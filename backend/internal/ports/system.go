@@ -40,14 +40,13 @@ type InstallCommandRunner interface {
 }
 
 // InstallScriptCommand is a daemon-owned remote installer recipe. The caller
-// selects the exact URL and interpreter; the adapter downloads the complete
-// script before executing it.
+// selects the exact URL, interpreter, and fixed script arguments; the adapter
+// downloads the complete script before executing it.
 type InstallScriptCommand struct {
 	URL         string
 	Interpreter []string
+	Args        []string
 	Env         []string
-	// Args follow the downloaded script, e.g. a vendor installer's version pin.
-	Args []string
 	// Isolated runs the script with InstallCommand.Isolated.
 	Isolated bool
 }

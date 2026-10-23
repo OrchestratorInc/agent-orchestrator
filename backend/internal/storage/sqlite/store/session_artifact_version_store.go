@@ -79,6 +79,19 @@ func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.Ses
 	return nil
 }
 
+// DeleteSessionArtifactPathVersions removes every version row of one artifact
+// path, for when the user deletes that file, and returns the removed rows'
+// hashes.
+func (s *Store) DeleteSessionArtifactPathVersions(ctx context.Context, id domain.SessionID, path string) ([]string, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	sums, err := s.qw.DeleteSessionArtifactPathVersions(ctx, gen.DeleteSessionArtifactPathVersionsParams{SessionID: id, Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("delete artifact versions for %s %q: %w", id, path, err)
+	}
+	return sums, nil
+}
+
 // CountSessionArtifactVersionsBySHA counts a session's version rows, across
 // all paths, whose content is the blob named by sha.
 func (s *Store) CountSessionArtifactVersionsBySHA(ctx context.Context, id domain.SessionID, sha string) (int64, error) {

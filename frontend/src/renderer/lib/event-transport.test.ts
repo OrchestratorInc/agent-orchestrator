@@ -9,7 +9,6 @@ const {
 	hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrlMock,
 	unsubscribeBaseUrlMock,
-	setTransportHealthyMock,
 	connectedHostsMock,
 	baseUrlForHostMock,
 	subscribeConnectedHostsMock,
@@ -22,7 +21,6 @@ const {
 	hasTrustedApiBaseUrlMock: vi.fn(() => true),
 	subscribeApiBaseUrlMock: vi.fn(),
 	unsubscribeBaseUrlMock: vi.fn(),
-	setTransportHealthyMock: vi.fn(),
 	connectedHostsMock: vi.fn(() => [] as string[]),
 	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
 	subscribeConnectedHostsMock: vi.fn(),
@@ -41,7 +39,6 @@ vi.mock("./api-client", () => ({
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,
 }));
-vi.mock("./agent-switch-visibility", () => ({ agentSwitchVisibility: { setTransportHealthy: setTransportHealthyMock } }));
 vi.mock("./host-clients", () => ({
 	connectedHosts: connectedHostsMock,
 	baseUrlForHost: baseUrlForHostMock,
@@ -105,7 +102,6 @@ beforeEach(() => {
 	hasTrustedApiBaseUrlMock.mockReset().mockReturnValue(true);
 	subscribeApiBaseUrlMock.mockReset().mockReturnValue(unsubscribeBaseUrlMock);
 	unsubscribeBaseUrlMock.mockReset();
-	setTransportHealthyMock.mockReset();
 	connectedHostsMock.mockReset().mockReturnValue([]);
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
 	subscribeConnectedHostsMock.mockReset().mockReturnValue(unsubscribeConnectedHostsMock);
@@ -170,7 +166,6 @@ describe("createEventTransport", () => {
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "review-1"] }, { cancelRefetch: false });
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-session-agent-switches", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-a"] }, { cancelRefetch: false });
 		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", {
 			params: { path: { sessionId: "same" }, query: { beforeSequence: undefined, limit: 200 } },
@@ -181,7 +176,6 @@ describe("createEventTransport", () => {
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-b", "review-1"] }, { cancelRefetch: false });
-		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-session-agent-switches", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-b"] }, { cancelRefetch: false });
 		remoteA.emit("cursor", "0");
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
@@ -275,7 +269,6 @@ describe("createEventTransport", () => {
 			expect(client.invalidateQueries).not.toHaveBeenCalled();
 			expect(client.refetchQueries).not.toHaveBeenCalled();
 			expect(client.setQueryData).not.toHaveBeenCalled();
-			expect(setTransportHealthyMock).not.toHaveBeenCalled();
 			expect(getEventsConnectionState()).toBe("idle");
 			expect(EventSourceStub.instances).toHaveLength(2);
 		} finally { vi.useRealTimers(); }
@@ -398,8 +391,6 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(getEventsConnectionState()).toBe("disconnected");
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", false);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", false);
 	});
 
 	it("flushes workspace and session invalidation immediately on the leading edge after a status change", () => {
@@ -413,7 +404,6 @@ describe("createEventTransport", () => {
 			// The first refresh after a quiet period does not wait out the window:
 			// it flushes on the leading edge so a reconnect recovers immediately.
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-agent-switches"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff"] }, { cancelRefetch: false });
@@ -555,7 +545,7 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	it("invalidates only the changed model-catalog scope for catalog CDC", () => {
+	it("refreshes the agent's device-wide catalog views for catalog CDC naming a project", () => {
 		vi.useFakeTimers();
 		try {
 			const queryClient = fakeQueryClient();
@@ -568,7 +558,7 @@ describe("createEventTransport", () => {
 				createdAt: "2026-09-07T08:00:00Z",
 			}));
 			vi.advanceTimersByTime(200);
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "codex", "proj-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "codex"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 		} finally {
 			vi.useRealTimers();
@@ -759,10 +749,7 @@ describe("createEventTransport", () => {
 		createEventTransport(queryClient as never).connect();
 		const source = cdcSources()[0];
 		source.onerror?.();
-		expect(setTransportHealthyMock).not.toHaveBeenCalledWith("active", false);
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", false);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", false);
 	});
 
 	it("heals transport when the post-disconnect full refresh succeeds", async () => {
@@ -771,8 +758,6 @@ describe("createEventTransport", () => {
 		createEventTransport(queryClient as never).connect();
 		cdcSources()[0].onerror?.();
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", true);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", true);
 	});
 
 	it("ignores a stale failed refresh after the SSE source reconnects", async () => {
@@ -783,10 +768,8 @@ describe("createEventTransport", () => {
 		const source = cdcSources()[0];
 		source.onerror?.();
 		source.onopen?.();
-		setTransportHealthyMock.mockClear();
 		rejectRefresh(new Error("late failure"));
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).not.toHaveBeenCalledWith("active", false);
 	});
 
 	it("rebuilds a source the browser abandoned after the retry delay", () => {
@@ -957,6 +940,107 @@ describe("bounded live refresh", () => {
 		emit(); await vi.advanceTimersByTimeAsync(150);
 		disconnect(); finish(); await vi.advanceTimersByTimeAsync(0);
 		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("id-only session updates", () => {
+	// Usage bookkeeping (and, rarely, agent switches, cleanup facts and reported
+	// PRs) emits session_updated with nothing but the session id.
+	const idOnly = (sessionId: string) =>
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId, type: "session_updated", payload: { id: sessionId } }));
+	// The sessions-row trigger's payload, as backend migration 0191 builds it.
+	const sessionRow = (sessionId: string, activity: string) =>
+		cdcSources()[0].emit("session_updated", JSON.stringify({
+			sessionId,
+			type: "session_updated",
+			payload: {
+				id: sessionId, activity, isTerminated: false, terminateOnPrMerge: false, previewUrl: "", previewRevision: 0,
+				isPinned: false, mode: "chat", autoInjectReview: true, autoInjectCI: true, autoReviewEnabled: false, provisionState: "ready",
+			},
+		}));
+	const workspaceRefreshes = (client: ReturnType<typeof fakeQueryClient>) =>
+		vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["workspaces"]').length;
+	afterEach(() => vi.useRealTimers());
+
+	it("refreshes the workspace at most once per interval for a stream of id-only updates", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		// Three running agents whose usage is recorded every 100 ms for 12 s.
+		for (let elapsed = 0; elapsed < 12_000; elapsed += 100) {
+			for (const sessionId of ["a", "b", "c"]) idOnly(sessionId);
+			await vi.advanceTimersByTimeAsync(100);
+		}
+		// The first update refreshes at once (t=0), then one refresh at 5 s and 10 s.
+		expect(workspaceRefreshes(client)).toBe(3);
+		// While the workspace waits, the session's own caches still refresh at once.
+		idOnly("d");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff", "d"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation", "d"] }, { cancelRefetch: false });
+		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("keeps status changes, sessions-row updates and new sessions prompt while id-only updates wait", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("busy");
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("busy");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(1);
+
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(2);
+		// The sessions-row trigger also fires for columns its payload omits (title,
+		// start-up checklist, branch state), so carried fields that did not change
+		// do not mean the board did not.
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(3);
+		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(4);
+		// Those refreshes already covered the waiting id-only update.
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(4);
+		disconnect();
+	});
+
+	it("waits a full interval after a newer workspace refresh before the id-only refresh", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("a"); // 0 s: refreshes at once.
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a"); // 1 s: waits until 5 s.
+		await vi.advanceTimersByTimeAsync(1_000);
+		sessionRow("b", "active"); // 2 s: refreshes at once, covering the 1 s update.
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a"); // 3 s: now waits until 7 s, 5 s after the newer refresh.
+		expect(workspaceRefreshes(client)).toBe(2);
+		await vi.advanceTimersByTimeAsync(2_100);
+		expect(workspaceRefreshes(client)).toBe(2);
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(workspaceRefreshes(client)).toBe(3);
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("drops a waiting id-only refresh on disconnect", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("a");
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a");
+		disconnect();
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(1);
 	});
 });
 

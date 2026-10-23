@@ -16,11 +16,18 @@ import {
 	ACCENT_ACTION_SHELL,
 	QUIET_ACTION_PILL,
 } from "./action-pill";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { agentModelsQueryOptions } from "../../hooks/useAgentModelsQuery";
+import { agentLabel } from "../../lib/agent-options";
+import { recordedModelName } from "../../lib/agent-model-choices";
+import { formatEffortLabel } from "../settings/EffortPicker";
+import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	ArrowRight,
 	Brain,
 	ChevronDown,
 	ChevronRight,
@@ -69,10 +76,12 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
 import { ConversationContentItems } from "./ConversationContentItems";
+import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
 	commandBinaryLabel,
@@ -95,6 +104,7 @@ import {
 	type ConversationActivity,
 	type ConversationBranchPoint,
 	type ConversationMessage,
+	type ConversationUsageLimit,
 	type DecisionOption,
 	type DeliveryState,
 	type DiffStatus,
@@ -336,6 +346,76 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 	);
 }
 
+/** The remote host a chat's session runs on, whose catalogs name its models. */
+export const ChatHostId = createContext<string | undefined>(undefined);
+
+/** One side of a handoff: the agent's mark, then its model by name when one was recorded. */
+function HandoffSide({ harness, model, effort, compactWindow, bright }: { harness: string; model?: string; effort?: string; compactWindow?: string; bright?: boolean }) {
+	const { t } = useTranslation();
+	// The marker stores the model id. Its name comes from the agent's catalog on the session's host.
+	const hostId = useContext(ChatHostId);
+	const catalog = useQuery({ ...agentModelsQueryOptions(harness, "", hostId), enabled: Boolean(model) }).data;
+	const name = model ? recordedModelName(harness, model, catalog?.models ?? []) : agentLabel(harness);
+	return (
+		<span className={cn("flex min-w-0 items-center gap-1.5", bright ? "text-foreground" : undefined)}>
+			<ProviderMark provider={harness} />
+			<span className="truncate">{name.replace(/\s*\b1M\b/g, "")}</span>
+			{effort ? <span className="shrink-0 text-muted-foreground">{formatEffortLabel(effort, t)}</span> : null}
+			{compactWindow ? <span className="shrink-0 text-muted-foreground" title="Compacts on its own at this size">· {compactWindow.toUpperCase()}</span> : null}
+		</span>
+	);
+}
+
+/** Where one agent handed the conversation to another. */
+export function ProviderSwitchMarker({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const detail = activity.detail;
+	const switching = Boolean(detail?.switching);
+	const named = Boolean(detail?.sourceHarness && detail.targetHarness);
+	// A switched row only seconds old is the one just made, so it opens from closed; older ones start open.
+	const [open, setOpen] = useState(() => switching || !(Date.now() - Date.parse(activity.createdAt) < 8000));
+	useEffect(() => {
+		if (switching || open) return;
+		let inner = 0;
+		const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setOpen(true)); });
+		return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+	}, [switching, open]);
+	const revealed = !switching && open;
+	const label = switching
+		? t("agentSwitch.switching")
+		: named
+			? t("agentSwitch.switchedFromTo", { from: agentLabel(detail?.sourceHarness ?? ""), to: agentLabel(detail?.targetHarness ?? "") })
+			: t("agentSwitch.switched");
+	return (
+		<div role="separator" aria-label={label} aria-busy={switching || undefined} className="flex min-w-0 items-center gap-3 py-2 text-[11px] text-muted-foreground">
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+			<div className="flex min-w-0 items-center">
+				<span className={cn("inline-block shrink-0", switching ? "chat-working-shimmer" : undefined)}>
+					{switching ? t("agentSwitch.switching") : t("agentSwitch.switched")}
+				</span>
+				{named ? (
+					// Closed while the switch runs, then its width grows from 0 to its own.
+					<div
+						className={cn(
+							"grid min-w-0 transition-[grid-template-columns] duration-300 ease-out motion-reduce:transition-none",
+							revealed ? "grid-cols-[1fr]" : "grid-cols-[0fr]",
+						)}
+					>
+						<div className="min-w-0 overflow-hidden">
+							<span className="flex w-max shrink-0 items-center gap-3 whitespace-nowrap pl-3">
+								<HandoffSide harness={detail?.sourceHarness ?? ""} model={detail?.sourceModel} />
+								<ArrowRight aria-hidden="true" className="size-3 shrink-0" />
+								<HandoffSide harness={detail?.targetHarness ?? ""} model={detail?.targetModel} effort={detail?.targetEffort} compactWindow={detail?.targetAutoCompactWindow} bright />
+							</span>
+						</div>
+					</div>
+				) : null}
+			</div>
+			<span aria-hidden="true" className="h-px min-w-4 flex-1 bg-border" />
+		</div>
+	);
+}
+
 export interface TurnOutcomeRetryControl {
 	onRetry: () => void;
 	pending?: boolean;
@@ -352,11 +432,28 @@ export function TurnOutcome({
 	state,
 	error,
 	retry,
+	usageLimit,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
 	retry?: TurnOutcomeRetryControl;
+	usageLimit?: ConversationUsageLimit;
 }) {
+	if (state === "failed" && usageLimit) {
+		return (
+			<div className="flex min-w-0 flex-col gap-2 py-3">
+				<UsageLimitNotice
+					compact={!retry}
+					usageLimit={usageLimit}
+					onResume={retry?.onRetry}
+					pending={retry?.pending}
+					disabled={retry?.disabled}
+					error={retry?.error}
+				/>
+				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+			</div>
+		);
+	}
 	const copy = {
 		recovered: {
 			label: "This turn was recovered from an earlier session",
@@ -876,7 +973,12 @@ export function AssistantMessage({
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
+	// Copy is ready the moment the text has fully arrived: it copies the stored markdown,
+	// so it need not wait for the typewriter to catch up or for the turn to settle.
+	// Rollback acts on the turn, so it waits for both.
+	const copyReady = showCopy && !message.streaming;
+	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
+	const showActions = copyReady || rollbackReady;
 	return (
 		<div
 			className="group/message relative"
@@ -891,7 +993,7 @@ export function AssistantMessage({
 				// fragment the provider emitted while working. Copy, rollback, and
 				// duration stay visible; only the wall-clock time reveals on hover.
 				<div className="mt-1 flex h-7 items-center gap-0.5">
-					{showCopy ? (
+					{copyReady ? (
 						<div className="-ml-1.5 size-7 shrink-0">
 							{/* The stored markdown, not a re-serialization of what was rendered:
 							   pasting it into an editor has to give back what the agent wrote. */}
@@ -903,7 +1005,7 @@ export function AssistantMessage({
 							/>
 						</div>
 					) : null}
-					{onRollback ? (
+					{rollbackReady ? (
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<button
@@ -1056,6 +1158,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
+	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
@@ -2346,7 +2449,8 @@ function setupDuration(durationMs: number): { minutes: number; seconds: number }
  * How the project's Setup commands (Project settings > Scripts) ended, before
  * the agent started. Compact like the other system rows; the failed step's
  * output (the tail the worker kept, already redacted) opens below it in
- * monospace.
+ * monospace. Workers that publish workspace.script.step events get the
+ * ScriptRunPanel instead; this row stays for workers that predate them.
  */
 function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 	const { t } = useTranslation();
@@ -2367,8 +2471,23 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 			: typeof detail?.exitCode === "number" && detail.exitCode >= 0
 				? t("chat.projectSetup.failedWithCode", { step, code: detail.exitCode })
 				: t("chat.projectSetup.failed", { step });
-	const output = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
 	const failed = status !== "succeeded";
+	const stepOutput = detail?.output?.trim() ? stripAnsi(detail.output) : undefined;
+	// The failed step's command, who and where it ran, and its full log, one
+	// fact per line above its output.
+	const setupFailure = failed ? detail?.setupFailure : undefined;
+	const contextLines: string[] = [];
+	if (setupFailure?.command) contextLines.push(t("chat.projectSetup.stepCommand", { step, command: setupFailure.command }));
+	if (setupFailure?.user) {
+		contextLines.push(setupFailure.groups?.length
+			? t("chat.projectSetup.ranAsWithGroups", { user: setupFailure.user, groups: setupFailure.groups.join(" ") })
+			: t("chat.projectSetup.ranAs", { user: setupFailure.user }));
+	}
+	if (setupFailure?.dir) contextLines.push(t("chat.projectSetup.ranIn", { dir: setupFailure.dir }));
+	if (setupFailure?.logPath) contextLines.push(t("chat.projectSetup.fullOutput", { path: setupFailure.logPath }));
+	const context = contextLines.join("\n");
+	const output = context ? (stepOutput ? `${context}\n\n${stepOutput}` : context) : stepOutput;
+	const hint = failed ? detail?.setupHint?.trim() : undefined;
 	const Icon = failed ? CircleAlert : SquareTerminal;
 	return (
 		<div className={cn("flex flex-col gap-1.5 rounded-md border bg-surface/60 px-3 py-2", failed ? "border-destructive/40" : "border-border")} data-testid="project-setup-row">
@@ -2387,8 +2506,9 @@ function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
 					</button>
 				) : null}
 			</div>
+			{hint ? <p className="pl-6 text-xs text-muted-foreground">{hint}</p> : null}
 			{output && expanded ? (
-				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground">{output}</pre>
+				<pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background/60 px-2.5 py-2 font-mono text-[12px] leading-5 text-muted-foreground select-text">{output}</pre>
 			) : null}
 		</div>
 	);
@@ -2498,7 +2618,7 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
+				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 					{body ? (
 						<p>
 							<ProseWithInlineImages
@@ -2528,7 +2648,7 @@ export function SteerMessage({
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered into the running turn
+				Steered
 			</span>
 		</div>
 	);

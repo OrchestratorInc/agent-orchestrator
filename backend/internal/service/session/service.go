@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -34,8 +33,6 @@ type Store interface {
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
-	GetActiveAgentSwitch(ctx context.Context, sessionID domain.SessionID) (domain.AgentSwitch, bool, error)
-	ListActiveAgentSwitches(ctx context.Context) ([]domain.AgentSwitch, error)
 	RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error)
 	RenameSessionIfDisplayName(ctx context.Context, id domain.SessionID, currentDisplayName, displayName string, updatedAt time.Time) (bool, error)
 	SetSessionPreviewURL(ctx context.Context, id domain.SessionID, previewURL string, updatedAt time.Time) (bool, error)
@@ -50,6 +47,7 @@ type Store interface {
 	ListPRFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error)
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
+	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
 	ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error)
 	ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error)
 	ListSessionWorktrees(ctx context.Context, id domain.SessionID) ([]domain.SessionWorktreeRecord, error)
@@ -74,10 +72,6 @@ type ListFilter struct {
 type commander interface {
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error)
 	RunBackgroundTask(ctx context.Context, id domain.SessionID, systemPrompt, prompt string) (string, error)
-	SwitchAgent(ctx context.Context, id domain.SessionID, cfg sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error)
-	RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error)
-	ListAgentSwitches(ctx context.Context, id domain.SessionID) ([]domain.AgentSwitch, error)
-	SubmitAgentHandoff(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID, sourceGenerationID domain.AgentGenerationID, handoff json.RawMessage) (domain.AgentSwitch, error)
 	RestoreWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (sessionmanager.RestoreResult, error)
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
@@ -210,7 +204,10 @@ type Service struct {
 	orchestratorLocks   map[domain.ProjectID]*sync.Mutex
 	workspaceCache      *workspaceCache
 	workspaceManifests  *workspaceManifestIndex
-	workspaceEditsMu    sync.Mutex
+	// commitSelections caches resolved commit selections. Their keys are
+	// immutable SHAs, so entries never go stale.
+	commitSelections *commitSelectionCache
+	workspaceEditsMu sync.Mutex
 	// workspaceGroup coalesces concurrent cache-miss compare/status lookups
 	// for the same (session, root): "Expand All" on many files fires that
 	// many GetWorkspaceFile calls at once, and without this each one would
@@ -320,6 +317,7 @@ func NewWithDeps(d Deps) *Service {
 	s.workspaceCache = newWorkspaceCache(workspaceCacheTTL, s.clock)
 	s.workspaceManifests = newWorkspaceManifestIndex()
 	s.workspaceManifests.now = s.clock
+	s.commitSelections = newCommitSelectionCache(commitSelectionCacheSize)
 	return s
 }
 
@@ -601,18 +599,36 @@ func (s *Service) SpawnOrchestrator(
 	requestedMode domain.SessionMode,
 	approval domain.PermissionMode,
 ) (domain.Session, error) {
-	unlock := s.lockOrchestratorProject(projectID)
-	defer unlock()
-
 	project, err := s.requireProject(ctx, projectID)
 	if err != nil {
 		return domain.Session{}, err
 	}
+	// A start runs the project's Setup and a clean replacement first runs
+	// the retired orchestrator's Cleanup, both possibly longer than one REST
+	// request; the lock may also wait for another replacement. The request's
+	// budget covers them from here. The bounded context is not passed on:
+	// the spawn extends the budget again, from its own start, and a deadline
+	// set here would cap it.
+	budget := sessionmanager.SetupBudget(project)
+	if clean {
+		budget += sessionmanager.ReplacementCleanupBudget(project)
+	}
+	_, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, budget)
+	defer cancelBudget()
+	unlock := s.lockOrchestratorProject(projectID)
+	defer unlock()
+
 	mode := requestedMode
 	if clean {
 		existing, err := s.activeOrchestrators(ctx, projectID)
 		if err != nil {
 			return domain.Session{}, err
+		}
+		if len(existing) > 1 {
+			// Each retirement runs its own Cleanup.
+			_, cancelRetireBudget := ports.ExtendSpawnRequestBudget(ctx,
+				sessionmanager.SetupBudget(project)+time.Duration(len(existing))*sessionmanager.ReplacementCleanupBudget(project))
+			defer cancelRetireBudget()
 		}
 		if len(existing) > 0 && mode == "" {
 			// Clean replacement preserves the controller contract of the
@@ -1179,14 +1195,6 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	if err != nil {
 		return nil, err
 	}
-	activeSwitches, err := s.store.ListActiveAgentSwitches(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list active agent switches: %w", err)
-	}
-	activeBySession := make(map[domain.SessionID]domain.AgentSwitch, len(activeSwitches))
-	for _, agentSwitch := range activeSwitches {
-		activeBySession[agentSwitch.SessionID] = agentSwitch
-	}
 	filtered := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
 	var archived []domain.SessionID
@@ -1207,6 +1215,10 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	if err != nil {
 		return nil, fmt.Errorf("list review runs: %w", err)
 	}
+	interrupted, err := s.store.ListInterruptedSessions(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list interrupted sessions: %w", err)
+	}
 	var cleanupBySession map[domain.SessionID]domain.SessionCleanupRecord
 	if len(archived) > 0 {
 		if cleanupBySession, err = s.store.ListSessionCleanupFactsForSessions(ctx, archived); err != nil {
@@ -1216,12 +1228,9 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 	out := make([]domain.Session, 0, len(filtered))
 	for _, rec := range filtered {
 		facts, found := cleanupBySession[rec.ID]
-		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], currentWorkspaceCleanup(rec, facts, found))
+		sess, err := s.toSessionWithFacts(ctx, rec, prsBySession[rec.ID], runsBySession[rec.ID], interrupted[rec.ID], currentWorkspaceCleanup(rec, facts, found))
 		if err != nil {
 			return nil, err
-		}
-		if agentSwitch, ok := activeBySession[rec.ID]; ok {
-			sess.ActiveAgentSwitch = &agentSwitch
 		}
 		out = append(out, sess)
 	}
@@ -1304,20 +1313,13 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	if err != nil {
 		return domain.Session{}, err
 	}
-	activeSwitch, ok, err := s.store.GetActiveAgentSwitch(ctx, id)
-	if err != nil {
-		return domain.Session{}, fmt.Errorf("get active agent switch for %s: %w", id, err)
-	}
-	if ok {
-		sess.ActiveAgentSwitch = &activeSwitch
-	}
 	if s.statusRecoveryRevision() != recoveryRevision {
 		sess.StatusReadiness = "checking"
 	}
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1372,7 +1374,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 	// ReconcileSessionOutputType is the sole writer); it is deliberately not
 	// recomputed here so the API and Kanban see the same durable
 	// classification rather than a value that can differ read to read.
-	presentation := deriveKanbanPresentation(rec, prs, runs, now, s.harnessSignals(rec.Harness))
+	presentation := deriveKanbanPresentation(rec, prs, runs, interrupted, now, s.harnessSignals(rec.Harness))
 	readiness := "ready"
 	if recovery, ok := s.manager.(interface {
 		SessionStatusReadiness(domain.SessionRecord) string
@@ -1413,7 +1415,7 @@ func mapSessionError(err error) error {
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
 		return apierr.Invalid("AGENT_ACCOUNT_PROVIDER_MISMATCH", "The account is for a different agent", nil)
 	case errors.Is(err, ports.ErrAgentAccountDefaultUnusable):
-		return apierr.Conflict("AGENT_ACCOUNT_DEFAULT_UNUSABLE", "The default account is signed out or now holds another login. Sign it in again, or make another account the default.", nil)
+		return apierr.Conflict("AGENT_ACCOUNT_DEFAULT_UNUSABLE", "The default account is signed out or now holds another login, and no other account is signed in. Sign one in again in Settings.", nil)
 	case errors.Is(err, ports.ErrAgentAccountSignedOut):
 		return apierr.Conflict("AGENT_ACCOUNT_SIGNED_OUT", "The account is signed out; sign it in again first", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnchanged):
@@ -1437,6 +1439,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAgentExitInProgress):
 		return apierr.Conflict("AGENT_EXIT_IN_PROGRESS",
 			"The agent is already exiting", nil)
+	case errors.Is(err, sessionmanager.ErrOperationInProgress):
+		return apierr.Conflict("SESSION_OPERATION_IN_PROGRESS", "Another operation is already running on this session", nil)
 	case errors.Is(err, sessionmanager.ErrInterfaceTransitionInProgress):
 		return apierr.Conflict("INTERFACE_TRANSITION_IN_PROGRESS",
 			"This session is already switching interfaces", nil)
@@ -1491,44 +1495,6 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
 		return apierr.Invalid("TARGET_AGENT_UNAUTHORIZED",
 			"The target agent is not authenticated; authenticate it before switching", nil)
-	case errors.Is(err, sessionmanager.ErrUnsupportedSwitchKind):
-		return apierr.Invalid("WORKER_SESSION_REQUIRED",
-			"Only worker sessions support agent switching", nil)
-	case errors.Is(err, sessionmanager.ErrUnsupportedSwitchHarness):
-		return apierr.Invalid("UNSUPPORTED_SWITCH_HARNESS",
-			"Agent switching is not supported for the requested harness", nil)
-	case errors.Is(err, sessionmanager.ErrAlreadyUsingHarness):
-		return apierr.Conflict("ALREADY_USING_HARNESS",
-			"The session is already using the requested harness", nil)
-	case errors.Is(err, sessionmanager.ErrSwitchNotFound):
-		return apierr.NotFound("AGENT_SWITCH_NOT_FOUND", "Unknown agent switch")
-	case errors.Is(err, sessionmanager.ErrSwitchRecoveryNotRequired):
-		return apierr.Conflict("AGENT_SWITCH_RECOVERY_NOT_REQUIRED",
-			"This agent switch does not require source restoration", nil)
-	case errors.Is(err, sessionmanager.ErrStaleHandoff):
-		return apierr.Conflict("STALE_AGENT_HANDOFF",
-			"The handoff is stale or its collection window has closed", nil)
-	case errors.Is(err, sessionmanager.ErrInvalidAgentHandoff):
-		return apierr.Invalid("INVALID_AGENT_HANDOFF",
-			"The handoff does not satisfy AO's semantic handoff schema", nil)
-	case errors.Is(err, sessionmanager.ErrSwitchDeliveryUnconfirmed):
-		return apierr.Conflict("AGENT_SWITCH_DELIVERY_UNCONFIRMED",
-			"The target agent started, but AO could not confirm that it accepted the continuation", nil)
-	case errors.Is(err, sessionmanager.ErrSwitchInProgress):
-		return apierr.Conflict("AGENT_SWITCH_IN_PROGRESS",
-			"This session already has an agent switch in progress", nil)
-	case errors.Is(err, sessionmanager.ErrSwitchShuttingDown):
-		return apierr.Conflict("AGENT_SWITCH_UNAVAILABLE",
-			"AO is shutting down and cannot start another agent switch", nil)
-	case errors.Is(err, sessionmanager.ErrSwitchUnavailable):
-		return apierr.Conflict("AGENT_SWITCH_UNAVAILABLE",
-			"Agent switching is unavailable in this AO instance", nil)
-	case errors.Is(err, domain.ErrAgentSwitchIdempotencyConflict):
-		return apierr.Conflict("AGENT_SWITCH_IDEMPOTENCY_CONFLICT",
-			"The idempotency key is already associated with a different agent switch", nil)
-	case errors.Is(err, domain.ErrAgentSwitchInProgress):
-		return apierr.Conflict("AGENT_SWITCH_IN_PROGRESS",
-			"This session already has an agent switch in progress", nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
@@ -1612,6 +1578,11 @@ func toSpawnAPIError(err error) error {
 	if mapped := toAPIError(err); !errors.Is(mapped, err) {
 		return mapped
 	}
+	// A failed Setup step already explains itself; the spawn stage prefix is noise.
+	var setupErr *sessionmanager.SetupStepError
+	if errors.As(err, &setupErr) {
+		return apierr.Conflict("WORKSPACE_PROVISION_FAILED", setupErr.Error(), nil)
+	}
 	switch {
 	case errors.Is(err, sessionmanager.ErrClientRequestConflict):
 		return apierr.Conflict("CLIENT_REQUEST_CONFLICT", "clientRequestId belongs to a different task", nil)
@@ -1692,7 +1663,11 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 		}
 		cleanup = currentWorkspaceCleanup(rec, facts, found)
 	}
-	return s.toSessionWithFacts(ctx, rec, prs, runs, cleanup)
+	interrupted, err := s.store.ListInterruptedSessions(ctx, []domain.SessionID{rec.ID})
+	if err != nil {
+		return domain.Session{}, fmt.Errorf("interrupted turn %s: %w", rec.ID, err)
+	}
+	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
 }
 
 // currentWorkspaceCleanup is the teardown disposition recorded for an archived

@@ -335,6 +335,22 @@ func sessionAt(activity contract.ActivityState) contract.KanbanSessionFacts {
 	}
 }
 
+func interruptedAt(activity contract.ActivityState) contract.KanbanSessionFacts {
+	session := sessionAt(activity)
+	session.Interrupted = true
+	return session
+}
+
+func TestDeriveKanbanPresentationInterruptedArtifactSession(t *testing.T) {
+	t.Parallel()
+	session := interruptedAt(contract.ActivityIdle)
+	session.HasArtifactOutput = true
+	got := contract.DeriveKanbanPresentation(session, nil, time.Unix(3600, 0), testGrace)
+	if got.Column != contract.KanbanValidating || got.DisplayStatus != contract.DisplayInterrupted {
+		t.Fatalf("presentation = %+v, want %q/%q", got, contract.KanbanValidating, contract.DisplayInterrupted)
+	}
+}
+
 func TestDeriveKanbanPresentationBuilding(t *testing.T) {
 	t.Parallel()
 	silent := contract.SessionFacts{
@@ -357,6 +373,9 @@ func TestDeriveKanbanPresentationBuilding(t *testing.T) {
 			want:    contract.DisplayNoSignal,
 		},
 		{"an idle worker is awaiting its pr", sessionAt(contract.ActivityIdle), contract.DisplayAwaitingPR},
+		{"an idle worker the person stopped is interrupted", interruptedAt(contract.ActivityIdle), contract.DisplayInterrupted},
+		{"a new turn after an interrupt is working", interruptedAt(contract.ActivityActive), contract.DisplayWorking},
+		{"an interrupted worker that exited has exited", interruptedAt(contract.ActivityExited), contract.DisplayExited},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

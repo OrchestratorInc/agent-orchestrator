@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
+import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { useLiveBrowserViewportRect, type ViewportRect } from "../hooks/useLiveBrowserViewportRect";
 import { useWorkspaceTopbarBottom } from "../hooks/useWorkspaceTopbarBottom";
 import { AGENT_OPTIONS, agentLabel, type AgentId } from "../lib/agent-options";
@@ -135,6 +136,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Settings is a modal that blocks pointer and focus outside it; its Harness
 	// page offers the same updates there.
 	if (settingsOpen || !readinessComplete || readiness.isError) return null;
+	// Only advertise updates AO can run without a login or manual maintenance.
+	// Wait for these checks so ineligible harnesses never flash in the stack. A
+	// failed background refetch keeps the cached data, so an update in flight
+	// or its failure stays visible.
+	if (!authPlans.data || !installers.data) return null;
 	// Let the first batch settle so a fast, seldom-used harness cannot jump
 	// ahead of the most-used one. Failed lookups don't block the other results.
 	if (AGENT_OPTIONS.some((id) => installed.has(id) && advisories.get(id)?.isPending)) return null;
@@ -152,6 +158,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const confirmed = installed.has(agentId) && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
 		const advisory = confirmed ?? failedUpdateAdvisory(agentId);
 		if (!advisory) return [];
+		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
+		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
+		if (!method?.available || !method.updateAvailable || needsLogin) return [];
 		const key = harnessUpdateNoticeKey(agentId, advisory.latestVersion!);
 		return dismissed.has(key) ? [] : [{ agentId, advisory, key }];
 	}).sort((left, right) => {
@@ -304,7 +313,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 					{error && !busy ? <div className="mt-1 flex flex-col items-start gap-1">
-						<p role="alert" className="break-words text-caption text-error">{error}</p>
+						<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
 						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 					</div> : null}
 				</article>;
@@ -325,8 +334,8 @@ const NOTICE_GAP = 12; // --space-3
  * The live browser page is a native view: anything drawn over it has to raise
  * the whole transparent shell above the page, which then swallows every click
  * and scroll meant for the browser. This notice is non-modal and long-lived, so
- * it never does that. It moves beside the page instead, and steps aside while
- * the page leaves no room for it (maximized browser). */
+ * it never does that. It stays at the app edge and steps aside while
+ * the live page overlaps that corner. */
 function NoticeFrame({ label, children }: { label: string; children: ReactNode }) {
 	const topbarBottom = useWorkspaceTopbarBottom();
 	const browserRect = useLiveBrowserViewportRect();
@@ -334,40 +343,51 @@ function NoticeFrame({ label, children }: { label: string; children: ReactNode }
 	const [height, setHeight] = useState(0);
 	useLayoutEffect(() => {
 		const element = frameRef.current;
-		if (!element) return;
-		const observer = new ResizeObserver(() => setHeight(element.getBoundingClientRect().height));
+		if (!element) {
+			publishHarnessUpdateNoticeRect(null);
+			return;
+		}
+		// Session content in this corner (a running step's timer, a session
+		// notice's dismiss button) reads this rect to keep itself clear.
+		const measure = () => {
+			const box = element.getBoundingClientRect();
+			setHeight(box.height);
+			publishHarnessUpdateNoticeRect(box.width > 0 ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null);
+		};
+		const observer = new ResizeObserver(measure);
 		observer.observe(element);
-		setHeight(element.getBoundingClientRect().height);
-		return () => observer.disconnect();
+		window.addEventListener("resize", measure);
+		measure();
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", measure);
+		};
 	});
+	useLayoutEffect(() => () => publishHarnessUpdateNoticeRect(null), []);
 	// Until a bar is laid out, assume the board's: below the toolbar (and Windows' titlebar).
 	const top = topbarBottom === null
 		? isWindowsPlatform() ? "calc(var(--size-window-titlebar) + var(--size-toolbar) + var(--space-3))" : "calc(var(--size-toolbar) + var(--space-3))"
 		: `calc(${topbarBottom}px + var(--space-3))`;
-	const placement = noticePlacement(browserRect, (topbarBottom ?? 0) + NOTICE_GAP, height);
-	if (placement === "hidden") return null;
+	if (noticeCoversLiveBrowser(browserRect, (topbarBottom ?? 0) + NOTICE_GAP, height)) return null;
 	return <aside ref={frameRef} role="region" aria-label={label}
-		className="harness-update-notice fixed isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
+		className="harness-update-notice fixed right-4 isolate z-[calc(var(--z-overlay)-1)] w-[min(300px,calc(100vw-32px))] text-card-foreground"
 		// The stack reaches the window's drag region, which would swallow its clicks.
-		style={{ WebkitAppRegion: "no-drag", top, right: placement.right } as CSSProperties}>
+		style={{ WebkitAppRegion: "no-drag", top } as CSSProperties}>
 		{children}
 	</aside>;
 }
 
-/** Where the notice's right edge sits, clear of the live browser page. */
-export function noticePlacement(
+/** Whether the notice at the app edge overlaps the live native browser page. */
+export function noticeCoversLiveBrowser(
 	browser: ViewportRect | null,
 	top: number,
 	height: number,
 	viewportWidth = document.documentElement.clientWidth,
-): { right: number } | "hidden" {
+): boolean {
 	const width = Math.min(NOTICE_MAX_WIDTH, viewportWidth - 2 * NOTICE_EDGE);
 	const right = viewportWidth - NOTICE_EDGE;
-	if (!browser) return { right: NOTICE_EDGE };
+	if (!browser) return false;
 	const overlapsX = right - width < browser.right && right > browser.left;
 	const overlapsY = top < browser.bottom && top + Math.max(height, 1) > browser.top;
-	if (!overlapsX || !overlapsY) return { right: NOTICE_EDGE };
-	const besideRight = browser.left - NOTICE_GAP;
-	if (besideRight - width < NOTICE_EDGE) return "hidden";
-	return { right: viewportWidth - besideRight };
+	return overlapsX && overlapsY;
 }

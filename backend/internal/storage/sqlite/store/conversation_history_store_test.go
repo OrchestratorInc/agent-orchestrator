@@ -726,6 +726,70 @@ func TestConversationSnapshotPagesCombinedTimelineBySequence(t *testing.T) {
 	}
 }
 
+func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for _, origin := range []domain.MessageOrigin{domain.MessageOriginHuman, domain.MessageOriginAutomation} {
+		turnID := "turn-" + string(origin)
+		created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+			ID: "message-" + string(origin), Text: "finish the task", Origin: origin,
+		}, turnID, histClock)
+		if err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", origin, created, err)
+		}
+		if err := s.BindTurnToProvider(ctx, turnID, "provider-"+string(origin), histClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < store.DefaultConversationPageSize; i++ {
+		providerID := "provider-human"
+		if i == store.DefaultConversationPageSize-1 {
+			providerID = "provider-automation"
+		}
+		if err := s.UpsertActivity(ctx, conversation, providerID, domain.ConversationActivity{
+			ID: fmt.Sprintf("activity-%d", i), Kind: domain.ActivityKindCommand,
+			Status: domain.ActivityStatusCompleted, Summary: "go test",
+		}, histClock.Add(time.Duration(i+1)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, turnID := range []string{"turn-human", "turn-automation"} {
+		if err := s.SettleTurnByID(ctx, turnID, domain.TurnStateFailed, "Usage limit reached; resets in 1 hour", histClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != 0 || len(page.Activities) != store.DefaultConversationPageSize || !page.HasMoreBefore {
+		t.Fatalf("default page: messages=%d activities=%d hasMore=%v", len(page.Messages), len(page.Activities), page.HasMoreBefore)
+	}
+	whole, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := s.LoadConversationSnapshotPage(ctx, conversation, page.OldestSequence, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(whole.Messages) != 2 || len(older.Messages) != 2 {
+		t.Fatalf("durable prompts: unbounded=%d older-page=%d", len(whole.Messages), len(older.Messages))
+	}
+	for name, snapshot := range map[string]store.ConversationSnapshot{"default page": page, "unbounded": whole, "older page": older} {
+		if len(snapshot.Turns) != 2 {
+			t.Fatalf("%s turns=%d, want both failed turns", name, len(snapshot.Turns))
+		}
+		for _, turn := range snapshot.Turns {
+			wantHuman := turn.ID == "turn-human"
+			if turn.State != domain.TurnStateFailed || turn.HasHumanPrompt != wantHuman {
+				t.Errorf("%s turn=%s state=%s hasHumanPrompt=%v, want failed/%v", name, turn.ID, turn.State, turn.HasHumanPrompt, wantHuman)
+			}
+		}
+	}
+}
+
 func TestProjectConversationPageStartsAtCurrentContextReset(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

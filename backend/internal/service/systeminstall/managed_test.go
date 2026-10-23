@@ -249,6 +249,60 @@ func TestFailedManagedInstallLeavesTheCurrentReleaseAlone(t *testing.T) {
 	}
 }
 
+func TestManagedUpdateFailureKeepsPathsOutOfTheNotice(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	// npm exits 0 without writing the executable.
+	f.s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error { return nil })
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusFailed || job.Error != "Installed, but codex was not found." {
+		t.Fatalf("job = %+v", job)
+	}
+	if missing := filepath.Join(f.root, "codex", "versions", "v1", "bin", "codex"); !strings.Contains(job.Output, missing+" is missing") {
+		t.Fatalf("diagnostics lack the missing path:\n%s", job.Output)
+	}
+}
+
+func TestManagedInstallCommandFailureIsSummarized(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	f.failInstall = true
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusFailed || job.Error != "The install command failed." || !strings.Contains(job.Output, "npm failed") {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestManagedProbeWithoutAVersionIsNotACrash(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	commands := f.s.commands
+	f.s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
+		if len(argv) == 2 && argv[1] == "--version" {
+			_, err := io.WriteString(stdout, "usage: codex [options]\n")
+			return err
+		}
+		return commands.Run(ctx, argv, stdout, stderr)
+	})
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusFailed || job.Error != "The new codex did not report its version." || !strings.Contains(job.Output, "usage: codex") {
+		t.Fatalf("job = %+v", job)
+	}
+}
+
+func TestSetupFailureAfterTheSwitchSaysTheSwitchHappened(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	// A directory where managed.json goes makes its write fail after current
+	// has moved to the new release.
+	if err := os.MkdirAll(filepath.Join(f.root, "codex", "managed.json", "blocker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	job := f.update(t, "1.1.0")
+	if job.Status != StatusFailed || job.Error != setupFailed {
+		t.Fatalf("job = %+v", job)
+	}
+	if target, _ := os.Readlink(filepath.Join(f.root, "codex", "current")); target != filepath.Join("versions", "v1") {
+		t.Fatalf("current = %q, want the new release", target)
+	}
+}
+
 func TestFailedRecordSwitchesBackToThePreviousRelease(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
@@ -695,27 +749,39 @@ func TestWindowsJunctionCrashHelper(t *testing.T) {
 	t.Fatal("mklink boundary not reached")
 }
 
-func TestManagedOpenCodeMajorsKeepSeparateLaunchers(t *testing.T) {
+// newManagedNPMExecService runs managed npm installs through install, which
+// writes the release under the --prefix it gets, and runs real version probes.
+func newManagedNPMExecService(t *testing.T, install func(prefix string) error) *Service {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX release fixtures")
 	}
 	s := newTestService("darwin", "npm")
 	s.managedRoot = t.TempDir()
 	s.releases = &releaseStoreStub{}
-	version := "1.2.27"
 	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
-		prefix := command.Argv[slices.Index(command.Argv, "--prefix")+1]
-		bin := filepath.Join(prefix, "bin", "opencode")
-		if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
-			return err
-		}
-		return os.WriteFile(bin, []byte("#!/bin/sh\necho "+version+"\n"), 0755)
+		return install(command.Argv[slices.Index(command.Argv, "--prefix")+1])
 	})
 	s.commands = commandRunnerFunc(func(ctx context.Context, argv []string, out, stderr io.Writer) error {
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Stdout = out
 		cmd.Stderr = stderr
 		return cmd.Run()
+	})
+	return s
+}
+
+func writeVersionScript(path, version string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte("#!/bin/sh\necho "+version+"\n"), 0755)
+}
+
+func TestManagedOpenCodeMajorsKeepSeparateLaunchers(t *testing.T) {
+	version := "1.2.27"
+	s := newManagedNPMExecService(t, func(prefix string) error {
+		return writeVersionScript(filepath.Join(prefix, "bin", "opencode"), version)
 	})
 	for _, step := range []struct {
 		target            Target
@@ -738,5 +804,36 @@ func TestManagedOpenCodeMajorsKeepSeparateLaunchers(t *testing.T) {
 		if err != nil || strings.TrimSpace(string(out)) != want {
 			t.Fatalf("%s launcher=%q,%v; want %s", name, out, err, want)
 		}
+	}
+}
+
+func TestManagedCopilotInstallsTheLauncherNotThePlatformBinary(t *testing.T) {
+	// npm's layout: bin/copilot links to the package's Node loader, and the
+	// platform package's binary sits under the loader's node_modules/.bin.
+	s := newManagedNPMExecService(t, func(prefix string) error {
+		pkg := filepath.Join(prefix, "lib", "node_modules", "@github", "copilot")
+		if err := writeVersionScript(filepath.Join(pkg, "npm-loader.js"), "1.0.101"); err != nil {
+			return err
+		}
+		if err := writeVersionScript(filepath.Join(pkg, "node_modules", ".bin", "copilot-darwin-arm64"), "1.0.101"); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0755); err != nil {
+			return err
+		}
+		return os.Symlink(filepath.Join("..", "lib", "node_modules", "@github", "copilot", "npm-loader.js"), filepath.Join(prefix, "bin", "copilot"))
+	})
+	// The resolver returns the native binary behind the npm loader.
+	native := "/opt/homebrew/lib/node_modules/@github/copilot/node_modules/.bin/copilot-darwin-arm64"
+	plan := Plan{Target: TargetCopilot, Method: "npm", Package: "@github/copilot"}
+	if err := s.runManagedInstall(context.Background(), plan, &installedBaseline{path: native, expected: "1.0.101"}, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if record, ok := s.readManagedRecord(TargetCopilot); !ok || record.CLI != "copilot" || record.BinRel != filepath.Join("bin", "copilot") {
+		t.Fatalf("managed record = %+v, %v", record, ok)
+	}
+	out, err := exec.Command(filepath.Join(s.ManagedBinDir(), "copilot"), "--version").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "1.0.101" {
+		t.Fatalf("copilot launcher=%q,%v; want 1.0.101", out, err)
 	}
 }

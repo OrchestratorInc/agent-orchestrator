@@ -348,7 +348,27 @@ type persistenceOptions struct {
 }
 
 // Poll runs one synchronous SCM observation cycle.
-func (o *Observer) Poll(ctx context.Context) error {
+func (o *Observer) Poll(ctx context.Context) (pollErr error) {
+	pollStarted := time.Now()
+	o.logger.Debug("scm observer: poll started", "started_at", pollStarted.UTC())
+	defer func() {
+		completedAt := time.Now()
+		duration := completedAt.Sub(pollStarted)
+		attrs := []any{
+			"stage", "poll",
+			"started_at", pollStarted.UTC(),
+			"completed_at", completedAt.UTC(),
+			"duration_ms", duration.Milliseconds(),
+		}
+		if pollErr != nil {
+			attrs = append(attrs, "err", pollErr)
+		}
+		if duration >= o.tick {
+			o.logger.Warn("scm observer: slow poll completed", attrs...)
+			return
+		}
+		o.logger.Debug("scm observer: poll completed", attrs...)
+	}()
 	now := o.clock().UTC()
 	if err := ctx.Err(); err != nil {
 		return err
@@ -476,7 +496,9 @@ func (o *Observer) Poll(ctx context.Context) error {
 		if len(active) == 0 {
 			continue
 		}
+		started := time.Now()
 		batch, err := o.provider.FetchPullRequests(ctx, active)
+		o.logProviderRequest("fetch_pull_requests", repoNames(active), started, err)
 		if err != nil {
 			// If the failure is a rate-limit error, apply a per-provider
 			// cooldown so subsequent polls back off instead of hammering
@@ -940,6 +962,39 @@ func trackedPRsForSession(sess domain.SessionRecord, prs []domain.PullRequest) [
 	return out
 }
 
+func (o *Observer) logProviderRequest(stage, repository string, startedAt time.Time, err error) {
+	completedAt := time.Now()
+	duration := completedAt.Sub(startedAt)
+	attrs := []any{
+		"stage", stage,
+		"repository", repository,
+		"started_at", startedAt.UTC(),
+		"completed_at", completedAt.UTC(),
+		"duration_ms", duration.Milliseconds(),
+	}
+	if err != nil {
+		attrs = append(attrs, "err", err)
+	}
+	if duration >= o.tick {
+		o.logger.Warn("scm observer: slow provider request completed", attrs...)
+		return
+	}
+	o.logger.Debug("scm observer: provider request completed", attrs...)
+}
+
+func repoNames(refs []ports.SCMPRRef) string {
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		seen[repoFullName(ref.Repo)] = struct{}{}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
+
 func (o *Observer) guardRepos(ctx context.Context, sessionRepos []sessionRepo) map[string]repoGuardState {
 	repos := map[string]ports.SCMRepo{}
 	for _, sr := range sessionRepos {
@@ -948,7 +1003,9 @@ func (o *Observer) guardRepos(ctx context.Context, sessionRepos []sessionRepo) m
 	out := map[string]repoGuardState{}
 	for key, repo := range repos {
 		prev, had := o.Cache.RepoPRListETag[key]
+		started := time.Now()
 		res, err := o.provider.RepoPRListGuard(ctx, repo, prev)
+		o.logProviderRequest("repo_pr_list_guard", repoFullName(repo), started, err)
 		if err != nil {
 			o.logger.Error("scm observer: repo PR-list guard failed", "repo", repoFullName(repo), "err", err)
 			out[key] = repoGuardState{hadETag: had, err: err}
@@ -1020,7 +1077,9 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 		if !cursor.IsZero() {
 			updatedAfter = cursor.Add(-incrementalDiscoveryOverlap)
 		}
+		started := time.Now()
 		pulls, err := o.provider.ListPRsByRepo(ctx, repo, updatedAfter)
+		o.logProviderRequest("list_open_prs", repoFullName(repo), started, err)
 		if err != nil {
 			o.logger.Debug("scm observer: open PR list failed", "repo", repoFullName(repo), "err", err)
 			if markRepoFailed != nil && !errors.Is(err, ports.ErrSCMNotFound) {
@@ -1207,30 +1266,39 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 		if sr.branch == "" {
 			continue
 		}
-		if sr.branch == sourceBranch {
-			consider(sr, len(sourceBranch)+1)
-		}
-		for _, prefix := range sessionBranchPrefixes(sr.branch) {
-			if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
-				consider(sr, len(prefix))
+		// A renamed task keeps owning its temporary branch, which the agent may
+		// have built on. It ranks below any session's current branch, so a later
+		// task given that name still wins its own PRs.
+		for temporary, owned := range []string{sr.branch, sr.session.TemporaryBranch} {
+			if owned == "" {
+				continue
 			}
-		}
-		if workspaceHyphenBranch(sr) && strings.HasPrefix(sourceBranch, sr.branch+"-") && len(sourceBranch) > len(sr.branch)+1 {
-			consider(sr, len(sr.branch))
+			rank := func(length int) int { return 2*length + 1 - temporary }
+			if owned == sourceBranch {
+				consider(sr, rank(len(sourceBranch)+1))
+			}
+			for _, prefix := range sessionBranchPrefixes(owned) {
+				if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
+					consider(sr, rank(len(prefix)))
+				}
+			}
+			if workspaceHyphenBranch(sr, owned) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
+				consider(sr, rank(len(owned)))
+			}
 		}
 	}
 	return best, bestLen >= 0 && !ambiguous
 }
 
-func workspaceHyphenBranch(sr sessionRepo) bool {
+func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
 	base := "ao/" + string(sr.session.ID)
-	if sr.branch == base {
+	if branch == base {
 		return true
 	}
-	suffix, ok := strings.CutPrefix(sr.branch, base+"-")
+	suffix, ok := strings.CutPrefix(branch, base+"-")
 	if !ok {
 		return false
 	}
@@ -1280,7 +1348,9 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 		if s.known.HeadSHA != "" {
 			commitKey := commitKey(s.repo, s.known.HeadSHA)
 			prev := o.Cache.CommitChecksETag[commitKey]
+			started := time.Now()
 			res, err := o.provider.CommitChecksGuard(ctx, s.repo, s.known.HeadSHA, prev)
+			o.logProviderRequest("commit_checks_guard", repoFullName(s.repo), started, err)
 			if err != nil {
 				o.logger.Error("scm observer: commit check-runs guard failed", "pr", s.known.URL, "sha", s.known.HeadSHA, "err", err)
 				if markRepoFailed != nil {
@@ -1447,7 +1517,9 @@ func (o *Observer) reconcileTerminalGitHubPRs(ctx context.Context, subjects map[
 		for i, r := range activePending {
 			active[i] = r.ref
 		}
+		started := time.Now()
 		batch, err := o.provider.FetchPullRequests(ctx, active)
+		o.logProviderRequest("reconcile_terminal_pull_requests", repoNames(active), started, err)
 		if err != nil {
 			if cooldown, ok := rateLimitCooldown(now, err); ok {
 				for _, ref := range active {
@@ -1534,7 +1606,10 @@ func (o *Observer) enrichFailureLogs(ctx context.Context, obs *ports.SCMObservat
 		tail := obs.CI.FailedChecks[i].LogTail
 		if tail == "" && obs.CI.FailedChecks[i].ProviderID != "" {
 			var err error
-			tail, err = o.provider.FetchFailedCheckLogTail(ctx, ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}, obs.CI.FailedChecks[i])
+			repo := ports.SCMRepo{Provider: obs.Provider, Host: obs.Host, Repo: obs.Repo, Owner: ownerOf(obs.Repo), Name: nameOf(obs.Repo)}
+			started := time.Now()
+			tail, err = o.provider.FetchFailedCheckLogTail(ctx, repo, obs.CI.FailedChecks[i])
+			o.logProviderRequest("fetch_failed_check_log", repoFullName(repo), started, err)
 			if err != nil {
 				tail = "<log fetch failed: " + scrubLine(err.Error()) + ">"
 			}
@@ -1603,7 +1678,9 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 		if !o.needsReviewRefresh(pkey, s.known, decision, hasObs, updatedAtProvider, now) {
 			continue
 		}
+		started := time.Now()
 		review, err := o.provider.FetchReviewThreads(ctx, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
+		o.logProviderRequest("fetch_review_threads", repoFullName(s.repo), started, err)
 		if err != nil {
 			o.logger.Error("scm observer: review refresh failed", "pr", s.known.URL, "err", err)
 			o.cacheSetBool(o.Cache.ReviewRefreshFailed, &o.Cache.reviewFailedOrder, pkey, true)

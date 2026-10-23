@@ -100,7 +100,7 @@ func TestPromptDeliveryWaitsBrieflyAfterStart(t *testing.T) {
 func TestContinuationCapabilitiesUseProviderAssignedNativeSessionID(t *testing.T) {
 	provider, ok := any(New()).(ports.AgentContinuationCapabilityProvider)
 	if !ok {
-		t.Fatal("fx must declare its native-session ownership for agent switching")
+		t.Fatal("fx must declare its native-session ownership")
 	}
 	if got := provider.ContinuationCapabilities().FreshNativeSessionID; got != ports.FreshNativeSessionIDProviderAssigned {
 		t.Fatalf("fresh native-session id mode = %q, want %q", got, ports.FreshNativeSessionIDProviderAssigned)
@@ -110,7 +110,7 @@ func TestContinuationCapabilitiesUseProviderAssignedNativeSessionID(t *testing.T
 func TestNativeSessionConfigDirUsesInvocationHome(t *testing.T) {
 	provider, ok := any(New()).(ports.AgentNativeSessionConfigProvider)
 	if !ok {
-		t.Fatal("fx must expose the native session state root used by switching")
+		t.Fatal("fx must expose the native session state root")
 	}
 	home := t.TempDir()
 	got, err := provider.NativeSessionConfigDir(context.Background(), map[string]string{"HOME": home})
@@ -129,7 +129,7 @@ func TestAfterStartPromptWrapsStandingInstructionsAndTaskInOneTurn(t *testing.T)
 	}
 	got, err := builder.BuildAfterStartPrompt(context.Background(), ports.LaunchConfig{
 		SystemPrompt: "Keep changes surgical.",
-		Prompt:       "Implement agent switching.",
+		Prompt:       "Implement a task.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ Keep changes surgical.
 
 ## AO Task
 
-Implement agent switching.`
+Implement a task.`
 	if got != want {
 		t.Fatalf("after-start prompt = %q, want %q", got, want)
 	}

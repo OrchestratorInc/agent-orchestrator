@@ -53,6 +53,10 @@ def offering_arguments(environment, providers, **extra):
         "0",
         "--freestyle-idle-pause-threshold",
         "15m",
+        "--coder-readable-names",
+        "true",
+        "--coder-worker-working-folder",
+        "false",
     ]
     for name, value in extra.items():
         arguments += [f"--{name.replace('_', '-')}", value]
@@ -75,6 +79,11 @@ class ValidateHostedSettingsCLITests(unittest.TestCase):
     def test_staging_offering(self):
         result = run(*offering_arguments("staging", "coder,freestyle"))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_offering_rejects_a_malformed_coder_rollout_flag(self):
+        result = run(*offering_arguments("staging", "coder,freestyle", coder_readable_names="yes"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("AO_CLOUD_CODER_READABLE_NAMES must be true or false", result.stderr)
 
     def test_stripe_secret(self):
         with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:

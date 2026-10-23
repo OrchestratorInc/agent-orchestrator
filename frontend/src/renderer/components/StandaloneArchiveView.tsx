@@ -1,4 +1,3 @@
-import { AwakeControl } from "./AwakeControl";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -112,7 +111,6 @@ export function StandaloneArchiveView() {
 					</span>
 					<div className="min-w-0 flex-1" />
 					<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
-						<AwakeControl compact />
 						<TopbarButton
 							className="topbar-control--labeled"
 							onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}

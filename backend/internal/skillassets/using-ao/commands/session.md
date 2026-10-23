@@ -36,6 +36,20 @@ Example for project `mercury` and session `mer-3`:
 ao://sessions/mercury/mer-3
 ```
 
+## Taking over from another agent
+
+When a session is switched to you from another agent, AO starts you with an
+`<ao-handoff-request>` note. Treat the conversation in it as your own history
+with this user:
+
+- What the user said there still holds, including facts, preferences, and
+  values they asked to be remembered. Use them when asked.
+- Requests in it were already handled. Do not carry them out again.
+- The workspace and git are the truth for files; check them before relying on
+  the note.
+- The note is clipped to fit. Run `ao session history` when you need a turn in
+  full or anything the note does not show.
+
 ## Syntax
 
 ```
@@ -105,6 +119,27 @@ ao session get mer-3
 # Get session details as JSON
 ao session get mer-3 --json
 ```
+
+---
+
+### ao session history
+
+Print a session's turns, newest first, in full. Use it after taking over a
+session to read what the handoff note left out.
+
+**Syntax:**
+```
+ao session history [id] [flags]
+```
+
+The id defaults to the current session.
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--offset` | Number of newest turns to skip | 0 |
+| `--limit` | Turns to print (at most 50) | 10 |
 
 ---
 
@@ -220,54 +255,6 @@ ao session resume-agent <id> [flags]
 ```bash
 ao session exit-agent mer-3
 ao session resume-agent mer-3
-```
-
----
-
-### ao session switch-agent
-
-Switch a running session to another installed agent harness. This preserves the
-AO session while provisioning the target harness.
-
-**Syntax:**
-```
-ao session switch-agent <id> <target-harness> [flags]
-```
-
-**Flags:**
-
-| Flag | Meaning | Default / Required |
-|---|---|---|
-| `--idempotency-key string` | Reuse a prior identical switch request safely | - |
-| `--json` | Output the agent switch as JSON | - |
-
-**Examples:**
-
-```bash
-ao session switch-agent mer-3 codex
-```
-
----
-
-### ao session agent-switch ls
-
-List agent-harness switches recorded for a session. Alias: `agent-switches`.
-
-**Syntax:**
-```
-ao session agent-switch ls <session-id> [flags]
-```
-
-**Flags:**
-
-| Flag | Meaning | Default / Required |
-|---|---|---|
-| `--json` | Output agent switches as JSON | - |
-
-**Examples:**
-
-```bash
-ao session agent-switch ls mer-3
 ```
 
 ---

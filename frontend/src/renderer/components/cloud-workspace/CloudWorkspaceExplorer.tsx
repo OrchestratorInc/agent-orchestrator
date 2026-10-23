@@ -96,8 +96,10 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 			{switchable ? <div aria-label={t("files.repositories", { defaultValue: "Repositories" })} className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1" role="tablist">
 				{[...repositories].sort((a, b) => Number(Boolean(b.main)) - Number(Boolean(a.main))).map((entry) => {
 					const value = entry.main ? "" : entry.name;
+					// The main checkout's folder is the provider's fixed name; label it with the repository's own.
+					const label = entry.label || entry.name;
 					const selected = value === activeRepository;
-					return <Button aria-selected={selected} className="h-6 shrink-0 px-2 font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(value); setFilter(""); }} role="tab" size="sm" title={entry.present ? entry.repository ?? entry.name : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: entry.name })} variant={selected ? "secondary" : "ghost"}>{entry.name}</Button>;
+					return <Button aria-selected={selected} className="h-6 shrink-0 px-2 font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(value); setFilter(""); }} role="tab" size="sm" title={entry.present ? entry.repository ?? label : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: label })} variant={selected ? "secondary" : "ghost"}>{label}</Button>;
 				})}
 			</div> : null}
 			{!enabled || summaryQuery.isPending ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isError ? <PanelMessage action={<RetryButton onClick={() => void summaryQuery.refetch()} />}>{summaryQuery.error.message}</PanelMessage> : showChanges ? (

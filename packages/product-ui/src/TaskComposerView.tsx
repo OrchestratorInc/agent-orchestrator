@@ -81,7 +81,6 @@ export type TaskComposerModelControl = {
 	disabled: boolean;
 	fetching: boolean;
 	id: string;
-	loading: boolean;
 	mode: string;
 	onModeChange: (value: string) => void;
 	onModelChange: (value: string) => void;

@@ -254,7 +254,7 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 			// connection of its own), so its children do too.
 			connections = nil
 		}
-		placement, err = resolveCoderPlacement(parent.ProjectConfig, connections, preferred)
+		placement, err = resolveCoderPlacement(parent.ProjectConfig, parent.RepositoryURL, connections, preferred)
 		if err != nil {
 			s.writeCoderPlacementError(w, r, err)
 			return

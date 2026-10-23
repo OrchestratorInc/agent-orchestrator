@@ -261,6 +261,45 @@ func TestACPReplayDrainReconstructsTurnsWithoutMessageIDs(t *testing.T) {
 	}
 }
 
+// pi-acp replays each user message as one id-less chunk and a reply that failed
+// as nothing. Two prompts whose replies both failed stay two turns, with the same
+// ids a replay with replies gives them, so earlier imports still match.
+func TestACPReplayKeepsWholeChunkUserMessagesApart(t *testing.T) {
+	conv := replayConversation()
+	conv.historyUserChunkIsMessage = true
+	conv.beginHistoryReplay("session-1")
+	for _, update := range []acpsdk.SessionNotification{
+		replayUserChunk("session-1", "", "What is the code word? Reply with only the code word."),
+		replayUserChunk("session-1", "", "What is the code word?"),
+	} {
+		if err := conv.SessionUpdate(context.Background(), update); err != nil {
+			t.Fatalf("SessionUpdate: %v", err)
+		}
+	}
+	if err := conv.drainAndFinishReplay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	history, err := conv.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	var userTexts, started []string
+	for _, event := range history {
+		switch event.Kind {
+		case ports.ChatEventUserMessageCompleted:
+			userTexts = append(userTexts, event.Text)
+		case ports.ChatEventTurnStarted:
+			started = append(started, event.ProviderTurnID)
+		}
+	}
+	if len(userTexts) != 2 || userTexts[0] != "What is the code word? Reply with only the code word." || userTexts[1] != "What is the code word?" {
+		t.Fatalf("user texts = %q, want the two prompts apart", userTexts)
+	}
+	if len(started) != 2 || !strings.HasSuffix(started[0], "user-1") || !strings.HasSuffix(started[1], "user-2") {
+		t.Fatalf("turns = %q, want user-1 then user-2", started)
+	}
+}
+
 // Block normalization while a second burst arrives. Delivery must keep making
 // progress, and the second batch must follow the first in the history snapshot.
 func TestACPReplayAcceptsUpdatesDuringDrain(t *testing.T) {

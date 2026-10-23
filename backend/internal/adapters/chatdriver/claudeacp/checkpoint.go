@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -94,13 +95,23 @@ type checkpointRecord struct {
 	Message struct {
 		Content    json.RawMessage `json:"content"`
 		StopReason string          `json:"stop_reason"`
+		Model      string          `json:"model"`
 	} `json:"message"`
 }
 
 type checkpointTurn struct {
 	promptID, userID, user, assistant string
 	complete, notice                  bool
+	// interrupted is a turn Esc ended: Claude records the interrupt marker in
+	// the prompt's own cycle and fires no Stop, so the turn never gets an
+	// end_turn reply. The marker is its settled boundary.
+	interrupted bool
 }
+
+// claudeSyntheticModel names the assistant records Claude Code writes itself
+// rather than receiving from the API, such as the "No response requested."
+// reply it adds after an interrupt marker when the conversation resumes.
+const claudeSyntheticModel = "<synthetic>"
 
 // claudeTranscriptNotice reports a note Claude Code writes into its transcript
 // as a user message: a background task's <task-notification>, which can carry
@@ -182,6 +193,11 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				continue
 			}
 			if checkpointToolResults(record.Message.Content) {
+				// A tool result after an interrupt marker means the turn went on.
+				if len(turns) > 0 && turns[len(turns)-1].interrupted {
+					turns[len(turns)-1].interrupted = false
+					turns[len(turns)-1].complete = false
+				}
 				continue
 			}
 			if record.PromptID == "" {
@@ -197,6 +213,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			// cycle keeps its prompt for Stop evidence; the boundary skips it.
 			notice := record.Meta || claudeTranscriptNotice(text)
 			if notice && len(turns) > 0 && turns[len(turns)-1].promptID == record.PromptID {
+				// Esc settles the turn it interrupts, whether Claude was replying
+				// or running a tool (its tool_use may have no result). Only the
+				// exact marker shape counts, as for the terminal interrupt
+				// detector; a typed prompt with the same text is a string.
+				if !record.Meta && claudecode.IsInterruptMarker(record.Message.Content) {
+					turns[len(turns)-1].interrupted = true
+					turns[len(turns)-1].complete = true
+				}
 				continue
 			}
 			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice})
@@ -224,14 +248,21 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				}
 			}
 		case "assistant":
+			if turn.interrupted && record.Message.Model == claudeSyntheticModel {
+				// Claude's own filler after the marker does not reopen the turn.
+				break
+			}
 			text, err := checkpointContent(record.Message.Content)
 			if err != nil {
 				return ports.NativeCheckpointBoundary{}, err
 			}
+			// A real reply after the marker means the turn is running again.
+			turn.interrupted = false
 			turn.assistant = text
 			turn.complete = record.Message.StopReason == "end_turn"
 		case "system":
 			if record.Subtype == "stop_hook_summary" && record.PreventedContinuation {
+				turn.interrupted = false
 				turn.complete = false
 			}
 		}
@@ -278,7 +309,10 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	if owner < 0 {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
-	return ports.NativeCheckpointBoundary{UserMessageID: turns[owner].userID, UserText: turns[owner].user, AssistantText: latest.assistant}, nil
+	return ports.NativeCheckpointBoundary{
+		UserMessageID: turns[owner].userID, UserText: turns[owner].user,
+		AssistantText: latest.assistant, Interrupted: latest.interrupted,
+	}, nil
 }
 
 func checkpointToolResults(raw json.RawMessage) bool {

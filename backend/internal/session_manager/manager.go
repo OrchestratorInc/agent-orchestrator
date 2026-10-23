@@ -71,53 +71,16 @@ var (
 	// not an orchestrator (orchestrators are promptless by design and relaunch fresh
 	// with the system prompt only). Workers without a task and without a native
 	// session id have nothing meaningful to restore.
-	ErrNotResumable = errors.New("session: nothing to resume from")
-	// ErrSwitchInProgress means an agent switch is already running for this
-	// session. The API maps it to a 409 so a double-submit does not race two
-	// teardown/relaunch cycles over one worktree.
-	ErrSwitchInProgress = errors.New("session: switch already in progress")
-	// ErrSwitchUnavailable means the configured store does not expose the
-	// durable agent-switch contract.
-	ErrSwitchUnavailable = errors.New("session: agent switching unavailable")
-	// ErrSwitchShuttingDown means daemon shutdown has closed background worker
-	// admission, so no new switch can be accepted safely.
-	ErrSwitchShuttingDown = errors.New("session: agent switching unavailable during shutdown")
-	// ErrUnsupportedSwitchHarness keeps the first release deliberately bounded
-	// to providers whose standing-instruction and native-resume behavior AO has
-	// verified end to end.
-	ErrUnsupportedSwitchHarness = errors.New("session: harness does not support agent switching")
-	// ErrUnsupportedSwitchKind keeps the first implementation scoped to worker
-	// sessions. Orchestrators own additional delegation and board semantics and
-	// need an explicit product contract before their process can be replaced.
-	ErrUnsupportedSwitchKind = errors.New("session: only worker sessions support agent switching")
+	ErrNotResumable        = errors.New("session: nothing to resume from")
+	ErrOperationInProgress = errors.New("session: another session operation is in progress")
 	// ErrTargetAgentUnauthorized is returned only when the target adapter's
 	// local auth probe conclusively reports missing or invalid credentials.
 	// Unknown/probe failures remain advisory and are allowed to reach launch.
 	ErrTargetAgentUnauthorized = errors.New("session: target agent is not authenticated")
-	// ErrSwitchDeliveryUnconfirmed means AO wrote the continuation turn but did
-	// not receive the target generation's prompt-submit hook before the bounded
-	// acknowledgement window expired. AO never resends this ambiguous turn.
-	ErrSwitchDeliveryUnconfirmed = errors.New("session: target continuation delivery was not acknowledged")
 	// ErrSwitchSourceStopUnconfirmed means runtime teardown returned an error and
 	// AO could not prove whether the source still owns the session. No target is
 	// launched in this case.
 	ErrSwitchSourceStopUnconfirmed = errors.New("session: source agent stop could not be confirmed")
-	// ErrAlreadyUsingHarness rejects a no-op replacement that would otherwise
-	// create a misleading switch record and restart the same process.
-	ErrAlreadyUsingHarness = errors.New("session: already using requested harness")
-	// ErrSwitchNotFound is returned for a switch id outside the requested AO
-	// session (the same response is used for absent and cross-session ids).
-	ErrSwitchNotFound = errors.New("session: agent switch not found")
-	// ErrSwitchRecoveryNotRequired rejects recovery requests for switches that
-	// are terminal or do not carry a durable source-restore marker.
-	ErrSwitchRecoveryNotRequired = errors.New("session: agent switch does not require source recovery")
-	// ErrStaleHandoff rejects semantic handoff submissions from an old provider
-	// generation or after the collection window has closed.
-	ErrStaleHandoff = errors.New("session: stale agent handoff")
-	// ErrInvalidAgentHandoff reports a generation-valid semantic report that did
-	// not satisfy AO's bounded provider-neutral schema. Collection is settled as
-	// rejected before this error is returned.
-	ErrInvalidAgentHandoff = errors.New("session: invalid agent handoff")
 	// ErrInterfaceHandoffUnsupported means the harness has not proven that its
 	// TUI resume identity and Chat protocol identity name the same conversation.
 	ErrInterfaceHandoffUnsupported = errors.New("session: interface handoff unsupported")
@@ -241,12 +204,6 @@ const (
 	EnvBrowserRuntimeTokenStdin = "AO_BROWSER_RUNTIME_TOKEN_STDIN" //nolint:gosec // Environment variable name, not a credential.
 )
 
-// hookBinaryName is the executable name the workspace hook commands invoke:
-// every agent adapter installs a bare `ao hooks <agent> <event>`. The session
-// PATH pin (hookPATH) only works when the daemon's own executable carries this
-// name, since prepending its directory must change what `ao` resolves to.
-const hookBinaryName = "ao"
-
 type lifecycleRecorder interface {
 	PrepareLaunch(id domain.SessionID, launchID string) error
 	CancelLaunch(id domain.SessionID, launchID string)
@@ -256,9 +213,6 @@ type lifecycleRecorder interface {
 	MarkChatSpawned(ctx context.Context, id domain.SessionID, metadata domain.SessionMetadata, boundary domain.ConversationBranch) error
 	CommitControllerEpoch(ctx context.Context, id domain.SessionID, source, target domain.SessionMode, nativeConversationID string, startFresh bool) (bool, error)
 	RestoreControllerEpoch(ctx context.Context, id domain.SessionID, source, target domain.SessionMode, nativeConversationID string, startFresh bool) (bool, error)
-	ConfirmAgentSwitchSourceStopped(ctx context.Context, confirmation domain.AgentSwitchSourceStopConfirmation) (bool, error)
-	ActivateAgentSwitchTarget(ctx context.Context, activation domain.AgentSwitchTargetActivation) (bool, error)
-	ActivateChatAgentSwitchTarget(ctx context.Context, activation domain.AgentSwitchChatTargetActivation) (bool, error)
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, signal ports.ActivitySignal) error
 	MarkTerminated(ctx context.Context, id domain.SessionID) error
 }
@@ -389,7 +343,9 @@ type Store interface {
 	SetSessionProvisionState(ctx context.Context, id domain.SessionID, state domain.SessionProvisionState, message string, now time.Time) (bool, error)
 	SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error
 	SetSessionProvisionedWorkspace(ctx context.Context, id domain.SessionID, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
-	SetSessionNamedWorkspace(ctx context.Context, id domain.SessionID, expectedPath, branch, workspacePath, workspaceRepoPath string, now time.Time) (bool, error)
+	SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error)
+	SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error
+	ClearSessionBranchNaming(ctx context.Context) error
 	SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error)
 	PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error)
 	DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error)
@@ -409,11 +365,8 @@ type Manager struct {
 	agents    ports.AgentResolver
 	workspace ports.Workspace
 	store     Store
-	// agentSwitchReporting supplies the exact authorization snapshot immediately
-	// before each failure-aware store transaction. Nil is fail-closed.
-	agentSwitchReporting ports.AgentSwitchReportingPolicy
-	daemonRunID          string
-	agentReadiness       ports.AgentReadinessProvider
+	// agentReadiness is late-bound by SetAgentReadiness.
+	agentReadiness ports.AgentReadinessProvider
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -489,37 +442,15 @@ type Manager struct {
 	statusRecoveryRevision      uint64
 	statusRecoveries            map[domain.SessionID]statusRecovery
 	statusVerificationLimit     time.Duration
+	startupChatRetryDelays      []time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
-	interfaceRecoveryMu         sync.Mutex
-	deferredInterfaceRecovery   map[domain.SessionID]string
-	// switchDecisionInput opens a narrow human-only terminal lane while the
-	// source is blocked on permission during a mandatory switch.
-	switchDecisionInput map[domain.SessionID]domain.AgentSwitchID
-	// retainedSwitches marks switch gates intentionally kept closed after an
-	// ambiguous external side effect (for example a target runtime that could
-	// not be removed). A later reconciliation pass may reclaim exactly these
-	// gates; an actively-running switch remains non-reentrant.
-	retainedSwitches map[domain.SessionID]struct{}
-	inputLeases      map[domain.SessionID]int
-	inputDrained     map[domain.SessionID]chan struct{}
-	// handoffWait bounds optional source-agent enrichment. Time spent waiting
-	// for a human permission decision is paused and charged only against the
-	// separate switchPermissionDecisionWait budget below.
-	handoffWait time.Duration
-	// switchPermissionDecisionWait is a separate human-response budget used only
-	// while the source agent is blocked on a permission prompt. The semantic
-	// handoff budget is paused while this budget is active.
-	switchPermissionDecisionWait time.Duration
-	// switchTargetStartWait bounds proof that the newly-created supervised
-	// provider generation is actually alive before durable ownership transfers.
-	switchTargetStartWait time.Duration
-	// switchPostStopWait bounds aggregate target setup after source ownership is
-	// conclusively stopped. Tests shorten it to exercise phase-budget isolation.
-	switchPostStopWait time.Duration
-	// switchDeliveryAckWait bounds the target generation's prompt-submit hook.
-	// Timeout is an explicit failed/ambiguous delivery, never implicit success.
-	switchDeliveryAckWait time.Duration
+	// launchStartWait bounds the wait to see a new supervised launch alive.
+	launchStartWait           time.Duration
+	interfaceRecoveryMu       sync.Mutex
+	deferredInterfaceRecovery map[domain.SessionID]string
+	inputLeases               map[domain.SessionID]int
+	inputDrained              map[domain.SessionID]chan struct{}
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context
@@ -581,7 +512,14 @@ type Manager struct {
 // acquireWorkspaceGate acquires the per-project workspace gate, returning a
 // release function that must be deferred or called when the operation finishes.
 func (m *Manager) acquireWorkspaceGate(projectID domain.ProjectID) func() {
+	mu := m.workspaceGate(projectID)
+	mu.Lock()
+	return mu.Unlock
+}
+
+func (m *Manager) workspaceGate(projectID domain.ProjectID) *sync.Mutex {
 	m.workspaceGateMu.Lock()
+	defer m.workspaceGateMu.Unlock()
 	if m.workspaceGates == nil {
 		m.workspaceGates = make(map[domain.ProjectID]*sync.Mutex)
 	}
@@ -590,10 +528,7 @@ func (m *Manager) acquireWorkspaceGate(projectID domain.ProjectID) func() {
 		mu = &sync.Mutex{}
 		m.workspaceGates[projectID] = mu
 	}
-	m.workspaceGateMu.Unlock()
-
-	mu.Lock()
-	return mu.Unlock
+	return mu
 }
 
 // Spawn rollback must release its project's gate before untimed cleanup.
@@ -805,13 +740,11 @@ const (
 
 // Deps are the collaborators a Session Manager needs; New wires them together.
 type Deps struct {
-	Runtime         runtimeController
-	Agents          ports.AgentResolver
-	Workspace       ports.Workspace
-	Store           Store
-	ReportingPolicy ports.AgentSwitchReportingPolicy
-	DaemonRunID     string
-	Messenger       ports.AgentMessenger
+	Runtime   runtimeController
+	Agents    ports.AgentResolver
+	Workspace ports.Workspace
+	Store     Store
+	Messenger ports.AgentMessenger
 	// Defaults supplies the daemon-owned default session interface for spawns that
 	// name no mode. Nil means always use the compatibility default.
 	Defaults SessionModeDefaults
@@ -855,6 +788,25 @@ type Deps struct {
 	Logger *slog.Logger
 }
 
+func (m *Manager) beginAgentSwitchAttempt() error {
+	m.agentSwitchWorkerMu.Lock()
+	defer m.agentSwitchWorkerMu.Unlock()
+	if m.agentSwitchWorkersClosed {
+		return errors.New("session: interface recovery is shutting down")
+	}
+	m.agentSwitchWorkers.Add(1)
+	return nil
+}
+
+// WaitAgentSwitchWorkers closes admission and waits for deferred TUI/Chat
+// interface recovery work.
+func (m *Manager) WaitAgentSwitchWorkers(ctx context.Context) error {
+	m.agentSwitchWorkerMu.Lock()
+	m.agentSwitchWorkersClosed = true
+	m.agentSwitchWorkerMu.Unlock()
+	return waitForWorkers(ctx, &m.agentSwitchWorkers)
+}
+
 // New builds a Session Manager from its dependencies, defaulting the clock to
 // time.Now when Deps.Clock is nil.
 func New(d Deps) *Manager {
@@ -863,8 +815,6 @@ func New(d Deps) *Manager {
 		agents:                         d.Agents,
 		workspace:                      d.Workspace,
 		store:                          d.Store,
-		agentSwitchReporting:           d.ReportingPolicy,
-		daemonRunID:                    strings.TrimSpace(d.DaemonRunID),
 		defaults:                       d.Defaults,
 		chat:                           d.Chat,
 		lcm:                            d.Lifecycle,
@@ -890,20 +840,11 @@ func New(d Deps) *Manager {
 		backgroundContext:              d.BackgroundContext,
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
-		switchDecisionInput:            make(map[domain.SessionID]domain.AgentSwitchID),
-		retainedSwitches:               make(map[domain.SessionID]struct{}),
+		launchStartWait:                3 * time.Second,
 		inputLeases:                    make(map[domain.SessionID]int),
 		inputDrained:                   make(map[domain.SessionID]chan struct{}),
-		handoffWait:                    90 * time.Second,
-		switchPermissionDecisionWait:   time.Minute,
-		switchTargetStartWait:          3 * time.Second,
-		switchPostStopWait:             switchPostStopWait,
-		// Provider startup, including slow MCP initialization, can delay the
-		// prompt-submit hook even though the continuation is correctly buffered.
-		// Leave enough headroom to avoid a false delivery failure.
-		switchDeliveryAckWait:  150 * time.Second,
-		transitions:            make(map[domain.SessionID]*interfaceTransitionRun),
-		transitionDeliveryWake: make(chan struct{}, 1),
+		transitions:                    make(map[domain.SessionID]*interfaceTransitionRun),
+		transitionDeliveryWake:         make(chan struct{}, 1),
 		sendConfirm: sendConfirmConfig{
 			pollInterval:    sendConfirmPollInterval,
 			attemptDeadline: sendConfirmAttemptDeadline,
@@ -925,6 +866,7 @@ func New(d Deps) *Manager {
 	}
 	m.statusRecoveries = make(map[domain.SessionID]statusRecovery)
 	m.statusVerificationLimit = statusVerificationLimit
+	m.startupChatRetryDelays = defaultStartupChatRetryDelays
 	if m.reconcileWorkers < 1 {
 		m.reconcileWorkers = 1
 	}
@@ -973,6 +915,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
 	}
+	ctx, cancelBudget := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+	defer cancelBudget()
 	standalone := cfg.ProjectID == ""
 	projectKind := project.Kind.WithDefault()
 	if standalone {
@@ -1039,10 +983,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// a worktree behind. Chat inherited from the daemon preference is best-effort:
 	// if it is unavailable for this harness or installation, fall back to TUI.
 	modeExplicitlyRequested := cfg.RequestedMode.Valid()
-	mode := m.resolveSessionMode(ctx, cfg.RequestedMode)
-	if cfg.Kind == domain.KindOrchestrator && !modeExplicitlyRequested {
-		mode = domain.SessionModeChat
-	}
+	mode := m.resolveSessionMode(ctx, cfg.Kind, cfg.RequestedMode)
 	if mode == domain.SessionModeChat {
 		if m.chat == nil {
 			if modeExplicitlyRequested {
@@ -1243,14 +1184,15 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	// synchronous workspace lifecycle as before. Async Chat acquires it in its
 	// background half so the API response never waits on Git.
 	var taskName func() generatedTaskName
-	var namingProgress *provisionProgress
-	if !asyncChat {
-		if cfg.NameFromPrompt && cfg.Branch == "" && cfg.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != "" {
-			namingProgress = m.startProvisionProgress(ctx, id, []domain.SessionProvisionStepID{domain.SessionProvisionStepWorktree})
+	cancelNaming := context.CancelFunc(func() {})
+	namingHandedOff := false
+	defer func() {
+		if !namingHandedOff {
+			cancelNaming()
 		}
-		var cancelNaming context.CancelFunc
-		taskName, cancelNaming = m.startTaskNaming(ctx, cfg, rec, project.Config)
-		defer cancelNaming()
+	}()
+	if !asyncChat {
+		taskName, cancelNaming = m.startTaskNaming(cfg, rec, project.Config)
 		releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(cfg.ProjectID))
 		ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 		defer releaseWorkspaceGate()
@@ -1321,41 +1263,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
-	// A synchronous request is unacknowledged until launch. Record that setup
-	// has not completed before naming publishes its workspace path.
-	trackSetup := taskName != nil && cfg.ClientRequestID != ""
-	if trackSetup {
-		namingProgress.steps = append(namingProgress.steps, domain.SessionProvisionStep{ID: domain.SessionProvisionStepSetup, Status: domain.SessionProvisionStepRunning})
-		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
-		}
-	}
-	if taskName != nil {
-		ws, workspaceProject, err = m.nameTaskWorkspace(ctx, rec, ws, workspaceProject, taskName())
-		if err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
-		}
-	}
-	if namingProgress != nil {
-		namingProgress.complete(ctx, domain.SessionProvisionStepWorktree)
-	}
 	// Per-project workspace provisioning: symlink shared files, then run any
 	// post-create commands (e.g. `pnpm install`) before the agent launches.
 	if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
-	}
-
-	if namingProgress != nil {
-		namingProgress.complete(ctx, domain.SessionProvisionStepSetup)
-	}
-	if trackSetup {
-		if err := m.store.SetSessionProvisionSteps(ctx, id, namingProgress.steps, m.clock()); err != nil {
-			m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false, false)
-			return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceProvision, err)
-		}
 	}
 
 	// CLI agents receive the prompt as text and cannot consume inline binary
@@ -1408,6 +1320,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnCommit, err)
 			}
 		}
+		namingHandedOff = true
+		m.nameTaskBranchLater(ctx, rec, ws, workspaceProject, taskName, cancelNaming)
 		return rec, promptBytes, systemPromptBytes, nil
 	}
 
@@ -1587,6 +1501,8 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, err
 	}
+	namingHandedOff = true
+	m.nameTaskBranchLater(ctx, rec, ws, workspaceProject, taskName, cancelNaming)
 	return rec, promptBytes, systemPromptBytes, nil
 }
 
@@ -1642,22 +1558,23 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, and command-code agents", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
 	}
-	if cfg.Harness == domain.HarnessCommandCode {
+	if cfg.Harness == domain.HarnessCommandCode || cfg.Harness == domain.HarnessHermes {
 		// Command Code's `cmd --list-models` catalog advertises no per-model
-		// effort levels, so there is nothing to validate against: forward the
-		// raw level (empty keeps the adapter default) and let `cmd --effort`
-		// reject unknown values at launch.
+		// effort levels, and Hermes accepts --reasoning for typed model IDs its
+		// configuration catalog never lists, so there is nothing to validate
+		// against: forward the raw level (empty keeps the adapter default) and
+		// let the CLI reject unknown values at launch.
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)
@@ -1671,7 +1588,13 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		}
 		return resolved, nil
 	}
-	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	// Validate against the saved catalog first so a launch does not wait on a
+	// live model discovery. Rediscover only when the saved catalog cannot answer:
+	// it failed, is stale or updating, or lacks the requested model or effort.
+	catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false)
+	if err != nil || !savedCatalogCovers(catalog, modelID, resolved.Effort) {
+		catalog, err = m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), true)
+	}
 	if err != nil {
 		if modelChangedWithoutExplicitEffort {
 			resolved.Effort = ""
@@ -2154,9 +2077,6 @@ func (m *Manager) destroySpawnWorkspace(ctx context.Context, ws ports.WorkspaceI
 		return false
 	}
 	_ = m.store.DeleteSessionWorktrees(ctx, ws.SessionID)
-	if err := m.completeTaskNaming(ctx, ports.WorkspaceProjectInfo{Root: ws}); err != nil {
-		m.logger.Warn("spawn rollback: clear task naming journal", "sessionID", ws.SessionID, "error", err)
-	}
 	return true
 }
 
@@ -2220,14 +2140,6 @@ func (m *Manager) rollbackSeedSpawnWorkspace(ctx context.Context, rec domain.Ses
 		if published {
 			m.clearProvisionedWorkspace(ctx, rec.ID, ws.Path)
 		} else {
-			cleanupCtx, cancel = spawnRollbackContext(ctx)
-			cleared, err := m.store.SetSessionNamedWorkspace(cleanupCtx, rec.ID, ws.Path, "", "", "", m.clock())
-			cancel()
-			if err != nil || !cleared {
-				m.logger.Warn("spawn rollback: retain session after workspace clear failed", "sessionID", rec.ID, "error", err)
-				m.markSpawnFailedTerminatedAfterFailure(ctx, rec.ID, false)
-				return
-			}
 			m.rollbackSpawnSeedRowAfterFailure(ctx, rec.ID)
 			m.cleanupArtifactDir(rec.ID)
 		}
@@ -2316,6 +2228,27 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 		merged.Model = ""
 	}
 	return merged
+}
+
+// launchOptionsStore keeps a terminal session's launch choices; optional.
+type launchOptionsStore interface {
+	SessionLaunchOptions(ctx context.Context, id domain.SessionID) (domain.AgentLaunchOptions, error)
+	SetSessionLaunchOptions(ctx context.Context, id domain.SessionID, options domain.AgentLaunchOptions) error
+	UpdateSessionWithLaunchOptions(ctx context.Context, rec domain.SessionRecord, options domain.AgentLaunchOptions) error
+}
+
+// sessionLaunchOptions reads the saved launch choices; none on a failed read.
+func (m *Manager) sessionLaunchOptions(ctx context.Context, id domain.SessionID) domain.AgentLaunchOptions {
+	store, ok := m.store.(launchOptionsStore)
+	if !ok {
+		return domain.AgentLaunchOptions{}
+	}
+	options, err := store.SessionLaunchOptions(ctx, id)
+	if err != nil {
+		m.logger.Warn("read session launch options", "session", id, "error", err)
+		return domain.AgentLaunchOptions{}
+	}
+	return options
 }
 
 func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) ports.AgentConfig {
@@ -2586,15 +2519,10 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	}
 
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
-		if !errors.Is(err, errAgentOperationInProgress) {
-			return KillResult{}, fmt.Errorf("kill %s: %w", id, err)
+		if errors.Is(err, errAgentOperationInProgress) {
+			err = ErrOperationInProgress
 		}
-		// Only a switch parked on an unconfirmed source restore yields: nothing
-		// is running for it, and Kill is the way out. A switch still executing
-		// keeps the session busy.
-		if !m.sourceRestoreQuarantined(ctx, id) || !m.claimRetainedAgentSwitchForKill(id) {
-			return KillResult{}, fmt.Errorf("kill %s: %w", id, ErrSwitchInProgress)
-		}
+		return KillResult{}, fmt.Errorf("kill %s: %w", id, err)
 	}
 	releaseOperation := func() { m.endAgentOperation(id, agentOperationKill) }
 	defer func() {
@@ -2654,9 +2582,6 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		if err := m.runtime.Destroy(ctx, handle); err != nil {
 			return KillResult{}, fmt.Errorf("kill %s: runtime: %w", id, err)
 		}
-	}
-	if err := m.settleSourceRestoreQuarantineOnKill(ctx, rec); err != nil {
-		return KillResult{}, fmt.Errorf("kill %s: agent switch: %w", id, err)
 	}
 	if err := m.terminateReviewer(ctx, id, "cancelled by worker session termination"); err != nil {
 		return KillResult{}, fmt.Errorf("kill %s: reviewer: %w", id, err)
@@ -2770,7 +2695,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 func (m *Manager) RetireForReplacement(ctx context.Context, id domain.SessionID) error {
 	if err := m.beginAgentOperation(ctx, id, agentOperationRetire); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
-			err = ErrSwitchInProgress
+			err = ErrOperationInProgress
 		}
 		return fmt.Errorf("retire replacement %s: %w", id, err)
 	}
@@ -2950,7 +2875,7 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
 	if err := m.beginAgentOperation(ctx, id, agentOperationRestore); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
-			err = ErrSwitchInProgress
+			err = ErrOperationInProgress
 		}
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
 	}
@@ -3113,6 +3038,30 @@ func (m *Manager) stopAgentController(ctx context.Context, rec domain.SessionRec
 		Generation:     strings.TrimSpace(rec.Metadata.RuntimeLaunchID),
 		NativeIdentity: strings.TrimSpace(rec.Metadata.AgentSessionID),
 	})
+}
+
+// stopSourceRuntime stops one fenced TUI runtime. A failed destroy is checked
+// against the runtime's own liveness and retried once before it is reported.
+func (m *Manager) stopSourceRuntime(ctx context.Context, ref ports.FencedRuntimeRef) error {
+	if strings.TrimSpace(ref.Handle.ID) == "" {
+		return ErrIncompleteHandle
+	}
+	var errs []error
+	var probe ports.FencedProbeResult
+	for range 2 {
+		err := m.runtime.Destroy(ctx, ref.Handle)
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, err)
+		if ctx.Err() != nil {
+			return errors.Join(append(errs, ctx.Err())...)
+		}
+		if probe = m.runtime.ProbeFencedRuntime(ctx, ref); probe.Liveness == ports.FencedDead {
+			return nil
+		}
+	}
+	return errors.Join(append(errs, fmt.Errorf("runtime ownership remains unresolved: %s", probe.Reason))...)
 }
 
 func (m *Manager) recordAgentExited(ctx context.Context, rec domain.SessionRecord) error {
@@ -3429,10 +3378,10 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		ProjectID: rec.ProjectID,
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || meta.RuntimeHandleID == "" {
-		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict)
+		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict, nil)
 	}
 	handle := ports.RuntimeHandle{ID: meta.RuntimeHandleID}
-	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, &handle, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict)
+	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, &handle, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict, nil)
 }
 
 func (m *Manager) relaunchSession(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle) (RestoreResult, error) {
@@ -3459,10 +3408,10 @@ func (m *Manager) relaunchSessionWithPolicy(
 	forceFresh, requireNativeHistory bool,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (RestoreResult, error) {
-	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, restartHandle, forceFresh, requireNativeHistory, "", historyPolicy)
+	return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, restartHandle, forceFresh, requireNativeHistory, "", historyPolicy, nil)
 }
 
-func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy) (RestoreResult, error) {
+func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, operation string, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo, restartHandle *ports.RuntimeHandle, forceFresh, requireNativeHistory bool, reservedGeneration string, historyPolicy domain.SessionInterfaceTransitionHistoryPolicy, promptOverride *string) (RestoreResult, error) {
 	// Relaunch dispatches from the currently committed persisted mode, never from
 	// a caller hint. The interface-transition coordinator changes that fact only
 	// after stopping the old controller, then reuses this ordinary restore path.
@@ -3481,15 +3430,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if !ok {
 		return RestoreResult{}, fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness)
 	}
-	// Recompute standing instructions, then reapply the durable finalized inbound
-	// handoff for this exact native conversation when one exists.
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
 	}
-	systemPrompt, err = m.systemPromptForNativeRestore(ctx, rec, systemPrompt)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: switched continuation: %w", operation, rec.ID, err)
+	if !forceFresh {
+		systemPrompt = m.withLegacySwitchHandoff(ctx, rec, systemPrompt)
 	}
 	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, rec.Harness, systemPrompt)
 	if err != nil {
@@ -3511,6 +3457,15 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
 		agentConfig.Effort = effort
 	}
+	agentConfig.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	// Only a provider switch passes its own prompt; it rolls back a failed start itself.
+	switching := promptOverride != nil
+	// A switch target that has not started yet: its note goes in place of the task.
+	savedNote := false
+	if note := agentConfig.Launch.HandoffNote; note != "" && !switching && rec.Metadata.AgentSessionID == "" {
+		promptOverride, savedNote = &note, true
+	}
+	agentConfig.Launch.HandoffNote = ""
 	if rec.Metadata.Permissions != "" {
 		agentConfig.Permissions = rec.Metadata.Permissions
 	}
@@ -3557,13 +3512,24 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	var initialization ports.NativeRestoreInitialization
 	var delivery ports.PromptDeliveryStrategy
 	var mode RestoreMode
+	// A handoff note is for this launch only; the session keeps the user's prompt.
+	savedPrompt := rec.Metadata.Prompt
+	if promptOverride != nil {
+		rec.Metadata.Prompt = *promptOverride
+	}
+	// Claude Code pins its native id to the AO session and refuses the id an
+	// earlier conversation used, so a handoff's fresh conversation gets a new one.
+	freshNativeSessionID := ""
+	if provider, ok := agent.(ports.AgentFreshNativeSessionIDProvider); ok && forceFresh && promptOverride != nil {
+		freshNativeSessionID = provider.NewNativeSessionID()
+	}
 	if restorer, ok := agent.(ports.AgentInteractiveNativeRestorer); ok && !forceFresh {
 		identityUnverified := rec.Metadata.RuntimeLaunchID != "" && rec.Metadata.AgentSessionIDLaunchID != rec.Metadata.RuntimeLaunchID
 		if identityUnverified && requireNativeHistory {
 			err = ErrNotResumable
 		} else if identityUnverified {
 			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 		} else {
 			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: ws.Path, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
 			if err == nil {
@@ -3574,12 +3540,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 				delivery, mode = ports.PromptDeliveryInCommand, RestoreModeNative
 			} else if errors.Is(err, ports.ErrNativeHistoryUnavailable) && !requireNativeHistory {
 				argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-					systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+					systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 			}
 		}
 	} else if forceFresh {
 		argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
-			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true)
+			systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID)
 	} else {
 		argv, delivery, mode, err = restoreArgv(ctx, agent, rec.ID, ws.Path, rec.Metadata,
 			systemPrompt, systemPromptFile, agentConfig, rec.Kind, rec.Harness, m.dataDir, env)
@@ -3602,6 +3568,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
+		NativeSessionID:  freshNativeSessionID,
 	}
 	afterStartPrompt := rec.Metadata.Prompt
 	if delivery == ports.PromptDeliveryAfterStart && mode != RestoreModeNative {
@@ -3665,7 +3632,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		if rec.StaleBinary != nil {
 			startErr = m.verifyRefreshedTerminal(ctx, handle, rec.ID, launchID)
 		} else {
-			alive, err := m.waitForTargetGeneration(ctx, handle, rec.ID, domain.AgentGenerationID(launchID))
+			alive, err := m.waitForExactLaunch(ctx, handle, rec.ID, launchID)
 			if err != nil || !alive {
 				startErr = errors.Join(ErrNotResumable, err)
 			}
@@ -3694,7 +3661,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		RuntimeHandleID:           handle.ID,
 		RuntimeLaunchID:           launchID,
 		AgentSessionID:            rec.Metadata.AgentSessionID,
-		Prompt:                    rec.Metadata.Prompt,
+		Prompt:                    savedPrompt,
 		BrowserCapabilityVerifier: rec.Metadata.BrowserCapabilityVerifier,
 	}
 	// Bind an exact native resume to the target launch immediately. Passive Codex
@@ -3728,12 +3695,19 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		}
 		if err := m.deliverAfterStartPrompt(ctx, agent, launchCfg, handle, rec.ID, afterStartPrompt); err != nil {
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
-			cleanupCtx, cancel := spawnRollbackContext(ctx)
-			_ = m.lcm.MarkTerminated(cleanupCtx, rec.ID)
-			cancel()
+			// A provider switch brings the source back itself, so its session
+			// must not be ended here.
+			if !switching {
+				cleanupCtx, cancel := spawnRollbackContext(ctx)
+				_ = m.lcm.MarkTerminated(cleanupCtx, rec.ID)
+				cancel()
+			}
 			m.cleanupSystemPromptDir(rec.ID)
 			return RestoreResult{}, fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err)
 		}
+	}
+	if savedNote {
+		m.clearHandoffNote(ctx, rec.ID)
 	}
 	updated, err := m.getRecord(ctx, rec.ID)
 	if err != nil {
@@ -4108,14 +4082,8 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 }
 
 // ReconcileStartupSafety closes interrupted operations or quarantines ambiguous
-// interface targets and agent switches with a restored input fence before the API accepts input.
+// interface targets with a restored input fence before the API accepts input.
 func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
-	// A daemon restart destroys the in-memory input fence. Close any durable
-	// non-terminal switch before adopting runtimes so the API never implies an
-	// unconfirmed continuation was delivered.
-	if err := m.reconcileAgentSwitches(ctx, true); err != nil {
-		return fmt.Errorf("reconcile: agent-switch pass: %w", err)
-	}
 	m.startTransitionMessageDispatcher(ctx)
 	_, err := m.recoverInterruptedInterfaceTransitions(ctx)
 	if err != nil {
@@ -4125,6 +4093,10 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	// background, where a slow or unavailable repository cannot delay boot.
 	m.startupTaskPreparations = []domain.SessionRecord{}
 	m.startupProvisioningRetries = nil
+	// No branch naming survives a restart; clients show the branch it left.
+	if err := m.store.ClearSessionBranchNaming(ctx); err != nil {
+		m.logger.Warn("reconcile: interrupted branch naming could not be cleared", "error", err)
+	}
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
 		m.logger.Warn("reconcile: interrupted startup work could not be listed", "error", err)
@@ -4191,29 +4163,6 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("reconcile: list sessions: %w", err)
 	}
-	for i, rec := range recs {
-		if rec.IsTerminated || rec.IsTaskPreparation || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.ProviderConversationID != "" {
-			continue
-		}
-		// Fence controller launches before taking the project gate, matching resume.
-		if err := m.beginAgentResume(ctx, rec.ID); err != nil {
-			continue
-		}
-		release := m.acquireWorkspaceGate(rec.ProjectID)
-		current, ok, readErr := m.store.GetSession(ctx, rec.ID)
-		if readErr == nil && ok && current.CreatedAt.Equal(rec.CreatedAt) {
-			_, recovered, recoveryErr := m.recoverTaskNaming(ctx, current)
-			if recoveryErr != nil {
-				m.logger.Warn("reconcile: task naming recovery failed", "sessionID", rec.ID, "error", recoveryErr)
-			} else if recovered {
-				if updated, ok, err := m.store.GetSession(ctx, rec.ID); err == nil && ok {
-					recs[i] = updated
-				}
-			}
-		}
-		release()
-		m.endAgentResume(rec.ID)
-	}
 	m.reconcileLivePass(ctx, recs)
 	for _, rec := range recs {
 		if !rec.IsTerminated {
@@ -4262,7 +4211,7 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	for _, rec := range candidates {
 		if _, ok := acquiredSet[rec.ID]; !ok {
 			m.finishStatusRecovery(ctx, rec, ErrResumeInProgress)
-			m.logger.Warn("reconcile: session remains input-gated pending unambiguous agent-switch recovery", "sessionID", rec.ID)
+			m.logger.Warn("reconcile: session remains input-gated pending unambiguous recovery", "sessionID", rec.ID)
 			continue
 		}
 		live = append(live, rec)
@@ -4276,6 +4225,8 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 	jobs := make(chan domain.SessionRecord)
 	var wg sync.WaitGroup
+	var retryMu sync.Mutex
+	var retryChats []domain.SessionID
 	wg.Add(workers)
 	for range workers {
 		go func() {
@@ -4288,9 +4239,19 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer cancel()
 					return m.checkSessionHealth(recoveryCtx, rec)
 				}()
-				m.finishStatusRecovery(ctx, rec, err)
+				retry := err != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+					retryableStartupChatCheck(err) && len(m.startupChatRetryDelays) > 0
+				if !retry {
+					// A scheduled reattach keeps the session checking; its last attempt settles it.
+					m.finishStatusRecovery(ctx, rec, err)
+				}
 				if err != nil {
-					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "error", err)
+					m.logger.Error("reconcile: live pass failed, skipping", "sessionID", rec.ID, "retrying", retry, "error", err)
+				}
+				if retry {
+					retryMu.Lock()
+					retryChats = append(retryChats, rec.ID)
+					retryMu.Unlock()
 				}
 			}
 		}()
@@ -4300,6 +4261,9 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	}
 	close(jobs)
 	wg.Wait()
+	if len(retryChats) > 0 && ctx.Err() == nil {
+		go m.retryStartupChatChecks(ctx, retryChats)
+	}
 }
 
 // RestoreAll relaunches every terminated session that was saved by the last
@@ -4525,7 +4489,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
 		if recreated {
-			if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+			if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
 		}
@@ -4557,11 +4521,21 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 		return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 	}
 	if recreated {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		if err := m.provisionRecreatedWorkspace(ctx, project, ws.Path); err != nil {
 			return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 		}
 	}
 	return ws, nil
+}
+
+// provisionRecreatedWorkspace runs the project's Setup for a restore whose
+// worktree was reclaimed. Only such a restore runs Setup, so only it extends
+// a REST restore's budget, from now, by the Setup steps' limits; any other
+// restore keeps the request's ordinary budget.
+func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
+	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+	defer cancel()
+	return m.provisionWorkspace(ctx, project, workspacePath)
 }
 
 func workspacePathMissing(path string) (bool, error) {
@@ -5025,7 +4999,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	case sessionguard.SuppressedStartupPending:
 		return fmt.Errorf("send %s: %w", id, ErrStartupPending)
 	case sessionguard.SuppressedInputGated:
-		return fmt.Errorf("send %s: %w", id, ErrSwitchInProgress)
+		return fmt.Errorf("send %s: %w", id, ErrOperationInProgress)
 	}
 	// Chat and transition queues persist interaction in their acceptance transaction.
 	// Only direct terminal sends need this separate fact; outbox replay already has it.
@@ -5164,19 +5138,6 @@ func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, 
 }
 
 type confirmationStopCheck func(context.Context) (bool, error)
-
-// confirmActiveUnderMutation is the switch-safe form of confirmActive. Agent
-// switching deliberately closes the ordinary input lease, so a catch-up Enter
-// must bypass that gate while retaining stricter activity checks: only an idle
-// or waiting-input composer may receive it. Active and blocked targets are
-// suppressed at the write boundary so the retry cannot steer a running turn or
-// answer a permission dialog. stop is checked before waiting and immediately
-// before every Enter so a completed target acknowledgement always wins.
-func (m *Manager) confirmActiveUnderMutation(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, stop confirmationStopCheck) {
-	m.confirmActiveWithNudge(ctx, id, stop, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
-		return guard.CoordinationUnderMutation(nudgeCtx, id, "", m.harnessNudgeSafe, nil)
-	})
-}
 
 func (m *Manager) confirmActiveWithNudge(ctx context.Context, id domain.SessionID, stop confirmationStopCheck, nudge func(context.Context) (sessionguard.Outcome, error)) {
 	for attempt := 1; ; attempt++ {
@@ -6341,30 +6302,102 @@ func safeRelPath(rel string) (string, error) {
 	return clean, nil
 }
 
+// scriptStepMinute is the unit of a Setup or Cleanup step's time limit; tests
+// shorten it.
+var scriptStepMinute = time.Minute
+
+// scriptStepTimeout is the command a Setup or Cleanup step runs and its time
+// limit: the one its first line sets (domain.ScriptStepMinutes), else
+// fallbackMinutes (0 for none).
+func scriptStepTimeout(step string, fallbackMinutes int) (string, time.Duration) {
+	command, minutes := domain.ScriptStepMinutes(step)
+	if minutes == 0 {
+		minutes = fallbackMinutes
+	}
+	return command, time.Duration(minutes) * scriptStepMinute
+}
+
 // runPostCreate runs each post-create command in the workspace via the platform
-// shell (sh on Unix, cmd on Windows). Each step has its own ten-minute
-// deadline. A non-zero exit aborts the spawn with bounded, redacted output.
+// shell (sh on Unix, cmd on Windows). Each step has its own deadline: the time
+// limit its first line sets (domain.ParseTimedScriptCommand; the marker line
+// itself never reaches the shell), else domain.DefaultScriptStepTimeoutMinutes.
+// A non-zero exit aborts the spawn with a SetupStepError carrying bounded,
+// redacted output.
 func runPostCreate(ctx context.Context, workspacePath, sourcePath string, commands []string, projectEnv map[string]string) error {
-	for index, command := range commands {
+	for index, step := range commands {
+		command, timeout := scriptStepTimeout(step, domain.DefaultScriptStepTimeoutMinutes)
 		command = strings.TrimSpace(command)
 		if command == "" {
 			continue
 		}
-		stepCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		stepCtx, cancel := context.WithTimeout(ctx, timeout)
 		out := &setupOutput{}
 		env := agentlaunch.MergeEnv(projectEnv, map[string]string{
 			"AO_SOURCE_TREE_PATH": sourcePath,
 			"AO_WORKTREE_PATH":    workspacePath,
 		})
 		err := runWorkspaceStep(stepCtx, workspacePath, command, env, out)
+		timedOut := ctx.Err() == nil && errors.Is(stepCtx.Err(), context.DeadlineExceeded)
 		cancel()
 		if err != nil {
 			message := agentlaunch.RedactValues(strings.TrimSpace(out.String()), projectEnv)
-			return fmt.Errorf("setup step %d failed: %w: %s", index+1, err, message)
+			return &SetupStepError{Step: index + 1, Err: err, TimedOut: timedOut, Timeout: timeout, Output: message}
 		}
 	}
 	return nil
 }
+
+// stepMinutes says a step's time limit in minutes ("1 minute", "30 minutes").
+func stepMinutes(timeout time.Duration) string {
+	if minutes := int(timeout / scriptStepMinute); minutes != 1 {
+		return strconv.Itoa(minutes) + " minutes"
+	}
+	return "1 minute"
+}
+
+// SetupBudget is how long a start of the project may spend in its Setup
+// steps: the sum of their time limits.
+func SetupBudget(project domain.ProjectRecord) time.Duration {
+	return postCreateBudget(0, project.Config.PostCreate)
+}
+
+// postCreateBudget is how much longer than base a start that runs these Setup
+// steps may take: the sum of their time limits, so a long Setup is never cut
+// short by the start's own deadline.
+func postCreateBudget(base time.Duration, commands []string) time.Duration {
+	for _, step := range commands {
+		command, timeout := scriptStepTimeout(step, domain.DefaultScriptStepTimeoutMinutes)
+		if strings.TrimSpace(command) != "" {
+			base += timeout
+		}
+	}
+	return base
+}
+
+// SetupStepError is a project Setup command that failed. Its message is the
+// one the user reads, so it names the step, the cause and where to fix it.
+// Timeout is the step's time limit, which a timed-out step names.
+type SetupStepError struct {
+	Step     int
+	Err      error
+	TimedOut bool
+	Timeout  time.Duration
+	Output   string
+}
+
+func (e *SetupStepError) Error() string {
+	cause := fmt.Sprintf("failed at step %d (%v)", e.Step, e.Err)
+	if e.TimedOut {
+		cause = fmt.Sprintf("stopped at step %d after %s", e.Step, stepMinutes(e.Timeout))
+	}
+	message := "The project's Setup script " + cause + ", so the agent did not start. Fix the script in Project settings > Scripts, then try again."
+	if e.Output != "" {
+		message += " Output: " + e.Output
+	}
+	return message
+}
+
+func (e *SetupStepError) Unwrap() error { return e.Err }
 
 // setupOutput retains the last 8 KiB so a noisy installer cannot grow daemon memory.
 type setupOutput struct{ tail []byte }
@@ -6435,7 +6468,14 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 		return fmt.Errorf("install hooks: %w", err)
 	}
 	if pl, ok := agent.(preLauncher); ok {
-		if err := pl.PreLaunch(ctx, ports.LaunchConfig{DataDir: m.dataDir, SessionID: string(id), WorkspacePath: workspacePath, Env: env}); err != nil {
+		if err := pl.PreLaunch(ctx, ports.LaunchConfig{
+			DataDir:       m.dataDir,
+			SessionID:     string(id),
+			WorkspacePath: workspacePath,
+			Config:        agentConfig,
+			Permissions:   agentConfig.Permissions,
+			Env:           env,
+		}); err != nil {
 			m.cleanupPreparedAgentWorkspace(ctx, agent, id, workspacePath, env)
 			return fmt.Errorf("pre-launch: %w", err)
 		}
@@ -6594,7 +6634,7 @@ func (m *Manager) deliverStartedInput(ctx context.Context, id domain.SessionID, 
 	case sessionguard.SuppressedStartupPending:
 		return fmt.Errorf("send %s: %w", id, ErrStartupPending)
 	case sessionguard.SuppressedInputGated:
-		return fmt.Errorf("send %s: %w", id, ErrSwitchInProgress)
+		return fmt.Errorf("send %s: %w", id, ErrOperationInProgress)
 	case sessionguard.SuppressedUnknown:
 		return fmt.Errorf("send %s: pre-write session read failed", id)
 	default:
@@ -6696,9 +6736,15 @@ func promptReadinessWaitTimeout(configured time.Duration, callerDeadline time.Ti
 	return min(configured, remaining), true
 }
 
+// promptOutputEscape matches CSI and OSC sequences. The runtime returns the raw
+// output ring, so a styled prompt such as Kimi's "│ >" arrives with a colour
+// code inside it and never matched until the readiness wait timed out.
+var promptOutputEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
+
 func promptOutputContains(output string, patterns []string) bool {
+	plain := promptOutputEscape.ReplaceAllString(output, "")
 	for _, pattern := range patterns {
-		if pattern != "" && strings.Contains(output, pattern) {
+		if pattern != "" && (strings.Contains(output, pattern) || strings.Contains(plain, pattern)) {
 			return true
 		}
 	}
@@ -6749,7 +6795,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 	// a saved prompt, rather than stranding the work behind ErrNotResumable. A
 	// worker that never got that far (no id, no prompt) still stays unresumable.
 	return freshLaunchArgv(ctx, agent, id, workspacePath, meta, systemPrompt,
-		systemPromptFile, agentConfig, kind, dataDir, conversationLost)
+		systemPromptFile, agentConfig, kind, dataDir, conversationLost, "")
 }
 
 // nativeConversationMissing reports whether the agent can see a persisted
@@ -6784,7 +6830,7 @@ func nativeConversationMissing(ctx context.Context, agent ports.Agent, ref ports
 // freshLaunchArgv builds the non-resume half of restoreArgv. Interface
 // transitions also use it when an adapter proves its reserved id has no
 // persisted history, both for preflight and for the actual target launch.
-func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
+func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath string, meta domain.SessionMetadata, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, kind domain.SessionKind, dataDir string, allowPromptless bool, nativeSessionID string) ([]string, ports.PromptDeliveryStrategy, RestoreMode, error) {
 	// A saved prompt is replayed fresh. An orchestrator is promptless by design
 	// and relaunches with the system prompt only. A promptless WORKER has no task
 	// and no session id to restore from: do not blank-relaunch it.
@@ -6804,6 +6850,7 @@ func freshLaunchArgv(ctx context.Context, agent ports.Agent, id domain.SessionID
 		SystemPromptFile: systemPromptFile,
 		Config:           agentConfig,
 		Permissions:      agentConfig.Permissions,
+		NativeSessionID:  nativeSessionID,
 	}
 	delivery, err := agent.GetPromptDeliveryStrategy(ctx, launchCfg)
 	if err != nil {
@@ -6869,6 +6916,14 @@ func (m *Manager) augmentRuntimePATHForLaunchBinary(ctx context.Context, env map
 	AugmentRuntimePATHForLaunchBinary(ctx, env, argv, m.lookPath, PinnedHookDir(m.executable, m.dataDir))
 }
 
+func boundedConversationFact(value string) string {
+	const limit = 16 << 10
+	if value = strings.TrimSpace(value); len(value) > limit {
+		return strings.ToValidUTF8(value[:limit], "�")
+	}
+	return value
+}
+
 // AugmentRuntimePATHForLaunchBinary is retained at the session-manager boundary
 // for reviewer launches; all agent child-process paths share agentlaunch's
 // executable-environment augmentation.
@@ -6887,23 +6942,12 @@ func (m *Manager) validateRuntimePrerequisites() error {
 }
 
 func (m *Manager) superviseAgentProcess(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string) ([]string, string, error) {
-	// Switching-capable providers always use the exact-generation
-	// supervisor, even when their native hooks also report exit. That gives a
-	// later semantic handoff a safe foreground-process proof. Refresh-capable
-	// providers need the same proof for command protection and startup checks.
+	// Refresh-capable providers need the exact-generation supervisor's
+	// foreground-process proof for command protection and startup checks.
 	// An exit races into the non-interpreting tmux sink rather than a shell.
-	_, switchingCapable := agent.(ports.AgentContinuationCapabilityProvider)
 	refreshCapability, refreshCapable := agent.(ports.AgentTerminalVersionRefresher)
 	refreshCapable = refreshCapable && refreshCapability.SupportsTerminalVersionRefresh()
-	return m.superviseAgentProcessMode(agent, id, env, argv, switchingCapable || refreshCapable)
-}
-
-// superviseAgentProcessForSwitch always installs AO's generation-bearing
-// wrapper. Native hooks still report activity, while the wrapper gives crash
-// recovery a process-level proof that a surviving workload belongs to the
-// target generation rather than the provider that was stopped.
-func (m *Manager) superviseAgentProcessForSwitch(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string) ([]string, string, error) {
-	return m.superviseAgentProcessMode(agent, id, env, argv, true)
+	return m.superviseAgentProcessMode(agent, id, env, argv, refreshCapable)
 }
 
 func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, force bool) ([]string, string, error) {
@@ -6919,9 +6963,7 @@ func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.Session
 }
 
 // wrapAgentProcessWithLaunchID rebuilds a preflighted launch command without
-// changing its already-reserved generation. Agent switching uses this after it
-// has assembled the final in-memory continuation for CLIs that can accept the
-// turn directly on fresh/resume launch.
+// changing its already-reserved generation.
 func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, launchID string, force bool) ([]string, error) {
 	if strings.TrimSpace(launchID) == "" {
 		return nil, errors.New("empty launch id")
@@ -6982,4 +7024,26 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// savedCatalogCovers reports whether a saved model catalog can answer a launch's
+// model and effort checks without a live rediscovery.
+func savedCatalogCovers(catalog ports.AgentModelCatalog, modelID, effort string) bool {
+	if catalog.Stale || len(catalog.Models) == 0 || (catalog.RefreshState != "" && catalog.RefreshState != "idle") {
+		return false
+	}
+	for _, item := range catalog.Models {
+		if item.ID == modelID || (modelID == "" && item.IsDefault) {
+			if effort == "" || containsString(item.Efforts, effort) {
+				return true
+			}
+			if len(item.Efforts) == 0 {
+				if concrete := newestClaudeFamilyModel(catalog.Models, item.ID); concrete != nil {
+					return containsString(concrete.Efforts, effort)
+				}
+			}
+			return false
+		}
+	}
+	return false
 }

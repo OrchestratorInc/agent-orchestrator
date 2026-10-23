@@ -8,6 +8,11 @@ vi.mock("../hooks/useHostConnection", () => ({
 }));
 
 describe("FileMediaPreview", () => {
+	it.each(["image", "video", "audio"] as const)("uses renderer-origin CORS for protected %s", (kind) => {
+		render(<FileMediaPreview kind={kind} path="media" sessionId="s1" source={{kind: "workspace"}} version={1} />);
+		expect(screen.getByLabelText("media")).toHaveAttribute("crossorigin", "anonymous");
+	});
+
 	it("encodes paths and streams from the selected remote host", () => {
 		render(<FileMediaPreview hostId="remote" kind="video" path="clips/a #1.mp4" sessionId="session 1" source={{ kind: "workspace" }} version={7} />);
 		expect(screen.getByLabelText("clips/a #1.mp4")).toHaveAttribute("src", "http://127.0.0.1:4000/token/api/v1/sessions/session%201/preview/files/clips/a%20%231.mp4?raw=true&v=7");

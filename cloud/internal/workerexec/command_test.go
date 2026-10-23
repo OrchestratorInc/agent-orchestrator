@@ -2,6 +2,7 @@ package workerexec
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
@@ -160,7 +162,7 @@ func TestCursorArgsStreamsJSONWithForceAndResume(t *testing.T) {
 		Mode:           "trusted",
 		Prompt:         "describe the change",
 		AgentSessionID: "cursor-native-1",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("cursor args: %v", err)
 	}
@@ -174,13 +176,59 @@ func TestCursorArgsStreamsJSONWithForceAndResume(t *testing.T) {
 }
 
 func TestCursorArgsOmitsResumeWithoutNativeConversation(t *testing.T) {
-	got, err := cursorArgs(worker.Turn{Mode: "standard", Prompt: "fresh"})
+	got, err := cursorArgs(worker.Turn{Mode: "standard", Prompt: "fresh"}, "")
 	if err != nil {
 		t.Fatalf("cursor args: %v", err)
 	}
 	want := []string{"agent", "--print", "--output-format", "stream-json", "fresh"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("args = %#v, want %#v", got, want)
+	}
+}
+
+// A Cursor project's plan or ask mode reaches a headless Chat turn as
+// --mode, and a restricted mode never runs with --force or --auto-review,
+// whatever the turn's approval mode. An unknown mode is refused rather than
+// run as the full agent.
+func TestCursorArgsRunTheProjectModeWithoutForce(t *testing.T) {
+	for _, approval := range []string{"", "bypass-permissions", "auto"} {
+		got, err := cursorArgs(worker.Turn{Mode: "trusted", ApprovalMode: approval, Prompt: "explain"}, "ask")
+		if err != nil {
+			t.Fatalf("cursor args: %v", err)
+		}
+		want := []string{"agent", "--print", "--output-format", "stream-json", "--mode", "ask", "explain"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("approval %q: args = %#v, want %#v", approval, got, want)
+		}
+	}
+	if _, err := cursorArgs(worker.Turn{Mode: "trusted", Prompt: "explain"}, "agent-ish"); !errors.Is(err, ErrUnsupportedPolicy) {
+		t.Fatalf("unknown Cursor mode = %v, want ErrUnsupportedPolicy", err)
+	}
+}
+
+// The Chat command of a Cursor session carries the project's Cursor mode,
+// which BuildInteractive passes to the terminal as --mode.
+func TestBuildCarriesTheProjectCursorModeIntoChat(t *testing.T) {
+	builder := HarnessBuilder{
+		Binaries: map[string]string{"cursor": "/bin/echo"}, DataDir: t.TempDir(),
+		Launch: worker.LaunchContext{
+			SessionID: "session-cursor", Kind: "worker", Harness: "cursor",
+			AgentConfig: domain.ProjectAgentConfig{Mode: "plan"},
+		},
+	}
+	command, err := builder.Build(context.Background(), worker.Turn{Harness: "cursor", Mode: "trusted", Prompt: "plan it"},
+		worker.CredentialResponse{Provider: "cursor", CredentialType: "api_key", Secret: "key"}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Cleanup != nil {
+		defer command.Cleanup()
+	}
+	if command.CursorMode != "plan" {
+		t.Fatalf("Chat command Cursor mode = %q, want plan", command.CursorMode)
+	}
+	if slices.Contains(command.Args, "--force") || !slices.Contains(command.Args, "--mode") {
+		t.Fatalf("headless Cursor args = %v, want --mode plan without --force", command.Args)
 	}
 }
 
@@ -357,6 +405,10 @@ func TestBuildInteractiveUsesConfiguredDurableCodexHomeOnRestore(t *testing.T) {
 	}
 	if !slices.Contains(command.Args, "thread-1") || len(command.Args) == 0 || command.Args[0] != "resume" {
 		t.Fatalf("unexpected Codex restore args: %#v", command.Args)
+	}
+	// The worker follows this conversation's rollout for failed turns.
+	if command.ConversationID != "thread-1" {
+		t.Fatalf("ConversationID = %q, want the resumed thread", command.ConversationID)
 	}
 }
 
@@ -547,5 +599,77 @@ func TestBuildInteractiveCursorBuildsWithoutPrompt(t *testing.T) {
 	})
 	if prompt := systemPromptArg(command); prompt != "" {
 		t.Fatalf("cursor unexpectedly carries a system prompt flag: %q", prompt)
+	}
+}
+
+// Claude Code opens "Make auto mode your default permission mode?" when its
+// global config lacks hasSeenAutoDefaultNudge and user settings pin a non-auto
+// defaultMode, which AO's settings always do. The dialog swallows messages AO
+// types into the terminal, so every Claude terminal must start with it marked
+// seen, without changing the permission mode AO selected.
+func TestBuildInteractiveClaudeMarksAutoDefaultNudgeSeen(t *testing.T) {
+	tests := []struct {
+		name        string
+		mode        string
+		permissions string
+		wantMode    string
+		wantFlag    []string
+	}{
+		{"standard", "standard", "", "auto", []string{"--permission-mode", "auto"}},
+		{"trusted", "trusted", "", "bypassPermissions", []string{"--permission-mode", "bypassPermissions"}},
+		{"project accept-edits", "standard", "accept-edits", "acceptEdits", []string{"--permission-mode", "acceptEdits"}},
+		{"project default", "trusted", "default", "default", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir := filepath.Join(t.TempDir(), "claude")
+			t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+			if err := os.MkdirAll(configDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// A config a previous launch (or Claude itself) wrote is preserved.
+			seed := `{"userID":"install-1","projects":{"/elsewhere":{"hasTrustDialogAccepted":true}}}`
+			if err := os.WriteFile(filepath.Join(configDir, ".claude.json"), []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			workspace := t.TempDir()
+			launch := worker.LaunchContext{
+				SessionID: "session-1", Harness: "claude-code", Mode: tt.mode,
+				AgentConfig: domain.ProjectAgentConfig{Permissions: tt.permissions},
+			}
+			command, err := (HarnessBuilder{DataDir: t.TempDir()}).BuildInteractive(launch, worker.CredentialResponse{
+				Provider: "claude-code", CredentialType: "api_key", Secret: "secret",
+			}, workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			global := readJSON(t, filepath.Join(configDir, ".claude.json"))
+			if global["hasSeenAutoDefaultNudge"] != true {
+				t.Fatalf("hasSeenAutoDefaultNudge = %v, want true", global["hasSeenAutoDefaultNudge"])
+			}
+			if global["hasCompletedOnboarding"] != true || global["userID"] != "install-1" {
+				t.Fatalf("global config lost onboarding or existing keys: %v", global)
+			}
+			projects := global["projects"].(map[string]any)
+			if _, ok := projects["/elsewhere"]; !ok {
+				t.Fatalf("existing trust entry dropped: %v", projects)
+			}
+			if _, ok := projects[workspace]; !ok {
+				t.Fatalf("workspace not trusted: %v", projects)
+			}
+
+			settings := readJSON(t, filepath.Join(configDir, "settings.json"))
+			if got := settings["permissions"].(map[string]any)["defaultMode"]; got != tt.wantMode {
+				t.Fatalf("defaultMode = %v, want %s", got, tt.wantMode)
+			}
+			if tt.wantFlag == nil {
+				if slices.Contains(command.Args, "--permission-mode") {
+					t.Fatalf("unexpected --permission-mode in %#v", command.Args)
+				}
+			} else if !containsAdjacent(command.Args, tt.wantFlag[0], tt.wantFlag[1]) {
+				t.Fatalf("args %#v missing %v", command.Args, tt.wantFlag)
+			}
+		})
 	}
 }

@@ -59,6 +59,52 @@ describe("mobile Chat API boundaries", () => {
 		expect(catalog.models[0]).toMatchObject({ id: "gpt-5", isDefault: true });
 	});
 
+	it("keeps re-reading a catalog the daemon is still discovering until its models arrive", async () => {
+		vi.useFakeTimers();
+		try {
+			// A cold load can outlast the old 20-read window: readiness waits up to
+			// 30s before discovery gets its own budget.
+			const discovering = 40;
+			for (let read = 0; read < discovering; read++) {
+				vi.mocked(fetch).mockResolvedValueOnce(response({ agentId: "opencode", models: [], refreshState: "refreshing" }));
+			}
+			vi.mocked(fetch).mockResolvedValueOnce(response({ agentId: "opencode", models: [{ id: "big-pickle", label: "Big Pickle" }], refreshState: "idle" }));
+			const polling = new AbortController();
+			const addListener = vi.spyOn(polling.signal, "addEventListener");
+			const removeListener = vi.spyOn(polling.signal, "removeEventListener");
+			const pending = getAgentModels(cfg, "opencode", undefined, polling.signal);
+			await vi.advanceTimersByTimeAsync(discovering * 1_500);
+			const catalog = await pending;
+			expect(vi.mocked(fetch)).toHaveBeenCalledTimes(discovering + 1);
+			expect(catalog.models.map((model) => model.id)).toEqual(["big-pickle"]);
+			expect(addListener).toHaveBeenCalledTimes(discovering);
+			expect(removeListener).toHaveBeenCalledTimes(discovering);
+			for (const [, listener] of addListener.mock.calls) {
+				expect(removeListener).toHaveBeenCalledWith("abort", listener);
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("stops re-reading a discovering catalog when the view closes", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(fetch).mockImplementation(async () => response({ agentId: "opencode", models: [], refreshState: "refreshing" }));
+			const polling = new AbortController();
+			const pending = getAgentModels(cfg, "opencode", undefined, polling.signal);
+			await vi.advanceTimersByTimeAsync(3_000);
+			polling.abort();
+			const catalog = await pending;
+			const reads = vi.mocked(fetch).mock.calls.length;
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(vi.mocked(fetch).mock.calls.length).toBe(reads);
+			expect(catalog.refreshState).toBe("refreshing");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("loads the model catalog without a project scope for standalone", async () => {
 		vi.mocked(fetch).mockResolvedValue(response({ agentId: "codex", models: [] }));
 		await getAgentModels(cfg, "codex");
@@ -343,8 +389,8 @@ describe("mobile Chat API boundaries", () => {
 			url: "http://ao.test:3011/api/v1/sessions/w-1/preview/files/README.md",
 			authenticated: true,
 		});
-		vi.mocked(fetch).mockResolvedValueOnce(response({}));
-		expect(await getPreview(cfg, "w-1", "https://example.com/demo")).toMatchObject({
+		vi.mocked(fetch).mockResolvedValueOnce(response({ previewUrl: "https://example.com/demo" }));
+		expect(await getPreview(cfg, "w-1")).toMatchObject({
 			url: "https://example.com/demo",
 			authenticated: false,
 		});
@@ -352,6 +398,20 @@ describe("mobile Chat API boundaries", () => {
 		expect(mobileReachablePreviewURL("http://localhost:5173", "2001:db8::5")?.href).toBe("http://[2001:db8::5]:5173/");
 		expect(mobileReachablePreviewURL("http://127.0.0.1:5173", "https://macbook.local/")?.href).toBe("http://macbook.local:5173/");
 		expect(mobileReachablePreviewURL("file:///tmp/demo.html", "ao.test")).toBeUndefined();
+	});
+
+	it("loads artifact previews through the authenticated configured host, including TLS tunnels", async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(response({ entry: "pages/test page.html", source: "artifact", previewUrl: "http://ao-preview-artifact.obzg6ztjnrss2my.localhost:3002/pages/test%20page.html" }));
+		expect(await getPreview({ ...cfg, host: "ao.example.com", httpPort: "443", secure: true }, "w-1")).toEqual({
+			entry: "pages/test page.html",
+			url: "https://ao.example.com:443/api/v1/sessions/w-1/preview/artifacts/pages/test%20page.html",
+			authenticated: true,
+		});
+	});
+
+	it("does not invent an app preview when the session has no selection", async () => {
+		vi.mocked(fetch).mockResolvedValueOnce(response({ sessionId: "w-1" }));
+		expect(await getPreview(cfg, "w-1")).toBeNull();
 	});
 
 	it("maps the provider-neutral conversation wire model without inventing protocol state", async () => {

@@ -38,6 +38,7 @@ const { cloudCpMock, getMock, navigateMock, patchMock, putMock, postMock } = vi.
       getSessionReviewState: vi.fn(),
       inspectSessionReviewerHarnesses: vi.fn(),
       installSessionReviewerHarness: vi.fn(),
+      listChatEvents: vi.fn(),
       listSessionPullRequests: vi.fn(),
       mergePullRequest: vi.fn(),
       sendSessionMessage: vi.fn(),
@@ -700,6 +701,19 @@ describe("SessionInspector PR section", () => {
   });
 
   it("merges a ready pull request directly through the daemon", async () => {
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/merge" ? {
+      data: {
+        ok: true,
+        prNumber: 7,
+        method: "squash",
+        state: "merged",
+        stateChangedAt: "2026-10-19T11:06:22Z",
+      },
+      error: undefined,
+    } : {
+      data: { ok: true, sessionId: "sess-1" },
+      error: undefined,
+    });
     const readyPR = prSummary(7, "open", {
       url: "https://example.com/pr/7",
       headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -709,7 +723,11 @@ describe("SessionInspector PR section", () => {
         unresolvedBy: [],
       },
     });
-    renderWithQuery(
+    const respond = commonGetsResponder();
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [readyPR], linkedPrs: [] } }
+      : respond(path));
+    const { queryClient } = renderWithQuery(
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
@@ -730,6 +748,13 @@ describe("SessionInspector PR section", () => {
         },
       }),
     );
+    await waitFor(() =>
+      expect(queryClient.getQueryData<{ prs: SessionPRSummary[] }>(sessionScmSummaryQueryKey("sess-1"))?.prs[0]?.state).toBe("merged"),
+    );
+    await waitFor(() =>
+      expect(prSection("Pull request").getByText("merged")).toBeInTheDocument(),
+    );
+    expect(prSection("Pull request").queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -1513,28 +1538,6 @@ describe("SessionInspector Activity section", () => {
         })}
       />,
     );
-    expect(
-      screen.queryByRole("button", { name: "Resume agent" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not offer agent resume while an agent switch owns the exited source", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "exited",
-          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
-          activeAgentSwitch: {
-            id: "switch-1",
-            fromHarness: "claude-code",
-            targetHarness: "codex",
-            state: "source_stopped",
-            agentHandoffStatus: "received",
-          },
-        })}
-      />,
-    );
-
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
@@ -4312,9 +4315,36 @@ describe("SessionInspector summary reviews", () => {
 describe("SessionInspector Cloud reviews", () => {
   beforeEach(() => {
     cloudCpMockState.enabled = true;
+    cloudCpMock.listChatEvents.mockReset();
+    cloudCpMock.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
   });
   afterEach(() => {
     cloudCpMockState.enabled = false;
+  });
+  it("keeps the latest Setup and Cleanup runs in collapsed Summary sections", async () => {
+    cloudCpMock.listSessionPullRequests.mockResolvedValue({ sessionId: "sess-1", pullRequests: [] });
+    const step = (sequence: number, payload: Record<string, unknown>) => ({
+      sessionId: "sess-1", sequence, type: "workspace.script.step", createdAt: "2026-10-18T10:00:00Z",
+      payload: { phase: "setup", total: 1, step: 1, repository: "", ...payload },
+    });
+    cloudCpMock.listChatEvents.mockResolvedValue({
+      events: [
+        step(1, { runId: "old", status: "failed", command: "make old", exitCode: 1 }),
+        step(2, { runId: "new", status: "succeeded", command: "make setup", exitCode: 0, durationMs: 3000 }),
+        step(3, { runId: "c", phase: "cleanup", status: "succeeded", command: "make teardown", exitCode: 0, durationMs: 1000 }),
+      ],
+      hasMore: false,
+      nextAfter: 3,
+    });
+    renderWithQuery(<SessionInspector session={session([], { cloud: { orgId: "org-1" } })} />);
+    const setup = await screen.findByRole("button", { name: "Setup" });
+    const cleanup = screen.getByRole("button", { name: "Cleanup" });
+    expect(setup).toHaveAttribute("aria-expanded", "false");
+    expect(cleanup).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(setup);
+    expect(await screen.findByText("make setup")).toBeInTheDocument();
+    expect(screen.queryByText("make old")).not.toBeInTheDocument();
+    expect(screen.queryByText("make teardown")).not.toBeInTheDocument();
   });
   it("does not report an already-reviewed commit while a cloud review handle is pending", async () => {
     cloudCpMock.listSessionPullRequests.mockResolvedValue({
