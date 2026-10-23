@@ -1293,7 +1293,12 @@ func (s *Service) Send(
 		// At-most-once on the visible channel: a batch shown within the emit
 		// TTL rides along silently; its acceptance ack still settles it.
 		if visible {
+			if len(reports.Reports) > 0 {
+				s.log.Info("worker reports piggybacked into user message", "batch", reports.IdempotencyKey(), "session", id, "reports", len(reports.Reports), "attempts", reports.MaxDeliveryAttempts())
+			}
 			msg.Text = reports.AppendToUserMessage(msg.Text)
+		} else {
+			s.log.Debug("worker reports piggyback suppressed within emit ttl", "batch", reports.IdempotencyKey(), "session", id)
 		}
 	}
 	var turn domain.ConversationTurn

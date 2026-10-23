@@ -362,6 +362,7 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 
 	for _, n := range nudges {
 		if _, err := m.sendOnce(ctx, id, o.URL, n.key, n.sig, n.msg, n.maxAttempts, n.urgent); err != nil {
+			slog.Default().Warn("lifecycle: pr nudge delivery failed", "session", id, "pr", o.URL, "key", n.key, "err", err)
 			return err
 		}
 	}
@@ -1022,6 +1023,7 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 	}
 
 	if m.react.seen[key] == sig {
+		slog.Default().Debug("lifecycle: pr nudge suppressed by signature", "session", id, "pr", prURL, "key", key, "sig_len", len(sig))
 		return sendOnceAccounted, nil
 	}
 	attempts := m.react.attempts[key]
@@ -1057,8 +1059,10 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 		return sendOnceAccounted, err
 	}
 	if outcome != sessionguard.Sent {
+		slog.Default().Debug("lifecycle: pr nudge suppressed by session guard", "session", id, "pr", prURL, "key", key)
 		return sendOnceSuppressed, nil
 	}
+	slog.Default().Info("lifecycle: pr nudge sent", "session", id, "pr", prURL, "key", key, "sig_len", len(sig), "urgent", urgent)
 	// Order: Send → in-memory mutation → durable persist. Sending first means a
 	// transient persist failure does NOT swallow a real send (the agent saw the
 	// message; subsequent polls in this process suppress re-sends via the

@@ -1,8 +1,10 @@
 package report
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -324,7 +326,8 @@ func TestCoordinatorSuppressesRepeatEmissionWithinEmitTTL(t *testing.T) {
 	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
 	store.add(reportAt("dup", "worker", now, now, "context"))
 	delivery := &coordinatorDelivery{submitErr: errors.New("prompt submission was not observed")}
-	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	var logs bytes.Buffer
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, Log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	// First attempt: the pane write already showed the batch before semantic
 	// acceptance failed, so the coordinator releases and schedules a retry.
 	if _, err := c.RunDue(context.Background()); err == nil {
@@ -347,6 +350,26 @@ func TestCoordinatorSuppressesRepeatEmissionWithinEmitTTL(t *testing.T) {
 	for _, rec := range store.reports {
 		if rec.DeliveryState != domain.ReportPending || !rec.AvailableAt.After(now) {
 			t.Fatalf("record = %+v, want pending deferred past the emit TTL", rec)
+		}
+	}
+	if got := logs.String(); !strings.Contains(got, "report: emission suppressed within emit ttl") || strings.Count(got, "report: batch emitted") != 1 {
+		t.Fatalf("suppression evidence = %q", got)
+	}
+}
+
+func TestCoordinatorEmissionLogsEvidence(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 30, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("evidence", "worker", now, now, "context"))
+	var logs bytes.Buffer
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: &coordinatorDelivery{}, Now: func() time.Time { return now }, Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"report: batch emitted", "target=orch", "reports=1", "attempts=1"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("emission evidence missing %q: %q", want, logs.String())
 		}
 	}
 }

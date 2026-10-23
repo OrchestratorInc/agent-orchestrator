@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
@@ -56,6 +57,7 @@ type Delivery interface {
 type Coordinator struct {
 	store      DeliveryStore
 	delivery   Delivery
+	log        *slog.Logger
 	now        func() time.Time
 	newToken   func() string
 	retryDelay time.Duration
@@ -75,6 +77,9 @@ type CoordinatorDeps struct {
 	NewToken   func() string
 	RetryDelay time.Duration
 	EmitTTL    time.Duration
+	// Log receives delivery evidence lines (emissions, suppressions, anomalies).
+	// A nil Log discards, keeping tests and embedders quiet by default.
+	Log *slog.Logger
 }
 
 // NewCoordinator constructs an idle report delivery coordinator.
@@ -91,7 +96,10 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	if d.EmitTTL <= 0 {
 		d.EmitTTL = ReportEmitTTL
 	}
-	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, emitTTL: d.EmitTTL, wake: make(chan struct{}, 1)}
+	if d.Log == nil {
+		d.Log = slog.New(slog.DiscardHandler)
+	}
+	return &Coordinator{store: d.Store, delivery: d.Delivery, log: d.Log, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, emitTTL: d.EmitTTL, wake: make(chan struct{}, 1)}
 }
 
 // EmitVisible gates the batch's single visible emission inside the at-most-once
@@ -130,6 +138,7 @@ func (c *Coordinator) run(ctx context.Context) {
 	for {
 		delay, err := c.RunDue(ctx)
 		if err != nil {
+			c.log.Warn("report: delivery cycle failed", "err", err)
 			delay = c.retryDelay
 		}
 		if delay < 0 {
@@ -191,6 +200,7 @@ func (c *Coordinator) ackBatch(ctx context.Context, projectID domain.ProjectID, 
 	}
 	if rows == 0 {
 		c.lostAcknowledgements.Add(1)
+		c.log.Warn("report: acknowledgment claim lost", "project", projectID, "token", token)
 		return fmt.Errorf("%w: project %s token %s", ErrReportBatchLost, projectID, token)
 	}
 	return nil
@@ -238,9 +248,13 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		// At-most-once on the visible channel: the batch was already shown
 		// inside the emit window, so retry silently and allow one re-emission
 		// once it expires. Ack fencing and its counters stay untouched.
+		c.log.Debug("report: emission suppressed within emit ttl", "batch", batch.IdempotencyKey(), "project", batch.ProjectID, "target", target.ID)
 		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, batch.emittedAt().Add(c.emitTTL), "report batch already emitted; repeat suppressed until emit TTL")
 		return deferErr
 	}
+	// Delivery evidence: a duplicate emission shows up as a second line with the
+	// same batch key and attempts > 1.
+	c.log.Info("report: batch emitted", "batch", batch.IdempotencyKey(), "project", batch.ProjectID, "target", target.ID, "reports", len(batch.Reports), "attempts", batch.MaxDeliveryAttempts())
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
 		return c.release(ctx, batch, err)
 	}
@@ -358,6 +372,7 @@ func (c *Coordinator) ReleasePiggyback(ctx context.Context, batch PreparedBatch,
 func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause error) error {
 	_, releaseErr := c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
 	if releaseErr != nil {
+		c.log.Warn("report: batch release failed", "batch", batch.IdempotencyKey(), "project", batch.ProjectID, "err", releaseErr)
 		return errors.Join(cause, releaseErr)
 	}
 	return cause
@@ -390,6 +405,18 @@ func (b PreparedBatch) IdempotencyKey() string {
 	sort.Strings(ids)
 	sum := sha256.Sum256([]byte(strings.Join(ids, "\x00")))
 	return "report-batch:" + hex.EncodeToString(sum[:16])
+}
+
+// MaxDeliveryAttempts returns the batch's highest durable attempt count, for
+// delivery evidence lines: a visible re-emission logs attempts > 1.
+func (b PreparedBatch) MaxDeliveryAttempts() int64 {
+	attempts := int64(0)
+	for _, r := range b.Reports {
+		if r.DeliveryAttempts > attempts {
+			attempts = r.DeliveryAttempts
+		}
+	}
+	return attempts
 }
 
 // Render formats compact attributed report context for an orchestrator.

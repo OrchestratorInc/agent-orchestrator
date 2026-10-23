@@ -1,6 +1,7 @@
 package chat_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -49,13 +50,17 @@ func provisioningService(t *testing.T, st *sqlite.Store) *chatsvc.Service {
 	return provisioningServiceOver(t, st, st)
 }
 
-func provisioningServiceOver(t *testing.T, store chatsvc.Store, st *sqlite.Store) *chatsvc.Service {
+func provisioningServiceOver(t *testing.T, store chatsvc.Store, st *sqlite.Store, loggers ...*slog.Logger) *chatsvc.Service {
 	t.Helper()
+	svcLog := slog.New(slog.DiscardHandler)
+	if len(loggers) > 0 && loggers[0] != nil {
+		svcLog = loggers[0]
+	}
 	next := 0
 	return chatsvc.New(chatsvc.Options{
 		Store: store, Sessions: st, Reader: fullSnapshotReader(st),
 		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
-		Log:     slog.New(slog.DiscardHandler),
+		Log:     svcLog,
 		NewID: func() string {
 			next++
 			return fmt.Sprintf("queued-%d", next)
@@ -158,7 +163,8 @@ func TestProvisioningSendPiggybacksReportsOnlyOnRecordedTurn(t *testing.T) {
 		}
 	}
 	createReport("first-report")
-	svc := provisioningService(t, st)
+	var logs bytes.Buffer
+	svc := provisioningServiceOver(t, st, st, slog.New(slog.NewTextHandler(&logs, nil)))
 	svc.SetReportCoordinator(reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{
 		Store: st, Now: func() time.Time { return now }, NewToken: func() string { return "report-claim" },
 	}))
@@ -174,6 +180,9 @@ func TestProvisioningSendPiggybacksReportsOnlyOnRecordedTurn(t *testing.T) {
 	if len(snapshot.Messages) != 1 || !strings.Contains(snapshot.Messages[0].Text, "<ao-worker-reports>") ||
 		!strings.Contains(snapshot.Messages[0].Text, "first-report") {
 		t.Fatalf("queued message missing piggyback: %+v", snapshot.Messages)
+	}
+	if !strings.Contains(logs.String(), "worker reports piggybacked into user message") {
+		t.Fatalf("piggyback evidence log missing: %q", logs.String())
 	}
 	first, found, err := st.GetReport(ctx, "first-report")
 	if err != nil || !found || first.DeliveryState != domain.ReportAcknowledged {
@@ -193,6 +202,66 @@ func TestProvisioningSendPiggybacksReportsOnlyOnRecordedTurn(t *testing.T) {
 	second, found, err := st.GetReport(ctx, "second-report")
 	if err != nil || !found || second.DeliveryState != domain.ReportPending {
 		t.Fatalf("duplicate acknowledged an unrecorded report: %+v, found = %v, err = %v", second, found, err)
+	}
+}
+
+// A batch shown moments ago rides along silently: the user message stays clean,
+// the suppression is logged, and the accepted turn still settles the batch.
+func TestProvisioningSendSuppressesPiggybackInsideEmitTTL(t *testing.T) {
+	st, workerID := openProvisioningStore(t, domain.SessionProvisionReady)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	orchestrator, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		ProvisionState: domain.SessionProvisionProvisioning,
+		CreatedAt:      now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateReport(ctx, domain.ReportRecord{
+		ID: "shown-report", SessionID: workerID, ProjectID: testProject,
+		State: domain.ReportCheckpoint, Note: "shown-report",
+		CreatedAt: now, AvailableAt: now.Add(time.Hour),
+		DeliveryState: domain.ReportPending, RepeatCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reportCoord := reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{
+		Store: st, Now: func() time.Time { return now }, NewToken: func() string { return "report-claim" },
+	})
+	// Seed the "shown once" state honestly: claim, stamp the visible-emission
+	// marker, then release the unaccepted batch back to pending.
+	shown, err := reportCoord.PreparePiggyback(ctx, orchestrator.ID)
+	if err != nil || len(shown.Reports) != 1 {
+		t.Fatalf("prepare shown batch = %#v, err = %v", shown, err)
+	}
+	if visible, err := reportCoord.EmitVisible(ctx, shown); err != nil || !visible {
+		t.Fatalf("first show visible = %v, err = %v", visible, err)
+	}
+	// ReleasePiggyback returns the cause by contract; the seeded refusal is not
+	// a test failure.
+	_ = reportCoord.ReleasePiggyback(ctx, shown, errors.New("turn refused after the pane write"))
+	var logs bytes.Buffer
+	svc := provisioningServiceOver(t, st, st, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	svc.SetReportCoordinator(reportCoord)
+	if _, err := svc.Send(ctx, orchestrator.ID, ports.ChatUserMessage{Text: "start", Origin: domain.MessageOriginHuman, ClientMessageID: "client-silent"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := svc.Snapshot(ctx, orchestrator.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Messages) != 1 || strings.Contains(snapshot.Messages[0].Text, "<ao-worker-reports>") {
+		t.Fatalf("suppressed piggyback leaked into the message: %+v", snapshot.Messages)
+	}
+	if !strings.Contains(logs.String(), "worker reports piggyback suppressed within emit ttl") {
+		t.Fatalf("suppression evidence log missing: %q", logs.String())
+	}
+	settled, found, err := st.GetReport(ctx, "shown-report")
+	if err != nil || !found || settled.DeliveryState != domain.ReportAcknowledged {
+		t.Fatalf("silent ride lost the batch: %+v, found = %v, err = %v", settled, found, err)
 	}
 }
 

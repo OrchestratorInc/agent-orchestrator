@@ -4007,6 +4007,63 @@ func TestPRObservation_DedupPersistsAcrossPRs(t *testing.T) {
 	}
 }
 
+func TestPRObservation_NudgeSentIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	o := ports.PRObservation{
+		Fetched: true,
+		URL:     "https://github.com/o/r/pull/1",
+		CI:      domain.CIFailing,
+		Checks:  []ports.PRCheckObservation{{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, URL: "https://ci.example/run/39725960619", LogTail: "boom"}},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("msgs = %d, want 1", len(msg.msgs))
+	}
+	if got := logs.String(); !strings.Contains(got, "lifecycle: pr nudge sent") || !strings.Contains(got, "key=ci:https://github.com/o/r/pull/1") || !strings.Contains(got, "sig_len=") {
+		t.Fatalf("nudge sent evidence = %q", got)
+	}
+}
+
+func TestPRObservation_DuplicateNudgeSuppressionIsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	o := ports.PRObservation{
+		Fetched: true,
+		URL:     "https://github.com/o/r/pull/1",
+		CI:      domain.CIFailing,
+		Checks:  []ports.PRCheckObservation{{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, URL: "https://ci.example/run/39725960619", LogTail: "boom"}},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("duplicate red run re-emitted: %d msgs", len(msg.msgs))
+	}
+	if got := logs.String(); strings.Count(got, "lifecycle: pr nudge sent") != 1 || !strings.Contains(got, "lifecycle: pr nudge suppressed by signature") {
+		t.Fatalf("duplicate nudge evidence = %q", got)
+	}
+}
+
 func TestApplyTrackerFacts_TerminalStateMarksTerminated(t *testing.T) {
 	for _, state := range []domain.NormalizedIssueState{domain.IssueDone, domain.IssueCancelled} {
 		t.Run(string(state), func(t *testing.T) {
