@@ -11,7 +11,7 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-var authProbeTimeout = 10 * time.Second
+var authProbeTimeout = 20 * time.Second
 
 var runAuthProbe = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	return aoprocess.CommandContext(ctx, binary, args...).CombinedOutput()
@@ -34,7 +34,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	if status, ok := providerListStatus(string(out)); ok && status == ports.AgentAuthStatusConfigured {
 		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
-		return status, nil
+		status = verifySelectedConnection(probeCtx, binary)
+		return status, ctx.Err()
 	}
 	// MiMo Auto is usable without a login, so it is absent from `auth list`.
 	// Ask MiMo itself whether the free channel is available before reporting

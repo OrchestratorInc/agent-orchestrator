@@ -612,6 +612,9 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 			timeout = opencodeV2MigrationTimeout
 		case domain.HarnessHermes:
 			timeout = hermesAuthCheckTimeout
+		case domain.HarnessMiMoCode:
+			// Native model/config resolution precedes its bounded provider request.
+			timeout = 20 * time.Second
 		}
 	}
 	ctx, cancel := context.WithTimeout(evidenceCtx, timeout)
