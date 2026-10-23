@@ -144,6 +144,7 @@ import {
 	getCloudSession,
 	installCloudIPC,
 	registerCloudProtocol,
+	resolveCloudAuthDir,
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
@@ -3313,11 +3314,10 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 });
 
 // Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
-// Data dir resolves to ~/.ao (prod) or ~/.ao/dev (dev) matching daemon conventions.
+// Data dir resolves to AO_DATA_DIR when set, else ~/.ao (prod) or ~/.ao/dev
+// (dev), so instances with their own data dir keep their own sign-in.
 function cloudDataDir(): string {
-	return isDev
-		? path.join(os.homedir(), ".ao", DEV_STATE_SUBDIR)
-		: path.join(os.homedir(), ".ao");
+	return resolveCloudAuthDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, !isDev);
 }
 
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.

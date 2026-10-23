@@ -69,6 +69,7 @@ import {
   handleCloudDeepLink,
   installCloudIPC,
   readAuthStore,
+  resolveCloudAuthDir,
   showCloudSignInFailure,
   signOutCloud,
   writeAuthStore,
@@ -661,5 +662,21 @@ describe("registerCloudProtocol", () => {
     registerCloudProtocol();
     expect(app.setAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app", process.execPath, [devScript]);
     expect(app.once).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveCloudAuthDir", () => {
+  it("keeps the sign-in in the configured data dir, so instances with their own data dir never share an account", () => {
+    const home = "/Users/someone";
+    const first = resolveCloudAuthDir({ AO_DATA_DIR: "/tmp/ao/alice" }, home, "/work", false);
+    const second = resolveCloudAuthDir({ AO_DATA_DIR: "/tmp/ao/bob" }, home, "/work", false);
+    expect(first).toBe("/tmp/ao/alice");
+    expect(second).toBe("/tmp/ao/bob");
+    expect(resolveCloudAuthDir({ AO_DATA_DIR: " relative/data " }, home, "/work", true)).toBe("/work/relative/data");
+  });
+
+  it("uses ~/.ao for a packaged build and ~/.ao/dev for a development build", () => {
+    expect(resolveCloudAuthDir({}, "/Users/someone", "/work", true)).toBe("/Users/someone/.ao");
+    expect(resolveCloudAuthDir({ AO_DATA_DIR: "  " }, "/Users/someone", "/work", false)).toBe("/Users/someone/.ao/dev");
   });
 });
