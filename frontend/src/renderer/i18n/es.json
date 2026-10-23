@@ -2541,6 +2541,8 @@
 	"settings.versionRefresh.description": "Tras actualizar un agente, las sesiones inactivas se reinician con la nueva versión en lugar de esperar a que las reinicies.",
 	"chat.versionSwitch.pending": "Cambiando a {{version}}…",
 	"chat.versionSwitch.pendingHint": "Ocurre cuando el agente está inactivo o con tu próximo mensaje.",
+	"chat.versionSwitch.installed": "{{version}} instalada",
+	"chat.versionSwitch.stoppedHint": "Reanuda el agente para iniciarlo con la nueva versión.",
 	"chat.reauth.accountSignedOut": "{{account}} cerró sesión",
 	"chat.reauth.savedAccountHint": "Vuelve a iniciar sesión para seguir usándola aquí y reintenta tu último mensaje.",
 	"chat.reauth.continueOn": "Continuar con {{account}}",

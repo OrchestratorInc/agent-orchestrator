@@ -4,7 +4,7 @@ import { useHostConnection } from "../hooks/useHostConnection";
 import { snapshotBlobUrl, type FilesSource } from "../hooks/useSessionWorkspaceFiles";
 import { getApiBaseUrl } from "../lib/api-client";
 import { artifactContentUrl } from "../lib/artifact-content-url";
-import type { FileMediaKind } from "../lib/file-media";
+import { mediaCrossOrigin, type FileMediaKind } from "../lib/file-media";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 export function FileMediaPreview({ hostId, kind, path, sessionId, source, version, side = "after" }: {
@@ -32,11 +32,11 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 	return (
 		<div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden p-3">
 			{kind === "image" ? (
-				<img alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
+				<img crossOrigin={mediaCrossOrigin(src)} alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
 			) : kind === "video" ? (
-				<video aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
+				<video crossOrigin={mediaCrossOrigin(src)} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
 			) : (
-				<audio aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
+				<audio crossOrigin={mediaCrossOrigin(src)} aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
 			)}
 		</div>
 	);

@@ -2541,6 +2541,8 @@
 	"settings.versionRefresh.description": "Após atualizar um agente, sessões ociosas reiniciam na nova versão em vez de esperar que você as reinicie.",
 	"chat.versionSwitch.pending": "Mudando para {{version}}…",
 	"chat.versionSwitch.pendingHint": "Acontece quando o agente fica ocioso ou com sua próxima mensagem.",
+	"chat.versionSwitch.installed": "{{version}} instalada",
+	"chat.versionSwitch.stoppedHint": "Retome o agente para iniciá-lo na nova versão.",
 	"chat.reauth.accountSignedOut": "{{account}} está desconectada",
 	"chat.reauth.savedAccountHint": "Entre de novo para continuar usando aqui e tente sua última mensagem novamente.",
 	"chat.reauth.continueOn": "Continuar com {{account}}",

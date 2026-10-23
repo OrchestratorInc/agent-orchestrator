@@ -2501,6 +2501,8 @@
 	"settings.versionRefresh.description": "Nach einem Agent-Update starten inaktive Sitzungen mit der neuen Version neu, statt auf deinen Neustart zu warten.",
 	"chat.versionSwitch.pending": "Wechsel zu {{version}} …",
 	"chat.versionSwitch.pendingHint": "Erfolgt, wenn der Agent untätig ist, oder mit deiner nächsten Nachricht.",
+	"chat.versionSwitch.installed": "{{version}} installiert",
+	"chat.versionSwitch.stoppedHint": "Setze den Agenten fort, um ihn mit der neuen Version zu starten.",
 	"chat.reauth.accountSignedOut": "{{account}} ist abgemeldet",
 	"chat.reauth.savedAccountHint": "Melde es erneut an, um es hier weiter zu nutzen, und wiederhole dann deine letzte Nachricht.",
 	"chat.reauth.continueOn": "Mit {{account}} fortfahren",

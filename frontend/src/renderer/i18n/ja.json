@@ -2501,6 +2501,8 @@
 	"settings.versionRefresh.description": "エージェントの更新後、待機中のセッションは再起動を待たずに新しいバージョンで再起動します。",
 	"chat.versionSwitch.pending": "{{version}} に切り替え中…",
 	"chat.versionSwitch.pendingHint": "エージェントが待機中になったとき、または次のメッセージ送信時に切り替わります。",
+	"chat.versionSwitch.installed": "{{version}} をインストール済み",
+	"chat.versionSwitch.stoppedHint": "エージェントを再開すると新しいバージョンで起動します。",
 	"chat.reauth.accountSignedOut": "{{account}} はサインアウトしています",
 	"chat.reauth.savedAccountHint": "ここで使い続けるにはもう一度サインインしてから、最後のメッセージを再試行してください。",
 	"chat.reauth.continueOn": "{{account}} で続行",

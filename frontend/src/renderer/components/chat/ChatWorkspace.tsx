@@ -1760,7 +1760,12 @@ function ChatWorkspaceContent({
 						shellError={shellError}
 					/>
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
-					<VersionSwitchBanner staleBinary={session?.staleBinary} hostId={activeRemoteHostId} />
+					<VersionSwitchBanner
+						staleBinary={session?.staleBinary}
+						hostId={activeRemoteHostId}
+						// Only a resume starts a stopped agent, on the new release.
+						agentStopped={snapshot.controller.state === "stopped" && !(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting)}
+					/>
 					<div
 						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}

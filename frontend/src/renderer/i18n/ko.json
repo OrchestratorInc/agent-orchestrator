@@ -2501,6 +2501,8 @@
 	"settings.versionRefresh.description": "에이전트 업데이트 후 유휴 세션은 직접 다시 시작할 때까지 기다리지 않고 새 버전으로 다시 시작됩니다.",
 	"chat.versionSwitch.pending": "{{version}}(으)로 전환 중…",
 	"chat.versionSwitch.pendingHint": "에이전트가 유휴 상태가 되거나 다음 메시지를 보낼 때 전환됩니다.",
+	"chat.versionSwitch.installed": "{{version}} 설치됨",
+	"chat.versionSwitch.stoppedHint": "에이전트를 재개하면 새 버전으로 시작됩니다.",
 	"chat.reauth.accountSignedOut": "{{account}}에서 로그아웃되었습니다",
 	"chat.reauth.savedAccountHint": "여기서 계속 사용하려면 다시 로그인한 후 마지막 메시지를 재시도하세요.",
 	"chat.reauth.continueOn": "{{account}}(으)로 계속",
