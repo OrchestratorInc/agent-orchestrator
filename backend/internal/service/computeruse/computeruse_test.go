@@ -914,3 +914,32 @@ func TestReadAfterActionRevivesAnEndedSession(t *testing.T) {
 		t.Fatalf("driver tools = %v", tools)
 	}
 }
+
+// A driver refusal or rejected arguments is the caller's request (400); an
+// error with a code is the screen not matching the call (409); only a driver
+// that is not working is unavailable (503). The outputs are Cua Driver 0.37.0's.
+func TestCallFailureStatusFollowsTheDriverAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		stdout, stderr string
+		want           apierr.Kind
+	}{
+		"missing argument": {stdout: "Missing required integer field: pid\n", want: apierr.KindInvalid},
+		"refused": {stdout: `{"hint":"An argument is missing","refusal":{"code":"invalid_arguments","message":"run_steps: unknown argument scope; accepted: app, steps"},"status":"refused"}`,
+			want: apierr.KindInvalid},
+		"window gone": {stdout: `{"code":"window_id_not_found","hint":"No window matches that target now.","pid":1,"window_id":1}`,
+			want: apierr.KindConflict},
+		"crashed": {stderr: "thread 'main' panicked at src/main.rs:1:1\n", want: apierr.KindUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			driver := &fakeDriver{daemonUp: true}
+			driver.onCall = func([]string) ([]byte, []byte, error) {
+				return []byte(tc.stdout), []byte(tc.stderr), errors.New("exit status 1")
+			}
+			_, err := newTestService(t, driver, "darwin").Call(context.Background(), CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 1, "window_id": 1}})
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_CALL_FAILED" || apiErr.Kind != tc.want {
+				t.Fatalf("err = %#v, want COMPUTER_USE_CALL_FAILED with kind %v", err, tc.want)
+			}
+		})
+	}
+}

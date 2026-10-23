@@ -3,6 +3,7 @@ package computeruse
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
@@ -136,6 +137,35 @@ func actionRefused(code, tool string, step int, message string) error {
 // would be unsafe or misleading for an agent.
 var driverRefusalHints = map[string]string{
 	"desktop_scope_disabled": "AO does not act on the whole screen: pass the pid and window_id of the window you read with get_window_state, not scope \"desktop\".",
+}
+
+// missingArgument is the driver's plain-text answer to arguments its schema
+// rejects before running, such as "Missing required integer field: pid".
+var missingArgument = regexp.MustCompile(`(?m)^Missing required \w+ field: `)
+
+// driverFailureKind is the API error kind for a failed driver call. A
+// refusal or rejected arguments is the caller's request (400); an error with
+// its own code, such as window_id_not_found or stale_element_token, is the
+// screen not being in the state the call expected (409). Anything else, a
+// crash or a timeout, means the driver is not working (503).
+func driverFailureKind(stdout, stderr []byte) apierr.Kind {
+	var answer struct {
+		Status  string          `json:"status"`
+		Code    string          `json:"code"`
+		Refusal json.RawMessage `json:"refusal"`
+	}
+	if json.Unmarshal(stdout, &answer) == nil {
+		switch {
+		case answer.Status == "refused" || len(answer.Refusal) > 0:
+			return apierr.KindInvalid
+		case answer.Code != "":
+			return apierr.KindConflict
+		}
+	}
+	if missingArgument.MatchString(cleanText(string(stdout))) || missingArgument.MatchString(cleanText(string(stderr))) {
+		return apierr.KindInvalid
+	}
+	return apierr.KindUnavailable
 }
 
 // refusalCode reads the code of a driver refusal:

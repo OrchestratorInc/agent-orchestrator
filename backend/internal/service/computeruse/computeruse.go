@@ -377,7 +377,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		if code, _ := refusalCode(stdout); driverRefusalHints[code] != "" {
 			message += "\n" + driverRefusalHints[code]
 		}
-		return CallResult{}, apierr.New(apierr.KindUnavailable, "COMPUTER_USE_CALL_FAILED", message, map[string]any{"tool": tool})
+		return CallResult{}, apierr.New(driverFailureKind(stdout, stderr), "COMPUTER_USE_CALL_FAILED", message, map[string]any{"tool": tool})
 	}
 
 	var result any
