@@ -12,6 +12,7 @@ import { MarkdownFileView } from "./markdown/MarkdownFileView";
 
 const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 625;
+const MARKDOWN_PAGE_WIDTH = 850;
 
 /** Gallery previews load near the viewport; pages keep the isolated inline origin. */
 export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
@@ -93,7 +94,7 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 			) : (
 				<span
 					className="absolute left-0 top-0 block origin-top-left"
-					style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / PAGE_WIDTH})` }}
+					style={{ width: MARKDOWN_PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / MARKDOWN_PAGE_WIDTH})` }}
 				>
 					<MarkdownFileView
 						artifactOrigin={contentUrl ? new URL(row.rawUrl ?? contentUrl).origin : undefined}
