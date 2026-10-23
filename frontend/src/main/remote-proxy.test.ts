@@ -96,6 +96,30 @@ async function startUpstream(
 }
 
 describe("startRemoteProxy", () => {
+	it("refuses hostile mux upgrades without opening an upstream socket", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
+		const upgrades = vi.fn();
+		upstream!.on("upgrade", (req, socket) => { upgrades(req.url); socket.destroy(); });
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const target = new URL(proxy.base);
+		const staticPreview = new URL(proxy.previewUrl("ao-1", `http://ao-preview.mfxs2mi.localhost:${port}/index.html`));
+		for (const [destination, origin] of [[target, "http://ao-preview-attacker.localhost:3001"], [target, "null"], [staticPreview, staticPreview.origin]] as const) {
+			await new Promise<void>((resolve, reject) => {
+				const onConnect = () => {
+					socket.write(`GET ${target.pathname}/mux HTTP/1.1\r\nHost: ${destination.host}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+				};
+				const socket = destination.protocol === "https:"
+					? tlsConnect({ host: "127.0.0.1", port: Number(destination.port), ...trustPreview(destination) }, onConnect)
+					: netConnect(Number(destination.port), "127.0.0.1", onConnect);
+				socket.setTimeout(2000, () => { socket.destroy(); reject(new Error("upgrade did not close")); });
+				socket.on("error", reject);
+				socket.on("close", () => resolve());
+			});
+		}
+		expect(upgrades).not.toHaveBeenCalled();
+		expect(seen).toHaveLength(0);
+	});
+
 	it("serves authenticated artifact files and sibling assets without replacing an app preview", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "artifact", headers: { "set-cookie": "secret=1" } }));
 		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" });
