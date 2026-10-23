@@ -51,6 +51,11 @@ Invalidated snapshots s0000002e: their element_tokens are stale.
    and live apps reorder their lists, so act next with the new `snapshot_id`,
    as the diff says. If the result says `observation skipped`, AO could not
    tell the window: read it with `get_window_state`.
+5. If an action by token did something other than what the screenshot led you
+   to expect (it hovered or opened a neighbouring element, say), the page has
+   likely moved since your read: it was still loading, or the window was not
+   painted, so the tree and the real layout disagree. Read the window again
+   and act with a fresh token before falling back to `x`/`y` pixels.
 
 Background windows do not always render. Chromium-based browsers and apps
 (Chrome, Brave, Edge, Electron), on Windows especially, throttle or stop
