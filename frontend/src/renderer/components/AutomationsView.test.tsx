@@ -35,7 +35,7 @@ vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
 		queryKey: ["agent-models", agentId, projectId],
 		queryFn: async () => ({
-			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true }],
+			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }, { id: "capable", label: "Capable", efforts: ["low", "high"], defaultEffort: "high" }, { id: "plain", label: "Plain", efforts: [] }],
 			allowCustom: false,
 			customModelEntry: "none",
 			selectionMode: "catalog",
@@ -45,6 +45,7 @@ vi.mock("../hooks/useAgentModelsQuery", () => ({
 	refreshAgentModels: vi.fn(),
 	revalidateAgentModels: vi.fn(),
 }));
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: {} }) }));
 vi.mock("../hooks/useAutomations", () => ({
 	useAutomations: () => ({ data: mocks.automations, isLoading: false, error: null }),
 	useCreateAutomation: () => ({ mutateAsync: mocks.create, isPending: false, error: null }),
@@ -82,14 +83,14 @@ describe("AutomationsView", () => {
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
-		expect(within(dialog).queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
+		expect(await within(dialog).findByRole("button", { name: "Worker model" })).toHaveTextContent("GPT-5");
 		expect(screen.queryByRole("option", { name: "Project default" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Session kind" })).not.toBeInTheDocument();
 	});
 
 	it("edits an automation from its card action", async () => {
 		const user = userEvent.setup();
-		mocks.automations = [{ id: "automation-1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", harness: "codex", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true, nextRunAt: "2026-08-27T09:00:00Z", createdAt: "2026-08-26T09:00:00Z", updatedAt: "2026-08-26T09:00:00Z" }];
+		mocks.automations = [{ id: "automation-1", projectId: "demo", displayName: "Morning triage", prompt: "Review", kind: "worker", harness: "codex", model: "gpt-5", effort: "high", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true, nextRunAt: "2026-08-27T09:00:00Z", createdAt: "2026-08-26T09:00:00Z", updatedAt: "2026-08-26T09:00:00Z" }];
 		renderView();
 		await user.click(screen.getByRole("button", { name: "Edit Morning triage" }));
 
@@ -116,6 +117,41 @@ describe("AutomationsView", () => {
 		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("timezone");
 		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("harness");
 		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("rrule");
+		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("model");
+		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("effort");
+	});
+
+	it("saves model and effort overrides for a new automation", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getAllByRole("button", { name: /create automation/i })[0]);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
+		await user.click(await within(dialog).findByRole("button", { name: "Worker model" }));
+		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
+		await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ model: "capable", effort: "low" }));
+	});
+
+	it("clears saved effort when editing to a model without effort support", async () => {
+		mocks.automations = [{ id: "automation-1", projectId: "demo", displayName: "Review", prompt: "Review", kind: "worker", harness: "codex", model: "capable", effort: "high", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true }];
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Edit Review" }));
+		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+		const picker = await within(dialog).findByRole("button", { name: "Worker model" });
+		expect(picker).toHaveTextContent("Capable");
+		expect(picker).toHaveTextContent("High");
+		await user.click(picker);
+		await user.click(screen.getByRole("menuitem", { name: "Plain" }));
+		expect(picker).toHaveTextContent("Plain");
+		expect(picker).not.toHaveTextContent("High");
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ model: "plain", effort: "" }) });
 	});
 
 	it("creates a weekly automation on the chosen weekday", async () => {
@@ -300,7 +336,7 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeInTheDocument();
 		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toBeInTheDocument();
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toBeInTheDocument();
-		expect(within(dialog).queryByRole("button", { name: "Model" })).not.toBeInTheDocument();
+		expect(await within(dialog).findByRole("button", { name: "Worker model" })).toHaveTextContent("GPT-5");
 		expect(view.container.querySelector('[data-slot="select-content"]')).toBeNull();
 	});
 

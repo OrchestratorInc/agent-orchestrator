@@ -386,3 +386,31 @@ func isAPIError(err error, kind apierr.Kind) bool {
 	var apiError *apierr.Error
 	return errors.As(err, &apiError) && apiError.Kind == kind
 }
+
+func TestAutomationModelSettingsUpdateAndClear(t *testing.T) {
+	ctx := context.Background()
+	svc := New(Deps{Store: newFakeStore()})
+	created, err := svc.Create(ctx, CreateInput{ProjectID: "scheduled", DisplayName: "Review", Prompt: "Review", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Model: "gpt-5", Effort: "high", RRule: "FREQ=DAILY", Timezone: "UTC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Model != "gpt-5" || created.Effort != "high" {
+		t.Fatalf("created = %#v", created)
+	}
+	name := "Renamed"
+	updated, err := svc.Update(ctx, created.ID, UpdateInput{DisplayName: &name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Model != "gpt-5" || updated.Effort != "high" {
+		t.Fatalf("updated = %#v", updated)
+	}
+	empty := ""
+	updated, err = svc.Update(ctx, created.ID, UpdateInput{Model: &empty, Effort: &empty, Mode: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Model != "" || updated.Effort != "" || updated.Mode != "" {
+		t.Fatalf("cleared = %#v", updated)
+	}
+}

@@ -17,6 +17,7 @@ import { Input } from "./ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectDefaultWorker } from "../hooks/useProjectDefaultWorker";
@@ -196,6 +197,9 @@ type AutomationFormSubmit = {
 	prompt: string;
 	kind?: "worker" | "orchestrator";
 	harness?: string;
+	model?: string;
+	mode?: string;
+	effort?: string;
 	timezone?: string;
 	rrule?: string;
 };
@@ -241,6 +245,10 @@ function AutomationFormDialog({
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
 	const [harness, setHarness] = useState("");
+	const [model, setModel] = useState("");
+	const [mode, setMode] = useState("");
+	const [effort, setEffort] = useState("");
+	const [modelValid, setModelValid] = useState(true);
 	const [schedule, setSchedule] = useState<ScheduleFields>(() => ({
 		preset: "daily",
 		time: nowLocalHHMM(),
@@ -272,6 +280,10 @@ function AutomationFormDialog({
 		setName(automation?.displayName ?? "");
 		setPrompt(automation?.prompt ?? "");
 		setHarness(automation?.harness ?? "");
+		setModel(automation?.model ?? "");
+		setMode(automation?.mode ?? "");
+		setEffort(automation?.effort ?? "");
+		setModelValid(true);
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
 		const nextSchedule = automation
@@ -317,6 +329,7 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		if (!modelValid) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
@@ -356,6 +369,9 @@ function AutomationFormDialog({
 				...(editing ? {} : { projectId, timezone, kind: "worker" as const }),
 				displayName: name,
 				prompt,
+				...(!editing || model !== (automation?.model ?? "") ? { model } : {}),
+				...(!editing || mode !== (automation?.mode ?? "") ? { mode } : {}),
+				...(!editing || effort !== (automation?.effort ?? "") ? { effort } : {}),
 				...(harnessChanged && selectedHarness ? { harness: selectedHarness } : {}),
 				...(scheduleChanged ? { rrule: nextRRule } : {}),
 			});
@@ -408,7 +424,7 @@ function AutomationFormDialog({
 								invalid={Boolean(validationErrors.projectId)}
 								describedBy={validationErrors.projectId ? `${AUTOMATION_FIELD_IDS.projectId}-error` : undefined}
 								value={projectId}
-								onValueChange={(value) => { setProjectId(value); clearValidationError("projectId"); }}
+								onValueChange={(value) => { setProjectId(value); setModel(""); setMode(""); setEffort(""); clearValidationError("projectId"); }}
 								options={projectOptions}
 							/>
 						</Field>
@@ -439,8 +455,27 @@ function AutomationFormDialog({
 								disabled={busy}
 								onChange={(value) => {
 									setHarness(value);
+									setModel(""); setMode(""); setEffort("");
 								}}
 							/>
+							{open ? (
+								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy}>
+									<span className={onboardingFormLabelClass}>{t("settings.models.workerModel")}</span>
+									<AgentModelField
+										key={selectedHarness + ":" + projectId}
+										role="worker"
+										agentId={selectedHarness}
+										projectId={projectId}
+										model={model}
+										mode={mode}
+										effort={effort}
+										onModelChange={setModel}
+										onModeChange={setMode}
+										onEffortChange={setEffort}
+										onValidityChange={setModelValid}
+									/>
+								</div>
+							) : null}
 							<Field label={t("automations.field.schedule")}>
 								<AutomationSelect
 									label={t("automations.field.schedule")}
@@ -595,7 +630,7 @@ function AutomationFormDialog({
 						<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy}>
+						<Button type="submit" variant="primary" disabled={busy || !modelValid}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>

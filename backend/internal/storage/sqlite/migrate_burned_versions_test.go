@@ -218,6 +218,8 @@ var shippedMigrations = map[int64]string{
 	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
 	20261020131539535: "20261020131539535_provider_switching.sql",
 	20261021230230412: "20261021230230412_provider_events_session_index.sql",
+
+	20261022152944904: "20261022152944904_automation_model_settings.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

@@ -187,6 +187,9 @@ type Automation struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	Model       string
+	Mode        string
+	Effort      string
 }
 
 type AutomationRun struct {
