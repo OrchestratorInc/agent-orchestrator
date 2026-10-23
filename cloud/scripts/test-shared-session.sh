@@ -140,6 +140,10 @@ acquire="$(composer "$bob" acquire)"
 bob_epoch="$(body_of "$acquire" | jq -r .composer.epoch)"
 check "Bob takes the composer" test "$(body_of "$acquire" | jq -r .granted)" = true
 check "Alice's stream shows Bob writing" wait_live alice ".composer.holder.userId == \"$bob_id\""
+draft_body="$(jq -nc --argjson epoch "$bob_epoch" '{epoch: $epoch, text: "fix the flaky test", cursor: 7}')"
+check "Bob shares his draft as he types" test "$(body_of "$(composer "$bob" draft "$draft_body")" | jq -r .granted)" = true
+check "Alice watches Bob's draft and caret live" wait_live alice '.composer.draft.text == "fix the flaky test" and .composer.draft.cursor == 7'
+check "Alice cannot write into Bob's draft" test "$(body_of "$(composer "$alice" draft "$draft_body")" | jq -r .granted)" = false
 check "Alice cannot take it while Bob writes" test "$(body_of "$(composer "$alice" acquire)" | jq -r .granted)" = false
 locked="$(send "$alice" "from alice without the lease")"
 check "Alice's send is refused with COMPOSER_LOCKED" test "$(status_of "$locked")" = 409 -a "$(body_of "$locked" | jq -r .code)" = COMPOSER_LOCKED
@@ -154,6 +158,7 @@ check "Bob's stream shows Alice waiting" wait_live bob ".composer.waitlist[0].us
 sent="$(send "$bob" "from bob" "$bob_epoch")"
 check "Bob sends with his grant" test "$(status_of "$sent")" = 202
 check "Bob's prompt names him" test "$(body_of "$sent" | jq -r .event.payload.authorName)" = Bob
+check "Bob's draft is gone once he sends" wait_live alice '.composer.draft == null'
 check "the lease passed to Alice, next in line" wait_live bob ".composer.holder.userId == \"$alice_id\" and .composer.epoch > $bob_epoch"
 check "Bob's old grant is fenced off" test "$(body_of "$(send "$bob" stale "$bob_epoch")" | jq -r .code)" = COMPOSER_LOCKED
 
