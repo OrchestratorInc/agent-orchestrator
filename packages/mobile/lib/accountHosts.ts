@@ -14,7 +14,8 @@ function endpoint(raw: string): Endpoint | null {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			kind: url.hostname.endsWith(".trycloudflare.com") ? "tunnel" : url.hostname.endsWith(".ts.net") ? "tailscale" : "lan",
+			// LAN endpoints are IP literals; any other name is a quick or named tunnel.
+			kind: url.hostname.endsWith(".ts.net") ? "tailscale" : /^[\d.]+$|^\[/.test(url.hostname) ? "lan" : "tunnel",
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",

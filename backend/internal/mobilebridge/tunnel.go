@@ -369,6 +369,16 @@ func (r *TunnelRuntime) Settled() {
 	r.settled = true
 }
 
+// NamedHostname records a named tunnel's address, which cloudflared never
+// prints, as already settled: its DNS record was published before the
+// connector started and stays the same across restarts.
+func (r *TunnelRuntime) NamedHostname(hostname string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.log.URL = "https://" + hostname
+	r.settled = true
+}
+
 // UnsettledHostname is a registered hostname still inside its settling window,
 // or "" when nothing is waiting — not registered yet, or already settled.
 func (r *TunnelRuntime) UnsettledHostname() string {
@@ -437,6 +447,18 @@ func CloudflaredArgs(localPort, metricsPort int) []string {
 		"--url", fmt.Sprintf("http://127.0.0.1:%d", localPort),
 		"--metrics", fmt.Sprintf("127.0.0.1:%d", metricsPort),
 		"--no-autoupdate",
+	}
+}
+
+// NamedCloudflaredArgs runs a named tunnel. Its ingress lives on Cloudflare
+// (see ProvisionNamedTunnel) and its run token arrives in TUNNEL_TOKEN, which
+// keeps it out of the process list.
+func NamedCloudflaredArgs(metricsPort int) []string {
+	return []string{
+		"tunnel",
+		"--no-autoupdate",
+		"--metrics", fmt.Sprintf("127.0.0.1:%d", metricsPort),
+		"run",
 	}
 }
 

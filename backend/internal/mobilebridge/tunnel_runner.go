@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -30,6 +31,9 @@ type TunnelRunner struct {
 	// SettleDelay overrides how long after registration the hostname is
 	// considered resolvable. Zero uses DefaultTunnelSettleDelay.
 	SettleDelay time.Duration
+	// Named, when set, runs this host's named tunnel instead of a quick tunnel.
+	Named  *NamedTunnelConfig
+	HostID string
 }
 
 // Run supervises the connector until ctx is cancelled. It blocks, so callers
@@ -70,7 +74,21 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		return fmt.Errorf("reserve metrics port: %w", err)
 	}
 
-	cmd := aoprocess.CommandContext(ctx, t.Binary, CloudflaredArgs(t.LocalPort, metricsPort)...)
+	args := CloudflaredArgs(t.LocalPort, metricsPort)
+	var hostname, runToken string
+	if t.Named != nil {
+		hostname, runToken, err = ProvisionNamedTunnel(ctx, *t.Named, t.HostID, t.LocalPort)
+		if err != nil {
+			t.Runtime.Exited(err)
+			return fmt.Errorf("provision named tunnel: %w", err)
+		}
+		args = NamedCloudflaredArgs(metricsPort)
+	}
+
+	cmd := aoprocess.CommandContext(ctx, t.Binary, args...)
+	if runToken != "" {
+		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+runToken)
+	}
 	// cloudflared logs to stderr; the hostname is only available there.
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -94,7 +112,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// for a brand-new quick tunnel lags the connector's own "registered" signal.
 	settleCtx, stopSettle := context.WithCancel(ctx)
 	defer stopSettle()
-	go t.awaitSettled(settleCtx)
+	if hostname != "" {
+		t.Runtime.NamedHostname(hostname)
+	} else {
+		go t.awaitSettled(settleCtx)
+	}
 
 	scanner := bufio.NewScanner(stderr)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

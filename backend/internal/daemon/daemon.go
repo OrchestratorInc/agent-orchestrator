@@ -898,12 +898,32 @@ func Run(buildVersion string) error {
 	// would silently report offline.
 	presenceTracker := presence.NewTracker()
 
+	// Stable, machine-bound host identity, served by the unauthenticated
+	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
+	// answers 501 and the phone falls back to pairing without identity
+	// verification, which is how it behaved before the probe existed.
+	hostIdentity, identityErr := mobilebridge.EnsureLocalIdentity(cfg.DataDir)
+	if identityErr != nil {
+		log.Warn("could not establish host identity; /api/v1/identity will report unimplemented", "error", identityErr)
+	}
+
 	// Managed remote-access connector. Reap first: a daemon that died without
 	// stopping its connector leaves a public tunnel to this machine running
 	// with nobody watching it.
 	tunnelPID := mobilebridge.TunnelPIDPath(cfg.DataDir)
 	if reapErr := mobilebridge.ReapStaleTunnel(tunnelPID, mobilebridge.IsLiveCloudflared, mobilebridge.KillProcess); reapErr != nil {
 		log.Warn("could not reap a stale mobile tunnel", "error", reapErr)
+	}
+	managedTunnel := func(res mobilebridge.CloudflaredResolution) controllers.TunnelController {
+		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
+		deps := mobilebridge.ManagedTunnelDeps{Binary: res.Path, PIDPath: tunnelPID, Log: log}
+		if named, err := mobilebridge.LoadNamedTunnelConfig(cfg.DataDir); err != nil {
+			log.Warn("ignoring named tunnel config; using a quick tunnel", "error", err)
+		} else if named != nil && hostIdentity.HostID != "" {
+			log.Info("mobile remote access uses a named tunnel", "zone", named.Zone)
+			deps.Named, deps.HostID = named, hostIdentity.HostID
+		}
+		return mobilebridge.NewManagedTunnel(deps)
 	}
 	// Looked up again whenever the bridge is enabled, so a cloudflared the user
 	// installs from Connect Mobile is picked up without restarting AO.
@@ -912,10 +932,7 @@ func Run(buildVersion string) error {
 		if res.NeedsInstall {
 			return nil
 		}
-		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
-			Binary: res.Path, PIDPath: tunnelPID, Log: log,
-		})
+		return managedTunnel(res)
 	}
 	// A system cloudflared is version-checked by running it (30-120ms, up to a
 	// 5s timeout), so resolve off the boot path. Status reads and anything that
@@ -930,20 +947,8 @@ func Run(buildVersion string) error {
 				"rejectedSystemPath", res.SystemPath)
 			return nil
 		}
-		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
-		return mobilebridge.NewManagedTunnel(mobilebridge.ManagedTunnelDeps{
-			Binary: res.Path, PIDPath: tunnelPID, Log: log,
-		})
+		return managedTunnel(res)
 	})
-
-	// Stable, machine-bound host identity, served by the unauthenticated
-	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
-	// answers 501 and the phone falls back to pairing without identity
-	// verification, which is how it behaved before the probe existed.
-	hostIdentity, identityErr := mobilebridge.EnsureLocalIdentity(cfg.DataDir)
-	if identityErr != nil {
-		log.Warn("could not establish host identity; /api/v1/identity will report unimplemented", "error", identityErr)
-	}
 
 	bs.HostID = hostIdentity.HostID
 	// Pushes include the authoritative host identity so a phone can reject

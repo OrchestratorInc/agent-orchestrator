@@ -17,6 +17,10 @@ type ManagedTunnelDeps struct {
 	// PIDPath records the connector's pid so a crashed daemon can reap it.
 	PIDPath string
 	Log     *slog.Logger
+	// Named and HostID switch the connector to this host's named tunnel. See
+	// ProvisionNamedTunnel.
+	Named  *NamedTunnelConfig
+	HostID string
 }
 
 // ManagedTunnel owns the lifecycle of the remote-access connector: at most one
@@ -124,5 +128,7 @@ func (m *ManagedTunnel) runReal(ctx context.Context, localPort int, rt *TunnelRu
 		PIDPath:   m.deps.PIDPath,
 		Runtime:   rt,
 		Log:       m.deps.Log,
+		Named:     m.deps.Named,
+		HostID:    m.deps.HostID,
 	}).Run(ctx)
 }
