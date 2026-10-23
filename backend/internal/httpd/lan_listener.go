@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"compress/flate"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
@@ -45,7 +48,7 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 	lock := newLockout(time.Now)
 	auth := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))
 	m := &LANManager{
-		handler:     lanControlBlock(auth(handler)),
+		handler:     lanControlBlock(auth(remoteJSONCompression(handler))),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
@@ -54,6 +57,15 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 	m.tunnel = auth(http.HandlerFunc(m.serveTunnel))
 	return m
 }
+
+// remoteJSONCompression gzips JSON for remote clients. Behind a tunnel every
+// response leaves the machine uncompressed through cloudflared, and the board
+// poll alone is about 300 KB every 2 seconds per phone, which capped a tunnel at
+// about 9 polls a second. BestSpeed keeps the daemon's CPU cost low. Only JSON:
+// event streams must reach the client unbuffered, and preview files already
+// carry their own encoding. Inner requests of the WebSocket tunnel pass through
+// m.handler, so they are compressed too.
+var remoteJSONCompression = middleware.Compress(flate.BestSpeed, "application/json")
 
 // lanControlBlockedPrefixes are the loopback-only daemon-control route
 // prefixes that must never be reachable through the LAN listener: /shutdown,
