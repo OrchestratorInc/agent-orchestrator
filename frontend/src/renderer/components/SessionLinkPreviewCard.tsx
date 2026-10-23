@@ -1,3 +1,4 @@
+import { mediaCrossOrigin } from "../lib/file-media";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Markdown, { type Components } from "react-markdown";
@@ -318,7 +319,7 @@ function ArtifactImagePreview({ rawUrl, name, updatedAt }: { rawUrl: string; nam
 	if (failedSrc === src) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
 	return (
 		<div className="grid max-h-40 place-items-center overflow-hidden rounded-sm text-passive" style={{ background: IMAGE_CHECKERBOARD }}>
-			<img alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
+			<img crossOrigin={mediaCrossOrigin(src)} alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
 		</div>
 	);
 }

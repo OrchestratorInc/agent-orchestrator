@@ -750,6 +750,10 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			}
 		},
 		ModifyResponse: func(res *http.Response) error {
+			// Remote proxies publish this app on a separate origin, where the
+			// sandbox is removed in favor of their existing preview policy.
+			res.Header.Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
+			res.Header.Set("X-AO-Preview-API-Sandbox", "1")
 			if location := res.Header.Get("Location"); location != "" {
 				if redirect, parseErr := url.Parse(location); parseErr == nil && redirect.IsAbs() && isPreviewLoopback(redirect.Hostname()) {
 					if redirect.Port() != target.Port() {
@@ -945,6 +949,8 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 }
 
 func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.File, info fs.FileInfo, clean string) {
+	sandboxLegacyPreview(w, r)
+
 	if !previewutil.IsMarkdownPath(clean) || previewRawRequested(r) {
 		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
@@ -966,8 +972,26 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Method != http.MethodHead {
-		_, _ = w.Write(rendered) //nolint:gosec // G705: preview content is workspace-local and agent-trusted
+		_, _ = w.Write(rendered) //nolint:gosec // G705: legacy documents are sandboxed; isolated previews have no daemon API authority
 	}
+}
+
+// Legacy API URLs must not give workspace HTML, Markdown or SVG the API's
+// origin. The sandbox permits scripts/forms but deliberately omits same-origin.
+// Normal isolated preview origins retain their own module/asset behavior.
+func sandboxLegacyPreview(w http.ResponseWriter, r *http.Request) {
+	if _, ok := previewutil.SessionIDFromHost(r.Host); ok {
+		return
+	}
+	if _, ok := previewutil.SessionIDFromArtifactHost(r.Host); ok {
+		return
+	}
+	if _, ok := previewutil.SessionIDFromInlineArtifactHost(r.Host); ok {
+		return
+	}
+	w.Header().Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
+	w.Header().Set("X-AO-Preview-API-Sandbox", "1")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
 func previewRawRequested(r *http.Request) bool {

@@ -1646,13 +1646,15 @@ func activityDetailPayload(activity domain.ConversationActivity) map[string]any 
 		if detail == nil {
 			detail = map[string]any{}
 		}
-		// The stream wins over the aggregate: it is the only one that exists
-		// mid-command, and once both exist they carry the same text.
+		// The stream wins over the separately capped aggregate, including its
+		// own truncation state.
 		detail["output"] = activity.CommandOutput
 		detail["outputSource"] = "stream"
 		detail["outputMayBePartial"] = true
 		if activity.CommandOutputTruncated {
 			detail["outputTruncated"] = true
+		} else {
+			delete(detail, "outputTruncated")
 		}
 	}
 	if activity.StreamedText != "" {

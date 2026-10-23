@@ -80,6 +80,8 @@ type fakeStore struct {
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+	conversations       map[domain.SessionID]domain.ConversationRecord
+	activities          []domain.ConversationActivity
 
 	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
 	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
@@ -107,6 +109,68 @@ func newFakeStore() *fakeStore {
 
 func (f *fakeStore) ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
+	conversation, ok := f.conversations[id]
+	if !ok {
+		return domain.ConversationRecord{}, domain.ErrNoConversation
+	}
+	return conversation, nil
+}
+
+func (f *fakeStore) SessionForActivityProviderItem(_ context.Context, providerItemID string) (domain.SessionID, bool, error) {
+	for _, activity := range f.activities {
+		if activity.ProviderItemID != providerItemID {
+			continue
+		}
+		for sessionID, conversation := range f.conversations {
+			if conversation.ID == activity.ConversationID {
+				return sessionID, true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	for _, existing := range f.activities {
+		if existing.ConversationID == conversationID && existing.ProviderItemID == providerItemID {
+			return existing.Status, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
+	if activity.ProviderItemID != "" {
+		for i, existing := range f.activities {
+			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
+				if activity.Kind == domain.ActivityKindAOAction &&
+					activity.Status == domain.ActivityStatusRunning &&
+					(existing.Status == domain.ActivityStatusCompleted ||
+						existing.Status == domain.ActivityStatusFailed ||
+						existing.Status == domain.ActivityStatusCancelled ||
+						existing.Status == domain.ActivityStatusResolved) {
+					return nil
+				}
+				activity.ID = existing.ID
+				activity.ConversationID = conversationID
+				activity.Sequence = existing.Sequence
+				activity.Revision = existing.Revision + 1
+				activity.UpdatedAt = now
+				f.activities[i] = activity
+				return nil
+			}
+		}
+	}
+	activity.ConversationID = conversationID
+	activity.Sequence = int64(len(f.activities) + 1)
+	activity.Revision = 1
+	activity.CreatedAt = now
+	activity.UpdatedAt = now
+	f.activities = append(f.activities, activity)
+	return nil
 }
 
 func TestListBatchesKanbanReads(t *testing.T) {
@@ -2555,39 +2619,40 @@ func TestSessionRenameMissingSessionReturnsNotFound(t *testing.T) {
 // fakeCommander records Kill/Spawn calls so a test can assert the
 // clean-orchestrator ordering without wiring a real session engine.
 type fakeCommander struct {
-	killed           []domain.SessionID
-	retired          []domain.SessionID
-	exited           []domain.SessionID
-	resumed          []domain.SessionID
-	ready            []domain.SessionID
-	sent             []domain.SessionID
-	sentMessages     []string
-	cleanupProjects  []domain.ProjectID
-	killErr          error
-	retireErr        error
-	retireFunc       func(context.Context, domain.SessionID) error
-	sendErr          error
-	sendFunc         func(domain.SessionID, string) error
-	cleanupErr       error
-	spawnErr         error
-	spawnWaitsForCtx bool
-	spawnHook        func(context.Context)
-	spawnRecord      domain.SessionRecord
-	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
-	spawnCalls       int
-	spawned          bool
-	spawnedCfg       ports.SpawnConfig
-	spawnCtx         context.Context
-	killsAtSpawn     int
-	restoreErr       error
-	restoreResult    sessionmanager.RestoreResult
-	readyErr         error
-	backgroundResult string
-	backgroundErr    error
-	backgroundFunc   func(backgroundTaskCall) (string, error)
-	backgroundCalls  []backgroundTaskCall
-	killFunc         func(domain.SessionID)
-	killMu           sync.Mutex
+	killed            []domain.SessionID
+	retired           []domain.SessionID
+	exited            []domain.SessionID
+	resumed           []domain.SessionID
+	ready             []domain.SessionID
+	sent              []domain.SessionID
+	sentMessages      []string
+	cleanupProjects   []domain.ProjectID
+	killErr           error
+	retireErr         error
+	retireFunc        func(context.Context, domain.SessionID) error
+	sendErr           error
+	sendFunc          func(domain.SessionID, string) error
+	cleanupErr        error
+	spawnErr          error
+	spawnWaitsForCtx  bool
+	spawnHook         func(context.Context)
+	spawnRecord       domain.SessionRecord
+	requestKillResult *sessionmanager.KillResult
+	spawnFunc         func(ports.SpawnConfig) domain.SessionRecord
+	spawnCalls        int
+	spawned           bool
+	spawnedCfg        ports.SpawnConfig
+	spawnCtx          context.Context
+	killsAtSpawn      int
+	restoreErr        error
+	restoreResult     sessionmanager.RestoreResult
+	readyErr          error
+	backgroundResult  string
+	backgroundErr     error
+	backgroundFunc    func(backgroundTaskCall) (string, error)
+	backgroundCalls   []backgroundTaskCall
+	killFunc          func(domain.SessionID)
+	killMu            sync.Mutex
 }
 
 type backgroundTaskCall struct {
@@ -5856,6 +5921,9 @@ func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []
 }
 
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	if f.requestKillResult != nil {
+		return *f.requestKillResult, nil
+	}
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err
 }

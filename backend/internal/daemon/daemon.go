@@ -41,6 +41,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/codexops"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemon/supervisor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -154,6 +155,34 @@ func Run(buildVersion string) error {
 	} else if live != nil && runFileOwnerServing(&http.Client{Timeout: staleProbeTimeout}, config.LoopbackHost, live) {
 		return fmt.Errorf("daemon already running (pid %d, port %d); refusing to start", live.PID, live.Port)
 	}
+
+	// Take the data-directory lock before touching SQLite. The run-file check
+	// above only proves nobody else owns this port/run file; it says nothing
+	// about the data dir, so a second daemon with a different AO_PORT/AO_RUN_FILE
+	// but the same AO_DATA_DIR would otherwise open and hot-migrate the database
+	// underneath the first daemon, invalidating its prepared statements against
+	// the new schema (issue #3716). The lock is scoped to the data dir alone and
+	// is held until Run returns; a crashed holder's lock is dropped by the OS, so
+	// a successor reclaims it with no stale-lock bookkeeping.
+	//
+	// A desktop takeover spawns this daemon as soon as the old one's /healthz
+	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout,
+	// the old daemon's capped shutdown (end of Run) then takes at most 8T+18s:
+	//   - the HTTP drain and seven stages capped at T each: failure dispatcher,
+	//     harness installer, background workers, agent-switch workers, Codex
+	//     account-switch workers, chat StopAll, LAN listener;
+	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
+	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake), and
+	//     a 2s Sentry flush.
+	// Wait 9T+18s (108s by default), one stage of margin. Run's uncapped waits
+	// (startup reconcile, preview servers, chat side stops, usage, pricing,
+	// lifecycle stack) are not covered: a predecessor stuck in one past the
+	// wait still makes this daemon exit 75.
+	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, 9*cfg.ShutdownTimeout+18*time.Second, log)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dataDirLock.Release() }()
 
 	// Open the durable store and bring up the CDC substrate: DB triggers capture
 	// changes into change_log, the poller tails it, and the broadcaster fans
@@ -465,7 +494,7 @@ func Run(buildVersion string) error {
 	}
 	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
-		Cache: store, Discoverer: modelDiscoverer, Projects: store, Sessions: store, Context: ctx, Logger: log,
+		Cache: store, Discoverer: modelDiscoverer, Sessions: store, Context: ctx, Logger: log,
 		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
 		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
 		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),
@@ -593,7 +622,7 @@ func Run(buildVersion string) error {
 	lcStack.LCM.SetSessionInputLease(sessMgr)
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log})
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
@@ -1370,6 +1399,34 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 // can capture it separately from any structured stdout protocol added later.
 func newLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// lockDataDir takes the data-dir lock. When another AO process holds it, as a
+// predecessor still shutting down during a takeover does, it logs and waits up
+// to wait for that process to exit, then refuses to start. On a file system
+// that cannot lock it returns a nil lock (Release is a no-op) and no error.
+func lockDataDir(ctx context.Context, dataDir string, wait time.Duration, log *slog.Logger) (*datadirlock.Lock, error) {
+	lock, err := datadirlock.Acquire(ctx, dataDir, 0)
+	if errors.Is(err, datadirlock.ErrUnsupported) {
+		// Some NFS, SMB and FUSE mounts cannot lock files. Start unguarded, as AO
+		// did before the lock, rather than refuse to run on them.
+		log.Warn("data dir file system cannot lock files; starting without the single-daemon guard", "err", err)
+		return nil, nil
+	}
+	if !errors.Is(err, datadirlock.ErrLocked) {
+		return lock, err
+	}
+	log.Warn("waiting for another AO process to release the data dir", "err", err, "wait", wait)
+	start := time.Now()
+	lock, err = datadirlock.Acquire(ctx, dataDir, wait)
+	if errors.Is(err, datadirlock.ErrLocked) {
+		return nil, fmt.Errorf("%w; waited %s for it to exit, refusing to start", err, wait)
+	}
+	if err != nil {
+		return nil, err
+	}
+	log.Info("data dir lock acquired", "waited", time.Since(start).Round(time.Millisecond))
+	return lock, nil
 }
 
 func stabilizeWorkingDirectory(dataDir string) error {
