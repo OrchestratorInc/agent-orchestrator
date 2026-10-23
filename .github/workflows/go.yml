@@ -159,6 +159,11 @@ jobs:
   # an open handle makes both fail. Scoped to those packages rather than the
   # whole suite to keep the matrix cheap.
   windows-workspace:
+    # Disabled by owner decision (#135): the fork does not want Windows
+    # coverage. The runner environment also breaks this suite even on a
+    # pristine main head (access denied syncing worktree gitdir backlinks in
+    # Temp); revisit only if Windows coverage is ever wanted again.
+    if: false
     runs-on: windows-latest
     # Fork-only gate: this suite has never been green on the fork (the
     # task-naming crash-helper steps require Windows runner state the fork

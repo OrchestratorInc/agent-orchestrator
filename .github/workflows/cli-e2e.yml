@@ -22,7 +22,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Windows leg disabled by owner decision (#135): the fork does not want
+        # Windows coverage; the runner environment additionally broke the
+        # workspace/session suites with access-denied file locks (see #135).
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
