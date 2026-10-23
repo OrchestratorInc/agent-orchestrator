@@ -8,14 +8,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
-
-	acpsdk "github.com/coder/acp-go-sdk"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	acpsdk "github.com/coder/acp-go-sdk"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"

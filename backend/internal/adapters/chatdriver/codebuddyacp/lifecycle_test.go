@@ -485,7 +485,7 @@ func TestCandidateSyntheticPermissionAndInterruptPorts(t *testing.T) {
 						}
 						ready = true
 					}
-					if !ready && choice == "interrupt" && strings.Contains(e.Text, "synthetic waiting") {
+					if !ready && choice == "interrupt" && e.Kind == ports.ChatEventMessageDelta && strings.Contains(e.Delta, "synthetic waiting") {
 						if err := conv.Interrupt(f.ctx, ref.ProviderTurnID); err != nil {
 							t.Fatal(err)
 						}
