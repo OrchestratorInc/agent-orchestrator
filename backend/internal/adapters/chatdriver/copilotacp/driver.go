@@ -109,7 +109,7 @@ func launchApprovalArgs(permissions ports.PermissionMode) []string {
 // the standing instructions. Copilot ignores --agent under --acp but offers
 // every profile as an "agent" value and keeps the choice across session/load.
 func launchSessionOptions(cfg acpdriver.LaunchConfig) []acpdriver.SessionOption {
-	name := copilot.AgentProfileName(string(cfg.SessionID), cfg.SystemPrompt, "")
+	name := copilot.AgentProfileName(cfg.WorkspacePath, string(cfg.SessionID), cfg.SystemPrompt, "")
 	if name == "" {
 		return nil
 	}
