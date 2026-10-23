@@ -1037,8 +1037,73 @@ func TestAddWorktreeReportsOrphanedWorktreeFromPreviousDataRoot(t *testing.T) {
 	if !strings.Contains(err.Error(), orphanPath) {
 		t.Fatalf("err = %v, want conflicting path %q", err, orphanPath)
 	}
-	if !strings.Contains(err.Error(), "remove it (`git worktree remove") {
-		t.Fatalf("err = %v, want remediation command", err)
+	if !strings.Contains(err.Error(), "worktree remove "+quoteRecoveryPath(orphanPath)) {
+		t.Fatalf("err = %v, want quoted remediation command", err)
+	}
+}
+
+// TestQuoteRecoveryPath covers the shell-escaping used by the remediation
+// commands: the user copies the command into a shell, so the path must arrive as
+// one argument even when an old data root contains spaces.
+func TestQuoteRecoveryPath(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"plain", "/managed/proj/sess", `"/managed/proj/sess"`},
+		{"windows", `D:/managed/proj/sess`, `"D:/managed/proj/sess"`},
+		{"spaces", `D:/AO Lab/worktrees/proj/sess`, `"D:/AO Lab/worktrees/proj/sess"`},
+		{"embedded quote", `/tmp/weird"name/proj/sess`, `"/tmp/weird\"name/proj/sess"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := quoteRecoveryPath(tc.path); got != tc.want {
+				t.Fatalf("quoteRecoveryPath(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAddWorktreeQuotesOrphanRemediationPath covers the recovery command for an
+// orphan under a data root that contains spaces: the command must quote the path
+// so copying it into a shell does not split it into several arguments.
+func TestAddWorktreeQuotesOrphanRemediationPath(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	orphanPath := filepath.Join(t.TempDir(), "AO Lab", "proj", "sess")
+	managedPath := filepath.Join(root, "proj", "sess")
+	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree remove"):
+			t.Fatalf("an orphan must not be removed automatically: %v", args)
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			return []byte("worktree " + orphanPath + "\nbranch refs/heads/feature/x\n"), nil
+		case strings.Contains(joined, "rev-parse"):
+			return []byte("commit"), nil
+		default:
+			t.Fatalf("unexpected git invocation: %v", args)
+			return nil, nil
+		}
+	}
+	_, err = ws.addWorktree(context.Background(), repo, managedPath, "feature/x", "", "", "", false)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ports.ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	wantCommand := "worktree remove " + quoteRecoveryPath(orphanPath)
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("err = %v, want quoted remediation command %q", err, wantCommand)
+	}
+	if strings.Contains(err.Error(), "worktree remove "+orphanPath) {
+		t.Fatalf("err = %v, remediation command path must be quoted", err)
 	}
 }
 
@@ -1156,6 +1221,21 @@ func TestAddWorktreeRefusesLockedOrphanedWorktree(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unlock it") {
 		t.Fatalf("err = %v, want lock remediation", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "confirm it is no longer in use") {
+		t.Fatalf("err = %v, want a confirmation step before unlocking", err)
+	}
+	// Unlocking alone leaves the registration and the branch checkout in place,
+	// and removing a locked worktree fails, so the message must spell out the
+	// sequence that works: confirm, unlock, remove, retry.
+	unlockAt := strings.Index(msg, "worktree unlock "+quoteRecoveryPath(orphanPath))
+	removeAt := strings.Index(msg, "worktree remove "+quoteRecoveryPath(orphanPath))
+	if unlockAt < 0 || removeAt < 0 {
+		t.Fatalf("err = %v, want quoted unlock and remove commands for %q", err, orphanPath)
+	}
+	if unlockAt > removeAt {
+		t.Fatalf("err = %v, unlock must be suggested before remove", err)
 	}
 	if removed {
 		t.Fatalf("a locked orphan must not be removed")

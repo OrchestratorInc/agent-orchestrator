@@ -1541,7 +1541,7 @@ func registeredWorktreeDirMissing(rec worktreeRecord) (bool, error) {
 		if rec.Locked {
 			return false, fmt.Errorf(
 				"%w: %q (branch %q) is registered but its directory is missing; unlock it (`git worktree unlock %s`) and retry, or remove the registration manually",
-				ErrWorktreeLocked, rec.Path, rec.Branch, rec.Path,
+				ErrWorktreeLocked, rec.Path, rec.Branch, quoteRecoveryPath(rec.Path),
 			)
 		}
 		return true, nil
@@ -1564,7 +1564,7 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 	// `git worktree add` will fail, but its stderr leaks through as an opaque
 	// 500. A typed sentinel lets the HTTP layer surface a 409. An AO-shaped
 	// orphan is recognized and reported with remediation (resolveBranchConflict).
-	records, err = w.resolveBranchConflict(records, branch, path)
+	records, err = w.resolveBranchConflict(records, repo, branch, path)
 	if err != nil {
 		return "", err
 	}
@@ -1652,13 +1652,14 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 // this same project and session ends with exactly the same relative path under
 // some other root, while a worktree AO still owns sits inside the managed root
 // (orphanedManagedWorktree). An orphan is surfaced as the typed 409 with the
-// exact `git worktree remove <path>` command, so the user can clear it
-// explicitly; it is never removed automatically, because a path-suffix match
-// cannot prove the other owner is inactive (two active AO instances share the
-// layout) and `git worktree remove` (without --force) still deletes ignored
-// local files such as a `.env` with credentials. A locked orphan reports
-// unlock/remove guidance. Every other case keeps the plain typed 409 unchanged.
-func (w *Workspace) resolveBranchConflict(records []worktreeRecord, branch, path string) ([]worktreeRecord, error) {
+// exact, shell-quoted `git -C <repo> worktree remove "<path>"` command, so the
+// user can clear it from any directory; it is never removed automatically,
+// because a path-suffix match cannot prove the other owner is inactive (two
+// active AO instances share the layout) and `git worktree remove` (without
+// --force) still deletes ignored local files such as a `.env` with credentials.
+// A locked orphan reports the sequence that actually clears it: confirm it is
+// unused, unlock, remove. Every other case keeps the plain typed 409 unchanged.
+func (w *Workspace) resolveBranchConflict(records []worktreeRecord, repo, branch, path string) ([]worktreeRecord, error) {
 	conflict, ok := findWorktreeByBranch(records, branch)
 	if !ok || filepath.Clean(conflict.Path) == filepath.Clean(path) {
 		return records, nil
@@ -1675,11 +1676,34 @@ func (w *Workspace) resolveBranchConflict(records []worktreeRecord, branch, path
 	// tracked status, would also delete ignored local files such as a `.env`
 	// with credentials. So the reclaim stays an explicit user action: surface
 	// the typed 409 with the exact, copy-pasteable remediation instead.
-	remediation := fmt.Sprintf("this looks like an orphaned AO worktree from a previous data root; remove it (`git worktree remove %s`), then retry", conflict.Path)
+	//
+	// The commands name the repository with -C because the user is pasting them
+	// into whatever directory their terminal happens to be in, and they quote
+	// every path so a data root with spaces stays a single argument.
+	gitCommand := "git -C " + quoteRecoveryPath(repo)
+	quoted := quoteRecoveryPath(conflict.Path)
+	remediation := fmt.Sprintf("this looks like an orphaned AO worktree from a previous data root; remove it (`%s worktree remove %s`), then retry", gitCommand, quoted)
 	if conflict.Locked {
-		remediation = fmt.Sprintf("this looks like an orphaned AO worktree but it is locked; unlock it (`git worktree unlock %s`) or remove it (`git worktree remove %s`), then retry", conflict.Path, conflict.Path)
+		// Unlocking alone leaves the registration and the branch checkout in
+		// place, and removing a locked worktree fails, so spell out the order
+		// that works: confirm, unlock, remove, retry.
+		remediation = fmt.Sprintf("this looks like an orphaned AO worktree but it is locked; confirm it is no longer in use, then unlock it (`%s worktree unlock %s`), remove it (`%s worktree remove %s`), then retry", gitCommand, quoted, gitCommand, quoted)
 	}
 	return records, branchCheckedOutElsewhereError(branch, conflict.Path, remediation)
+}
+
+// quoteRecoveryPath renders path as one argument in the copy-pasteable
+// remediation command. The user pastes it into whatever shell the machine runs
+// (POSIX sh, PowerShell or cmd.exe), and double quotes are the one quoting form
+// all three agree on, so an old data root such as `D:/AO Lab/worktrees/...`
+// reaches `git worktree remove` as a single argument instead of word-splitting.
+// Everything else is left verbatim: a backslash is a literal path separator in
+// PowerShell and cmd.exe and is not an escape inside POSIX double quotes, so
+// escaping it would corrupt a Windows path. An embedded double quote is escaped
+// the POSIX way; AO's managed layout never contains one, and Windows paths
+// cannot.
+func quoteRecoveryPath(path string) string {
+	return `"` + strings.ReplaceAll(path, `"`, `\"`) + `"`
 }
 
 // branchCheckedOutElsewhereError keeps the typed sentinel and the conflicting

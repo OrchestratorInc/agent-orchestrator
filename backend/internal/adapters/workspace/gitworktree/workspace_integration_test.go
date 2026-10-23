@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1654,13 +1655,94 @@ func TestWorkspaceIntegrationReportsOrphanedWorktreeFromPreviousDataRoot(t *test
 	if !strings.Contains(err.Error(), filepath.ToSlash(orphanInfo.Path)) {
 		t.Fatalf("err = %v, want orphan path %q", err, orphanInfo.Path)
 	}
-	if !strings.Contains(err.Error(), "remove it (`git worktree remove") {
-		t.Fatalf("err = %v, want remediation command", err)
+	if !strings.Contains(err.Error(), "worktree remove "+quoteRecoveryPath(filepath.ToSlash(orphanInfo.Path))) {
+		t.Fatalf("err = %v, want quoted remediation command", err)
 	}
 	if _, statErr := os.Stat(orphanInfo.Path); statErr != nil {
 		t.Fatalf("orphan was not preserved: %v", statErr)
 	}
 }
+
+// TestWorkspaceIntegrationOrphanRemediationCommandHandlesSpacedPath proves the
+// recovery command from the 409 is copy-pasteable when the previous data root
+// contains spaces: the quoted path survives a real shell and actually clears the
+// orphan, after which the spawn succeeds.
+func TestWorkspaceIntegrationOrphanRemediationCommandHandlesSpacedPath(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	oldRoot := filepath.Join(tmp, "old managed root")
+	newRoot := filepath.Join(tmp, "managed")
+	oldWS, err := New(Options{Binary: git, ManagedRoot: oldRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new old: %v", err)
+	}
+	ws, err := New(Options{Binary: git, ManagedRoot: newRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/spaced-orphan"}
+
+	orphanInfo, err := oldWS.Create(ctx, cfg)
+	if err != nil {
+		t.Fatalf("create orphan: %v", err)
+	}
+
+	_, err = ws.Create(ctx, cfg)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	command := remediationCommandFromError(t, err)
+	// git prints worktree paths with forward slashes, including on Windows.
+	if quoted := `"` + filepath.ToSlash(orphanInfo.Path) + `"`; !strings.Contains(command, quoted) {
+		t.Fatalf("command = %q, want quoted orphan path %s", command, quoted)
+	}
+	runShellCommand(t, command)
+	if _, statErr := os.Stat(orphanInfo.Path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("remediation command did not remove the orphan: %v", statErr)
+	}
+	if _, err := ws.Create(ctx, cfg); err != nil {
+		t.Fatalf("create after remediation: %v", err)
+	}
+}
+
+// remediationCommandFromError returns the first backticked command in a 409
+// message, i.e. the exact text the user is told to paste into a shell.
+func remediationCommandFromError(t *testing.T, err error) string {
+	t.Helper()
+	msg := err.Error()
+	start := strings.Index(msg, "`")
+	if start < 0 {
+		t.Fatalf("err = %v, want a backticked remediation command", err)
+	}
+	rest := msg[start+1:]
+	end := strings.Index(rest, "`")
+	if end < 0 {
+		t.Fatalf("err = %v, want a closed backticked remediation command", err)
+	}
+	return rest[:end]
+}
+
+// runShellCommand runs a copy-pasted remediation command the way a user would:
+// through the platform shell, so quoting is exercised for real.
+func runShellCommand(t *testing.T, command string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		// Go's argv escaping is not cmd.exe escaping, so a quoted command passed
+		// as an argument would be mangled before cmd ever sees it. Run it from a
+		// batch file instead, which is how the command is pasted on Windows
+		// anyway.
+		path := filepath.Join(t.TempDir(), "recover.bat")
+		if err := os.WriteFile(path, []byte("@echo off\r\n"+command+"\r\n"), 0o644); err != nil {
+			t.Fatalf("write recovery batch file: %v", err)
+		}
+		run(t, "cmd", "/c", path)
+		return
+	}
+	run(t, "sh", "-c", command)
+}
+
 func TestWorkspaceIntegrationPreservesDirtyOrphanedWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
