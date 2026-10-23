@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	runsError: null as Error | null,
 	hideShellTopbar: false,
 	capture: vi.fn(),
+	defaultWorker: "codex",
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -29,13 +30,13 @@ const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "ins
 const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: [codexSnapshot, cursorSnapshot, ampSnapshot] } }) }));
-vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectDefaultWorker: () => "codex" }));
+vi.mock("../hooks/useProjectDefaultWorker", () => ({ useProjectDefaultWorker: () => mocks.defaultWorker }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "demo", name: "Demo" }] }) }));
 vi.mock("../hooks/useAgentModelsQuery", () => ({
 	agentModelsQueryKey: (agentId: string, projectId: string) => ["agent-models", agentId, projectId],
 	agentModelsQueryOptions: (agentId: string, projectId: string) => ({
 		queryKey: ["agent-models", agentId, projectId],
-		queryFn: async () => agentId === "amp" ? ({ models: [{ id: "smart", label: "Smart", isDefault: true }], allowCustom: false, customModelEntry: "none", selectionMode: "mode" }) : ({
+		queryFn: async () => agentId === "amp" ? ({ models: [{ id: "smart", label: "Smart", isDefault: true }, { id: "rush", label: "Rush" }], allowCustom: false, customModelEntry: "none", selectionMode: "mode" }) : ({
 			models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }, { id: "capable", label: "Capable", efforts: ["low", "high"], defaultEffort: "high" }, { id: "plain", label: "Plain", efforts: [] }],
 			allowCustom: false,
 			customModelEntry: "none",
@@ -57,11 +58,11 @@ vi.mock("../hooks/useAutomations", () => ({
 
 function renderView(ui: ReactNode = <AutomationsView />) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+	return render(ui, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.automations = []; mocks.runsError = null; mocks.hideShellTopbar = false; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.defaultWorker = "codex"; mocks.automations = []; mocks.runsError = null; mocks.hideShellTopbar = false; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -172,6 +173,59 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeEnabled();
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: "amp", model: "", effort: "" }) });
+	});
+
+	it("pins the catalog harness when adding a model to an unpinned automation", async () => {
+		mocks.automations = [{ id: "automation-1", projectId: "demo", displayName: "Review", prompt: "Review", kind: "worker", harness: "", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true }];
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Edit Review" }));
+		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
+		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: "codex", model: "capable" }) });
+	});
+
+	it.each(["effort", "mode"] as const)("pins the harness for an %s-only edit", async (field) => {
+		mocks.defaultWorker = field === "mode" ? "amp" : "codex";
+		mocks.automations = [{ id: "automation-1", projectId: "demo", displayName: "Review", prompt: "Review", kind: "worker", harness: "", model: field === "effort" ? "capable" : "", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=30;BYSECOND=0", timezone: "UTC", enabled: true }];
+		const user = userEvent.setup();
+		renderView();
+		await user.click(screen.getByRole("button", { name: "Edit Review" }));
+		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+		if (field === "effort") {
+			await user.click(await within(dialog).findByRole("button", { name: "Effort" }));
+			await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		} else {
+			await user.click(await within(dialog).findByRole("button", { name: "Model" }));
+			await user.click(screen.getByRole("menuitemradio", { name: "Rush" }));
+		}
+		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: mocks.defaultWorker, [field]: field === "effort" ? "low" : "rush" }) });
+		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("model");
+	});
+
+	it("clears fallback tuning when the project default harness resolves later", async () => {
+		mocks.defaultWorker = "";
+		const user = userEvent.setup();
+		const view = renderView();
+		await user.click(screen.getAllByRole("button", { name: /create automation/i })[0]);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
+		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
+		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
+		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
+		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
+		await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		mocks.defaultWorker = "amp";
+		view.rerender(<AutomationsView />);
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Smart"));
+		expect(within(dialog).queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ harness: "amp", model: "", mode: "", effort: "" }));
 	});
 
 	it("creates a weekly automation on the chosen weekday", async () => {

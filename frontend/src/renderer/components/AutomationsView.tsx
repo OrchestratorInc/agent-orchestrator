@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
@@ -317,6 +317,19 @@ function AutomationFormDialog({
 			fallbackAgents: [],
 		}).find(isReadyAgent)?.id ?? "";
 	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
+	const previousHarness = useRef<{ automation?: Automation; harness: string } | null>(null);
+	useEffect(() => {
+		if (!open) { previousHarness.current = null; return; }
+		if (!previousHarness.current || previousHarness.current.automation !== automation) {
+			// Opening an edit hydrates its saved harness in the preceding effect.
+			previousHarness.current = { automation, harness: automation?.harness || selectedHarness };
+			return;
+		}
+		if (previousHarness.current.harness !== selectedHarness) {
+			setModel(""); setMode(""); setEffort(""); setModelValid(true);
+			previousHarness.current.harness = selectedHarness;
+		}
+	}, [open, automation, selectedHarness]);
 
 	function clearValidationError(field: AutomationField) {
 		setValidationErrors((current) => {
@@ -353,7 +366,12 @@ function AutomationFormDialog({
 		}
 		const nextRRule = buildRRuleFromSchedule(schedule);
 		const scheduleChanged = !(editing && automation && initialSchedule && schedulesEqual(schedule, initialSchedule));
-		const harnessChanged = !editing || harness !== (automation?.harness ?? "");
+		const tuning = {
+			...(!editing || model !== (automation?.model ?? "") ? { model } : {}),
+			...(!editing || mode !== (automation?.mode ?? "") ? { mode } : {}),
+			...(!editing || effort !== (automation?.effort ?? "") ? { effort } : {}),
+		};
+		const harnessChanged = !editing || harness !== (automation?.harness ?? "") || Object.keys(tuning).length > 0;
 		const funnel = editing
 			? null
 			: {
@@ -369,9 +387,7 @@ function AutomationFormDialog({
 				...(editing ? {} : { projectId, timezone, kind: "worker" as const }),
 				displayName: name,
 				prompt,
-				...(!editing || model !== (automation?.model ?? "") ? { model } : {}),
-				...(!editing || mode !== (automation?.mode ?? "") ? { mode } : {}),
-				...(!editing || effort !== (automation?.effort ?? "") ? { effort } : {}),
+				...tuning,
 				...(harnessChanged && selectedHarness ? { harness: selectedHarness } : {}),
 				...(scheduleChanged ? { rrule: nextRRule } : {}),
 			});
