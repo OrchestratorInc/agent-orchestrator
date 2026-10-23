@@ -5464,7 +5464,7 @@ describe("SessionView", () => {
 		}
 	});
 
-	it("opens a requested HTML artifact in the Browser panel", async () => {
+	it("opens a requested HTML artifact in the Artifacts tab", async () => {
 		const worker = workspaces[0].sessions[0];
 		const previewUrl = "http://ao-preview-artifact.abc.localhost:3001/report.html";
 		worker.artifactFiles = [{ kind: "html", name: "report.html", path: "report.html", previewUrl, size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
@@ -5473,13 +5473,9 @@ describe("SessionView", () => {
 
 			render(<SessionView sessionId="sess-1" />);
 
-			await waitFor(() =>
-				expect(chatViewPostMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
-					params: { path: { sessionId: "sess-1" } },
-					body: { url: previewUrl },
-				}),
-			);
-			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(screen.getByText("selected report.html")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(chatViewPostMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
 			expect(inspectorOpen("sess-1")).toBe(true);
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		} finally {

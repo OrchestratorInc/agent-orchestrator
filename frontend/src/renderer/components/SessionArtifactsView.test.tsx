@@ -8,9 +8,8 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { deleteArtifactMock, openPreviewMock } = vi.hoisted(() => ({ deleteArtifactMock: vi.fn(), openPreviewMock: vi.fn() }));
+const { deleteArtifactMock } = vi.hoisted(() => ({ deleteArtifactMock: vi.fn() }));
 
-vi.mock("../hooks/useOpenArtifactPreview", () => ({ useOpenArtifactPreview: () => openPreviewMock }));
 vi.mock("../hooks/useSessionWorkspaceFiles", () => ({
 	deleteSessionArtifactFile: deleteArtifactMock,
 	sessionArtifactFileQueryOptions: (sessionId: string, path: string) => ({
@@ -26,7 +25,7 @@ vi.mock("./ArtifactFileView", () => ({
 
 const artifacts: SessionArtifact[] = [
 	{ kind: "markdown", name: "notes.md", path: "notes.md", size: 12, updatedAt: "2026-09-22T00:00:00Z" },
-	{ kind: "html", name: "report.html", path: "report.html", previewUrl: "http://artifact.localhost/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
+	{ kind: "html", name: "report.html", path: "report.html", previewUrl: "http://artifact.localhost/report.html", inlineUrl: "http://ao-inline-artifact.sess-1.localhost/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" },
 	{ kind: "file", name: "plan.md", path: "reports/plan.md", size: 20, updatedAt: "2026-09-21T00:00:00Z" },
 ];
 
@@ -52,7 +51,6 @@ describe("SessionArtifactsView", () => {
 			disconnect() {}
 		});
 		vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-		openPreviewMock.mockReset();
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
 	});
 
@@ -122,14 +120,25 @@ describe("SessionArtifactsView", () => {
 		expect(screen.queryByRole("button", { name: /^Open in (?!session)/ })).not.toBeInTheDocument();
 	});
 
-	it("opens an HTML card directly in the Browser panel", async () => {
+	it("opens HTML in the artifact viewer and can switch to its source", async () => {
 		renderView(<SessionArtifactsView session={session()} />);
-
 		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(document.querySelector("iframe")).toHaveAttribute("src", "http://ao-inline-artifact.sess-1.localhost/report.html");
+		expect(document.querySelector("iframe")).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+		expect(screen.getByTestId("artifact-view").parentElement).toHaveClass("hidden");
+		await userEvent.click(screen.getByRole("button", { name: "View source" }));
+		expect(screen.getByTestId("artifact-view").parentElement).not.toHaveClass("hidden");
+		expect(document.querySelector("iframe")).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Rich preview" }));
+		expect(document.querySelector("iframe")).not.toBeNull();
+	});
 
-		expect(openPreviewMock).toHaveBeenCalledWith("http://artifact.localhost/report.html");
-		expect(screen.queryByTestId("artifact-view")).not.toBeInTheDocument();
+	it("never frames an HTML artifact from the daemon's own origin", () => {
+		const html: SessionArtifact = { kind: "html", name: "report.html", path: "report.html", inlineUrl: "http://127.0.0.1:3002/report.html", size: 20, updatedAt: "2026-09-23T00:00:00Z" };
+		renderView(<SessionArtifactsView request={{ key: 1, path: "report.html" }} session={session([html])} />);
+		expect(document.querySelector("iframe")).toBeNull();
+		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:report.html");
 	});
 
 	it("opens a file artifact in the viewer and returns to the list", async () => {
