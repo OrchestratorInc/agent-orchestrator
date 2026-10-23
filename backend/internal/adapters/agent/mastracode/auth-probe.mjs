@@ -73,11 +73,14 @@ try {
   else {
     status = 'configured';
     code = 'mastra_model_unselected';
-    // The native build-mode startup uses modeDefaults.build. Never choose an
-    // arbitrary credential's provider or catalog model merely to turn green.
-    // AO launch replaces inherited MASTRACODE_MODEL_ID per session, so that
-    // environment value cannot identify the generic Harness-page default.
-    const modelId = settings.models?.modeDefaults?.build;
+    // Match native headless/build startup, including active built-in/custom
+    // packs and per-pack overrides. Raw modeDefaults can be empty or stale.
+    // AO replaces inherited MASTRACODE_MODEL_ID per session.
+    code = 'mastra_sdk_unsupported';
+    const { listBuiltinModePacks } = await import(sdk.target('./onboarding/packs'));
+    const defaults = settingsModule.resolveModelDefaults(settings, listBuiltinModePacks());
+    code = 'mastra_model_unselected';
+    const modelId = defaults?.build;
     if (typeof modelId === 'string' && modelId.includes('/')) {
       code = 'provider_unsupported';
       const normalized = settingsModule.stripMastraCodeCustomProviderPrefix(modelId, custom);

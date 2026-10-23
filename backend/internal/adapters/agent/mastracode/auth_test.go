@@ -41,12 +41,30 @@ func fixtureNativeAuth(t *testing.T, credential, model, outcome string) string {
 	write("node_modules/@mastra/core/package.json", `{"name":"@mastra/core","version":"1.75.0","type":"module","exports":{"./package.json":"./package.json","./llm":"./llm.js"}}`)
 	write("node_modules/@mastra/core/llm.js", `export const PROVIDER_REGISTRY={zai:{apiKeyEnvVar:'ZHIPU_API_KEY'},minimax:{apiKeyEnvVar:'MINIMAX_API_KEY'}};`)
 	write("node_modules/@mastra/code-sdk/dist/auth/storage.js", `export class AuthStorage {
+ constructor(){if(process.env.AO_TEST_EXPECTED_PROFILE&&process.env.MASTRA_APP_DATA_DIR!==process.env.AO_TEST_EXPECTED_PROFILE)throw Error("wrong native profile")}
  list(){return process.env.AO_TEST_MASTRA_CREDENTIAL==='stored'?['apikey:zai']:process.env.AO_TEST_MASTRA_CREDENTIAL==='oauth'?['zai']:[]}
  get(provider){return process.env.AO_TEST_MASTRA_CREDENTIAL==='oauth'&&provider==='zai'?{type:'oauth'}:undefined}
  getStoredApiKey(provider){return process.env.AO_TEST_MASTRA_CREDENTIAL==='stored'&&provider==='zai'?'fixture-secret':undefined}
  loadStoredApiKeysIntoEnv(vars){for(const [provider,env] of Object.entries(vars)){const key=this.getStoredApiKey(provider);if(key&&!process.env[env])process.env[env]=key}}
  }`)
-	write("node_modules/@mastra/code-sdk/dist/onboarding/settings.js", `export function stripMastraCodeCustomProviderPrefix(id){return id}; export function loadSettings(){return {models:{modeDefaults:{build:process.env.AO_TEST_MASTRA_MODEL}},customProviders:process.env.AO_TEST_MASTRA_CREDENTIAL==='custom'?[{name:'local',url:'https://example.invalid',apiKey:'fixture-secret',models:['test']}]:[]}}`)
+	write("node_modules/@mastra/code-sdk/dist/onboarding/settings.js", `export function stripMastraCodeCustomProviderPrefix(id){return id};
+ export function loadSettings(){return {
+  models:{modeDefaults:{build:process.env.AO_TEST_MASTRA_ACTIVE_PACK?process.env.AO_TEST_MASTRA_RAW_MODEL:process.env.AO_TEST_MASTRA_MODEL},activeModelPackId:process.env.AO_TEST_MASTRA_ACTIVE_PACK||null,modePackOverrides:JSON.parse(process.env.AO_TEST_MASTRA_PACK_OVERRIDES||'{}')},
+  customModelPacks:[{name:'fixture-custom',models:{build:'minimax/model-test'}}],
+  customProviders:process.env.AO_TEST_MASTRA_CREDENTIAL==='custom'?[{name:'local',url:'https://example.invalid',apiKey:'fixture-secret',models:['test']}]:[]
+ }};
+ // Public native resolver behavior: selected packs override raw mode defaults.
+ export function resolveModelDefaults(settings,builtinPacks){
+  const {activeModelPackId,modeDefaults}=settings.models;
+  if(!activeModelPackId)return modeDefaults;
+  if(activeModelPackId.startsWith('custom:')){
+   const pack=settings.customModelPacks.find(p=>p.name===activeModelPackId.slice(7));
+   return pack?pack.models:modeDefaults;
+  }
+  const pack=builtinPacks.find(p=>p.id===activeModelPackId);
+  return pack?{...pack.models,...settings.models.modePackOverrides?.[pack.id]}:modeDefaults;
+ }`)
+	write("node_modules/@mastra/code-sdk/dist/onboarding/packs.js", `export function listBuiltinModePacks(){return [{id:'fixture-built-in',models:{build:'zai/glm-test'}}]}`)
 	write("node_modules/@mastra/code-sdk/dist/agents/model.js", `export function resolveModel(id){if(!['zai/glm-test','minimax/model-test','local/test'].includes(id))throw Error('unexpected selected provider');return {modelId:id}}`)
 	write("node_modules/ai/package.json", `{"name":"ai","type":"module","exports":"./index.js"}`)
 	write("node_modules/ai/index.js", `export async function generateText(options){
@@ -73,6 +91,10 @@ func fixtureNativeAuth(t *testing.T, credential, model, outcome string) string {
 	t.Setenv("AO_TEST_MASTRA_CREDENTIAL", credential)
 	t.Setenv("AO_TEST_MASTRA_MODEL", model)
 	t.Setenv("AO_TEST_MASTRA_OUTCOME", outcome)
+	t.Setenv("AO_TEST_EXPECTED_PROFILE", "")
+	t.Setenv("AO_TEST_MASTRA_ACTIVE_PACK", "")
+	t.Setenv("AO_TEST_MASTRA_RAW_MODEL", "")
+	t.Setenv("AO_TEST_MASTRA_PACK_OVERRIDES", "")
 	if credential == "env" {
 		t.Setenv("MINIMAX_API_KEY", "fixture-secret")
 	}
@@ -202,5 +224,52 @@ func TestNativeAuthIgnoresModelEnvironmentReplacedByLaunch(t *testing.T) {
 	status, _, steps, err := New().AuthStatusWithDiagnostics(t.Context())
 	if err != nil || status != ports.AgentAuthStatusConfigured || len(steps) != 1 || steps[0].Code != "mastra_model_unselected" {
 		t.Fatalf("inherited model should not be probed = %s, %#v, %v", status, steps, err)
+	}
+}
+
+func TestNativeAuthUsesEffectiveModelPack(t *testing.T) {
+	for _, tc := range []struct {
+		name, credential, activePack, rawModel, overrides, model, provider string
+	}{
+		{"built-in pack with cleared defaults", "stored", "fixture-built-in", "", "", "zai/glm-test", "zai"},
+		{"built-in pack override", "env", "fixture-built-in", "zai/glm-test", `{"fixture-built-in":{"build":"minimax/model-test"}}`, "minimax/model-test", "minimax"},
+		{"custom pack overrides stale provider", "env", "custom:fixture-custom", "zai/glm-test", "", "minimax/model-test", "minimax"},
+		{"missing pack uses native fallback", "stored", "missing-pack", "zai/glm-test", "", "zai/glm-test", "zai"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixtureNativeAuth(t, tc.credential, tc.model, "success")
+			t.Setenv("AO_TEST_MASTRA_ACTIVE_PACK", tc.activePack)
+			t.Setenv("AO_TEST_MASTRA_RAW_MODEL", tc.rawModel)
+			t.Setenv("AO_TEST_MASTRA_PACK_OVERRIDES", tc.overrides)
+			status, identity, _, err := New().AuthStatusWithDiagnostics(t.Context())
+			if err != nil || status != ports.AgentAuthStatusAuthorized || identity.Provider != tc.provider {
+				t.Fatalf("native pack selection = %s, provider %q, %v; want authorized %s", status, identity.Provider, err, tc.provider)
+			}
+		})
+	}
+}
+
+func TestNativeAuthUsesCanonicalDataDirAfterDaemonChdir(t *testing.T) {
+	for _, explicitProfile := range []bool{false, true} {
+		t.Run(map[bool]string{false: "AO profile", true: "explicit native profile"}[explicitProfile], func(t *testing.T) {
+			fixtureNativeAuth(t, "stored", "zai/glm-test", "success")
+			dataDir := filepath.Join(t.TempDir(), "relative-data")
+			if err := os.MkdirAll(dataDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(dataDir)
+			t.Setenv("AO_DATA_DIR", "relative-data")
+			profile := filepath.Join(dataDir, "mastra-code", "profile")
+			if explicitProfile {
+				profile = filepath.Join(t.TempDir(), "explicit-native-profile")
+				t.Setenv("MASTRA_APP_DATA_DIR", profile)
+			}
+			t.Setenv("AO_TEST_EXPECTED_PROFILE", profile)
+			ctx := ports.WithAgentAuthDataDir(t.Context(), dataDir)
+			status, _, _, err := New().AuthStatusWithDiagnostics(ctx)
+			if err != nil || status != ports.AgentAuthStatusAuthorized {
+				t.Fatalf("canonical native profile = %s, %v; want authorized", status, err)
+			}
+		})
 	}
 }

@@ -82,7 +82,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	if err != nil {
 		return finish(ports.AgentAuthStatusUnknown, "command_failed", "", 0, nil)
 	}
-	profile := ProfileDir("")
+	profile := ProfileDir(ports.AgentAuthDataDir(ctx))
 	if !filepath.IsAbs(profile) {
 		return finish(ports.AgentAuthStatusUnknown, "check_inconclusive", "", 0, nil)
 	}
