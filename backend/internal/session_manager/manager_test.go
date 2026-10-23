@@ -11459,13 +11459,12 @@ func TestSend_ConfirmAcceptsRetainedSubmissionEvidence(t *testing.T) {
 }
 
 func TestSend_CoordinationDeliveryIgnoresPromptEvidence(t *testing.T) {
-	// A coordination (ao send) delivery is not user-authored, so it deliberately
-	// leaves LatestUserPromptAt unchanged. The confirmation evidence check must be
-	// disabled for it: an advance of the marker during the confirm window can only
-	// come from an unrelated concurrent user prompt, and crediting it would falsely
-	// confirm a coordination send that never went active. Here the nudge advances
-	// the marker, yet confirmation must still exhaust its budget and surface
-	// ErrDeliveryUnconfirmed rather than treat the advance as acceptance.
+	// A coordination (ao send) delivery deliberately leaves LatestUserPromptAt
+	// unchanged, so that marker is the wrong evidence for it: an advance during
+	// the confirm window can only come from an unrelated concurrent user prompt,
+	// and crediting it would falsely confirm a coordination send. Here the nudge
+	// advances LatestUserPromptAt but no coordination checkpoint is recorded, so
+	// confirmation must still exhaust its budget and surface ErrDeliveryUnconfirmed.
 	st := newFakeStore()
 	base := time.Now().Add(-time.Hour)
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
@@ -11479,6 +11478,12 @@ func TestSend_CoordinationDeliveryIgnoresPromptEvidence(t *testing.T) {
 		t.Fatalf("Send error = %v, want ErrDeliveryUnconfirmed (coordination send ignores prompt evidence)", err)
 	}
 }
+
+// The positive coordination-acceptance case (marker recorded, session back to
+// idle before confirmation polls) is covered end-to-end against a real sqlite
+// store and the real lifecycle write path by
+// TestSend_CoordinationAcceptanceMarker_RealStore in
+// send_confirm_coordination_integration_test.go.
 
 func TestSend_BlockedSessionRejectsDelivery(t *testing.T) {
 	// A session paused on a permission decision (blocked) must not receive the
