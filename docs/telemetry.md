@@ -256,8 +256,9 @@ sent to PostHog is not deleted.
 
 The **Share error events** control on the same page covers error diagnostics
 only: the daemon's Sentry capture of 5xx errors and panics. The
-daemon tags these error events with the same `install_id` while this control
-permits capture. The tag does not include email or local paths. The
+daemon tags these error events with the same `install_id` when the installation
+identifier is available. If it cannot be read, consented error reporting
+continues without that tag. The tag does not include email or local paths. The
 environment-variable controls below also govern the desktop/daemon
 product-telemetry paths, for example in managed environments. Set all three variables in the environment used to launch Orchestrator.inc:
 

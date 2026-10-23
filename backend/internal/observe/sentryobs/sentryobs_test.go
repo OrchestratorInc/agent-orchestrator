@@ -75,6 +75,27 @@ func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	}
 }
 
+func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	if !Enabled() {
+		t.Fatal("missing installation ID disabled Sentry")
+	}
+	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp")
+	select {
+	case event := <-transport.events:
+		if _, ok := event.Tags["install_id"]; ok {
+			t.Fatal("event used a caller supplied installation ID")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Sentry event missing")
+	}
+}
+
 type recordingTransport struct{ events chan *sentry.Event }
 
 func (*recordingTransport) Configure(sentry.ClientOptions)        {}
