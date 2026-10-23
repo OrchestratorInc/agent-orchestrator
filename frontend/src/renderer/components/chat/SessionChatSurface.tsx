@@ -258,9 +258,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const switchError = providerSwitch.error ?? sendSwitchError;
 	const clearSwitchError = () => { setSendSwitchError(undefined); providerSwitch.reset(); };
 	const currentHarness = snapshot?.harness;
-	// A pick made in Developer Mode lapses when the mode is turned off.
-	const developerMode = useUiStore((state) => state.developerMode);
-	const pendingSwitch = developerMode && currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
+	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
 	// Catalogs are cached by session; a switch made elsewhere (another window or device)
 	// leaves the outgoing agent's, so they follow the agent the chat reports.
 	useEffect(() => {
