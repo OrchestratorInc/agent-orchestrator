@@ -93,11 +93,17 @@ try {
           maxOutputTokens: 16, maxRetries: 0, abortSignal: AbortSignal.timeout(15000) });
         // A bounded reasoning-only response still proves provider access.
         // A missing/malformed SDK result does not.
+        // The native V2 router can retain V3/V4 provider result fields through
+        // AI SDK 6's compatibility wrapper. Read only their documented values.
+        const finishReason = typeof result?.finishReason === 'string'
+          ? result.finishReason : result?.finishReason?.unified;
+        const outputTokens = typeof result?.usage?.outputTokens === 'number'
+          ? result.usage.outputTokens : result?.usage?.outputTokens?.total;
         const inference = (typeof result?.text === 'string' && result.text.trim() !== '') ||
-          (Number.isFinite(result?.usage?.outputTokens) && result.usage.outputTokens > 0);
+          (Number.isFinite(outputTokens) && outputTokens > 0);
         if (typeof result?.response?.modelId === 'string' && result.response.modelId.trim() &&
-            result.usage && typeof result.usage === 'object' && typeof result.finishReason === 'string' &&
-            result.finishReason !== 'error' && inference) {
+            result.usage && typeof result.usage === 'object' &&
+            ['stop', 'length', 'content-filter', 'tool-calls', 'other'].includes(finishReason) && inference) {
           status = 'authorized'; code = 'provider_accepted';
         }
       } catch (error) {

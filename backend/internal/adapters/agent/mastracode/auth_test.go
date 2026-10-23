@@ -72,6 +72,19 @@ func fixtureNativeAuth(t *testing.T, credential, model, outcome string) string {
  if(!process.env.ZHIPU_API_KEY&&!process.env.MINIMAX_API_KEY&&!['oauth','custom'].includes(process.env.AO_TEST_MASTRA_CREDENTIAL))throw Error('credential resolution missing');
  if(process.env.AO_TEST_MASTRA_OUTCOME==='transport')throw Error('fixture-secret raw transport');
  if(process.env.AO_TEST_MASTRA_OUTCOME==='malformed')return {};
+ // Native Mastra's installed provider interface can retain structured finish/usage fields.
+ if(process.env.AO_TEST_MASTRA_OUTCOME.startsWith('structured-')){
+  const outcome=process.env.AO_TEST_MASTRA_OUTCOME;
+  const reasoning=outcome==='structured-reasoning';
+  const noText=reasoning||['structured-no-inference','structured-invalid-tokens'].includes(outcome);
+  const finishReason={unified:outcome==='structured-error'?'error':reasoning?'length':'stop',raw:'native-result'};
+  if(outcome==='structured-missing-reason')delete finishReason.unified;
+  if(outcome==='structured-invalid-reason')finishReason.unified='unexpected';
+  return {text:noText?'':'fixture-secret provider output',
+   usage:{inputTokens:{total:1,noCache:1,cacheRead:0,cacheWrite:0},
+    outputTokens:{total:outcome==='structured-invalid-tokens'?'1':outcome==='structured-no-inference'?0:1,text:reasoning?0:1,reasoning:reasoning?1:0}},
+   response:{modelId:outcome==='structured-empty-model'?'':options.model.modelId},finishReason};
+ }
  if(['error-result','empty-model','no-inference'].includes(process.env.AO_TEST_MASTRA_OUTCOME))return {text:'',usage:{inputTokens:1,outputTokens:0},response:{modelId:process.env.AO_TEST_MASTRA_OUTCOME==='empty-model'?'':options.model.modelId},finishReason:process.env.AO_TEST_MASTRA_OUTCOME==='error-result'?'error':'stop'};
 
  if(!['success','reasoning'].includes(process.env.AO_TEST_MASTRA_OUTCOME)){const err=Error('fixture-secret raw provider');err.statusCode=process.env.AO_TEST_MASTRA_OUTCOME==='quota403'?403:Number(process.env.AO_TEST_MASTRA_OUTCOME);if(process.env.AO_TEST_MASTRA_OUTCOME==='quota403')err.data={error:{code:'insufficient_quota'}};throw err}
@@ -111,6 +124,14 @@ func TestNativeAuthUsesSelectedProviderAndVerifiedResult(t *testing.T) {
 		{"stored key", "stored", "zai/glm-test", "success", ports.AgentAuthStatusAuthorized},
 		{"reasoning length limit", "stored", "zai/glm-test", "reasoning", ports.AgentAuthStatusAuthorized},
 		{"malformed result", "stored", "zai/glm-test", "malformed", ports.AgentAuthStatusConfigured},
+		{"structured native text", "env", "minimax/model-test", "structured-text", ports.AgentAuthStatusAuthorized},
+		{"structured reasoning length limit", "env", "minimax/model-test", "structured-reasoning", ports.AgentAuthStatusAuthorized},
+		{"structured error despite output", "env", "minimax/model-test", "structured-error", ports.AgentAuthStatusConfigured},
+		{"structured missing unified reason", "env", "minimax/model-test", "structured-missing-reason", ports.AgentAuthStatusConfigured},
+		{"structured invalid unified reason", "env", "minimax/model-test", "structured-invalid-reason", ports.AgentAuthStatusConfigured},
+		{"structured missing response model", "env", "minimax/model-test", "structured-empty-model", ports.AgentAuthStatusConfigured},
+		{"structured no inference evidence", "env", "minimax/model-test", "structured-no-inference", ports.AgentAuthStatusConfigured},
+		{"structured nonnumeric token evidence", "env", "minimax/model-test", "structured-invalid-tokens", ports.AgentAuthStatusConfigured},
 		{"error result", "stored", "zai/glm-test", "error-result", ports.AgentAuthStatusConfigured},
 		{"empty response model", "stored", "zai/glm-test", "empty-model", ports.AgentAuthStatusConfigured},
 		{"no inference evidence", "stored", "zai/glm-test", "no-inference", ports.AgentAuthStatusConfigured},
