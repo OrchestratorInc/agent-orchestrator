@@ -107,6 +107,10 @@ var discoveryVersionedExecutable = regexp.MustCompile(`^([a-z][a-z0-9-]*?)-(?:v?
 
 var discoveryLauncherReference = regexp.MustCompile(`(?i)"[^"\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)"|'[^'\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)'|[^\s"'<>|&;]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)\b`)
 
+// Invocation prefixes are shell syntax, not the executable. Preserve quoted
+// targets so extensionless commands and paths containing spaces are checked too.
+var discoveryLauncherCommand = regexp.MustCompile(`(?i)^(?:(?:exec|call)\s+|&\s*|\.\s+)?("[^"\r\n]+"|'[^'\r\n]+'|[^\s"'<>|&;]+)`)
+
 func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen map[string]bool) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -180,11 +184,9 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 			continue
 		}
 		references := discoveryLauncherReference.FindAllString(line, -1)
-		// POSIX wrappers often exec an extensionless CLI.
-		command := strings.TrimSpace(strings.TrimPrefix(line, "exec "))
-		fields := strings.Fields(command)
-		if len(fields) > 0 {
-			references = append(references, strings.Trim(fields[0], `"'`))
+		// Shells can resolve extensionless targets through PATH/PATHEXT.
+		if command := discoveryLauncherCommand.FindStringSubmatch(line); len(command) > 1 {
+			references = append(references, strings.Trim(command[1], `"'`))
 		}
 		for _, reference := range references {
 			reference = strings.Trim(reference, `"'`)
