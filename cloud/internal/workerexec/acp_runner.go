@@ -445,16 +445,125 @@ type cloudACPClient struct {
 	// handshake and is flipped true just before Prompt, so only the live turn's
 	// output is published.
 	live atomic.Bool
+	// mu guards the tool calls and reasoning run below, which turn ACP tool
+	// calls and thoughts into Chat activity for the live turn.
+	mu        sync.Mutex
+	tools     map[string]*acpToolState
+	thoughtID string
+	thoughts  int
 }
 
 func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.SessionNotification) error {
 	if !c.live.Load() {
 		return nil
 	}
-	if chunk := notification.Update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
+	update := notification.Update
+	if chunk := update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
+		c.endThought()
 		return c.publish(Output{Stream: "stdout", Text: chunk.Content.Text.Text})
 	}
+	if chunk := update.AgentThoughtChunk; chunk != nil && chunk.Content.Text != nil && chunk.Content.Text.Text != "" {
+		// Consecutive thought chunks are one reasoning row, as with Codex.
+		var outputs []Output
+		id := c.thought()
+		for _, text := range codexChunks(chunk.Content.Text.Text) {
+			outputs = append(outputs, Output{Activity: &worker.ChatActivity{ID: id, Kind: "reasoning", Status: "running",
+				Summary: "Reasoning", Detail: map[string]any{"textDelta": text}}})
+		}
+		for _, output := range outputs {
+			c.publishActivity(output)
+		}
+		return nil
+	}
+	if activity := c.toolActivity(update); activity != nil {
+		c.publishActivity(Output{Activity: activity})
+	}
 	return nil
+}
+
+// publishActivity records a tool call or reasoning row on a best-effort basis:
+// the timeline is a view of the turn, so a rejected activity must never fail
+// it. A worker that lost its turn finds out from the assistant text it
+// publishes.
+func (c *cloudACPClient) publishActivity(output Output) {
+	_ = c.publish(output)
+}
+
+// toolActivity folds an ACP tool_call or tool_call_update into the call's
+// remembered state and returns its full activity snapshot, or nil for any
+// other update.
+func (c *cloudACPClient) toolActivity(update acp.SessionUpdate) *worker.ChatActivity {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tools == nil {
+		c.tools = map[string]*acpToolState{}
+	}
+	switch {
+	case update.ToolCall != nil:
+		call := update.ToolCall
+		id := string(call.ToolCallId)
+		if id == "" {
+			return nil
+		}
+		c.thoughtID = ""
+		tool := &acpToolState{title: call.Title, kind: call.Kind, status: call.Status, content: call.Content,
+			rawInput: call.RawInput, rawOutput: call.RawOutput, meta: call.Meta}
+		c.tools[id] = tool
+		return acpToolActivity(id, tool)
+	case update.ToolCallUpdate != nil:
+		call := update.ToolCallUpdate
+		id := string(call.ToolCallId)
+		if id == "" {
+			return nil
+		}
+		c.thoughtID = ""
+		tool := c.tools[id]
+		if tool == nil {
+			tool = &acpToolState{}
+			c.tools[id] = tool
+		}
+		if call.Title != nil {
+			tool.title = *call.Title
+		}
+		if call.Kind != nil {
+			tool.kind = *call.Kind
+		}
+		if call.Status != nil {
+			tool.status = *call.Status
+		}
+		if call.Content != nil {
+			tool.content = call.Content
+		}
+		if call.RawInput != nil {
+			tool.rawInput = call.RawInput
+		}
+		if call.RawOutput != nil {
+			tool.rawOutput = call.RawOutput
+		}
+		if call.Meta != nil {
+			tool.meta = call.Meta
+		}
+		return acpToolActivity(id, tool)
+	}
+	return nil
+}
+
+// thought is the id of the reasoning row the current run of thought chunks
+// adds to, starting a new one after a message or a tool call.
+func (c *cloudACPClient) thought() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.thoughtID == "" {
+		c.thoughts++
+		c.thoughtID = fmt.Sprintf("acp-thought-%d", c.thoughts)
+	}
+	return c.thoughtID
+}
+
+func (c *cloudACPClient) endThought() {
+	c.mu.Lock()
+	c.thoughtID = ""
+	c.mu.Unlock()
 }
 
 func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
