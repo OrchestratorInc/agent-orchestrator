@@ -744,12 +744,14 @@ function ModelEffortPicker({
 					<OptionMenuSubTrigger label="Model" value={modelLabel} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
-					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS}>
-						<ModelMenuChoices models={catalog} searchable={false}>
-							{() => catalog.map((model) => (
+					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
+						<ModelMenuChoices models={catalog}>
+							{(matches, searchActiveID, optionID) => matches.map((model) => (
 								<OptionMenuItem
 									key={model.id}
+									id={optionID?.(model.id)}
 									active={model.id === settings.model}
+									searchActive={model.id === searchActiveID}
 									radio
 									onSelect={() => onChange({ ...settings, model: model.id, reasoningEffort: undefined })}
 									className={cn("text-xs", model.id === settings.model ? "text-foreground" : "text-muted-foreground")}
@@ -1099,7 +1101,11 @@ function OptionSubmenu({
 	return (
 		<OptionMenuSub>
 			<OptionMenuSubTrigger label={label ?? option.name} value={current} />
-			<OptionMenuSubContent scrollable={scrollable} className={CHAT_MENU_CLASS}>
+			<OptionMenuSubContent
+				scrollable={scrollable}
+				className={CHAT_MENU_CLASS}
+				onFocus={isModelOption(option) ? focusModelSearch : undefined}
+			>
 				{isModelOption(option) ? (
 					<ConfigModelChoices option={option} onChange={(value) => onChange(option.id, value)} groupClaude={groupClaude} />
 				) : (
@@ -1138,6 +1144,7 @@ function ConfigOptionPicker({
 			title={title || option.description || option.name}
 			disabled={disabled}
 			leadIcon={leadIcon}
+			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
 			{isModelOption(option) ? (
 				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
@@ -1182,9 +1189,15 @@ function ConfigModelChoices({
 	const showOther = otherOpen || selectedIsOther;
 	const menuModels = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : models;
 	return (
-		<ModelMenuChoices models={menuModels} searchable={false}>
-			{() => (<>
-					<ConfigOptionChoices option={{ ...option, choices: menuModels }} onChange={onChange} />
+		<ModelMenuChoices models={menuModels}>
+			{(matches, searchActiveID, optionID) => (
+				<>
+					<ConfigOptionChoices
+						option={{ ...option, choices: matches }}
+						onChange={onChange}
+						searchActiveID={searchActiveID}
+						optionID={optionID}
+					/>
 					{claude?.other.length && !selectedIsOther ? (
 						<OptionMenuItem
 							// The composer focuses its editor on any click that bubbles out of the portal,
@@ -1201,7 +1214,8 @@ function ConfigModelChoices({
 							<ChevronDown className={cn("ml-auto size-3 opacity-70 transition-transform", otherOpen && "rotate-180")} aria-hidden="true" />
 						</OptionMenuItem>
 					) : null}
-			</>)}
+				</>
+			)}
 		</ModelMenuChoices>
 	);
 }
@@ -1209,9 +1223,13 @@ function ConfigModelChoices({
 function ConfigOptionChoices({
 	option,
 	onChange,
+	searchActiveID,
+	optionID,
 }: {
 	option: ChatConfigOption;
 	onChange: (value: ChatConfigOptionValue) => void;
+	searchActiveID?: string;
+	optionID?: (id: string) => string;
 }) {
 	if (option.type === "boolean") {
 		return (
@@ -1251,7 +1269,9 @@ function ConfigOptionChoices({
 							</OptionMenuLabel>
 						) : null}
 						<OptionMenuItem
+							id={optionID?.(choice.value)}
 							active={choice.value === option.currentValue}
+							searchActive={choice.value === searchActiveID}
 							radio
 							onSelect={() => onChange({ value: choice.value })}
 							className={cn("text-xs")}
@@ -1503,6 +1523,16 @@ function Picker({
 			</OptionMenuContent>
 		</OptionMenu>
 	);
+}
+
+function focusModelSearch(event: FocusEvent<HTMLDivElement>) {
+	if (event.target !== event.currentTarget) return;
+	const search = event.currentTarget.querySelector<HTMLInputElement>('input[type="search"]');
+	if (search) {
+		// Focus search before the menu's roving focus chooses a model.
+		event.preventDefault();
+		search.focus();
+	}
 }
 
 function isModelOption(option: ChatConfigOption): boolean {
