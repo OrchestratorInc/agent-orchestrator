@@ -246,7 +246,12 @@ func TestModelDiscoveryErrorTailBounded(t *testing.T) {
 }
 
 func TestKiroDiscoveryRunsOnlyAfterAConfirmedSignIn(t *testing.T) {
-	const missingBinary = "ao-test-missing-kiro-cli"
+	// A recognizable but non-runnable fixture lets the identity guard pass
+	// without invoking any installed CLI after the mocked sign-in check.
+	missingBinary := filepath.Join(t.TempDir(), "kiro-cli.exe")
+	if err := os.WriteFile(missingBinary, []byte("MZ fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	type outcome int
 	const (
 		// ranModelCommand: the model command ran (and failed on the missing binary).

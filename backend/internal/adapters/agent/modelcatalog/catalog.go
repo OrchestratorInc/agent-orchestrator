@@ -285,6 +285,11 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 
 func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	if request.AgentID == "fx" && request.CredentialType == "" {
+		binary, err := verifyDiscoveryExecutable(ctx, request.AgentID, request.Binary)
+		if err != nil {
+			return Base(request.AgentID), err
+		}
+		request.Binary = binary
 		return discoverFXCatalog(ctx, request, func(ctx context.Context, binary string, args []string, dir string, env map[string]string) ([]byte, error) {
 			return modelCommand(ctx, binary, args, dir, env).CombinedOutput()
 		})
@@ -465,6 +470,11 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	}
 	if strings.TrimSpace(binary) == "" {
 		return base, errors.New("agent binary is not installed")
+	}
+	var err error
+	binary, err = verifyDiscoveryExecutable(ctx, agentID, binary)
+	if err != nil {
+		return base, err
 	}
 	if spec.signIn != nil {
 		if err := spec.signIn.check(ctx, agentID, binary, workingDir, env); err != nil {
