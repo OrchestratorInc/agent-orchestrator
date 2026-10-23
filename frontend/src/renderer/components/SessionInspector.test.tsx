@@ -376,6 +376,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("SessionInspector tabs", () => {
@@ -1244,6 +1245,11 @@ describe("SessionInspector Artifacts section", () => {
   });
 
   it("shows the contextual Artifacts tab while active and hides it on leaving", async () => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
     const onViewChange = vi.fn();
     renderWithQuery(<SessionInspector onViewChange={onViewChange} view="artifacts" session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
     expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");

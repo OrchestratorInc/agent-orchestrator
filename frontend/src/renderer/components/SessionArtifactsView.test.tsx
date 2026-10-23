@@ -50,7 +50,6 @@ describe("SessionArtifactsView", () => {
 			observe() { this.callback([{ isIntersecting: true }]); }
 			disconnect() {}
 		});
-		vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 		deleteArtifactMock.mockReset().mockResolvedValue(undefined);
 	});
 
