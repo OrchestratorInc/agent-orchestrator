@@ -1602,6 +1602,8 @@
 	"settings.versionRefresh.description": "After an agent update, idle sessions restart on the new version instead of waiting for you to restart them.",
 	"chat.versionSwitch.pending": "Switching to {{version}}…",
 	"chat.versionSwitch.pendingHint": "Happens when the agent is idle or with your next message.",
+	"chat.versionSwitch.installed": "{{version}} installed",
+	"chat.versionSwitch.stoppedHint": "Resume the agent to start it on the new version.",
 	"chat.reauth.accountSignedOut": "{{account}} is signed out",
 	"chat.reauth.savedAccountHint": "Sign it in again to keep using it here, then retry your last message.",
 	"chat.reauth.continueOn": "Continue on {{account}}",

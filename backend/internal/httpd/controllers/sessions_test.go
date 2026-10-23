@@ -915,7 +915,7 @@ func newSessionTestServerWithPreview(
 		deps.PreviewServer = managed
 		deps.SessionCapabilities = allowSessionCapability{}
 	}
-	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{}))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}, log, nil, deps, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -3479,7 +3479,7 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer host-password")
-	request.Header.Set("Origin", "http://ao-preview-client.localhost:4321")
+	request.Header.Set("Origin", "app://renderer")
 	request.Header.Set("X-AO-Preview-App-Authorization", "Basic app-token")
 	request.Header.Set("X-AO-Preview-App-Origin", "http://ao-preview-client.localhost:4321")
 	response, err = http.DefaultClient.Do(request)
@@ -3505,7 +3505,7 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	conn, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/sessions/ao-1/preview/app/ws", &websocket.DialOptions{
 		HTTPHeader: http.Header{
 			"Authorization":                  []string{"Bearer host-password"},
-			"Origin":                         []string{"http://ao-preview-client.localhost:4321"},
+			"Origin":                         []string{"app://renderer"},
 			"X-Ao-Preview-App-Authorization": []string{"Basic ws-token"},
 			"X-Ao-Preview-App-Origin":        []string{"http://ao-preview-client.localhost:4321"},
 		},
@@ -5233,5 +5233,33 @@ func TestSessionsAPI_SourceSelectorCannotFallBackToLiveFiles(t *testing.T) {
 				t.Fatalf("source selector fell back to the worktree: %d %s input=%+v", status, body, svc.workspaceSnapshotInput)
 			}
 		})
+	}
+}
+
+func TestSessionsAPI_LegacyPreviewDocumentsHaveNoAPIOrigin(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"index.html", "report.md", "image.svg", "asset.js"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("<script>window.preview=true</script>"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := newFakeSessionService()
+	sess := svc.sessions["ao-1"]
+	sess.Metadata.WorkspacePath = root
+	svc.sessions["ao-1"] = sess
+	srv := newSessionTestServer(t, svc)
+	previewURL, err := previewutil.FileURL(srv.URL, "ao-1", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"index.html", "report.md", "image.svg", "asset.js"} {
+		_, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/"+name, "")
+		if status != 200 || headers.Get("Content-Security-Policy") != "sandbox allow-scripts allow-forms" || headers.Get("X-Content-Type-Options") != "nosniff" {
+			t.Fatalf("legacy %s: status=%d headers=%v", name, status, headers)
+		}
+		_, status, headers = doPreviewOriginRequest(t, srv, previewURL, "/"+name)
+		if status != 200 || headers.Get("Content-Security-Policy") != "" {
+			t.Fatalf("isolated %s: status=%d headers=%v", name, status, headers)
+		}
 	}
 }
