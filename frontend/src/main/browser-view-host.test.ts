@@ -2454,6 +2454,57 @@ describe("browser profile partitions and replacement", () => {
 		expect(reconstructed.host.getProfileState(reensured.viewId)).toMatchObject({ profileId: null, temporary: true });
 	});
 
+	it("detaches every idle browser to its own temporary profile while preserving tabs", async () => {
+		const bindings = { "worker-1": profile.id, "worker-2": profile.id };
+		const { host, invoke, constructorOptions } = setupTabHost(fakeBrowserProfileStore(profile, bindings));
+		const first = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		const second = (await invoke("browser:ensure", "worker-2")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId: first.viewId, url: "https://example.com/one" });
+		expect(host.getProfileUsage(profile.id)).toEqual([
+			{ viewId: first.viewId, sessionId: "worker-1", blocker: null },
+			{ viewId: second.viewId, sessionId: "worker-2", blocker: null },
+		]);
+		await host.detachProfile(profile.id);
+		expect(host.isProfileLive(profile.id)).toBe(false);
+		expect(host.getProfileUsage(profile.id)).toEqual([]);
+		expect(bindings).toEqual({ "worker-1": null, "worker-2": null });
+		expect(host.getProfileState(first.viewId)).toMatchObject({ temporary: true });
+		expect(host.getProfileState(second.viewId)).toMatchObject({ temporary: true });
+		const partitions = constructorOptions.slice(2).map((item) => item.webPreferences.partition);
+		expect(new Set(partitions).size).toBe(2);
+		expect(partitions.every((partition) => partition?.startsWith("persist:ao-browser-temporary-"))).toBe(true);
+		expect(await invoke("browser:getTabs", first.viewId)).toMatchObject({ tabs: [expect.objectContaining({ url: "https://example.com/one" })] });
+	});
+
+	it("keeps failed browsers on the named profile and waits for successful switches", async () => {
+		const { host, invoke, runtime } = setupTabHost(fakeBrowserProfileStore(profile, { "worker-1": profile.id, "worker-2": profile.id }));
+		const first = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		const second = (await invoke("browser:ensure", "worker-2")) as BrowserNavState;
+		vi.mocked(runtime.closeSession).mockRejectedValueOnce(new Error("Runtime unavailable"));
+		await expect(host.detachProfile(profile.id)).rejects.toMatchObject({ code: "BROWSER_PROFILE_SWITCH_FAILED", message: expect.stringContaining("profile was kept") });
+		expect(host.getProfileState(first.viewId)?.profileId).toBe(profile.id);
+		expect(host.getProfileState(second.viewId)?.temporary).toBe(true);
+		expect(host.getProfileUsage(profile.id)).toEqual([{ viewId: first.viewId, sessionId: "worker-1", blocker: null }]);
+	});
+
+	it("blocks all detachment before switching any idle browser when an agent is active", async () => {
+		const { host, invoke, runtime } = setupTabHost(fakeBrowserProfileStore(profile, { "worker-1": profile.id, "worker-2": profile.id }));
+		const first = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		await invoke("browser:ensure", "worker-2");
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => { release = resolve; });
+		vi.mocked(runtime.runAction).mockImplementationOnce(async () => { await pending; return {}; });
+		const command = host.execute("worker-2", "open", { url: "http://localhost:3000/" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		try {
+			expect(host.getProfileUsage(profile.id)).toContainEqual(expect.objectContaining({ sessionId: "worker-2", blocker: "agent-active" }));
+			await expect(host.detachProfile(profile.id)).rejects.toMatchObject({ code: "BROWSER_PROFILE_ACTIVE", message: expect.stringContaining("worker-2") });
+			expect(host.getProfileState(first.viewId)?.profileId).toBe(profile.id);
+		} finally { release(); await command; }
+		await host.detachProfile(profile.id);
+		expect(host.isProfileLive(profile.id)).toBe(false);
+	});
+
 	it("uses a stable named partition and restores the durable binding on host reconstruction", async () => {
 		const bindings = { "worker-1": profile.id, "worker-2": profile.id };
 		const store = fakeBrowserProfileStore(profile, bindings);

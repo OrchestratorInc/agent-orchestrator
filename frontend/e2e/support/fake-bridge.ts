@@ -274,7 +274,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return { id, name, createdAt: now, updatedAt: now };
 					},
 					clear: async () => undefined,
-					delete: async () => undefined,
+					usage: async () => ({ sessions: [] }),
+					delete: async () => ({}),
 					setDefault: async () => undefined,
 					discoverImportSources: async () => ({ sources: [] }),
 					import: async () => ({ sourceName: "", entries: [] }),
@@ -1152,7 +1153,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return { id, name, createdAt: now, updatedAt: now };
 					},
 					clear: async () => undefined,
-					delete: async () => undefined,
+					usage: async () => ({ sessions: [] }),
+					delete: async () => ({}),
 					setDefault: async () => undefined,
 					discoverImportSources: async () => ({ sources: [] }),
 					import: async () => ({ sourceName: "", entries: [] }),
