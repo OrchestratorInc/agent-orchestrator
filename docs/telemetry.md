@@ -189,8 +189,11 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   `count`. At most 20 of those events are sent per day. No raw arguments are
   included. Each event is stamped at the end of that UTC day.
 - Renderer API errors are not sampled. A daemon-unavailable report is skipped
-  while the daemon is still starting. HTTP 409 responses from workspace diff,
-  config-option, skill, and model probes are not analytics events. Codex
+  while the daemon is still starting. HTTP 409 responses are dropped only for
+  `POST /api/v1/sessions/:id/workspace/diffs`,
+  `GET /api/v1/sessions/:id/conversation/config-options`,
+  `GET /api/v1/sessions/:id/conversation/models`, and
+  `GET /api/v1/sessions/:id/conversation/skills`. Codex
   account management being unwired, and an already-closed shell terminal, are
   not analytics events. An expired GitHub token still reports. A Codex login
   terminal failure and an incomplete Codex account setup use their own error

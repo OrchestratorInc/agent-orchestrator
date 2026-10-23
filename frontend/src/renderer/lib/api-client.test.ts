@@ -356,6 +356,17 @@ describe("api error telemetry", () => {
 			headers: { "Content-Type": "application/json" },
 		}));
 		await apiClient.GET("/api/v1/agents/{agent}/models", { params: { path: { agent: "codex" } } });
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({
+			operation: "GET /api/v1/agents/:id/models",
+			status: 409,
+			error_category: "http_4xx",
+		}));
+		captureMock.mockClear();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "not ready" }), {
+			status: 409,
+			headers: { "Content-Type": "application/json" },
+		}));
+		await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/skills", { params: { path: { sessionId: "session-1" } } });
 		expect(captureMock).not.toHaveBeenCalled();
 		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: "SESSION_GONE", message: "missing" }), {
 			status: 404,

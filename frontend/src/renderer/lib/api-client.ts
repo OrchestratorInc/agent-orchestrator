@@ -221,15 +221,25 @@ type ApiErrorCategory = "daemon_unavailable" | "network_error" | "http_4xx" | "h
 // signal matters, the storm does not.
 const API_ERROR_DEDUPE_MS = 30_000;
 // These codes are the successful or expected outcome of a probe: Codex is not
-// wired in this process, a shell the user already closed, or a GitHub token
-// the user has not connected. Other 401 and 404 responses still report.
+// wired in this process, or a shell the user already closed. Other 401 and
+// 404 responses still report, including an expired GitHub token.
 const EXPECTED_API_ERROR_CODES = new Set([
 	"CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE",
 	"SHELL_TERMINAL_NOT_FOUND",
 ]);
 
+// Conversation probes that 409 while the chat controller is not ready.
+// Exact normalized operations only, so a later 409 on another skills or
+// models route still reports.
+const EXPECTED_PROBE_CONFLICTS = new Set([
+	"POST /api/v1/sessions/:id/workspace/diffs",
+	"GET /api/v1/sessions/:id/conversation/config-options",
+	"GET /api/v1/sessions/:id/conversation/models",
+	"GET /api/v1/sessions/:id/conversation/skills",
+]);
+
 function expectedProbeConflict(operation: string, status?: number): boolean {
-	return status === 409 && /workspace\/diffs|config-options|\/skills|\/models/.test(operation);
+	return status === 409 && EXPECTED_PROBE_CONFLICTS.has(operation);
 }
 const lastApiErrorAt = new Map<string, number>();
 
