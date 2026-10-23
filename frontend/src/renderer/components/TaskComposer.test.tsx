@@ -1223,6 +1223,22 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
 	});
 
+	// The catalog is this device's; its first model may not run on the cloud VM.
+	it("leaves an unreported cloud default model to the cloud VM", async () => {
+		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "codex" } } });
+		h.get.mockImplementation(async () => ({ data: { agent: "codex", selectionMode: "catalog", models: [
+			{ id: "gpt-local-only", label: "Local only" },
+			{ id: "gpt-other", label: "Other" },
+		], allowCustom: true } }));
+		h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+		render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await screen.findByRole("button", { name: "Model" });
+		fireEvent.change(task(), { target: { value: "Do the work" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledOnce());
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+	});
+
 	it("defaults cloud effort to medium and sends explicit effort choices", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 		h.get.mockImplementation(async () => ({ data: { agent: "claude-code", selectionMode: "catalog", models: [

@@ -523,14 +523,21 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const rememberedModeIsValid =
 		isConcreteModelID(rememberedMode) && catalogModels.some((item) => item.id === rememberedMode);
 	// A model is always selected: the provider's default, else the first one listed.
-	const catalogPick = catalogDefaultOption || catalogModels[0]?.id || "";
+	// Cloud tasks read this device's catalog, whose first model the cloud VM may not
+	// run, so there an unreported default is left to the VM, as before.
+	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models?.some(
+		(item) => item.isDefault && isConcreteModelID(item.id) && !catalogModels.some((offered) => offered.id === item.id),
+	));
+	const catalogPick = isCloudProject ? catalogDefaultOption : catalogDefaultOption || catalogModels[0]?.id || "";
 	const defaultModelForSelectedAgent =
 		(rememberedModelIsValid ? rememberedModel : "") ||
 		(isConcreteModelID(projectModelForSelectedAgent) ? projectModelForSelectedAgent : "") ||
 		(!catalogUsesModes && isConcreteModelID(lastUsedOption) ? lastUsedOption : "") ||
 		(catalogUsesModes ? "" : catalogDefaultOption) ||
 		claudeFallbackOption ||
-		(catalogUsesModes ? "" : catalogPick);
+		(catalogUsesModes ? "" : catalogPick) ||
+		// Only replace a default the catalog identified and Settings hid.
+		(isCloudProject && !catalogUsesModes && catalogDefaultHidden ? catalogModels[0]?.id ?? "" : "");
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
