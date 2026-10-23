@@ -14,7 +14,13 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ao_github_webhook_install_order_idx
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ao_github_webhook_processing_idx
     ON ao_github_webhook_deliveries (lease_until)
     WHERE status = 'processing';
+-- Issuing a worker bootstrap ticket invalidates the session's earlier ones, and
+-- a retried bootstrap checks for a newer ticket: both looked tickets up by
+-- session with a full scan of ao_access_tickets, which is never purged.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ao_access_tickets_session_purpose_idx
+    ON ao_access_tickets (org_id, session_id, purpose);
 
 -- +goose Down
+DROP INDEX CONCURRENTLY IF EXISTS ao_access_tickets_session_purpose_idx;
 DROP INDEX CONCURRENTLY IF EXISTS ao_github_webhook_processing_idx;
 DROP INDEX CONCURRENTLY IF EXISTS ao_github_webhook_install_order_idx;

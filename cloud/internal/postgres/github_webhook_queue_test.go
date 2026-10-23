@@ -115,7 +115,7 @@ func TestPruneGitHubWebhooksKeepsRecentAndInFlightDeliveries(t *testing.T) {
 
 func TestGitHubWebhookClaimIndexesExist(t *testing.T) {
 	_, admin, _ := openNotificationTestStore(t)
-	for _, name := range []string{"ao_github_webhook_install_order_idx", "ao_github_webhook_processing_idx"} {
+	for _, name := range []string{"ao_github_webhook_install_order_idx", "ao_github_webhook_processing_idx", "ao_access_tickets_session_purpose_idx"} {
 		var valid bool
 		if err := admin.QueryRow(context.Background(), `SELECT i.indisvalid FROM pg_index i
 			JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = $1`, name).Scan(&valid); err != nil {
