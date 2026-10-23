@@ -947,8 +947,8 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-		// Unverified credentials allow updates without claiming a verified connection.
-		if (authentication === "configured") expect(within(row).getByText("Credentials not verified")).toBeInTheDocument();
+		// Credential presence alone does not imply a failed provider check.
+		if (authentication === "configured") expect(within(row).getByText("Installed")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
 	});
 
@@ -1409,6 +1409,8 @@ describe("HarnessSettingsSection", () => {
 
 	it("keeps configured MiMo Code unverified and offers to log in again", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		configured.agents[0].authentication.diagnostics = [{ method: "provider_validation", code: "probe_timeout",
+			reason: "Provider check timed out.", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }];
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
@@ -1599,7 +1601,7 @@ describe("HarnessSettingsSection", () => {
 		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
 	});
 
-	it("keeps Unreal documentation available when credentials are configured but unverified", async () => {
+	it("keeps Unreal documentation available with a neutral configured status", async () => {
 		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
@@ -1614,8 +1616,10 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("unreal-agent");
-		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
+		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
+		await userEvent.click(within(row).getByRole("tab", { name: "Health" }));
+		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
@@ -1877,7 +1881,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
+		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();

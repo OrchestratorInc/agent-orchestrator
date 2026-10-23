@@ -113,7 +113,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
-	const authSummary = authStatus === "configured" ? t("settings.harness.health.authUnverified")
+	const unverifiedProvider = readinessAgent?.authentication.diagnostics?.some((step) => step.method === "provider_validation"
+		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code));
+	const authSummary = authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : "settings.harness.installed")
 		: authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))

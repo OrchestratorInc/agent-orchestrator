@@ -30,7 +30,7 @@ export function HarnessHealthTab({ details, checking, authCheckFailed, updateErr
 		: renewsOnRun || details.authStatus === "authorized" || details.authStatus === "not_applicable" ? "ok"
 		: details.authStatus === "unauthorized" ? "error" : "off";
 	const authLabel = renewsOnRun ? t("settings.harness.health.authRenewsOnRun")
-		: details.authStatus === "configured" ? t("settings.harness.health.authUnverified") : details.authSummary;
+		: details.authSummary;
 	// Only facts AO has observed: a row with nothing to report is left out rather than filled with a placeholder.
 	const credential = detectedCredential(details, t);
 	const executable = advisory?.binaryPath || details.job?.expectedDestination;
