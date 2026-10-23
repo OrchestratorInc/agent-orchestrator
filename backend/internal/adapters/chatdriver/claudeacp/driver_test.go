@@ -281,6 +281,39 @@ func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	if prompt["type"] != "preset" || prompt["preset"] != "claude_code" || prompt["append"] != "AO standing instructions" {
 		t.Fatalf("systemPrompt = %#v", prompt)
 	}
+	if options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options"); options["tools"] != nil {
+		t.Fatalf("ordinary session received a tool restriction: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+	for _, window := range []string{"", "50000"} {
+		t.Run("compact window "+window, func(t *testing.T) {
+			meta := claudeSessionMeta(acpdriver.LaunchConfig{
+				SystemPrompt: "Return only task title and slug JSON.", DisableTools: true,
+				Env: map[string]string{claudeAutoCompactWindowEnv: window},
+			})
+			prompt := meta["systemPrompt"].(map[string]any)
+			if prompt["append"] != "Return only task title and slug JSON." {
+				t.Fatalf("text-only task received tool-use guidance: %#v", prompt)
+			}
+			options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+			tools, ok := options["tools"].([]string)
+			if !ok || tools == nil || len(tools) != 0 {
+				t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+			}
+			if options["strictMcpConfig"] != true || !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+				t.Fatalf("background task can inherit MCP tools: %#v", options)
+			}
+			if window != "" {
+				env, ok := options["env"].(map[string]string)
+				if !ok || env[claudeAutoCompactWindowEnv] != window {
+					t.Fatalf("lost compaction environment: %#v", options)
+				}
+			}
+		})
+	}
 }
 
 func TestClaudeSessionMetaNeverIncludesReplayContext(t *testing.T) {

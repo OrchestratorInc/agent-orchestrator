@@ -364,22 +364,37 @@ func validateClaudeACPExecutable(binary, goos string) error {
 
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	standing := strings.TrimSpace(cfg.SystemPrompt)
-	if claudeTodoToolsEnabled(cfg.Env) {
+	if !cfg.DisableTools && claudeTodoToolsEnabled(cfg.Env) {
 		if standing != "" {
 			standing += "\n\n"
 		}
 		standing += claudePlanGuidance
 	}
-	if standing == "" {
+	meta := map[string]any{}
+	if standing != "" {
+		// Append AO's standing instructions to Claude Code's own prompt. Replacing
+		// the preset would discard Claude's native coding/tool instructions.
+		meta["systemPrompt"] = map[string]any{
+			"type": "preset", "preset": "claude_code", "append": standing,
+		}
+	}
+	// Also per session, so a choice made after the adapter started still applies.
+	options := map[string]any{}
+	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
+		options["env"] = map[string]string{claudeAutoCompactWindowEnv: window}
+	}
+	if cfg.DisableTools {
+		options["tools"] = []string{}
+		options["strictMcpConfig"] = true
+		options["disallowedTools"] = []string{"mcp__*"}
+	}
+	if len(options) > 0 {
+		meta["claudeCode"] = map[string]any{"options": options}
+	}
+	if len(meta) == 0 {
 		return nil
 	}
-	// Append AO's standing instructions to Claude Code's own prompt. Replacing
-	// the preset would discard Claude's native coding/tool instructions.
-	return map[string]any{
-		"systemPrompt": map[string]any{
-			"type": "preset", "preset": "claude_code", "append": standing,
-		},
-	}
+	return meta
 }
 
 func claudeSessionMode(permission ports.PermissionMode) string {

@@ -1249,7 +1249,7 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 			return Launch{Command: "fake"}, nil
 		},
 		SessionMeta: func(cfg LaunchConfig) map[string]any {
-			return map[string]any{"systemPrompt": map[string]any{"append": cfg.SystemPrompt}}
+			return map[string]any{"systemPrompt": map[string]any{"append": cfg.SystemPrompt}, "disableTools": cfg.DisableTools}
 		},
 		SessionMode: func(permission ports.PermissionMode) string {
 			if permission == ports.PermissionModeAcceptEdits {
@@ -1267,7 +1267,7 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 	driver.useTestProcess(fakeSpawn(agent))
 
 	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
-		WorkspacePath: t.TempDir(), SystemPrompt: "AO instructions",
+		WorkspacePath: t.TempDir(), SystemPrompt: "AO instructions", DisableTools: true,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1281,6 +1281,9 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 	agent.mu.Unlock()
 	if meta["systemPrompt"] == nil {
 		t.Fatal("session/new did not receive provider metadata")
+	}
+	if meta["disableTools"] != true {
+		t.Fatal("session/new did not receive the background tool restriction")
 	}
 
 	// Consume controller.ready from session setup.
