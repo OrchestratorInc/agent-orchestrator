@@ -132,14 +132,33 @@ func ExpandWorkingDirectory(template, home, repositoryURL string) (string, error
 // or the root has no such folder and is an error.
 func StandaloneWorkingDirectory(template, home string) (string, error) {
 	template = strings.TrimSpace(template)
-	if index := strings.Index(template, "{repo}"); index >= 0 {
-		parent := template[:max(strings.LastIndex(template[:index], "/"), 0)]
-		if parent == "" || parent == "~" || parent == "$HOME" {
-			return "", fmt.Errorf("working directory %q has no folder above {repo} for a session with no repository", template)
-		}
-		template = parent
+	index := strings.Index(template, "{repo}")
+	if index < 0 {
+		return ExpandWorkingDirectory(template, home, "")
 	}
-	return ExpandWorkingDirectory(template, home, "")
+	parent := template[:max(strings.LastIndex(template[:index], "/"), 0)]
+	if parent == "" || parent == "~" || parent == "$HOME" {
+		return "", fmt.Errorf("working directory %q has no folder above {repo} for a session with no repository", template)
+	}
+	dir, err := ExpandWorkingDirectory(parent, home, "")
+	if err != nil {
+		return "", err
+	}
+	// The folder above {repo} must hold the repositories, not be a home or the
+	// root: the session writes its agent settings and runs Setup there.
+	clean := filepath.Clean(dir)
+	if clean == string(filepath.Separator) {
+		return "", fmt.Errorf("working directory %q puts a session with no repository at the filesystem root", template)
+	}
+	for _, other := range []string{home, os.Getenv(UserHomeEnv)} {
+		if other = strings.TrimSpace(other); other != "" && filepath.Clean(other) == clean {
+			return "", fmt.Errorf("working directory %q puts a session with no repository in the home directory", template)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(clean, ".ao")); err == nil {
+		return "", fmt.Errorf("working directory %q puts a session with no repository in AO's worker folder", template)
+	}
+	return dir, nil
 }
 
 // ResolveWorkingDirectory decides how a session uses the connection's

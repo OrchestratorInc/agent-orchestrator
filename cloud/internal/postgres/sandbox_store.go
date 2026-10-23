@@ -943,9 +943,11 @@ func (s *Store) IssueAccessTicket(
 	return token, nil
 }
 
-// WorkerBootstrapRetryWindow is how long after a bootstrap ticket is redeemed
-// the same worker may redeem it again, as long as no worker has checked in on
-// its epoch (see RedeemWorkerBootstrapTicket).
+// WorkerBootstrapRetryWindow is how long after a bootstrap ticket is first
+// redeemed the same worker may redeem it again, even past the ticket's expiry,
+// as long as no worker has checked in on its epoch (see
+// RedeemWorkerBootstrapTicket). It outlasts the worker's bootstrap retry
+// budget, which starts no earlier than the first redemption.
 const WorkerBootstrapRetryWindow = 10 * time.Minute
 
 // RedeemWorkerBootstrapTicket atomically consumes a bootstrap ticket. Its
@@ -994,8 +996,12 @@ func (s *Store) RedeemWorkerBootstrapTicket(
 }
 
 // redeemBootstrapTicketAgain answers a worker retrying a bootstrap whose
-// response it lost (RedeemWorkerBootstrapTicket). Locking the ticket row
-// settles concurrent retries one at a time.
+// response it lost (RedeemWorkerBootstrapTicket). The window runs from the
+// first redemption, not the ticket's expiry: a ticket issued while the
+// workspace was still installing the worker can be close to expiring when the
+// worker first reaches the control plane. The row lock only orders retries'
+// checks; two that pass both register the same worker and epoch, which is
+// idempotent.
 func redeemBootstrapTicketAgain(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -1010,7 +1016,6 @@ func redeemBootstrapTicketAgain(
 			AND purpose = 'worker_bootstrap'
 			AND worker_epoch IS NOT NULL
 			AND consumed_at > now() - $2::interval
-			AND expires_at > now()
 		FOR UPDATE`,
 		hash,
 		intervalString(WorkerBootstrapRetryWindow),

@@ -117,3 +117,59 @@ func epochsAfterFixture(t *testing.T, admin *pgxpool.Pool, epoch int64) {
 		t.Fatal(err)
 	}
 }
+
+// The control plane runs without BYPASSRLS, so the check-in test must see the
+// session's worker connections under the ticket's organization: as a plain
+// role, a ticket whose worker checked in is still refused.
+func TestBootstrapTicketRetryIsRefusedAfterCheckInUnderRLS(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	rls := openRLSStore(t, admin)
+	ctx := context.Background()
+	epochsAfterFixture(t, admin, fixture.epoch)
+
+	token, err := store.IssueAccessTicket(ctx, fixture.orgID, fixture.sessionID, "worker_bootstrap", []string{"worker:connect"}, time.Hour)
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+	first, err := rls.RedeemWorkerBootstrapTicket(ctx, token)
+	if err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	if again, err := rls.RedeemWorkerBootstrapTicket(ctx, token); err != nil || again.WorkerEpoch != first.WorkerEpoch {
+		t.Fatalf("retry before check-in = %+v, %v", again, err)
+	}
+	workerID := worker.NextWorkerID(fixture.sessionID, first.WorkerEpoch)
+	if err := store.RegisterWorkerBootstrap(ctx, fixture.orgID, fixture.sessionID, workerID, "test", first.WorkerEpoch, nil); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if err := store.MarkWorkerSeen(ctx, fixture.orgID, fixture.sessionID, workerID, "test", first.WorkerEpoch, nil); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	if _, err := rls.RedeemWorkerBootstrapTicket(ctx, token); !errors.Is(err, ErrInvalidTicket) {
+		t.Fatalf("redeem after check-in under RLS: err = %v, want ErrInvalidTicket", err)
+	}
+}
+
+// A ticket issued while the workspace was still installing the worker can be
+// close to expiring when the worker first reaches the control plane. Its retry
+// window runs from that first redemption, not from the ticket's expiry.
+func TestBootstrapTicketRetryOutlivesTheTicketExpiry(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	epochsAfterFixture(t, admin, fixture.epoch)
+
+	token, err := store.IssueAccessTicket(ctx, fixture.orgID, fixture.sessionID, "worker_bootstrap", []string{"worker:connect"}, time.Hour)
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+	first, err := store.RedeemWorkerBootstrapTicket(ctx, token)
+	if err != nil {
+		t.Fatalf("redeem: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_access_tickets SET created_at = now() - interval '20 minutes', expires_at = now() - interval '1 minute' WHERE id = $1`, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := store.RedeemWorkerBootstrapTicket(ctx, token); err != nil || again.WorkerEpoch != first.WorkerEpoch {
+		t.Fatalf("retry past expiry, inside the window = %+v, %v; want epoch %d", again, err, first.WorkerEpoch)
+	}
+}

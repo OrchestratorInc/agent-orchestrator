@@ -70,7 +70,9 @@ func TestStandaloneWorkingDirectory(t *testing.T) {
 			t.Errorf("StandaloneWorkingDirectory(%q) = %q, %v; want %q", template, got, err, want)
 		}
 	}
-	for _, template := range []string{"~/{repo}", "$HOME/{repo}", "/{repo}", "{repo}", "work/{repo}", ""} {
+	// The home directory spelled out is refused like ~ (the session would write
+	// its agent settings and run Setup in home).
+	for _, template := range []string{"~/{repo}", "$HOME/{repo}", "/home/ubuntu/{repo}", "/home/ubuntu/{repo}/src", "/{repo}", "{repo}", "work/{repo}", ""} {
 		if got, err := StandaloneWorkingDirectory(template, "/home/ubuntu"); err == nil {
 			t.Errorf("StandaloneWorkingDirectory(%q) = %q, want an error", template, got)
 		}
@@ -238,5 +240,17 @@ func TestDisplayPath(t *testing.T) {
 		if got := DisplayPath(tc.dir, tc.home); got != tc.want {
 			t.Errorf("DisplayPath(%q, %q) = %q, want %q", tc.dir, tc.home, got, tc.want)
 		}
+	}
+}
+
+// The folder above {repo} must not be AO's own worker folder.
+func TestStandaloneWorkingDirectoryRefusesAOWorkerFolder(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".ao"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := StandaloneWorkingDirectory(root+"/{repo}", "/home/ubuntu"); err == nil {
+		t.Fatalf("StandaloneWorkingDirectory(%q) = %q, want an error", root+"/{repo}", got)
 	}
 }

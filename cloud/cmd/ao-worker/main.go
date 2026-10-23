@@ -50,7 +50,11 @@ const (
 	// successor.
 	maxHeartbeatFailures = 3
 	requestTimeout       = 30 * time.Second
-	maxResponseBody      = 1 << 20
+	// bootstrapRequestTimeout is longer: a retried bootstrap is answered with
+	// the same epoch, so waiting out a slow control plane beats giving up and
+	// running the whole handler again against it.
+	bootstrapRequestTimeout = 90 * time.Second
+	maxResponseBody         = 1 << 20
 )
 
 var workerCapabilities = []string{
@@ -127,9 +131,10 @@ func run(logger *slog.Logger) error {
 	defer stop()
 
 	client := &client{
-		baseURL:   publicURL + "/api/cloud/v1",
-		http:      &http.Client{Timeout: requestTimeout},
-		tokenFile: filepath.Join(dataDir, "worker-token"),
+		baseURL:       publicURL + "/api/cloud/v1",
+		http:          &http.Client{Timeout: requestTimeout},
+		bootstrapHTTP: &http.Client{Timeout: bootstrapRequestTimeout},
+		tokenFile:     filepath.Join(dataDir, "worker-token"),
 	}
 
 	// Heal a stale baked binary before any credential-bearing work, so the
@@ -1168,11 +1173,14 @@ var errStaleWorker = errors.New("worker credential replaced")
 var errCheckoutForbidden = errors.New("checkout grant not authorized")
 
 type client struct {
-	baseURL   string
-	http      *http.Client
-	tokenFile string
-	mu        sync.RWMutex
-	token     string
+	baseURL string
+	http    *http.Client
+	// bootstrapHTTP serves only the bootstrap request (bootstrapRequestTimeout);
+	// nil uses http.
+	bootstrapHTTP *http.Client
+	tokenFile     string
+	mu            sync.RWMutex
+	token         string
 	// Startup lookups made beside the checkout (see startStartupPrefetch).
 	// Set before any goroutine that reads them starts; nil means none.
 	credentialPrefetch *prefetch[worker.CredentialResponse]
@@ -1221,7 +1229,7 @@ func (c *client) startStartupPrefetch(ctx context.Context, launch worker.LaunchC
 
 func (c *client) bootstrap(ctx context.Context, bootstrapToken string) (worker.BootstrapResponse, error) {
 	var response worker.BootstrapResponse
-	err := c.do(ctx, "/worker/bootstrap", worker.BootstrapRequest{
+	err := c.do(context.WithValue(ctx, bootstrapRequestKey{}, true), "/worker/bootstrap", worker.BootstrapRequest{
 		BootstrapToken: bootstrapToken,
 		Version:        workerVersion,
 		Capabilities:   workerCapabilities,
@@ -1314,6 +1322,10 @@ func (c *client) bootstrapWithRetry(
 		delay = min(delay*2, bootstrapRetryMaxDelay)
 	}
 }
+
+// bootstrapRequestKey marks the bootstrap request's context so doMethod sends
+// it with bootstrapHTTP.
+type bootstrapRequestKey struct{}
 
 func retryableBootstrapError(err error) bool {
 	var transport *url.Error
@@ -1876,7 +1888,11 @@ func (c *client) doMethod(
 		request.Header.Set("Authorization", "Worker "+token)
 		request.Header.Set(worker.CapabilitiesHeader, strings.Join(workerCapabilities, ","))
 	}
-	response, err := c.http.Do(request)
+	httpClient := c.http
+	if bootstrap, _ := ctx.Value(bootstrapRequestKey{}).(bool); bootstrap && c.bootstrapHTTP != nil {
+		httpClient = c.bootstrapHTTP
+	}
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return err
 	}

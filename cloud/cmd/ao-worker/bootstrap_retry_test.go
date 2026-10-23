@@ -109,3 +109,26 @@ func TestBootstrapStopsRetryingAfterItsBudget(t *testing.T) {
 		t.Fatalf("%d calls in %s; want several within the 2s budget", calls.Load(), elapsed)
 	}
 }
+
+// A control plane slower than the usual request timeout still answers the
+// bootstrap: it has its own, longer timeout, so a slow but working control
+// plane is waited out instead of retried into the ground.
+func TestBootstrapWaitsLongerThanOtherRequests(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"workerToken":"worker-token"}`)
+	}))
+	defer server.Close()
+	c := &client{baseURL: server.URL,
+		http:          &http.Client{Transport: server.Client().Transport, Timeout: 50 * time.Millisecond},
+		bootstrapHTTP: &http.Client{Transport: server.Client().Transport, Timeout: 5 * time.Second}}
+	response, err := c.bootstrap(context.Background(), "ticket")
+	if err != nil || response.WorkerToken != "worker-token" {
+		t.Fatalf("bootstrap = %+v, %v; want it to wait out the slow control plane", response, err)
+	}
+	// Other requests keep the short timeout.
+	if err := c.do(context.Background(), "/worker/heartbeat", map[string]string{}, nil); err == nil {
+		t.Fatal("a non-bootstrap request used the bootstrap timeout")
+	}
+}

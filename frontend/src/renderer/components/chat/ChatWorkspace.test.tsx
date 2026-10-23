@@ -1087,6 +1087,47 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
 	});
 
+	it("keeps only the run the agent is working in open while the turn runs", () => {
+		const turnId = "live-turn-runs";
+		const at = "2026-08-11T10:01:00Z";
+		const call = (id: string, sequence: number, summary: string) => ({
+			kind: "activity" as const, id, turnId, sequence, revision: 0,
+			activityKind: "command" as const, status: "completed" as const, summary,
+			detail: { command: summary }, createdAt: at,
+		});
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			controller: { state: "busy" },
+			latestSequence: 7,
+			turns: [{ id: turnId, state: "running", requestedAt: at, startedAt: at }],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "Fix the build",
+					streaming: false, createdAt: at,
+				},
+				call("early-1", 2, "ls"),
+				call("early-2", 3, "cat go.mod"),
+				{
+					kind: "message", id: "between", turnId, sequence: 4, revision: 0,
+					role: "assistant", origin: "provider", text: "Found it, building now.",
+					streaming: false, createdAt: at,
+				},
+				call("late-1", 5, "go build ./..."),
+				call("late-2", 6, "go vet ./..."),
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		// The current run is open and shows each call; the earlier run is folded to
+		// its summary line.
+		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
+		expect(toggle(/^Explored 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
+		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getAllByText("Ran command")).toHaveLength(2);
+	});
+
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {
 		const turnId = "turn-with-steer";
 		const at = "2026-08-11T10:01:00Z";
