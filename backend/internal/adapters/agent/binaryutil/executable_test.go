@@ -96,3 +96,52 @@ func TestDiscoveryExecutableAllowsNativeManagerSymlinks(t *testing.T) {
 		})
 	}
 }
+
+func linkDiscoveryLauncher(t *testing.T, target, link string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("extensionless npm bins and POSIX shims are not Windows launchers")
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	return link
+}
+
+func TestDiscoveryExecutableAllowsNodeShebangPackageBins(t *testing.T) {
+	// Shaped like the published @kilocode/cli, @mimo-ai/cli and @factory/cli
+	// bins: extensionless node scripts whose `//` comments are not commands.
+	body := "#!/usr/bin/env node\n\nconst childProcess = require(\"child_process\")\n//\n// kilocode_change start\n  configureTreeSitterResources(target) // kilocode_change\n"
+	for _, tc := range []struct{ agent, pkg, bin string }{
+		{"kilocode", "@kilocode/cli", "kilo"},
+		{"mimo-code", "@mimo-ai/cli", "mimo"},
+		{"droid", "@factory/cli", "droid"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			root := t.TempDir()
+			target := writeDiscoveryLauncher(t, root, filepath.Join("lib/node_modules", tc.pkg, "bin", tc.bin), body)
+			link := linkDiscoveryLauncher(t, target, filepath.Join(root, tc.bin))
+			if verified, err := VerifyExecutable(context.Background(), tc.agent, link); err != nil || verified != link {
+				t.Fatalf("node package bin verification = %q, %v, want launcher %q", verified, err, link)
+			}
+		})
+	}
+}
+
+func TestDiscoveryExecutableIdentifiesScopedPackage(t *testing.T) {
+	root := t.TempDir()
+	// OMP publishes as @oh-my-pi/pi-coding-agent; its bare package segment
+	// must not identify it as Pi.
+	target := writeDiscoveryLauncher(t, root, "install/global/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js", "#!/usr/bin/env bun\n// application code\n")
+	shim := writeDiscoveryLauncher(t, root, "omp.cmd", "@\"%~dp0\\node.exe\" \"%~dp0\\install\\global\\node_modules\\@oh-my-pi\\pi-coding-agent\\dist\\cli.js\" %*\n")
+	if verified, err := VerifyExecutable(context.Background(), "omp", shim); err != nil || verified != shim {
+		t.Fatalf("omp npm shim verification = %q, %v, want launcher %q", verified, err, shim)
+	}
+	if _, err := VerifyExecutable(context.Background(), "pi", shim); err == nil || !strings.Contains(err.Error(), "omp instead of pi") {
+		t.Fatalf("pi verification of omp shim = %v, want omp identified", err)
+	}
+	link := linkDiscoveryLauncher(t, target, filepath.Join(root, "omp"))
+	if verified, err := VerifyExecutable(context.Background(), "omp", link); err != nil || verified != link {
+		t.Fatalf("omp package symlink verification = %q, %v, want launcher %q", verified, err, link)
+	}
+}
