@@ -297,4 +297,68 @@ describe("ElicitationDock", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent(/unsafe or invalid URL/i);
 		expect(screen.getByRole("button", { name: "Open link" })).toBeDisabled();
 	});
+
+	it("makes the form body scrollable with composer scrollbar and caps dock height", () => {
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		const dock = screen.getByTestId("elicitation-dock");
+		expect(dock).toHaveClass("flex", "max-h-[min(65vh,32rem)]", "flex-col", "overflow-hidden");
+
+		const scrollBody = screen.getByTestId("elicitation-scroll-body");
+		expect(scrollBody).toHaveClass("chat-composer-scrollbar", "min-h-0", "flex-1", "overflow-y-auto", "overscroll-contain");
+	});
+
+	it("keeps multi-question generic forms in a scrollable body with pinned footer", () => {
+		const genericSchema = {
+			type: "object" as const,
+			properties: {
+				scope: {
+					type: "string",
+					title: "Scope",
+					description: "Which scope?",
+					oneOf: [
+						{ const: "entries", title: "Only entries" },
+						{ const: "all", title: "All crontab" },
+					],
+				},
+				scope_other: { type: "string", title: "Scope (other)" },
+				location: {
+					type: "string",
+					title: "Code location",
+					description: "Where to put code?",
+					oneOf: [
+						{ const: "tool", title: "Own tool" },
+						{ const: "repo", title: "In repo" },
+					],
+				},
+				location_other: { type: "string", title: "Code location (other)" },
+			},
+		};
+
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: genericSchema })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		const scrollBody = screen.getByTestId("elicitation-scroll-body");
+		expect(scrollBody).toHaveClass("chat-composer-scrollbar", "overflow-y-auto");
+
+		expect(screen.getByRole("group", { name: /Scope/ })).toBeInTheDocument();
+		expect(screen.getByLabelText("Scope (other)")).toBeInTheDocument();
+		expect(screen.getByRole("group", { name: /Code location/ })).toBeInTheDocument();
+		expect(screen.getByLabelText("Code location (other)")).toBeInTheDocument();
+
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
+		const continueBtn = screen.getByRole("button", { name: "Continue" });
+		expect(continueBtn).toBeInTheDocument();
+		expect(scrollBody).not.toContainElement(continueBtn);
+	});
 });

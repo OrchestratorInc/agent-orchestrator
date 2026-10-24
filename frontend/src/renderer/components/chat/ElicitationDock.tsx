@@ -47,7 +47,7 @@ export function ElicitationDock({
 			role="group"
 			aria-label="Agent question"
 			data-testid="elicitation-dock"
-			className="elicitation-dock overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
+			className="elicitation-dock flex max-h-[min(65vh,32rem)] flex-col overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
 		>
 			{activity.detail?.inputMode === "url" ? (
 				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
@@ -56,7 +56,7 @@ export function ElicitationDock({
 			)}
 
 			{error ? (
-				<p role="alert" className="px-3 pb-2 text-xs leading-snug text-destructive">
+				<p role="alert" className="shrink-0 px-3 pb-2 text-xs leading-snug text-destructive">
 					{error}
 				</p>
 			) : null}
@@ -141,7 +141,7 @@ function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; 
 /** The full question stays visible above its answers, alongside the step count. */
 function DockHeader({ id, title, pager }: { id?: string; title: string; pager?: string }) {
 	return (
-		<div className="flex min-h-8 items-start gap-2 px-3 py-2">
+		<div className="flex min-h-8 shrink-0 items-start gap-2 px-3 py-2">
 			<p id={id} className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs font-medium leading-relaxed text-foreground">
 				{title}
 			</p>
@@ -153,7 +153,7 @@ function DockHeader({ id, title, pager }: { id?: string; title: string; pager?: 
 }
 
 function DockFooter({ children }: { children: ReactNode }) {
-	return <div className="flex flex-wrap items-center justify-between gap-1.5 px-3 pb-2.5 pt-1">{children}</div>;
+	return <div className="flex shrink-0 flex-wrap items-center justify-between gap-1.5 px-3 pb-2.5 pt-1">{children}</div>;
 }
 
 function URLRequest({
@@ -187,7 +187,7 @@ function URLRequest({
 	}
 
 	return (
-		<>
+		<div className="flex min-h-0 flex-1 flex-col">
 			<DockHeader title={activity.detail?.message || activity.summary} />
 			{parsed ? (
 				<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
@@ -231,7 +231,7 @@ function URLRequest({
 					Open {parsed?.hostname ?? "link"}
 				</button>
 			</DockFooter>
-		</>
+		</div>
 	);
 }
 
@@ -284,12 +284,20 @@ function FormRequest({
 	}
 
 	return (
-		<form onSubmit={submit}>
-			<DockHeader id={headerId} title={title} pager={pager} />
-			{!questionGroups && schema?.description ? (
-				<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
-			) : null}
-			<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
+		<form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+			<div className="shrink-0">
+				<DockHeader id={headerId} title={title} pager={pager} />
+				{!questionGroups && schema?.description ? (
+					<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
+				) : null}
+			</div>
+			<div
+				data-testid="elicitation-scroll-body"
+				className={cn(
+					"chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain",
+					questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1",
+				)}
+			>
 				{visibleProperties.map(([name, property], index) => (
 					<FormField
 						key={name}
