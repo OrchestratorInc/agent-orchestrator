@@ -1,0 +1,450 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/go-chi/chi/v5"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+)
+
+const relayTestTerminalID = "4b0fcd37-6c64-4d5c-9b55-6a3f3c7a1f10"
+
+// mirrorStubStore serves the store surface the worker stream handler touches.
+// appendErrors maps a frame ID to the error its durable mirror returns.
+type mirrorStubStore struct {
+	Store
+	mu           sync.Mutex
+	appendErrors map[int64]error
+	appended     []int64
+}
+
+func (s *mirrorStubStore) ClaimTerminalInput(
+	context.Context, string, string, string, int64, string, time.Duration,
+) (domain.WorkerRequest, bool, error) {
+	return domain.WorkerRequest{}, false, nil
+}
+
+func (s *mirrorStubStore) AppendTerminalOutputAt(
+	_ context.Context,
+	_, _, _, _ string,
+	_, sequence int64,
+	_ []byte,
+) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.appendErrors[sequence]; err != nil {
+		return 0, err
+	}
+	s.appended = append(s.appended, sequence)
+	return sequence, nil
+}
+
+func startWorkerStream(t *testing.T, server *Server, query string) *websocket.Conn {
+	t.Helper()
+	router := chi.NewRouter()
+	router.Get("/worker/terminals/{terminalId}/stream", func(w http.ResponseWriter, r *http.Request) {
+		claims := worker.Claims{
+			OrgID: "org", SessionID: "session", WorkerID: "worker", Epoch: 1,
+			Scopes: []string{"worker:transport"},
+		}
+		server.workerTerminalStream(w, r.WithContext(context.WithValue(r.Context(), workerContextKey{}, claims)))
+	})
+	listener := httptest.NewServer(router)
+	t.Cleanup(listener.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	url := "ws" + listener.URL[len("http"):] + "/worker/terminals/" + relayTestTerminalID + "/stream" + query
+	connection, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		t.Fatalf("dial worker stream: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.CloseNow() })
+	return connection
+}
+
+func writeWorkerFrame(t *testing.T, connection *websocket.Conn, frame worker.TerminalStreamFrame) {
+	t.Helper()
+	encoded, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := connection.Write(ctx, websocket.MessageText, encoded); err != nil {
+		t.Fatalf("write worker frame: %v", err)
+	}
+}
+
+func readWorkerFrame(t *testing.T, connection *websocket.Conn) worker.TerminalStreamFrame {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, message, err := connection.Read(ctx)
+	if err != nil {
+		t.Fatalf("read worker frame: %v", err)
+	}
+	var frame worker.TerminalStreamFrame
+	if err := json.Unmarshal(message, &frame); err != nil {
+		t.Fatal(err)
+	}
+	return frame
+}
+
+func relayServer(store Store) *Server {
+	return &Server{
+		store:                 store,
+		logger:                slog.Default(),
+		terminalStreamEnabled: true,
+		terminalRelayEnabled:  true,
+		terminalStreams:       newTerminalStreams(),
+	}
+}
+
+func receiveLive(t *testing.T, live chan terminalRelayOutput) terminalRelayOutput {
+	t.Helper()
+	select {
+	case frame := <-live:
+		return frame
+	case <-time.After(5 * time.Second):
+		t.Fatal("live relay output never reached the browser")
+	}
+	return terminalRelayOutput{}
+}
+
+// A durable-mirror failure used to cancel the whole worker stream, which also
+// cut live output to the browser; the worker redialed into the same failure
+// and the terminal looked frozen. The mirror is best effort: live frames keep
+// flowing, later frames are still mirrored, and only stored frames are acked.
+func TestTerminalRelayMirrorFailureKeepsLiveStream(t *testing.T) {
+	store := &mirrorStubStore{appendErrors: map[int64]error{
+		1: errors.New("database unavailable"),
+		2: postgres.ErrTerminalExpired,
+	}}
+	server := relayServer(store)
+	live, unsubscribe := server.terminalStreams.subscribeRelayOutput(relayTestTerminalID)
+	defer unsubscribe()
+	connection := startWorkerStream(t, server, "")
+
+	for id := int64(1); id <= 3; id++ {
+		writeWorkerFrame(t, connection, worker.TerminalStreamFrame{Type: "output", ID: id, Data: []byte("frame")})
+		if got := receiveLive(t, live); got.sequence != id {
+			t.Fatalf("live frame sequence = %d, want %d", got.sequence, id)
+		}
+	}
+	ack := readWorkerFrame(t, connection)
+	if ack.Type != "ack" || ack.ID != 3 {
+		t.Fatalf("worker got %+v, want the ack for frame 3 (frames 1 and 2 were not stored)", ack)
+	}
+	store.mu.Lock()
+	appended := append([]int64(nil), store.appended...)
+	store.mu.Unlock()
+	if len(appended) != 1 || appended[0] != 3 {
+		t.Fatalf("mirrored frames = %v, want [3]", appended)
+	}
+}
+
+// A rejection that proves the terminal is gone still ends the stream, with the
+// code an old worker already treats as permanent.
+func TestTerminalRelayClosedTerminalEndsStream(t *testing.T) {
+	store := &mirrorStubStore{appendErrors: map[int64]error{1: postgres.ErrTerminalClosed}}
+	server := relayServer(store)
+	connection := startWorkerStream(t, server, "")
+	writeWorkerFrame(t, connection, worker.TerminalStreamFrame{Type: "output", ID: 1, Data: []byte("bye")})
+	frame := readWorkerFrame(t, connection)
+	if frame.Type != "error" || frame.Code != "TRANSPORT_EXPIRED" {
+		t.Fatalf("worker got %+v, want a TRANSPORT_EXPIRED error", frame)
+	}
+}
+
+// Resize and repaint frames only go down the stream of a worker that dialed
+// with the control feature; an older worker would drop unknown frame types.
+func TestTerminalStreamControlFramesNeedWorkerFeature(t *testing.T) {
+	legacy := relayServer(&mirrorStubStore{})
+	startWorkerStream(t, legacy, "")
+	waitForWorkerStream(t, legacy.terminalStreams)
+	if legacy.terminalStreams.pushControl(relayTestTerminalID, worker.TerminalStreamFrame{Type: "resize", Columns: 100, Rows: 30}) {
+		t.Fatal("resize was pushed to a worker that did not advertise control frames")
+	}
+
+	current := relayServer(&mirrorStubStore{})
+	connection := startWorkerStream(t, current, "?features="+worker.TerminalStreamControlFeature)
+	waitForWorkerStream(t, current.terminalStreams)
+	if !current.terminalStreams.pushControl(relayTestTerminalID, worker.TerminalStreamFrame{Type: "resize", Columns: 100, Rows: 30}) {
+		t.Fatal("resize was not pushed to a worker that advertised control frames")
+	}
+	frame := readWorkerFrame(t, connection)
+	if frame.Type != "resize" || frame.Columns != 100 || frame.Rows != 30 {
+		t.Fatalf("worker got %+v, want resize 100x30", frame)
+	}
+}
+
+func waitForWorkerStream(t *testing.T, registry *terminalStreams) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for registry.lookupWorker(relayTestTerminalID) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("worker stream never registered")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// resizeStubStore records durable resizes and repaints.
+type resizeStubStore struct {
+	Store
+	mu       sync.Mutex
+	block    chan struct{}
+	resizes  [][2]uint16
+	repaints int
+	frames   []domain.TerminalOutput
+}
+
+func (s *resizeStubStore) QueueTerminalResize(_ context.Context, _ domain.TerminalSession, columns, rows uint16) error {
+	if s.block != nil {
+		<-s.block
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resizes = append(s.resizes, [2]uint16{columns, rows})
+	return nil
+}
+
+func (s *resizeStubStore) QueueTerminalRepaint(context.Context, domain.TerminalSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.repaints++
+	return nil
+}
+
+func (s *resizeStubStore) ListTerminalOutput(
+	_ context.Context,
+	_ domain.TerminalSession,
+	after int64,
+	_ int,
+) ([]domain.TerminalOutput, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var frames []domain.TerminalOutput
+	for _, frame := range s.frames {
+		if frame.Sequence > after {
+			frames = append(frames, frame)
+		}
+	}
+	return frames, "open", nil
+}
+
+func (s *resizeStubStore) snapshot() ([][2]uint16, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][2]uint16(nil), s.resizes...), s.repaints
+}
+
+// A burst of resizes while one is still being queued collapses to the newest
+// size, delivered last, and never holds up the input loop.
+func TestTerminalResizesCoalesceWhileDelivering(t *testing.T) {
+	store := &resizeStubStore{block: make(chan struct{})}
+	server := &Server{store: store, logger: slog.Default()}
+	resizes := newTerminalResizes()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.deliverTerminalResizes(ctx, domain.TerminalSession{ID: "term"}, resizes)
+
+	resizes.request(80, 24)
+	// Let the first delivery start and block in the durable queue.
+	time.Sleep(50 * time.Millisecond)
+	for columns := uint16(81); columns <= 120; columns++ {
+		resizes.request(columns, 40)
+	}
+	close(store.block)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, _ := store.snapshot()
+		if len(got) == 2 {
+			if got[0] != [2]uint16{80, 24} || got[1] != [2]uint16{120, 40} {
+				t.Fatalf("delivered resizes = %v, want [80x24 120x40]", got)
+			}
+			return
+		}
+		if len(got) > 2 || time.Now().After(deadline) {
+			t.Fatalf("delivered resizes = %v, want exactly the first and the newest", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// With the worker stream on this replica, a resize takes the in-memory path
+// keystrokes take instead of the durable queue.
+func TestTerminalResizeUsesWorkerStreamWhenConnected(t *testing.T) {
+	store := &resizeStubStore{}
+	server := &Server{store: store, logger: slog.Default(), terminalStreamEnabled: true, terminalStreams: newTerminalStreams()}
+	stream := &workerTerminalStream{
+		send:    make(chan []byte, 1),
+		control: make(chan worker.TerminalStreamFrame, 4),
+		done:    make(chan struct{}),
+	}
+	server.terminalStreams.registerWorker("term", stream)
+	resizes := newTerminalResizes()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.deliverTerminalResizes(ctx, domain.TerminalSession{ID: "term"}, resizes)
+	resizes.request(132, 43)
+	select {
+	case frame := <-stream.control:
+		if frame.Type != "resize" || frame.Columns != 132 || frame.Rows != 43 {
+			t.Fatalf("worker stream got %+v, want resize 132x43", frame)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resize never reached the worker stream")
+	}
+	if got, _ := store.snapshot(); len(got) != 0 {
+		t.Fatalf("durable resizes = %v, want none while the stream is connected", got)
+	}
+}
+
+// A replay whose head was pruned (it starts above sequence 1) leaves the
+// client's screen inconsistent; the program is asked to repaint.
+func TestTerminalReplayAfterPruneRequestsRepaint(t *testing.T) {
+	store := &resizeStubStore{frames: []domain.TerminalOutput{
+		{Sequence: 40, Data: []byte("tail")},
+		{Sequence: 41, Data: []byte("end")},
+	}}
+	server := &Server{store: store, logger: slog.Default()}
+	relayCtx, cancelRelay := context.WithCancel(context.Background())
+	defer cancelRelay()
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		var writeMu sync.Mutex
+		_ = server.writeTerminalOutput(relayCtx, connection, domain.TerminalSession{
+			ID: "term", OrgID: "org", SessionID: "session", WorkerEpoch: 1,
+		}, 0, true, &writeMu)
+	}))
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+listener.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	for {
+		_, payload, err := connection.Read(ctx)
+		if err != nil {
+			t.Fatalf("read replay: %v", err)
+		}
+		var message terminalServerMessage
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Fatal(err)
+		}
+		if message.Type == "replay_complete" {
+			break
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, repaints := store.snapshot(); repaints == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("pruned replay did not request a repaint")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A frame that never reaches the replay log (lost in transit, or a failing
+// mirror) used to stop a client's live output for good: every later live
+// frame waited for the durable pass to fill the gap. After
+// terminalRelayGapWait the client skips the gap and the program repaints.
+func TestTerminalLiveOutputSkipsUnfilledGap(t *testing.T) {
+	store := &resizeStubStore{}
+	registry := newTerminalStreams()
+	server := &Server{store: store, logger: slog.Default(), terminalRelayEnabled: true, terminalStreams: registry}
+	relayCtx, cancelRelay := context.WithCancel(context.Background())
+	defer cancelRelay()
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		var writeMu sync.Mutex
+		_ = server.writeTerminalOutput(relayCtx, connection, domain.TerminalSession{
+			ID: "term", OrgID: "org", SessionID: "session", WorkerEpoch: 1,
+		}, 0, true, &writeMu)
+	}))
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+listener.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	readOutput := func() terminalServerMessage {
+		t.Helper()
+		for {
+			_, payload, err := connection.Read(ctx)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			var message terminalServerMessage
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.Type == "output" {
+				return message
+			}
+		}
+	}
+	// writeTerminalOutput subscribes to live output itself; wait for it.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		registry.mu.Lock()
+		subscribed := len(registry.clients["term"]) > 0
+		registry.mu.Unlock()
+		if subscribed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client never subscribed to live output")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	registry.relayOutput("term", terminalRelayOutput{sequence: 1, data: []byte("one")})
+	if got := readOutput(); got.Sequence != 1 {
+		t.Fatalf("first live frame = %+v", got)
+	}
+	// Frame 2 is lost and the durable log never receives it.
+	registry.relayOutput("term", terminalRelayOutput{sequence: 3, data: []byte("three")})
+	time.Sleep(terminalRelayGapWait + 200*time.Millisecond)
+	registry.relayOutput("term", terminalRelayOutput{sequence: 4, data: []byte("four")})
+	if got := readOutput(); got.Sequence != 4 {
+		t.Fatalf("live frame after the gap = %+v, want sequence 4", got)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		if _, repaints := store.snapshot(); repaints == 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("skipped gap did not request a repaint")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

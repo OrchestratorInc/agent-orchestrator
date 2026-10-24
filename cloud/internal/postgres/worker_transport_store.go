@@ -1128,6 +1128,21 @@ func (s *Store) QueueTerminalResize(
 	return s.queueTerminalRequest(ctx, terminal, "terminal.resize", "", payload)
 }
 
+// QueueTerminalRepaint asks the worker to make the terminal's program redraw
+// at its current size. It rides the terminal.resize kind (so it needs no new
+// request kind) with no dimensions; a worker that predates repaint rejects the
+// zero size as invalid and leaves the terminal untouched.
+func (s *Store) QueueTerminalRepaint(
+	ctx context.Context,
+	terminal domain.TerminalSession,
+) error {
+	payload, _ := json.Marshal(map[string]any{
+		"terminalId": terminal.ID,
+		"repaint":    true,
+	})
+	return s.queueTerminalRequest(ctx, terminal, "terminal.resize", "", payload)
+}
+
 func agentTerminalInputMarksSessionActive(terminal domain.TerminalSession, kind string) bool {
 	return terminal.Kind == "agent" && kind == "terminal.input"
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 )
@@ -42,6 +43,13 @@ const (
 	// terminal to open, checking every agentTicketPoll.
 	agentTicketWait = 8 * time.Second
 	agentTicketPoll = 250 * time.Millisecond
+	// terminalRelayGapWait is how long a client's live output waits for the
+	// replay log to fill a sequence gap before it skips the gap. Frames lost in
+	// transit, or a failing durable mirror, must not freeze a live terminal.
+	terminalRelayGapWait = 2 * time.Second
+	// terminalRepaintInterval limits how often one attachment asks the
+	// terminal's program to redraw over output it skipped.
+	terminalRepaintInterval = 5 * time.Second
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")
@@ -364,6 +372,8 @@ func (s *Server) readTerminalInput(
 	writeMu *sync.Mutex,
 ) error {
 	operate := terminalScope(terminal.Scopes, "terminal:operate")
+	resizes := newTerminalResizes()
+	go s.deliverTerminalResizes(ctx, terminal, resizes)
 	for {
 		_, data, err := connection.Read(ctx)
 		if err != nil {
@@ -400,13 +410,7 @@ func (s *Server) readTerminalInput(
 					}
 					continue
 				}
-				if err := retryTerminalRequest(ctx, func() error {
-					return s.store.QueueTerminalResize(
-						ctx, terminal, message.Columns, message.Rows,
-					)
-				}); err != nil {
-					return err
-				}
+				resizes.request(message.Columns, message.Rows)
 				continue
 			}
 			if message.Type == "input" {
@@ -446,6 +450,97 @@ func (s *Server) readTerminalInput(
 			}
 		}
 	}
+}
+
+// terminalResizes holds the newest size one client asked for. Delivery runs
+// apart from the input loop, so keystrokes never wait behind a resize, and a
+// burst of resizes (a dragged side panel) collapses to the latest size while
+// an earlier one is still in flight: each delivered resize costs the program a
+// full redraw.
+type terminalResizes struct {
+	mu      sync.Mutex
+	columns uint16
+	rows    uint16
+	pending bool
+	wake    chan struct{}
+}
+
+func newTerminalResizes() *terminalResizes {
+	return &terminalResizes{wake: make(chan struct{}, 1)}
+}
+
+func (r *terminalResizes) request(columns, rows uint16) {
+	r.mu.Lock()
+	r.columns, r.rows, r.pending = columns, rows, true
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (r *terminalResizes) take() (uint16, uint16, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending := r.pending
+	r.pending = false
+	return r.columns, r.rows, pending
+}
+
+// deliverTerminalResizes sends each coalesced size to the worker in order:
+// straight down its stream when this replica holds it (the path keystrokes
+// take), otherwise through the durable queue. A size that cannot be queued
+// is dropped; the next resize or reattach sends a current one.
+func (s *Server) deliverTerminalResizes(
+	ctx context.Context,
+	terminal domain.TerminalSession,
+	resizes *terminalResizes,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-resizes.wake:
+		}
+		columns, rows, ok := resizes.take()
+		if !ok {
+			continue
+		}
+		if s.terminalStreamEnabled && s.terminalStreams != nil && s.terminalStreams.pushControl(
+			terminal.ID, worker.TerminalStreamFrame{Type: "resize", Columns: columns, Rows: rows},
+		) {
+			continue
+		}
+		if err := retryTerminalRequest(ctx, func() error {
+			return s.store.QueueTerminalResize(ctx, terminal, columns, rows)
+		}); err != nil && ctx.Err() == nil && s.logger != nil {
+			s.logger.Warn("queue terminal resize", "error", err, "terminal_id", terminal.ID)
+		}
+	}
+}
+
+// requestTerminalRepaint asks the terminal's program to redraw because this
+// client skipped output: the replay log's head was pruned, or frames were
+// lost. A full-screen program repaints its whole screen; a line-mode shell
+// only loses the skipped scrollback. It is best effort and never blocks the
+// output path.
+func (s *Server) requestTerminalRepaint(terminal domain.TerminalSession) {
+	if s.logger != nil {
+		s.logger.Info("terminal replay skipped output; requesting repaint",
+			"terminal_id", terminal.ID, "kind", terminal.Kind)
+	}
+	if s.terminalStreamEnabled && s.terminalStreams != nil && s.terminalStreams.pushControl(
+		terminal.ID, worker.TerminalStreamFrame{Type: "repaint"},
+	) {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.store.QueueTerminalRepaint(ctx, terminal); err != nil && s.logger != nil {
+			s.logger.Debug("queue terminal repaint", "error", err, "terminal_id", terminal.ID)
+		}
+	}()
 }
 
 func retryTerminalRequest(ctx context.Context, operation func() error) error {
@@ -511,6 +606,12 @@ func (s *Server) writeTerminalOutput(
 	replayComplete := false
 	startingSent := false
 	ready := false
+	// skipped notes output this client will never see (a pruned replay head or
+	// a sequence gap); the program is then asked to repaint, at most once per
+	// terminalRepaintInterval.
+	skipped := false
+	var repaintedAt time.Time
+	var gapSince time.Time
 	// Poll once to establish state and replay existing output. Once relay mode
 	// is live, only the ticker/NOTIFY fallback asks Postgres again; a hot output
 	// frame must not wait behind a database round trip.
@@ -549,6 +650,9 @@ func (s *Server) writeTerminalOutput(
 				}
 			}
 			for _, frame := range frames {
+				if frame.Sequence != after+1 {
+					skipped = true
+				}
 				var err error
 				writeMu.Lock()
 				if structured {
@@ -568,6 +672,7 @@ func (s *Server) writeTerminalOutput(
 					return err
 				}
 				after = frame.Sequence
+				gapSince = time.Time{}
 			}
 			if structured && ready && !replayComplete {
 				writeMu.Lock()
@@ -579,6 +684,11 @@ func (s *Server) writeTerminalOutput(
 				}
 				writeMu.Unlock()
 				replayComplete = true
+			}
+			if skipped && state == "open" && time.Since(repaintedAt) >= terminalRepaintInterval {
+				skipped = false
+				repaintedAt = time.Now()
+				s.requestTerminalRepaint(terminal)
 			}
 			if state == "failed" {
 				return errTerminalProcessUnavailable
@@ -596,16 +706,26 @@ func (s *Server) writeTerminalOutput(
 			}
 		case frame := <-live:
 			// A direct frame uses the same sequence that the ordered durable
-			// mirror will commit. Never jump a gap: the next durable replay pass
-			// fills it, preserving the terminal's byte order after a saturated
-			// live-client buffer.
+			// mirror will commit. A gap is first left to the next durable replay
+			// pass, which fills it and preserves byte order after a saturated
+			// live-client buffer. A gap the log has not filled within
+			// terminalRelayGapWait never will be (the frames were lost, or the
+			// mirror is failing): skip it and repaint rather than freeze.
 			if frame.sequence <= after {
 				continue
 			}
 			if frame.sequence != after+1 {
+				if gapSince.IsZero() {
+					gapSince = time.Now()
+				}
+				if time.Since(gapSince) < terminalRelayGapWait {
+					pollDurable = true
+					continue
+				}
+				skipped = true
 				pollDurable = true
-				continue
 			}
+			gapSince = time.Time{}
 			writeMu.Lock()
 			var writeErr error
 			if structured {
