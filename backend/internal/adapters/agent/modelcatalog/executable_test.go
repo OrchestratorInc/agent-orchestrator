@@ -47,6 +47,22 @@ func TestDiscoveryExecutableRejectsForeignAgent(t *testing.T) {
 		{"npm wrapper", "cursor", "cursor-agent.cmd", "@\"node.exe\" \"%~dp0/node_modules/autohand-cli/dist/cli.js\" %*\n"},
 		{"direct foreign binary", "grok", "autohand.exe", "MZ fixture"},
 		{"different foreign agent", "grok", "grok.cmd", "@\"%~dp0cursor-agent.exe\" %*\n"},
+		{"npx foreign command", "grok", "grok.cmd", "@npx autohand %*\n"},
+		{"start foreign command", "grok", "grok.cmd", "start \"\" /b autohand %*\n"},
+		{"env foreign command", "grok", "grok.cmd", "env autohand\n"},
+		{"conditional foreign command", "grok", "grok.cmd", "if exist marker ( autohand )\n"},
+		{"chained foreign command", "grok", "grok.cmd", "a && autohand\n"},
+		{"fallback foreign command", "grok", "grok.cmd", "a || autohand\n"},
+		{"pipeline foreign command", "grok", "grok.cmd", "a | autohand\n"},
+		{"semicolon foreign command", "grok", "grok.cmd", "a; autohand\n"},
+		{"env assignment foreign command", "grok", "grok.cmd", "env MODE=agent autohand\n"},
+		{"exec argv0 foreign command", "grok", "grok.cmd", "exec -a \"$0\" autohand \"$@\"\n"},
+		{"exec variable foreign command", "grok", "grok.cmd", "NODE_BIN=autohand\nexec -a \"$0\" \"$NODE_BIN\" \"$@\"\n"},
+		{"exec forwarded foreign command", "grok", "grok.cmd", "set -- autohand \"$@\"\nexec \"$@\"\n"},
+		{"npx package foreign command", "grok", "grok.cmd", "npx --package=autohand autohand\n"},
+		{"npm exec foreign command", "grok", "grok.cmd", "npm exec -- autohand\n"},
+		{"inline conditional foreign command", "grok", "grok.cmd", "if exist marker autohand\n"},
+		{"posix conditional foreign command", "grok", "grok.cmd", "if true; then autohand; fi\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)
@@ -74,6 +90,12 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 		{"opencode shared v2 binary", "opencode-v2", "opencode.exe", "MZ fixture"},
 		{"command code windows", "command-code", "cmdc.exe", "MZ fixture"},
 		{"comments are not redirects", "grok", "grok.cmd", "@echo off\nREM replaced autohand.exe\n:: autohand.exe\n# autohand.exe\n\"%~dp0grok.exe\" %*\n"},
+		{"cursor exec argv0", "cursor", "cursor-agent.cmd", "#!/bin/bash\nNODE_BIN=\"$SCRIPT_DIR/node\"\nexec -a \"$0\" \"$NODE_BIN\" \"$SCRIPT_DIR/index.js\" \"$@\"\n"},
+		{"pnpm adjacent node", "grok", "grok.cmd", "#!/bin/sh\nexec \"$basedir/node\" \"$basedir/node_modules/grok-cli/dist/cli.js\" \"$@\"\n"},
+		{"pnpm PATH node", "grok", "grok.cmd", "#!/bin/sh\nexec node \"$basedir/node_modules/grok-cli/dist/cli.js\" \"$@\"\n"},
+		{"forward positional arguments", "grok", "grok.cmd", "#!/bin/sh\nexec \"$@\"\n"},
+		{"source shell profile", "grok", "grok.cmd", "#!/bin/sh\n. \"$HOME/.profile\"\nexec node \"$basedir/node_modules/grok-cli/dist/cli.js\" \"$@\"\n"},
+		{"quoted operators are arguments", "grok", "grok.cmd", "#!/bin/sh\necho \"text && autohand\"\nexec node \"$basedir/node_modules/grok-cli/dist/cli.js\" \"$@\"\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)
@@ -81,6 +103,54 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 			if err != nil || verified != path {
 				t.Fatalf("verification = %q, %v, want %q", verified, err, path)
 			}
+		})
+	}
+}
+
+func TestDiscoveryPOSIXLauncherFixtures(t *testing.T) {
+	for _, tc := range []struct{ agent, fixture string }{
+		{"cursor", "cursor-posix-launcher.sh"}, {"grok", "pnpm-posix-launcher.sh"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			// Representative complete launchers exercise setup and control flow,
+			// not just the final exec line. Static inspection also runs on Windows.
+			body, err := os.ReadFile(filepath.Join("testdata", tc.fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			name := tc.agent
+			if name == "cursor" {
+				name = "cursor-agent"
+			}
+			if runtime.GOOS == "windows" {
+				name += ".cmd"
+			}
+			launcher := writeDiscoveryLauncher(t, root, name, string(body))
+			writeDiscoveryLauncher(t, root, "node", "#!/bin/sh\nprintf 'Available models:\\n  * "+tc.agent+"-shim-smoke\\n'\n")
+			if _, err := verifyDiscoveryExecutable(context.Background(), tc.agent, launcher); err != nil {
+				t.Fatalf("POSIX launcher rejected: %v", err)
+			}
+			if runtime.GOOS == "windows" {
+				return // Execution is checked on POSIX CI, inspection above is portable.
+			}
+			if tc.agent == "cursor" {
+				if _, err := exec.LookPath("bash"); err != nil {
+					t.Skip("bash is required for exec -a")
+				}
+			}
+			catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+				AgentID: tc.agent, Binary: launcher, WorkingDir: root,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, model := range catalog.Models {
+				if model.ID == tc.agent+"-shim-smoke" {
+					return
+				}
+			}
+			t.Fatalf("POSIX shim returned no fixture model: %#v", catalog.Models)
 		})
 	}
 }
@@ -237,6 +307,14 @@ func TestDiscoveryExecutableLimitsTotalFiles(t *testing.T) {
 				t.Fatalf("verification = %v, want total file limit rejection", err)
 			}
 		})
+	}
+}
+
+func TestDiscoveryExecutableBoundsVariableExpansion(t *testing.T) {
+	root := t.TempDir()
+	launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "A=x\n"+strings.Repeat("A=\"$A$A\"\n", 20)+"exec node\n")
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "variable expansion exceeds inspection limit") {
+		t.Fatalf("verification = %v, want bounded variable expansion", err)
 	}
 }
 

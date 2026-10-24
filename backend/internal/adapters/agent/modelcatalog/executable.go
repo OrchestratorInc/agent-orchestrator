@@ -114,10 +114,6 @@ var discoveryVersionedExecutable = regexp.MustCompile(`^([a-z][a-z0-9-]*?)-(?:v?
 
 var discoveryLauncherReference = regexp.MustCompile(`(?i)"[^"\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)"|'[^'\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)'|[^\s"'<>|&;]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)\b`)
 
-// Invocation prefixes are shell syntax, not the executable. Preserve quoted
-// targets so extensionless commands and paths containing spaces are checked too.
-var discoveryLauncherCommand = regexp.MustCompile(`(?i)^((?:exec|call)\s+|&\s*|\.\s+)?("[^"\r\n]+"|'[^'\r\n]+'|[^\s"'<>|&;]+)`)
-
 func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspection *discoveryInspection) (verified bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -196,25 +192,46 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 	if bytes.ContainsRune(body, '\x00') {
 		return false, fmt.Errorf("launcher is not inspectable text")
 	}
+	variables := map[string]string{}
+	variableBytes := 0
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "@"))
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "::") || strings.HasPrefix(strings.ToLower(line), "rem ") {
 			continue
 		}
-		references := discoveryLauncherReference.FindAllString(line, -1)
-		var invokedTarget string
-		var explicitInvocation bool
-		// Shells can resolve extensionless targets through PATH/PATHEXT.
-		if command := discoveryLauncherCommand.FindStringSubmatch(line); len(command) > 2 {
-			invokedTarget = strings.Trim(command[2], `"'`)
-			explicitInvocation = command[1] != ""
-			// Batch CALL :label invokes a subroutine in this same file, not
-			// another executable. Its body is still inspected line by line.
-			batch := ext == ".cmd" || ext == ".bat"
-			localLabel := batch && strings.EqualFold(strings.TrimSpace(command[1]), "call") && strings.HasPrefix(invokedTarget, ":")
-			if !localLabel {
-				references = append(references, invokedTarget)
+		if assignment := discoveryLauncherAssignment.FindStringSubmatch(line); len(assignment) > 2 {
+			value, expandErr := discoveryExpandLauncherTarget(strings.Trim(assignment[2], `"'`), variables)
+			if expandErr != nil {
+				return false, expandErr
 			}
+			variableBytes += len(value) - len(variables[assignment[1]])
+			if variableBytes > discoveryLauncherReadLimit {
+				return false, fmt.Errorf("launcher variable data exceeds inspection limit")
+			}
+			variables[assignment[1]] = value
+		}
+		if strings.HasPrefix(line, "set -- ") {
+			if arguments := discoveryLauncherTokens.FindAllString(strings.TrimPrefix(line, "set -- "), -1); len(arguments) > 0 {
+				value, expandErr := discoveryExpandLauncherTarget(strings.Trim(arguments[0], `"'`), variables)
+				if expandErr != nil {
+					return false, expandErr
+				}
+				variableBytes += len(value) - len(variables["@"])
+				if variableBytes > discoveryLauncherReadLimit {
+					return false, fmt.Errorf("launcher variable data exceeds inspection limit")
+				}
+				variables["@"] = value
+			}
+		}
+		references := discoveryLauncherReference.FindAllString(line, -1)
+		explicitTargets := map[string]bool{}
+		for _, invocation := range discoveryLauncherInvocations(line, ext == ".cmd" || ext == ".bat") {
+			target, expandErr := discoveryExpandLauncherTarget(invocation.target, variables)
+			if expandErr != nil {
+				return false, expandErr
+			}
+			references = append(references, target)
+			explicitTargets[target] = explicitTargets[target] || invocation.explicit
 		}
 		lineReferences := make(map[string]bool, len(references))
 		for _, reference := range references {
@@ -234,7 +251,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 			// Wrapper ownership cannot vouch for an unidentified script or
 			// extensionless delegate. Do not guess the shell's PATH/PATHEXT
 			// or working directory: require a path we can actually inspect.
-			requireInspection := targetOwner == "" && (script || (explicitInvocation && reference == invokedTarget && ext == ""))
+			requireInspection := targetOwner == "" && (script || (explicitTargets[reference] && ext == "" && !discoveryRuntimeTarget(reference)))
 			if target == "" {
 				if requireInspection {
 					return false, fmt.Errorf("cannot verify launcher command %q; use an explicit agent-owned launcher path", reference)
