@@ -223,6 +223,8 @@ describe("SessionArtifactsView for a cloud session", () => {
 		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
 		expect(screen.queryByRole("menuitem", { name: /^Show in / })).toBeNull();
+		// Share links publish local artifacts only.
+		expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
 	});
 
 	it("deletes a cloud file from cloud storage and the sandbox after confirming", async () => {
@@ -408,6 +410,23 @@ describe("SessionArtifactsView", () => {
 		expect(openArtifacts).toHaveBeenNthCalledWith(1, { sessionId: "sess-1", targetId: "file-manager", path: "reports/plan.md" });
 		expect(openArtifacts).toHaveBeenNthCalledWith(2, { sessionId: "sess-1", targetId: "terminal", path: "reports/plan.md" });
 		openArtifacts.mockRestore();
+	});
+
+	it("keeps Share hidden while the sharing flag is off", () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
+		expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+	});
+
+	it("offers Share in the open artifact's header for a local session only, with the flag on", () => {
+		vi.stubEnv("VITE_AO_ARTIFACT_SHARES", "1");
+		try {
+			const { rerender } = renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
+			expect(screen.getByRole("button", { name: "Share" })).toBeInTheDocument();
+			rerender(<SessionArtifactsView hostId="remote-1" request={{ key: 2, path: "notes.md" }} session={session()} />);
+			expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("copies a markdown artifact as Markdown", async () => {

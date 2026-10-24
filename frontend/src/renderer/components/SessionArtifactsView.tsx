@@ -20,6 +20,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactFileView } from "./ArtifactFileView";
+import { ArtifactShareButton, artifactSharingAvailable } from "./ArtifactShare";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -552,6 +553,7 @@ export function SessionArtifactsView({
 					</Button>
 					<ArtifactMenu artifact={selected} downloadUrl={listed?.rawUrl} hostId={hostId} key={selected.path} session={session} />
 					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
+					{artifactSharingAvailable(session, hostId) ? <ArtifactShareButton artifact={selected} key={selected.path} session={session} /> : null}
 					{session.cloud || selectedFile.data?.binary ? null : (
 						<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 					)}
