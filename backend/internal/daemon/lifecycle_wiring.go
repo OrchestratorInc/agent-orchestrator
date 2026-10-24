@@ -202,9 +202,8 @@ func (l *lifecycleStack) Stop() {
 // depending on the concrete manager type.
 //
 // SaveAndTeardownAll is deliberately ABSENT from this interface so the daemon
-// cannot tear down live sessions on shutdown. Sessions survive the daemon exit
-// and Reconcile on the next boot adopts them, preserving session IDs. Re-adding
-// the method here is a visible, reviewable interface change.
+// cannot remove worktrees on shutdown. Explicit desktop quit may stop agent
+// processes; ordinary daemon replacement still preserves them for adoption.
 type sessionLifecycle interface {
 	Reconcile(ctx context.Context) error
 	ReconcileStartupSafety(ctx context.Context) error
@@ -225,6 +224,7 @@ type sessionLifecycle interface {
 	RestoreAll(ctx context.Context) error
 	WaitBackgroundWorkers(ctx context.Context) error
 	WaitAgentSwitchWorkers(ctx context.Context) error
+	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's

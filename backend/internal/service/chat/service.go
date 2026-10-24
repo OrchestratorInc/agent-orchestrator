@@ -1798,7 +1798,36 @@ func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwn
 	return err
 }
 
-// StopAll closes every controller, for daemon shutdown.
+// TerminateAll stops every owned provider on explicit desktop quit.
+func (s *Service) TerminateAll(ctx context.Context) error {
+	if s.sides != nil {
+		s.sides.stopAll()
+	}
+	s.mu.RLock()
+	owners := make([]domain.ConversationOwner, 0, len(s.ownerControllers))
+	for owner := range s.ownerControllers {
+		owners = append(owners, owner)
+	}
+	s.mu.RUnlock()
+	errs := make(chan error, len(owners))
+	var workers sync.WaitGroup
+	for _, owner := range owners {
+		workers.Go(func() {
+			if err := s.StopForOwner(ctx, owner); err != nil {
+				errs <- fmt.Errorf("stop chat owner %s/%s: %w", owner.Kind, owner.ID, err)
+			}
+		})
+	}
+	workers.Wait()
+	close(errs)
+	var failures []error
+	for err := range errs {
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
+}
+
+// StopAll detaches every controller for daemon replacement.
 func (s *Service) StopAll(ctx context.Context) {
 	if s.sides != nil {
 		s.sides.stopAll()
