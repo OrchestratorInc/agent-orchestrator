@@ -1431,7 +1431,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			      cluster above a full-height sidebar; Windows hangs the sidebar
 			      below its custom titlebar. */}
 					<Sidebar
-						hideEdgeBorder={isHomeRoute}
 						underTopbar={isMac || isWindows || isLinux}
 						topbarOffset={isWindows ? "titlebar" : hideShellTopbar ? "trafficLights" : "toolbar"}
 						onCloneProject={cloneProject}
