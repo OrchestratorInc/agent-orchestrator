@@ -21,7 +21,8 @@ export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permiss
 export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };
 
 export type PlanStep = { text: string; status: "pending" | "in_progress" | "completed" };
-export type ConversationPlan = { explanation?: string; steps: PlanStep[] };
+/** `sessionScoped`: the agent keeps one list for the whole conversation and re-sends it every turn. */
+export type ConversationPlan = { explanation?: string; steps: PlanStep[]; sessionScoped?: boolean };
 export type DiffFile = {
 	path: string;
 	oldPath?: string;

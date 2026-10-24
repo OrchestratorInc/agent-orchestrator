@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, latestFirstConversationGroups, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, latestFirstConversationGroups, partitionTurnItems, readableConversationItems, summarizeActivities, visibleTurnPlan } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -314,5 +314,33 @@ describe("editable human prompts", () => {
 		value.capabilities = [];
 		value.hasMoreBefore = true;
 		expect(editableHumanTurns(value).editable.size).toBe(0);
+	});
+
+	describe("a plan the agent keeps for the whole conversation", () => {
+		const plan = { steps: [{ text: "one", status: "completed" as const }, { text: "two", status: "in_progress" as const }] };
+		const withPlans = (first: ConversationTurn["plan"], second: ConversationTurn["plan"]) => {
+			const value = snapshot();
+			value.turns[0] = { ...value.turns[0], plan: first };
+			value.turns[1] = { ...value.turns[1], plan: second };
+			return value;
+		};
+
+		it("draws the checklist once, on the latest turn that carries it", () => {
+			const value = withPlans({ ...plan, sessionScoped: true }, { ...plan, sessionScoped: true });
+			expect(visibleTurnPlan(value, value.turns[0])).toBeUndefined();
+			expect(visibleTurnPlan(value, value.turns[1])).toEqual({ ...plan, sessionScoped: true });
+		});
+
+		it("still draws each turn's own plan when the plan belongs to the turn", () => {
+			const value = withPlans(plan, plan);
+			expect(visibleTurnPlan(value, value.turns[0])).toEqual(plan);
+			expect(visibleTurnPlan(value, value.turns[1])).toEqual(plan);
+		});
+
+		it("draws nothing once a later turn clears the list", () => {
+			const value = withPlans({ ...plan, sessionScoped: true }, { steps: [], sessionScoped: true });
+			expect(visibleTurnPlan(value, value.turns[0])).toBeUndefined();
+			expect(visibleTurnPlan(value, value.turns[1])).toBeUndefined();
+		});
 	});
 });
