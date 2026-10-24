@@ -618,16 +618,6 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	principal := principalFrom(r)
-	if request.Provider == "" {
-		preferred, configured, err := s.store.GetUserSandboxProvider(r.Context(), principal.UserID)
-		if err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
-		if configured {
-			request.Provider = preferred
-		}
-	}
 	// With nothing choosing a provider, the session gets the organization's
 	// default: the deployment default when the organization may use it,
 	// otherwise its first allowed provider. An organization with no allowed

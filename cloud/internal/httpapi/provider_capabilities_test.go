@@ -470,12 +470,12 @@ func TestCreateSessionOnCoderWithoutCapability(t *testing.T) {
 	}
 }
 
-func TestCreateSessionAccountPreferenceMustBeAllowedByOrg(t *testing.T) {
+func TestCreateSessionDisallowedLegacyPreferenceDoesNotBlockOrgDefault(t *testing.T) {
 	store := &offeringStore{preference: sandbox.ProviderNodeOps}
 	rec := httptest.NewRecorder()
 	newOfferingServer(store).createSession(rec, offeringSessionRequest(t, teamPrincipal("coder"), ""))
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "provider_forbidden") || store.created {
-		t.Fatalf("status = %d, created = %t, body = %s; want 403 provider_forbidden", rec.Code, store.created, rec.Body.String())
+	if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderCoder {
+		t.Fatalf("status = %d, provider = %q, body = %s; want org default coder", rec.Code, store.captured.Provider, rec.Body.String())
 	}
 }
 
@@ -500,9 +500,9 @@ func TestCreateSessionAccountPreferenceWithProjectAndOrgDefaults(t *testing.T) {
 			organization: sandbox.ProviderFreestyle, want: sandbox.ProviderCoder,
 		},
 		{
-			name:    "account overrides organization default",
+			name:    "organization default ignores legacy account preference",
 			account: sandbox.ProviderCoder, organization: sandbox.ProviderFreestyle,
-			want: sandbox.ProviderCoder,
+			want: sandbox.ProviderFreestyle,
 		},
 		{
 			name:         "organization default applies without account preference",
@@ -518,6 +518,19 @@ func TestCreateSessionAccountPreferenceWithProjectAndOrgDefaults(t *testing.T) {
 					rec.Code, store.captured.Provider, rec.Body.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestCreateSessionUsesUpdatedOrganizationDefault(t *testing.T) {
+	store := &offeringStore{preference: sandbox.ProviderCoder, orgPreference: sandbox.ProviderFreestyle}
+	srv := newGenericOfferingServer(store)
+	for _, provider := range []string{sandbox.ProviderFreestyle, sandbox.ProviderCoder} {
+		store.orgPreference = provider
+		rec := httptest.NewRecorder()
+		srv.createSession(rec, offeringSessionRequest(t, teamPrincipal(), ""))
+		if rec.Code != http.StatusCreated || store.captured.Provider != provider {
+			t.Fatalf("status=%d provider=%q want current org default %q; body=%s", rec.Code, store.captured.Provider, provider, rec.Body.String())
+		}
 	}
 }
 

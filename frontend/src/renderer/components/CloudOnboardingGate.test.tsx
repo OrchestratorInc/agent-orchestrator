@@ -20,16 +20,17 @@ vi.mock("./CloudLocalSignInDialog", () => ({ CloudLocalSignInDialog: () => null 
 import { CloudOnboardingGate } from "./CloudOnboardingGate";
 
 describe("CloudOnboardingGate", () => {
-	it("mounts migration once and clears account preference cache on sign-out", () => {
+	it("does not migrate legacy personal placement and still clears its account cache on sign-out", () => {
 		mocks.status = "authenticated";
 		mocks.preference.mockClear();
 		const client = new QueryClient();
 		const key = ["cloud-provider-preference", "https://cloud.test", "alice"];
 		client.setQueryData(key, "coder");
 		const { rerender } = render(<QueryClientProvider client={client}><CloudOnboardingGate /></QueryClientProvider>);
-		expect(mocks.preference).toHaveBeenCalledWith({ migrateLegacy: true });
+		expect(mocks.preference).not.toHaveBeenCalled();
 		mocks.status = "unauthenticated";
 		rerender(<QueryClientProvider client={client}><CloudOnboardingGate /></QueryClientProvider>);
 		expect(client.getQueryData(key)).toBeUndefined();
+		expect(mocks.preference).not.toHaveBeenCalled();
 	});
 });

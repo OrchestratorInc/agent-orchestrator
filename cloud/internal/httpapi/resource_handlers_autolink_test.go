@@ -246,14 +246,14 @@ func TestCreateSessionDoesNotAutoLinkOrchestrator(t *testing.T) {
 	}
 }
 
-func TestCreateSessionProviderPreferencePrecedence(t *testing.T) {
+func TestCreateSessionIgnoresLegacyPersonalProviderPreference(t *testing.T) {
 	cases := []struct {
 		name, kind, explicit, parentProvider, preference, want string
 		linked                                                 bool
 		wantReads                                              int
 	}{
-		{"orchestrator uses preference", "orchestrator", "", "", sandbox.ProviderCoder, sandbox.ProviderCoder, false, 1},
-		{"standalone worker uses preference", "worker", "", "", sandbox.ProviderCoder, sandbox.ProviderCoder, false, 1},
+		{"orchestrator uses default", "orchestrator", "", "", sandbox.ProviderCoder, sandbox.ProviderNodeOps, false, 0},
+		{"standalone worker uses default", "worker", "", "", sandbox.ProviderCoder, sandbox.ProviderNodeOps, false, 0},
 		{"explicit wins", "orchestrator", sandbox.ProviderNodeOps, "", sandbox.ProviderCoder, sandbox.ProviderNodeOps, false, 0},
 		{"linked worker inherits", "worker", "", sandbox.ProviderNodeOps, sandbox.ProviderCoder, sandbox.ProviderNodeOps, true, 0},
 	}
@@ -270,12 +270,12 @@ func TestCreateSessionProviderPreferencePrecedence(t *testing.T) {
 	}
 }
 
-func TestCreateSessionProviderPreferenceUnavailable(t *testing.T) {
+func TestCreateSessionIgnoresUnavailableLegacyPersonalProvider(t *testing.T) {
 	store := &stubAutolinkStore{preference: "removed-provider", preferenceConfigured: true}
 	srv := newChildServer(store, bothProviderProvisioning(sandbox.ProviderNodeOps), sandbox.ProviderNodeOps)
 	rec := httptest.NewRecorder()
 	srv.createSession(rec, createSessionRequestHTTP(t, "orchestrator", ""))
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "provider_unavailable") || store.created {
+	if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderNodeOps || store.preferenceReads != 0 || store.preference != "removed-provider" {
 		t.Fatalf("status=%d created=%t body=%s", rec.Code, store.created, rec.Body.String())
 	}
 }
@@ -303,11 +303,12 @@ func TestCreateSessionProviderPreferenceAcrossDeviceFlows(t *testing.T) {
 	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), `"sandboxProvider":"coder"`) {
 		t.Fatalf("read preference: %d %s", get.Code, get.Body.String())
 	}
+	readsBeforeCreate := store.preferenceReads
 
 	for _, kind := range []string{"orchestrator", "worker"} {
 		rec := httptest.NewRecorder()
 		srv.createSession(rec, createSessionRequestHTTP(t, kind, ""))
-		if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderCoder {
+		if rec.Code != http.StatusCreated || store.captured.Provider != sandbox.ProviderNodeOps || store.preferenceReads != readsBeforeCreate || store.preference != sandbox.ProviderCoder {
 			t.Fatalf("%s: %d provider=%q body=%s", kind, rec.Code, store.captured.Provider, rec.Body.String())
 		}
 	}

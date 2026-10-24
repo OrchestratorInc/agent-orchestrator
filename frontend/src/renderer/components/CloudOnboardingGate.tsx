@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCloudGate } from "../hooks/useCloudGate";
-import { useCloudProviderPreference } from "../hooks/useCloudProviderPreference";
 import { useCloudSession } from "../lib/cloud-session";
 import { cloudOrgQueryKey } from "../hooks/useCloudOrg";
 import { cloudBillingQueryKey } from "../hooks/useCloudOffering";
@@ -17,7 +16,6 @@ export function CloudOnboardingGate() {
 	const { cloudEnabled } = useCloudGate();
 	const { status } = useCloudSession();
 	const queryClient = useQueryClient();
-	useCloudProviderPreference({ migrateLegacy: true });
 
 	// Sign-out must also drop the cached cloud data: the queries merely become
 	// disabled, and their stale results would otherwise keep cloud projects on
