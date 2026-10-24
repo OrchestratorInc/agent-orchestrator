@@ -39,6 +39,7 @@ func newTestSink(t *testing.T, dir string, requests chan map[string]any, hits *a
 func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	sink := newTestSink(t, t.TempDir(), nil, nil)
 	defer func() { _ = sink.Close(context.Background()) }()
+	stableInstallID := sink.Identity().InstallID()
 
 	anon := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
 	for _, k := range []string{"github_actor", "ao_cloud_user_id", "$set"} {
@@ -49,6 +50,9 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	if anon["$process_person_profile"] != false {
 		t.Fatalf("anonymous event is identified: %v", anon["$process_person_profile"])
 	}
+	if anon["install_id"] != stableInstallID {
+		t.Fatal("anonymous event missing installation ID")
+	}
 
 	sink.Identity().SetGitHubLogin("octocat")
 	if err := sink.Identity().SetCloudUserID(context.Background(), "user_01HABC"); err != nil {
@@ -57,6 +61,9 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	first := sink.properties(ports.TelemetryEvent{Name: "ao.daemon.started", Source: "daemon"})
 	if first["github_actor"] != "octocat" || first["ao_cloud_user_id"] != "user_01HABC" {
 		t.Fatalf("identity not on event: %#v", first)
+	}
+	if first["install_id"] != stableInstallID {
+		t.Fatal("signed-in event changed installation ID")
 	}
 	if first["$process_person_profile"] != true {
 		t.Fatal("signed-in event must be linked to the person")
@@ -89,6 +96,9 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	out := sink.properties(ports.TelemetryEvent{Name: "ao.http.5xx", Source: "httpd"})
 	if _, ok := out["ao_cloud_user_id"]; ok {
 		t.Fatal("ao_cloud_user_id survived sign-out")
+	}
+	if out["install_id"] != stableInstallID || sink.Identity().InstallID() != stableInstallID {
+		t.Fatal("sign-out changed installation ID")
 	}
 }
 
@@ -211,6 +221,50 @@ func TestFreshInstallOnlyBeforeFirstExportedEvent(t *testing.T) {
 	}
 }
 
+func TestInstallIDCreationRecoversEmptyFileAndConcurrentReaders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, installIDFile)
+	if err := os.WriteFile(path, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want, err := loadOrCreateInstallID(dir)
+	if err != nil || !strings.HasPrefix(want, "ins_") {
+		t.Fatalf("recovered install id = %q, %v", want, err)
+	}
+	if stored, err := readTrimmed(path); err != nil || stored != want {
+		t.Fatalf("stored install id = %q, %v, want %q", stored, err, want)
+	}
+
+	type result struct {
+		id  string
+		err error
+	}
+	for _, legacyEmpty := range []bool{false, true} {
+		concurrentDir := t.TempDir()
+		if legacyEmpty {
+			if err := os.WriteFile(filepath.Join(concurrentDir, installIDFile), []byte("\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		results := make(chan result, 16)
+		for range cap(results) {
+			go func() {
+				id, err := loadOrCreateInstallID(concurrentDir)
+				results <- result{id, err}
+			}()
+		}
+		for range cap(results) {
+			got := <-results
+			if got.err != nil || !strings.HasPrefix(got.id, "ins_") {
+				t.Fatalf("concurrent install id = %q, %v", got.id, got.err)
+			}
+			if disk, err := readTrimmed(filepath.Join(concurrentDir, installIDFile)); err != nil || disk != got.id {
+				t.Fatalf("published install id = %q, %v, caller saw %q", disk, err, got.id)
+			}
+		}
+	}
+}
+
 func TestInstalledEventIsReservedOnceEvenWithoutAnExport(t *testing.T) {
 	dir := t.TempDir()
 	first, err := NewIdentity(dir)
@@ -299,7 +353,7 @@ func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
 	_ = ident.SetCloudUserID(context.Background(), "user_A")
 	emit() // signed in: the account, not the install ID that identify() merges into A
 	_ = ident.SetCloudUserID(context.Background(), "")
-	install1 := ident.InstallID()
+	install1 := ident.AnonymousID()
 	emit() // signed out: must not resolve to A
 	_ = ident.SetCloudUserID(context.Background(), "user_B")
 	emit()
@@ -312,8 +366,8 @@ func TestAccountSwitchNeverReusesTheFirstAccountsInstallID(t *testing.T) {
 		t.Fatalf("signed-out events reused the install ID bound to A: %v (install0=%s install1=%s)", got, install0, install1)
 	}
 	// The desktop bootstrap and the phone read the same ID from disk.
-	if disk, _ := loadOrCreateInstallID(dir); disk != install1 {
-		t.Fatalf("install id on disk = %s, want %s", disk, install1)
+	if disk, _ := loadOrCreateInstallID(dir); disk != install0 {
+		t.Fatalf("install id on disk = %s, want %s", disk, install0)
 	}
 }
 
@@ -340,8 +394,8 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 		t.Fatal("same account replayed after restart must not rotate")
 	}
 	_ = second.SetCloudUserID(context.Background(), "")
-	rotated := second.InstallID()
-	if rotated == original {
+	rotated := second.AnonymousID()
+	if rotated == original || second.InstallID() != original {
 		t.Fatal("sign-out did not retire the bound install ID")
 	}
 
@@ -350,13 +404,41 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = third.SetCloudUserID(context.Background(), "")
-	if third.InstallID() != rotated {
+	if third.AnonymousID() != rotated {
 		t.Fatal("repeated signed-out push must not keep rotating")
 	}
 	_ = third.SetCloudUserID(context.Background(), "user_B")
 	_ = third.SetCloudUserID(context.Background(), "user_C") // account switch without a signed-out step
-	if third.InstallID() == rotated {
+	if third.AnonymousID() == rotated || third.InstallID() != original {
 		t.Fatal("direct account switch did not retire the install ID")
+	}
+}
+
+func TestBoundInstallKeepsAnonymousDistinctIDAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.SetCloudUserID(context.Background(), "user_A"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Startup events can export before the desktop restores the Cloud user.
+	second, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := second.Snapshot().DistinctID()
+	if want == first.InstallID() {
+		t.Fatal("bound install reused the install ID before Cloud identity was restored")
+	}
+	third, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := third.Snapshot().DistinctID(); got != want {
+		t.Fatalf("anonymous distinct ID changed across restart: got %q, want %q", got, want)
 	}
 }
 
@@ -454,7 +536,7 @@ func TestRotationFailureKeepsTheBindingAndSuppressesExport(t *testing.T) {
 	// Sign-out while the install ID cannot be replaced.
 	realWrite := ident.writeFile
 	ident.writeFile = func(path string, data []byte) error {
-		if filepath.Base(path) == installIDFile {
+		if filepath.Base(path) == anonymousIDFile {
 			return os.ErrPermission
 		}
 		return realWrite(path, data)
@@ -484,8 +566,8 @@ func TestRotationFailureKeepsTheBindingAndSuppressesExport(t *testing.T) {
 	if ident.Snapshot().OptedOut {
 		t.Fatal("snapshot still suppressed after recovery")
 	}
-	if ident.InstallID() == original || ident.ExportSuppressed() {
-		t.Fatalf("retry did not retire the ID or lift suppression (id=%s suppressed=%v)", ident.InstallID(), ident.ExportSuppressed())
+	if ident.InstallID() != original || ident.AnonymousID() == original || ident.ExportSuppressed() {
+		t.Fatalf("retry did not retire the anonymous ID or lift suppression (id=%s suppressed=%v)", ident.AnonymousID(), ident.ExportSuppressed())
 	}
 	if _, err := os.Stat(filepath.Join(dir, boundUserFile)); !os.IsNotExist(err) {
 		t.Fatalf("binding survived a completed sign-out: %v", err)

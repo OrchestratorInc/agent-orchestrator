@@ -53,6 +53,32 @@ func TestExpandWorkingDirectory(t *testing.T) {
 	}
 }
 
+// A session with no repository starts in the folder holding the template's
+// checkouts rather than AO's empty default folder.
+func TestStandaloneWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	for template, want := range map[string]string{
+		"~/work/{repo}":        "/home/ubuntu/work",
+		"$HOME/work/{repo}":    "/home/ubuntu/work",
+		"/srv/{repo}/main":     "/srv",
+		"~/work/{repo}-api":    "/home/ubuntu/work",
+		"~/stacks":             "/home/ubuntu/stacks",
+		" ~/work/{repo}/src/ ": "/home/ubuntu/work",
+	} {
+		got, err := StandaloneWorkingDirectory(template, "/home/ubuntu")
+		if err != nil || got != want {
+			t.Errorf("StandaloneWorkingDirectory(%q) = %q, %v; want %q", template, got, err, want)
+		}
+	}
+	// The home directory spelled out is refused like ~ (the session would write
+	// its agent settings and run Setup in home).
+	for _, template := range []string{"~/{repo}", "$HOME/{repo}", "/home/ubuntu/{repo}", "/home/ubuntu/{repo}/src", "/{repo}", "{repo}", "work/{repo}", ""} {
+		if got, err := StandaloneWorkingDirectory(template, "/home/ubuntu"); err == nil {
+			t.Errorf("StandaloneWorkingDirectory(%q) = %q, want an error", template, got)
+		}
+	}
+}
+
 // The template's checkout at the configured directory is adopted onto the
 // session branch, and a restarted worker keeps it without switching again.
 func TestResolveWorkingDirectoryAdoptsMatchingCheckout(t *testing.T) {
@@ -214,5 +240,17 @@ func TestDisplayPath(t *testing.T) {
 		if got := DisplayPath(tc.dir, tc.home); got != tc.want {
 			t.Errorf("DisplayPath(%q, %q) = %q, want %q", tc.dir, tc.home, got, tc.want)
 		}
+	}
+}
+
+// The folder above {repo} must not be AO's own worker folder.
+func TestStandaloneWorkingDirectoryRefusesAOWorkerFolder(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".ao"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := StandaloneWorkingDirectory(root+"/{repo}", "/home/ubuntu"); err == nil {
+		t.Fatalf("StandaloneWorkingDirectory(%q) = %q, want an error", root+"/{repo}", got)
 	}
 }

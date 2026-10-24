@@ -32,7 +32,12 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	}
 	appendPermissionFlags(&args, cfg.Permissions)
 	if strings.TrimSpace(cfg.SystemPrompt) != "" {
-		args = append(args, "--append-system-prompt", cfg.SystemPrompt)
+		// Kimchi reads the flag's value as a file when one exists at that path.
+		file, err := acpdriver.SystemPromptFile(cfg, "kimchi")
+		if err != nil {
+			return nil, nil, err
+		}
+		args = append(args, "--append-system-prompt", file)
 	}
 	return args, nil, nil
 }

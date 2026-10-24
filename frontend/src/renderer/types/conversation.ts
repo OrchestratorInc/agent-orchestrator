@@ -45,7 +45,8 @@ export type ActivityKind =
 	| "system"
 	| "mcp_tool"
 	| "auto_review"
-	| "user_input";
+	| "user_input"
+	| "ao_action";
 
 /**
  * `cancelled` means the enclosing turn stopped before the provider completed the
@@ -431,6 +432,25 @@ export interface ArtifactRef {
 }
 
 /**
+ * A daemon-confirmed AO mutation. `action` is the only classifier. Command
+ * text and tool prose never promote an attempt into one of these.
+ */
+export interface AOActionDetail {
+	action?: string;
+	operationId?: string;
+	sourceSessionId?: string;
+	targetSessionId?: string;
+	displayName?: string;
+	previousDisplayName?: string;
+	harness?: string;
+	previousHarness?: string;
+	href?: string;
+	prNumber?: number;
+	prTitle?: string;
+	error?: string;
+}
+
+/**
  * A `system` activity's discriminator and the fields that belong to it.
  *
  * The kind is a general bucket, so the daemon stamps the event rather than leaving
@@ -447,6 +467,7 @@ export interface SystemEventDetail {
 		| "plan"
 		| "context.reset"
 		| "context.boundary"
+		| "provider_switch"
 		| "render"
 		| "artifact"
 		| "workspace.setup"
@@ -460,6 +481,20 @@ export interface SystemEventDetail {
 	setupStatus?: "succeeded" | "failed" | "timed_out";
 	/** workspace.setup: the 1-based Setup step that failed or timed out. */
 	setupStep?: number;
+	/** provider_switch */
+	sourceHarness?: string;
+	targetHarness?: string;
+	sourceModel?: string;
+	targetModel?: string;
+	targetEffort?: string;
+	/** The Claude Code compaction window the target started with, such as "200k". */
+	targetAutoCompactWindow?: string;
+	/** The permission mode the target started in. */
+	permissionMode?: ApprovalMode;
+	/** The chat's own mode, when the target could not run in it; a switch away goes back to it. */
+	chatPermissionMode?: ApprovalMode;
+	/** provider_switch: drawn before the daemon has switched, so the line shows it is still in progress. Never stored. */
+	switching?: boolean;
 	/** workspace.setup: a failed step's command, the user and groups it ran as, where, and its full log. */
 	setupFailure?: { command?: string; user?: string; groups?: string[]; dir?: string; logPath?: string };
 	/** workspace.setup: why a failed step likely failed (no Docker, no sudo, a refused path). */
@@ -601,7 +636,8 @@ export interface ConversationActivity {
 		AutoReviewDetail &
 		UserInputDetail &
 		SystemEventDetail &
-		PlanDetail;
+		PlanDetail &
+		AOActionDetail;
 	/**
 	 * The provider's identifier for an approval. Resolving matches on this, so a
 	 * card left on screen cannot answer a request that replaced it.
@@ -639,6 +675,12 @@ export interface TurnSettings {
 	model?: string;
 	reasoningEffort?: string;
 	approvalMode?: ApprovalMode;
+	/** Ask for the provider's faster tier, on models that offer one. */
+	fastMode?: boolean;
+	/** Ask the provider to plan rather than act, where AO sets that per turn. */
+	planMode?: boolean;
+	/** Where Claude Code compacts on its own. Unset leaves it to Claude Code. */
+	autoCompactWindow?: "200k" | "1m";
 }
 
 /** One model the provider offers for this session. */
@@ -651,6 +693,8 @@ export interface ChatModel {
 	/** Reasoning levels this model supports, in the provider's order. */
 	efforts?: string[];
 	defaultEffort?: string;
+	/** The model can run on the provider's faster tier. */
+	supportsFast?: boolean;
 }
 
 /** One provider-owned setting advertised for this live chat session. */

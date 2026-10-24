@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { prepareDesktopReleaseNotes } from "../lib/desktop-release-notes";
+import { normalizeReleaseNotes } from "../../shared/update-telemetry";
 
 it("removes contributor handles and the comparison footer while retaining linked PR numbers", () => {
 	const notes = [
@@ -56,4 +57,29 @@ it("cleans release notes published after the repository moved to OrchestratorInc
 		"",
 		"- Fix update links [#6228](https://github.com/OrchestratorInc/agent-orchestrator/pull/6228)",
 	].join("\n"));
+});
+
+// releases.atom delivers the same body as HTML; after normalization the
+// renderer cleanup must give the same result as for the Markdown body.
+it("cleans HTML feed notes the same way as the Markdown release body", () => {
+	const pull = "https://github.com/OrchestratorInc/agent-orchestrator/pull/124";
+	const compare = "https://github.com/OrchestratorInc/agent-orchestrator/compare/v0.14.2...v0.14.3";
+	const html = [
+		"<h3>Fixed</h3>",
+		"<ul>",
+		`<li>Update dependencies by <a class="user-mention notranslate" href="https://github.com/apps/dependabot">@dependabot[bot]</a> in <a href="${pull}">#124</a></li>`,
+		"</ul>",
+		`<p><strong>Full Changelog</strong>: <a class="commit-link" href="${compare}"><tt>v0.14.2...v0.14.3</tt></a></p>`,
+	].join("\n");
+	const markdown = [
+		"### Fixed",
+		"",
+		`- Update dependencies by @dependabot[bot] in [#124](${pull})`,
+		"",
+		`**Full Changelog**: ${compare}`,
+	].join("\n");
+
+	const expected = `### Fixed\n\n- Update dependencies [#124](${pull})`;
+	expect(prepareDesktopReleaseNotes(normalizeReleaseNotes(html) ?? "")).toBe(expected);
+	expect(prepareDesktopReleaseNotes(normalizeReleaseNotes(markdown) ?? "")).toBe(expected);
 });

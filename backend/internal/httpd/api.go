@@ -78,8 +78,7 @@ type APIDeps struct {
 	Installer controllers.Installer
 	AgentAuth controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
-	GitHub            controllers.GitHubPATService
-	AgentSwitchPolicy AgentSwitchPolicyControl
+	GitHub controllers.GitHubPATService
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
@@ -265,7 +264,15 @@ func (a *API) Register(root chi.Router) {
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					// A clone downloads the whole repository inside the request,
+					// which takes minutes for a large repository.
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
+						pattern == "/api/v1/projects/clone/prepare" {
+						clone.ServeHTTP(w, req)
+						return
+					}
 					// A spawn, an orchestrator start or a restore runs the project's
 					// Setup inside the request, and a Setup step may take far longer
 					// than one REST request: the operation extends this budget by its
@@ -350,6 +357,7 @@ func attachmentUploadRoute(req *http.Request) bool {
 		"/api/v1/orchestrators/delegate",
 		"/api/v1/sessions/{sessionId}/send",
 		"/api/v1/sessions/{sessionId}/conversation/messages",
+		"/api/v1/sessions/{sessionId}/provider-switch",
 		"/api/v1/sessions/{sessionId}/conversation/steer",
 		"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",

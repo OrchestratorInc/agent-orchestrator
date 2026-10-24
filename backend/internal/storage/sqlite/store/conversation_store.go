@@ -540,6 +540,7 @@ func insertConversationBranchTx(
 		ProviderScopeID:        branch.ProviderScopeID,
 		ProviderIdsScoped:      boolInt(branch.ProviderIDsScoped),
 		CreatedAt:              now,
+		HandoffNote:            branch.HandoffNote,
 	}); err != nil {
 		return fmt.Errorf("insert conversation branch %s: %w", branch.ID, err)
 	}
@@ -576,6 +577,47 @@ func (s *Store) CreateAndActivateConversationBranch(
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
 		}
 		return nil
+	})
+}
+
+// CommitProviderSwitch atomically publishes the fresh provider branch and the
+// target harness/controller metadata. Provider startup happens before this
+// method; until it commits, the old branch remains the durable owner.
+func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, settings domain.ConversationSettings, activity domain.ConversationActivity) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "commit provider switch", func(q *gen.Queries) error {
+		if err := insertAndActivateConversationBranchTx(ctx, q, branch, rec.UpdatedAt); err != nil {
+			return err
+		}
+		sessionRows, err := q.ActivateConversationBranchSession(ctx, gen.ActivateConversationBranchSessionParams{
+			ProviderConversationID: branch.ProviderConversationID, ControllerGeneration: generation, UpdatedAt: rec.UpdatedAt, ID: rec.ID,
+		})
+		if err != nil {
+			return fmt.Errorf("move session controller: %w", err)
+		} else if sessionRows != 1 {
+			return fmt.Errorf("move session controller: live chat session %s not found", rec.ID)
+		}
+		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+			return fmt.Errorf("update switched session: %w", err)
+		}
+		if err := q.UpdateConversationTurnSettings(ctx, gen.UpdateConversationTurnSettingsParams{
+			Model: nullableString(settings.Model), ReasoningEffort: nullableString(settings.ReasoningEffort),
+			ApprovalMode: nullableString(string(settings.ApprovalMode)), OpencodeMode: settings.OpenCodeMode,
+			AutoCompactWindow: settings.AutoCompactWindow, UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID,
+		}); err != nil {
+			return fmt.Errorf("save switched conversation settings: %w", err)
+		}
+		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{UpdatedAt: rec.UpdatedAt, ID: branch.ConversationID})
+		if err != nil {
+			return fmt.Errorf("allocate provider switch activity sequence: %w", err)
+		}
+		return q.InsertConversationActivity(ctx, gen.InsertConversationActivityParams{
+			ID: activity.ID, ConversationID: branch.ConversationID, Sequence: sequence,
+			Kind: activity.Kind, Status: activity.Status, Summary: activity.Summary,
+			DetailJson: string(activity.Detail), RequestID: activity.RequestID,
+			ProviderItemID: activity.ProviderItemID, CreatedAt: rec.UpdatedAt, UpdatedAt: rec.UpdatedAt,
+		})
 	})
 }
 
@@ -1053,6 +1095,18 @@ func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectI
 		return domain.ConversationRecord{}, fmt.Errorf("select project conversation: %w", err)
 	}
 	return conversationToDomain(row), nil
+}
+
+// SessionForActivityProviderItem finds the session holding an action activity.
+func (s *Store) SessionForActivityProviderItem(ctx context.Context, providerItemID string) (domain.SessionID, bool, error) {
+	sessionID, err := s.qr.SelectSessionForActivityProviderItem(ctx, providerItemID)
+	if errors.Is(err, sql.ErrNoRows) || sessionID == nil {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return *sessionID, true, nil
 }
 
 // ConversationForSession looks up a session's conversation.
@@ -1900,6 +1954,8 @@ func (s *Store) SetConversationSettings(
 		OpencodeMode:    settings.OpenCodeMode,
 		UpdatedAt:       now,
 		ID:              conversationID,
+
+		AutoCompactWindow: settings.AutoCompactWindow,
 	}); err != nil {
 		return fmt.Errorf("set conversation settings for %s: %w", conversationID, err)
 	}
@@ -2686,7 +2742,22 @@ func (s *Store) AppendAssistantDelta(
 		return nil
 
 	case errors.Is(err, sql.ErrNoRows):
-		turnID := s.turnIDFor(ctx, conversationID, providerTurnID)
+		var turnID sql.NullString
+		streaming := int64(1)
+		if providerTurnID != "" {
+			turn, turnErr := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+				ConversationID: conversationID,
+				ProviderTurnID: providerTurnID,
+			})
+			if turnErr == nil {
+				turnID = sql.NullString{String: turn.ID, Valid: true}
+				if turn.State.Terminal() {
+					streaming = 0
+				}
+			} else if !errors.Is(turnErr, sql.ErrNoRows) {
+				return fmt.Errorf("lookup turn %s for assistant delta: %w", providerTurnID, turnErr)
+			}
+		}
 		return s.inTx(ctx, "insert assistant message", func(q *gen.Queries) error {
 			sequence, seqErr := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
 				UpdatedAt: now,
@@ -2703,7 +2774,7 @@ func (s *Store) AppendAssistantDelta(
 				Role:           domain.MessageRoleAssistant,
 				Origin:         domain.MessageOriginProvider,
 				Text:           delta,
-				Streaming:      1,
+				Streaming:      streaming,
 				ProviderItemID: providerItemID,
 				CreatedAt:      now,
 				UpdatedAt:      now,
@@ -2716,7 +2787,8 @@ func (s *Store) AppendAssistantDelta(
 }
 
 // SettleAssistantMessage replaces streamed text with the provider's settled text
-// and stops the streaming marker.
+// and stops the streaming marker. An empty settle means the provider settled
+// nothing, so it keeps the streamed text.
 func (s *Store) SettleAssistantMessage(
 	ctx context.Context,
 	conversationID, providerItemID, providerTurnID, text, messageID string,
@@ -2725,7 +2797,7 @@ func (s *Store) SettleAssistantMessage(
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
-	_, err := q.SelectConversationMessageByProviderItem(ctx,
+	existing, err := q.SelectConversationMessageByProviderItem(ctx,
 		gen.SelectConversationMessageByProviderItemParams{
 			ConversationID: conversationID,
 			ProviderItemID: providerItemID,
@@ -2759,6 +2831,9 @@ func (s *Store) SettleAssistantMessage(
 	if err != nil {
 		return fmt.Errorf("lookup message %s: %w", providerItemID, err)
 	}
+	if text == "" {
+		text = existing.Text
+	}
 
 	if err := q.SettleConversationMessage(ctx, gen.SettleConversationMessageParams{
 		Text:           text,
@@ -2771,7 +2846,35 @@ func (s *Store) SettleAssistantMessage(
 	return nil
 }
 
+// ActivityStatusByProviderItem reports the status of one provider item.
+// Missing rows return ok=false.
+func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	row, err := s.qr.SelectConversationActivityByProviderItem(ctx, gen.SelectConversationActivityByProviderItemParams{
+		ConversationID: conversationID,
+		ProviderItemID: providerItemID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return row.Status, true, nil
+}
+
+func aoActionStatusSettled(status domain.ActivityStatus) bool {
+	switch status {
+	case domain.ActivityStatusCompleted, domain.ActivityStatusFailed, domain.ActivityStatusCancelled, domain.ActivityStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // UpsertActivity records or updates a non-message timeline entry.
+// A running ao_action does not replace a completed, failed, cancelled, or
+// resolved row. The admission write and the terminal callback take this lock
+// separately, so the decision uses the row read in this call.
 func (s *Store) UpsertActivity(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -2784,12 +2887,17 @@ func (s *Store) UpsertActivity(
 	detail := string(activity.Detail)
 
 	if activity.ProviderItemID != "" {
-		_, err := q.SelectConversationActivityByProviderItem(ctx,
+		row, err := q.SelectConversationActivityByProviderItem(ctx,
 			gen.SelectConversationActivityByProviderItemParams{
 				ConversationID: conversationID,
 				ProviderItemID: activity.ProviderItemID,
 			})
 		if err == nil {
+			if activity.Kind == domain.ActivityKindAOAction &&
+				activity.Status == domain.ActivityStatusRunning &&
+				aoActionStatusSettled(row.Status) {
+				return nil
+			}
 			if settleErr := q.SettleConversationActivity(ctx,
 				gen.SettleConversationActivityParams{
 					Status:         activity.Status,
@@ -3866,6 +3974,8 @@ func conversationToDomain(row gen.Conversation) domain.ConversationRecord {
 			ReasoningEffort: row.ReasoningEffort.String,
 			ApprovalMode:    domain.PermissionMode(row.ApprovalMode.String),
 			OpenCodeMode:    row.OpencodeMode,
+
+			AutoCompactWindow: row.AutoCompactWindow,
 		},
 		ProviderTitle: row.ProviderTitle,
 		AppliedTitle:  row.AppliedTitle,
@@ -3915,6 +4025,7 @@ func conversationBranchToDomain(row gen.SelectConversationBranchRow) domain.Conv
 		ProviderIDsScoped:      row.ProviderIdsScoped != 0,
 		Active:                 row.Active,
 		CreatedAt:              row.CreatedAt,
+		HandoffNote:            row.HandoffNote,
 	}
 }
 
@@ -3937,6 +4048,7 @@ func conversationBranchListToDomain(row gen.SelectConversationBranchesRow) domai
 		ProviderIDsScoped:      row.ProviderIdsScoped != 0,
 		Active:                 row.Active,
 		CreatedAt:              row.CreatedAt,
+		HandoffNote:            row.HandoffNote,
 	}
 }
 
@@ -4529,4 +4641,27 @@ func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now t
 		_, err = q.ClearReviewChatController(ctx, gen.ClearReviewChatControllerParams{ID: reviewID, UpdatedAt: now})
 		return err
 	})
+}
+
+// RebindUnansweredBranchProvider points a branch that never had a turn at the
+// provider conversation that replaced one its provider never saved.
+func (s *Store) RebindUnansweredBranchProvider(ctx context.Context, conversationID, branchID, previous, provider string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	res, err := s.writeDB.ExecContext(ctx, `
+UPDATE conversation_branches SET provider_conversation_id = ?
+WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
+  AND NOT EXISTS (SELECT 1 FROM conversation_turns WHERE conversation_id = ? AND branch_id = ?)`,
+		provider, branchID, conversationID, previous, conversationID, branchID)
+	if err != nil {
+		return fmt.Errorf("rebind branch %s provider: %w", branchID, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rebind branch %s provider: %w", branchID, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("rebind branch %s provider: %d rows", branchID, rows)
+	}
+	return nil
 }

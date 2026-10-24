@@ -52,11 +52,6 @@ const (
 	maxDisplayNameLen = 100
 	maxIdempotencyKey = 128
 
-	// Agent-authored handoffs are deliberately bounded. Deterministic AO
-	// context is stored separately and does not need to be repeated here.
-	maxAgentHandoffBodyBytes = 256 << 10
-	maxAgentHandoffBytes     = 64 << 10
-
 	// Attachment limits guard the daemon against oversized spawn bodies. Files
 	// are pasted/dropped into the task brief and inlined as base64 in the JSON
 	// body, so the caps are deliberately conservative.
@@ -98,10 +93,6 @@ type SessionService interface {
 	Restore(ctx context.Context, id domain.SessionID) (sessionsvc.RestoreOutcome, error)
 	ExitAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ExitAgentOutcome, error)
 	ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error)
-	SwitchAgent(ctx context.Context, id domain.SessionID, in sessionsvc.SwitchAgentInput) (domain.AgentSwitch, error)
-	RecoverAgentSwitch(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID) (domain.AgentSwitch, error)
-	ListAgentSwitches(ctx context.Context, id domain.SessionID) ([]domain.AgentSwitch, error)
-	SubmitAgentHandoff(ctx context.Context, id domain.SessionID, switchID domain.AgentSwitchID, sourceGenerationID domain.AgentGenerationID, handoff json.RawMessage) (domain.AgentSwitch, error)
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 	DeleteArtifacts(ctx context.Context, id domain.SessionID) error
 	RollbackSpawn(ctx context.Context, id domain.SessionID) (sessionsvc.RollbackOutcome, error)
@@ -268,10 +259,6 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/restore", c.restore)
 	r.Post("/sessions/{sessionId}/exit-agent", c.exitAgent)
 	r.Post("/sessions/{sessionId}/resume-agent", c.resumeAgent)
-	r.Post("/sessions/{sessionId}/switch-agent", c.switchAgent)
-	r.Get("/sessions/{sessionId}/agent-switches", c.listAgentSwitches)
-	r.Post("/sessions/{sessionId}/agent-switches/{switchId}/recover", c.recoverAgentSwitch)
-	r.Post("/sessions/{sessionId}/agent-switches/{switchId}/handoff", c.submitAgentHandoff)
 	r.Get("/sessions/{sessionId}/interface-transition", c.interfaceTransitionStatus)
 	r.Post("/sessions/{sessionId}/interface-transition", c.startInterfaceTransition)
 	r.Delete("/sessions/{sessionId}/interface-transition", c.cancelInterfaceTransition)
@@ -763,6 +750,10 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			}
 		},
 		ModifyResponse: func(res *http.Response) error {
+			// Remote proxies publish this app on a separate origin, where the
+			// sandbox is removed in favor of their existing preview policy.
+			res.Header.Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
+			res.Header.Set("X-AO-Preview-API-Sandbox", "1")
 			if location := res.Header.Get("Location"); location != "" {
 				if redirect, parseErr := url.Parse(location); parseErr == nil && redirect.IsAbs() && isPreviewLoopback(redirect.Hostname()) {
 					if redirect.Port() != target.Port() {
@@ -958,6 +949,8 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 }
 
 func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.File, info fs.FileInfo, clean string) {
+	sandboxLegacyPreview(w, r)
+
 	if !previewutil.IsMarkdownPath(clean) || previewRawRequested(r) {
 		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
@@ -979,8 +972,26 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Method != http.MethodHead {
-		_, _ = w.Write(rendered) //nolint:gosec // G705: preview content is workspace-local and agent-trusted
+		_, _ = w.Write(rendered) //nolint:gosec // G705: legacy documents are sandboxed; isolated previews have no daemon API authority
 	}
+}
+
+// Legacy API URLs must not give workspace HTML, Markdown or SVG the API's
+// origin. The sandbox permits scripts/forms but deliberately omits same-origin.
+// Normal isolated preview origins retain their own module/asset behavior.
+func sandboxLegacyPreview(w http.ResponseWriter, r *http.Request) {
+	if _, ok := previewutil.SessionIDFromHost(r.Host); ok {
+		return
+	}
+	if _, ok := previewutil.SessionIDFromArtifactHost(r.Host); ok {
+		return
+	}
+	if _, ok := previewutil.SessionIDFromInlineArtifactHost(r.Host); ok {
+		return
+	}
+	w.Header().Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
+	w.Header().Set("X-AO-Preview-API-Sandbox", "1")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
 func previewRawRequested(r *http.Request) bool {
@@ -2068,103 +2079,6 @@ func (c *SessionsController) exitAgent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (c *SessionsController) switchAgent(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/switch-agent")
-		return
-	}
-	var in SwitchAgentRequest
-	if err := decodeJSONStrict(r, &in); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
-		return
-	}
-	targetHarness := domain.AgentHarness(strings.TrimSpace(string(in.TargetHarness)))
-	if targetHarness == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "TARGET_HARNESS_REQUIRED", "targetHarness is required", nil)
-		return
-	}
-	model := strings.TrimSpace(domain.SanitizeControlChars(in.Model))
-	if utf8.RuneCountInString(model) > maxModelLen {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "MODEL_TOO_LONG", "Model must be 256 characters or fewer", nil)
-		return
-	}
-	idempotencyKey := strings.TrimSpace(in.IdempotencyKey)
-	if len(idempotencyKey) > maxIdempotencyKey {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "IDEMPOTENCY_KEY_TOO_LONG", "idempotencyKey is too long", nil)
-		return
-	}
-	switchRecord, err := c.Svc.SwitchAgent(r.Context(), sessionID(r), sessionsvc.SwitchAgentInput{
-		TargetHarness:  targetHarness,
-		Model:          model,
-		IdempotencyKey: idempotencyKey,
-	})
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusAccepted, AgentSwitchResponse{Switch: agentSwitchView(switchRecord)})
-}
-
-func (c *SessionsController) listAgentSwitches(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/agent-switches")
-		return
-	}
-	switches, err := c.Svc.ListAgentSwitches(r.Context(), sessionID(r))
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, ListAgentSwitchesResponse{Switches: agentSwitchViews(switches)})
-}
-
-func (c *SessionsController) recoverAgentSwitch(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/agent-switches/{switchId}/recover")
-		return
-	}
-	switchRecord, err := c.Svc.RecoverAgentSwitch(r.Context(), sessionID(r), agentSwitchID(r))
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusAccepted, AgentSwitchResponse{Switch: agentSwitchView(switchRecord)})
-}
-
-func (c *SessionsController) submitAgentHandoff(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/agent-switches/{switchId}/handoff")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxAgentHandoffBodyBytes)
-	var in SubmitAgentHandoffRequest
-	if err := decodeJSON(r, &in); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
-		return
-	}
-	sourceGenerationID := domain.AgentGenerationID(strings.TrimSpace(string(in.SourceGenerationID)))
-	if sourceGenerationID == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SOURCE_GENERATION_REQUIRED", "sourceGenerationId is required", nil)
-		return
-	}
-	if len(bytes.TrimSpace(in.Handoff)) == 0 {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "HANDOFF_REQUIRED", "handoff is required", nil)
-		return
-	}
-	if len(in.Handoff) > maxAgentHandoffBytes {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "HANDOFF_TOO_LARGE", "handoff must be no larger than 64 KiB", nil)
-		return
-	}
-	switchRecord, err := c.Svc.SubmitAgentHandoff(
-		r.Context(), sessionID(r), agentSwitchID(r), sourceGenerationID, in.Handoff,
-	)
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, AgentSwitchResponse{Switch: agentSwitchView(switchRecord)})
-}
-
 func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/kill")
@@ -2451,6 +2365,9 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		AgentSessionID:               agentSessionID,
 		LatestUserPrompt:             capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestUserPrompt)), 16<<10),
 		LatestAssistantUpdate:        capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.LatestAssistantUpdate)), 16<<10),
+		FinalAssistantMessage:        capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.FinalAssistantMessage)), 16<<10),
+		TurnUserRequest:              capActivityText(domain.SanitizeControlChars(strings.TrimSpace(in.TurnUserRequest)), 16<<10),
+		ExpectedHarness:              domain.AgentHarness(capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.Harness)))),
 		ConversationCheckpointOrigin: checkpointOrigin,
 		CoordinationID:               capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.CoordinationID))),
 		ProviderTurnID:               capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.ProviderTurnID))),
@@ -2718,10 +2635,6 @@ func sessionID(r *http.Request) domain.SessionID {
 	return domain.SessionID(chi.URLParam(r, "sessionId"))
 }
 
-func agentSwitchID(r *http.Request) domain.AgentSwitchID {
-	return domain.AgentSwitchID(chi.URLParam(r, "switchId"))
-}
-
 func orchestratorID(r *http.Request) domain.SessionID {
 	return domain.SessionID(chi.URLParam(r, "id"))
 }
@@ -2973,36 +2886,7 @@ func sessionView(r *http.Request, s domain.Session) SessionView {
 		PRs:           sessionPRFacts(s.PRs),
 		ArtifactFiles: sessionArtifactFiles(r, s),
 	}
-	if s.ActiveAgentSwitch != nil {
-		active := agentSwitchView(*s.ActiveAgentSwitch)
-		view.ActiveAgentSwitch = &active
-	}
 	return view
-}
-
-func agentSwitchView(s domain.AgentSwitch) AgentSwitchView {
-	return AgentSwitchView{
-		ID:                      s.ID,
-		SessionID:               s.SessionID,
-		FromHarness:             s.FromHarness,
-		TargetHarness:           s.TargetHarness,
-		TargetStartMode:         s.TargetStartMode,
-		State:                   s.State,
-		AgentHandoffStatus:      s.AgentHandoffStatus,
-		SemanticHandoffIncluded: s.SemanticHandoffIncluded,
-		SourceTranscriptStatus:  s.SourceTranscriptStatus,
-		ErrorCode:               s.ErrorCode,
-		RequestedAt:             s.RequestedAt,
-		UpdatedAt:               s.UpdatedAt,
-	}
-}
-
-func agentSwitchViews(switches []domain.AgentSwitch) []AgentSwitchView {
-	out := make([]AgentSwitchView, 0, len(switches))
-	for _, agentSwitch := range switches {
-		out = append(out, agentSwitchView(agentSwitch))
-	}
-	return out
 }
 
 func sessionViews(r *http.Request, sessions []domain.Session) []SessionView {

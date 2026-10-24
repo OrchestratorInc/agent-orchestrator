@@ -1,6 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import {
@@ -11,15 +10,16 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
+import { renderChat as render } from "../../test/render-chat";
 
-function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-	return {
-		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
-	};
-}
+// The sign-in banner reads the session's account; these tests cover the chrome
+// without a daemon, so the account reads answer nothing.
+vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAccounts")>()),
+	useSessionAgentAccounts: () => ({ data: undefined }),
+	useAgentAccounts: () => ({ data: undefined }),
+	useAgentAccountActions: () => ({}),
+}));
 
 // The surface-level wiring: which snapshot fields produce which chrome, and — the part
 // that is easy to get wrong — which combinations stay quiet.
@@ -305,7 +305,7 @@ describe("empty project session permissions", () => {
 		const picker = screen.getByRole("button", { name: "Approval policy for the next turn" });
 		expect(picker).toBeEnabled();
 		await user.click(picker);
-		await user.click(screen.getByRole("menuitem", { name: "Remember for this project" }));
+		await user.click(screen.getByRole("menuitem", { name: /Remember for this project/ }));
 		expect(remember).toHaveBeenCalledWith("auto");
 	});
 });

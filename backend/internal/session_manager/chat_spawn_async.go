@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -116,13 +115,25 @@ const asyncChatSpawnBudget = 10 * time.Minute
 func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) {
 	id := in.record.ID
 	totalStarted := time.Now()
-	taskName, cancelNaming := m.startTaskNaming(ctx, in.cfg, in.record, in.project.Config)
-	defer cancelNaming()
+	taskName, cancelNaming := m.startTaskNaming(in.cfg, in.record, in.project.Config)
+	namingHandedOff := false
+	defer func() {
+		if !namingHandedOff {
+			cancelNaming()
+		}
+	}()
 	stageStarted := totalStarted
 	var ws ports.WorkspaceInfo
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
+	if reusePublishedWorkspace {
+		if missing, _ := workspacePathMissing(in.record.Metadata.WorkspacePath); missing {
+			// A saved worktree that no longer exists (removed by hand, or left
+			// mid-move by an older build) is created again, with every step shown.
+			reusePublishedWorkspace, in.record.ProvisionSteps = false, nil
+		}
+	}
 	plan := provisionPlan(in, reusePublishedWorkspace)
 	progress := m.startProvisionProgress(ctx, id, plan)
 	if reusePublishedWorkspace {
@@ -154,20 +165,6 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	releaseWorkspaceGate := sync.OnceFunc(m.acquireWorkspaceGate(in.cfg.ProjectID))
 	ctx = context.WithValue(ctx, spawnWorkspaceGateKey{}, releaseWorkspaceGate)
 	defer releaseWorkspaceGate()
-	if in.retry {
-		info, recovered, recoveryErr := m.recoverTaskNaming(ctx, in.record)
-		if recoveryErr != nil {
-			m.failAsyncChatSpawn(ctx, id, recoveryErr)
-			return
-		}
-		if recovered {
-			ws = info.Root
-			reusePublishedWorkspace = true
-			if in.projectKind == domain.ProjectKindWorkspace {
-				workspaceProject = &info
-			}
-		}
-	}
 	if ws.Path == "" {
 		baseRefs := m.refreshDefaultBranchesBestEffort(ctx, in.project)
 		m.logAsyncChatSpawnStage(id, "default_branch_refresh", stageStarted)
@@ -190,47 +187,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
-	if reusePublishedWorkspace && ws.Branch != "" && slices.Contains(plan, domain.SessionProvisionStepWorktree) {
-		namer, ok := m.workspace.(ports.WorkspaceTaskNamer)
-		if !ok {
-			m.failAsyncChatSpawn(ctx, id, errors.New("workspace cannot repair interrupted task naming"))
-			return
-		}
-		info := ports.WorkspaceProjectInfo{Root: ws}
-		if workspaceProject != nil {
-			info = *workspaceProject
-			for i := range info.Worktrees {
-				info.Worktrees[i].Path = filepath.Join(ws.Path, filepath.FromSlash(info.Worktrees[i].RelativePath))
-			}
-		}
-		info, repairErr := namer.RepairTaskWorkspace(ctx, info)
-		persistErr := m.persistTaskWorkspace(ctx, id, info, in.record.Metadata.WorkspacePath)
-		ws = info.Root
-		if workspaceProject != nil {
-			workspaceProject = &info
-		}
-		if err := errors.Join(repairErr, persistErr); err != nil {
-			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
-			return
-		}
-	}
 	m.logAsyncChatSpawnStage(id, "workspace_create", stageStarted)
-	if taskName != nil && !reusePublishedWorkspace {
-		// A saved recovery path is not proof setup finished. Require its checkpoint
-		// before naming publishes that path so retry can resume unfinished stages.
-		if err := m.store.SetSessionProvisionSteps(ctx, id, progress.steps, m.clock()); err != nil {
-			m.cleanupAsyncChatWorkspace(ctx, id, ws, workspaceProject)
-			m.failAsyncChatSpawn(ctx, id, err)
-			return
-		}
-		stageStarted = time.Now()
-		ws, workspaceProject, err = m.nameTaskWorkspace(ctx, in.record, ws, workspaceProject, taskName())
-		if err != nil {
-			m.failAsyncChatSpawn(ctx, id, wrapSpawnStage(id, ErrWorkspaceCreate, err))
-			return
-		}
-		m.logAsyncChatSpawnStage(id, "workspace_name", stageStarted)
-	}
 	progress.complete(ctx, domain.SessionProvisionStepWorktree)
 	stageStarted = time.Now()
 	if !reusePublishedWorkspace || slices.Contains(plan, domain.SessionProvisionStepSetup) {
@@ -308,6 +265,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
+	// The agent owns the checkout now; nothing below touches the workspace.
+	releaseWorkspaceGate()
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
@@ -322,14 +281,16 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "mark_ready", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepAgent)
+	// Only a start that succeeded gets a generated branch name.
+	namingHandedOff = true
+	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
 	m.logAsyncChatSpawnStage(id, "total", totalStarted)
 }
 
 // provisionProgress publishes a start's checklist. Finishing one stage and
 // starting the next is a single write, so the checklist never shows a gap
 // between them. Updates are best effort; a missed completion can replay a stage
-// on retry. Naming requires a durable initial checkpoint before publishing a
-// moved workspace path, so a retry never mistakes that path for completed setup.
+// on retry.
 type provisionProgress struct {
 	m     *Manager
 	id    domain.SessionID
@@ -389,7 +350,7 @@ func provisionPlan(in asyncChatSpawn, reusePublishedWorkspace bool) []domain.Ses
 			plan = append(plan, domain.SessionProvisionStepFetch)
 		}
 		plan = append(plan, domain.SessionProvisionStepWorktree)
-		if in.cfg.NameFromPrompt || slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
+		if slices.ContainsFunc(in.project.Config.PostCreate, func(command string) bool {
 			return strings.TrimSpace(command) != ""
 		}) {
 			plan = append(plan, domain.SessionProvisionStepSetup)
@@ -510,16 +471,25 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		return RestoreResult{}, false, wrapSpawnStage(rec.ID, ErrSpawnSystemPrompt, err)
 	}
 	config := restoredAgentConfig(rec, project.Config)
-	if rec.Metadata.Model != "" {
-		config.Model = rec.Metadata.Model
-	}
-	if rec.Metadata.Permissions != "" {
-		config.Permissions = rec.Metadata.Permissions
-	}
 	cfg := ports.SpawnConfig{
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
+	}
+	if rec.Harness == domain.HarnessCodex {
+		// ChatUI can change the saved model independently of effort, and provider
+		// capabilities can change between attempts. Validate the actual pair
+		// without merging today's project defaults back into the saved choices.
+		cfg.EffortOverride = true
+		resolved, err := m.resolveAgentConfig(ctx, cfg, domain.ProjectConfig{})
+		if errors.Is(err, ports.ErrUnsupportedEffort) {
+			cfg.AgentConfig.Effort = "" // use this model's provider default
+			resolved, err = m.resolveAgentConfig(ctx, cfg, domain.ProjectConfig{})
+		}
+		if err != nil {
+			return RestoreResult{}, false, err
+		}
+		cfg.AgentConfig = resolved
 	}
 	projectKind := projectKindForSession(project, rec.ProjectID)
 	branch := rec.Metadata.Branch
@@ -614,9 +584,13 @@ func (m *Manager) runInBackground(work func()) {
 // WaitBackgroundWorkers waits for daemon-owned spawn and task-preparation work
 // after the daemon context has been cancelled.
 func (m *Manager) WaitBackgroundWorkers(ctx context.Context) error {
+	return waitForWorkers(ctx, &m.backgroundWorkers)
+}
+
+func waitForWorkers(ctx context.Context, workers *sync.WaitGroup) error {
 	done := make(chan struct{})
 	go func() {
-		m.backgroundWorkers.Wait()
+		workers.Wait()
 		close(done)
 	}()
 	select {

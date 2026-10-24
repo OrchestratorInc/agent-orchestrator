@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,12 +37,21 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 // JSON a client actually parses is what is checked.
 
 type fakeConversationService struct {
+	switchRequest     domain.ProviderSwitchRequest
+	switchErr         error
+	history           []domain.HandoffTurn
+	historyTotal      int
+	historyOffset     int
+	historyLimit      int
+	historyErr        error
 	viewID            string
 	viewActive        bool
 	viewSessionID     domain.SessionID
 	viewCalls         int
 	snapshot          chatsvc.Snapshot
 	sendErr           error
+	sendCtxErr        error
+	switchCtxErr      error
 	skills            []ports.ChatSkill
 	skillErr          error
 	configOptions     []ports.ChatConfigOption
@@ -145,8 +156,9 @@ func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (c
 	return f.snapshot, nil
 }
 
-func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
+func (f *fakeConversationService) Send(ctx context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	f.sent = message
+	f.sendCtxErr = ctx.Err()
 	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, f.sendErr
 }
 
@@ -239,6 +251,26 @@ func (f *fakeConversationService) ReloadMCPServers(
 	domain.SessionID,
 ) ([]domain.ConversationMCPServer, error) {
 	return f.mcpServers, f.reloadErr
+}
+
+func (f *fakeConversationService) SwitchProvider(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) error {
+	f.switchRequest = request
+	f.switchCtxErr = ctx.Err()
+	return f.switchErr
+}
+
+// SwitchProviderAndSend is the service's: a retry after the switch went through finds the target active.
+func (f *fakeConversationService) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, message ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	if err := f.SwitchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		return domain.ConversationTurn{}, false, err
+	}
+	turn, err := f.Send(ctx, id, message)
+	return turn, true, err
+}
+
+func (f *fakeConversationService) SessionHistory(_ context.Context, _ domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error) {
+	f.historyOffset, f.historyLimit = offset, limit
+	return f.history, f.historyTotal, f.historyErr
 }
 
 func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]ports.ChatSkill, error) {
@@ -768,6 +800,55 @@ func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	}
 	if _, present := detail["outputTruncated"]; present {
 		t.Error("untruncated output still carried the truncation flag")
+	}
+}
+
+func TestSnapshotOutputTruncationFollowsSelectedSource(t *testing.T) {
+	aggregateOutput := strings.Repeat("a", 64*1024)
+	aggregate, err := json.Marshal(map[string]any{
+		"output":          aggregateOutput,
+		"outputSource":    "aggregate",
+		"outputTruncated": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		stream          string
+		streamTruncated bool
+		wantSource      string
+		wantTruncated   bool
+	}{
+		{"uncut stream replaces capped aggregate", strings.Repeat("s", 60*1024), false, "stream", false},
+		{"capped stream replaces capped aggregate", strings.Repeat("s", 64*1024), true, "stream", true},
+		{"no stream keeps capped aggregate", "", false, "aggregate", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := conversationSnapshotBody(t, chatsvc.Snapshot{
+				SessionID: domain.SessionID("p1-1"),
+				Mode:      domain.SessionModeChat,
+				Activities: []domain.ConversationActivity{{
+					ID: "act-1", Kind: domain.ActivityKindCommand,
+					Status: domain.ActivityStatusCompleted, Summary: "run tests",
+					Detail: aggregate, CommandOutput: tc.stream,
+					CommandOutputTruncated: tc.streamTruncated,
+					CreatedAt:              time.Now().UTC(),
+				}},
+			})
+			detail := body["activities"].([]any)[0].(map[string]any)["detail"].(map[string]any)
+			wantOutput := aggregateOutput
+			if tc.stream != "" {
+				wantOutput = tc.stream
+			}
+			if detail["output"] != wantOutput || detail["outputSource"] != tc.wantSource {
+				t.Fatalf("output did not come from %s", tc.wantSource)
+			}
+			truncated, present := detail["outputTruncated"]
+			if tc.wantTruncated && truncated != true || !tc.wantTruncated && present {
+				t.Errorf("outputTruncated = %#v (present=%v), want truncated=%v", truncated, present, tc.wantTruncated)
+			}
+		})
 	}
 }
 

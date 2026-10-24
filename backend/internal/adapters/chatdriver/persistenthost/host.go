@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -34,6 +35,11 @@ const (
 	startupTimeout   = 10 * time.Second
 	// Host hello is local control-plane I/O and must not stall daemon recovery.
 	handshakeTimeout = time.Second
+	// A stopped provider gets providerStdinGrace (providerQuickGrace for a quick
+	// stop) to exit on stdin closing, then SIGTERM, then a kill at the deadline.
+	providerStdinGrace   = time.Second
+	providerQuickGrace   = 300 * time.Millisecond
+	providerStopDeadline = 3 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -139,6 +145,8 @@ type hello struct {
 	Version int    `json:"version"`
 	Token   string `json:"token"`
 	Action  string `json:"action"`
+	// QuickStop on a shutdown: see ShutdownQuick.
+	QuickStop bool `json:"quickStop,omitempty"`
 }
 
 type helloResponse struct {
@@ -506,6 +514,16 @@ func HostPID(dataDir, sessionID string) (int, bool) {
 // Missing/dead hosts are harmless; unknown live owners fail closed.
 // The protocol acknowledgement only confirms that shutdown was requested.
 func Shutdown(ctx context.Context, dataDir, sessionID string) error {
+	return shutdown(ctx, dataDir, sessionID, false)
+}
+
+// ShutdownQuick is Shutdown for a provider that gains nothing from the stdin
+// grace (session closed, or deaf to stdin). An older host waits the full grace.
+func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
+	return shutdown(ctx, dataDir, sessionID, true)
+}
+
+func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
 	d, err := readDescriptor(dataDir, sessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -527,7 +545,7 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	}
 	defer func() { _ = conn.Close() }()
 	finishHandshake := bindConnToContext(handshakeCtx, conn)
-	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown", QuickStop: quick}); err != nil {
 		return finishHandshake(err)
 	}
 	var response helloResponse
@@ -661,6 +679,11 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	stopProvider := func() {
 		_ = stdin.Close()
+		deadline := time.After(providerStopDeadline)
+		grace := providerStdinGrace
+		if h.quickStop.Load() {
+			grace = providerQuickGrace
+		}
 		select {
 		case <-providerDone:
 			// Wrapper adapters may exit before their provider child. The hosted
@@ -668,9 +691,30 @@ func Run(ctx context.Context, cfg Config) error {
 			// any descendant that did not follow stdin closure.
 			reapProvider()
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
-		case <-time.After(3 * time.Second):
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			return
+		case <-time.After(grace):
 		}
+		// Some agents (Cursor) ignore stdin closing and only exit on a signal.
+		_ = terminateProviderProcess(child)
+		// The provider's output can stay open after it exits when a helper it
+		// started inherited the pipe, so its own exit also ends the wait.
+		exited := time.NewTicker(100 * time.Millisecond)
+		defer exited.Stop()
+	wait:
+		for {
+			select {
+			case <-providerDone:
+				break wait
+			case <-deadline:
+				break wait
+			case <-exited.C:
+				if child.Process != nil && !processalive.Alive(child.Process.Pid) {
+					break wait
+				}
+			}
+		}
+		reapProvider()
+		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	}
 	var runErr error
 	select {
@@ -712,6 +756,7 @@ type host struct {
 	maxRequestID     int64
 	shutdown         chan struct{}
 	shutdownOnce     sync.Once
+	quickStop        atomic.Bool // set before shutdown closes; see ShutdownQuick
 }
 
 type pendingRequest struct {
@@ -749,6 +794,9 @@ func (h *host) handle(conn net.Conn) {
 	if request.Action == "shutdown" {
 		_ = json.NewEncoder(conn).Encode(helloResponse{OK: true})
 		_ = conn.Close()
+		if request.QuickStop {
+			h.quickStop.Store(true)
+		}
 		h.shutdownOnce.Do(func() { close(h.shutdown) })
 		return
 	}

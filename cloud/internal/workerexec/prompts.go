@@ -1,6 +1,13 @@
 package workerexec
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+	"strconv"
+
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+)
 
 // The standing prompts stay deliberately compact: they carry the rules and the
 // command surface, and point at the installed using-ao skill for exact flags
@@ -48,7 +55,8 @@ CI/review feedback, and summarize progress for the human.
 
 ## Core Commands
 
-- `+"`ao list [--json] [--all]`"+` - your workers with branch, status, and PRs.
+- `+"`ao list [--json] [--all]`"+` - your workers with branch, status, PRs, and
+  artifact files.
 - `+"`ao spawn --name \"<label>\" --prompt \"<clear worker task>\"`"+` - spawn a worker
   in its own sandbox. The label is the human's sidebar text: keep it to 20
   characters or fewer, and count it yourself before running the command.
@@ -63,6 +71,13 @@ CI/review feedback, and summarize progress for the human.
 - `+"`ao kill <session-id>`"+` - terminate a finished or stuck worker.
 - Workers report back with `+"`ao report`"+`; their messages appear in this
   conversation prefixed with their session id.
+- Deliverables your workers write (documents, pages, reports) are files in each
+  worker's own artifact directory, in its own sandbox, which you cannot read;
+  your own artifact directory holds only files you wrote. `+"`ao list --json`"+` lists
+  each worker's `+"`artifactFiles`"+` (path, kind, size, updatedAt), and `+"`--all`"+` adds
+  terminated workers. Check it whenever the human asks about the project's
+  artifacts or a worker's output, and point them to the file in that worker's
+  session.
 
 ## Coordination Workflow
 
@@ -72,7 +87,7 @@ CI/review feedback, and summarize progress for the human.
    any file or path you name in the prompt actually exists in the checkout
    first.
 3. Monitor progress: worker reports arrive here; `+"`ao list --json`"+` shows each
-   worker's branch, status, and PR number/CI state.
+   worker's branch, status, PR number/CI state, and artifact files.
 4. Route CI failures and review comments to the responsible worker with
    `+"`ao send`"+`, including the failing output or review text.
 5. When work is green and approved, report that state to the human. Do not
@@ -149,3 +164,23 @@ Report blockers clearly.
 When using `+"`ao`"+`, read %s/SKILL.md and only the relevant file under
 %s/commands/ — do not load unrelated guides.`, report, skillDir, skillDir)
 }
+
+// artifactsPrompt tells the agent where deliverables go when the session keeps
+// artifacts.
+func artifactsPrompt(dir string) string {
+	return "## Session Artifacts\n\n" +
+		"Any deliverable that is not part of a pull request — a one-pager, analysis, plan, design doc, report, or other generated file — must be written to `" + filepath.ToSlash(dir) + "` (also in `$" + worker.ArtifactsDirEnv + "`), never into the git workspace, even temporarily. " +
+		"This applies even when a workspace-relative path like `docs/`, `docs/plans/`, or `notes/` would otherwise feel like the natural place for it: if it is not shipping in a PR, it does not belong in the workspace at all. " +
+		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
+		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in this conversation; do not create files solely because a response is a summary, plan, analysis, or report. " +
+		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Prefer one consolidated deliverable over many diagnostic files. " +
+		"The directory starts with the files this session already saved there, so after the session is restored, update them in place rather than starting over. " +
+		"Files in this directory are copied to AO Cloud and shown in the session's Artifacts, up to " + strconv.Itoa(domain.MaxArtifactFileBytes>>20) + " MiB per file and " + strconv.Itoa(domain.MaxSessionArtifactFiles) + " files. " +
+		"Saving a file here does not authorize external publishing; follow the user's publishing scope."
+}
+
+// artifactOutputPrompt is added for a session created with the artifact
+// output kind.
+const artifactOutputPrompt = "## Artifact Output\n\n" +
+	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
+	"Do not open a pull request, and do not commit the deliverable to the git workspace. If the request is unclear, ask the user what the artifact should contain before writing it."

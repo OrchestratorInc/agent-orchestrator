@@ -136,6 +136,8 @@ if (typeof window !== "undefined") {
 			onOpenFolderPath: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
+			onQuitConfirmRequest: () => () => undefined,
+			resolveQuitConfirm: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -179,6 +181,10 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		cloudArtifact: {
+			fetch: async () => new Uint8Array(),
+			onFrameNavigated: () => () => undefined,
+		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),
@@ -219,7 +225,6 @@ if (typeof window !== "undefined") {
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: true,
@@ -349,7 +354,8 @@ if (typeof window !== "undefined") {
 				return { id, name, createdAt: now, updatedAt: now };
 			},
 			clear: async () => undefined,
-			delete: async () => undefined,
+			usage: async () => ({ sessions: [] }),
+			delete: async () => ({}),
 			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),

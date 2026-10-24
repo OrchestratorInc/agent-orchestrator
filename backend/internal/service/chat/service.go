@@ -119,6 +119,9 @@ type Service struct {
 	gates              map[domain.ConversationOwner]controllerGate
 	probeMu            sync.Mutex
 	probed             map[domain.AgentHarness]ports.ChatCapabilities
+	prewarming         sync.Map // domain.AgentHarness -> struct{}
+	providerSwitches   sync.Map // domain.SessionID -> chan struct{}, one switch at a time
+	terminalSwitcher   TerminalProviderSwitcher
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -333,6 +336,9 @@ func notifyControllerReady(
 	return commit, nil
 }
 
+// claudeAutoCompactWindowEnv is the token count at which Claude Code compacts on its own.
+const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
 func cloneStartConfig(cfg StartConfig) StartConfig {
 	cloned := cfg
 	if cfg.AwakeReconnectTarget != nil {
@@ -387,14 +393,21 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 // the user can act on.
 func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, error) {
 	owner := conversationOwner(cfg)
-	if owner.Kind == domain.ConversationOwnerReview {
-		cfg.ReadOnly = true
-	}
 	gate := s.controllerGate(owner)
 	if err := gate.lock(ctx); err != nil {
 		return nil, err
 	}
 	defer gate.unlock()
+	return s.startLocked(ctx, cfg)
+}
+
+// startLocked is the launch implementation shared by ordinary starts and the
+// provider-switch saga. Callers must hold the typed controller gate.
+func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller, error) {
+	owner := conversationOwner(cfg)
+	if owner.Kind == domain.ConversationOwnerReview {
+		cfg.ReadOnly = true
+	}
 	if target := cfg.AwakeReconnectTarget; target != nil {
 		s.mu.Lock()
 		candidate, exists := s.awakeInterrupted[owner]
@@ -488,7 +501,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	s.mu.RLock()
 	existing := s.ownerControllers[owner]
 	s.mu.RUnlock()
-	if existing != nil {
+	if existing != nil && cfg.ProviderSwitch == nil {
 		if existing.State() != ports.ChatControllerStopped {
 			return existing, nil
 		}
@@ -587,7 +600,8 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	now := s.now()
 	var resetBoundary domain.ConversationActivity
-	freshProjectContext := scope == domain.ConversationScopeProject && cfg.ProviderConversationID == ""
+	freshProjectContext := scope == domain.ConversationScopeProject &&
+		cfg.ProviderConversationID == "" && cfg.ProviderSwitch == nil
 	if freshProjectContext {
 		detail, marshalErr := json.Marshal(map[string]string{
 			"event":  "context.reset",
@@ -621,6 +635,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			conversation.ActiveBranchID != handoff.PreviousBranchID || conversation.LatestSequence != handoff.PreviousSequence) {
 			err = errors.New("native Chat handoff conversation changed")
 		}
+	} else if providerSwitch := cfg.ProviderSwitch; providerSwitch != nil {
+		conversation, err = s.store.ConversationForSession(ctx, cfg.SessionID)
+		if err == nil && (conversation.ID != providerSwitch.ConversationID ||
+			conversation.ActiveBranchID != providerSwitch.SourceBranchID ||
+			conversation.LatestSequence != providerSwitch.SourceSequence) {
+			err = errors.New("provider switch conversation changed")
+		}
 	} else if freshProjectContext && firstController {
 		// What the user typed while this orchestrator provisioned waits in a
 		// session-scoped row. It moves to the project conversation with the rebind
@@ -649,7 +670,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	var repairedBranch domain.ConversationBranch
 	var restoredProviderOwner bool
-	if cfg.ProviderHandoff == nil && owner.Kind != domain.ConversationOwnerReview {
+	if cfg.ProviderHandoff == nil && cfg.ProviderSwitch == nil && owner.Kind != domain.ConversationOwnerReview {
 		repairedBranch, restoredProviderOwner, err = s.store.RepairIncompleteConversationEdit(
 			ctx, cfg.SessionID, conversation.ID, s.now())
 		if err != nil {
@@ -696,7 +717,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		preserveUndispatchedQueue = len(running) == 0 && (sessionRecord.ProvisionState.IsProvisioning() || waking)
 	}
 	providerBoundaryID := ""
-	if !providerHandleOwnedByActiveBranch {
+	if cfg.ProviderSwitch != nil {
+		providerBoundaryID = s.newID()
+		providerScopeID = providerBoundaryID
+		providerHandleOwnedByActiveBranch = false
+	} else if !providerHandleOwnedByActiveBranch {
 		providerBoundaryID = providerScopeID
 	} else if cfg.ProviderConversationID == "" && cfg.ProviderScopeID == "" &&
 		!queuedBeforeFirstController &&
@@ -717,6 +742,25 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 				activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
 	}
+	// A switch to Claude Code sets the window, Auto (empty) included.
+	if cfg.ProviderSwitch != nil && cfg.Harness == domain.HarnessClaudeCode {
+		// The switch's config is the source's, which may still carry the window
+		// AO set for an earlier Claude Code start. Drop that value so the new
+		// choice, Auto included, is what starts; a project's own value stays.
+		if previous := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; previous > 0 &&
+			cfg.Env[claudeAutoCompactWindowEnv] == fmt.Sprint(previous) {
+			cfg.Env = cloneStartConfig(cfg).Env
+			delete(cfg.Env, claudeAutoCompactWindowEnv)
+		}
+		conversation.Settings.AutoCompactWindow = cfg.ProviderSwitch.AutoCompactWindow
+	}
+	// Claude Code reads its compaction window when it starts. Auto leaves any
+	// window the project's environment sets. The map is copied because the
+	// caller's may be the one saved for later restarts.
+	if tokens := domain.AutoCompactTokens[conversation.Settings.AutoCompactWindow]; cfg.Harness == domain.HarnessClaudeCode && tokens > 0 {
+		cfg.Env = cloneStartConfig(cfg).Env
+		cfg.Env[claudeAutoCompactWindowEnv] = fmt.Sprint(tokens)
+	}
 	// Conversation settings are durable user choices. Restore the selected
 	// model when rebuilding a controller after a daemon restart; the caller's
 	// session default must not silently replace it.
@@ -736,8 +780,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		conversation.Settings.Model = cfg.Model
 		conversation.Settings.ReasoningEffort = cfg.Effort
 		conversation.Settings.ApprovalMode = cfg.Permissions
-		if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
-			return nil, fmt.Errorf("record initial conversation settings: %w", err)
+		// A switch target's settings are saved by the switch's commit.
+		if cfg.ProviderSwitch == nil {
+			if err := s.store.SetConversationSettings(ctx, conversation.ID, conversation.Settings, s.now()); err != nil {
+				return nil, fmt.Errorf("record initial conversation settings: %w", err)
+			}
 		}
 	}
 
@@ -752,14 +799,27 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 
+	// A provider that took over through a switch keeps its handoff note for the
+	// life of its branch: the switch supplies it, a later restart reads it back.
+	handoffNote := activeBranch.HandoffNote
+	if cfg.ProviderSwitch != nil {
+		handoffNote = cfg.ProviderSwitch.Bootstrap
+	}
+	providerSystemPrompt := withHandoffNote(cfg.SystemPrompt, handoffNote)
+
 	var conv ports.ChatConversation
 	hostID := providerHostID(cfg)
+	freshIfMissing := cfg.FreshIfProviderConversationMissing
 	if cfg.ProviderConversationID != "" {
+		// A target that has not answered yet still needs its standing context, though
+		// the source's turns come before it.
+		unanswered := s.switchBranchUnanswered(ctx, conversation.ID, activeBranch)
+		freshIfMissing = freshIfMissing || unanswered
 		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
-			FreshIfMissing:         cfg.FreshIfProviderConversationMissing,
-			HasPriorTurns:          conversation.LatestSequence > 0,
+			FreshIfMissing:         freshIfMissing,
+			HasPriorTurns:          conversation.LatestSequence > 0 && !unanswered,
 			DataDir:                cfg.DataDir,
 			WorkspacePath:          cfg.WorkspacePath,
 			Env:                    cfg.Env,
@@ -768,7 +828,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			Effort:                 cfg.Effort,
 			Permissions:            cfg.Permissions,
 			ReadOnly:               cfg.ReadOnly,
-			SystemPrompt:           cfg.SystemPrompt,
+			SystemPrompt:           providerSystemPrompt,
 			ProviderScopeID:        providerScopeID,
 			ProviderIDsScoped:      providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
 			AdditionalDirectories:  cfg.AdditionalDirectories,
@@ -786,7 +846,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			Effort:                cfg.Effort,
 			Permissions:           cfg.Permissions,
 			ReadOnly:              cfg.ReadOnly,
-			SystemPrompt:          cfg.SystemPrompt,
+			SystemPrompt:          providerSystemPrompt,
 			ProviderScopeID:       providerScopeID,
 			AdditionalDirectories: cfg.AdditionalDirectories,
 			MCPServers:            cfg.MCPServers,
@@ -803,7 +863,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if cfg.ProviderConversationID != "" &&
 		conv.ProviderConversationID() != cfg.ProviderConversationID {
 		returned := conv.ProviderConversationID()
-		if !cfg.FreshIfProviderConversationMissing || liveReconnect || returned == "" {
+		if !freshIfMissing || liveReconnect || returned == "" {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, fmt.Errorf(
 				"resumed provider conversation handle %q does not match requested handle %q",
@@ -813,6 +873,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		// The provider never persisted the requested conversation and started a
 		// fresh one in its place. ControllerReady rebinds the session to it.
 		freshReplacement = true
+		if !cfg.FreshIfProviderConversationMissing {
+			// A switch branch that never had a turn: its branch row names the old
+			// handle too, so it moves with the session once the start commits.
+			cfg.ControllerReady = s.rebindBranchOnReady(ctx, cfg.ControllerReady, conversation.ID, activeBranch.ID, cfg.ProviderConversationID)
+		}
 	}
 	if (cfg.HistoryMode == ports.ChatHistoryRequired) && liveReconnect {
 		// A TUI handoff needs a fresh, verified native-history admission. A host
@@ -936,6 +1001,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			ForkAfterSequence: conversation.LatestSequence, ProviderScopeID: providerScopeID,
 			ProviderIDsScoped: true,
 			CreatedAt:         s.now(),
+		}
+		if cfg.ProviderSwitch != nil {
+			providerBoundary.Strategy = domain.ConversationBranchStrategyApproximateContext
+			providerBoundary.ReplayCutoffSequence = cfg.ProviderSwitch.SourceSequence
+			providerBoundary.ReplayTruncated = true
+			// Stored with the branch, so a later restart of its provider reads it back.
+			providerBoundary.HandoffNote = cfg.ProviderSwitch.Bootstrap
 		}
 	}
 	// Whatever the previous controller left in flight is not this controller's, and
@@ -1136,6 +1208,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// A committed reservation is consumed. Internal controller restarts must
 	// resume the now-current branch, not retry its old ownership snapshot.
 	cfg.ProviderHandoff = nil
+	cfg.ProviderSwitch = nil
 	cfg.ProviderScopeID = ""
 	cfg.AwakeReconnectTarget = nil
 	cfg.HistoryMode = ports.ChatHistoryImport
@@ -1926,6 +1999,9 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 			state = live
 			caps = controller.Capabilities()
 		}
+		// Fast and plan mode live with the controller, not in the stored row.
+		live := controller.Settings()
+		rows.Conversation.Settings.FastMode, rows.Conversation.Settings.PlanMode = live.FastMode, live.PlanMode
 	}
 
 	return Snapshot{
@@ -2031,6 +2107,9 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 			state = live
 			caps = controller.Capabilities()
 		}
+		// Fast and plan mode live with the controller, not in the stored row.
+		live := controller.Settings()
+		rows.Conversation.Settings.FastMode, rows.Conversation.Settings.PlanMode = live.FastMode, live.PlanMode
 	}
 	return Snapshot{
 		Conversation:                     rows.Conversation,
@@ -2145,6 +2224,28 @@ func (s *Service) PreflightChat(
 	return capabilityAdmissionError(harness, caps, permissions)
 }
 
+// PermissionModes lists, strictest first, the permission modes harness can run a
+// chat in: the ones its capabilities admit (Pi cannot ask, so only bypass) and
+// its agent accepts (Kimi runs only in its default). It starts nothing.
+func (s *Service) PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error) {
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, harness)
+	}
+	caps, err := s.driverCapabilities(ctx, harness, driver)
+	if err != nil {
+		return nil, err
+	}
+	checker, _ := driver.(ports.ChatPermissionModeChecker)
+	var modes []ports.PermissionMode
+	for _, mode := range ports.PermissionModesStrictestFirst {
+		if len(ports.MissingCapabilitiesForPermissions(caps, mode)) == 0 && (checker == nil || checker.SupportsPermissionMode(mode)) {
+			modes = append(modes, mode)
+		}
+	}
+	return modes, nil
+}
+
 func capabilityAdmissionError(
 	harness domain.AgentHarness,
 	caps ports.ChatCapabilities,
@@ -2164,6 +2265,102 @@ func capabilityAdmissionError(
 		Missing:                append([]ports.ChatCapability(nil), missing...),
 		AllowedPermissionModes: allowed,
 	}
+}
+
+// ChatUnavailable maps each of harnesses whose chat adapter is missing to the
+// reason. It starts nothing, so it is cheap enough for a picker to ask.
+func (s *Service) ChatUnavailable(ctx context.Context, harnesses []domain.AgentHarness) map[domain.AgentHarness]string {
+	out := map[domain.AgentHarness]string{}
+	for _, harness := range harnesses {
+		driver, err := s.drivers.Driver(harness)
+		if err != nil {
+			continue
+		}
+		if checker, ok := driver.(ports.ChatInstallChecker); ok {
+			if err := checker.CheckChatInstall(ctx); err != nil {
+				out[harness] = err.Error()
+			}
+		}
+	}
+	return out
+}
+
+// branchProviderRebinder moves a branch that never had a turn to a new
+// provider conversation.
+type branchProviderRebinder interface {
+	RebindUnansweredBranchProvider(ctx context.Context, conversationID, branchID, previous, provider string) error
+}
+
+// rebindBranchOnReady wraps ready so a committed fresh start also rebinds the
+// branch that named the conversation the provider never saved.
+func (s *Service) rebindBranchOnReady(
+	ctx context.Context,
+	ready func(StartResult) (ControllerCommit, error),
+	conversationID, branchID, previous string,
+) func(StartResult) (ControllerCommit, error) {
+	return func(started StartResult) (ControllerCommit, error) {
+		commit := ControllerCommit{Conversation: started.Conversation}
+		if ready != nil {
+			var err error
+			if commit, err = ready(started); err != nil {
+				return commit, err
+			}
+		}
+		if rebinder, ok := s.store.(branchProviderRebinder); ok {
+			if err := rebinder.RebindUnansweredBranchProvider(context.WithoutCancel(ctx), conversationID, branchID, previous, started.ProviderConversationID); err != nil {
+				s.log.Warn("rebind unanswered switch branch", "branch", branchID, "error", err)
+			}
+		}
+		return commit, nil
+	}
+}
+
+// withHandoffNote adds a switch's handoff note to the agent's system prompt. A
+// branch keeps its note for life, so every launch on it passes the note again.
+func withHandoffNote(systemPrompt, note string) string {
+	if note == "" {
+		return systemPrompt
+	}
+	return strings.TrimSpace(strings.TrimSpace(systemPrompt) + "\n\nAO provider handoff context:\n\n" + note)
+}
+
+// switchBranchUnanswered reports a branch a switch opened whose agent never
+// had a turn, so its provider never saved the conversation. Resuming it would
+// fail forever; it can start fresh, since its handoff note holds the context.
+func (s *Service) switchBranchUnanswered(ctx context.Context, conversationID string, branch domain.ConversationBranch) bool {
+	if s.reader == nil || branch.Strategy != domain.ConversationBranchStrategyApproximateContext || branch.HandoffNote == "" {
+		return false
+	}
+	rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)
+	if err != nil {
+		return false
+	}
+	for _, turn := range rows.Turns {
+		if turn.BranchID == branch.ID {
+			return false
+		}
+	}
+	return true
+}
+
+// PrewarmChat runs PreflightChat's capability probe in the background so a
+// later switch to harness finds it cached: the probe's throwaway provider
+// process (up to ~1.3s) otherwise lands on the switch. Failures are not
+// cached, so a later switch still reports them. One check per harness runs at a time.
+func (s *Service) PrewarmChat(harness domain.AgentHarness) {
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return
+	}
+	if _, running := s.prewarming.LoadOrStore(harness, struct{}{}); running {
+		return
+	}
+	go func() {
+		defer s.prewarming.Delete(harness)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = s.driverCapabilities(ctx, harness, driver)
+	}()
 }
 
 // driverCapabilities performs the provider capability probe once per harness for

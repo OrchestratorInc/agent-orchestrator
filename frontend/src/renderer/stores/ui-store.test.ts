@@ -89,6 +89,44 @@ describe("global settings deep links", () => {
 	});
 });
 
+describe("cloud review cleanup", () => {
+	it("keeps pane state for the same target and resets only that repository when the target changes", () => {
+		useUiStore.setState({ inspectorSessions: {} });
+		const store = useUiStore.getState();
+		store.setCloudReviewSelection("sess-1", undefined, { scope: "staged" });
+		store.setCloudReviewUi("sess-1", undefined, { filter: "src", pane: { selectionKey: "staged", files: { "src/a.ts": { fingerprint: "fp", collapsed: true, loadedDeferred: false } } } });
+		store.setCloudReviewUi("sess-1", "sibling", { commitBrowserOpen: true });
+		const before = useUiStore.getState();
+		store.setCloudReviewSelection("sess-1", undefined, { scope: "staged" });
+		expect(useUiStore.getState()).toBe(before);
+		store.setCloudReviewSelection("sess-1", undefined, { scope: "combined" });
+		const ui = useUiStore.getState().inspectorSessions["sess-1"].cloudReviewUi;
+		expect(ui?.[""].pane).toBeUndefined();
+		expect(ui?.[""].filter).toBe("src");
+		expect(ui?.sibling).toBe(before.inspectorSessions["sess-1"].cloudReviewUi?.sibling);
+	});
+
+	it("clears cloud review state at the Files reset boundary without changing another session or inspector preferences", () => {
+		useUiStore.setState({ inspectorSessions: {} });
+		useUiStore.getState().setCloudReviewSelection("sess-1", "sibling", { scope: "committed", commitSha: "abc123" });
+		useUiStore.getState().setCloudReviewRepository("sess-1", "sibling");
+		useUiStore.getState().setCloudReviewUi("sess-1", "sibling", { filter: "src", commitBrowserOpen: true });
+		useUiStore.getState().setInspectorView("sess-1", "files");
+		useUiStore.getState().setCloudReviewSelection("sess-2", undefined, { scope: "staged" });
+		const other = useUiStore.getState().inspectorSessions["sess-2"];
+		useUiStore.getState().resetFilesSelection("sess-1");
+		const state = useUiStore.getState();
+		expect(state.inspectorSessions["sess-1"].cloudReviewSelection).toBeUndefined();
+		expect(state.inspectorSessions["sess-1"].cloudReviewRepository).toBeUndefined();
+		expect(state.inspectorSessions["sess-1"].cloudReviewUi).toBeUndefined();
+		expect(state.inspectorSessions["sess-1"].view).toBe("files");
+		expect(state.inspectorSessions["sess-2"]).toBe(other);
+		useUiStore.getState().resetFilesSelection("sess-1");
+		useUiStore.getState().resetFilesSelection("absent");
+		expect(useUiStore.getState()).toBe(state);
+	});
+});
+
 // A fresh module sees exactly what a booting renderer sees: only storage.
 async function bootStore() {
 	return (await import("./ui-store")).useUiStore;

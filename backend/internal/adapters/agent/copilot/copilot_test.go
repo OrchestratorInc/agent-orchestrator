@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -300,7 +301,7 @@ func TestCopilotNativeBinaryForNpmLoader(t *testing.T) {
 	if err := os.WriteFile(loader, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	native := filepath.Join(packageDir, "node_modules", ".bin", "copilot-"+runtime.GOOS+"-"+runtime.GOARCH)
+	native := filepath.Join(packageDir, "node_modules", ".bin", copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0])
 	if err := os.WriteFile(native, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -319,6 +320,69 @@ func TestCopilotNativeBinaryForNpmLoader(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("native binary = %q, want %q", got, want)
+	}
+}
+
+func TestCopilotNativeNamesUseNpmPlatformNames(t *testing.T) {
+	for _, tt := range []struct {
+		goos, goarch string
+		want         []string
+	}{
+		{"darwin", "arm64", []string{"copilot-darwin-arm64"}},
+		{"darwin", "amd64", []string{"copilot-darwin-x64"}},
+		{"linux", "amd64", []string{"copilot-linux-x64", "copilot-linuxmusl-x64"}},
+		{"linux", "arm64", []string{"copilot-linux-arm64", "copilot-linuxmusl-arm64"}},
+	} {
+		if got := copilotNativeNames(tt.goos, tt.goarch); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("copilotNativeNames(%s, %s) = %v, want %v", tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}
+
+func TestResolveCopilotBinaryRunsTheManagedNativeBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm loader native binary naming is covered on Unix-like platforms")
+	}
+	// AO's managed layout: bin/copilot -> copilot/current/bin/copilot, the
+	// npm loader of release v1.
+	root := t.TempDir()
+	release := filepath.Join(root, "copilot", "versions", "v1")
+	packageDir := filepath.Join(release, "lib", "node_modules", "@github", "copilot")
+	if err := os.MkdirAll(filepath.Join(packageDir, "node_modules", ".bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(packageDir, "npm-loader.js"), []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nativeName := copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0]
+	if err := os.WriteFile(filepath.Join(packageDir, "node_modules", ".bin", nativeName), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(release, "bin"), filepath.Join(root, "bin")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for link, target := range map[string]string{
+		filepath.Join(release, "bin", "copilot"):  filepath.Join("..", "lib", "node_modules", "@github", "copilot", "npm-loader.js"),
+		filepath.Join(root, "copilot", "current"): filepath.Join("versions", "v1"),
+		filepath.Join(root, "bin", "copilot"):     filepath.Join("..", "copilot", "current", "bin", "copilot"),
+	} {
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binaryutil.SetManagedBinDir(filepath.Join(root, "bin"))
+	t.Cleanup(func() { binaryutil.SetManagedBinDir("") })
+
+	got, err := ResolveCopilotBinary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Through current, not v1, so the resolved path follows the next update.
+	want := filepath.Join(root, "copilot", "current", "lib", "node_modules", "@github", "copilot", "node_modules", ".bin", nativeName)
+	if got != want {
+		t.Fatalf("resolved %q, want %q", got, want)
 	}
 }
 
@@ -361,7 +425,7 @@ func TestResolveCopilotBinaryFallbacks(t *testing.T) {
 				if err := os.WriteFile(loader, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				native := writeExecutable(t, filepath.Join(packageDir, "node_modules", ".bin", "copilot-"+runtime.GOOS+"-"+runtime.GOARCH))
+				native := writeExecutable(t, filepath.Join(packageDir, "node_modules", ".bin", copilotNativeNames(runtime.GOOS, runtime.GOARCH)[0]))
 				link := filepath.Join(binDir, "copilot")
 				if err := os.Symlink(loader, link); err != nil {
 					t.Fatal(err)
@@ -396,6 +460,70 @@ func TestResolveCopilotBinaryFallbacks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// VS Code's Copilot Chat extension installs a `copilot` launcher that only
+// forwards to a CLI found elsewhere on PATH, and asks to install one otherwise.
+func writeVSCodeCopilotLauncher(t *testing.T, home string) string {
+	t.Helper()
+	dir := filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli")
+	launcher := writeExecutable(t, filepath.Join(dir, "copilot"))
+	if err := os.WriteFile(filepath.Join(dir, vsCodeCopilotLauncherScript), []byte("// launcher\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return launcher
+}
+
+func TestResolveCopilotBinaryIgnoresVSCodeLauncher(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix launcher shape")
+	}
+	oldUnixPaths := copilotUnixPaths
+	copilotUnixPaths = nil
+	t.Cleanup(func() { copilotUnixPaths = oldUnixPaths })
+
+	setup := func(t *testing.T) (home, launcher string) {
+		home = t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("VOLTA_HOME", filepath.Join(home, ".volta"))
+		t.Setenv("FNM_DIR", "")
+		return home, writeVSCodeCopilotLauncher(t, home)
+	}
+
+	t.Run("launcher alone is not an install", func(t *testing.T) {
+		_, launcher := setup(t)
+		for _, path := range []string{t.TempDir(), filepath.Dir(launcher)} {
+			t.Setenv("PATH", path)
+			if got, err := ResolveCopilotBinary(context.Background()); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
+				t.Fatalf("PATH=%s: ResolveCopilotBinary = %q, %v; want ErrAgentBinaryNotFound", path, got, err)
+			}
+		}
+	})
+
+	t.Run("the CLI behind the launcher on PATH is used", func(t *testing.T) {
+		_, launcher := setup(t)
+		want := writeExecutable(t, filepath.Join(t.TempDir(), "copilot"))
+		t.Setenv("PATH", filepath.Dir(launcher)+string(os.PathListSeparator)+filepath.Dir(want))
+		got, err := ResolveCopilotBinary(context.Background())
+		if err != nil || got != want {
+			t.Fatalf("ResolveCopilotBinary = %q, %v; want %q", got, err, want)
+		}
+	})
+
+	t.Run("a link to the launcher is still the launcher", func(t *testing.T) {
+		home, launcher := setup(t)
+		link := filepath.Join(home, ".local", "bin", "copilot")
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(launcher, link); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+		if got, err := ResolveCopilotBinary(context.Background()); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
+			t.Fatalf("ResolveCopilotBinary = %q, %v; want ErrAgentBinaryNotFound", got, err)
+		}
+	})
 }
 
 func writeExecutable(t *testing.T, path string) string {
@@ -1069,5 +1197,25 @@ func TestManagedCopilotLaunchAndResumeDisableVendorAutoUpdate(t *testing.T) {
 		if !contains(argv, "--no-auto-update") {
 			t.Errorf("%s can replace its release outside AO: %q", name, argv)
 		}
+	}
+}
+
+func TestOnlyASwitchTargetTrustsTheWorkspaceForCopilot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("COPILOT_HOME", home)
+	workspace := t.TempDir()
+	config := filepath.Join(home, "config.json")
+	// A new task leaves folder trust to the user.
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "s-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(config); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a spawn wrote the user's Copilot config: %v", err)
+	}
+	New().PrepareSwitchTarget(context.Background(), workspace)
+	data, err := os.ReadFile(config)
+	resolved, _ := filepath.EvalSymlinks(workspace)
+	if err != nil || !strings.Contains(string(data), resolved) {
+		t.Fatalf("config.json = %q (%v), want %s trusted", data, err, resolved)
 	}
 }

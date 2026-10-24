@@ -43,10 +43,8 @@ import {
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
 import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
-import { DaemonTelemetryPolicyClient } from "./main/daemon-telemetry-policy-client";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
 import { TelemetryIdentityController } from "./main/telemetry-identity";
-import { AgentSwitchVisibilityController } from "./main/agent-switch-observability";
 import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./main/update-settings";
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
@@ -54,7 +52,7 @@ import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
-import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
+import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
 import { isAgentPageUrl } from "./shared/agent-page-url";
 import {
@@ -90,6 +88,9 @@ import { attachAppShortcuts } from "./main/app-shortcuts";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
+	QUIT_CONFIRM_REQUEST_CHANNEL,
+	QUIT_CONFIRM_RESULT_CHANNEL,
+	type QuitConfirmRequest,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	type KeybindingOverrides,
@@ -97,6 +98,7 @@ import {
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
+import { createQuitConfirmController } from "./main/quit-confirm";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
 	TRAY_SET_ATTENTION_STATE_CHANNEL,
@@ -119,7 +121,7 @@ import {
 	resolveDaemonFromPort,
 	resolveDaemonFromRunFile,
 } from "./shared/daemon-attach";
-import { browserDaemonOwnershipDecision, shouldReplacePortHolder } from "./shared/daemon-takeover";
+import { browserDaemonOwnershipDecision, portHolderPidToReplace } from "./shared/daemon-takeover";
 import {
 	buildDaemonEnv,
 	devDaemonAllowedOrigins,
@@ -163,6 +165,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -191,6 +194,7 @@ import type {
 	BrowserRemoteTabAction,
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { readProcessStartMs } from "./main/process-start";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
@@ -207,7 +211,6 @@ import { registerRemotesIpc, remotesFilePath } from "./main/remotes-main";
 import { createLocalHostIdentity } from "./main/remote-request";
 import { RemoteRegistry } from "./main/remote-registry";
 import { startRemoteProxy } from "./main/remote-proxy";
-import { AGENT_SWITCH_VISIBILITY_IPC_CHANNEL } from "./shared/agent-switch-observability";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -235,6 +238,12 @@ const APP_DISPLAY_NAME = "Orchestrator.inc";
 // Unpackaged runs get a distinct name so the dev window, dock menu, and About
 // panel never impersonate the installed app (#3642).
 app.setName(app.isPackaged ? APP_DISPLAY_NAME : `${APP_DISPLAY_NAME} (dev)`);
+
+// An unsigned dev Electron is a new app to macOS whenever its binary changes, so Chromium's
+// keychain-held cookie key prompted on start. Dev runs use the stand-in key; packaged keep the keychain.
+if (!app.isPackaged && process.platform === "darwin") {
+	app.commandLine.appendSwitch("use-mock-keychain");
+}
 
 // Windows shows native toasts only when the app declares an AppUserModelID that
 // matches its installer shortcut (the NSIS maker's appId). Without it,
@@ -285,8 +294,7 @@ const desktopLaunchWorkingDirectory = process.cwd();
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
 // PostHog identity: the user-facing analytics opt-out (marker file shared with the
-// daemon) and the loopback hand-off of the signed-in AO Cloud user ID. Distinct
-// from the agent-switch "Event reporting" policy above.
+// daemon) and the loopback hand-off of the signed-in AO Cloud user ID.
 const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
 const telemetryIdentity = new TelemetryIdentityController(
 	desktopDataDir,
@@ -296,7 +304,6 @@ const telemetryIdentity = new TelemetryIdentityController(
 		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
 	},
 );
-let agentSwitchVisibilityController: AgentSwitchVisibilityController | null = null;
 const trustedShellWebContents = new Map<number, WebContents>();
 const pendingRendererQueuePurges = new Map<string, {
 	senderId: number;
@@ -390,6 +397,25 @@ const desktopQuit = createDesktopQuitController({
 		}
 	},
 	hideDock: () => app.dock?.hide(),
+	quit: () => app.quit(),
+});
+// macOS app menu Quit. ⌘Q asks the shell to confirm; with no visible window
+// there is nowhere to show the dialog, so the shortcut quits directly.
+const quitConfirm = createQuitConfirmController({
+	canConfirm: () => {
+		const shell = getShellWebContents();
+		return Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized() && shell && !shell.isDestroyed());
+	},
+	requestConfirm: () => {
+		const shell = getShellWebContents();
+		shell?.focus();
+		// Mirrors desktopQuit.handleBeforeQuit: with the tray up, quitting only
+		// closes the window, and the dialog says so.
+		const request: QuitConfirmRequest = {
+			keepsRunning: trayController !== null && !browserQuitRequested && !isUpdateRestartRequested(),
+		};
+		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
+	},
 	quit: () => app.quit(),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
@@ -856,11 +882,12 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
-	agentSwitchVisibilityController?.registerWindow(shellWebContents.id);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
-		agentSwitchVisibilityController?.destroyWindow(shellWebContents.id);
+		quitConfirm.reset();
 	});
+	// A reload drops any open quit dialog, so the next ⌘Q should ask again.
+	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
 	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
@@ -885,7 +912,7 @@ async function createWindowInternal(): Promise<void> {
 					void host.toggleDevToolsForLastFocused().then((state) => {
 						if (!state) fallback();
 					}).catch(fallback);
-				}),
+				}, { appName: app.name, onQuit: quitConfirm.menuQuit }),
 			),
 		);
 	} else if (process.platform === "linux") {
@@ -916,6 +943,18 @@ async function createWindowInternal(): Promise<void> {
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
 		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+	});
+
+	// A cloud artifact frame's page can open another file of its session; the
+	// renderer follows it (the file's name, a refused link) by its URL.
+	shellWebContents.on("did-frame-navigate", (_event, url, httpResponseCode, _statusText, isMainFrame) => {
+		if (isMainFrame) return;
+		try {
+			if (cloudArtifactPrefix(new URL(url)) === undefined) return;
+		} catch {
+			return;
+		}
+		shellWebContents.send("cloudArtifact:frameNavigated", { url, status: httpResponseCode });
 	});
 
 	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
@@ -2050,47 +2089,46 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	}
 
 	// Wedged-orphan kill+replace: both attach paths returned null, but a process
-	// may still be holding the port. The only reachable case here is a hung/wedged
-	// holder whose run-file PID is still alive but is not answering /healthz (e.g.
-	// our own daemon that bound the port and then deadlocked). Two cases are
-	// intentionally NOT handled: an identity-mismatched but healthy AO daemon is
-	// already surfaced as an error status upstream by resolveDaemonFromPort (not
-	// killed here), and a foreign non-AO process holding the port with a dead
-	// run-file PID is not replaced (out of scope). When no holder is detectable,
-	// skip straight to spawn.
+	// may still be holding the port: a hung daemon that bound it and then stopped
+	// answering /healthz (e.g. one that deadlocked), or one that started answering
+	// since the checks above. A run-file PID that is merely alive is not enough to
+	// signal: after a crash or reboot the OS hands that PID to an unrelated
+	// process, so portHolderPidToReplace names only a daemon it can identify. Two
+	// cases are intentionally NOT handled: an identity-mismatched but healthy AO
+	// daemon is already surfaced as an error status upstream by
+	// resolveDaemonFromPort (not killed here), and a foreign non-AO process holding
+	// the port is not replaced (out of scope). When no holder is identified, skip
+	// straight to spawn (the new daemon overwrites a stale run-file itself); a live
+	// process that is left alone is logged below.
 	const orphanProbe = await readDaemonProbe(resolvedDaemonPort(), "healthz");
 	const runFilePath_ = runFilePath();
-	let runFilePid: number | null = null;
+	let runFile: ReturnType<typeof parseRunFile> = null;
 	if (runFilePath_) {
 		try {
-			runFilePid = parseRunFile(await readFile(runFilePath_, "utf8"))?.pid ?? null;
+			runFile = parseRunFile(await readFile(runFilePath_, "utf8"));
 		} catch {
 			// run-file absent or unreadable; proceed without a PID.
 		}
 	}
-	// process.kill(pid, 0) does not kill; it throws iff the PID is not live.
-	let holderPidAlive = false;
-	if (runFilePid) {
-		try {
-			process.kill(runFilePid, 0);
-			holderPidAlive = true;
-		} catch {
-			holderPidAlive = false;
-		}
+	const holder = await portHolderPidToReplace({
+		probe: orphanProbe,
+		runFile,
+		processStartMs: readProcessStartMs,
+	});
+	// Declining to signal is otherwise silent, so say why a live process named by
+	// running.json is left alone (a hung daemon that is not replaced shows up here).
+	if (holder.pid === null && runFile && processAlive(runFile.pid)) {
+		console.warn(`AO: not stopping process ${runFile.pid} named by running.json: ${holder.reason}`);
 	}
-	if (shouldReplacePortHolder(orphanProbe, holderPidAlive)) {
-		// Use the run-file PID when available; fall back to the probe's reported
-		// PID as a last resort (a wedged daemon may not have written a fresh run-file).
-		const pidToKill = runFilePid ?? orphanProbe?.pid ?? null;
-		if (pidToKill) {
+	const holderPid = holder.pid;
+	if (holderPid !== null) {
+		try {
+			process.kill(-holderPid, "SIGTERM");
+		} catch {
 			try {
-				process.kill(-pidToKill, "SIGTERM");
+				process.kill(holderPid, "SIGTERM");
 			} catch {
-				try {
-					process.kill(pidToKill, "SIGTERM");
-				} catch {
-					// process already gone; proceed
-				}
+				// process already gone; proceed
 			}
 		}
 		// Poll until the port is free (probe returns null) or 8 s elapses.
@@ -2600,6 +2638,11 @@ ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: 
 	closeShellTerminalShortcutEnabled = enabled === true;
 });
 
+ipcMain.on(QUIT_CONFIRM_RESULT_CHANNEL, (event, confirmed: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof confirmed !== "boolean") return;
+	quitConfirm.resolve(confirmed);
+});
+
 ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSize: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
@@ -2734,12 +2777,6 @@ ipcMain.handle("telemetry:capture", (_event, request: RendererTelemetryCapture) 
 	if (!telemetryPolicyController || !sanitized) return false;
 	return telemetryPolicyController.capture(sanitized);
 });
-ipcMain.on(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, (event, request: unknown) => {
-	const trustedSender = trustedShellWebContents.get(event.sender.id);
-	if (trustedSender !== event.sender || trustedSender.isDestroyed()) return;
-	agentSwitchVisibilityController?.signal(event.sender.id, request);
-});
-
 function failClosedTelemetryPolicyView(): TelemetryPolicyView {
 	return { eventsEnabled: false, consentGeneration: "unavailable", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "cleanup_failed", environmentVeto: true, durabilitySupported: false, reason: "invalid_authority" };
 }
@@ -2911,6 +2948,7 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
+registerCloudArtifactIpc({ ipcMain });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
@@ -3376,20 +3414,11 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
-	const visibilityKillSwitched = (process.env.AO_TELEMETRY_DISABLED_EVENTS ?? "").split(",").some((name) => name.trim() === "ao.agent_switch.visibility_failure");
-	// The approved release gate is intentionally closed. Tests inject the
-	// dedicated no-cache sender; the shipping composition creates no visibility
-	// network transport until that gate is separately approved.
-	agentSwitchVisibilityController = new AgentSwitchVisibilityController({ send: async () => undefined, killSwitched: visibilityKillSwitched, diagnostic: (code) => console.warn("agent switch visibility diagnostic:", code) });
-	for (const shellContents of trustedShellWebContents.values()) agentSwitchVisibilityController.registerWindow(shellContents.id);
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
-	const daemonPolicy = new DaemonTelemetryPolicyClient(() => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null, (url, init) => net.fetch(url, init));
 	const policyController = new DesktopTelemetryController({
 		authority,
-		daemon: daemonPolicy,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
 		transportFactory: () => initMainSentry(app.getVersion(), app.getPath("userData")),
-		visibility: agentSwitchVisibilityController,
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);

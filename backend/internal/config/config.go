@@ -109,9 +109,9 @@ type GitLabConfig struct {
 }
 
 // DefaultAllowedOrigins are the browser origins the daemon's CORS boundary
-// trusts. General routes additionally admit loopback-served content, while
-// credential-management routes accept only this exact list (plus native
-// callers without an Origin header). The daemon has no auth, so every default
+// trusts. Workspace previews and unrelated local servers are not trusted
+// API clients. Native callers remain unauthenticated; paired mobile callers
+// use the separately authenticated listener. Every default
 // entry must be an origin ordinary web content cannot present:
 // app://renderer is the packaged Electron renderer, served from a custom
 // scheme only the desktop app registers — no website can bear it. The opaque

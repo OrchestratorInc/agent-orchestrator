@@ -50,7 +50,13 @@ const (
 	// successor.
 	maxHeartbeatFailures = 3
 	requestTimeout       = 30 * time.Second
-	maxResponseBody      = 1 << 20
+	// bootstrapRequestTimeout is longer: a retried bootstrap is answered with
+	// the same epoch, so waiting out a slow control plane beats giving up and
+	// running the whole handler again against it. It stays under the load
+	// balancer's 60 s idle timeout, past which the request is cut anyway (and
+	// the control plane's 30 s statement timeout ends a blocked query sooner).
+	bootstrapRequestTimeout = 55 * time.Second
+	maxResponseBody         = 1 << 20
 )
 
 var workerCapabilities = []string{
@@ -66,6 +72,7 @@ var workerCapabilities = []string{
 	"notification.events",
 	worker.CapabilityWorkspacePathPlaceholder,
 	worker.CapabilityMultiRepo,
+	worker.CapabilityArtifacts,
 	worker.CapabilityChatStart,
 }
 
@@ -126,9 +133,10 @@ func run(logger *slog.Logger) error {
 	defer stop()
 
 	client := &client{
-		baseURL:   publicURL + "/api/cloud/v1",
-		http:      &http.Client{Timeout: requestTimeout},
-		tokenFile: filepath.Join(dataDir, "worker-token"),
+		baseURL:       publicURL + "/api/cloud/v1",
+		http:          &http.Client{Timeout: requestTimeout},
+		bootstrapHTTP: &http.Client{Timeout: bootstrapRequestTimeout},
+		tokenFile:     filepath.Join(dataDir, "worker-token"),
 	}
 
 	// Heal a stale baked binary before any credential-bearing work, so the
@@ -198,8 +206,8 @@ func run(logger *slog.Logger) error {
 		// A standalone project (no repository) on a workspace with a
 		// configured working directory works in that folder as the template
 		// left it, for example ~/work holding the repositories the template
-		// cloned itself.
-		if dir, err := worker.ExpandWorkingDirectory(workingDirectory, os.Getenv("HOME"), ""); err != nil {
+		// cloned itself (a ~/work/{repo} template starts in ~/work).
+		if dir, err := worker.StandaloneWorkingDirectory(workingDirectory, os.Getenv("HOME")); err != nil {
 			logger.Warn("working directory: a standalone session cannot use the configured directory; using the default",
 				"working_directory", workingDirectory, "error", err)
 		} else {
@@ -295,6 +303,27 @@ func run(logger *slog.Logger) error {
 		logger.Info("agent browser off", "reason", err)
 	}
 	var agentCommandFactory workertransport.AgentCommandFactory
+	var artifacts *artifactSyncer
+	if bootstrap.Launch.Artifacts {
+		artifactsDir := worker.ArtifactsDir(dataDir, bootstrap.SessionID)
+		if err := os.MkdirAll(artifactsDir, 0o700); err != nil {
+			// Without the directory the agent must not be told to use it.
+			bootstrap.Launch.Artifacts = false
+			logger.Warn("create artifact directory; artifacts are not synced", "error", err)
+		} else {
+			artifacts = newArtifactSyncer(client, artifactsDir, logger)
+			changed := artifacts.pokeCommittedChanged
+			client.artifactsChanged.Store(&changed)
+			// A new sandbox starts with the files the session already has.
+			restoreCtx, cancelRestore := context.WithTimeout(ctx, artifactRestoreTimeout)
+			if restored, err := artifacts.restore(restoreCtx); err != nil {
+				logger.Warn("artifacts: restore; retrying in the background", "error", err)
+			} else if restored > 0 {
+				logger.Info("artifacts: restored", "files", restored)
+			}
+			cancelRestore()
+		}
+	}
 	pullRequestSocketPath := filepath.Join(dataDir, "ao-pull-request.sock")
 	reviewSocketPath := filepath.Join(dataDir, "ao-review.sock")
 	checkpointSocketPath := filepath.Join(dataDir, "ao-checkpoint.sock")
@@ -334,6 +363,9 @@ func run(logger *slog.Logger) error {
 		b.Env["AO_PULL_REQUEST_SOCKET"] = pullRequestSocketPath
 		b.Env["AO_PULL_REQUEST_HELP"] = pullRequestHelp(bootstrap.Launch)
 		b.Env[worker.SessionRepositoriesEnv] = sessionRepositories(bootstrap.Launch, workspace, dataDir)
+		if artifacts != nil {
+			b.Env[worker.ArtifactsDirEnv] = artifacts.dir
+		}
 		b.Env["AO_REVIEW_SOCKET"] = reviewSocketPath
 		b.Env["AO_REVIEW_HELP"] = "curl --unix-socket $AO_REVIEW_SOCKET " +
 			`-X POST http://localhost/review -H 'Content-Type: application/json' ` +
@@ -371,8 +403,15 @@ func run(logger *slog.Logger) error {
 		}
 		chatRunner = &workerexec.Supervisor{
 			Control: client, Builder: b, Runner: workerexec.OSRunner{},
-			PullRequestClaimer:  client.claimPullRequest,
-			GitRefReporter:      gitRefReporter,
+			PullRequestClaimer: client.claimPullRequest,
+			GitRefReporter:     gitRefReporter,
+			// A Chat turn's end syncs artifacts at once, as the terminal's
+			// Stop hook does.
+			TurnEnded: func() {
+				if artifacts != nil {
+					artifacts.poke()
+				}
+			},
 			UseProviderProtocol: true,
 			// Use the supervisor's 100 ms default. A one-second worker-command
 			// poll makes every phase of a TUI <-> Chat handoff visibly laggy,
@@ -505,7 +544,7 @@ func run(logger *slog.Logger) error {
 	// perceived connection path independent from clone latency without letting
 	// a prompt run in an empty workspace.
 	transportSupervisor.HoldAgentInputUntilWorkspaceReady()
-	results := make(chan error, 6)
+	results := make(chan error, 7)
 	backgroundWorkers := 4
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
@@ -515,6 +554,10 @@ func run(logger *slog.Logger) error {
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
 	}()
+	if artifacts != nil {
+		backgroundWorkers++
+		go func() { results <- artifacts.run(runCtx) }()
+	}
 	if outbox, err := notificationoutbox.Open(filepath.Join(dataDir, "notification-outbox.db")); err != nil {
 		logger.Warn("open notification outbox", "error", err)
 	} else {
@@ -679,7 +722,14 @@ func run(logger *slog.Logger) error {
 		// turn-completion (Stop) hook via this unix socket, not a timer. Bound to
 		// runCtx: it stops on shutdown.
 		cp := newCheckpointer(client, bootstrap, workspace, dataDir, logger)
-		if err := runCheckpointBridge(runCtx, checkpointSocketPath, cp.checkpoint, logger); err != nil &&
+		onCheckpoint := cp.checkpoint
+		if artifacts != nil {
+			onCheckpoint = func(ctx context.Context) {
+				artifacts.poke()
+				cp.checkpoint(ctx)
+			}
+		}
+		if err := runCheckpointBridge(runCtx, checkpointSocketPath, onCheckpoint, logger); err != nil &&
 			runCtx.Err() == nil {
 			logger.Warn("checkpoint bridge stopped", "error", err)
 		}
@@ -1125,11 +1175,14 @@ var errStaleWorker = errors.New("worker credential replaced")
 var errCheckoutForbidden = errors.New("checkout grant not authorized")
 
 type client struct {
-	baseURL   string
-	http      *http.Client
-	tokenFile string
-	mu        sync.RWMutex
-	token     string
+	baseURL string
+	http    *http.Client
+	// bootstrapHTTP serves only the bootstrap request (bootstrapRequestTimeout);
+	// nil uses http.
+	bootstrapHTTP *http.Client
+	tokenFile     string
+	mu            sync.RWMutex
+	token         string
 	// Startup lookups made beside the checkout (see startStartupPrefetch).
 	// Set before any goroutine that reads them starts; nil means none.
 	credentialPrefetch *prefetch[worker.CredentialResponse]
@@ -1138,6 +1191,10 @@ type client struct {
 	// busy reports sandbox activity for the next heartbeat; set once the
 	// transport supervisor exists.
 	busy atomic.Pointer[func() bool]
+	// artifactsChanged is called when WaitForWork reports that the session's
+	// committed artifacts changed without this worker; set once the artifact
+	// syncer exists.
+	artifactsChanged atomic.Pointer[func()]
 	// busyAccepted records that the control plane's last heartbeat response
 	// advertised worker.HeartbeatFeatureBusy. Until then (and after a
 	// control-plane rollback) the field is not sent: an older control plane
@@ -1174,7 +1231,7 @@ func (c *client) startStartupPrefetch(ctx context.Context, launch worker.LaunchC
 
 func (c *client) bootstrap(ctx context.Context, bootstrapToken string) (worker.BootstrapResponse, error) {
 	var response worker.BootstrapResponse
-	err := c.do(ctx, "/worker/bootstrap", worker.BootstrapRequest{
+	err := c.do(context.WithValue(ctx, bootstrapRequestKey{}, true), "/worker/bootstrap", worker.BootstrapRequest{
 		BootstrapToken: bootstrapToken,
 		Version:        workerVersion,
 		Capabilities:   workerCapabilities,
@@ -1232,24 +1289,30 @@ func (c *client) connect(
 	return resp, nil
 }
 
-// bootstrapAttempts bounds how often a worker retries its first request when
-// the network drops it (about 3.75s of backoff in all). Without it, one dropped
-// connection at startup strands the session until the control plane's startup
-// deadline replaces the sandbox.
-const bootstrapAttempts = 5
+// bootstrapRetryBudget bounds how long a worker keeps retrying its first
+// request when the network drops it or the control plane fails it. Without it,
+// one dropped connection or a slow control plane at startup strands the session
+// until the startup ceiling. It stays inside the control plane's
+// postgres.WorkerBootstrapRetryWindow, the time a redeemed ticket can be
+// redeemed again, measured from the first attempt that reached it.
+var (
+	bootstrapRetryBudget   = 8 * time.Minute
+	bootstrapRetryMaxDelay = 15 * time.Second
+)
 
-// bootstrapWithRetry retries only transport failures. An HTTP error status is
-// returned at once: the ticket is single-use, so a request the control plane
-// already answered must not be replayed. A transport failure after the ticket
-// was spent is answered on retry with a clean rejection, no worse than failing.
+// bootstrapWithRetry retries transport failures and server errors (5xx). The
+// control plane answers a retry of a ticket whose response was lost with the
+// same epoch, until a worker checks in on it. Any other HTTP error is the
+// control plane's answer and is returned at once; an older control plane
+// rejects a retried spent ticket that way, no worse than failing.
 func (c *client) bootstrapWithRetry(
 	ctx context.Context, logger *slog.Logger, bootstrapToken string,
 ) (worker.BootstrapResponse, error) {
+	deadline := time.Now().Add(bootstrapRetryBudget)
 	delay := 250 * time.Millisecond
 	for attempt := 1; ; attempt++ {
 		resp, err := c.bootstrap(ctx, bootstrapToken)
-		var transport *url.Error
-		if err == nil || !errors.As(err, &transport) || attempt == bootstrapAttempts {
+		if err == nil || !retryableBootstrapError(err) || time.Now().Add(delay).After(deadline) {
 			return resp, err
 		}
 		logger.Warn("worker bootstrap request failed; retrying", "attempt", attempt, "error", err)
@@ -1258,8 +1321,30 @@ func (c *client) bootstrapWithRetry(
 			return resp, err
 		case <-time.After(delay):
 		}
-		delay *= 2
+		delay = min(delay*2, bootstrapRetryMaxDelay)
 	}
+}
+
+// bootstrapRequestKey marks the bootstrap request's context so doMethod sends
+// it with bootstrapHTTP.
+type bootstrapRequestKey struct{}
+
+func retryableBootstrapError(err error) bool {
+	var transport *url.Error
+	var status *httpStatusError
+	return errors.As(err, &transport) || (errors.As(err, &status) && status.code >= 500)
+}
+
+// httpStatusError is a control plane response outside 2xx that has no more
+// specific error.
+type httpStatusError struct {
+	path string
+	code int
+	body string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("%s returned %d: %s", e.path, e.code, e.body)
 }
 
 func (c *client) loadPersistedToken() string {
@@ -1607,10 +1692,19 @@ func (c *client) ClaimTransport(ctx context.Context) (*worker.TransportRequest, 
 // WaitForWork long-polls the control plane until a turn or transport request is
 // enqueued for this session (or a short server-side timeout), replacing the old
 // ~100ms busy-poll of the claim routes. It returns no work; the caller re-runs
-// the claim RPCs. An older control plane without the endpoint returns an error,
+// the claim RPCs. A wake that reports changed artifacts pokes the artifact
+// syncer. An older control plane without the endpoint returns an error,
 // which the transport supervisor treats as a bounded back-off.
 func (c *client) WaitForWork(ctx context.Context) error {
-	return c.doMethod(ctx, http.MethodGet, "/worker/work/wait", nil, nil)
+	var response worker.WorkWaitResponse
+	// An empty body reports no artifact change.
+	if err := c.doMethod(ctx, http.MethodGet, "/worker/work/wait", nil, &response); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	if changed := c.artifactsChanged.Load(); response.ArtifactsChanged && changed != nil {
+		(*changed)()
+	}
+	return nil
 }
 
 func (c *client) CompleteTransport(
@@ -1796,7 +1890,11 @@ func (c *client) doMethod(
 		request.Header.Set("Authorization", "Worker "+token)
 		request.Header.Set(worker.CapabilitiesHeader, strings.Join(workerCapabilities, ","))
 	}
-	response, err := c.http.Do(request)
+	httpClient := c.http
+	if bootstrap, _ := ctx.Value(bootstrapRequestKey{}).(bool); bootstrap && c.bootstrapHTTP != nil {
+		httpClient = c.bootstrapHTTP
+	}
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return err
 	}
@@ -1812,7 +1910,7 @@ func (c *client) doMethod(
 			bytes.Contains(snippet, []byte("CHECKOUT_NOT_AUTHORIZED")) {
 			return errCheckoutForbidden
 		}
-		return fmt.Errorf("%s returned %d: %s", path, response.StatusCode, strings.TrimSpace(string(snippet)))
+		return &httpStatusError{path: path, code: response.StatusCode, body: strings.TrimSpace(string(snippet))}
 	}
 	if out == nil {
 		return nil

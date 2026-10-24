@@ -18,10 +18,13 @@ import { WorkerDock } from "../../lib/worker-dock";
 import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
 import { WorkerMachineState } from "../../lib/worker-machine-state";
+import { WorkerEnvironmentFilter } from "../../lib/worker-environment-filter";
 import {
 	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
 	filterWorkersByEnvironmentAndProject,
+	showsEnvironmentFilter,
+	sortWorkerEnvironments,
 	spawnProjectParam,
 	workerProjectForEnvironment,
 	workerProjectLabel,
@@ -57,7 +60,7 @@ export default function FleetScreen() {
 	// tick re-rendered the dock mid-tap, the bug the stable handlers below avoid.
 	const environmentsKey = JSON.stringify(hostStates.map((host) => [host.hostId, host.name, host.appearance.symbol]));
 	const environments = useMemo(
-		() => hostStates.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance })),
+		() => sortWorkerEnvironments(hostStates.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance }))),
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey covers every field read here
 		[environmentsKey],
 	);
@@ -184,6 +187,13 @@ export default function FleetScreen() {
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
 			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{showsEnvironmentFilter(environments) ? (
+				<WorkerEnvironmentFilter
+					environments={environments}
+					selectedEnvironmentId={workerEnvironmentId}
+					onSelectEnvironment={selectEnvironment}
+				/>
+			) : null}
 
 			{!selectedHost && fleetLoading && allSessions.length === 0 ? (
 				<View style={styles.center}>

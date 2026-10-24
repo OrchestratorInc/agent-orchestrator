@@ -4,6 +4,7 @@ import * as Device from "expo-device";
 import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
 import { getTelemetryIdentity, type SessionMode } from "../api";
+import { cachedInstallId } from "../installId";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -76,8 +77,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		host: MOBILE_POSTHOG_HOST,
 		enableSessionReplay: false,
 		captureAppLifecycleEvents: false,
-		// Anonymous ingestion rate until a paired desktop's identity is adopted
-		// (adoptDesktopIdentity); only then does identify() create a profile.
+		// Keep the phone's own anonymous SDK identity across desktop pairings.
 		personProfiles: "identified_only",
 	});
 
@@ -96,6 +96,8 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 	loadRateState();
 	telemetry = createMobileTelemetry(client, context, {
 		disabledEvents: MOBILE_DISABLED_EVENTS,
+		phoneInstallId: cachedInstallId,
+		awaitIdentityMigration: true,
 		allow: allowEvent,
 		// Nothing is captured until loadMobileOptOut() has read the saved preference.
 		awaitPreference: true,
@@ -112,9 +114,25 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 // The desktop's opt-out is sticky on the phone: it survives unpairing and only a
 // paired desktop that is opted in lifts it.
 const OPT_OUT_STORAGE_KEY = "ao.telemetry.optedOut";
+const PHONE_IDENTITY_MIGRATION_KEY = "ao.telemetry.phoneIdentity.v2";
 
 /** Restores the persisted opt-out and releases capture. Awaited before the first heartbeat. */
 export async function loadMobileOptOut(): Promise<void> {
+	if (telemetry) {
+		let reset = false;
+		try {
+			if ((await AsyncStorage.getItem(PHONE_IDENTITY_MIGRATION_KEY)) !== "1") {
+				telemetry.resetPhoneIdentity();
+				reset = true;
+				await AsyncStorage.setItem(PHONE_IDENTITY_MIGRATION_KEY, "1");
+			} else {
+				telemetry.releasePhoneIdentity();
+			}
+		} catch {
+			// If the marker is unreadable, reset again on the next launch.
+			if (!reset) telemetry.resetPhoneIdentity();
+		}
+	}
 	let stored = false;
 	try {
 		stored = (await AsyncStorage.getItem(OPT_OUT_STORAGE_KEY)) === "1";

@@ -1,7 +1,9 @@
 import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
-import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActivityRow, AssistantMessage, ChatHostId, HumanMessage, ProviderSwitchMarker, TurnOutcome } from "./ChatTimelineItems";
+import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
 import type { ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
@@ -499,5 +501,25 @@ describe("HumanMessage", () => {
 
 		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
 		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
+	});
+});
+
+describe("ProviderSwitchMarker", () => {
+	it("names a remote session's models from its host's catalog", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+		client.setQueryData(agentModelsQueryKey("codex", "", "host-1"), { models: [{ id: "gpt-6", label: "GPT Six" }] });
+		client.setQueryData(agentModelsQueryKey("codex", ""), { models: [{ id: "gpt-6", label: "Local name" }] });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatHostId.Provider value="host-1">
+					<ProviderSwitchMarker activity={{
+						kind: "activity", id: "switch", sequence: 1, revision: 1, activityKind: "system", status: "completed",
+						summary: "Switched provider", createdAt: "2026-01-01T00:00:00Z",
+						detail: { event: "provider_switch", sourceHarness: "claude-code", targetHarness: "codex", targetModel: "gpt-6" },
+					}} />
+				</ChatHostId.Provider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("GPT Six")).toBeInTheDocument();
 	});
 });
