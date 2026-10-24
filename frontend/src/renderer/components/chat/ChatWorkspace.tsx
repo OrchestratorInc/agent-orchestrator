@@ -154,6 +154,8 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { SubagentTeam } from "./SubagentTeam";
+import { isSubagentLaunch, partitionSubagentSteps, readSubagent } from "./subagent-team";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
@@ -2074,15 +2076,23 @@ function RolledBackNotice({ count }: { count: number }) {
  */
 type TimelineRun =
 	| { kind: "activities"; key: string; items: ConversationItem[] }
+	| { kind: "subagents"; key: string; items: ConversationActivity[] }
 	| { kind: "single"; key: string; items: [ConversationItem] };
 
 function runsOf(items: ConversationItem[]): TimelineRun[] {
 	const runs: TimelineRun[] = [];
 	for (const item of items) {
+		const last = runs.at(-1);
+		// Subagents launched back to back are one team: the parent fanned the work
+		// out in one breath, so it reads as one block rather than one per child.
+		if (isSubagentLaunch(item)) {
+			if (last?.kind === "subagents") last.items.push(item);
+			else runs.push({ kind: "subagents", key: `subagents-${item.sequence}`, items: [item] });
+			continue;
+		}
 		// Approvals, user input, errors, reasoning, and stamped system events stay
 		// boundaries. Confirmed AO actions have no event stamp, so they batch.
 		const runnable = isOrdinaryActivity(item);
-		const last = runs.at(-1);
 		if (runnable && last?.kind === "activities") {
 			last.items.push(item);
 			continue;
@@ -2112,6 +2122,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     header meter instead.
  *   - reasoning. Providers can emit one per tool call and they usually carry no
  *     readable body, so they are internal signal rather than conversation chrome.
+ *     A subagent launch is the exception: ACP files Claude's `Agent` tool as
+ *     reasoning, and it is the row the child's steps hang from.
  *
  *   - a plan row whose turn already carries the plan. The daemon writes both, from
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
@@ -2134,7 +2146,7 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
-		if (item.activityKind === "reasoning") return false;
+		if (item.activityKind === "reasoning" && !isSubagentLaunch(item)) return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
@@ -4044,6 +4056,7 @@ export function Timeline({
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
+									harness={snapshot.harness}
 									sessionId={snapshot.sessionId}
 									apiBaseUrl={apiBaseUrl}
 									onDecide={decide}
@@ -4285,6 +4298,7 @@ const TurnGroup = memo(function TurnGroup({
 	onSelectAnnotation,
 	workerUpdates = false,
 	tight = false,
+	harness,
 }: {
 	group: TimelineGroup;
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
@@ -4327,26 +4341,29 @@ const TurnGroup = memo(function TurnGroup({
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	workerUpdates?: boolean;
 	tight?: boolean;
+	/** The conversation's agent, so its subagents wear the same mark. */
+	harness?: string;
 }) {
 	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
-	const runs = useMemo(
-		() =>
-			runsOf(
-				group.items.filter((item) => {
-					if (item.id === group.liveProviderFailure?.id) return false;
-					if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
-					return !(
-						hasTerminalFailure &&
-						item.kind === "activity" &&
-						item.detail?.event === "provider.failure" &&
-						item.status === "failed"
-					);
-				}),
-			),
-		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
-	);
+	const { runs, subagentSteps } = useMemo(() => {
+		// A subagent's steps leave the turn's flow and hang under its launch, so the
+		// child's commands stop reading as the parent's own.
+		const { items, steps } = partitionSubagentSteps(
+			group.items.filter((item) => {
+				if (item.id === group.liveProviderFailure?.id) return false;
+				if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
+				return !(
+					hasTerminalFailure &&
+					item.kind === "activity" &&
+					item.detail?.event === "provider.failure" &&
+					item.status === "failed"
+				);
+			}),
+		);
+		return { runs: runsOf(items), subagentSteps: steps };
+	}, [group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure]);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -4380,8 +4397,15 @@ const TurnGroup = memo(function TurnGroup({
 	// Questions, errors, and system warnings stay readable after the turn settles, and
 	// so does anything the user said mid-turn: folding a steer away would leave the
 	// reply under the Worked row answering a message the reader can no longer see.
+	// So does a team with a child still working: folding live work under a settled
+	// "Worked for" row would hide it from the reader.
 	const noticeRuns = group.outcome
-		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run))
+		? workedRuns.filter((run) =>
+			isHumanRun(run.items[0]) ||
+			isNoticeRun(run) ||
+			(run.kind === "subagents" && run.items.some((launch) =>
+				readSubagent(launch, subagentSteps.get(launch.id) ?? [], false).state === "working",
+			)))
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
@@ -4398,7 +4422,18 @@ const TurnGroup = memo(function TurnGroup({
 	// runs fold to their summary, so a long turn does not keep every call mounted.
 	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
 	const renderRun = (run: TimelineRun) =>
-		run.kind === "activities" ? (
+		run.kind === "subagents" ? (
+			<SubagentTeam
+				key={run.key}
+				launches={run.items}
+				steps={subagentSteps}
+				live={Boolean(group.live)}
+				harness={harness}
+				disclosureKey={`${group.key}:${run.key}`}
+				disclosureOverrides={activityDisclosureOverrides}
+				onDisclosureChange={onActivityDisclosureChange}
+			/>
+		) : run.kind === "activities" ? (
 			<ActivityRun
 				key={run.key}
 				disclosureKey={`${group.key}:${run.key}`}
