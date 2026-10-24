@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/go-chi/chi/v5"
 )
@@ -49,6 +50,10 @@ type workerCredentialAvailabilityStore interface {
 
 type userProviderCredentialStore interface {
 	UserAgentCredentialAvailable(context.Context, string, string) (bool, error)
+}
+
+type userModelCatalogSessionStore interface {
+	UserModelCatalogSession(context.Context, domain.Principal, string, string) (string, string, error)
 }
 
 type secretEncrypter interface {
@@ -455,6 +460,42 @@ func (s *Server) listUserProviderConnections(w http.ResponseWriter, r *http.Requ
 		items = append(items, toUserProviderConnectionResponse(connection))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providerConnections": items})
+}
+
+func (s *Server) listUserAgentModels(w http.ResponseWriter, r *http.Request) {
+	orgID := chi.URLParam(r, "orgId")
+	if requireUUID(orgID, "orgId") != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "orgId must be a UUID.")
+		return
+	}
+	agent := strings.TrimSpace(chi.URLParam(r, "agent"))
+	if !validAgentProvider(agent) {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "The coding agent is invalid.")
+		return
+	}
+	store, ok := s.store.(userModelCatalogSessionStore)
+	if !ok {
+		writeError(w, r, http.StatusNotImplemented, "not_implemented", "Cloud model catalogs are unavailable.")
+		return
+	}
+	_, sessionID, err := store.UserModelCatalogSession(r.Context(), principalFrom(r), orgID, agent)
+	if err != nil {
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "No live worker matches this organization and current personal connection. Use the agent default or enter a model ID; start a task to discover worker models.")
+			return
+		}
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if agent != "codex" && agent != "claude-code" {
+		writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "This agent does not support worker model discovery. Use its native default or enter a model ID.")
+		return
+	}
+	result, ok := s.discoverModelCatalog(w, r, orgID, sessionID, agent)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) putUserAgentConnection(w http.ResponseWriter, r *http.Request) {

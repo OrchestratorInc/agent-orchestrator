@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/go-chi/chi/v5"
@@ -20,10 +22,20 @@ import (
 type workspaceReviewHandlerStore struct {
 	Store
 	provider       string
+	modelOrgID     string
+	modelSessionID string
+	modelResponse  json.RawMessage
+	modelSourceErr error
 	createdKind    string
 	createdPayload json.RawMessage
+	requestTimeout time.Duration
 	eventType      string
 	errorCode      string
+}
+
+func (s *workspaceReviewHandlerStore) UserModelCatalogSession(_ context.Context, _ domain.Principal, orgID, _ string) (string, string, error) {
+	s.modelOrgID = orgID
+	return orgID, s.modelSessionID, s.modelSourceErr
 }
 
 func (s *workspaceReviewHandlerStore) GetSession(_ context.Context, _ domain.Principal, _, _ string) (domain.Session, error) {
@@ -34,8 +46,9 @@ func (s *workspaceReviewHandlerStore) ResumeSession(_ context.Context, _ domain.
 	return domain.SandboxLifecycle{SessionID: sessionID}, nil
 }
 
-func (s *workspaceReviewHandlerStore) CreateWorkspaceRequest(_ context.Context, _ domain.Principal, orgID, sessionID, kind string, payload json.RawMessage, _ time.Duration) (domain.WorkerRequest, error) {
+func (s *workspaceReviewHandlerStore) CreateWorkspaceRequest(_ context.Context, _ domain.Principal, orgID, sessionID, kind string, payload json.RawMessage, timeout time.Duration) (domain.WorkerRequest, error) {
 	s.createdKind, s.createdPayload = kind, payload
+	s.requestTimeout = timeout
 	return domain.WorkerRequest{ID: "00000000-0000-4000-8000-000000000003", OrgID: orgID, SessionID: sessionID}, nil
 }
 
@@ -43,7 +56,10 @@ func (s *workspaceReviewHandlerStore) GetWorkspaceRequest(_ context.Context, _ d
 	if s.errorCode != "" {
 		return domain.WorkerRequest{Status: "failed", ErrorCode: s.errorCode, ErrorMessage: "stale"}, nil
 	}
-	response, _ := json.Marshal(map[string]any{})
+	response := s.modelResponse
+	if response == nil {
+		response, _ = json.Marshal(map[string]any{})
+	}
 	return domain.WorkerRequest{Status: "succeeded", Response: response}, nil
 }
 
@@ -99,6 +115,95 @@ func TestWorkspaceReviewHandlerMapsStaleSnapshotToConflict(t *testing.T) {
 	server.postWorkspaceReviewDiffs(recorder, request)
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestListUserAgentModelsUsesCurrentUsersLiveWorker(t *testing.T) {
+	store := &workspaceReviewHandlerStore{
+		modelOrgID: workspaceTestOrgID, modelSessionID: workspaceTestSessionID,
+		modelResponse: json.RawMessage(`{"models":[{"id":"gpt-supported","displayName":"Supported","default":true,"efforts":["low","high"]}]}`),
+	}
+	server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
+	request := workspaceReviewRequest(t, http.MethodGet, "/orgs/"+workspaceTestOrgID+"/providers/codex/models", nil)
+	routeContext := chi.RouteContext(request.Context())
+	routeContext.URLParams.Add("agent", "codex")
+	recorder := httptest.NewRecorder()
+
+	server.listUserAgentModels(recorder, request)
+
+	if recorder.Code != http.StatusOK || store.createdKind != "chat.models" {
+		t.Fatalf("status=%d kind=%q body=%s", recorder.Code, store.createdKind, recorder.Body.String())
+	}
+	if store.modelOrgID != workspaceTestOrgID || store.requestTimeout < 30*time.Second {
+		t.Fatalf("catalog scope=%q timeout=%s, want requested org and time for worker discovery", store.modelOrgID, store.requestTimeout)
+	}
+	var response worker.ChatModelsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Models) != 1 || response.Models[0].ID != "gpt-supported" || len(response.Models[0].Efforts) != 2 {
+		t.Fatalf("models = %+v", response.Models)
+	}
+}
+
+func TestListUserAgentModelsRejectsMalformedWorkerCatalog(t *testing.T) {
+	for _, response := range []json.RawMessage{
+		json.RawMessage(`{}`),
+		json.RawMessage(`null`),
+		json.RawMessage(`{"models":null}`),
+		json.RawMessage(`{"models":{}}`),
+		json.RawMessage(`{"models":[{"id":"","displayName":"No id"}]}`),
+		json.RawMessage(`{"models":[{"id":"one","displayName":" "}]}`),
+		json.RawMessage(`{"models":[{"id":"one","displayName":"One"},{"id":"one","displayName":"Duplicate"}]}`),
+	} {
+		store := &workspaceReviewHandlerStore{
+			modelOrgID: workspaceTestOrgID, modelSessionID: workspaceTestSessionID,
+			modelResponse: response,
+		}
+		server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
+		request := workspaceReviewRequest(t, http.MethodGet, "/orgs/"+workspaceTestOrgID+"/providers/codex/models", nil)
+		chi.RouteContext(request.Context()).URLParams.Add("agent", "codex")
+		recorder := httptest.NewRecorder()
+
+		server.listUserAgentModels(recorder, request)
+
+		if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "INVALID_WORKER_RESPONSE") {
+			t.Fatalf("response=%s status=%d body=%s", response, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestListUserAgentModelsDoesNotReuseCatalogAfterConnectionChange(t *testing.T) {
+	store := &workspaceReviewHandlerStore{modelSourceErr: postgres.ErrNotFound}
+	server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
+	request := workspaceReviewRequest(t, http.MethodGet, "/orgs/"+workspaceTestOrgID+"/providers/codex/models", nil)
+	routeContext := chi.RouteContext(request.Context())
+	routeContext.URLParams.Add("agent", "codex")
+	recorder := httptest.NewRecorder()
+
+	server.listUserAgentModels(recorder, request)
+
+	if recorder.Code != http.StatusConflict || store.createdKind != "" || !strings.Contains(recorder.Body.String(), "MODEL_CATALOG_UNAVAILABLE") {
+		t.Fatalf("status=%d kind=%q body=%s", recorder.Code, store.createdKind, recorder.Body.String())
+	}
+}
+
+func TestListUserAgentModelsEmptyAndUnsupportedCatalogsRemainUnavailable(t *testing.T) {
+	for _, agent := range []string{"codex", "cursor", "opencode"} {
+		t.Run(agent, func(t *testing.T) {
+			store := &workspaceReviewHandlerStore{modelSessionID: workspaceTestSessionID, modelResponse: json.RawMessage(`{"models":[]}`)}
+			server := &Server{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), workerRequestTimeout: time.Second}
+			request := workspaceReviewRequest(t, http.MethodGet, "/providers/"+agent+"/models", nil)
+			chi.RouteContext(request.Context()).URLParams.Add("agent", agent)
+			recorder := httptest.NewRecorder()
+			server.listUserAgentModels(recorder, request)
+			if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "MODEL_CATALOG_UNAVAILABLE") {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if agent != "codex" && store.createdKind != "" {
+				t.Fatalf("unsupported agent dispatched worker request %q", store.createdKind)
+			}
+		})
 	}
 }
 

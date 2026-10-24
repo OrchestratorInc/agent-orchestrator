@@ -216,6 +216,34 @@ paths:
           description: The link was revoked.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/providers/{agent}/models:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: agent
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [claude-code, codex, cursor, opencode]
+    get:
+      operationId: listUserAgentModels
+      tags: [Providers]
+      description: Advisory model and reasoning-effort suggestions reported by a live Codex or Claude worker in this organization started with the authenticated user's current personal provider connection. The source worker's CLI, image, current model and default flags do not establish the next task's capabilities or defaults. Keep the native default unless the user or configuration explicitly selects a model. Eligibility is rechecked before a bounded process-local cache is accessed.
+      responses:
+        "200":
+          description: Advisory suggestions from an eligible worker, not a verified catalog for a future worker.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatModelsResponse"
+        "409":
+          description: MODEL_CATALOG_UNAVAILABLE. No matching live worker or this harness cannot discover worker models. Clients may offer native default or manual selection without presenting desktop models as worker-supported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
     get:
       operationId: getGitHubUserConnection

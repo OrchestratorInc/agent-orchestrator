@@ -68,6 +68,7 @@ export function AgentModelCombobox({
 	retryAt,
 	onChange,
 	onCustom,
+	onUseDefault,
 	emptyLabel,
 	triggerLabel,
 	triggerClassName,
@@ -93,6 +94,7 @@ export function AgentModelCombobox({
 	retryAt?: string | null;
 	onChange: (value: string) => void;
 	onCustom?: (value: string) => void;
+	onUseDefault?: () => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
 	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
@@ -416,6 +418,11 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
+						{onUseDefault && normalizedSearch === "" && (
+							<DropdownMenuItem onSelect={onUseDefault}>
+								{t("settings.models.useConfiguredDefault", { defaultValue: "Use project or agent default" })}
+							</DropdownMenuItem>
+						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}

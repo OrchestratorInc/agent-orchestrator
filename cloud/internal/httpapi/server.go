@@ -197,6 +197,8 @@ type Server struct {
 	// protocol default; workerTokenTTL() resolves that.
 	workerTokenLifetime     time.Duration
 	workerRequestTimeout    time.Duration
+	modelCatalogMu          sync.Mutex
+	modelCatalogs           map[modelCatalogKey]*modelCatalogEntry
 	maxSandboxes            int
 	environment             string
 	release                 string
@@ -616,6 +618,7 @@ func New(options Options) *Server {
 				router.Post("/projects/scratch", server.createGitHubScratchProject)
 			}
 			router.Get("/projects", server.listProjects)
+			router.Get("/providers/{agent}/models", server.listUserAgentModels)
 			router.Get("/billing", server.getBilling)
 			router.Post("/billing/checkout", server.createBillingCheckout)
 			router.Post("/billing/portal", server.createBillingPortal)

@@ -6,6 +6,32 @@ healthy replica. Live terminal relay connections stay in process memory; see
 [Worker workspace and terminal transport](#worker-workspace-and-terminal-transport)
 for the recovery path and deployment constraint.
 
+## Advisory model discovery
+
+The organization-scoped provider model route borrows a live worker owned by the
+authenticated user and started after their current credential was saved. Its
+catalog is advisory: neither its CLI/image nor its current model/default flags
+prove what a future task's worker will run. The composer keeps native/default
+or explicit configured/user selections, including unknown-capability effort.
+Without an eligible worker it supports native/default and manual entry; 409
+`MODEL_CATALOG_UNAVAILABLE` is not an absent legacy route. Only code-less
+404/501 responses enable labeled desktop compatibility suggestions, never an
+automatic desktop model selection.
+
+Each HTTP request rechecks credential freshness, ownership, active membership
+and tenant/session eligibility before cache access. Discovery is coalesced per
+user, organization, agent and source session in a disposable process-local cache
+of at most 128 entries. Successful responses live for five minutes, failures for
+five seconds. Dedicated discovery polls every 500 ms for at most 30 seconds and
+does not resume a worker. The last HTTP waiter leaving cancels the discovery and
+its outstanding worker request. Session-scoped requests retain their configured
+timeout. No persistent verified catalog or cross-replica coalescing is provided.
+
+The renderer passes the query AbortSignal to the Cloud client. Direct HTTP
+cancellation reaches this server, but the existing Electron `cloudCpFetch` IPC
+bridge does not forward AbortSignal, so native unmount-to-server cancellation
+is not guaranteed by this change.
+
 ## Durable session creation
 
 Creating a session commits one PostgreSQL transaction containing:
