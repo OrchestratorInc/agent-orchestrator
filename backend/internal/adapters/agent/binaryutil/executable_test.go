@@ -85,6 +85,26 @@ func TestDiscoveryExecutableLimitsTotalFiles(t *testing.T) {
 	}
 }
 
+func TestDiscoveryExecutableExplainsLargeUnverifiedApplication(t *testing.T) {
+	for _, ext := range []string{".js", ".mjs", ".cjs"} {
+		t.Run(ext, func(t *testing.T) {
+			root := t.TempDir()
+			body := "#!/usr/bin/env node\n" + strings.Repeat("// application code\n", discoveryLauncherReadLimit)
+			writeDiscoveryLauncher(t, root, "custom/cli"+ext, body)
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@node \"%~dp0custom/cli"+ext+"\" %*\n")
+			if _, err := VerifyExecutable(t.Context(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify launcher identity") || !strings.Contains(err.Error(), "inspection limit") {
+				t.Fatalf("large unverified application = %v, want identity-verification diagnostic", err)
+			}
+			// Large applications in an identified agent package still pass.
+			writeDiscoveryLauncher(t, root, "node_modules/grok-cli/cli"+ext, body)
+			launcher = writeDiscoveryLauncher(t, root, "grok.cmd", "@node \"%~dp0node_modules/grok-cli/cli"+ext+"\" %*\n")
+			if _, err := VerifyExecutable(t.Context(), "grok", launcher); err != nil {
+				t.Fatalf("large verified package application refused: %v", err)
+			}
+		})
+	}
+}
+
 func TestDiscoveryExecutableReusesSharedTargets(t *testing.T) {
 	root := t.TempDir()
 	// Repeated quoted commands and branches must reuse completed results rather
