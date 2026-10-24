@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -25,7 +26,61 @@ const (
 	agentOperationProviderSwitch    agentOperationKind = "provider_switch"
 )
 
+// agentOperationHolder records which exclusive operation owns a session and
+// when it started, so a refusal can name the holder and a wedged one can be
+// recognised as stale instead of refusing every later operation forever.
+type agentOperationHolder struct {
+	kind      agentOperationKind
+	startedAt time.Time
+}
+
+// defaultAgentOperationStaleAfter bounds how long an exclusive operation may
+// hold a session before later callers treat it as stale. Every operation kind
+// is bounded well inside it (wake 60s, interface-transition steps 45s, a whole
+// terminal switch 135s), so a holder this old has lost its owner — a process
+// that died mid-operation, or a lease its release never reached.
+const defaultAgentOperationStaleAfter = 10 * time.Minute
+
 var errAgentOperationInProgress = errors.New("session: another exclusive operation is in progress")
+
+// AgentOperationBusyError is a refusal that names the operation holding the
+// session, so a client can offer cancel/wait instead of a bare busy. It
+// unwraps to errAgentOperationInProgress, keeping every existing errors.Is
+// refusal check working.
+type AgentOperationBusyError struct {
+	Kind      agentOperationKind
+	StartedAt time.Time
+}
+
+func (e *AgentOperationBusyError) Error() string {
+	if e == nil || e.Kind == "" {
+		if e != nil && !e.StartedAt.IsZero() {
+			return errAgentOperationInProgress.Error() + " (held since " + e.StartedAt.Format(time.RFC3339) + ")"
+		}
+		return errAgentOperationInProgress.Error()
+	}
+	message := errAgentOperationInProgress.Error() + " (" + string(e.Kind)
+	if !e.StartedAt.IsZero() {
+		message += " held since " + e.StartedAt.Format(time.RFC3339)
+	}
+	return message + ")"
+}
+
+func (e *AgentOperationBusyError) Unwrap() error { return errAgentOperationInProgress }
+
+// agentOperationBusyDetail renders a busy refusal for a provider switch: it
+// names the holder and when it started so the UI can offer cancel/wait.
+func agentOperationBusyDetail(err error) string {
+	var busy *AgentOperationBusyError
+	if !errors.As(err, &busy) || busy == nil || busy.Kind == "" {
+		return "another session operation is in progress"
+	}
+	detail := "another session operation is in progress: " + string(busy.Kind)
+	if !busy.StartedAt.IsZero() {
+		detail += fmt.Sprintf(" held since %s (running for %s)", busy.StartedAt.Format("15:04:05"), time.Since(busy.StartedAt).Round(time.Second))
+	}
+	return detail
+}
 
 var _ sessionguard.InputLease = (*Manager)(nil)
 
@@ -92,6 +147,15 @@ func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
 	return ok || deferred
 }
 
+// operationClock tolerates a bare test Manager: the clock is always wired in
+// production, but the lease helpers must not segfault without it.
+func (m *Manager) operationClock() time.Time {
+	if m.clock == nil {
+		return time.Now()
+	}
+	return m.clock()
+}
+
 // beginAgentOperation closes input admission before waiting for already-issued
 // leases. Because both actions share agentOpMu, a pane write is either fully
 // admitted before the operation (and drained) or rejected after it; there is
@@ -105,10 +169,13 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 	for {
 		m.agentOpMu.Lock()
 		if m.agentOperationActiveLocked(id) {
-			current := m.agentOperations[id]
+			holder := m.agentOperations[id]
 			m.agentOpMu.Unlock()
-			if current != agentOperationHibernate || kind == agentOperationHibernate {
-				return errAgentOperationInProgress
+			if m.agentOperationStale(holder) && m.reapStaleAgentOperation(id, holder) {
+				continue
+			}
+			if holder.kind != agentOperationHibernate || kind == agentOperationHibernate {
+				return &AgentOperationBusyError{Kind: holder.kind, StartedAt: holder.startedAt}
 			}
 			// Background cleanup yields to every explicit operation once its
 			// bounded shutdown completes; it must not make Kill/Switch fail.
@@ -119,7 +186,7 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 				continue
 			}
 		}
-		m.agentOperations[id] = kind
+		m.agentOperations[id] = agentOperationHolder{kind: kind, startedAt: m.operationClock()}
 		drained = m.inputDrained[id]
 		m.agentOpMu.Unlock()
 		break
@@ -155,7 +222,7 @@ func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.Session
 		if id == "" || m.agentOperationActiveLocked(id) {
 			continue
 		}
-		m.agentOperations[id] = kind
+		m.agentOperations[id] = agentOperationHolder{kind: kind, startedAt: m.operationClock()}
 		reservations = append(reservations, reservation{id: id, drained: m.inputDrained[id]})
 	}
 	m.agentOpMu.Unlock()
@@ -183,10 +250,44 @@ func (m *Manager) beginAgentOperations(ctx context.Context, ids []domain.Session
 func (m *Manager) endAgentOperation(id domain.SessionID, kind agentOperationKind) {
 	m.agentOpMu.Lock()
 	defer m.agentOpMu.Unlock()
-	if current, ok := m.agentOperations[id]; ok && current == kind {
+	if current, ok := m.agentOperations[id]; ok && current.kind == kind {
 		delete(m.agentOperations, id)
 		m.resumeDeferredInterfaceRecoveryLocked(id)
 	}
+}
+
+// agentOperationStale reports whether an exclusive-operation holder has run
+// past every budget its kind is given. Only an owner that can no longer be
+// alive — a process that died mid-operation, or a release that never ran —
+// gets there; a live operation is named in the refusal instead.
+func (m *Manager) agentOperationStale(holder agentOperationHolder) bool {
+	if holder.kind == "" || holder.startedAt.IsZero() {
+		return false
+	}
+	limit := m.operationStaleAfter
+	if limit <= 0 {
+		limit = defaultAgentOperationStaleAfter
+	}
+	return m.operationClock().Sub(holder.startedAt) > limit
+}
+
+// reapStaleAgentOperation releases a stale holder so the session stops
+// refusing every exclusive operation forever. The compare under the lock keeps
+// a finished operation's own release, or a newer operation that reused the
+// slot, from being reaped in the stale holder's place.
+func (m *Manager) reapStaleAgentOperation(id domain.SessionID, holder agentOperationHolder) bool {
+	m.agentOpMu.Lock()
+	defer m.agentOpMu.Unlock()
+	if current, ok := m.agentOperations[id]; !ok || current != holder {
+		return false
+	}
+	delete(m.agentOperations, id)
+	m.logger.Warn("session: reaped stale exclusive operation",
+		"sessionID", id, "operation", holder.kind,
+		"startedAt", holder.startedAt.Format(time.RFC3339),
+		"age", m.operationClock().Sub(holder.startedAt).Round(time.Second))
+	m.resumeDeferredInterfaceRecoveryLocked(id)
+	return true
 }
 
 // The deferred fence survives the foreign operation's release. Recovery, not

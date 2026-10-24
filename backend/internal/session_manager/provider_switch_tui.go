@@ -18,7 +18,7 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 	target := request.TargetHarness
 	if err := m.beginAgentOperation(ctx, id, agentOperationProviderSwitch); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
-			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: "another session operation is in progress", Cause: err}
+			return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalBusy, Detail: agentOperationBusyDetail(err), Cause: err}
 		}
 		return err
 	}

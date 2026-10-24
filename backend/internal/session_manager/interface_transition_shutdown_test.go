@@ -137,7 +137,7 @@ func TestStartupDefersInterfaceRecoveryBehindExistingSessionOperation(t *testing
 func TestDeferredInterfaceRecoveryRespectsWorkerShutdown(t *testing.T) {
 	m, _, _, _, _ := newTransitionManager(t, domain.SessionModeChat)
 	m.deferredInterfaceRecovery = map[domain.SessionID]string{"session-1": "interrupted"}
-	m.agentOperations["session-1"] = agentOperationKill
+	m.agentOperations["session-1"] = agentOperationHolder{kind: agentOperationKill, startedAt: time.Now()}
 	if err := m.WaitAgentSwitchWorkers(context.Background()); err != nil {
 		t.Fatal(err)
 	}

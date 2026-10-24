@@ -28,9 +28,9 @@ func TestHibernatedResumeWaitsForPersistentHostReconcile(t *testing.T) {
 	deadline := time.After(time.Second)
 	for {
 		mgr.agentOpMu.Lock()
-		operation := mgr.agentOperations[rec.ID]
+		holder := mgr.agentOperations[rec.ID]
 		mgr.agentOpMu.Unlock()
-		if operation == agentOperationResume {
+		if holder.kind == agentOperationResume {
 			break
 		}
 		select {
