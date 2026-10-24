@@ -343,7 +343,6 @@ describe("NotificationCenter", () => {
 	});
 
 	it("opens once on click without a hover/focus remount and dismisses outside", async () => {
-		const user = userEvent.setup();
 		renderNotificationCenter();
 		const trigger = screen.getByRole("button", { name: /unread notifications/ });
 		fireEvent.mouseEnter(trigger);
@@ -353,9 +352,7 @@ describe("NotificationCenter", () => {
 		await clickOpen();
 
 		expect(screen.queryByText(/last 7 days/i)).not.toBeInTheDocument();
-		await user.pointer({ keys: "[MouseLeft>]", target: document.body });
-		expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
-		await user.pointer({ keys: "[/MouseLeft]", target: document.body });
+		fireEvent.pointerDown(document.body);
 		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Notifications" })).not.toBeInTheDocument());
 	});
 

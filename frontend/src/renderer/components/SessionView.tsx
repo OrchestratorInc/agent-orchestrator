@@ -33,7 +33,7 @@ import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { isArtifactPreviewUrl } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
-import { TerminalSessionMenu } from "./TerminalAgentControls";
+import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { ShellTopbar } from "./ShellTopbar";
@@ -80,6 +80,8 @@ import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { sessionUiKey } from "../lib/hosts";
 import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
+import { cloudWorkspaceFilePath } from "../lib/cloud-workspace-file-path";
+import { cloudWorkspaceReviewSummaryQueryOptions } from "../hooks/useCloudWorkspaceReview";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { filesProjectKind } from "../lib/files-review-selection";
 import { aoBridge } from "../lib/bridge";
@@ -579,6 +581,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					visibleKeys.has(key) ? nextOrder[nextIndex++]! : key,
 				);
 				while (nextIndex < nextOrder.length) mergedOrder.push(nextOrder[nextIndex++]!);
+				if (mergedOrder.length === currentOrder.length && mergedOrder.every((key, index) => key === currentOrder[index])) return current;
 				return { ...current, [uiSessionId]: mergedOrder };
 			});
 		},
@@ -1461,17 +1464,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local terminal session's tab menu holds its agent and the switch to chat; Cloud cannot switch agent.
+	// A local session's tab menu holds the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	const sessionTabActions = !session || showChatSurface || session.cloud
+	const sessionTabActions = !session || session.cloud
 		? (session?.cloud ? interfaceUi.switchControl : null)
 		: (
-			<TerminalSessionMenu
+			<SessionTabMenu
 				key={uiSessionId}
 				session={session}
 				hostId={hostId}
 				blocked={agentWorking}
+				switchTarget={interfaceUi.target}
 				switchAction={interfaceUi.switchAction}
 				switchControl={interfaceUi.switchControl}
 			/>
@@ -1550,7 +1554,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		async (rawPath: string, options?: FileOpenOptions) => {
 			const reference = normalizeWorkspaceFileReference(rawPath);
 			if (session?.cloud) {
-				if (reference) openCenterFile(reference, options);
+				if (!reference) return;
+				try {
+					const review = await queryClient.fetchQuery(cloudWorkspaceReviewSummaryQueryOptions({
+						client: cloudCpClient, baseUrl: cloudCpBaseUrl, orgId: session.cloud.orgId, sessionId,
+					}));
+					openCenterFile(cloudWorkspaceFilePath(rawPath, review), options);
+				} catch {
+					openCenterFile(reference, options);
+				}
 				return;
 			}
 			if (!isAbsoluteFileReference(reference)) {
@@ -1571,7 +1583,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			// so, rather than a workspace file that happens to share its name.
 			openCenterFile(reference, options);
 		},
-		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, session?.cloud, sessionId],
+		[cloudCpBaseUrl, cloudCpClient, fetchWorkspaceFiles, hostId, openCenterFile, queryClient, revealResolvedArtifact, session?.cloud, sessionId],
 	);
 
 	const handleOpenFiles = useCallback(() => {
@@ -1955,7 +1967,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
-									onOpenFile={openCenterFile}
+									onOpenFile={handleOpenFile}
 									session={session}
 									sessionTabAction={sessionTabActions}
 									reviewerTerminal={reviewerTerminal}
@@ -1964,6 +1976,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onSelectChat={selectSessionTerminal}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
+									workspaceTabs={centerFileTabs}
+									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 								/>

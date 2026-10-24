@@ -3,6 +3,7 @@ import { machineIdentity, type ServerConfig } from "../config";
 import {
 	cancelQueuedConversationTurn,
 	compactConversation,
+	editConversationMessage,
 	getConversationConfigOptions,
 	getConversationModels,
 	getConversationPage,
@@ -30,7 +31,7 @@ import {
 	type ConversationPage,
 } from "./api";
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
-import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages } from "./snapshot";
+import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
@@ -69,6 +70,7 @@ export type ConversationAction =
 	| "input"
 	| "compact"
 	| "rollback"
+	| "edit"
 	| "settings"
 	| "config"
 	| "mcp"
@@ -106,6 +108,8 @@ export type MobileConversation = {
 	resolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	compact(): Promise<void>;
 	rollback(turnId: string): Promise<number>;
+	/** Retry an uncertain edit with the same `clientMessageId`; the daemon will not branch it twice. */
+	editMessage(turnId: string, text: string, clientMessageId: string): Promise<void>;
 	chooseSettings(settings: TurnSettings): Promise<void>;
 	setConfigOption(optionId: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
 	reloadMcp(): Promise<void>;
@@ -155,9 +159,7 @@ export function useMobileConversation(
 				: await getConversationPage(cfg, sessionId);
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
 			setPages((old) => {
-				const next = old[0]?.conversationId && old[0].conversationId !== live.conversationId
-					? [live]
-					: [live, ...old.slice(1)];
+				const next = withLivePage(old, live);
 				conversationPageCache.set(cacheKey, next);
 				return next;
 			});
@@ -188,7 +190,7 @@ export function useMobileConversation(
 			const older = options?.reviewId
 				? await getReviewerConversationPage(cfg, options.reviewId, snapshot.oldestSequence)
 				: await getConversationPage(cfg, sessionId, snapshot.oldestSequence);
-			if (mounted.current) setPages((old) => [...old, older]);
+			if (mounted.current) setPages((old) => olderPageFits(old, older) ? [...old, older] : old);
 		} catch (cause) {
 			if (mounted.current) setActionError(conversationActionError(cause));
 		} finally {
@@ -277,7 +279,9 @@ export function useMobileConversation(
 	}, [cfg, unavailable, scheduleRefresh]);
 
 	const runAction = useCallback(
-		async <T,>(kind: ConversationAction, action: () => Promise<T>, resetHistoricalPages = false): Promise<T> => {
+		// `banner: false` keeps a failure out of the screen banner when the control
+		// that acted already shows it in place (the inline message editor).
+		async <T,>(kind: ConversationAction, action: () => Promise<T>, resetHistoricalPages = false, banner = true): Promise<T> => {
 			setPendingActions((old) => old.includes(kind) ? old : [...old, kind]);
 			setActionError(undefined);
 			setActionErrors((old) => ({ ...old, [kind]: undefined }));
@@ -289,10 +293,11 @@ export function useMobileConversation(
 				return result;
 			} catch (cause) {
 				const message = conversationActionError(cause);
-				setActionError(message);
+				if (banner) setActionError(message);
 				setActionErrors((old) => ({ ...old, [kind]: message }));
-				setActionCodes((old) => ({ ...old, [kind]: conversationErrorCode(cause) }));
-				throw new Error(message);
+				const code = conversationErrorCode(cause);
+				setActionCodes((old) => ({ ...old, [kind]: code }));
+				throw Object.assign(new Error(message), { code });
 			} finally {
 				setPendingActions((old) => old.filter((candidate) => candidate !== kind));
 			}
@@ -430,6 +435,11 @@ export function useMobileConversation(
 		(turnId: string) => runAction("rollback", () => requireConfig(cfg, (c) => rollbackConversation(c, sessionId, turnId)), true),
 		[cfg, runAction, sessionId],
 	);
+	const editMessage = useCallback(
+		(turnId: string, text: string, clientMessageId: string) =>
+			runAction("edit", () => requireConfig(cfg, (c) => editConversationMessage(c, sessionId, turnId, text, clientMessageId)), true, false),
+		[cfg, runAction, sessionId],
+	);
 	const chooseSettings = useCallback(
 		(settings: TurnSettings) => runAction("settings", () => requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings))),
 		[cfg, runAction, sessionId],
@@ -489,6 +499,7 @@ export function useMobileConversation(
 		resolveInput: resolveInputAction,
 		compact,
 		rollback,
+		editMessage,
 		chooseSettings,
 		setConfigOption,
 		reloadMcp,
@@ -501,7 +512,7 @@ async function requireConfig<T>(cfg: ServerConfig | null, action: (cfg: ServerCo
 	return action(cfg);
 }
 
-function clientMessageId(): string {
+export function clientMessageId(): string {
 	return `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 

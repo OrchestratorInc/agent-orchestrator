@@ -1,0 +1,163 @@
+---
+title: 安装
+description: 下载 Orchestrator 桌面应用，并连接你的编程工具。
+translatedFrom: 7460247266d0
+---
+
+如需最新的稳定版桌面构建，请从 [Orchestrator 官方下载页面](https://orchestrator.inc/download/)开始。该页面还列出了每夜构建和移动应用。如果你想直接获取桌面安装包，请从下面选择：
+
+<InstallDownloads />
+
+在手机上，安装[适用于 iPhone 或 iPad 的 Orchestrator Mobile](https://apps.apple.com/app/ao-mobile/id6792552173) 或[适用于 Android 的 Orchestrator Mobile](https://play.google.com/store/apps/details?id=aoagents.dev)。然后在桌面应用中使用 [Connect Mobile](/configuration/remote-access) 进行配对。
+
+桌面应用是标准的安装方式。它管理本地守护进程，不需要全局的 `ao` 命令，并会在启动后和运行期间检查更新。
+
+<span id="optional-macos-install-with-homebrew" />
+## 可选：在 macOS 上用 Homebrew 安装
+
+推荐使用上面的桌面下载进行安装。在 macOS 上，你也可以安装现有的 Homebrew cask：
+
+```bash
+brew install --cask agentwrapper/tap/agent-orchestrator
+```
+
+桌面应用通常会自动更新。要更新由 Homebrew 管理的安装，请先更新 Homebrew，再升级 cask：
+
+```bash
+brew update
+brew upgrade --cask agentwrapper/tap/agent-orchestrator
+```
+
+<span id="prerequisites" />
+## 前提条件
+
+| 工具 | 何时需要 | 原因 |
+| --- | --- | --- |
+| Git | 仓库项目 | 创建和管理隔离的工作树与分支。 |
+| GitHub CLI `gh` | GitHub 项目 | 使用你现有的认证执行仓库和拉取请求操作。 |
+| 外部编程代理（在 Orchestrator 中称为 harness） | 使用已安装 CLI 的代理会话 | 安装受支持的工具，例如 Claude Code、Codex、Cursor、Aider 或 OpenCode。当前列表和界面支持情况请参阅[代理目录](/plugins/agents)。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。 |
+| tmux | macOS 预检，以及旧版或回退的终端会话 | macOS 和 Linux 的桌面安装包已包含它。从源码启动时可能需要系统中的 tmux；请参阅 [Runtime](/plugins/runtimes)。 |
+
+Orchestrator 使用你电脑上已经安装并登录的编程代理。**Settings → Harness** 提供受支持代理的设置和就绪检查；有些代理需要在 Orchestrator 之外安装或登录。Unreal Agent 是一个例外：它是内置的、仅用于 Chat 的代理，有自己的平台和权限限制。请参阅[代理目录](/plugins/agents)。
+
+<span id="set-up-ao" />
+<span id="set-up-orchestrator" />
+## 设置 Orchestrator
+
+<Steps>
+<Step>
+
+<span id="install-and-open-the-desktop-app" />
+### 安装并打开桌面应用
+
+在上方选择适合你平台的下载，安装后打开 **Orchestrator**。应用会自动启动并监督本地的 Go 守护进程。
+
+</Step>
+<Step>
+
+<span id="authenticate-github" />
+### 进行 GitHub 认证
+
+对于 GitHub 仓库，如有需要请先[安装 GitHub CLI](https://cli.github.com/)，然后登录：
+
+```bash
+gh auth login
+gh auth status
+```
+
+请使用能够读取该仓库、并能执行你希望代理进行的分支和拉取请求操作的账户。
+
+对于 GitLab，请使用 GitLab 令牌或 `glab` 登录。请参阅[源代码管理设置](/plugins/scm)。
+
+</Step>
+<Step>
+
+<span id="install-and-sign-in-to-an-agent" />
+
+<span id="install-and-sign-in-to-an-external-agent" />
+### 安装并登录外部代理
+
+对于外部安装的 harness，请先安装，然后在 Orchestrator 之外运行一次以完成登录。Orchestrator 会在你创建会话时检测可用的 harness。如果你使用内置的 Unreal Agent，可以跳过这一步，在受支持的 macOS 或 Linux 上创建 Chat 会话时直接选择它。
+
+是否支持 Chat 取决于 harness 及其已安装的版本；请参阅[代理能力目录](/plugins/agents#chat-versus-terminal-ui)。
+
+</Step>
+<Step>
+
+<span id="add-a-project" />
+### 添加项目
+
+在桌面应用中选择 **Add project**，然后选择一个现有的本地 Git 仓库。Orchestrator 会登记该仓库，但不会移动你原来的检出目录。每个 worker 会话都有自己独立的工作树。
+
+</Step>
+</Steps>
+
+对于不需要仓库的工作，你也可以启动一个不属于任何项目的独立任务。可选 CLI 的写法是 `ao spawn --standalone --agent codex --name notes --prompt "Draft release notes"`；独立 worker 不能认领 PR，也不能使用 Git 或项目相关的参数。
+
+<span id="legacy-npm-cli" />
+## 旧版 npm CLI
+
+<details className="ao-legacy-cli-details">
+<summary>
+	<span className="ao-legacy-cli-summary-copy">
+		<span className="ao-legacy-cli-summary-title">已经在用 npm CLI？</span>
+		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> 已冻结在 <code>0.10.0</code>，不再推荐使用。</span>
+	</span>
+	<span className="ao-legacy-cli-summary-icon" aria-hidden="true" />
+</summary>
+
+<div className="ao-legacy-cli-details__content">
+
+`0.10.0` 是最后一个 npm 版本。该包作为现有用户的旧版过渡保留，不会再获得新的产品功能。从该安装运行 `ao start` 会获取并打开桌面构建。
+
+```bash
+npm install -g @aoagents/ao
+ao start
+```
+
+新用户应直接安装桌面应用。
+
+</div>
+</details>
+
+<span id="where-ao-stores-data" />
+<span id="where-orchestrator-stores-data" />
+## Orchestrator 的数据存放位置
+
+Orchestrator 的所有应用状态默认都存放在 `~/.ao` 下，包括守护进程数据库、运行文件（run file）、托管的工作树、Electron 浏览器数据和移动端配对配置。高级安装可以用 `AO_DATA_DIR` 和 `AO_RUN_FILE` 覆盖守护进程的路径。
+
+<span id="common-installation-problems" />
+## 常见安装问题
+
+<Accordions>
+	<Accordion title="没有可用的代理">
+		对于外部 harness，请安装它并运行一次以完成认证，然后重启 Orchestrator，让从桌面启动的守护进程获得更新后的登录 shell 环境。Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat；直接选择它即可，无需安装 CLI。
+	</Accordion>
+	<Accordion title="缺少 GitHub 数据">
+		运行 `gh auth status`。确认当前账户能够访问该仓库及其拉取请求。
+	</Accordion>
+	<Accordion title="在 macOS 或 Linux 上无法启动 Terminal UI">
+		打包的构建已包含 tmux。新会话通常使用原生 PTY 宿主；macOS 仍会检查 tmux 是否可用，较旧的会话可能需要它。源码安装和回退行为请参阅[运行时诊断](/plugins/runtimes/tmux)。
+	</Accordion>
+	<Accordion title="找不到旧版 `ao` 命令">
+		桌面应用不需要这个命令。只有在你有意使用已冻结的旧版 CLI 时，才需要排查包管理器的全局 bin 路径。
+	</Accordion>
+	<Accordion title="macOS 提示无法验证开发者">
+		在访达中右键点按 Orchestrator，选择“打开”，然后在确认对话框中再次选择“打开”。如果 macOS 仍然阻止该应用，请运行以下诊断命令，并在提交 issue 时附上输出：
+		```bash
+		sw_vers
+		codesign -dvvv "/Applications/Agent Orchestrator.app"
+		spctl -a -t exec -vvv --ignore-cache --no-cache "/Applications/Agent Orchestrator.app"
+		log show --last 10m --predicate 'subsystem == "com.apple.syspolicy"'
+		```
+	</Accordion>
+</Accordions>
+
+<span id="next" />
+## 下一步
+
+<Cards>
+	<Card title="快速开始" description="创建项目并运行第一个 worker。" href="/quickstart" />
+	<Card title="平台" description="查看各平台的下载和终端行为。" href="/platforms" />
+	<Card title="故障排除" description="诊断桌面应用、守护进程和代理的问题。" href="/troubleshooting" />
+</Cards>

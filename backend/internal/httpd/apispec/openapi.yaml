@@ -286,12 +286,15 @@ paths:
           description: Return catalog facts without reading session history for model
             recency. Cached catalogs are served while discovery refreshes in the background.
           type: boolean
-      - description: Optional project identifier used as the model-catalog cache scope.
+      - description: 'Optional cloud credential scope. Any other value, including
+          a project identifier, is ignored: model catalogs are cached per device,
+          not per project.'
         in: query
         name: projectId
         schema:
-          description: Optional project identifier used as the model-catalog cache
-            scope.
+          description: 'Optional cloud credential scope. Any other value, including
+            a project identifier, is ignored: model catalogs are cached per device,
+            not per project.'
           type: string
       responses:
         "200":
@@ -347,12 +350,15 @@ paths:
           description: Refresh the Harness Settings browsing catalog without session-history
             enrichment; FX includes all connections in a separate cache.
           type: boolean
-      - description: Optional project identifier used as the model-catalog cache scope.
+      - description: 'Optional cloud credential scope. Any other value, including
+          a project identifier, is ignored: model catalogs are cached per device,
+          not per project.'
         in: query
         name: projectId
         schema:
-          description: Optional project identifier used as the model-catalog cache
-            scope.
+          description: 'Optional cloud credential scope. Any other value, including
+            a project identifier, is ignored: model catalogs are cached per device,
+            not per project.'
           type: string
       - description: When true, compare executable and config metadata before running
           discovery.
@@ -3249,7 +3255,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: List paired mobile devices with their live/muted status
+      summary: List paired mobile devices with their live status
       tags:
       - mobile
   /api/v1/mobile/devices/{installId}:
@@ -3279,52 +3285,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Remove a paired device from the roster
-      tags:
-      - mobile
-    patch:
-      operationId: muteMobileDevice
-      parameters:
-      - description: The device's stable install id.
-        in: path
-        name: installId
-        required: true
-        schema:
-          description: The device's stable install id.
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MuteDeviceRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                additionalProperties:
-                  type: boolean
-                type: object
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Mute or unmute push notifications for a paired device
       tags:
       - mobile
   /api/v1/mobile/disable:
@@ -4183,6 +4143,44 @@ paths:
       tags:
       - projects
   /api/v1/projects/{id}/permissions:
+    delete:
+      operationId: forgetProjectPermissions
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Forget remembered project permissions
+      tags:
+      - projects
     patch:
       operationId: setProjectPermissions
       parameters:
@@ -4401,7 +4399,45 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Clone and register a project from a git repository URL
+      tags:
+      - projects
+  /api/v1/projects/clone/check:
+    post:
+      operationId: checkCloneDestination
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloneProjectInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloneDestination'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Check a clone destination and normalize its repository URL without
+        network access
       tags:
       - projects
   /api/v1/projects/clone/cleanup:
@@ -4465,6 +4501,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Clone a project without registering it so Git setup can be completed
       tags:
       - projects
@@ -14168,6 +14210,22 @@ components:
       - clearEpoch
       - clearSequence
       type: object
+    CloneDestination:
+      properties:
+        canUseExisting:
+          type: boolean
+        exists:
+          type: boolean
+        path:
+          type: string
+        remoteUrl:
+          type: string
+      required:
+      - remoteUrl
+      - path
+      - exists
+      - canUseExisting
+      type: object
     ClonePreparationResult:
       properties:
         path:
@@ -14930,6 +14988,8 @@ components:
           type: boolean
         branch:
           type: string
+        branchNaming:
+          type: boolean
         branchState:
           $ref: '#/components/schemas/SessionBranchState'
         chatProviderPreserved:
@@ -15233,6 +15293,7 @@ components:
           - mcp_tool
           - auto_review
           - user_input
+          - ao_action
           type: string
         createdAt:
           type: string
@@ -15576,6 +15637,8 @@ components:
       properties:
         explanation:
           type: string
+        spansTurns:
+          type: boolean
         steps:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'
@@ -16136,6 +16199,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - hermes
           - fake
           type: string
         approvalMode:
@@ -16836,6 +16900,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - hermes
           - cloudflared
           type: string
         updatedAt:
@@ -17369,8 +17434,6 @@ components:
         live:
           description: True when the phone's app is open and polling.
           type: boolean
-        muted:
-          type: boolean
         notificationsEnabled:
           description: True when this device has a push token registered.
           type: boolean
@@ -17383,7 +17446,6 @@ components:
           type: string
       required:
       - installId
-      - muted
       - live
       - notificationsEnabled
       - createdAt
@@ -17483,14 +17545,6 @@ components:
       - hostname
       - location
       - lastError
-      type: object
-    MuteDeviceRequest:
-      properties:
-        muted:
-          description: True to stop sending push notifications to this device.
-          type: boolean
-      required:
-      - muted
       type: object
     NotificationEnvelope:
       properties:
@@ -17749,6 +17803,8 @@ components:
       type: object
     ProjectClonePreparationCleanupInput:
       properties:
+        keepCheckout:
+          type: boolean
         path:
           minLength: 1
           type: string
@@ -20182,6 +20238,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - hermes
           type: string
         issueId:
           type: string
@@ -20629,6 +20686,8 @@ components:
         distinctId:
           type: string
         githubLogin:
+          type: string
+        installId:
           type: string
         optedOut:
           type: boolean

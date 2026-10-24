@@ -84,6 +84,7 @@ const (
 	TargetOpenHands   Target = "openhands"
 	TargetCommandCode Target = "command-code"
 	TargetMemcode     Target = "memcode"
+	TargetHermes      Target = "hermes"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
@@ -97,7 +98,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetMemcode,
+	TargetCommandCode, TargetMemcode, TargetHermes,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -312,7 +313,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -591,9 +592,14 @@ func operationPlanFor(plans map[string]Plan, method string) Plan {
 	return Plan{Method: method, Unsupported: true, Reason: "This installation method is no longer detected."}
 }
 
+// lastResortInstallers are official installers that clone a source repository
+// rather than fetch a release artifact, so an available package manager is
+// recommended ahead of them.
+var lastResortInstallers = map[Target]bool{TargetHermes: true}
+
 func recommendedPlanIndex(plans []Plan) int {
 	for index, plan := range plans {
-		if plan.Method == "official-installer" && !plan.Unsupported {
+		if plan.Method == "official-installer" && !plan.Unsupported && !lastResortInstallers[plan.Target] {
 			return index
 		}
 	}
@@ -794,7 +800,7 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
-			baseline = &installedBaseline{scheme: versionSchemeFor(target)}
+			baseline = &installedBaseline{target: target, scheme: versionSchemeFor(target)}
 		}
 		// An update never moves the installed copy backwards.
 		if versionAtMost(baseline.scheme, expected, baseline.version) {
@@ -1308,7 +1314,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		_, _ = io.WriteString(out, "\nAutohand CLI install will be verified. Computer control needs a separate repair: autohand computer install\n")
 	}
 	if runErr != nil && !installConfirmed && !autohandCLIInstalled {
-		message := runErr.Error()
+		message := failureSummary(runErr, out)
 		if plan.Target == TargetAutohand && plan.Method == "official-installer" &&
 			strings.Contains(out.String(), "Downloaded Autohand CLI failed to start") &&
 			strings.Contains(out.String(), "The existing installation was not changed.") {
@@ -1329,8 +1335,33 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
 }
 
-// maxUpdaterReportRunes bounds the updater line quoted in a failed update.
-const maxUpdaterReportRunes = 200
+// maxUpdaterReportRunes keeps the updater line quoted in a failed update
+// short enough for the update notice.
+const maxUpdaterReportRunes = 80
+
+// installFailure is a failed operation with a short summary for the update
+// notice. err, which may name paths or quote output, goes to diagnostics.
+type installFailure struct {
+	summary string
+	err     error
+}
+
+func (e *installFailure) Error() string { return e.summary }
+func (e *installFailure) Unwrap() error { return e.err }
+
+func installFailed(summary string, err error) error {
+	return &installFailure{summary: summary, err: err}
+}
+
+// failureSummary is the job error for err. An installFailure's detail is
+// written to out, the job's diagnostics, so the notice keeps only the summary.
+func failureSummary(err error, out io.Writer) string {
+	var failure *installFailure
+	if errors.As(err, &failure) && failure.err != nil {
+		_, _ = fmt.Fprintf(out, "\n%s\n%v\n", failure.summary, failure.err)
+	}
+	return err.Error()
+}
 
 // terminalEscape matches ANSI CSI and OSC sequences that colour or retitle
 // terminal output.
@@ -1388,7 +1419,7 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 	}
 	if failure != "" {
 		if updaterReport != "" {
-			failure = fmt.Sprintf("%s; the update command reported: %q", failure, updaterReport)
+			failure = fmt.Sprintf("%s The updater said: %q", failure, updaterReport)
 		}
 		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
 		return
@@ -1396,7 +1427,7 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 	if baseline != nil {
 		// Only updates carry a baseline. Mark the sessions it left behind
 		// before reporting success, while launches still wait on this update.
-		if installed, ok := baseline.scheme.find(result.Output); ok {
+		if installed, ok := baseline.scheme.find(installedVersionText(job.Target, result.ResolvedPath, result.Output)); ok {
 			s.noteHarnessUpdated(job.Target, installed.display)
 		}
 	}
@@ -1519,7 +1550,11 @@ func (s *Service) resolvePlan(target Target) Plan {
 // "; " rather than "&&": a failed step is noted and Command still runs.
 func displayCommand(plan Plan) string {
 	if plan.Script != nil {
-		return fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
+		display := fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
+		if len(plan.Script.Args) > 0 {
+			display += " " + strings.Join(plan.Script.Args, " ")
+		}
+		return display
 	}
 	argv := plan.Command
 	if plan.NeedsRoot && len(argv) > 0 {

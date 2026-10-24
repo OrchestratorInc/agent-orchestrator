@@ -7,18 +7,13 @@
  * turn, and the turn id that reaches the daemon is the one that was clicked.
  */
 
-import { render as rtlRender, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-}
+import { renderChat as render } from "../../test/render-chat";
 
 /** A conversation with one failed turn and nothing in flight. */
 function failedSnapshot(): ConversationSnapshot {
@@ -190,6 +185,33 @@ describe("ChatWorkspace retry", () => {
 
 		// The failed turn in the fixture is turn-1; the daemon must be given AO's
 		// own turn id, which is what the snapshot exposes.
+		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
+	});
+
+	it.each([1, 2])("keeps one retry for a failed turn after %i steers", async (steerCount) => {
+		const snapshot = failedSnapshot();
+		const createdAt = snapshot.turns[0]!.requestedAt;
+		snapshot.items = [...snapshot.items];
+		for (let index = 0; index < steerCount; index += 1) {
+			snapshot.items.push({
+				kind: "activity",
+				id: `steer-${index}`,
+				turnId: "turn-1",
+				sequence: ++snapshot.latestSequence,
+				revision: 0,
+				activityKind: "system",
+				status: "completed",
+				summary: "Only run the unit tests",
+				detail: { event: "steer", text: "Only run the unit tests", origin: "human" },
+				createdAt,
+			});
+		}
+		const onRetryTurn = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: onRetryTurn }} />);
+
+		const retries = screen.getAllByRole("button", { name: "Retry this turn" });
+		expect(retries).toHaveLength(1);
+		await userEvent.click(retries[0]!);
 		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
 	});
 

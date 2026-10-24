@@ -54,9 +54,8 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger(log, deps.Telemetry))
 	r.Use(recoverTelemetry(log, deps.Telemetry))
-	// Account-management routes do not inherit the general localhost preview
-	// exception. This guard must wrap corsMiddleware so hostile preflights are
-	// rejected before the general CORS layer can answer them.
+	// Credential routes retain their exact renderer-only boundary even for
+	// authenticated LAN callers. Check before CORS can answer a preflight.
 	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
@@ -68,7 +67,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
 	mountHealth(r, cfg)
-	mountTerminalMux(r, termMgr, log)
+	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
 	mountTelemetryIdentity(r, deps.TelemetryIdentity)
@@ -179,7 +178,6 @@ func mountMobileDevices(r chi.Router, c *controllers.MobileDevicesController) {
 		return
 	}
 	r.Get("/api/v1/mobile/devices", c.List)
-	r.Patch("/api/v1/mobile/devices/{installId}", c.Mute)
 	r.Delete("/api/v1/mobile/devices/{installId}", c.Remove)
 }
 

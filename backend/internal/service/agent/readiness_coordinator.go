@@ -21,9 +21,15 @@ const (
 	defaultLaunchReadinessTTL   = 30 * time.Second
 	defaultInstallCheckTimeout  = 2 * time.Second
 	opencodeInstallCheckTimeout = 12 * time.Second
-	opencodeV2MigrationTimeout  = 30 * time.Minute
-	defaultAuthCheckTimeout     = 10 * time.Second
-	defaultReadinessWorkers     = 4
+	// Hermes is a Python CLI: a warm --version identity probe takes about two
+	// seconds, and the first run after an install compiles its bytecode.
+	hermesInstallCheckTimeout = 60 * time.Second
+	// The Hermes auth check resolves the binary, then runs `hermes status`,
+	// which inspects every provider and takes several seconds even when warm.
+	hermesAuthCheckTimeout     = 45 * time.Second
+	opencodeV2MigrationTimeout = 30 * time.Minute
+	defaultAuthCheckTimeout    = 10 * time.Second
+	defaultReadinessWorkers    = 4
 )
 
 var defaultReadinessRetryDelays = []time.Duration{15 * time.Second, time.Minute, 5 * time.Minute}
@@ -533,8 +539,13 @@ func (c *readinessCoordinator) runCheck(id string, purpose domain.AgentReadiness
 func (c *readinessCoordinator) checkInstallation(item agentregistry.HarnessAgent, presenceOnly bool) (domain.AgentInstallationObservation, bool) {
 	attempted := c.now()
 	timeout := c.installTimeout
-	if timeout == defaultInstallCheckTimeout && (item.Harness == domain.HarnessOpenCode || item.Harness == domain.HarnessOpenCodeV2) {
-		timeout = opencodeInstallCheckTimeout
+	if timeout == defaultInstallCheckTimeout {
+		switch item.Harness {
+		case domain.HarnessOpenCode, domain.HarnessOpenCodeV2:
+			timeout = opencodeInstallCheckTimeout
+		case domain.HarnessHermes:
+			timeout = hermesInstallCheckTimeout
+		}
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
@@ -594,9 +605,14 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnknown, domain.AgentReadinessReasonAuthCheckUnsupported, "Authentication checks are not supported for this harness."), false
 	}
 	timeout := c.authTimeout
-	if timeout == defaultAuthCheckTimeout && item.Harness == domain.HarnessOpenCodeV2 {
-		// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
-		timeout = opencodeV2MigrationTimeout
+	if timeout == defaultAuthCheckTimeout {
+		switch item.Harness {
+		case domain.HarnessOpenCodeV2:
+			// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
+			timeout = opencodeV2MigrationTimeout
+		case domain.HarnessHermes:
+			timeout = hermesAuthCheckTimeout
+		}
 	}
 	ctx, cancel := context.WithTimeout(evidenceCtx, timeout)
 	defer cancel()

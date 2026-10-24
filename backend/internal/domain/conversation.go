@@ -154,6 +154,10 @@ const (
 	// the person to answer. It is not an approval: accepting a tool and supplying
 	// form data have different response contracts and different UI.
 	ActivityKindUserInput ActivityKind = "user_input"
+	// ActivityKindAOAction is a daemon-confirmed product mutation. The neutral
+	// action name lives in detail, not in a new kind per operation, so Chat can
+	// label the outcome without reading command text or tool prose.
+	ActivityKindAOAction ActivityKind = "ao_action"
 )
 
 // ActivityStatus is the lifecycle of one activity. A provider may omit an item's
@@ -487,6 +491,10 @@ type ConversationPlan struct {
 	// Explanation is the agent's note about the plan as a whole, when it gives one.
 	Explanation string                 `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStep `json:"steps"`
+	// SpansTurns marks a list the agent keeps across turns, such as Claude's task
+	// list, rather than one plan per turn. A turn ending says nothing about its
+	// steps, and the copy each later turn receives is the same list, not a new plan.
+	SpansTurns bool `json:"spansTurns,omitempty"`
 }
 
 // ConversationPlanStep is one step of a plan.

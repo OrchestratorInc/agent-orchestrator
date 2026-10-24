@@ -120,7 +120,7 @@
 		"openapi-fetch": "^0.17.0",
 		"posthog-js": "^1.390.2",
 		"qrcode-generator": "^1.5.2",
-		"radix-ui": "1.6.2",
+		"radix-ui": "^1.5.0",
 		"react": "^19.2.7",
 		"react-dom": "^19.2.7",
 		"react-i18next": "^17.0.11",

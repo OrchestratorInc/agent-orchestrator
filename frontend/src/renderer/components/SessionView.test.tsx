@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, type ReactNode } from "react";
+import { Profiler, StrictMode, useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render as rtlRender, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -23,12 +23,18 @@ const openShellTerminalMock = vi.hoisted(() => vi.fn());
 const adoptedShellHandles = vi.hoisted(() => new Map<string, string>());
 const closeShellTerminalMock = vi.hoisted(() => vi.fn());
 const cloudReviewGetMock = vi.hoisted(() => vi.fn());
+const realCloudChat = vi.hoisted(() => ({ enabled: false }));
+vi.mock("../lib/use-session-link-navigation", () => ({
+	useSessionLinkNavigation: () => vi.fn(),
+	useSessionLinkSource: () => ({}),
+}));
 const cloudCpClientMock = vi.hoisted(() => ({
 	resumeSession: vi.fn(async () => ({ session: {} })),
 	requestWorkspaceCheckout: vi.fn(async () => undefined),
 	listChatEvents: vi.fn(),
 	getSession: vi.fn(),
 	getSessionReviewState: cloudReviewGetMock,
+	getWorkspaceReview: vi.fn(),
 	retrySessionStartup: vi.fn(),
 	// The presence heartbeat beats once the test document has focus.
 	touchSessionPresence: vi.fn(async () => undefined),
@@ -185,6 +191,8 @@ vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 }));
 
 vi.mock("../lib/api-client", () => ({
+	getApiBaseUrl: () => "",
+	subscribeApiBaseUrl: () => () => {},
 	apiClient: {
 		GET: reviewGetMock,
 		POST: vi.fn((path: string, ...args: unknown[]) =>
@@ -365,7 +373,6 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			</button>
 			{headerActions}
 			{sessionTabAction}
-			{interfaceSwitch?.control}
 			{interfaceSwitch?.errorNotice}
 			<div role="tablist">
 				{workspaceTabs?.map((tab) => (
@@ -430,21 +437,29 @@ vi.mock("./chat/SessionChatSurface", async () => {
 	};
 });
 
-vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
-	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void }) => (
-		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
-			{sessionTabAction}
-			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
-			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
-			{reviewerTerminal ? <button type="button" onClick={() => onOpenReviewerTerminal?.(reviewerTerminal)}>cloud reviewer tab</button> : null}
-			<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : "chat"}</span>
-		</div>
-	),
-}));
-// The terminal tab's menu is stood in for by the switch control it wraps.
+vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => {
+	const original = await importOriginal<typeof import("./chat/CloudSessionChatSurface")>();
+	return {
+		...original,
+		CloudSessionChatSurface: (props: React.ComponentProps<typeof original.CloudSessionChatSurface>) => realCloudChat.enabled
+			? <original.CloudSessionChatSurface {...props} />
+			: <StubCloudChat {...props} />,
+	};
+	function StubCloudChat({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat }: React.ComponentProps<typeof original.CloudSessionChatSurface>) {
+		return (
+			<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
+				{sessionTabAction}
+				<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
+				<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
+				{reviewerTerminal ? <button type="button" onClick={() => onOpenReviewerTerminal?.(reviewerTerminal)}>cloud reviewer tab</button> : null}
+				<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : "chat"}</span>
+			</div>
+		);
+	}
+});
+// The session tab's menu is stood in for by the switch control it wraps.
 vi.mock("./TerminalAgentControls", () => ({
-	TerminalSessionMenu: ({ switchControl }: { switchControl?: ReactNode }) => (
+	SessionTabMenu:({ switchControl }: { switchControl?: ReactNode }) => (
 		<>
 			{switchControl}
 		</>
@@ -455,7 +470,8 @@ vi.mock("./chat/ReviewerChatSurface", () => ({
 		<div data-testid="reviewer-chat-surface">{reviewId}</div>
 	),
 }));
-vi.mock("./CenterPane", () => ({
+vi.mock("./CenterPane", async (importOriginal) => ({
+	...await importOriginal<typeof import("./CenterPane")>(),
 	CenterPane: ({
 		agentInputDisabled,
 		session,
@@ -928,6 +944,7 @@ describe("SessionView", () => {
 	}
 
 	beforeEach(() => {
+		realCloudChat.enabled = false;
 		cloudGateState.cloudEnabled = true;
 		for (const sessionId of ["sess-1", "sess-2", "sess-orch", "sess-cross-project"]) {
 			setChatDraftBoundary(sessionId, "composer", undefined);
@@ -999,6 +1016,7 @@ describe("SessionView", () => {
 		cloudRetryStartupMock.mockResolvedValue({ session: {} });
 		cloudReviewGetMock.mockReset();
 		cloudReviewGetMock.mockResolvedValue({ sessionId: "sess-2", reviews: [], runs: [] });
+		cloudCpClientMock.getWorkspaceReview.mockReset();
 		cloudGetSessionMock.mockReset();
 		subscribeSessionEventsMock.mockClear();
 		listSessionEventsMock.mockReset();
@@ -5369,6 +5387,63 @@ describe("SessionView", () => {
 		} finally {
 			window.removeEventListener("unhandledrejection", unhandled);
 		}
+	});
+
+	it("settles the real Cloud Chat tab-order contract after opening and closing a file", async () => {
+		const scrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+		Object.defineProperty(HTMLElement.prototype, "scrollTo", { configurable: true, value: vi.fn() });
+		try {
+			realCloudChat.enabled = true;
+			const session = workerSession("sess-1");
+			session.mode = "chat";
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+			let commits = 0;
+			const onRender = () => {
+				if (++commits > 50) throw new Error("Cloud SessionView did not settle within 50 commits");
+			};
+			const trackedSession = () => <Profiler id="cloud-session" onRender={onRender}><SessionView sessionId="sess-1" /></Profiler>;
+			const view = render(trackedSession());
+			fireEvent.click(screen.getByRole("button", { name: "open files" }));
+			fireEvent.click(screen.getByRole("button", { name: "open cloud file" }));
+			expect(await screen.findByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+			expect(screen.getByRole("tab", { name: "cloud.ts" })).toHaveAttribute("aria-selected", "true");
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+			const settled = commits;
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+			expect(commits).toBe(settled);
+			expect(screen.getByTestId("session-topbar-host")).toBeInTheDocument();
+			shellTerminalsState.data = [{ handleId: "hidden-shell", sessionId: session.id, title: "Hidden shell", workingDir: "", createdAt: session.updatedAt }];
+			view.rerender(trackedSession());
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+			const settledWithHiddenTab = commits;
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 100)); });
+			expect(commits).toBe(settledWithHiddenTab);
+			fireEvent.click(screen.getByRole("button", { name: "Close cloud.ts" }));
+			expect(screen.queryByTestId("cloud-file-workspace")).not.toBeInTheDocument();
+			session.mode = "tui";
+			view.rerender(trackedSession());
+			expect(screen.getByTestId("auxiliary-tab-order-tui-sess-1")).toHaveTextContent("hidden-shell");
+			view.unmount();
+		} finally {
+			if (scrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", scrollTo);
+			else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+		}
+	});
+
+	it.each([
+		["view absolute review file", "src/panel.tsx"],
+		["view review basename", "docs/notes.txt"],
+	])("resolves Cloud %s from worker metadata without the local resolver", async (action, path) => {
+		const session = workerSession("sess-1");
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+		cloudCpClientMock.getWorkspaceReview.mockResolvedValue({
+			workspaceRoot: "/Users/me/worktrees/s", files: [{ path: "src/panel.tsx" }, { path: "docs/notes.txt" }], truncated: false,
+		});
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: action }));
+		expect((await screen.findByTestId("cloud-file-workspace")).textContent).toBe(path);
+		expect(cloudCpClientMock.getWorkspaceReview).toHaveBeenCalledWith("cloud-org", "sess-1");
+		expect(reviewGetMock.mock.calls.some(([path]) => String(path).includes("/workspace/"))).toBe(false);
 	});
 
 	it.each([
