@@ -32,10 +32,8 @@ func verifyDiscoveryExecutable(ctx context.Context, agentID, binaryPath string) 
 	if err != nil {
 		return "", err
 	}
-	resolved, err = filepath.EvalSymlinks(resolved)
-	if err != nil {
-		return "", err
-	}
+	// Inspection follows symlinks internally. Keep the selected launcher path
+	// for execution so aliases retain argv[0] and package entry-point semantics.
 	verified, err := inspectDiscoveryExecutable(ctx, agentID, resolved, map[string]bool{})
 	if err != nil {
 		return "", fmt.Errorf("%s model discovery: refusing executable %q: %w; repair or reinstall the intended agent's launcher", agentID, resolved, err)
