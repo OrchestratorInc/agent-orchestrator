@@ -83,6 +83,15 @@ var discoveryExecutableOwners = map[string]string{
 	"openhands": "openhands", "vibe": "vibe", "mistral-vibe": "vibe", "unreal-agent": "unreal-agent",
 }
 
+// Scoped npm packages are identified by their full name before their path
+// segments: oh-my-pi publishes OMP as @oh-my-pi/pi-coding-agent, whose bare
+// package segment would otherwise name Pi.
+var discoveryPackageOwners = map[string]string{
+	"@oh-my-pi/pi-coding-agent":       "omp",
+	"@earendil-works/pi-coding-agent": "pi",
+	"@mariozechner/pi-coding-agent":   "pi",
+}
+
 func discoveryExecutableOwner(path string) string {
 	path = strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
 	path = strings.ReplaceAll(path, "%~dp0", "/")
@@ -103,7 +112,13 @@ func discoveryExecutableOwner(path string) string {
 	}
 	// npm wrappers launch cli.js/index.js inside an agent-owned package.
 	if index := strings.LastIndex(path, "/node_modules/"); index >= 0 {
-		for _, part := range strings.Split(path[index+len("/node_modules/"):], "/") {
+		parts := strings.Split(path[index+len("/node_modules/"):], "/")
+		if len(parts) > 1 && strings.HasPrefix(parts[0], "@") {
+			if owner := discoveryPackageOwners[parts[0]+"/"+parts[1]]; owner != "" {
+				return owner
+			}
+		}
+		for _, part := range parts {
 			if owner := discoveryExecutableOwners[strings.TrimPrefix(part, "@")]; owner != "" {
 				return owner
 			}
@@ -175,16 +190,17 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 	if !info.Mode().IsRegular() {
 		return false, fmt.Errorf("launcher is not a regular file")
 	}
-	// The package-owned application behind an npm shim is not another launcher;
-	// scanning its implementation would mistake provider integrations for redirects.
 	ext := strings.ToLower(filepath.Ext(canonical))
-	application := ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".py"
-	if application && strings.Contains(strings.ReplaceAll(canonical, `\`, "/"), "/node_modules/") && verified {
-		return true, nil
-	}
 	body, err := io.ReadAll(io.LimitReader(file, discoveryLauncherReadLimit+1))
 	if err != nil {
 		return false, err
+	}
+	// The package-owned application behind an npm shim is not another launcher;
+	// scanning its implementation would mistake provider integrations for redirects.
+	// npm bins are often extensionless scripts identified only by their shebang.
+	application := ext == ".js" || ext == ".mjs" || ext == ".cjs" || ext == ".py" || discoveryInterpreterScript(body)
+	if application && strings.Contains(strings.ReplaceAll(canonical, `\`, "/"), "/node_modules/") && verified {
+		return true, nil
 	}
 	// Native executables are opaque. Version managers can expose an agent-named
 	// symlink to a shared native shim, so retain the selected entry point as
@@ -230,7 +246,12 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 			if batchSet {
 				name = strings.ToUpper(name)
 			}
-			value, expandErr := discoveryExpandLauncherTarget(strings.Trim(assignment[2], `"'`), variables)
+			raw := strings.Trim(assignment[2], `"'`)
+			if raw == "${0##*/}" {
+				// pyenv/nodenv/rbenv shims dispatch on their own invocation name.
+				raw = filepath.Base(path)
+			}
+			value, expandErr := discoveryExpandLauncherTarget(raw, variables)
 			if expandErr != nil {
 				return false, expandErr
 			}
@@ -301,11 +322,15 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 				}
 				continue
 			}
-			if _, statErr := os.Stat(target); statErr != nil {
+			targetInfo, statErr := os.Stat(target)
+			if statErr != nil {
 				if requireInspection {
 					return false, fmt.Errorf("cannot verify launcher command %q: %w", reference, statErr)
 				}
 				continue
+			}
+			if targetInfo.IsDir() {
+				continue // A directory cannot be executed, e.g. a `//` script comment.
 			}
 			targetVerified, inspectErr := inspectDiscoveryExecutable(ctx, agentID, target, inspection)
 			if inspectErr != nil {
@@ -317,6 +342,25 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		}
 	}
 	return verified, nil
+}
+
+var discoveryApplicationInterpreter = regexp.MustCompile(`^(?:node|nodejs|bun|deno|python[0-9.]*)$`)
+
+// discoveryInterpreterScript reports whether a script's shebang runs it with a
+// language runtime rather than a shell, e.g. `#!/usr/bin/env node`.
+func discoveryInterpreterScript(body []byte) bool {
+	if !bytes.HasPrefix(body, []byte("#!")) {
+		return false
+	}
+	line, _, _ := bytes.Cut(body[2:], []byte("\n"))
+	fields := strings.Fields(string(line))
+	if len(fields) > 0 && filepath.Base(fields[0]) == "env" {
+		fields = fields[1:]
+		for len(fields) > 0 && (strings.HasPrefix(fields[0], "-") || strings.Contains(fields[0], "=")) {
+			fields = fields[1:]
+		}
+	}
+	return len(fields) > 0 && discoveryApplicationInterpreter.MatchString(filepath.Base(fields[0]))
 }
 
 func discoveryLauncherTarget(launcher, reference string) string {
