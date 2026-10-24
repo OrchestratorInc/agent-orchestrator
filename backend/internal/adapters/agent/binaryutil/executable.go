@@ -133,7 +133,7 @@ func discoveryPackageOwner(path string) string {
 		switch parts[0] + "/" + parts[1] {
 		case "@oh-my-pi/pi-coding-agent":
 			return "omp"
-		case "@mariozechner/pi-coding-agent":
+		case "@mariozechner/pi-coding-agent", "@earendil-works/pi-coding-agent":
 			return "pi"
 		case "@kilocode/cli":
 			return "kilocode"
