@@ -149,6 +149,8 @@ type conversation struct {
 	historyNotice                func(string) bool
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
 	historyUserChunkIsMessage bool
+	// historyReconciler: see Config.HistoryReconciler.
+	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// plansSpanTurns: see Config.PlansSpanTurns.
 	plansSpanTurns bool
 	// preamble is standing context attached to the first prompt that actually

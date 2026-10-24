@@ -3833,6 +3833,73 @@ func TestResolveLegacyModelChoiceDistinguishesThinkingVariants(t *testing.T) {
 	}
 }
 
+// Hermes advertises provider-prefixed ids (auto:anthropic/claude-opus-4.6,
+// openrouter:anthropic/claude-opus-4.6) while its configuration names the bare
+// model. A bare value resolves through the provider-prefixed suffix, preferring
+// the auto: row when several providers list the same model.
+func TestResolveLegacyModelChoiceResolvesProviderPrefixedAdvertisedID(t *testing.T) {
+	hermes := []ports.ChatConfigOptionChoice{
+		{Value: "auto:anthropic/claude-opus-4.6"},
+		{Value: "openrouter:anthropic/claude-opus-4.6"},
+		{Value: "gemini:gemini-3.8-flash"},
+		{Value: "auto:openrouter/gpt-5.6"},
+	}
+	tests := []struct {
+		name      string
+		choices   []ports.ChatConfigOptionChoice
+		requested string
+		want      string
+	}{
+		{
+			name:      "bare config model resolves to the auto-prefixed advertised id",
+			choices:   hermes,
+			requested: "anthropic/claude-opus-4.6",
+			want:      "auto:anthropic/claude-opus-4.6",
+		},
+		{
+			name:      "bare model with a single provider match resolves to it",
+			choices:   hermes,
+			requested: "gemini-3.8-flash",
+			want:      "gemini:gemini-3.8-flash",
+		},
+		{
+			name:      "an exact advertised id still wins",
+			choices:   hermes,
+			requested: "openrouter:anthropic/claude-opus-4.6",
+			want:      "openrouter:anthropic/claude-opus-4.6",
+		},
+		{
+			name:      "a partial suffix is not a match",
+			choices:   hermes,
+			requested: "claude-opus-4.5",
+			want:      "",
+		},
+		{
+			name: "two providers without an auto row stay ambiguous",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:gpt-5.6"},
+				{Value: "azure:gpt-5.6"},
+			},
+			requested: "gpt-5.6",
+			want:      "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resolveLegacyModelChoice(tt.choices, tt.requested)
+			if tt.want == "" {
+				if ok {
+					t.Fatalf("resolveLegacyModelChoice(%q) = %q, true; want rejection", tt.requested, got)
+				}
+				return
+			}
+			if !ok || got != tt.want {
+				t.Fatalf("resolveLegacyModelChoice(%q) = %q, %v; want %q, true", tt.requested, got, ok, tt.want)
+			}
+		})
+	}
+}
+
 func TestACPDriverRejectsLegacyModelAliasWithoutAdvertisedModelCatalog(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "auto",
@@ -3899,6 +3966,41 @@ func TestACPDriverRejectsAmbiguousLegacyModelAlias(t *testing.T) {
 	agent.mu.Unlock()
 	if calls != 0 {
 		t.Fatalf("legacy model setter called %d times, want 0", calls)
+	}
+}
+
+// The composer sends Hermes' bare configured model while the legacy session
+// selector only advertises provider-prefixed ids. The launch must translate the
+// bare value to the auto:-prefixed advertised id before session/set_model.
+func TestACPDriverTranslatesBareConfigModelToProviderPrefixedAdvertisedID(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "openrouter:anthropic/claude-opus-4.6",
+		availableModels: []legacyModelInfo{
+			{ModelID: "auto:anthropic/claude-opus-4.6", Name: "Anthropic · anthropic/claude-opus-4.6"},
+			{ModelID: "openrouter:anthropic/claude-opus-4.6", Name: "OpenRouter · anthropic/claude-opus-4.6"},
+		},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessHermes,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "anthropic/claude-opus-4.6",
+	})
+	if err != nil {
+		t.Fatalf("Start with bare config model: %v", err)
+	}
+	defer conv.Close()
+	agent.mu.Lock()
+	model, calls := agent.model, agent.modelCalls
+	agent.mu.Unlock()
+	if calls != 1 || model != "auto:anthropic/claude-opus-4.6" {
+		t.Fatalf("session/set_model = (%q, %d calls), want the auto:-prefixed advertised id set once", model, calls)
 	}
 }
 
@@ -4160,6 +4262,48 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}
 	if agent.promptParams.Prompt != nil {
 		t.Fatalf("discovery sent a prompt: %#v", agent.promptParams)
+	}
+}
+
+// Discovery must read the legacy `models` session/new field. Hermes sends no
+// configOptions and lists its whole catalog under `models`, so the composer's
+// picker offered only the configured model before launch (review comment
+// 4365736482 on PR #6635).
+func TestDiscoverConfigOptionsReadsLegacyModels(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "auto:anthropic/claude-opus-4.6",
+		availableModels: []legacyModelInfo{
+			{ModelID: "auto:anthropic/claude-opus-4.6", Name: "Claude Opus 4.6 (auto)"},
+			{ModelID: "openrouter:anthropic/claude-opus-4.6", Name: "Claude Opus 4.6 (OpenRouter)"},
+		},
+	}
+	driver := New(Config{
+		Harness: domain.HarnessHermes,
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "hermes", Args: []string{"acp"}}, nil
+		},
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model *ports.ChatConfigOption
+	for i := range got {
+		if got[i].ID == "model" {
+			model = &got[i]
+		}
+	}
+	if model == nil {
+		t.Fatalf("options = %#v, want the legacy model catalog", got)
+	}
+	if model.Current.Select != "auto:anthropic/claude-opus-4.6" || len(model.Choices) != 2 {
+		t.Fatalf("model option = %#v, want both advertised models with the current one selected", model)
+	}
+	if model.Choices[0].Value != "auto:anthropic/claude-opus-4.6" ||
+		model.Choices[1].Value != "openrouter:anthropic/claude-opus-4.6" {
+		t.Fatalf("model choices = %#v, want the advertised ids", model.Choices)
 	}
 }
 

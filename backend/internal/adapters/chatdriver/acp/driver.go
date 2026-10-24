@@ -137,6 +137,12 @@ type Config struct {
 	// HistoryUserChunkIsMessage makes each id-less replayed user chunk its own
 	// prompt, for an agent that replays a user message as one chunk (pi-acp).
 	HistoryUserChunkIsMessage bool
+	// HistoryReconciler rewrites one completed session/load replay before it
+	// becomes the conversation's history snapshot, for an agent whose replay
+	// carries rows AO never saw live. It runs after stable event identities are
+	// assigned, so an identical provider replay stays identical after the same
+	// rewrite. See hermesacp for the motivating shape.
+	HistoryReconciler func([]ports.ChatEvent) []ports.ChatEvent
 	// PlansSpanTurns marks the agent's ACP plan as one list kept for the whole
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
@@ -244,7 +250,10 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
-	return normalizeConfigOptions(resp.ConfigOptions), nil
+	// Normalize exactly like the live session path: agents that list models
+	// only in the legacy `models` response field (Hermes) or modes only in
+	// `modes` must surface those in discovery, not just in a launched session.
+	return normalizeSessionOptions(resp.ConfigOptions, conv.legacyWire.modelState(), resp.Modes), nil
 }
 
 // Harness identifies the AO harness this ACP transport adapts.
@@ -736,6 +745,7 @@ func (d *Driver) initialize(
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
+	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {

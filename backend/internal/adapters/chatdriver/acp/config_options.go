@@ -394,6 +394,39 @@ func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested 
 		}
 		matched = choice.Value
 	}
+	if matched != "" {
+		return matched, true
+	}
+	return resolveProviderPrefixedChoice(choices, requested)
+}
+
+// resolveProviderPrefixedChoice maps a bare model value onto an advertised
+// choice that carries a provider prefix. Hermes advertises ids such as
+// auto:anthropic/claude-opus-4.6 and openrouter:anthropic/claude-opus-4.6
+// while its CLI-facing configuration names the bare model, so the requested
+// value must equal everything after the advertised id's first ':'. Several
+// providers may list the same model: a single auto:-prefixed row wins because
+// it resolves to the session's current provider, and any other collision stays
+// ambiguous rather than guessed.
+func resolveProviderPrefixedChoice(choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
+	auto, matched := "", ""
+	for _, choice := range choices {
+		provider, model, found := strings.Cut(choice.Value, ":")
+		if !found || provider == "" || model == "" || model != requested {
+			continue
+		}
+		if provider == "auto" {
+			auto = choice.Value
+			continue
+		}
+		if matched != "" {
+			return "", false
+		}
+		matched = choice.Value
+	}
+	if auto != "" {
+		return auto, true
+	}
 	return matched, matched != ""
 }
 

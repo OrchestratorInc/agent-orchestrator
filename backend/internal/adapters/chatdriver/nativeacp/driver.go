@@ -58,7 +58,10 @@ type Config struct {
 	ValidateInitialize func(acpsdk.InitializeResponse) error
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
-	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	// HistoryReconciler rewrites a completed session/load replay. See
+	// acpdriver.Config.HistoryReconciler.
+	HistoryReconciler            func([]ports.ChatEvent) []ports.ChatEvent
 	PermissionPolicy             acpdriver.PermissionPolicy
 	ClientExtension              acpdriver.ClientExtensionHandler
 	ClientExtensionAliases       map[string]string
@@ -158,6 +161,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionPreamble:              cfg.SessionPreamble,
+		HistoryReconciler:            cfg.HistoryReconciler,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
