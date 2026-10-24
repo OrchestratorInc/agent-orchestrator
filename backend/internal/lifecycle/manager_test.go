@@ -600,6 +600,57 @@ func TestRuntimeObservation_FailedProbeDoesNotMutate(t *testing.T) {
 	}
 }
 
+// A paused agent cannot emit the signal that would clear its sticky state once
+// its runtime is gone, so a dead probe must terminate it (#6726).
+func TestRuntimeObservation_ConfirmedRuntimeDeathTerminatesStickySession(t *testing.T) {
+	for _, state := range []domain.ActivityState{domain.ActivityBlocked, domain.ActivityWaitingInput} {
+		t.Run(string(state), func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.Activity = domain.Activity{State: state, LastActivityAt: time.Now()}
+			rec.Metadata.RuntimeLaunchID = "launch-1"
+			st.sessions["mer-1"] = rec
+
+			if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{
+				Runtime:  ports.ProbeDead,
+				Workload: ports.ProbeFailed,
+				LaunchID: "launch-1",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			got := st.sessions["mer-1"]
+			if !got.IsTerminated || got.Activity.State != domain.ActivityExited {
+				t.Fatalf("want terminated/exited, got %+v", got)
+			}
+		})
+	}
+}
+
+func TestRuntimeObservation_InconclusiveProbeKeepsStickySessionLive(t *testing.T) {
+	for _, state := range []domain.ActivityState{domain.ActivityBlocked, domain.ActivityWaitingInput} {
+		for _, probe := range []ports.ProbeResult{ports.ProbeFailed, ports.ProbeAlive} {
+			t.Run(string(state)+"/"+string(probe), func(t *testing.T) {
+				m, st, _ := newManager()
+				rec := working("mer-1")
+				rec.Activity = domain.Activity{State: state, LastActivityAt: time.Now().Add(-2 * time.Minute)}
+				rec.Metadata.RuntimeLaunchID = "launch-1"
+				st.sessions["mer-1"] = rec
+
+				if err := m.ApplyRuntimeObservation(ctx, "mer-1", ports.RuntimeFacts{
+					Runtime:  probe,
+					Workload: ports.ProbeFailed,
+					LaunchID: "launch-1",
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
+					t.Fatalf("%s probe mutated sticky session: got %+v, want %+v", probe, got, rec)
+				}
+			})
+		}
+	}
+}
+
 func TestRuntimeObservation_ExitedWorkloadKeepsSessionLive(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")

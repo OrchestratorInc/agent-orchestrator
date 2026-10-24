@@ -886,7 +886,7 @@ flowchart TD
 
 ```
 
-**Key principle:** Failed probes are NOT proof of death. A session is only terminated when the runtime and process are **both** clearly dead and recent activity doesn't contradict that.
+**Key principle:** Failed probes are NOT proof of death. A session is only terminated when the runtime and process are **both** clearly dead and recent activity doesn't contradict that. A sticky `blocked` / `waiting_input` state is not recent activity once the runtime probe is conclusively dead: stickiness only stops time-based demotion, and the paused agent can no longer emit the signal that would clear it. Failed and alive probes never override a sticky state.
 
 ---
 
