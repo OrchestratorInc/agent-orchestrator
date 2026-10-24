@@ -252,12 +252,19 @@ describe("ArtifactsView", () => {
 		expect(within(project.getByRole("button", { name: /^pricing\.md/ })).getByTitle("No preview available")).toBeInTheDocument();
 	});
 
-	it("frames an HTML preview only on its dedicated inline origin", () => {
+	it("checks HTML availability before framing only its dedicated inline origin", async () => {
 		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
 		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		html.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		let respond!: (response: Response) => void;
+		const fetch = vi.fn(() => new Promise<Response>((resolve) => { respond = resolve; }));
+		vi.stubGlobal("fetch", fetch);
 		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
 		const { container, unmount } = renderView();
-		expect(container.querySelector("iframe")).toHaveAttribute("src", html.artifactFiles![0].inlineUrl);
+		expect(container.querySelector("iframe")).toBeNull();
+		expect(fetch).toHaveBeenCalledWith(html.artifactFiles![0].rawUrl, { signal: expect.any(AbortSignal), cache: "no-store" });
+		respond(new Response("<h1>Design review</h1>"));
+		await waitFor(() => expect(container.querySelector("iframe")).toHaveAttribute("src", html.artifactFiles![0].inlineUrl));
 		expect(container.querySelector("iframe")).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
 		expect(container.querySelector("iframe")).toHaveAttribute("tabindex", "-1");
 		unmount();
@@ -265,6 +272,24 @@ describe("ArtifactsView", () => {
 		const unsafe = renderView();
 		expect(unsafe.container.querySelector("iframe")).toBeNull();
 		expect(within(screen.getByRole("region", { name: "AO" })).getByTitle("No preview available")).toBeInTheDocument();
+	});
+
+	it.each(["missing", "network failure"])("shows an unavailable HTML preview for %s files after reopening", async (failure) => {
+		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		html.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
+		const fetch = vi.fn().mockResolvedValueOnce(new Response("<h1>Design review</h1>"));
+		vi.stubGlobal("fetch", fetch);
+		const { container, unmount } = renderView();
+		await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+		unmount();
+		if (failure === "missing") fetch.mockResolvedValueOnce(new Response('{"code":"ARTIFACT_FILE_NOT_FOUND"}', { status: 404 }));
+		else fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const reopened = renderView();
+		await waitFor(() => expect(within(screen.getByRole("region", { name: "AO" })).getByTitle("No preview available")).toBeInTheDocument());
+		expect(reopened.container.querySelector("iframe")).toBeNull();
+		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
 	it("shows image previews and falls back to a placeholder when the image fails", () => {
