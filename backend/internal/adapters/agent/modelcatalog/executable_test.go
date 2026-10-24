@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -82,6 +83,63 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDiscoveryExecutableInspectsNPMCmdShim(t *testing.T) {
+	// Generated unmodified by npm's cmd-shim 8.0.0 from a bin with a node
+	// shebang. Keep its subroutine, variable setup and final command intact.
+	fixture, err := os.ReadFile("testdata/npm-cmd-shim-grok.cmd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, agentPackage := range []struct{ agent, pkg string }{
+		{"grok", "grok-cli"}, {"pi", "pi-coding-agent"}, {"kilocode", "kilocode"},
+		{"copilot", "copilot"}, {"auggie", "auggie"}, {"opencode", "opencode-ai"},
+	} {
+		t.Run(agentPackage.agent, func(t *testing.T) {
+			root := t.TempDir()
+			body := strings.ReplaceAll(string(fixture), "grok-cli", agentPackage.pkg)
+			launcher := writeDiscoveryLauncher(t, root, agentPackage.agent+".cmd", body)
+			writeDiscoveryLauncher(t, root, "node_modules/"+agentPackage.pkg+"/dist/cli.js", "#!/usr/bin/env node\n")
+			if _, err := verifyDiscoveryExecutable(context.Background(), agentPackage.agent, launcher); err != nil {
+				t.Fatalf("npm cmd-shim rejected: %v", err)
+			}
+			// Label calls must not hide foreign commands in the subroutine body.
+			body = strings.ReplaceAll(body, "SET dp0=%~dp0", "SET dp0=%~dp0\r\nCALL autohand %*")
+			writeDiscoveryLauncher(t, root, agentPackage.agent+".cmd", body)
+			if _, err := verifyDiscoveryExecutable(context.Background(), agentPackage.agent, launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+				t.Fatalf("foreign command in npm subroutine accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryRunsNPMCmdShim(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("executes the Windows npm shim")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required to run the npm shim fixture")
+	}
+	fixture, err := os.ReadFile("testdata/npm-cmd-shim-grok.cmd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	launcher := writeDiscoveryLauncher(t, root, "grok.cmd", string(fixture))
+	writeDiscoveryLauncher(t, root, "node_modules/grok-cli/dist/cli.js", "#!/usr/bin/env node\nconsole.log('Available models:\\n  * grok-shim-smoke');\n")
+	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "grok", Binary: launcher, WorkingDir: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range catalog.Models {
+		if model.ID == "grok-shim-smoke" {
+			return
+		}
+	}
+	t.Fatalf("npm shim discovery did not return its fixture model: %#v", catalog.Models)
 }
 
 func TestDiscoveryExecutableRejectsUnverifiableRedirect(t *testing.T) {
