@@ -20,9 +20,38 @@ describe("compareArchived", () => {
 		];
 		expect(ids([...rows].sort(compareArchived))).toEqual(["pinned", "b", "c", "a"]);
 	});
+
+	// The daemon orders by nanoseconds. Within one millisecond, a comparator
+	// that only saw milliseconds fell back to the id and disagreed with it.
+	it("orders rows inside one millisecond by their full timestamp", () => {
+		const rows = [
+			row("z", "2026-10-01T00:00:00.000800Z"),
+			row("a", "2026-10-01T00:00:00.000900Z"),
+			row("m", "2026-10-01T00:00:00.0008001Z"),
+		];
+		expect(ids([...rows].sort(compareArchived))).toEqual(["a", "m", "z"]);
+	});
+
+	it("compares instants, not strings, across offsets and fraction lengths", () => {
+		const rows = [
+			row("utc", "2026-10-01T00:00:00.5Z"),
+			row("ist", "2026-10-01T05:30:00.4999999+05:30"),
+			row("whole", "2026-10-01T00:00:00Z"),
+		];
+		expect(ids([...rows].sort(compareArchived))).toEqual(["utc", "ist", "whole"]);
+	});
 });
 
 describe("mergeArchiveStreams", () => {
+	// A non-final page from the daemon, in its order: both rows are above the
+	// boundary, so both show.
+	it("shows every row of a page whose rows fall inside one millisecond", () => {
+		const merged = mergeArchiveStreams([
+			{ rows: [row("a", "2026-10-01T00:00:00.000900Z"), row("z", "2026-10-01T00:00:00.000800Z")], done: false },
+		]);
+		expect(ids(merged.rows)).toEqual(["a", "z"]);
+	});
+
 	it("shows a single finished machine's archive in full", () => {
 		const merged = mergeArchiveStreams([{ rows: [row("a", "2026-10-02T00:00:00Z"), row("b", "2026-10-01T00:00:00Z")], done: true }]);
 		expect(ids(merged.rows)).toEqual(["a", "b"]);

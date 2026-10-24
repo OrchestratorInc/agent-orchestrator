@@ -1,9 +1,21 @@
 import type { DashboardSession } from "../api";
 
-// Every daemon sends updatedAt; the fallbacks only order rows built without it.
-function updatedAtOf(session: DashboardSession): number {
-	const at = Date.parse(session.updatedAt || session.lastEventAt || session.lastActivityAt || "");
-	return Number.isNaN(at) ? 0 : at;
+/**
+ * A timestamp as [seconds since the epoch, nanoseconds], the precision the
+ * daemon orders by. `Date.parse` alone keeps milliseconds, so rows inside one
+ * millisecond fell to the id and disagreed with the daemon's page order.
+ * Every daemon sends updatedAt; the fallbacks only order rows built without it.
+ */
+function instantOf(session: DashboardSession): [number, number] {
+	const raw = session.updatedAt || session.lastEventAt || session.lastActivityAt || "";
+	const parts = /^(.+?)(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/i.exec(raw);
+	if (!parts) {
+		const ms = Date.parse(raw);
+		return Number.isNaN(ms) ? [0, 0] : [Math.floor(ms / 1000), (ms % 1000) * 1_000_000];
+	}
+	const ms = Date.parse(parts[1] + parts[3]);
+	if (Number.isNaN(ms)) return [0, 0];
+	return [Math.floor(ms / 1000), Number((parts[2] ?? "").slice(0, 9).padEnd(9, "0"))];
 }
 
 /**
@@ -13,8 +25,10 @@ function updatedAtOf(session: DashboardSession): number {
  */
 export function compareArchived(a: DashboardSession, b: DashboardSession): number {
 	if (Boolean(a.isPinned) !== Boolean(b.isPinned)) return a.isPinned ? -1 : 1;
-	const byUpdate = updatedAtOf(b) - updatedAtOf(a);
-	if (byUpdate !== 0) return byUpdate;
+	const [aSeconds, aNanos] = instantOf(a);
+	const [bSeconds, bNanos] = instantOf(b);
+	if (aSeconds !== bSeconds) return bSeconds - aSeconds;
+	if (aNanos !== bNanos) return bNanos - aNanos;
 	return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
