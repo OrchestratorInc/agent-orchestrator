@@ -94,7 +94,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				...(hours ? { expiresInHours: hours } : {}),
 			});
 			if (!link.token) throw new Error(t("share.noToken"));
-			return shareLinkUrl(orgId, link.token);
+			return shareLinkUrl(baseUrl, orgId, link.token);
 		},
 		onSuccess: (url) => {
 			setCreated(url);
