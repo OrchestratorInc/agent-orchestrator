@@ -18,6 +18,7 @@ import { WorkerDock } from "../../lib/worker-dock";
 import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
 import { WorkerMachineState } from "../../lib/worker-machine-state";
+import { WorkerEnvironmentFilter } from "../../lib/worker-environment-filter";
 import {
 	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
@@ -184,6 +185,13 @@ export default function FleetScreen() {
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
 			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{environments.length > 0 ? (
+				<WorkerEnvironmentFilter
+					environments={environments}
+					selectedEnvironmentId={workerEnvironmentId}
+					onSelectEnvironment={selectEnvironment}
+				/>
+			) : null}
 
 			{!selectedHost && fleetLoading && allSessions.length === 0 ? (
 				<View style={styles.center}>

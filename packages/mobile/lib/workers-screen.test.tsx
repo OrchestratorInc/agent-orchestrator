@@ -15,7 +15,7 @@ const fixtures = vi.hoisted(() => ({
 
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixtures.push, navigate: vi.fn() }) }));
 vi.mock("react-native", () => ({
-	ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
+	ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", ScrollView: "ScrollView", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
 	Keyboard: { dismiss: vi.fn() }, StyleSheet: { create: (styles: object) => styles },
 }));
 vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, useAnimatedStyle: () => ({}) }));

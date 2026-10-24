@@ -9,7 +9,8 @@ import { haptics } from "./haptics";
 import type { Host } from "./hosts";
 import { Feather } from "./icons";
 import { MachineAvatar, MachineIdentity } from "./MachineIdentity";
-import { machineAppearance, machineAppearancePalette, machineSymbolLabels, type MachineAppearance, type MachineSymbol } from "./machineAppearance";
+import { machineAppearance, type MachineAppearance } from "./machineAppearance";
+import { MachineSymbolPicker } from "./MachineSymbolPicker";
 import { LAYOUT_MS, ROW_ENTER_MS } from "./motion";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -379,18 +380,11 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 						{appearanceOpen ? (
 							<View style={styles.appearancePicker}>
 								<Text style={styles.appearancePickerLabel}>Symbol</Text>
-								<View style={styles.appearanceChoices}>
-									{machineAppearancePalette.symbols.map((symbol) => (
-										<AppearanceChoice
-											key={symbol}
-											testID={`environment-symbol-${host.id}-${symbol}`}
-											label={machineSymbolLabels[symbol]}
-											appearance={{ ...appearance, symbol }}
-											selected={appearance.symbol === symbol}
-											onPress={() => setAppearance((current) => ({ ...current, symbol: symbol as MachineSymbol }))}
-										/>
-									))}
-								</View>
+								<MachineSymbolPicker
+									testIDPrefix={`environment-symbol-${host.id}`}
+									selected={appearance.symbol}
+									onSelect={(symbol) => setAppearance((current) => ({ ...current, symbol }))}
+								/>
 							</View>
 						) : null}
 					</View>
@@ -444,22 +438,6 @@ export function EnvironmentEditorActions({ editor }: { editor: EnvironmentEditor
 			</Pressable>
 		</View>
 	</View>;
-}
-
-function AppearanceChoice({ testID, label, appearance, selected, onPress }: { testID: string; label: string; appearance: MachineAppearance; selected: boolean; onPress(): void }) {
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<Pressable
-			testID={testID}
-			accessibilityRole="radio"
-			accessibilityLabel={label}
-			accessibilityState={{ selected }}
-			onPress={() => { haptics.select(); onPress(); }}
-			style={({ pressed }) => [styles.appearanceChoice, selected && styles.appearanceChoiceSelected, pressed && styles.pressed]}
-		>
-			<MachineAvatar appearance={appearance} size={32} />
-		</Pressable>
-	);
 }
 
 function EditField({ label, ...input }: { label: string } & React.ComponentProps<typeof TextInput>) {
@@ -521,9 +499,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	appearancePreview: { maxWidth: "52%" },
 	appearancePicker: { gap: space.sm, padding: space.md, backgroundColor: t.bgSubtle, borderRadius: radius.md, borderCurve: "continuous" },
 	appearancePickerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase" },
-	appearanceChoices: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
-	appearanceChoice: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderWidth: rowDividerWidth, borderColor: "transparent", borderRadius: radius.md, borderCurve: "continuous" },
-	appearanceChoiceSelected: { borderColor: t.accentBorder, backgroundColor: t.accentTint },
 	field: { flex: 1, gap: space.xxs },
 	fieldLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase" },
 	input: { minHeight: touchTarget, fontFamily: "Geist_400Regular", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderDefault, borderRadius: radius.sm, borderCurve: "continuous", paddingHorizontal: space.md, paddingVertical: space.sm, color: t.textPrimary, fontSize: type.subheadline.fontSize },
