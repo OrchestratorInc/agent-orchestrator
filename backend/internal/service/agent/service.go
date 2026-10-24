@@ -647,6 +647,19 @@ func (s *Service) requeueCatalog(projectID string, catalog ports.AgentModelCatal
 	_ = s.saveCatalog(s.ctx, projectID, catalog, time.Now().UTC().UnixNano(), 0)
 }
 
+// modelCatalogLoadBudget returns the wall-clock budget for one discovery run.
+// OpenCode 2's first-use migration is a one-time, potentially large copy of the
+// user's pre-isolation data store, so it gets readiness's migration budget
+// instead of the CLI discovery timeout. Without this, model discovery aborted
+// the copy at 30s, discarded the staging directory, and reported an empty
+// catalog on every refresh.
+func modelCatalogLoadBudget(agentID string) time.Duration {
+	if agentID == string(domain.HarnessOpenCodeV2) {
+		return opencodeV2MigrationTimeout + modelCatalogLoadTimeout
+	}
+	return modelCatalogLoadTimeout
+}
+
 func (s *Service) coalesceModelLoad(
 	ctx context.Context,
 	agentID, projectID string,
@@ -704,7 +717,7 @@ func (s *Service) coalesceModelLoad(
 			s.modelCallMu.Unlock()
 			return
 		}
-		loadCtx, cancel := context.WithTimeout(baseCtx, modelCatalogLoadTimeout)
+		loadCtx, cancel := context.WithTimeout(baseCtx, modelCatalogLoadBudget(agentID))
 		defer cancel()
 		select {
 		case <-call.refresh:
