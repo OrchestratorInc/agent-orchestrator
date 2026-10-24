@@ -208,12 +208,16 @@ func Run(buildVersion string) error {
 	sentryobs.SetPolicyEnabled(eventsAllowed)
 	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
-	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
-	// Initialize the transport once so a later policy opt-in works without a
-	// daemon restart. The policy gate remains fail-closed and is checked before
-	// every capture; a blank DSN still leaves this as a no-op.
+	installID := ""
+	if telemetryIdentity != nil {
+		installID = telemetryIdentity.Snapshot().InstallID
+	}
+	// Initialize daemon Sentry once so a later policy opt-in works without a
+	// restart. The policy gate is checked before every capture. An unavailable
+	// install ID omits the tag without disabling error reporting.
 	if err := sentryobs.Init(sentryobs.Config{
 		DSN:         cfg.Telemetry.SentryDSN,
+		InstallID:   installID,
 		Release:     cfg.Telemetry.AppVersion,
 		Environment: sentryEnvironment(cfg.Telemetry.AppVersion),
 	}); err != nil {

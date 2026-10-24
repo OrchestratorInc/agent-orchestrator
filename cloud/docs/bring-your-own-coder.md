@@ -112,7 +112,9 @@ have AO work in that same checkout, with the same access:
    session branch and saves any local changes to tracked files in a stash named
    after the session. If the directory does not exist, AO clones into it. The
    path may be absolute or start with `~/` or `$HOME/`, must name a directory
-   below that root, and may not contain `.` or `..` segments.
+   below that root, and may not contain `.` or `..` segments. A project with
+   no repository starts in the folder above `{repo}` (`~/work`), as the
+   template left it.
 3. **Workspace ready check** if your template signals readiness itself (above).
 4. **Project Setup and Cleanup scripts** for anything per session (below).
 5. **Keep the agent out of secret files (.env): on** (the default). This

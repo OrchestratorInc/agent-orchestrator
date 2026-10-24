@@ -2474,6 +2474,7 @@ type IdentityResponse struct {
 // phone honors OptedOut. This response carries no email.
 type TelemetryIdentityResponse struct {
 	DistinctID  string `json:"distinctId"`
+	InstallID   string `json:"installId,omitempty"`
 	CloudUserID string `json:"cloudUserId,omitempty"`
 	GitHubLogin string `json:"githubLogin,omitempty"`
 	OptedOut    bool   `json:"optedOut"`
@@ -3591,7 +3592,6 @@ type MobileDeviceResponse struct {
 	Token                string    `json:"token,omitempty"`
 	Platform             string    `json:"platform,omitempty" enum:"ios,android"`
 	DeviceName           string    `json:"deviceName,omitempty"`
-	Muted                bool      `json:"muted"`
 	Live                 bool      `json:"live" description:"True when the phone's app is open and polling."`
 	NotificationsEnabled bool      `json:"notificationsEnabled" description:"True when this device has a push token registered."`
 	CreatedAt            time.Time `json:"createdAt"`
@@ -3601,11 +3601,6 @@ type MobileDeviceResponse struct {
 // MobileDevicesResponse is the { devices } envelope for the roster.
 type MobileDevicesResponse struct {
 	Devices []MobileDeviceResponse `json:"devices"`
-}
-
-// MuteDeviceRequest is the body of PATCH /api/v1/mobile/devices/{installId}.
-type MuteDeviceRequest struct {
-	Muted bool `json:"muted" description:"True to stop sending push notifications to this device."`
 }
 
 // InstallIDParam is the {installId} path parameter for mobile-device roster

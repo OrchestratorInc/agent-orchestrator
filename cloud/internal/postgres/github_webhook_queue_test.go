@@ -61,3 +61,68 @@ func TestRecentOpenedPullRequestWebhooksReplaysProcessedDelivery(t *testing.T) {
 		t.Fatalf("replayed deliveries = %+v", deliveries)
 	}
 }
+
+func TestPruneGitHubWebhooksKeepsRecentAndInFlightDeliveries(t *testing.T) {
+	store, admin, _ := openNotificationTestStore(t)
+	ctx := context.Background()
+	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	cutoff := old.Add(time.Hour)
+	ids := map[string]struct {
+		status   string
+		received time.Time
+		kept     bool
+	}{
+		uuid.NewString(): {"processed", old, false},
+		uuid.NewString(): {"failed", old, false},
+		uuid.NewString(): {"processed", cutoff.Add(time.Minute), true},
+		uuid.NewString(): {"pending", old, true},
+		uuid.NewString(): {"retry", old, true},
+		uuid.NewString(): {"processing", old, true},
+	}
+	all := make([]string, 0, len(ids))
+	for id, row := range ids {
+		all = append(all, id)
+		if _, err := admin.Exec(ctx, `INSERT INTO ao_github_webhook_deliveries
+			(github_delivery_id, event, payload, payload_hash, status, received_at)
+			VALUES ($1, 'check_run', '{}'::bytea, decode(repeat('00', 32), 'hex'), $2, $3)`,
+			id, row.status, row.received); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), `DELETE FROM ao_github_webhook_deliveries WHERE github_delivery_id = ANY($1)`, all)
+	})
+	// Other tests' rows may also be old and finished, so count only ours.
+	for {
+		deleted, err := store.PruneGitHubWebhooks(ctx, cutoff, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if deleted == 0 {
+			break
+		}
+	}
+	for id, row := range ids {
+		var exists bool
+		if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ao_github_webhook_deliveries WHERE github_delivery_id = $1)`, id).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists != row.kept {
+			t.Fatalf("%s delivery received %v: kept = %v, want %v", row.status, row.received, exists, row.kept)
+		}
+	}
+}
+
+func TestGitHubWebhookClaimIndexesExist(t *testing.T) {
+	_, admin, _ := openNotificationTestStore(t)
+	for _, name := range []string{"ao_github_webhook_install_order_idx", "ao_github_webhook_processing_idx", "ao_access_tickets_session_purpose_idx"} {
+		var valid bool
+		if err := admin.QueryRow(context.Background(), `SELECT i.indisvalid FROM pg_index i
+			JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = $1`, name).Scan(&valid); err != nil {
+			t.Fatalf("index %s: %v", name, err)
+		}
+		if !valid {
+			t.Fatalf("index %s is not valid", name)
+		}
+	}
+}

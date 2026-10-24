@@ -53,6 +53,42 @@ func TestList_ClassifiesByExtensionAndSortsByPath(t *testing.T) {
 	}
 }
 
+func TestList_SkipsOSMetadataAndToolFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, rel := range []string{
+		"report.md",
+		"site/index.html",
+		".DS_Store",
+		"site/.DS_Store",
+		"._report.md",
+		"Thumbs.db",
+		"site/desktop.ini",
+		".git/HEAD",
+		".versions/blobs/x",
+		"node_modules/pkg/index.js",
+		"site/__pycache__/gen.pyc",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var paths []string
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	if fmt.Sprint(paths) != "[report.md site/index.html]" {
+		t.Fatalf("paths = %v, want [report.md site/index.html]", paths)
+	}
+}
+
 func TestList_BoundsFileCount(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < MaxFiles+25; i++ {

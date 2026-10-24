@@ -121,6 +121,26 @@ PY
 # value set in the promoting shell wins. Only the secrets of providers
 # production actually serves are required.
 load_offering ./scripts/offering/production.env
+# Artifacts, like a provider, reach production only after staging serves them.
+staging_artifacts="$(
+	SOURCE="$staging_source" python3 - <<'PY'
+import json
+import os
+
+source = json.loads(os.environ["SOURCE"])
+container = next(
+    item
+    for item in source["taskDefinition"]["containerDefinitions"]
+    if item["name"] == "control-plane"
+)
+environment = {item["name"]: item["value"] for item in container["environment"]}
+print(environment.get("AO_CLOUD_ARTIFACTS", "0"))
+PY
+)"
+if [[ "$AO_CLOUD_ARTIFACTS" == 1 && "$staging_artifacts" != 1 ]]; then
+	echo "AO_CLOUD_ARTIFACTS=1 in production needs staging to serve artifacts first (staging has ${staging_artifacts})." >&2
+	exit 1
+fi
 SANDBOX_PROVIDER="$AO_CLOUD_SANDBOX_PROVIDER"
 PROVIDERS="$AO_CLOUD_SANDBOX_PROVIDERS"
 if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
@@ -150,9 +170,13 @@ fi
 	--paywalled-features "$AO_CLOUD_PAYWALLED_FEATURES" \
 	--idle-pause-threshold "$AO_CLOUD_IDLE_PAUSE_THRESHOLD" \
 	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD" \
+	--artifacts "$AO_CLOUD_ARTIFACTS" \
+	--artifact-bucket "$AO_CLOUD_ARTIFACT_BUCKET" \
+	--artifact-region "$AO_CLOUD_ARTIFACT_REGION" \
 	--coder-readable-names "$AO_CLOUD_CODER_READABLE_NAMES" \
 	--coder-worker-working-folder "$AO_CLOUD_CODER_WORKER_WORKING_FOLDER"
-echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none}" >&2
+echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none} artifacts=${AO_CLOUD_ARTIFACTS}" >&2
+check_artifact_bucket "$PRODUCTION_CLUSTER" "$PRODUCTION_SERVICE" || exit 1
 release="${RELEASE_ARG:-$staging_release}"
 if [[ "$release" != "$staging_release" ]]; then
 	echo "Release ${release} is not the healthy staging release ${staging_release}." >&2
@@ -434,6 +458,9 @@ register_api_task() {
 		--set-environment "AO_CLOUD_PAYWALLED_FEATURES=${AO_CLOUD_PAYWALLED_FEATURES}"
 		--set-environment "AO_CLOUD_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_IDLE_PAUSE_THRESHOLD}"
 		--set-environment "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD}"
+		--set-environment "AO_CLOUD_ARTIFACTS=${AO_CLOUD_ARTIFACTS}"
+		--set-environment "AO_CLOUD_ARTIFACT_BUCKET=${AO_CLOUD_ARTIFACT_BUCKET}"
+		--set-environment "AO_CLOUD_ARTIFACT_REGION=${AO_CLOUD_ARTIFACT_REGION}"
 		--set-environment "AO_CLOUD_CODER_READABLE_NAMES=${AO_CLOUD_CODER_READABLE_NAMES}"
 		--set-environment "AO_CLOUD_CODER_WORKER_WORKING_FOLDER=${AO_CLOUD_CODER_WORKER_WORKING_FOLDER}"
 	)

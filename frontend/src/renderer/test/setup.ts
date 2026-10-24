@@ -136,6 +136,8 @@ if (typeof window !== "undefined") {
 			onOpenFolderPath: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
+			onQuitConfirmRequest: () => () => undefined,
+			resolveQuitConfirm: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -178,6 +180,10 @@ if (typeof window !== "undefined") {
 		chatImage: {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
+		},
+		cloudArtifact: {
+			fetch: async () => new Uint8Array(),
+			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),

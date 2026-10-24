@@ -59,7 +59,7 @@ Do not point `tailscale serve`, a public proxy, or port forwarding at the unauth
 - Shutdown, telemetry, mobile-control, and browser-control routes remain loopback-only.
 - Mobile settings live at `AO_DATA_DIR/mobile/config.json` (normally `~/.ao/data/mobile/config.json`). The file stores the rotating password so the desktop can redisplay it and is written with mode `0600`; authentication comparisons use an in-memory hash. It is not a persisted password-hash-only store.
 
-Do not share pairing screenshots or links. Use device mute/remove controls in Connect Mobile to manage push delivery and paired-device records. Removing a device record is not a substitute for rotating the shared connection password: regenerate that password if a phone or QR/link was lost or exposed, then pair trusted phones again. Keep direct plaintext traffic off untrusted networks. The historical LAN-only design describes the listener itself; current managed secure endpoints do not change the primary listener boundary.
+Do not share pairing screenshots or links. Turn push notifications on or off on the phone itself; use Remove in Connect Mobile to clear a paired-device record. Removing a device record is not a substitute for rotating the shared connection password: regenerate that password if a phone or QR/link was lost or exposed, then pair trusted phones again. Keep direct plaintext traffic off untrusted networks. The historical LAN-only design describes the listener itself; current managed secure endpoints do not change the primary listener boundary.
 
 ## What mobile supports
 
@@ -67,7 +67,7 @@ The Expo/React Native app is a native control surface over the same daemon resou
 
 Mobile supports structured Chat, Terminal UI, session creation, the same capability-gated Chat/TUI handoff, approvals and structured input, model and agent controls, compaction and rollback when the session advertises those capabilities, voice dictation, attachments, a workspace shell, and generated previews.
 
-Mobile also exposes pull request, workspace review, and reviewer-run views. Push notifications need mobile permission, an unmuted paired device, and a running daemon with network access to its push service. Pairing alone does not guarantee push delivery. Supported macOS hosts can enable keep-awake in Connect Mobile; the host must remain awake and reachable for interactive access.
+Mobile also exposes pull request, workspace review, and reviewer-run views. Push notifications need mobile permission, a paired device, and a running daemon with network access to its push service. Pairing alone does not guarantee push delivery. Supported macOS hosts can enable keep-awake in Connect Mobile; the host must remain awake and reachable for interactive access.
 
 ## If the phone cannot connect
 
@@ -78,7 +78,7 @@ Mobile also exposes pull request, workspace review, and reviewer-run views. Push
 | Wrong computer or contract-version error | Check the computer name shown by the phone and update both apps. QR pairing checks the offered host identity before sending the password. |
 | Password rejected | Copy the current password from Connect Mobile or scan a new QR. Regeneration invalidates old credentials. Repeated wrong attempts can trigger a temporary lockout. |
 | Connection drops after sleep or full app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; ordinary Quit/Cmd+Q leaves the server running, but **Quit AO Completely** stops it. Reopen the session after the network returns. |
-| No push alerts | Allow phone notifications, check that the device is not muted, and confirm the daemon can reach its push service. Open the app directly for interactive work. |
+| No push alerts | Allow notifications on the phone, check that it is still listed under Connected devices, and confirm the daemon can reach its push service. Open the app directly for interactive work. |
 
 <details>
 <summary>Verification scope</summary>

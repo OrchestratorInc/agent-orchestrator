@@ -2,11 +2,18 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
+
+// artifactsChangedTTL bounds how long a replica remembers that a session's
+// committed artifacts changed, for a worker whose next WaitForWork lands
+// elsewhere.
+const artifactsChangedTTL = 10 * time.Minute
 
 // workWaitTimeout bounds a single WaitForWork long-poll. A NOTIFY delivers work
 // within milliseconds; this is only the fallback re-check cadence for the rare
@@ -22,10 +29,38 @@ const workWaitTimeout = 5 * time.Second
 type workWaiters struct {
 	mu      sync.Mutex
 	waiters map[string]map[chan struct{}]struct{}
+	// artifactsChanged holds when each session's committed artifacts last
+	// changed without its worker, until its next WaitForWork reports it.
+	artifactsChanged map[string]time.Time
 }
 
 func newWorkWaiters() *workWaiters {
-	return &workWaiters{waiters: make(map[string]map[chan struct{}]struct{})}
+	return &workWaiters{
+		waiters:          make(map[string]map[chan struct{}]struct{}),
+		artifactsChanged: make(map[string]time.Time),
+	}
+}
+
+// markArtifactsChanged records that the session's committed artifacts changed
+// without its worker, and forgets marks older than artifactsChangedTTL.
+func (w *workWaiters) markArtifactsChanged(sessionID string, now time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for id, at := range w.artifactsChanged {
+		if now.Sub(at) > artifactsChangedTTL {
+			delete(w.artifactsChanged, id)
+		}
+	}
+	w.artifactsChanged[sessionID] = now
+}
+
+// takeArtifactsChanged reports and clears a recent mark for the session.
+func (w *workWaiters) takeArtifactsChanged(sessionID string, now time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	at, ok := w.artifactsChanged[sessionID]
+	delete(w.artifactsChanged, sessionID)
+	return ok && now.Sub(at) <= artifactsChangedTTL
 }
 
 // subscribe returns a coalescing wake channel for the session and a deregister
@@ -65,12 +100,18 @@ func (w *workWaiters) notify(sessionID string) {
 }
 
 // HandleWorkerWorkNotify is the Postgres NOTIFY callback for ao_worker_work; the
-// payload is the session id whose turn/transport queue just gained a row. Every
-// replica runs its own listener, so whichever one holds the waiting worker's
-// long-poll wakes it; the others no-op.
-func (s *Server) HandleWorkerWorkNotify(sessionID string) {
+// payload is the session id whose turn/transport queue just gained a row, or
+// that id after postgres.ArtifactsChangedNotifyPrefix when its committed
+// artifacts changed without its worker. Every replica runs its own listener,
+// so whichever one holds the waiting worker's long-poll wakes it; the others
+// no-op, and remember an artifact change for a later wait.
+func (s *Server) HandleWorkerWorkNotify(payload string) {
 	if s.workWaiters == nil {
 		return
+	}
+	sessionID, artifacts := strings.CutPrefix(payload, postgres.ArtifactsChangedNotifyPrefix)
+	if artifacts {
+		s.workWaiters.markArtifactsChanged(sessionID, time.Now())
 	}
 	s.workWaiters.notify(sessionID)
 }
@@ -79,7 +120,8 @@ func (s *Server) HandleWorkerWorkNotify(sessionID string) {
 // transport request), or a short fallback timeout elapses. It replaces the
 // worker's ~100ms busy-poll: the worker holds one request open and the control
 // plane wakes it on enqueue. It never returns the work itself — the worker
-// re-runs its atomic claim RPCs when this returns.
+// re-runs its atomic claim RPCs when this returns. ArtifactsChanged tells it
+// to check its artifact files against the committed ones.
 func (s *Server) workerWaitForWork(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	claims := workerFrom(r)
@@ -100,5 +142,7 @@ func (s *Server) workerWaitForWork(w http.ResponseWriter, r *http.Request) {
 	case <-wake:
 	case <-timer.C:
 	}
-	writeJSON(w, http.StatusOK, struct{}{})
+	writeJSON(w, http.StatusOK, worker.WorkWaitResponse{
+		ArtifactsChanged: s.workWaiters.takeArtifactsChanged(claims.SessionID, time.Now()),
+	})
 }

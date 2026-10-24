@@ -1524,6 +1524,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
 		return apierr.Invalid("TARGET_AGENT_UNAUTHORIZED",
 			"The target agent is not authenticated; authenticate it before switching", nil)
+	case errors.Is(err, sessionmanager.ErrDeliveryUnconfirmed):
+		return apierr.Conflict("SESSION_DELIVERY_UNCONFIRMED",
+			"Message was written to the terminal but the agent did not start a turn; prompt may be unsubmitted", nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):
