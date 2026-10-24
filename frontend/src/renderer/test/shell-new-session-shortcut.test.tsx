@@ -6,6 +6,7 @@ import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcu
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useUiStore } from "../stores/ui-store";
+import * as onboardingFinish from "../lib/onboarding-finish";
 import type { WorkspaceSummary } from "../types/workspace";
 
 const shellMocks = vi.hoisted(() => {
@@ -1022,6 +1023,24 @@ describe("shell keyboard-shortcuts help subscription", () => {
 });
 
 describe("shell quit confirm subscription", () => {
+	it("keeps quit confirmation available while the onboarding handoff is pending", async () => {
+		const finish = vi.spyOn(onboardingFinish, "runOnboardingFinish").mockReturnValue(new Promise(() => {}));
+		useUiStore.setState({ onboardingFinishRequest: { nonce: 901, path: "/tmp/project", orchestratorAgent: "claude-code", workerAgent: "claude-code" } });
+		try {
+			await renderShell();
+			expect(screen.getByRole("heading", { name: /Starting your orchestrator/ })).toBeInTheDocument();
+			const listener = shellMocks.state.quitConfirmListener;
+			if (!listener) throw new Error("quit confirm listener was not registered");
+			act(() => listener({ keepsRunning: true }));
+			fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+			expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
+			expect(screen.getByRole("heading", { name: /Starting your orchestrator/ })).toBeInTheDocument();
+		} finally {
+			finish.mockRestore();
+			useUiStore.setState({ onboardingFinishRequest: null, onboardingFinishError: null });
+		}
+	});
+
 	it("shows the quit confirm over the startup loader and resolves it either way", async () => {
 		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
 		await renderShell();

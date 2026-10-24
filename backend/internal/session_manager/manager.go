@@ -6472,7 +6472,7 @@ func safeRelPath(rel string) (string, error) {
 
 // scriptStepMinute is the unit of a Setup or Cleanup step's time limit; tests
 // shorten it.
-var scriptStepMinute = time.Minute
+var scriptStepMinute = time.Minute //nolint:revive // A configured minute, scaled down in deadline tests.
 
 // scriptStepTimeout is the command a Setup or Cleanup step runs and its time
 // limit: the one its first line sets (domain.ScriptStepMinutes), else

@@ -417,6 +417,60 @@ beforeEach(() => {
 	useUiStore.setState({ globalToast: null, globalToasts: [], projectCreationPending: false });
 });
 
+describe("CreateProjectFlow onboarding preparation", () => {
+	it("preserves workspace mode when a parent folder is imported through onboarding", async () => {
+		const user = userEvent.setup();
+		const path = "/repo/parent";
+		const child = { repoPath: `${path}/web`, isRepo: true, hasCommit: true, hasOrigin: true, isEmptyFolder: false, needsGitInit: false, requiredActions: [], blockingErrors: [] };
+		const root = { isRepo: false, hasCommit: false, hasOrigin: false, needsGitInit: true, requiredActions: ["git_init", "git_commit", "create_remote_repository"] };
+		bridgeMocks.chooseDirectory.mockResolvedValue(path);
+		bridgeMocks.scanImportFolder.mockResolvedValue({ path, repos: [{ name: "web", path: child.repoPath, relativePath: "web", branch: "main", remote: "https://example.com/web.git", hasRemote: true, isRepo: true, hasCommit: true, status: "ok", needsGitInit: false }] });
+		apiMocks.POST.mockResolvedValueOnce({ data: projectValidation(path, { nextStep: "choose_import_kind", root, childRepos: [child] }) });
+		apiMocks.POST.mockResolvedValueOnce({ data: { ...projectValidation(path, { root, childRepos: [child] }), importKind: "workspace" } });
+		const onPrepared = vi.fn();
+		const { rerender } = render(<CreateProjectFlow mode="choose" {...noop} variant="onboarding" onboardingTrigger={{ kind: "folder", nonce: 0 }} prepareOnly={{ onPrepared }} />);
+		rerender(<CreateProjectFlow mode="choose" {...noop} variant="onboarding" onboardingTrigger={{ kind: "folder", nonce: 1 }} prepareOnly={{ onPrepared }} />);
+
+		await user.click(await screen.findByRole("button", { name: "Import as workspace" }));
+		await screen.findByRole("dialog", { name: "Import workspace" });
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+
+		await waitFor(() => expect(onPrepared).toHaveBeenCalledWith(expect.objectContaining({ path, asWorkspace: true })));
+	});
+
+	it("hands a selected local repository back to onboarding", async () => {
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/project") });
+		const onPrepared = vi.fn();
+		const { rerender } = render(
+			<CreateProjectFlow
+				mode="choose"
+				{...noop}
+				onboardingTrigger={{ kind: "folder", nonce: 0 }}
+				prepareOnly={{ onPrepared }}
+				variant="onboarding"
+			/>,
+		);
+
+		rerender(
+			<CreateProjectFlow
+				mode="choose"
+				{...noop}
+				onboardingTrigger={{ kind: "folder", nonce: 1 }}
+				prepareOnly={{ onPrepared }}
+				variant="onboarding"
+			/>,
+		);
+
+		await waitFor(() => expect(onPrepared).toHaveBeenCalledWith({
+			path: "/repo/project",
+			asWorkspace: false,
+			clonePreparationId: undefined,
+			defaultBranch: undefined,
+		}));
+	});
+});
+
 describe("CreateProjectFlow remote host", () => {
 	it("switches the shared picker back to this computer", async () => {
 		const user = userEvent.setup();

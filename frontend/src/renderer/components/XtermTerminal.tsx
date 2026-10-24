@@ -67,6 +67,8 @@ import {
 export type XtermTerminalProps = {
 	ariaLabel?: string;
 	className?: string;
+	/** Compact setup terminals omit advanced search/fullscreen actions. */
+	contextMenuMode?: "full" | "compact";
 	fontSize?: number;
 	isFullscreen?: boolean;
 	theme: Theme;
@@ -1996,13 +1998,13 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				>
 					{contextMenu.link ? (
 						<>
-							<DropdownMenuItem disabled={!props.onLinkOpen} onSelect={() => {
+							{props.onLinkOpen ? <DropdownMenuItem onSelect={() => {
 								const { link } = contextMenu;
 								setContextMenuOpen(false);
 								if (link) props.onLinkOpen?.(link);
 							}}>
 								{t("link.openInAOBrowser")}
-							</DropdownMenuItem>
+							</DropdownMenuItem> : null}
 							<DropdownMenuItem
 								onSelect={() => {
 									const { link } = contextMenu;
@@ -2023,12 +2025,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 							<DropdownMenuSeparator />
 						</>
 					) : null}
-					<DropdownMenuItem disabled={!contextMenu.canCopy} onSelect={() => runContextMenuAction("copy")}>
+					{contextMenu.canCopy ? <DropdownMenuItem onSelect={() => runContextMenuAction("copy")}>
 						{t("titlebar.copy")}
-					</DropdownMenuItem>
+					</DropdownMenuItem> : null}
 					<DropdownMenuItem onSelect={() => runContextMenuAction("paste")}>{t("titlebar.paste")}</DropdownMenuItem>
 					<DropdownMenuItem onSelect={() => runContextMenuAction("selectAll")}>{t("titlebar.selectAll")}</DropdownMenuItem>
-					<DropdownMenuSeparator />
+					{props.contextMenuMode !== "compact" ? <><DropdownMenuSeparator />
 					<DropdownMenuItem
 						onSelect={() => {
 							setContextMenuOpen(false);
@@ -2046,7 +2048,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						>
 							{props.isFullscreen ? t("terminal.exitFullscreen") : t("terminal.fullscreen")}
 						</DropdownMenuItem>
-					) : null}
+					) : null}</> : null}
 				</DropdownMenuContent>
 			</DropdownMenu>
 			<HoverCard
