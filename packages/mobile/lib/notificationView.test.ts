@@ -3,6 +3,10 @@ import { notificationAction, notificationsAcrossHosts, notificationRowsForHost, 
 import { darkTheme } from "./theme";
 
 describe("notificationVisual", () => {
+	it("distinguishes Cloud completion and failure with desktop semantic colors", () => {
+		expect(notificationVisual(darkTheme, "agent_failed")).toEqual({ icon: "circle-alert", color: darkTheme.red, label: "Agent failed" });
+		expect(notificationVisual(darkTheme, "agent_completed")).toEqual({ icon: "check-check", color: darkTheme.green, label: "Agent completed" });
+	});
 	it("gives every known type its own label", () => {
 		const labels = ["needs_input", "ready_to_merge", "pr_merged", "pr_closed_unmerged", "review_completed", "review_changes_requested"].map(
 			(t) => notificationVisual(darkTheme, t).label,
@@ -36,6 +40,20 @@ describe("notificationVisual", () => {
 	it("falls back to a usable label for an unknown type", () => {
 		expect(notificationVisual(darkTheme, "something_new").label).toBe("something_new");
 		expect(notificationVisual(darkTheme, "").label).toBe("Notification");
+	});
+});
+
+describe("Cloud notification actions", () => {
+	it("opens a Cloud PR outcome in its session instead of a local PR route", () => {
+		expect(notificationAction({ type: "review_completed", sessionId: "worker", prUrl: "https://github.com/org/repo/pull/1" }, { terminated: false, sessionsReady: true }, "cloud")).toEqual({ kind: "open", sessionId: "worker" });
+	});
+	it("never falls through to local PR navigation when a Cloud session is missing", () => {
+		expect(notificationAction({ type: "agent_completed" }, { terminated: false, sessionsReady: true }, "cloud")).toEqual({ kind: "none" });
+		expect(notificationAction({ type: "ready_to_merge", sessionId: "worker" }, { terminated: false, sessionsReady: false }, "cloud")).toEqual({ kind: "none" });
+	});
+	it("requires explicit restore only for terminated Cloud sessions needing input", () => {
+		expect(notificationAction({ type: "needs_input", sessionId: "worker" }, { terminated: true, sessionsReady: true }, "cloud")).toEqual({ kind: "restore", sessionId: "worker" });
+		expect(notificationAction({ type: "agent_completed", sessionId: "worker" }, { terminated: true, sessionsReady: true }, "cloud")).toEqual({ kind: "open", sessionId: "worker" });
 	});
 });
 

@@ -129,7 +129,7 @@ export function ChatComposer({
 	onAcknowledgeSend(id: string): Promise<void>;
 	completedRetry?: { id: string; draftText: string };
 	onSteer(text: string): Promise<string>;
-	onPromoteQueuedTurn(turnId: string): Promise<void>;
+	onPromoteQueuedTurn?(turnId: string): Promise<void>;
 	onCancelQueuedTurn(turnId: string): Promise<void>;
 	onInterrupt(): void;
 	onOpenSettings(): void;
@@ -265,7 +265,8 @@ export function ChatComposer({
 		/>
 	) : null;
 	const canSteer = snapshot.capabilities?.includes("steer") && !steerUnavailable && active;
-	const canEmbedFiles = snapshot.capabilities?.includes("embedded_context");
+	const canAttachPhoto = Boolean(config);
+	const canEmbedFiles = Boolean(config && snapshot.capabilities?.includes("embedded_context"));
 	const hasDraft = Boolean(text.trim() || quotes.length);
 	const primaryAction = composerPrimaryAction({ active, hasDraft, hasAttachments: attachments.length > 0 });
 	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0 && quotes.length === 0);
@@ -400,6 +401,7 @@ export function ChatComposer({
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
 
 	const addImage = async () => {
+		if (!canAttachPhoto || disabled || stopped || submitting) return;
 		setLocalError(undefined);
 		try {
 			const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.82, allowsMultipleSelection: true, selectionLimit: 4 });
@@ -428,6 +430,7 @@ export function ChatComposer({
 		}
 	};
 	const addFile = async () => {
+		if (!canEmbedFiles || disabled || stopped || submitting) return;
 		setLocalError(undefined);
 		const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
 		if (result.canceled) return;
@@ -532,7 +535,7 @@ export function ChatComposer({
 					return <View key={entry.turnId} style={[styles.queueRow, index > 0 && styles.queueRowDivider]}>
 						<Feather name="corner-down-right" size={15} color={t.textTertiary} />
 						<Text numberOfLines={1} style={styles.queueText}>{entry.message.text}</Text>
-						{canSteer ? <Pressable
+						{canSteer && onPromoteQueuedTurn ? <Pressable
 							accessibilityRole="button"
 							accessibilityLabel={`Steer queued message: ${entry.message.text}`}
 							accessibilityState={{ busy: promoting, disabled: queueActionPending }}
@@ -603,7 +606,7 @@ export function ChatComposer({
 					</View>)}
 				</ScrollView> : null}
 				<View style={styles.composerRow}>
-					<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
+					<ChatAttachmentMenu disabled={Boolean(disabled || stopped || submitting)} canAttachPhoto={canAttachPhoto} canAttachFile={canEmbedFiles} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
 					<TextInput
 						ref={inputRef}
 						accessibilityLabel="Message the agent"

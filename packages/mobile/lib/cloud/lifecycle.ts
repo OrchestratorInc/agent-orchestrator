@@ -1,6 +1,6 @@
 import type { ControllerState } from "../chat/types";
 
-/** Ported verbatim from frontend/src/renderer/lib/cloud-lifecycle.ts. */
+/** Mobile presentation of frontend/src/renderer/lib/cloud-lifecycle.ts. */
 export type CloudLifecycleStage =
 	| "paused_by_coder"
 	| "paused"
@@ -74,15 +74,28 @@ export function cloudHeaderControllerState(
 }
 
 export type CloudStartupProblem =
-	| { phase: "failed"; message: string; code?: string; detail?: string }
+	| { phase: "failed"; message: string; code?: string; detail?: string; at?: string }
 	| { phase: "retrying"; message: string }
 	| { phase: "unavailable"; message?: string };
 
+const workspaceStartupErrorCodes = new Set(["repository_checkout_failed", "working_directory_unusable", "project_setup_failed"]);
+export function isWorkspaceStartupError(code?: string): boolean {
+	return code !== undefined && workspaceStartupErrorCodes.has(code);
+}
+
 export function cloudStartupProblem(session: CloudLifecycleInput): CloudStartupProblem | undefined {
-	if (!session.cloud || session.runtimeConnected || session.isTerminated || session.isTerminal) return undefined;
+	if (!session.cloud || session.isTerminated || session.isTerminal) return undefined;
 	const lifecycle = session.cloud;
+	const startupError = lifecycle.startupError;
+	// Checking in proves the worker is reachable, not that checkout and Setup
+	// succeeded. These failures require an explicit retry, just as on desktop.
+	if (startupError && isWorkspaceStartupError(startupError.code) && startupError.message?.trim()) {
+		return { phase: "failed", message: startupError.message.trim(), code: startupError.code,
+			detail: startupError.detail?.trim() || undefined, at: startupError.at };
+	}
+	if (session.runtimeConnected) return undefined;
 	const final = (lifecycle.runtimeState || lifecycle.observedState) === "terminated";
-	const message = lifecycle.startupError?.message.trim();
+	const message = startupError?.message?.trim();
 	if (message) return final ? { phase: "failed", message, code: lifecycle.startupError?.code, detail: lifecycle.startupError?.detail?.trim() || undefined } : { phase: "retrying", message };
 	if (final) return { phase: "unavailable", message: lifecycle.runtimeError?.trim() || undefined };
 	return undefined;

@@ -15,6 +15,7 @@ import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
+import { useNotificationBadge } from "../../lib/useNotificationBadge";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
@@ -25,10 +26,10 @@ export default function ProjectsScreen() {
 	const insets = useSafeAreaInsets();
 	const router = useRouter();
 	const cloudSignIn = useCloudSignInAction();
-	const { scopedBoard, refreshAll, notificationsUnread, hostStates } = useApp();
+	const { scopedBoard, refreshAll, hostStates } = useApp();
 	const { projects, sources } = scopedBoard;
 	const sourceStatuses = Object.entries(sources);
-	const unreadCount = hostStates.reduce((count, host) => count + host.notificationsUnread, 0) || notificationsUnread;
+	const notifications = useNotificationBadge();
 	const { signedIn } = useCloudAuth();
 	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
@@ -81,17 +82,17 @@ export default function ProjectsScreen() {
 			<ScreenHeader
 				title="Projects"
 				right={<View style={styles.headerActions}>
-					{hostStates.some((host) => host.connection === "open") && <HeaderIconButton
+					{notifications.available && <HeaderIconButton
 						icon="bell"
 						label="Notifications"
-						badge={unreadCount}
+						badge={notifications.unreadCount}
 						onPress={() => router.navigate("/notifications")}
 					/>}
 					{signedIn && <HeaderIconButton icon="plus" label="Add Cloud project" onPress={() => router.push("/create-project")} />}
 				</View>}
 			/>
 			{sourceStatuses.map(([key, status]) => (
-				<StaleBanner key={key} sourceLabel={key.startsWith('["cloud"') ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />
+				<StaleBanner key={key} sourceKey={key} sourceLabel={key.startsWith('["cloud"') ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />
 			))}
 			{initialLoading && projects.length === 0 ? (
 				<View style={styles.center}>

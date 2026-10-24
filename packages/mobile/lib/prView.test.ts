@@ -1,14 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { localOnlyPRCopy } from "./prView";
-import { readFileSync } from "node:fs";
+import { reviewRouteForPR } from "./reviewView";
 
 describe("PR source scope", () => {
-	it("explains that PRs are paired-desktop only", () => {
-		expect(localOnlyPRCopy).toContain("paired desktop");
-	});
-	it("routes PR cards back to that desktop, not an unscoped session", () => {
-		const card = readFileSync(new URL("./PRCard.tsx", import.meta.url), "utf8");
-		expect(card).toContain("source: source.kind, sourceId: source.id");
+	it("routes Local PRs to their owning desktop and Cloud PRs to their account", () => {
+		const pr = { number: 7, url: "https://github.com/a/b/pull/7" };
+		expect(reviewRouteForPR("same", pr, { kind: "local", id: "host" }).params).toMatchObject({ sessionId: "same", hostId: "host", source: "local", sourceId: "host" });
+		expect(reviewRouteForPR("same", pr, { kind: "cloud", id: "org" }, "account").params).toEqual({ sessionId: "same", prNumber: "7", prUrl: pr.url, source: "cloud", sourceId: "org", scopeKey: "account" });
 	});
 });
 import type { DashboardPR, DashboardSession, SessionPRSummary } from "./api";
@@ -37,6 +34,10 @@ const session = (projectId: string, prs: DashboardPR[], id = `${projectId}-1`): 
 	({ id, projectId, prs }) as DashboardSession;
 
 describe("collectPRs", () => {
+	it("keeps different repositories sharing a PR number within one project", () => {
+		const got = collectPRs([session("same", [pr({ number: 7, url: "https://github.com/a/first/pull/7" }), pr({ number: 7, url: "https://github.com/a/second/pull/7" })])]);
+		expect(got.map(({ pr }) => pr.url)).toEqual(["https://github.com/a/first/pull/7", "https://github.com/a/second/pull/7"]);
+	});
 	// Regression: the key was `${owner}/${repo}#${number}`, but the board endpoint
 	// never sends owner or repo — so it collapsed to "/#12" and two projects with
 	// a PR #12 dropped one of each other.

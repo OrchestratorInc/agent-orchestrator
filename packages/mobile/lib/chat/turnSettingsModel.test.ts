@@ -19,6 +19,16 @@ const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapsho
 });
 
 describe("turnSettingsRows", () => {
+	it("hides approvals for read-only Cloud sessions in the native menu and summary", () => {
+		const current = snapshot({ capabilities: [], approvalModes: [], settings: { model: "Sonnet" } } as Partial<ConversationSnapshot>);
+		expect(turnSettingsRows(current, [], []).some((row) => row.label === "Approvals")).toBe(false);
+		expect(turnSettingsSummary(current, [], [])).toBe("Sonnet");
+	});
+	it("offers only the Cloud ceiling's approval choices while retaining all local choices", () => {
+		const cloud = snapshot({ capabilities: [], approvalModes: ["accept-edits", "auto"] } as Partial<ConversationSnapshot>);
+		expect(turnSettingsRows(cloud, [], []).find((row) => row.label === "Approvals")?.choices.map((choice) => [choice.value, choice.selected])).toEqual([["accept-edits", true], ["auto", false]]);
+		expect(turnSettingsRows(snapshot({ capabilities: [] }), [], []).find((row) => row.label === "Approvals")?.choices.map((choice) => choice.value)).toEqual(["default", "accept-edits", "auto", "bypass-permissions"]);
+	});
 	it("identifies the native controls Android promotes above generic provider options", () => {
 		const controls: ChatConfigOption[] = [
 			{ id: "fast", name: "Fast mode", type: "boolean", currentBoolean: true, choices: [] },

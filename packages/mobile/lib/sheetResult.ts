@@ -40,6 +40,8 @@ export function resetSheetResults(): void {
  * (route params are strings) lives in one place rather than at every call site.
  */
 export function projectSheetRoute(opts: {
+	/** Restrict a Local-only picker to this machine instead of active environment. */
+	hostId?: string;
 	selected: string;
 	onSelect: (id: string) => void;
 	includeAll?: boolean;
@@ -54,6 +56,7 @@ export function projectSheetRoute(opts: {
 			includeAll: opts.includeAll === false ? "0" : "1",
 			...(opts.title ? { title: opts.title } : {}),
 			...(opts.subtitle ? { subtitle: opts.subtitle } : {}),
+			...(opts.hostId !== undefined ? { hostId: opts.hostId } : {}),
 		},
 	};
 }

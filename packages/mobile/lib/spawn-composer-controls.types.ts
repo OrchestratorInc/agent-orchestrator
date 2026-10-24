@@ -35,6 +35,8 @@ export type SpawnComposerControlsProps = {
 	/** Dictation into the prompt: hold to talk, double-tap for hands-free. */
 	voice: SpawnComposerVoice;
 	onSpawn: () => void;
+	/** A blocking state may replace Start task with its next useful action. */
+	submitLabel?: string;
 	busy: boolean;
 	disabled: boolean;
 };

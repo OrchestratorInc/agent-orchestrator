@@ -3,20 +3,21 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ActivityIndicator, FlatList, Pressable, RefreshControl, SectionList, StyleSheet, Text, TextInput, View } from "react-native";
 import { userFacingError } from "../../../lib/connectionError";
 import { haptics } from "../../../lib/haptics";
-import { hostRouteMatches } from "../../../lib/hostRoute";
 import { Feather } from "../../../lib/icons";
-import { HostScope, useApp } from "../../../lib/store";
+import { PickerOptions } from "../../../lib/PickerOptions";
 import type { Theme } from "../../../lib/theme";
 import { textSelectionColors } from "../../../lib/textSelection";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
-import { getWorkspaceTree, searchWorkspaceFiles, type WorkspaceSearchResult, type WorkspaceTreeEntry } from "../../../lib/files/api";
+import { type WorkspaceSearchResult, type WorkspaceTreeEntry } from "../../../lib/files/api";
+import { FilesScope, useFilesScope } from "../../../lib/files/FilesScope";
 import { ChangeRow, FileTypeIcon, FolderTypeIcon, LineCounts, ReviewTray, SegmentedTabs } from "../../../lib/files/components";
 import { changeGroups, plural, splitPath, type ChangeEntry } from "../../../lib/files/model";
-import { reviewKey } from "../../../lib/files/reviewStore";
+import { fileRoute } from "../../../lib/files/navigation";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
+import type { WorkspaceSource } from "../../../lib/files/workspaceSource";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -24,23 +25,20 @@ type Tab = "changes" | "all";
 
 /** The session's files: what the agent changed, and the whole worktree to browse. */
 export default function SessionFilesScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionFilesContent /></HostScope> : <SessionFilesContent />;
+	return <FilesScope><SessionFilesContent /></FilesScope>;
 }
 
 function SessionFilesContent() {
-	const { sessionId, hostId: routeHostId, tab: initialTab, title } = useLocalSearchParams<{ sessionId: string; hostId?: string; tab?: Tab; title?: string }>();
-	const id = String(sessionId ?? "");
+	const { tab: initialTab, title } = useLocalSearchParams<{ tab?: Tab; title?: string }>();
+	const { sessionId: id, workspace, owner, reviewKey: key } = useFilesScope();
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection, loading: appLoading } = useApp();
-	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [tab, setTab] = useState<Tab>(initialTab === "all" ? "all" : "changes");
-	const { manifest, loading, error, refreshing, refresh } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
-	const key = reviewKey(currentHostId, id);
-	const review = useReviewSender(config, key, id);
+	const [choosingRepository, setChoosingRepository] = useState(false);
+	const { manifest, loading, error, refreshing, refresh } = useWorkspaceManifest(workspace, id);
+	const review = useReviewSender(workspace, key, id);
 	const groups = useMemo(() => manifest ? changeGroups(manifest) : [], [manifest]);
 	const commentsByPath = useMemo(() => {
 		const counts = new Map<string, number>();
@@ -53,19 +51,32 @@ function SessionFilesContent() {
 	}, [navigation, title]);
 
 	const openFile = useCallback((path: string, mode: "diff" | "file", previousPath?: string) => {
-		router.push({ pathname: "/files/[sessionId]/file", params: { sessionId: id, path, mode, previousPath, hostId: routeHostId } });
-	}, [id, routeHostId, router]);
+		if (!workspace.isCurrent()) return;
+		const route = fileRoute(id, path, undefined, previousPath, owner);
+		router.push({ ...route, params: { ...route.params, mode } });
+	}, [id, owner, router, workspace]);
 	const openChange = useCallback((file: ChangeEntry) => openFile(file.path, "diff", file.previousPath), [openFile]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="These files belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
-	// A cold start (a deep link, a notification) lands before the saved pairing
-	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
-
 	const summary = manifest?.summary;
+	const repositories = owner.source.kind === "cloud" ? manifest?.repositories?.filter((repository) => repository.present) ?? [] : [];
+	const repositoryName = repositories.find((repository) => owner.repository ? repository.name === owner.repository : repository.main)?.label
+		?? repositories.find((repository) => owner.repository ? repository.name === owner.repository : repository.main)?.name
+		?? "Main repository";
 	const header = (
 		<View style={styles.header}>
+			{repositories.length > 1 ? choosingRepository ? <PickerOptions title="Repository"
+				options={repositories.map((repository) => ({ id: repository.main ? "" : repository.name, label: repository.label || repository.name, icon: "folder" }))}
+				selectedValue={owner.repository ?? ""}
+				onBack={() => setChoosingRepository(false)}
+				onSelect={(repository) => {
+					if (!workspace.isCurrent() || !repositories.some((item) => (item.main ? "" : item.name) === repository)) return;
+					haptics.select(); setChoosingRepository(false); router.setParams({ repository, tab });
+				}}
+			/> : <Pressable accessibilityRole="button" accessibilityLabel="Choose repository" onPress={() => { haptics.tap(); setChoosingRepository(true); }} style={styles.repository}>
+				<Feather name="folder" size={iconSize.sm} color={t.textSecondary} />
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.body} style={styles.repositoryName}>{repositoryName}</Text>
+				<Feather name="chevron-down" size={iconSize.sm} color={t.textTertiary} />
+			</Pressable> : null}
 			<SegmentedTabs<Tab>
 				value={tab}
 				onChange={setTab}
@@ -107,7 +118,7 @@ function SessionFilesContent() {
 					/>
 				)
 			) : (
-				<FileBrowser sessionId={id} header={header} bottomInset={review.comments.length ? 96 : space.xxl} onOpen={(path, changed) => openFile(path, changed ? "diff" : "file")} />
+				<FileBrowser workspace={workspace} sessionId={id} header={header} bottomInset={review.comments.length ? 96 : space.xxl} onOpen={(path, changed) => openFile(path, changed ? "diff" : "file")} />
 			)}
 			<ReviewTray comments={review.comments} sending={review.sending} error={review.error} onSend={() => void review.send()} onRemove={review.remove} />
 		</View>
@@ -142,8 +153,7 @@ function ChangesSummary({ manifest }: { manifest: NonNullable<ReturnType<typeof 
 }
 
 /** The worktree as folders, one level at a time, with a search across every path. */
-function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: string; header: React.ReactElement; bottomInset: number; onOpen: (path: string, changed: boolean) => void }) {
-	const { config } = useApp();
+function FileBrowser({ workspace, sessionId, header, bottomInset, onOpen }: { workspace: WorkspaceSource; sessionId: string; header: React.ReactElement; bottomInset: number; onOpen: (path: string, changed: boolean) => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [dir, setDir] = useState("");
@@ -153,38 +163,53 @@ function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: st
 	const [query, setQuery] = useState("");
 	const [results, setResults] = useState<WorkspaceSearchResult[] | null>(null);
 	const [searching, setSearching] = useState(false);
+	const [searchError, setSearchError] = useState<string>();
 	const request = useRef(0);
+	const treeController = useRef<AbortController | null>(null);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; ++request.current; treeController.current?.abort(); };
+	}, []);
 
 	const loadTree = useCallback(async (path: string) => {
-		if (!config) return;
+		if (!workspace.isCurrent()) return;
+		treeController.current?.abort();
+		const controller = new AbortController();
+		treeController.current = controller;
 		const ticket = ++request.current;
+		const current = () => mounted.current && ticket === request.current && !controller.signal.aborted && workspace.isCurrent();
 		setLoading(true);
 		setError(undefined);
 		try {
-			const next = await getWorkspaceTree(config, sessionId, path);
-			if (ticket === request.current) setTree({ ...next, entries: [...next.entries].sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1) });
+			const next = await workspace.getTree(sessionId, path, { signal: controller.signal });
+			if (current()) setTree({ ...next, entries: [...next.entries].sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1) });
 		} catch (cause) {
-			if (ticket === request.current) setError(userFacingError(cause, "Couldn't read this folder."));
+			if (current()) setError(userFacingError(cause, "Couldn't read this folder."));
 		} finally {
-			if (ticket === request.current) setLoading(false);
+			if (current()) setLoading(false);
 		}
-	}, [config, sessionId]);
+	}, [workspace, sessionId]);
 
 	useEffect(() => { void loadTree(dir); }, [dir, loadTree]);
 
 	useEffect(() => {
 		const trimmed = query.trim();
-		if (!config || !trimmed) { setResults(null); setSearching(false); return; }
+		if (!workspace.isCurrent() || !trimmed) { setResults(null); setSearching(false); setSearchError(undefined); return; }
+		const controller = new AbortController();
+		setResults([]);
+		setSearchError(undefined);
 		setSearching(true);
 		let cancelled = false;
+		const current = () => !cancelled && workspace.isCurrent();
 		const timer = setTimeout(() => {
-			searchWorkspaceFiles(config, sessionId, trimmed)
-				.then((found) => { if (!cancelled) setResults(found.results); })
-				.catch(() => { if (!cancelled) setResults([]); })
-				.finally(() => { if (!cancelled) setSearching(false); });
+			workspace.search(sessionId, trimmed, { signal: controller.signal })
+				.then((found) => { if (current()) setResults(found.results); })
+				.catch((cause) => { if (current()) setSearchError(userFacingError(cause, "Couldn't search this workspace.")); })
+				.finally(() => { if (current()) setSearching(false); });
 		}, 250);
-		return () => { cancelled = true; clearTimeout(timer); };
-	}, [config, query, sessionId]);
+		return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+	}, [workspace, query, sessionId]);
 
 	const crumbs = dir ? dir.split("/") : [];
 	const searchBox = (
@@ -239,7 +264,7 @@ function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: st
 				contentContainerStyle={{ paddingBottom: bottomInset }}
 				ItemSeparatorComponent={() => <View style={styles.divider} />}
 				renderItem={({ item }) => <PathRow path={item.path} status={item.status} onPress={() => onOpen(item.path, item.status !== "unmodified")} />}
-				ListEmptyComponent={searching ? null : <EmptyState icon="search" title="No matching files" message={`Nothing in this worktree matches “${query.trim()}”.`} />}
+				ListEmptyComponent={searching ? null : searchError ? <EmptyState icon="alert-triangle" title="Couldn't search files" message={searchError} /> : <EmptyState icon="search" title="No matching files" message={`Nothing in this worktree matches “${query.trim()}”.`} />}
 			/>
 		);
 	}
@@ -267,7 +292,7 @@ function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: st
 			) : (
 				<PathRow path={item.path} name={item.name} status={item.status} onPress={() => onOpen(item.path, Boolean(item.status && item.status !== "unmodified"))} />
 			)}
-			ListFooterComponent={tree?.truncated ? <Text style={styles.footNote}>This folder has more entries than the daemon lists. Use Find a file to reach the rest.</Text> : null}
+			ListFooterComponent={tree?.truncated ? <Text style={styles.footNote}>This folder has more entries than can be listed. Use Find a file to reach the rest.</Text> : null}
 			ListEmptyComponent={loading ? (
 				<View style={styles.centerInline}><ActivityIndicator color={t.accent} /></View>
 			) : error ? (
@@ -308,6 +333,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	centerInline: { paddingVertical: space.huge, alignItems: "center" },
 	copy: { ...type.footnote, color: t.textTertiary, textAlign: "center" },
 	header: { paddingHorizontal: space.lg, paddingTop: space.md, gap: space.md },
+	repository: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm },
+	repositoryName: { flex: 1, ...type.callout, color: t.textSecondary },
 	summary: { gap: space.xs, paddingBottom: space.xs },
 	summaryRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 	summaryText: { flex: 1, ...type.footnote, color: t.textSecondary },

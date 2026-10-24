@@ -1,4 +1,5 @@
-import { MenuView, type MenuAction, type NativeActionEvent } from "@expo/ui/community/menu";
+import { Host } from "@expo/ui";
+import { Button, ContextMenu, RNHostView } from "@expo/ui/swift-ui";
 import { type ReactNode } from "react";
 import { Pressable } from "react-native";
 import type { GestureType } from "react-native-gesture-handler";
@@ -26,34 +27,37 @@ export function WorkerRowContextMenu({
 	style: object;
 	pressedStyle: object;
 }) {
-	// iOS resolves SF Symbols by name at runtime, so every action can carry one.
-	const menuActions: MenuAction[] = actions.map((action) => ({
-		id: action.id,
-		title: action.title,
-		image: workerActionSymbol(action.id),
-		attributes: action.destructive ? { destructive: true } : undefined,
-	}));
-
-	const chooseAction = (event: NativeActionEvent) => {
-		onAction(event.nativeEvent.event as WorkerActionId);
-	};
-
 	return (
-		<MenuView
-			actions={menuActions}
-			shouldOpenOnLongPress
-			onPressAction={chooseAction}
-			testID="worker-row-menu"
-		>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={accessibilityLabel}
-				accessibilityHint={accessibilityHint}
-				onPress={onPress}
-				style={({ pressed }) => [style, pressed && pressedStyle]}
-			>
-				{children}
-			</Pressable>
-		</MenuView>
+		// Community MenuView fits both axes to the trigger's intrinsic size.
+		// A list row must instead inherit its list width at BOTH hosting boundaries;
+		// only its height follows the RN content.
+		<Host matchContents={{ vertical: true }} style={{ width: "100%" }} testID="worker-row-menu" ignoreSafeArea="all">
+			<ContextMenu>
+				<ContextMenu.Trigger>
+					<RNHostView matchContents={{ vertical: true }}>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel={accessibilityLabel}
+							accessibilityHint={accessibilityHint}
+							onPress={onPress}
+							style={({ pressed }) => [style, pressed && pressedStyle]}
+						>
+							{children}
+						</Pressable>
+					</RNHostView>
+				</ContextMenu.Trigger>
+				<ContextMenu.Items>
+					{actions.map((action) => (
+						<Button
+							key={action.id}
+							label={action.title}
+							systemImage={workerActionSymbol(action.id)}
+							role={action.destructive ? "destructive" : undefined}
+							onPress={() => onAction(action.id)}
+						/>
+					))}
+				</ContextMenu.Items>
+			</ContextMenu>
+		</Host>
 	);
 }

@@ -101,6 +101,19 @@ describe.each([
 	["iOS fallback", WorkerControlsSheet, 0],
 	["Android", AndroidWorkerControlsSheet, 180],
 ] as const)("%s worker controls", (_platform, Controls, searchDelayMs) => {
+	it("uses the actual machine names for otherwise identical projects", async () => {
+		await act(async () => { renderer = create(<Controls {...props} environments={[
+			{ id: "mac", name: "Studio Mac", source: { kind: "local", id: "same" } },
+			{ id: "dev", name: "Build Laptop", source: { kind: "local", id: "dev" } },
+			{ id: "cloud", name: "Cloud", source: { kind: "cloud", id: "same" } },
+		]} projects={[
+			{ source: { kind: "local", id: "same" }, value: { id: "app", name: "App" } },
+			{ source: { kind: "local", id: "dev" }, value: { id: "app", name: "App" } },
+			{ source: { kind: "cloud", id: "same" }, value: { id: "app", name: "App" } },
+		]} />); });
+		expect(renderer!.root.findByType("BottomSheetScrollView" as never).findAllByType("Text" as never).map((node) => node.props.children))
+			.toEqual(["All projects", "App · Studio Mac", "App · Build Laptop", "App · Cloud"]);
+	});
 	it("offers one checked environment among all, named machines, and Cloud", async () => {
 		await act(async () => { renderer = create(<Controls {...props} selectedEnvironmentId="cloud" environments={[
 			{ id: "mac", name: "Studio Mac", source: { kind: "local", id: "mac" } },

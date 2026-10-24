@@ -14,16 +14,62 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { iconSize, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { userFacingError } from "../../lib/connectionError";
+import { useCloudAuth } from "../../lib/cloud/authStore";
+import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
+import { resolvePreviewRoute, type PreviewRouteParams, type PreviewRouteResolution } from "../../lib/preview/route";
+import type { PreviewSource } from "../../lib/preview/source";
 
 /** One preview surface for the session browser and any generated app/document preview. */
 export default function SessionPreviewScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionPreviewContent /></HostScope> : <SessionPreviewContent />;
+	const params = useLocalSearchParams<PreviewRouteParams>();
+	const route = resolvePreviewRoute(params);
+	const title = typeof params.title === "string" ? params.title : undefined;
+	if (route.kind !== "found") return <PreviewUnavailable title="Preview source unavailable" message="Open Preview from the worker that owns this browser." />;
+	if (route.source.kind === "cloud") return <CloudSessionPreviewContent route={route} title={title} />;
+	return <HostScope key={route.source.id} hostId={route.source.id}><SessionPreviewContent sessionID={route.id} routeHostId={route.source.id} title={title} /></HostScope>;
 }
 
-function SessionPreviewContent() {
-	const { id: rawID, title, hostId: routeHostId } = useLocalSearchParams<{ id: string; title?: string; hostId?: string }>();
-	const sessionID = String(rawID ?? "");
+function PreviewUnavailable({ title, message }: { title: string; message: string }) {
+	const router = useRouter();
+	const styles = useThemedStyles(makeStyles);
+	return <View style={styles.center}><EmptyState icon="globe" title={title} message={message} action={<Button title="Open Workers" onPress={() => router.navigate("/")} />} /></View>;
+}
+
+function CloudSessionPreviewContent({ route, title }: { route: Extract<PreviewRouteResolution, { kind: "found" }>; title?: string }) {
+	const { sourceFor } = useApp();
+	const auth = useCloudAuth();
+	const signIn = useCloudSignInAction();
+	const navigation = useNavigation();
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const source = sourceFor(route.source);
+	const preview = source?.preview;
+	const key = JSON.stringify([route.source.id, route.scopeKey, route.id]);
+	const owner = useRef<{ key: string; preview?: PreviewSource }>({ key });
+	if (owner.current.key !== key) owner.current = { key };
+	const matches = route.scopeKey === source?.scopeKey && route.scopeKey === preview?.scopeKey && preview?.isCurrent() === true;
+	if (!owner.current.preview && matches) owner.current.preview = preview;
+	const current = matches && owner.current.preview === preview;
+
+	useLayoutEffect(() => {
+		navigation.setOptions({ title: title || "Preview", unstable_headerRightItems: undefined,
+			headerRight: current ? () => <Pressable accessibilityRole="switch" accessibilityLabel="Mobile view" accessibilityState={{ checked: false, disabled: true }} accessibilityHint="Cloud app and document previews aren't available yet. This is the agent's shared live browser." disabled style={[styles.modeToggle, styles.modeToggleDimmed]}>
+				<Feather name="smartphone" size={iconSize.sm} color={t.textSecondary} /><Text style={styles.modeLabel}>Mobile view</Text>
+			</Pressable> : undefined,
+		});
+	}, [current, navigation, title, styles.modeToggle, styles.modeToggleDimmed, styles.modeLabel, t.textSecondary]);
+
+	if (!source) {
+		if (auth.signedIn === null || auth.busy || (!auth.orgId && auth.orgLoading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+		if (!auth.signedIn) return <View style={styles.center}><EmptyState icon="cloud" title="Sign in to Orchestrator Cloud" message="Sign in to the account that owns this browser." action={<Button title="Sign in to Orchestrator Cloud" loading={signIn.busy} onPress={() => void signIn.signIn()} />} /></View>;
+		return <PreviewUnavailable title="Cloud workspace changed" message="Open Preview from a worker in your current Cloud workspace." />;
+	}
+	if (!preview) return <PreviewUnavailable title="Cloud browser unavailable" message="This Cloud worker doesn't support the live browser viewer." />;
+	if (!current) return <PreviewUnavailable title="Cloud workspace changed" message="Open Preview from a worker in your current account." />;
+	return <View style={styles.screen}><BrowserLivePane key={key} source={preview} sessionID={route.id} /></View>;
+}
+
+function SessionPreviewContent({ sessionID, title, routeHostId }: { sessionID: string; title?: string; routeHostId: string }) {
 	const navigation = useNavigation();
 	const router = useRouter();
 	const { config, currentHostId, connection } = useApp();

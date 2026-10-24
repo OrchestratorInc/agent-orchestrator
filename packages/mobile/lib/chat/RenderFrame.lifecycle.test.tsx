@@ -1,5 +1,6 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ServerConfig } from "../config";
 
 vi.mock("react-native", () => ({
 	View: "View",
@@ -19,10 +20,11 @@ vi.mock("expo-router/react-navigation", async () => {
 });
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock("expo-linking", () => ({ openURL: vi.fn() }));
-vi.mock("../config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), httpBase: () => "http://lab:3011" }));
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: {} }));
+vi.mock("expo-secure-store", () => ({}));
 vi.mock("../haptics", () => ({ haptics: { tap: () => {} } }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
-vi.mock("../store", () => ({ useApp: () => ({ config: { host: "lab", httpPort: "3011", muxPort: "", password: "test" } }) }));
+vi.mock("../store", () => ({ useApp: () => ({ config: { host: "active-a", httpPort: "3011", muxPort: "", password: "secret-a", hostId: "host-a" } }) }));
 vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: () => "#000" });
 	return { useTheme: () => theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (t: unknown) => unknown) => factory(theme) };
@@ -34,6 +36,7 @@ import { RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport } from "./renderFrameModel";
 
 const render = { id: "page", title: "Page", height: 300, path: "/api/v1/sessions/s/renders/page" };
+const config: ServerConfig = { host: "routed-b", httpPort: "3443", muxPort: "", secure: true, password: "secret-b", hostId: "host-b" };
 // Where the frame sits in the window; measureInWindow reads it.
 let frameTop = 100;
 let renderer: ReactTestRenderer | undefined;
@@ -44,7 +47,7 @@ beforeEach(() => {
 	frameTop = 100;
 	navigation.focused = true;
 	act(() => {
-		renderer = create(<RenderFrame render={render} />, {
+		renderer = create(<RenderFrame render={render} config={config} />, {
 			createNodeMock: () => ({
 				measureInWindow: (callback: (x: number, y: number, w: number, h: number) => void) => callback(0, frameTop, 350, 300),
 				injectJavaScript: () => {},
@@ -67,6 +70,37 @@ const skeletonShown = () => renderer!.root.findAll((node) => node.type === ("Ren
 // Viewport checks run on the next frame.
 const moveFrame = (top: number) => act(() => { frameTop = top; notifyRenderViewport(); vi.advanceTimersByTime(20); });
 const setFocused = (focused: boolean) => act(() => { navigation.focused = focused; for (const listener of navigation.listeners) listener(); });
+
+it.each(["inline", "fullscreen"])("loads the %s page from the routed host with its own credentials", (mode) => {
+	if (mode === "fullscreen") act(() => renderer!.root.findByProps({ accessibilityLabel: "Expand Page" }).props.onPress());
+	const page = renderer!.root.findAll((node) => node.type === ("WebView" as never) && node.props.scrollEnabled === (mode === "fullscreen"))[0];
+	expect(page.props.source).toEqual({
+		uri: expect.stringMatching(/^https:\/\/routed-b:3443\/api\/v1\/sessions\/s\/renders\/page#/),
+		headers: { Authorization: "Bearer secret-b", "X-AO-Expected-Host-ID": "host-b" },
+	});
+});
+
+it("updates inline and expanded page requests when the routed host endpoint or credentials change", () => {
+	act(() => renderer!.root.findByProps({ accessibilityLabel: "Expand Page" }).props.onPress());
+	act(() => renderer!.update(<RenderFrame render={render} config={{ ...config, host: "new-b", password: "rotated-b" }} />));
+	const pages = renderer!.root.findAll((node) => node.type === ("WebView" as never));
+	expect(pages).toHaveLength(2);
+	for (const page of pages) expect(page.props.source).toEqual({
+		uri: expect.stringMatching(/^https:\/\/new-b:3443\/api\/v1\/sessions\/s\/renders\/page#/),
+		headers: { Authorization: "Bearer rotated-b", "X-AO-Expected-Host-ID": "host-b" },
+	});
+});
+
+it("shows a noninteractive page title for Cloud even with an active local pairing", () => {
+	act(() => renderer!.root.findByProps({ accessibilityLabel: "Expand Page" }).props.onPress());
+	act(() => renderer!.update(<RenderFrame render={render} config={null} />));
+	expect(renderer!.root.findAllByType("WebView" as never)).toHaveLength(0);
+	expect(renderer!.root.findAllByType("Modal" as never)).toHaveLength(0);
+	expect(renderer!.root.findAllByType("Text" as never).map((node) => node.props.children)).toEqual(["Page"]);
+	const fallback = renderer!.root.findByType("Pressable" as never);
+	expect(fallback.props.disabled).toBe(true);
+	expect(fallback.props.accessibilityRole).toBeUndefined();
+});
 
 it("keeps the skeleton for a page that returns after leaving range mid-load", () => {
 	expect(webView()).toBeDefined();

@@ -6,7 +6,7 @@ import { MachineIdentity } from "./MachineIdentity";
 import { ScreenHeader } from "./ui";
 
 const state = vi.hoisted(() => ({
-	push: vi.fn(), openOrchestrator: vi.fn(), signIn: vi.fn(async () => true), available: true, action: "start" as "start" | "open",
+	push: vi.fn(), openOrchestrator: vi.fn(), signIn: vi.fn(async () => true), available: true, retainUnavailableRow: false, action: "start" as "start" | "open",
 	params: { id: "project-1", source: "cloud", sourceId: "org-1" } as { id: string; source?: string; sourceId?: string; hostId?: string },
 	projects: [] as Scoped<ProjectInfo>[],
 }));
@@ -32,7 +32,7 @@ vi.mock("./store", () => ({ useApp: () => ({ environment: "cloud", configured: t
 		sources: { '["cloud","org-1"]': { resolved: true, available: state.available, loading: false, error: null } } },
 	sourceFor: () => state.available ? { kind: "cloud" } : undefined, refreshSource: vi.fn(async () => {}) }) }));
 vi.mock("./orchestratorView", () => ({
-	orchestratorProjectSections: (projects: ProjectInfo[]) => state.available ? [{ data: projects.map((project) => ({ project, action: state.action, link: null })) }] : [],
+	orchestratorProjectSections: (projects: ProjectInfo[]) => state.available || state.retainUnavailableRow ? [{ data: projects.map((project) => ({ project, action: state.action, link: null })) }] : [],
 	projectDetailSessions: () => [],
 	projectPageStats: () => ({ workers: 0, needsYou: 0, ready: 0, archived: 0 }),
 }));
@@ -67,6 +67,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	state.action = "start";
 	state.available = true;
+	state.retainUnavailableRow = false;
 	state.params = { id: "project-1", source: "cloud", sourceId: "org-1" };
 	state.projects = [{ source: { kind: "cloud", id: "org-1" }, value: { id: "project-1", name: "Tappy", kind: "single_repo" } }];
 });
@@ -79,11 +80,22 @@ afterEach(async () => {
 });
 
 describe("Cloud project page", () => {
+	it.each(["local", "cloud"] as const)("passes exact %s ownership to an unavailable cached project's header", async (kind) => {
+		state.available = false; state.retainUnavailableRow = true;
+		const source = { kind, id: kind === "local" ? "host-dev" : "org-1" };
+		state.params = { id: "project-1", source: source.kind, sourceId: source.id };
+		state.projects.push({ source: { kind: "local", id: "host-dev" }, value: { id: "project-1", name: "Local Tappy" } });
+		await act(async () => { renderer = create(<ProjectScreen />); });
+		const header = renderer!.root.findByType("WorkerBoardList" as never).props.ListHeaderComponent;
+		expect(header.props.source).toEqual(source);
+		expect(header.props.onPress).toBeUndefined();
+	});
 	it("shows Cloud once at the trailing edge of a long project title", async () => {
 		state.projects[0] = { ...state.projects[0], value: { id: "project-1", name: "A long project title that needs space beside the Cloud identity", kind: "single_repo" } };
 		await act(async () => { renderer = create(<ProjectScreen />); });
 		const header = renderer!.root.findByType(ScreenHeader);
 		expect(header.findAllByType(MachineIdentity)).toHaveLength(1);
+		expect(renderer!.root.findByType("StaleBanner" as never).props.sourceKey).toBe('["cloud","org-1"]');
 		expect(header.findByType(MachineIdentity).props.name).toBe("Cloud");
 		expect(header.findAll((node) => String(node.type) === "Feather" && node.props.name === "cloud")).toHaveLength(1);
 		const title = header.find((node) => String(node.type) === "Text" && node.props.children === state.projects[0].value.name);

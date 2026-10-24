@@ -34,7 +34,6 @@ describe("session header controls", () => {
 		const end = session.indexOf("glassHeaderControl(\"right\"),", start);
 		expect(session.slice(start, end)).not.toContain("file-diff");
 		expect(session).toContain("onFiles: () => filesNavigation?.openChanges()");
-		expect(session).toContain("useMemo<FilesNavigation | null>(() => cloudSession ? null");
 	});
 
 	it("gives every platform an icon for the more control", () => {

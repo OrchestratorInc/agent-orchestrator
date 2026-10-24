@@ -35,7 +35,7 @@ vi.mock("react-native", async () => {
 	};
 });
 
-import { ProjectCard, ProjectMachineIndicator } from "./project-card";
+import { ProjectCard, ProjectMachineIndicator, ProjectPageHeader } from "./project-card";
 
 const row: OrchestratorProjectRow = {
 	project: { id: "project-1", name: "Tap", kind: "single_repo" },
@@ -47,6 +47,7 @@ const row: OrchestratorProjectRow = {
 	activityAt: null,
 	urgency: 0,
 };
+const stats = { workers: 0, needsYou: 0, ready: 0, archived: 0 };
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -68,6 +69,25 @@ afterEach(async () => {
 });
 
 describe("project source identity", () => {
+	it.each([
+		[{ kind: "local", id: "same" }, "Local · Read-only"],
+		[{ kind: "cloud", id: "same" }, "Cloud · Read-only"],
+		[null, "Read-only"],
+	] as const)("labels an unavailable project using its explicit source %j", async (source, label) => {
+		await act(async () => { renderer = create(<ProjectPageHeader source={source} row={row} stats={stats} busy={false} />); });
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && node.props.children === label)).toHaveLength(1);
+		expect(renderer!.root.findAllByType("Pressable" as never)).toHaveLength(0);
+	});
+	it.each(["local", "cloud"] as const)("retains enabled orchestrator actions on a configured %s project", async (kind) => {
+		const onPress = vi.fn();
+		await act(async () => { renderer = create(<ProjectPageHeader source={{ kind, id: "same" }} row={row} stats={stats} busy={false} onPress={onPress} />); });
+		const buttons = renderer!.root.findAllByType("Pressable" as never);
+		expect(buttons).toHaveLength(2);
+		await act(async () => { buttons.forEach((button) => button.props.onPress()); });
+		expect(onPress).toHaveBeenCalledTimes(2);
+		expect(onPress).toHaveBeenCalledWith(row);
+		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && String(node.props.children).includes("Read-only"))).toHaveLength(0);
+	});
 	it.each([
 		"dark",
 		"light",

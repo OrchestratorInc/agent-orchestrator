@@ -18,6 +18,51 @@ const deltaTwo: ClientEvent = {
 } as ClientEvent;
 
 describe("toConversationItems", () => {
+	it("keeps Setup outcomes in replay order outside agent turns", () => {
+		const setup = (sequence: number, payload: object): ClientEvent => ({ ...userEvent, sequence, type: "workspace.setup", payload } as unknown as ClientEvent);
+		const events = [
+			setup(1, { status: "failed", step: 2, exitCode: 2, durationMs: 800, output: "redacted failure tail" }),
+			setup(2, { status: "timed_out", step: 3, exitCode: -1, durationMs: 1_800_000 }),
+			{ ...userEvent, sequence: 4 },
+		];
+		expect(toConversationItems(events)).toMatchObject([
+			{ kind: "activity", sequence: 1, activityKind: "system", status: "failed", summary: "Setup failed", detail: { event: "workspace.setup", setupStatus: "failed", setupStep: 2, exitCode: 2, durationMs: 800, output: "redacted failure tail" } },
+			{ kind: "activity", sequence: 2, activityKind: "system", status: "failed", summary: "Setup timed out", detail: { setupStatus: "timed_out", setupStep: 3, exitCode: -1 } },
+			{ kind: "message", sequence: 4 },
+		]);
+		expect(toConversationItems(events).slice(0, 2).every((item) => !item.turnId)).toBe(true);
+		expect(toConversationTurns(events)).toEqual([]);
+	});
+
+	it("keeps passed Setup history while the startup checklist owns current failures", () => {
+		const setup = (sequence: number, status: string): ClientEvent => ({ ...userEvent, sequence, type: "workspace.setup", payload: { status, exitCode: status === "succeeded" ? 0 : 2, durationMs: 12_400 } } as unknown as ClientEvent);
+		const events = [setup(1, "failed"), setup(2, "succeeded"), { ...userEvent, sequence: 3 }, setup(4, "succeeded"), setup(5, "failed")];
+		expect(toConversationItems(events).map((item) => item.sequence)).toEqual([2, 3, 4, 5]);
+		expect(toConversationItems(events, { startupFailed: true }).map((item) => item.sequence)).toEqual([2, 3, 4]);
+		expect(toConversationItems([events[0]], { startupFailed: true })).toEqual([]);
+	});
+
+	it("selects only valid Setup display fields from the worker payload", () => {
+		const setup = { ...userEvent, type: "workspace.setup", payload: {
+			status: "succeeded", step: 0, exitCode: 0, durationMs: 0, output: "  ",
+			turnId: "unexpected-turn", authorization: "private", command: "private command", detail: { token: "private" },
+		} } as unknown as ClientEvent;
+		const [item] = toConversationItems([setup]);
+		expect(item).toMatchObject({ kind: "activity", status: "completed", detail: { event: "workspace.setup", setupStatus: "succeeded", exitCode: 0, durationMs: 0 } });
+		expect(item?.turnId).toBeUndefined();
+		expect(toConversationTurns([setup])).toEqual([]);
+		if (item?.kind !== "activity") throw new Error("Expected Setup activity");
+		expect(item.detail?.output).toBeUndefined();
+		expect(item.detail?.setupStep).toBeUndefined();
+		expect(item.detail).not.toHaveProperty("authorization");
+		expect(item.detail).not.toHaveProperty("command");
+		expect(item.detail).not.toHaveProperty("detail");
+		const [malformed] = toConversationItems([{ ...setup, payload: { status: "unexpected", step: -1, exitCode: {}, durationMs: "slow", output: { private: true } } } as unknown as ClientEvent]);
+		expect(malformed).toMatchObject({ status: "failed", summary: "Setup failed" });
+		if (malformed?.kind !== "activity") throw new Error("Expected Setup activity");
+		for (const key of ["setupStep", "exitCode", "durationMs", "output"]) expect(malformed.detail?.[key]).toBeUndefined();
+	});
+
 	it("keeps provider item identities separate by turn and attempt, but folds revisions of the same item", () => {
 		const delta = (sequence: number, turnId: string, attempt: number, itemId: string, text: string): ClientEvent => ({ ...deltaOne, type: "chat.assistant_delta", sequence, payload: { turnId, attempt, itemId, text, stream: "stdout" } });
 		expect(toConversationItems([delta(1, "t1", 1, "a", "First"), delta(2, "t1", 1, "b", "Second"), delta(3, "t1", 1, "a", " reply"), delta(4, "t1", 2, "a", "Retry"), delta(5, "t2", 1, "a", "Other")]).filter((item) => item.kind === "message").map((item) => item.text)).toEqual(["First reply", "Second", "Retry", "Other"]);

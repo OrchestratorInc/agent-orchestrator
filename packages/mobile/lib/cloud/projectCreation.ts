@@ -21,7 +21,7 @@ export async function findCloudProjectForRepository(client: CloudClient, orgId: 
 }
 
 export function coderSetupProblem(config: OrgCoderConfigResponse, templates: readonly { id: string }[], templateId: string): string | null {
-	if (config.configured && !templateId) return "Choose a Coder template before creating this project.";
+	if ((config.configured || templates.length > 0) && !templateId.trim()) return "Choose a Coder template before creating this project.";
 	if (templateId && !templates.some((template) => template.id === templateId)) return "This Coder template is no longer available. Choose another template.";
 	return null;
 }

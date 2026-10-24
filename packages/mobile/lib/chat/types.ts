@@ -17,7 +17,7 @@ export type ActivityKind =
 	| "user_input";
 
 export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permissions";
-export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };
+export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode; executionMode?: "agent" | "plan" };
 
 export type PlanStep = { text: string; status: "pending" | "in_progress" | "completed" };
 export type ConversationPlan = { explanation?: string; steps: PlanStep[] };
@@ -224,6 +224,8 @@ export type ConversationSnapshot = {
 	turns: ConversationTurn[];
 	items: ConversationItem[];
 	settings: TurnSettings;
+	/** Cloud permission ceiling; absent for local controllers that own their choices. */
+	approvalModes?: ApprovalMode[];
 	title?: string;
 	usage?: ConversationUsage;
 	rateLimits?: ConversationRateLimits;
@@ -262,6 +264,7 @@ export type ChatConfigOption = {
 	currentBoolean?: boolean;
 	choices: ChatConfigChoice[];
 };
+export type ChatTurnOptions = { models: ChatModel[]; configOptions: ChatConfigOption[]; settings?: TurnSettings };
 export type ChatSkill = {
 	name: string;
 	displayName: string;

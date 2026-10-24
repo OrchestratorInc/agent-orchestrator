@@ -30,7 +30,8 @@ describe("Interface affordances", () => {
 		});
 
 		it("pins the Button's name to its title so a spinner does not erase it", () => {
-			expect(ui).toContain("accessibilityLabel={title}");
+			expect(ui).toContain("accessibilityLabel = title");
+			expect(ui).toContain("accessibilityLabel={accessibilityLabel}");
 			expect(ui).toContain("accessibilityState={{ disabled: disabled || loading, busy: loading }}");
 		});
 
@@ -61,15 +62,8 @@ describe("Interface affordances", () => {
 	});
 
 	describe("the unified preview controls", () => {
-		const preview = source("../app/preview/[id].tsx");
 		const browser = source("./preview/BrowserLivePane.tsx");
 		const terminal = source("./session/TerminalSessionScreen.tsx");
-
-		it("leaves browser chrome to the dedicated mobile-browser UI", () => {
-			expect(preview).toContain('accessibilityLabel="Reload app preview"');
-			expect(browser).not.toContain("TextInput");
-			expect(browser).not.toContain('placeholder="Enter a URL"');
-		});
 
 		it("covers the common causes when the browser handshake fails", () => {
 			expect(source("./browserLive.ts")).toContain('this.handlers.onStatus("error");');

@@ -21,6 +21,8 @@ export type ReviewComment = {
 
 const EMPTY: readonly ReviewComment[] = [];
 const comments = new Map<string, readonly ReviewComment[]>();
+const cloudOwners = new Map<string, { baseUrl: string; accountId: string }>();
+const lifetimes = new Map<string, number>();
 const listeners = new Set<() => void>();
 let nextId = 0;
 
@@ -31,6 +33,28 @@ let nextId = 0;
  */
 export function reviewKey(hostId: string | undefined, sessionId: string): string {
 	return `${hostId ?? ""}|${sessionId}`;
+}
+
+/** Cloud drafts never share a queue with Local or another signed-in account. */
+export function cloudReviewKey(scopeKey: string, sessionId: string, repository = ""): string {
+	const key = JSON.stringify(["cloud", scopeKey, sessionId, repository]);
+	try {
+		const scope: unknown = JSON.parse(scopeKey);
+		if (Array.isArray(scope) && scope.length === 3 && scope.every((value) => typeof value === "string")) cloudOwners.set(key, { baseUrl: scope[0], accountId: scope[1] });
+	} catch { /* Only validated account scopes participate in account retirement. */ }
+	return key;
+}
+
+/** Retiring a queue also invalidates acknowledgments already in flight. */
+export function reviewLifetime(key: string): number { return lifetimes.get(key) ?? 0; }
+
+export function clearCloudReviewsForAccount(baseUrl: string, accountId: string): void {
+	const normalized = baseUrl.replace(/\/+$/, "");
+	for (const [key, owner] of cloudOwners) {
+		if (owner.baseUrl !== normalized || owner.accountId !== accountId) continue;
+		lifetimes.set(key, reviewLifetime(key) + 1);
+		emit(key, []);
+	}
 }
 
 function emit(key: string, next: readonly ReviewComment[]) {

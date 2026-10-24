@@ -45,9 +45,11 @@ describe("universal spawn destination picker", () => {
 				models={[]} modelSelection="__auto__" modelLabel="Automatic" onSelectModel={vi.fn()}
 				onAttach={vi.fn()} voice={{ state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }}
 				onSpawn={vi.fn()} busy={false} disabled
+				submitLabel="Manage Cloud sessions"
 			/>);
 		});
 		const picker = renderer!.root.findAll((node) => String(node.type) === "Picker")[0];
+		expect(renderer!.root.findByProps({ label: "Manage Cloud sessions" })).toBeDefined();
 		expect(picker.findAll((node) => String(node.type) === "PickerItem").map((node) => [node.props.label, node.props.value])).toEqual([
 			["Choose destination", ""],
 			["Alpha", '["local","host-a"]'],

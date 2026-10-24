@@ -428,6 +428,7 @@ export function ListSectionHeader({
 
 export function Button({
 	title,
+	accessibilityLabel = title,
 	onPress,
 	variant = "primary",
 	loading = false,
@@ -436,6 +437,8 @@ export function Button({
 	style,
 }: {
 	title: string;
+	/** Optional context for repeated actions, such as the session being archived. */
+	accessibilityLabel?: string;
 	onPress: () => void;
 	/** `success` is desktop's green merge action. */
 	variant?: "primary" | "ghost" | "text" | "danger" | "success";
@@ -458,10 +461,10 @@ export function Button({
 		<Animated.View style={[style, pressFx.style]}>
 			<Pressable
 				accessibilityRole="button"
-				// The label is pinned to the visible title rather than left to the child
+				// The label defaults to the visible title rather than the child
 				// text: while a request is in flight the text is replaced by a spinner,
 				// and the control would otherwise announce with no name at all.
-				accessibilityLabel={title}
+				accessibilityLabel={accessibilityLabel}
 				accessibilityState={{ disabled: disabled || loading, busy: loading }}
 				onPressIn={pressFx.onPressIn}
 				onPressOut={pressFx.onPressOut}

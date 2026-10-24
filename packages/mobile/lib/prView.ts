@@ -24,7 +24,7 @@ import type { Theme } from "./theme";
  * projects that each had a PR #12 silently dropped one of them. Deduping still
  * matters: several sessions in one project can point at the same PR.
  */
-export function collectPRs<T extends DashboardSession>(sessions: T[]): { pr: DashboardPR; session: T }[] {
+export function collectPRs<T extends DashboardSession & { hostId?: string }>(sessions: T[]): { pr: DashboardPR; session: T }[] {
 	const seen = new Set<string>();
 	const out: { pr: DashboardPR; session: T }[] = [];
 	for (const s of sessions) {
@@ -32,7 +32,7 @@ export function collectPRs<T extends DashboardSession>(sessions: T[]): { pr: Das
 		for (const pr of list) {
 			// Real GitHub/GitLab PR numbers are >= 1; 0/missing signals a placeholder.
 			if (!pr || !pr.number || pr.number <= 0) continue;
-			const key = `${pr.owner ?? ""}/${pr.repo ?? ""}@${s.projectId}#${pr.number}`;
+			const key = JSON.stringify([s.hostId ?? "", s.projectId, pr.url || `${pr.owner ?? ""}/${pr.repo ?? ""}#${pr.number}`]);
 			if (seen.has(key)) continue;
 			seen.add(key);
 			out.push({ pr, session: s });
@@ -341,4 +341,3 @@ export function comparePRs(a: DashboardPR, b: DashboardPR): number {
 	// Newest first within a bucket.
 	return b.number - a.number;
 }
-export const localOnlyPRCopy = "Pull requests from your paired desktop";

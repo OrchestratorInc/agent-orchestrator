@@ -116,6 +116,7 @@ describe("SpawnComposerControls on iOS", () => {
 		expect(onSelectProject).toHaveBeenCalledWith("project-1");
 	});
 	it("keeps Cloud agent and model choices while hiding unsupported attachments", async () => {
+		const onSpawn = vi.fn();
 		await act(async () => {
 			renderer = create(<SpawnComposerControls
 				destinations={[{ source: { kind: "cloud", id: "org-1" }, label: "Cloud", available: true }]}
@@ -133,11 +134,12 @@ describe("SpawnComposerControls on iOS", () => {
 				onSelectModel={vi.fn()}
 				onAttach={vi.fn()}
 				voice={{ state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() }}
-				onSpawn={vi.fn()}
+				onSpawn={onSpawn}
 				busy={false}
 				disabled={false}
 				showAttachments={false}
 				showModels={true}
+				submitLabel="Manage Cloud sessions"
 			/>);
 		});
 
@@ -152,6 +154,10 @@ describe("SpawnComposerControls on iOS", () => {
 		const buttons = renderer!.root.findAll((node) => String(node.type) === "Button");
 		expect(buttons.some((node) => node.props.label === "Custom model…")).toBe(true);
 		expect(buttons.some((node) => node.props.label === "Attach file")).toBe(false);
+		const manage = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Manage Cloud sessions")[0];
+		expect(manage.findAll((node) => String(node.type) === "RNText").map((node) => node.props.children)).toContain("Manage Cloud sessions");
+		await act(async () => manage.props.onPress());
+		expect(onSpawn).toHaveBeenCalledOnce();
 	});
 });
 

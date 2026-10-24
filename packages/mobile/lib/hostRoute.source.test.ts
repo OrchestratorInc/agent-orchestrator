@@ -30,12 +30,14 @@ describe("retained-stack host routes", () => {
 	});
 
 	it("requires the owning host for review detail, reviewer chat, and actions", () => {
-		for (const path of ["../app/review/[sessionId].tsx", "../app/reviewer/[reviewId].tsx", "../app/sheets/review-actions.tsx"]) {
+		for (const path of ["../app/review/[sessionId].tsx", "../app/sheets/review-actions.tsx"]) {
 			const route = source(path);
-			expect(route).toContain("<HostScope key={hostId} hostId={hostId}>");
+			expect(route).toContain("<PRScope>");
 			expect(route).toContain("hostRouteMatches(routeHostId, currentHostId)");
 		}
-		expect(source("../app/review/[sessionId].tsx")).toContain("hostId: routeHostId");
-		expect(source("./PRCard.tsx")).toContain("prUrl: pr.url, hostId");
+		expect(source("../app/reviewer/[reviewId].tsx")).toContain("<HostScope key={hostId} hostId={hostId}>");
+		expect(source("./pr/PRScope.tsx")).toContain("<HostScope hostId={ref.id}");
+		expect(source("./pr/PRScope.tsx")).toContain("resolveSessionRouteSource(");
+		expect(source("./PRCard.tsx")).toContain("reviewRouteForPR(session.id, pr, source, scopeKey)");
 	});
 });

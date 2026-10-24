@@ -21,6 +21,7 @@ export function SpawnComposerControls({
 	onSelectModel,
 	onAttach,
 	onSpawn,
+	submitLabel = "Start task",
 	busy,
 	disabled,
 }: SpawnComposerControlsProps) {
@@ -59,7 +60,7 @@ export function SpawnComposerControls({
 				</Host>
 			</View>
 			<Host style={styles.spawnHost} colorScheme={scheme} seedColor={t.accent}>
-				<Button label={busy ? "Starting…" : "Start task"} variant="filled" onPress={onSpawn} disabled={disabled} style={styles.spawnButton} />
+				<Button label={busy ? "Starting…" : submitLabel} variant="filled" onPress={onSpawn} disabled={disabled} style={styles.spawnButton} />
 			</Host>
 		</View>
 	);

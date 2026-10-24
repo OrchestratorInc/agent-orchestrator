@@ -41,7 +41,7 @@ export function WorkerControlsSheet({
 	const [environmentId, setEnvironmentId] = useState(selectedEnvironmentId);
 	useLayoutEffect(() => { if (open) setEnvironmentId(selectedEnvironmentId); }, [open, selectedEnvironmentId]);
 	const selectedSource = environments.find((environment) => environment.id === environmentId)?.source ?? null;
-	const projectOptions = scopedWorkerProjectOptions(projects, selectedSource);
+	const projectOptions = scopedWorkerProjectOptions(projects, selectedSource, environments);
 	const draft = useWorkerControlsDraft({ open, selectedEnvironmentId: "all", selectedProjectId, projects: projectOptions.map((project) => ({ id: project.id, name: project.label })), onSelectEnvironment: () => {}, onSelectProject, onDismiss, onSearch });
 	const environmentOptions = workerEnvironmentOptions(environments);
 
@@ -95,7 +95,7 @@ export function WorkerControlsSheet({
 									setEnvironmentId(environment.id);
 									if (environment.id !== environmentId) onSelectEnvironment(environment.id);
 									const nextSource = environments.find((entry) => entry.id === environment.id)?.source ?? null;
-									if (!scopedWorkerProjectOptions(projects, nextSource).some((project) => project.id === draft.projectId)) draft.selectProject(ALL_WORKER_PROJECTS);
+									if (!scopedWorkerProjectOptions(projects, nextSource, environments).some((project) => project.id === draft.projectId)) draft.selectProject(ALL_WORKER_PROJECTS);
 									else draft.close();
 								}}
 								style={({ pressed }) => [styles.optionRow, index > 0 && styles.separator, selected && styles.selectedRow, pressed && styles.pressed]}

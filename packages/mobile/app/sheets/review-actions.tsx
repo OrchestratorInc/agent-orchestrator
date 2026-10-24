@@ -33,10 +33,13 @@ import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { ReviewerPicker } from "../../lib/reviewer-picker";
 import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
 import { pullRequestSummaryForURL } from "../../lib/reviewView";
-import { HostScope, useApp } from "../../lib/store";
+import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { SHEET_SCROLL_CONTENT, SheetHeader } from "../../lib/ui";
+import type { CloudReviewerHarness, HarnessStatus } from "@aoagents/cloud-client";
+import type { PullRequestSource } from "../../lib/pr/source";
+import { PRScope } from "../../lib/pr/PRScope";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -45,15 +48,15 @@ type ReviewPolicies = Record<PolicyKey, boolean>;
 type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: string } | { kind: "policy"; id: PolicyKey };
 
 export default function ReviewActionsSheet() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewActionsContent /></HostScope> : <ReviewActionsContent />;
+	return <PRScope>{(source, owner) => <ReviewActionsContent cloud={owner.source.kind === "cloud" ? source : undefined} localHostId={owner.source.kind === "local" ? owner.source.id : undefined} />}</PRScope>;
 }
 
-function ReviewActionsContent() {
+function ReviewActionsContent({ cloud, localHostId }: { cloud?: PullRequestSource; localHostId?: string }) {
 	const styles = useThemedStyles(makeStyles);
 	const { config, currentHostId } = useApp();
-	const { sessionId = "", prUrl = "", hostId: routeHostId } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string; hostId?: string }>();
-	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
+	const { sessionId = "", prUrl = "", hostId: explicitHostId } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string; hostId?: string }>();
+	const routeHostId = explicitHostId ?? localHostId;
+	const hostMatches = cloud ? cloud.isCurrent() : hostRouteMatches(routeHostId, currentHostId);
 	const [agents, setAgents] = useState<ReturnType<typeof reviewerChoices>>([]);
 	const [models, setModels] = useState<AgentModelCatalog>();
 	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
@@ -70,14 +73,34 @@ function ReviewActionsContent() {
 	const [busy, setBusy] = useState<BusyAction>();
 	const [error, setError] = useState("");
 	const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
+	const [cloudHarnesses, setCloudHarnesses] = useState<HarnessStatus[]>([]);
+	const [cloudCredentials, setCloudCredentials] = useState<CloudReviewerHarness[]>([]);
+	const lifetime = useRef(new AbortController());
+	const sendKeys = useRef(new Map<string, string>());
+	useEffect(() => {
+		const controller = new AbortController(); lifetime.current = controller;
+		return () => controller.abort();
+	}, []);
 
 	const load = useCallback(async () => {
-		if (!hostMatches || !config || !sessionId) return;
+		if (!hostMatches || (!cloud && !config) || !sessionId || lifetime.current.signal.aborted) return;
+		const signal = lifetime.current.signal;
 		setError("");
 		try {
-			const [catalog, prs, session, reviewState] = await Promise.all([getAgents(config), getSessionPR(config, sessionId), getSession(config, sessionId), getSessionReviews(config, sessionId)]);
+			if (cloud) {
+				const options = { signal };
+				const [prs, prefs, reviewState] = await Promise.all([cloud.list(sessionId, options), cloud.preferences!(sessionId, options), cloud.reviews(sessionId, options)]);
+				if (signal.aborted || !cloud.isCurrent()) return;
+				setReviewerOverride(prefs.reviewerHarness); setProjectDefaultReviewer(reviewState.reviewerHarness || prefs.workerHarness);
+				setPolicies(prefs); setReviews(reviewState); setCloudCredentials(reviewState.availableReviewerHarnesses ?? []);
+				const matchedPR = pullRequestSummaryForURL(prs, prUrl); setPR(matchedPR); setPRMissing(!matchedPR);
+				try { setCloudHarnesses((await cloud.inspectHarnesses!(sessionId, options)).harnesses); }
+				catch (cause) { if (!signal.aborted && cloud.isCurrent()) setError(cause instanceof Error ? cause.message : "Could not inspect reviewer binaries. The worker reviewer remains the default."); }
+				return;
+			}
+			const [catalog, prs, session, reviewState] = await Promise.all([getAgents(config!), getSessionPR(config!, sessionId), getSession(config!, sessionId), getSessionReviews(config!, sessionId)]);
 			setAgents(reviewerChoices(catalog));
-			const project = session.projectId ? await getProject(config, session.projectId).catch(() => undefined) : undefined;
+			const project = session.projectId ? await getProject(config!, session.projectId).catch(() => undefined) : undefined;
 			setReviewerOverride(session.reviewerHarness || "");
 			setProjectDefaultReviewer(defaultReviewerHarness(project?.config?.reviewers, session.harness ?? undefined));
 			setReviewerConfig(session.reviewerConfig ?? {});
@@ -91,19 +114,20 @@ function ReviewActionsContent() {
 				autoInjectCI: session.autoInjectCI ?? true,
 			});
 		} catch (cause) {
+			if (signal.aborted || cloud && !cloud.isCurrent()) return;
 			setError(cause instanceof Error ? cause.message : "Could not load review actions.");
 		}
-	}, [config, hostMatches, prUrl, sessionId]);
+	}, [cloud, config, hostMatches, prUrl, sessionId]);
 
 	useEffect(() => { void load(); }, [load]);
 	useEffect(() => {
 		const request = ++modelRequest.current;
 		setModels(undefined);
-		if (!hostMatches || !config || !effectiveReviewer) return;
+		if (cloud || !hostMatches || !config || !effectiveReviewer) return;
 		void getAgentModels(config, effectiveReviewer)
 			.then((result) => { if (request === modelRequest.current) setModels(result); })
 			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
-	}, [config, effectiveReviewer, hostMatches]);
+	}, [cloud, config, effectiveReviewer, hostMatches]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
 	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);
 	// Like the spawn sheet, only offer reviewers that can run now. A saved
@@ -164,16 +188,17 @@ function ReviewActionsContent() {
 	}
 
 	async function updatePolicy(key: PolicyKey, value: boolean) {
-		if (!config || !policies || busy) return;
+		if ((!cloud && !config) || !policies || busy) return;
 		const previous = policies;
 		haptics.select();
 		setPolicies({ ...policies, [key]: value });
 		setBusy({ kind: "policy", id: key });
 		setError("");
 		try {
-			if (key === "autoReviewEnabled") await setSessionAutoReview(config, sessionId, value);
-			else if (key === "autoInjectReview") await setSessionAutoInjectReview(config, sessionId, value);
-			else await setSessionAutoInjectCI(config, sessionId, value);
+			if (cloud) await cloud.updatePreferences!(sessionId, { [key]: value }, { signal: lifetime.current.signal });
+			else if (key === "autoReviewEnabled") await setSessionAutoReview(config!, sessionId, value);
+			else if (key === "autoInjectReview") await setSessionAutoInjectReview(config!, sessionId, value);
+			else await setSessionAutoInjectCI(config!, sessionId, value);
 			haptics.success();
 		} catch (cause) {
 			setPolicies(previous);
@@ -184,7 +209,7 @@ function ReviewActionsContent() {
 	}
 
 	async function rerequest(item: PRUnresolvedReviewer) {
-		if (!config || !pr || busy) return;
+		if (cloud || !config || !pr || busy) return;
 		setBusy({ kind: "rerequest", id: item.reviewerId });
 		setError("");
 		try {
@@ -198,7 +223,7 @@ function ReviewActionsContent() {
 	}
 
 	function confirmResolve(comment: PRReviewCommentLink) {
-		if (!config || !pr || busy) return;
+		if (cloud || !config || !pr || busy) return;
 		Alert.alert("Resolve feedback?", comment.body?.trim() || "Mark this addressed comment as resolved on GitHub.", [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Resolve", onPress: () => void resolve(comment) },
@@ -206,7 +231,7 @@ function ReviewActionsContent() {
 	}
 
 	async function resolve(comment: PRReviewCommentLink) {
-		if (!config || !pr) return;
+		if (cloud || !config || !pr) return;
 		const commentUrl = comment.url;
 		if (!commentUrl) return;
 		setBusy({ kind: "resolve", id: commentUrl });
@@ -223,11 +248,15 @@ function ReviewActionsContent() {
 	}
 
 	async function send(id: string, message: string) {
-		if (!config || busy) return;
+		if ((!cloud && !config) || busy) return;
 		setBusy({ kind: "send", id });
 		setError("");
 		try {
-			await sendMessage(config, sessionId, message);
+			if (cloud) {
+				if (!sendKeys.current.has(id)) sendKeys.current.set(id, `mobile-pr-feedback-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+				await cloud.sendFeedback(sessionId, message, sendKeys.current.get(id)!, { signal: lifetime.current.signal });
+				sendKeys.current.delete(id);
+			} else await sendMessage(config!, sessionId, message);
 			setSent((current) => new Set(current).add(id));
 			haptics.success();
 		} catch (cause) {
@@ -235,6 +264,24 @@ function ReviewActionsContent() {
 		} finally {
 			setBusy(undefined);
 		}
+	}
+
+	async function selectCloudReviewer(harness: CloudReviewerHarness | "") {
+		if (!cloud || busy) return;
+		setBusy({ kind: "reviewer", id: harness }); setError("");
+		try {
+			const options = { signal: lifetime.current.signal };
+			if (harness && !cloudCredentials.includes(harness)) throw new Error("Connect this agent in Cloud settings before selecting it as reviewer.");
+			const binary = cloudHarnesses.find((item) => item.harness === harness);
+			if (harness && binary?.status !== "ready") {
+				const installed = await cloud.installHarness!(sessionId, harness, options);
+				if (installed.status !== "ready") throw new Error("The reviewer could not be installed. Try again when the worker is connected.");
+				setCloudHarnesses((current) => [...current.filter((item) => item.harness !== harness), installed]);
+			}
+			await cloud.updatePreferences!(sessionId, { reviewerHarness: harness }, options);
+			setReviewerOverride(harness); haptics.success();
+		} catch (cause) { if (!lifetime.current.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not change reviewer."); }
+		finally { setBusy(undefined); }
 	}
 
 	if (!hostMatches) return <View style={styles.screen}><SheetHeader title="Review actions" subtitle="Review belongs to another machine" /></View>;
@@ -268,8 +315,17 @@ function ReviewActionsContent() {
 				onChange={(value) => void updatePolicy("autoInjectCI", value)}
 			/>
 		</Section>
-		<Section title="ORCHESTRATOR REVIEWER" subtitle="Choose who runs the next Orchestrator review and which model it uses.">
-			{availableReviewers.length || reviewerOverride ? <ReviewerPicker
+		<Section title="ORCHESTRATOR REVIEWER" subtitle={cloud ? "Cloud credentials and the reviewer binary must both be ready." : "Choose who runs the next Orchestrator review and which model it uses."}>
+			{cloud ? <>
+				<ActionRow icon="cpu" title="Use worker default" subtitle={effectiveReviewer || "Worker reviewer"} selected={!reviewerOverride} disabled={Boolean(busy)} onPress={() => void selectCloudReviewer("")} />
+				{(["claude-code", "codex", "cursor"] as const).map((harness) => {
+					const label = harness === "claude-code" ? "Claude Code" : harness === "codex" ? "Codex" : "Cursor";
+					const credential = cloudCredentials.includes(harness);
+					const binary = cloudHarnesses.find((item) => item.harness === harness);
+					const install = credential && binary?.status !== "ready";
+					return <ActionRow key={harness} icon="cpu" harness={harness} accessibilityLabel={install ? `Install ${label} reviewer` : `Select ${label} reviewer`} title={label} subtitle={!credential ? "Connect this agent in Cloud settings" : binary?.status === "ready" ? `Connected · ${binary.version || "Installed"}` : binary ? "Connected · Install reviewer" : "Connected · Binary status unavailable"} selected={reviewerOverride === harness} loading={busy?.kind === "reviewer" && busy.id === harness} disabled={Boolean(busy) || !credential || !binary} onPress={() => void selectCloudReviewer(harness)} />;
+				})}
+			</> : availableReviewers.length || reviewerOverride ? <ReviewerPicker
 				reviewers={availableReviewers}
 				selectedReviewer={reviewerOverride}
 				effectiveReviewer={effectiveReviewer}
@@ -281,7 +337,7 @@ function ReviewActionsContent() {
 				busy={Boolean(busy)}
 			/> : <Text style={styles.empty}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
 		</Section>
-		{externalReviewers.length ? <Section title="EXTERNAL REVIEWERS" subtitle="Ask a GitHub reviewer to look at the latest changes again.">
+		{!cloud && externalReviewers.length ? <Section title="EXTERNAL REVIEWERS" subtitle="Ask a GitHub reviewer to look at the latest changes again.">
 			{externalReviewers.map((item) => <ActionRow key={item.reviewerId} icon="refresh-cw" title={item.reviewerId} subtitle={`${item.count} ${item.count === 1 ? "comment" : "comments"}`} loading={busy?.kind === "rerequest" && busy.id === item.reviewerId} disabled={Boolean(busy)} onPress={() => void rerequest(item)} />)}
 		</Section> : null}
 		{externalReviews.length > 0 && pr ? <Section title="GITHUB REVIEWS" subtitle="Complete review summaries submitted on GitHub.">
@@ -299,11 +355,11 @@ function ReviewActionsContent() {
 				</View>;
 			})}
 		</Section> : null}
-		{comments.length ? <Section title="UNRESOLVED COMMENTS" subtitle="Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.">
-			{comments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => confirmResolve(item.comment)} />)}
+		{comments.length ? <Section title="UNRESOLVED COMMENTS" subtitle={cloud ? "Open the GitHub file and line or send feedback to the worker." : "Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed."}>
+			{comments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} canResolve={!cloud} allowEmptySend={!cloud} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => confirmResolve(item.comment)} />)}
 		</Section> : null}
 		{resolvedComments.length ? <Section title="RESOLVED COMMENTS" subtitle="Previously addressed Orchestrator and GitHub feedback.">
-			{resolvedComments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} resolved aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => undefined} />)}
+			{resolvedComments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} resolved aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} canResolve={!cloud} allowEmptySend={!cloud} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => undefined} />)}
 		</Section> : null}
 		{!pr && !error && !prMissing ? <Text style={styles.empty}>No GitHub feedback is available for this pull request yet.</Text> : null}
 	</ScrollView>;
@@ -341,15 +397,15 @@ function reviewComments(pr: SessionPRSummary | undefined, resolved: boolean): Re
 	return result;
 }
 
-function FeedbackCard({ item, resolved = false, aoOwned, sent, busy, disabled, onOpen, onSend, onResolve }: { item: ReviewCommentItem; resolved?: boolean; aoOwned: boolean; sent: boolean; busy?: BusyAction; disabled: boolean; onOpen: () => void; onSend: () => void; onResolve: () => void }) {
+function FeedbackCard({ item, resolved = false, aoOwned, sent, busy, disabled, onOpen, onSend, onResolve, canResolve, allowEmptySend }: { item: ReviewCommentItem; resolved?: boolean; aoOwned: boolean; sent: boolean; busy?: BusyAction; disabled: boolean; onOpen: () => void; onSend: () => void; onResolve: () => void; canResolve: boolean; allowEmptySend: boolean }) {
 	const styles = useThemedStyles(makeStyles);
 	const { reviewerId, comment } = item;
 	const id = comment.url || `${reviewerId}:${comment.file}`;
 	// Desktop keeps these in a per-comment "⋯" menu rather than as buttons under every comment.
 	const actions: ItemAction[] = [
 		...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", systemImage: "arrow.up.right.square", onPress: onOpen }] : []),
-		...(!sent ? [{ id: "send", label: "Send to worker", systemImage: "paperplane", onPress: onSend }] : []),
-		...(!resolved && comment.url ? [{ id: "resolve", label: "Resolve", systemImage: "checkmark.circle", onPress: onResolve }] : []),
+		...(!sent && (allowEmptySend || Boolean(comment.body?.trim())) ? [{ id: "send", label: "Send to worker", systemImage: "paperplane", onPress: onSend }] : []),
+		...(!resolved && canResolve && comment.url ? [{ id: "resolve", label: "Resolve", systemImage: "checkmark.circle", onPress: onResolve }] : []),
 	];
 	const working = (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url);
 	return <View style={styles.feedbackCard}>
@@ -371,10 +427,10 @@ function Section({ title, subtitle, children }: { title: string; subtitle: strin
 	return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text><Text style={styles.sectionSubtitle}>{subtitle}</Text><View style={styles.rows}>{children}</View></View>;
 }
 
-function ActionRow({ icon, harness, title, subtitle, selected, loading, disabled, onPress }: { icon: keyof typeof Feather.glyphMap; harness?: string; title: string; subtitle?: string; selected?: boolean; loading?: boolean; disabled?: boolean; onPress: () => void }) {
+function ActionRow({ icon, harness, title, subtitle, selected, loading, disabled, onPress, accessibilityLabel }: { icon: keyof typeof Feather.glyphMap; harness?: string; title: string; subtitle?: string; selected?: boolean; loading?: boolean; disabled?: boolean; onPress: () => void; accessibilityLabel?: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.pressed, disabled && styles.disabled]}>
+	return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.pressed, disabled && styles.disabled]}>
 		{harness ? <AgentLogo harness={harness} size={22} /> : <Feather name={icon} size={17} color={selected ? t.accent : t.textTertiary} />}
 		<View style={styles.rowCopy}><Text style={[styles.rowTitle, selected && { color: t.accent }]}>{title}</Text>{subtitle ? <Text numberOfLines={2} style={styles.rowSubtitle}>{subtitle}</Text> : null}</View>
 		{loading ? <ActivityIndicator size="small" color={t.accent} /> : selected ? <Feather name="check" size={17} color={t.accent} /> : <Feather name="chevron-right" size={16} color={t.textFaint} />}

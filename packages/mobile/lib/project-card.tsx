@@ -171,11 +171,13 @@ export function ProjectMachineIndicator({
  */
 export function ProjectPageHeader({
 	row,
+	source,
 	stats,
 	busy,
 	onPress,
 }: {
 	row: OrchestratorProjectRow;
+	source: SourceRef | null;
 	stats: ProjectPageStats;
 	busy: boolean;
 	onPress?: (row: OrchestratorProjectRow) => void;
@@ -245,7 +247,7 @@ export function ProjectPageHeader({
 				<View style={styles.body}>
 					<Text style={styles.project}>{row.project.name}</Text>
 					{row.project.kind && <Text style={styles.summary}>{row.project.kind.replaceAll("_", " ")}</Text>}
-					<Text style={styles.summary}>Cloud · Read-only</Text>
+					<Text style={styles.summary}>{source ? `${source.kind === "cloud" ? "Cloud" : "Local"} · Read-only` : "Read-only"}</Text>
 				</View>
 			)}
 		</View>

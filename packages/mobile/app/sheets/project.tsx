@@ -9,14 +9,16 @@ import { backOr } from "../../lib/backNavigation";
 // ProjectSwitcher, Settings and the spawn screen — see `openProjectSheet`.
 export default function ProjectSheetRoute() {
 	const router = useRouter();
-	const { projects } = useApp();
-	const { resultKey, selected, includeAll, title, subtitle } = useLocalSearchParams<{
+	const app = useApp();
+	const { resultKey, selected, includeAll, title, subtitle, hostId } = useLocalSearchParams<{
+		hostId?: string;
 		resultKey?: string;
 		selected?: string;
 		includeAll?: string;
 		title?: string;
 		subtitle?: string;
 	}>();
+	const projects = hostId === undefined ? app.projects : app.hostStates.find((host) => host.hostId === hostId)?.projects ?? [];
 
 	// Release the parked callback however the sheet goes away, including a
 	// swipe-dismiss that never chose anything.

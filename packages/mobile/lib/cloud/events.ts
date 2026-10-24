@@ -21,6 +21,7 @@ export function toConversationTurns(events: readonly ClientEvent[]): Conversatio
 	const turns = new Map<string, ConversationTurn>();
 	const attempts = new Map<string, number>();
 	for (const event of events) {
+		if (event.type === "workspace.setup") continue;
 		const id = eventTurnId(event);
 		if (!id) continue;
 		const attempt = eventAttempt(event);
@@ -102,7 +103,7 @@ function cloudTurnDiff(patch: string): FileChange[] {
 }
 
 /** Replay into the app's existing rich timeline, fenced by turn and attempt. */
-export function toConversationItems(events: readonly ClientEvent[]): ConversationItem[] {
+export function toConversationItems(events: readonly ClientEvent[], options: { startupFailed?: boolean } = {}): ConversationItem[] {
 	const items: ConversationItem[] = [];
 	const open = new Map<string, ConversationMessage>();
 	const activities = new Map<string, ConversationActivity>();
@@ -123,6 +124,23 @@ export function toConversationItems(events: readonly ClientEvent[]): Conversatio
 		}
 	};
 	for (const event of events) {
+		if (event.type === "workspace.setup") {
+			const rawStatus = payloadField(event, "status");
+			const status = rawStatus === "succeeded" || rawStatus === "timed_out" ? rawStatus : "failed";
+			const step = payloadField(event, "step");
+			const exitCode = payloadField(event, "exitCode");
+			const durationMs = payloadField(event, "durationMs");
+			const output = payloadField(event, "output");
+			items.push({ kind: "activity", id: "cloud-project-setup-" + event.sessionId + ":" + event.sequence,
+				sequence: event.sequence, revision: 1, activityKind: "system", status: status === "succeeded" ? "completed" : "failed",
+				summary: status === "succeeded" ? "Setup passed" : status === "timed_out" ? "Setup timed out" : "Setup failed",
+				detail: { event: "workspace.setup", setupStatus: status,
+					setupStep: typeof step === "number" && Number.isInteger(step) && step > 0 ? step : undefined,
+					exitCode: typeof exitCode === "number" && Number.isInteger(exitCode) ? exitCode : undefined,
+					durationMs: typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : undefined,
+					output: typeof output === "string" && output.trim() ? output : undefined }, createdAt: event.createdAt });
+			continue;
+		}
 		const turnId = eventTurnId(event);
 		const attempt = eventAttempt(event);
 		const previousAttempt = turnId ? attempts.get(turnId) : undefined;
@@ -224,7 +242,10 @@ export function toConversationItems(events: readonly ClientEvent[]): Conversatio
 			activity.detail.files = activity.detail.files.map((file) => ({ ...file, patch: file.patch ?? patches?.find((patch) => patch.path === file.path)?.patch }));
 		}
 	}
-	return items;
+	// The startup checklist owns the current failure. A passed retry replaces
+	// earlier failed Setup rows; all successful outcomes remain in history.
+	const lastPassed = Math.max(-1, ...items.filter((item) => item.kind === "activity" && item.detail?.event === "workspace.setup" && item.detail.setupStatus === "succeeded").map((item) => item.sequence));
+	return items.filter((item) => item.kind !== "activity" || item.detail?.event !== "workspace.setup" || item.detail.setupStatus === "succeeded" || (!options.startupFailed && item.sequence > lastPassed));
 }
 
 /** Steering is active-turn/attempt-specific, never inferred from a queued send. */

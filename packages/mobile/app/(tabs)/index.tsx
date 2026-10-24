@@ -10,6 +10,7 @@ import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
+import { useNotificationBadge } from "../../lib/useNotificationBadge";
 import { Button, EmptyState, HeaderIconButton, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../lib/worker-board-list";
 import { WorkerDock } from "../../lib/worker-dock";
@@ -39,7 +40,7 @@ export default function FleetScreen() {
 	const { scopedBoard, refreshAll, refreshHost, hostStates, availableSources } = useApp();
 	const { sessions, projects, sources } = scopedBoard;
 	const sourceStatuses = Object.entries(sources);
-	const unreadCount = hostStates.reduce((count, host) => count + host.notificationsUnread, 0);
+	const notifications = useNotificationBadge();
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
 	const [searchRequested, setSearchRequested] = useState(false);
@@ -67,7 +68,7 @@ export default function FleetScreen() {
 		[environmentsKey],
 	);
 	const selectedSource = environments.find((environment) => environment.id === workerEnvironmentId)?.source ?? null;
-	const projectOptions = useMemo(() => scopedWorkerProjectOptions(projects, selectedSource), [projects, selectedSource]);
+	const projectOptions = useMemo(() => scopedWorkerProjectOptions(projects, selectedSource, environments), [projects, selectedSource, environments]);
 	// Stable identities so the memoised dock is not rebuilt on every poll — a
 	// re-render mid-tap is what made the filter menu open only sometimes.
 	const openSearch = useCallback(() => setSearchRequested(true), []);
@@ -113,7 +114,7 @@ export default function FleetScreen() {
 		// effect below creates an intermediate empty board and a second remount.
 		const environment = environments.find((entry) => entry.id === environmentId);
 		setWorkerEnvironmentId(environment?.id ?? ALL_WORKER_ENVIRONMENTS);
-		setWorkerProjectId((projectId) => scopedWorkerProjectOptions(projects, environment?.source ?? null).some((project) => project.id === projectId) ? projectId : ALL_WORKER_PROJECTS);
+		setWorkerProjectId((projectId) => scopedWorkerProjectOptions(projects, environment?.source ?? null, environments).some((project) => project.id === projectId) ? projectId : ALL_WORKER_PROJECTS);
 	}, [projects, environments]);
 
 	useEffect(() => {
@@ -161,11 +162,11 @@ export default function FleetScreen() {
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
 				title="Workers"
-				right={hostStates.some((host) => host.connection === "open") ?
+				right={notifications.available ?
 					<HeaderIconButton
 						icon="bell"
 						label="Notifications"
-						badge={unreadCount}
+						badge={notifications.unreadCount}
 						onPress={() => router.navigate("/notifications")}
 					/>
 					: null
@@ -174,7 +175,7 @@ export default function FleetScreen() {
 			{/* Above the list rather than inside ListEmptyComponent: the case this
 			    exists for is a populated board whose poll has died. */}
 			{sourceStatuses.map(([key, status]) => (
-				<StaleBanner key={key} sourceLabel={key.startsWith('["cloud"') ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />
+				<StaleBanner key={key} sourceKey={key} sourceLabel={key.startsWith('["cloud"') ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />
 			))}
 
 			{!selectedHost && initialLoading && sessions.length === 0 ? (

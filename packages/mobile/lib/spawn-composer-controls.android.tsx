@@ -1,10 +1,11 @@
 import { Feather } from "./icons";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { AgentLogo } from "./AgentLogo";
 import { useTheme } from "./ThemeProvider";
 import type { Theme } from "./theme";
-import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
+import type { SpawnComposerControlsProps } from "./spawn-composer-controls.types";
+import { PickerOptions } from "./PickerOptions";
 import { type, space } from "./tokens";
 import { MicKey } from "./voice/MicKey";
 import { sourceKey } from "./environment/scopedBoard";
@@ -30,6 +31,7 @@ export function SpawnComposerControls({
 	showModels = true,
 	voice,
 	onSpawn,
+	submitLabel = "Start task",
 	busy,
 	disabled,
 }: SpawnComposerControlsProps) {
@@ -63,7 +65,7 @@ export function SpawnComposerControls({
 	// three sheets deep.
 	if (openMenu) {
 		return (
-			<OptionList
+			<PickerOptions
 				title={menuTitle}
 				options={options}
 				selectedValue={selectedValue}
@@ -115,7 +117,7 @@ export function SpawnComposerControls({
 
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={busy ? "Starting task" : "Start task"}
+				accessibilityLabel={busy ? "Starting task" : submitLabel}
 				accessibilityState={{ disabled }}
 				testID="spawn-submit"
 				disabled={disabled}
@@ -124,7 +126,7 @@ export function SpawnComposerControls({
 				style={[styles.spawn, { opacity: disabled ? 0.68 : 1 }]}
 			>
 				{busy ? <ActivityIndicator size="small" color={t.onAccent} /> : null}
-				<Text style={styles.spawnLabel}>{busy ? "Starting…" : "Start task"}</Text>
+				<Text style={styles.spawnLabel}>{busy ? "Starting…" : submitLabel}</Text>
 			</Pressable>
 
 		</View>
@@ -155,51 +157,6 @@ function SelectorButton({ label, icon, harness, onPress, style }: {
 	);
 }
 
-function OptionList({ title, options, selectedValue, showAgentLogos, onSelect, onBack }: {
-	title: string;
-	options: readonly SpawnComposerOption[];
-	selectedValue: string;
-	showAgentLogos?: boolean;
-	onSelect: (value: string) => void;
-	onBack: () => void;
-}) {
-	const t = useTheme();
-	const styles = makeStyles(t);
-	return (
-		<View style={styles.stack}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel="Back"
-				android_ripple={{ color: t.accentTint }}
-				onPress={onBack}
-				style={styles.optionHeader}
-			>
-				<Feather name="chevron-left" size={20} color={t.textSecondary} />
-				<Text style={styles.optionTitle}>{title}</Text>
-			</Pressable>
-			<ScrollView style={styles.optionList} showsVerticalScrollIndicator={false}>
-				{options.map((option, index) => {
-					const selected = option.id === selectedValue;
-					return (
-						<Pressable
-							key={option.id}
-							accessibilityRole="button"
-							accessibilityState={{ selected }}
-							android_ripple={{ color: t.accentTint }}
-							onPress={() => onSelect(option.id)}
-							style={[styles.optionRow, index > 0 && !option.sectionBreakBefore && styles.optionBorder, option.sectionBreakBefore && styles.optionSectionBreak, selected && styles.optionSelected]}
-						>
-							{showAgentLogos ? <AgentLogo harness={option.id} size={24} /> : option.icon ? <Feather name={option.icon} size={20} color={t.textSecondary} /> : null}
-							<Text numberOfLines={2} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
-							{selected ? <Feather name="check" size={20} color={t.accent} /> : null}
-						</Pressable>
-					);
-				})}
-			</ScrollView>
-		</View>
-	);
-}
-
 const makeStyles = (t: Theme) => StyleSheet.create({
 	stack: { gap: space.sm },
 	destinationRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs },
@@ -223,13 +180,4 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	selectorLabel: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 	spawn: { height: 44, flexDirection: "row", gap: space.sm, borderRadius: 16, borderCurve: "continuous", alignItems: "center", justifyContent: "center", overflow: "hidden", backgroundColor: t.accent },
 	spawnLabel: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
-	optionHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 12, overflow: "hidden" },
-	optionTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, lineHeight: type.body.lineHeight, fontWeight: "600" },
-	optionList: { maxHeight: 340, borderRadius: 16, backgroundColor: t.bgElevated, overflow: "hidden" },
-	optionRow: { minHeight: 54, paddingHorizontal: space.lg, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md },
-	optionBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
-	optionSectionBreak: { marginTop: space.xs, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderDefault },
-	optionSelected: { backgroundColor: t.accentTint },
-	optionLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
-	optionLabelSelected: { fontFamily: "Geist_600SemiBold", color: t.accent, fontWeight: "600" },
 });

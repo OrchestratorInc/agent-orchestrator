@@ -12,9 +12,10 @@ import { CloudApiError, type CloudClient } from "@aoagents/cloud-client";
  * something tells authStore to drop back to signed-out. Wrapping the client
  * catches that everywhere it's used — org resolution, the session source,
  * event polling — rather than requiring every call site to check status
- * itself.
+ * itself. A membership refusal revalidates the workspace instead of signing
+ * out; policy refusals remain ordinary errors. Neither path replays requests.
  */
-export function wrapUnauthorized(client: CloudClient, onUnauthorized: (generation: number) => void, getGeneration: () => number): CloudClient {
+export function wrapUnauthorized(client: CloudClient, onUnauthorized: (generation: number) => void, getGeneration: () => number, onForbidden?: (generation: number) => void): CloudClient {
 	return new Proxy(client, {
 		get(target, prop, receiver) {
 			const value = Reflect.get(target, prop, receiver);
@@ -25,6 +26,7 @@ export function wrapUnauthorized(client: CloudClient, onUnauthorized: (generatio
 				if (result instanceof Promise) {
 					return result.catch((error: unknown) => {
 						if (error instanceof CloudApiError && error.status === 401) onUnauthorized(generation);
+						if (error instanceof CloudApiError && error.status === 403 && error.code === "forbidden") onForbidden?.(generation);
 						throw error;
 					});
 				}

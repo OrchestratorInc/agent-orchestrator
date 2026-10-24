@@ -14,6 +14,21 @@ import { afterDraftWrites, clearPendingSend, needsAttachmentRecovery, pendingSen
 beforeEach(() => saved.clear());
 
 describe("pending Chat send", () => {
+	it.each(["agent", "plan"] as const)("restores and acknowledges a Cloud %s message without changing its retry settings", async (executionMode) => {
+		const key = pendingSendKey('["https://cloud.test","user","org"]', "session");
+		const first = { id: "original", draftText: "Inspect", text: "Inspect", hasAttachments: false,
+			settings: { executionMode, model: "chosen-model", reasoningEffort: "high" } };
+		await reservePendingSend(key, first);
+		expect(await readPendingSend(key)).toEqual(first);
+		expect(await reservePendingSend(key, { ...first, id: "new", settings: { executionMode: executionMode === "plan" ? "agent" : "plan", model: "other-model" } })).toEqual(first);
+		await clearPendingSend(key, first.id);
+		expect(await readPendingSend(key)).toBeNull();
+	});
+	it.each([{ executionMode: "unknown" }, { executionMode: true }, { token: "private" }, { unrecognizedSetting: "value" }])("rejects unsupported settings in a saved retry record: %j", async (settings) => {
+		const key = pendingSendKey("host", "session");
+		saved.set(key, JSON.stringify({ id: "original", draftText: "Inspect", text: "Inspect", hasAttachments: false, settings }));
+		await expect(readPendingSend(key)).rejects.toThrow("retry record is damaged");
+	});
 	it("serializes simultaneous reservations so a double tap reuses one identity and payload", async () => {
 		const key = pendingSendKey("scope", "session");
 		const first = { id: "first", draftText: "Inspect", text: "Inspect", hasAttachments: false, settings: { model: "one" } };

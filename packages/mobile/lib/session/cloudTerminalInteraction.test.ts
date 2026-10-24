@@ -14,6 +14,8 @@ function loadCloudTerminalScript(platform: "ios" | "android", alternate = false)
 	const messages: Array<{ type: string; message: string }> = [];
 	const wheelEvents: Array<{ deltaY: number; deltaMode: number }> = [];
 	const styles: Array<{ textContent: string }> = [];
+	const windowListeners = new Map<string, () => void>();
+	let proposedDimensions = { cols: 55, rows: 39 };
 	const viewport = { scrollTop: 100, scrollBarWidth: 15 };
 	const textarea = { disabled: false, setAttribute() {} };
 	const terminalElement = { dispatchEvent(event: { deltaY: number; deltaMode: number }) { wheelEvents.push(event); } };
@@ -45,9 +47,9 @@ function loadCloudTerminalScript(platform: "ios" | "android", alternate = false)
 		document,
 		window: {
 			terminal,
-			fitAddon: { proposeDimensions: () => ({ cols: 55, rows: 39 }) },
+			fitAddon: { proposeDimensions: () => proposedDimensions },
 			ReactNativeWebView: { postMessage(value: string) { messages.push(JSON.parse(value)); } },
-			addEventListener() {},
+			addEventListener(type: string, listener: () => void) { windowListeners.set(type, listener); },
 		},
 		WheelEvent,
 		setTimeout: () => 1,
@@ -60,10 +62,27 @@ function loadCloudTerminalScript(platform: "ios" | "android", alternate = false)
 		cancelable: true,
 		preventDefault() {},
 	});
-	return { listeners, messages, wheelEvents, styles, viewport, textarea, event };
+	return { listeners, messages, wheelEvents, styles, viewport, textarea, event,
+		reportSize(cols: number, rows: number) { proposedDimensions = { cols, rows }; windowListeners.get("resize")?.(); },
+	};
 }
 
 describe("Cloud terminal WebView interactions", () => {
+	it.each(["ios", "android"] as const)("reports only settled %s grids without caching tiny transient fits", (platform) => {
+		const view = loadCloudTerminalScript(platform);
+		view.reportSize(2, 1);
+		view.reportSize(19, 4);
+		view.reportSize(20, 3);
+		expect(view.messages).toEqual([]);
+		view.reportSize(20, 4);
+		expect(view.messages).toEqual([{ type: "debug", message: "FRESSH_DIMS 20 4" }]);
+		view.reportSize(2, 1);
+		view.reportSize(20, 4);
+		expect(view.messages).toHaveLength(1);
+		view.reportSize(55, 39);
+		expect(view.messages.at(-1)).toEqual({ type: "debug", message: "FRESSH_DIMS 55 39" });
+	});
+
 	it("scrolls normal-buffer output by the finger distance on Android", () => {
 		const view = loadCloudTerminalScript("android");
 		view.listeners.get("touchstart")?.(view.event(20, 100));

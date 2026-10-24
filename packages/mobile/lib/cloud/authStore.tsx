@@ -43,6 +43,7 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 	const isCurrentSession = useCallback(() => owner.getSnapshot().epoch === epoch, [owner, epoch]);
 	const [workspace, setWorkspace] = useState<{ epoch: number; orgId: string | null; offering?: ResolvedMobileCloudOffering; loading: boolean; error: string | null }>({ epoch, orgId: null, loading: false, error: null });
 	const resolution = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
+	const membershipRecovery = useRef<{ owner: AccountSessionOwner; resolve(epoch: number): Promise<void> } | null>(null);
 	const signOut = useCallback(async () => {
 		cancelAccountHostSync();
 		await owner.signOut();
@@ -51,12 +52,17 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 		baseUrl, tokens: owner, isCurrent: () => capturedEpoch === owner.getSnapshot().epoch,
 	}), (failedEpoch) => {
 		if (failedEpoch === owner.getSnapshot().epoch) void signOut();
-	}, () => capturedEpoch), [baseUrl, owner, signOut]);
+	}, () => capturedEpoch, (failedEpoch) => {
+		const recovery = membershipRecovery.current;
+		if (recovery?.owner === owner) void recovery.resolve(failedEpoch);
+	}), [baseUrl, owner, signOut]);
 	const client = useMemo(() => boundClient(epoch), [boundClient, epoch]);
 	const resolveSession = useCallback((capturedEpoch: number): Promise<void> => {
 		if (capturedEpoch !== owner.getSnapshot().epoch || owner.getSnapshot().busy) return Promise.resolve();
 		if (resolution.current?.epoch === capturedEpoch) return resolution.current.promise;
-		setWorkspace({ epoch: capturedEpoch, orgId: null, loading: true, error: null });
+		setWorkspace((value) => value.epoch === capturedEpoch
+			? { ...value, loading: true, error: null }
+			: { epoch: capturedEpoch, orgId: null, loading: true, error: null });
 		let promise!: Promise<void>;
 		promise = (async () => {
 			try {
@@ -68,7 +74,10 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 				const result = await resolveCloudWorkspace(boundClient(capturedEpoch), () => capturedEpoch === owner.getSnapshot().epoch);
 				if (capturedEpoch === owner.getSnapshot().epoch) setWorkspace({ epoch: capturedEpoch, orgId: result.organization.id, offering: result.offering, loading: false, error: null });
 			} catch (error) {
-				if (capturedEpoch === owner.getSnapshot().epoch) setWorkspace({ epoch: capturedEpoch, orgId: null, loading: false, error: error instanceof Error ? error.message : "Could not load your cloud workspace." });
+				if (capturedEpoch === owner.getSnapshot().epoch) setWorkspace((value) => ({
+					...(value.epoch === capturedEpoch ? value : { epoch: capturedEpoch, orgId: null }),
+					loading: false, error: error instanceof Error ? error.message : "Could not load your cloud workspace.",
+				}));
 			} finally {
 				if (capturedEpoch === owner.getSnapshot().epoch) setWorkspace((value) => value.epoch === capturedEpoch ? { ...value, loading: false } : value);
 				if (resolution.current?.promise === promise) resolution.current = null;
@@ -78,14 +87,21 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 		return promise;
 	}, [owner, boundClient, deployment]);
 	const retryOrgResolution = useCallback(() => resolveSession(owner.getSnapshot().epoch), [owner, resolveSession]);
+	useEffect(() => {
+		// Main re-resolves /me after membership changes. Share the in-flight
+		// lookup here too, without replaying the rejected action or dropping
+		// cached rows while a same-login workspace refresh is pending.
+		membershipRecovery.current = { owner, resolve: resolveSession };
+		return () => { membershipRecovery.current = null; };
+	}, [owner, resolveSession]);
 	useEffect(() => { void resolveSession(epoch); }, [epoch, snapshot.busy, resolveSession]);
 	const orgId = workspace.epoch === epoch && snapshot.signedIn === true && !snapshot.busy ? workspace.orgId : null;
 	useEffect(() => {
 		const listener = AppState.addEventListener("change", (state) => {
-			if (state === "active" && snapshot.signedIn && !orgId) void retryOrgResolution();
+			if (state === "active" && snapshot.signedIn) void retryOrgResolution();
 		});
 		return () => listener.remove();
-	}, [snapshot.signedIn, orgId, retryOrgResolution]);
+	}, [snapshot.signedIn, retryOrgResolution]);
 	const signInWithWorkOS = useCallback(async () => {
 		const accepted = await signInToDeployment(deployment, owner);
 		if (accepted) await resolveSession(owner.getSnapshot().epoch);
@@ -100,7 +116,8 @@ export function CloudAuthProvider({ children, baseUrl = CLOUD_BASE_URL, owner: i
 	const value: CloudAuthState = {
 		signedIn: snapshot.signedIn, account: snapshot.account, sessionEpoch: epoch,
 		accountId: snapshot.account?.id ?? null, offering: orgId ? workspace.offering ?? null : null,
-		orgId, orgLoading: workspace.epoch === epoch && workspace.loading,
+		// Background revalidation must not unmount a usable source or its draft.
+		orgId, orgLoading: workspace.epoch === epoch && workspace.loading && !orgId,
 		orgError: workspace.epoch === epoch ? workspace.error : null, retryOrgResolution,
 		client, baseUrl, error: CLOUD_CONFIGURATION_ERROR ?? snapshot.error, busy: snapshot.busy,
 		signInWithWorkOS, signInLocal, registerLocal, signOut,

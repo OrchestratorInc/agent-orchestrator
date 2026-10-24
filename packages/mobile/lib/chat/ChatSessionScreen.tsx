@@ -47,7 +47,7 @@ import { cloudLifecycleBanner, controllerStoppedBanner, errorBanner, mcpBanner, 
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
 import { turnSettingsModelLabel } from "./turnSettingsModel";
-import { brokenMcpServers, can } from "./types";
+import { brokenMcpServers, can, type ChatTurnOptions } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
@@ -67,6 +67,8 @@ import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useChangeSummary } from "../files/useChangeSummary";
+import { useSourcePRs } from "../pr/useSourcePRs";
+import { previewRoute } from "../preview/navigation";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -164,7 +166,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 	const cloudProblem = cloudStartupProblem(session);
 	const startupCopy = cloudProblem ? cloudStartupErrorCopy(cloudProblem, !session.cloud?.coderWorkspaceUrl) : undefined;
 	const cloudComposerLocked = cloudSession && (terminated || Boolean(conversation.unavailable) || interfaceSwitch.loading || cloudInterfaceInputLocked(cloudInterface?.status ?? ownCloudInterface.status)) || cloudStage !== undefined && cloudStage !== "connected";
-	const failedStart = cloudSession && cloudProblem?.phase === "failed" ? startupCopy?.message : "projectName" in session || session.provisionState !== "failed"
+	const failedStart = cloudSession && !isResumable(cloudStage) && cloudProblem?.phase === "failed" ? startupCopy?.message : "projectName" in session || session.provisionState !== "failed"
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
@@ -226,14 +228,19 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.
-	const filesNavigation = useMemo<FilesNavigation | null>(() => cloudSession ? null : ({
-		openChanges: () => router.push(filesRoute(session.id, source.id, sessionName)),
-		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, source.id, previousPath)),
-	}), [cloudSession, source.id, router, session.id, sessionName]);
+	const workspace = sessionSource?.workspace;
+	const filesNavigation = useMemo<FilesNavigation | null>(() => {
+		if (!workspace?.isCurrent() || cloudSession && !sessionSource?.scopeKey) return null;
+		const owner = cloudSession ? { source, scopeKey: sessionSource?.scopeKey } : undefined;
+		return {
+			openChanges: () => { if (workspace.isCurrent()) router.push(filesRoute(session.id, cloudSession ? undefined : source.id, sessionName, owner)); },
+			openFile: (path, previousPath) => { if (workspace.isCurrent()) router.push(fileRoute(session.id, path, cloudSession ? undefined : source.id, previousPath, owner)); },
+		};
+	}, [cloudSession, source.kind, source.id, sessionSource?.scopeKey, workspace, router, session.id, sessionName]);
 	// Re-read git's totals when a turn reports edits, not on a timer.
 	const lastTurn = conversation.snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(conversation.snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
-	const changeSummary = useChangeSummary(config, session.id, changeSignal);
+	const changeSummary = useChangeSummary(workspace ?? null, session.id, changeSignal);
 	// Desktop derives one name from the session (useWorkspaceQuery: displayName ??
 	// issueId ?? id) and its chat header prefers it over the conversation's own
 	// title (ChatWorkspace: sessionTitle || session.title || snapshot.title). This
@@ -245,9 +252,22 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 		: session.projectId ? scopedBoard.projects.find((entry) => entry.source.kind === source.kind && entry.source.id === source.id && entry.value.id === session.projectId)?.value.name : "Standalone";
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
 	const headerState = cloudHeaderControllerState(cloudStage, conversation.snapshot?.controller.state ?? "connecting");
-	const reviewPromptPRCandidate = cloudSession || "projectName" in session ? undefined : sessionPRReadyForReview(session);
+	const cloudPRSource = cloudSession && !("projectName" in session) ? sessionSource?.pullRequests : undefined;
+	const cloudPRs = useSourcePRs(cloudPRSource ? [{ source: cloudPRSource, sessionId: session.id }] : []);
+	const cloudPRList = cloudPRSource ? cloudPRs.list(cloudPRSource, session.id) : [];
+	const cloudPRSignal = `${session.id}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}`;
+	const lastPRSignal = useRef(cloudPRSignal);
+	useEffect(() => {
+		if (lastPRSignal.current === cloudPRSignal) return;
+		lastPRSignal.current = cloudPRSignal;
+		if (cloudPRSource?.isCurrent()) cloudPRs.reload();
+	}, [cloudPRSignal, cloudPRSource, cloudPRs.reload]);
+	const cloudReviewSummary = cloudPRList.find((pr) => pr.state !== "closed" && pr.state !== "merged");
+	const reviewPromptPRCandidate = "projectName" in session ? undefined : cloudSession
+		? cloudReviewSummary && { ...cloudReviewSummary, state: cloudReviewSummary.state === "draft" ? "open" as const : cloudReviewSummary.state, isDraft: cloudReviewSummary.state === "draft" }
+		: sessionPRReadyForReview(session);
 	const reviewPromptKey = reviewPromptPRCandidate ? `${reviewPromptPRCandidate.url}#${reviewPromptPRCandidate.number}` : undefined;
-	const reviewPromptHostKey = config ? machineIdentity(config) : source.id;
+	const reviewPromptHostKey = cloudSession ? sessionSource?.scopeKey : config ? machineIdentity(config) : source.id;
 	const reviewPromptStateStorageKey = reviewPromptKey && reviewPromptHostKey
 		? `ao.chat.reviewPromptCollapsed:${encodeURIComponent(reviewPromptHostKey)}:${encodeURIComponent(session.id)}:${encodeURIComponent(reviewPromptKey)}`
 		: undefined;
@@ -282,7 +302,8 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 		if (reviewPromptStateStorageKey) void AsyncStorage.removeItem(reviewPromptStateStorageKey).catch(() => {});
 	}, [reviewPromptStateStorageKey]);
 	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
-	const reviewPromptSummary = config && reviewPromptPR ? reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number) : undefined;
+	const reviewPromptSummary = cloudSession ? cloudPRList.find((pr) => pr.url === reviewPromptPR?.url)
+		: config && reviewPromptPR ? reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number, reviewPromptPR.url) : undefined;
 
 	// The blocking request. It takes the composer's place until it is answered.
 	// Computed here rather than at render because the back-swipe below is a hook
@@ -376,16 +397,17 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 		const current = conversation.snapshot;
 		if (!current) return;
 		await dismissKeyboardBeforeSheet(keyboardVisible);
-		let catalog = { models: conversation.models, configOptions: conversation.configOptions };
+		let catalog: ChatTurnOptions = { models: conversation.models, configOptions: conversation.configOptions };
 		let catalogError = conversation.actionErrors.settings ?? conversation.actionErrors.config;
 		try {
 			catalog = await conversation.loadTurnOptions();
 		} catch (cause) {
+			if (cloudSession && cause instanceof Error && cause.name === "AbortError") return;
 			catalogError = conversationActionError(cause);
 		}
 		router.push(chatSheetRoute({
 			kind: "turn-settings",
-			snapshot: current,
+			snapshot: catalog.settings ? { ...current, settings: catalog.settings } : current,
 			models: catalog.models,
 			options: catalog.configOptions,
 			disabled: current.controller.state === "stopped" || conversation.pendingActions.includes("settings") || conversation.pendingActions.includes("config"),
@@ -394,10 +416,17 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			onOption: conversation.setConfigOption,
 			onRefresh: () => conversation.loadTurnOptions({ refresh: true }),
 		}));
-	}, [conversation, keyboardVisible, router]);
+	}, [cloudSession, conversation, keyboardVisible, router]);
 
 	const openShell = useCallback(async () => {
-		if (!config || openingShell) return;
+		if (openingShell) return;
+		if (cloudSession) {
+			if ("projectName" in session) return;
+			setMenuOpen(false);
+			router.push({ pathname: "/session/[id]", params: { id: session.id, source: "cloud", sourceId: source.id, view: "shell" } });
+			return;
+		}
+		if (!config) return;
 		setOpeningShell(true);
 		try {
 			const shell = await openSessionShell(config, session.id, session.projectId);
@@ -406,7 +435,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 		} catch (cause) {
 			Alert.alert("Couldn't open shell", userFacingError(cause));
 		} finally { setOpeningShell(false); }
-	}, [config, openingShell, router, session.id, session.projectId]);
+	}, [cloudSession, config, openingShell, router, session, source.id]);
 
 	// Links open in-app, like the desktop Browser inspector. A localhost link from
 	// the agent's machine is mapped onto the AO host first (the phone's own
@@ -423,8 +452,8 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 		setResumeError(undefined);
 		try {
 			if (terminated) await restoreOn(source, session.id);
-			else if (cloudSession && cloudProblem?.phase === "failed" && sessionSource?.retryStartup) await sessionSource.retryStartup(session.id);
 			else if (cloudSession && isResumable(cloudStage) && sessionSource) await sessionSource.resumeSession(session.id);
+			else if (cloudSession && cloudProblem?.phase === "failed" && sessionSource?.retryStartup) await sessionSource.retryStartup(session.id);
 			else if (cloudSession) throw new Error("This Cloud session has no supported recovery action. Refresh its status.");
 			else await resumeAgentOn(source, session.id);
 			await conversation.refresh();
@@ -568,6 +597,10 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			interfaceSupported: !terminated && Boolean(interfaceSwitch.status?.supported),
 			interfaceReason: terminated ? "This session has ended." : interfaceSwitch.status?.reason || interfaceSwitch.error,
 			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting || cloudSession && cloudInterfaceInputLocked(cloudInterface?.status ?? ownCloudInterface.status),
+			canOpenFiles: Boolean(filesNavigation),
+			canOpenShell: !cloudSession || !("projectName" in session),
+			canPreview: !cloudSession || Boolean(sessionSource?.scopeKey && sessionSource.preview?.isCurrent()),
+			canPullRequests: !cloudSession || Boolean(sessionSource?.scopeKey && cloudPRSource?.isCurrent()),
 			// Orchestrators are not deleted from here; the board owns their lifecycle.
 			canDelete: !cloudSession && !("projectName" in session),
 			// The daemon refuses to rename the project orchestrator.
@@ -577,8 +610,21 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			onFiles: () => filesNavigation?.openChanges(),
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
-			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: source.id } }),
+			onPreview: () => {
+				if (cloudSession) {
+					if (sourceFor(source) !== sessionSource || !sessionSource?.scopeKey || !sessionSource.preview?.isCurrent()) return;
+					router.push(previewRoute(session.id, undefined, title, { source, scopeKey: sessionSource.scopeKey }));
+					return;
+				}
+				router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: source.id } });
+			},
 			onPullRequests: () => {
+				if (cloudSession) {
+					if (sourceFor(source) !== sessionSource || !sessionSource?.scopeKey || !cloudPRSource?.isCurrent()) return;
+					if (cloudPRList.length === 1) openPage(reviewRouteForPR(session.id, cloudPRList[0], source, sessionSource.scopeKey));
+					else router.push({ pathname: "/(tabs)/prs", params: { source: source.kind, sourceId: source.id, projectId: session.projectId } });
+					return;
+				}
 				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
 					? reviewRouteForSession(session, source.id)
 					: undefined;
@@ -589,17 +635,21 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			onSwitchInterface: requestInterfaceSwitch,
 			onCompact: () => void conversation.compact().catch(() => {}),
 			onReload: () => void conversation.reloadMcp().catch(() => {}),
-			onRename: () => router.push(chatSheetRoute({
-				kind: "conversation-rename",
-				initialTitle: sessionName,
-				onRename: (next) => renameWorkerOn(source, session.id, next),
-			})),
+			onRename: () => {
+				if (cloudSession || "projectName" in session) return;
+				router.push(chatSheetRoute({
+					kind: "conversation-rename",
+					initialTitle: sessionName,
+					onRename: (next) => renameWorkerOn(source, session.id, next),
+				}));
+			},
 			onTogglePin: () => {
-				if ("projectName" in session) return;
+				if (cloudSession || "projectName" in session) return;
 				void setWorkerPinnedOn(source, session.id, !session.isPinned).catch(() => {});
 			},
 			onRefresh: () => void conversation.refresh(),
 			onDelete: () => {
+				if (cloudSession || "projectName" in session) return;
 				haptics.warning();
 				Alert.alert(
 					ARCHIVE_SESSION_CONFIRM.title,
@@ -615,7 +665,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 		};
 		actionsEntryRef.current = entry;
 		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [cloudSession, conversation, filesNavigation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setActiveProject, setWorkerPinnedOn, renameWorkerOn, killOn, source, terminated, title]);
+	}, [cloudSession, cloudPRSource, cloudPRList, conversation, filesNavigation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, sessionSource, sourceFor, setActiveProject, setWorkerPinnedOn, renameWorkerOn, killOn, source, terminated, title]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -757,6 +807,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<ChatTimeline
+					config={config}
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
 					onLoadOlder={conversation.loadOlder}
@@ -780,7 +831,10 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 				reviewPRSummary={reviewPromptSummary}
 				reviewPRCollapsed={reviewPromptCollapsed}
 				onCollapseReviewPR={collapseReviewPrompt}
-				onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, source.id)) : undefined}
+				onOpenReview={reviewPromptPR ? () => {
+					if (cloudSession && (sourceFor(source) !== sessionSource || !cloudPRSource?.isCurrent() || !sessionSource?.scopeKey)) return;
+					openPage(reviewRouteForPR(session.id, reviewPromptPR, cloudSession ? source : source.id, cloudSession ? sessionSource?.scopeKey : undefined));
+				} : undefined}
 				sessionId={session.id}
 				config={config}
 				draftScopeKey={cloudSession ? sessionSource?.scopeKey : undefined}
@@ -810,7 +864,7 @@ export function ChatSessionScreen({ session: boardSession, source, cloudInterfac
 				onAcknowledgeSend={conversation.acknowledgeSend}
 				completedRetry={conversation.completedRetry}
 				onSteer={conversation.steer}
-				onPromoteQueuedTurn={conversation.promoteQueuedTurn}
+				onPromoteQueuedTurn={cloudSession ? undefined : conversation.promoteQueuedTurn}
 				onCancelQueuedTurn={conversation.cancelQueuedTurn}
 				onInterrupt={() => void conversation.interrupt().catch(() => {})}
 				onOpenSettings={() => void openTurnSettings()}

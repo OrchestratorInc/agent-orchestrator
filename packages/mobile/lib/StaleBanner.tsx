@@ -25,15 +25,15 @@ import type { SourceStatus } from "./environment/scopedBoard";
  * small component. It also self-gates to null when the data is current, so
  * screens can render it unconditionally.
  */
-export function StaleBanner({ error = false, sourceLabel, sourceStatus, onRetry }: { error?: boolean; sourceLabel?: "Local" | "Cloud"; sourceStatus?: SourceStatus; onRetry?: () => void }) {
+export function StaleBanner({ error = false, sourceKey, sourceLabel, sourceStatus, onRetry }: { error?: boolean; sourceKey?: string; sourceLabel?: "Local" | "Cloud"; sourceStatus?: SourceStatus; onRetry?: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { getLastSyncAt, config, environment } = useApp();
-	const { stale, ageMs } = useStaleness(getLastSyncAt);
+	const { getLastSyncAt, getSourceLastSyncAt, config, environment } = useApp();
+	const { stale, ageMs } = useStaleness(() => sourceKey ? getSourceLastSyncAt(sourceKey) : sourceStatus ? 0 : getLastSyncAt());
 
 	// Fresh and healthy: say nothing. Silence is the correct state here, and it
 	// keeps the caller free of a conditional.
-	if (sourceStatus ? !sourceStatus.error && !sourceStatus.stale : !stale && !error) return null;
+	if (sourceStatus ? !sourceStatus.error && !sourceStatus.stale && !stale : !stale && !error) return null;
 
 	// A reachability failure is worth more alarm than mere age: one means the
 	// desktop is gone, the other can just be a laptop that slept.
@@ -43,7 +43,7 @@ export function StaleBanner({ error = false, sourceLabel, sourceStatus, onRetry 
 	const host = config?.host?.trim();
 	const age = staleAgeLabel(ageMs);
 	const text = sourceStatus
-		? `${sourceLabel ?? "Workspace"} ${sourceStatus.error ? "couldn't refresh" : "may be out of date"}. ${sourceStatus.error ?? ""}`.trim()
+		? `${sourceLabel ?? "Workspace"} ${sourceStatus.error ? "couldn't refresh" : "may be out of date"}. ${sourceStatus.error ?? (ageMs ? `Last updated ${age}.` : "")}`.trim()
 		: boardStaleMessage(environment, error, host, age);
 
 	return (

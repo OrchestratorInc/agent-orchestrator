@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	InteractionManager,
 	Alert,
+	BackHandler,
+	Keyboard,
 	Platform,
 	Pressable,
 	ScrollView,
@@ -23,13 +25,17 @@ import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
 import { useCloudAuth } from "../lib/cloud/authStore";
-import { cloudRequestErrorCopy } from "../lib/cloud/errorCopy";
+import { cloudRequestErrorCopy, isCloudSessionLimitError } from "../lib/cloud/errorCopy";
+import { CloudSessionLimitNotice } from "../lib/cloud/CloudSessionLimitNotice";
+import { CloudSessionManager } from "../lib/cloud/CloudSessionManager";
+import { CloudAgentConnections } from "../lib/cloud/CloudAgentConnections";
+import { CloudSpawnRecoveryNotice } from "../lib/cloud/CloudSpawnRecoveryNotice";
 import { sourceKey, type SourceRef } from "../lib/environment/scopedBoard";
 import { haptics } from "../lib/haptics";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { cloudRoleDefaults, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged, spawnRequestFingerprint } from "../lib/spawnModel";
-import { clearCloudOperation, readCloudOperation, type CloudOperation } from "../lib/cloud/operation";
-import type { CreateSessionInput } from "@aoagents/cloud-client";
+import { clearCloudOperation, readCloudOperation, rejectCloudOperation as releaseUnacceptedOperation, type CloudOperation } from "../lib/cloud/operation";
+import { CloudApiError, type CreateSessionInput } from "@aoagents/cloud-client";
 import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { canSubmitSpawn, initialSpawnDestination, spawnRequestIsCurrent } from "../lib/spawnDestination";
@@ -57,7 +63,7 @@ function SpawnModalContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId, source: routeKind, sourceId: routeSourceId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; source?: string; sourceId?: string; hostId?: string }>();
-	const { scopedBoard, availableSources, sourceFor, spawnOn, configForHost, hostStates, configResolved, switchHost, setActiveProject } = useApp();
+	const { scopedBoard, availableSources, sourceFor, spawnOn, refreshSource, configForHost, hostStates, configResolved, switchHost, setActiveProject } = useApp();
 	const cloudAuth = useCloudAuth();
 	const { client: cloudClient, orgId: cloudOrgId } = cloudAuth;
 	const cloudScopeKey = cloudOrgId ? sourceFor({ kind: "cloud", id: cloudOrgId })?.scopeKey : undefined;
@@ -71,6 +77,7 @@ function SpawnModalContent() {
 	const [savedPreference, setSavedPreference] = useState<SpawnPreference | null>(null);
 	const [preferenceLoaded, setPreferenceLoaded] = useState(false);
 	const catalogGeneration = useRef(0);
+	const projectSelectionGeneration = useRef(0);
 	const cloudSpawn = destination?.kind === "cloud";
 	const config = destination?.kind === "local" ? configForHost(destination.id) : null;
 	const selectedHost = destination?.kind === "local" ? hostStates.find((host) => host.hostId === destination.id) : undefined;
@@ -97,6 +104,8 @@ function SpawnModalContent() {
 	const [customModelOpen, setCustomModelOpen] = useState(false);
 	const [customModel, setCustomModel] = useState("");
 	const [reservedWorker, setReservedWorker] = useState<CloudOperation<CreateSessionInput> | null>(null);
+	const recoveryContext = useRef({ scope: cloudScopeKey, projectId, key: reservedWorker?.key });
+	recoveryContext.current = { scope: cloudScopeKey, projectId, key: reservedWorker?.key };
 	const [operationLoading, setOperationLoading] = useState(false);
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
@@ -105,6 +114,16 @@ function SpawnModalContent() {
 	const [modelError, setModelError] = useState<string>();
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [cloudLimitError, setCloudLimitError] = useState<CloudApiError | null>(null);
+	const [managingCloud, setManagingCloud] = useState(false);
+	const [connectingAgents, setConnectingAgents] = useState(false);
+	const [androidSheetVersion, setAndroidSheetVersion] = useState(0);
+	const showCloudLimit = cloudSpawn && Boolean(cloudLimitError) && !reservedWorker?.acceptedId;
+	useEffect(() => {
+		if (!managingCloud && !connectingAgents) return;
+		const listener = BackHandler.addEventListener("hardwareBackPress", () => { setManagingCloud(false); setConnectingAgents(false); return true; });
+		return () => listener.remove();
+	}, [managingCloud, connectingAgents]);
 	const requestRef = useRef<{ payload: string; attachments: readonly SpawnAttachment[]; id: string } | undefined>(undefined);
 
 	const [catalog, setCatalog] = useState<AgentCatalog | null>(null);
@@ -128,6 +147,7 @@ function SpawnModalContent() {
 		previousCloudScope.current = cloudScopeKey;
 		catalogGeneration.current += 1;
 		setReservedWorker(null); requestRef.current = undefined;
+		setCloudLimitError(null); setManagingCloud(false); setConnectingAgents(false); setError(null);
 		if (destinationRef.current?.kind === "cloud") {
 			destinationRef.current = null; setDestination(null); setProjectId(null);
 			setHarness(""); setAgentTouched(false); setModel(""); setModelTouched(false); setPrompt("");
@@ -144,7 +164,7 @@ function SpawnModalContent() {
 			const payload = operation.payload;
 			setPrompt(payload.prompt ?? ""); setHarness(payload.harness); setAgentTouched(true);
 			setModel(payload.model ?? ""); setModelTouched(true);
-			requestRef.current = { payload: spawnRequestFingerprint(cloudScopeKey, `cloud/${destination!.id}`, { ...payload, mode: "chat" }), attachments: attachmentsRef.current, id: operation.key };
+			requestRef.current = { payload: spawnRequestFingerprint(cloudScopeKey, `cloud/${destination!.id}`, { ...payload, mode: payload.interfaceMode ?? "tui" }), attachments: attachmentsRef.current, id: operation.key };
 		}).catch((cause) => { if (!cancelled) setError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled) setOperationLoading(false); });
 		return () => { cancelled = true; };
@@ -205,12 +225,12 @@ function SpawnModalContent() {
 				setLoading(false);
 				return;
 			}
-			void cloudClient.listUserProviderConnections().then((available) => {
+			void Promise.all([cloudClient.listUserProviderConnections(), cloudClient.getCurrentAccount()]).then(([available, account]) => {
 				if (cancelled || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) return;
 				const harnesses = readyHarnesses(available);
 				const agents = harnesses.map(cloudAgentInfo);
 				setCatalog({ supported: agents, installed: agents, authorized: agents });
-				setChatHarnesses(harnesses.filter((harness) => harness !== "opencode"));
+				setChatHarnesses(account.chatHarnesses ?? []);
 				setCatalogError(null);
 			}).catch((cause) => {
 				if (cancelled || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) return;
@@ -292,6 +312,7 @@ function SpawnModalContent() {
 		|| error
 		|| offerTUI
 		|| reservedWorker
+		|| showCloudLimit
 		|| customModelOpen,
 	);
 
@@ -348,6 +369,7 @@ function SpawnModalContent() {
 		catalogGeneration.current += 1;
 		destinationRef.current = next;
 		setDestination(next);
+		setCloudLimitError(null); setManagingCloud(false);
 		const preference = { source: next, projectId: null, ...(next.kind === "cloud" ? { scopeKey: cloudScopeKey } : {}) };
 		setSavedPreference(preference);
 		void saveSpawnPreference(preference);
@@ -381,6 +403,11 @@ function SpawnModalContent() {
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); setCustomModelOpen(false); };
 	const changeProject = (nextProjectId: string | null) => {
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
+		// A project can change while creation is in flight. Retire only that
+		// submission's UI ownership, not the destination's agent-catalog load.
+		projectSelectionGeneration.current += 1;
+		setReservedWorker(null); requestRef.current = undefined;
+		setError(null); setCloudLimitError(null); setOfferTUI(false); setManagingCloud(false);
 		resetModelSource();
 		setProjectDetail(undefined);
 		setProjectDetailLoadedFor(null);
@@ -463,35 +490,47 @@ function SpawnModalContent() {
 		}
 	};
 
-	const openWorker = (session: { id: string; projectId: string }, requested: SourceRef, generation: number) => {
-		if (!mounted.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (requested.kind === "cloud" && !cloudAuth.isCurrentSession())) return;
+	const openWorker = (session: { id: string; projectId: string }, requested: SourceRef, generation: number, projectGeneration = projectSelectionGeneration.current) => {
+		if (!mounted.current || projectGeneration !== projectSelectionGeneration.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (requested.kind === "cloud" && !cloudAuth.isCurrentSession())) return;
 		haptics.success(); backOr(router);
 		InteractionManager.runAfterInteractions(() => {
-			if (!spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (requested.kind === "cloud" && !cloudAuth.isCurrentSession())) return;
+			if (projectGeneration !== projectSelectionGeneration.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (requested.kind === "cloud" && !cloudAuth.isCurrentSession())) return;
 			router.push({ pathname: "/session/[id]", params: { id: session.id, projectId: session.projectId, source: requested.kind, sourceId: requested.id, ...(requested.kind === "cloud" ? { startup: "spawn" } : {}) } });
 			if (requested.kind === "cloud" && cloudScopeKey && requestRef.current) {
 				void clearCloudOperation(cloudScopeKey, `worker-create/${session.projectId}`, requestRef.current.id).catch(() => {});
 			}
 		});
 	};
-	const discardWorkerRetry = () => {
-		if (!reservedWorker || !projectId) return;
+	const prepareNewWorkerRequest = () => {
+		if (!reservedWorker || reservedWorker.acceptedId || !projectId || busy || operationLoading) return;
 		const operation = reservedWorker;
-		Alert.alert("Discard retry record?", "This does not delete a worker. Check existing workers first if the request may have completed.", [
-			{ text: "Keep record", style: "cancel" },
-			{ text: "Discard record", style: "destructive", onPress: () => {
-				void clearCloudOperation(operation.scopeKey, `worker-create/${projectId}`, operation.key).then(() => {
-					if (!mounted.current || !cloudAuth.isCurrentSession()) return;
-					setReservedWorker(null); requestRef.current = undefined; setError(null);
-				}).catch((cause) => { if (mounted.current) setError(userFacingError(cause)); });
+		const ownsDraft = () => mounted.current && cloudAuth.isCurrentSession()
+			&& recoveryContext.current.scope === operation.scopeKey && recoveryContext.current.projectId === projectId;
+		const ownsRecovery = () => ownsDraft() && recoveryContext.current.key === operation.key;
+		Alert.alert("Start a new request?", "The previous request may have created a worker. Starting a separate request could create a duplicate. Your current draft will stay here, and no worker will be stopped or deleted.", [
+			{ text: "Keep previous request", style: "cancel" },
+			{ text: "Use current draft", onPress: () => {
+				if (!ownsRecovery()) return;
+				setOperationLoading(true);
+				void (async () => {
+					try {
+						await releaseUnacceptedOperation(operation.scopeKey, `worker-create/${projectId}`, operation.key);
+						const remaining = await readCloudOperation<CreateSessionInput>(operation.scopeKey, `worker-create/${projectId}`);
+						if (!ownsRecovery()) return;
+						setReservedWorker(remaining); setError(null);
+						if (!remaining) requestRef.current = undefined;
+					} catch { if (ownsRecovery()) setError("Couldn’t prepare a new request. Your draft is still here. Try again."); }
+					finally { if (ownsDraft()) setOperationLoading(false); }
+				})();
 			} },
 		]);
 	};
 	const onSpawn = async () => {
 		if (submitting.current || operationLoading || !mounted.current) return;
-		if (!canSubmitSpawn(destination, projectId, harness, sourceFor) || !destination) return;
+		const saved = cloudSpawn ? reservedWorker?.payload : undefined;
+		if (!canSubmitSpawn(destination, projectId, saved?.harness ?? harness, sourceFor) || !destination) return;
 		if (cloudSpawn && !cloudAuth.isCurrentSession()) return;
-		if (cloudSpawn && (projectDetailLoadedFor !== projectId || modelError)) return;
+		if (cloudSpawn && !saved && (projectDetailLoadedFor !== projectId || modelError)) return;
 		if (reservedWorker?.acceptedId && projectId) { openWorker({ id: reservedWorker.acceptedId, projectId }, destination, catalogGeneration.current); return; }
 		if (pickingAttachments.current) {
 			setAttachmentError("Wait for attachments to finish loading.");
@@ -503,40 +542,75 @@ function SpawnModalContent() {
 		submitting.current = true;
 		const generation = catalogGeneration.current;
 		const requested = destination;
+		const projectGeneration = projectSelectionGeneration.current;
+		const ownsSubmission = () => mounted.current && projectGeneration === projectSelectionGeneration.current
+			&& spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)
+			&& (!cloudSpawn || cloudAuth.isCurrentSession());
 		setBusy(true);
 		setError(null);
+		setCloudLimitError(null);
 		setOfferTUI(false);
+		const cloudMode = saved ? saved.interfaceMode ?? "tui" : mode === "chat" && chatHarnesses.includes(harness) ? "chat" : "tui";
 		try {
 			const request = {
 				projectId: projectId ?? undefined,
-				prompt: prompt.trim() || undefined,
-				harness: harness || undefined,
-				model: cloudSpawn ? displayedModel || undefined : modelOverride(displayedModel, modelTouched),
-				...(cloudSpawn ? { reasoningEffort: reservedWorker ? reservedWorker.payload.reasoningEffort : cloudDefaults.reasoningEffort } : {}),
-				mode,
+				prompt: saved ? saved.prompt || undefined : prompt.trim() || undefined,
+				harness: saved ? saved.harness : harness || undefined,
+				model: saved ? saved.model : cloudSpawn ? displayedModel || undefined : modelOverride(displayedModel, modelTouched),
+				...(cloudSpawn ? { reasoningEffort: saved ? saved.reasoningEffort : cloudDefaults.reasoningEffort } : {}),
+				mode: cloudSpawn ? cloudMode : mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
 			const payload = spawnRequestFingerprint(cloudSpawn ? cloudScopeKey ?? "" : "", `${destination.kind}/${destination.id}`, request);
-			if (reservedWorker && requestRef.current?.payload !== payload) throw new Error("Resolve the previous Cloud request before starting a changed request. Check workers or discard its retry record.");
+			if (reservedWorker && requestRef.current?.payload !== payload) throw new Error("Your earlier task could not be retried. View Cloud sessions before starting a separate request from More.");
 			if (requestRef.current?.payload !== payload || requestRef.current?.attachments !== attachmentsRef.current) {
 				requestRef.current = { payload, attachments: attachmentsRef.current, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
 			}
 			const session = await spawnOn(destination, { ...request, clientRequestId: requestRef.current.id });
-			if (!mounted.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (cloudSpawn && !cloudAuth.isCurrentSession())) return;
+			if (!ownsSubmission()) return;
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
-			openWorker(session, requested, generation);
+			openWorker(session, requested, generation, projectGeneration);
 		} catch (e) {
-			if (!mounted.current || !spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current) || (cloudSpawn && !cloudAuth.isCurrentSession())) return;
+			if (!ownsSubmission()) return;
 			haptics.error();
-			setError(spawnErrorCopy(e, destination.kind));
+			if (cloudSpawn && isCloudSessionLimitError(e)) { Keyboard.dismiss(); setCloudLimitError(e); }
+			else setError(spawnErrorCopy(e, destination.kind));
+			let cloudRequestReleased = false;
 			if (cloudSpawn && cloudScopeKey && projectId) {
-				try { setReservedWorker(await readCloudOperation(cloudScopeKey, `worker-create/${projectId}`)); } catch {}
+				try {
+					const recovery = await readCloudOperation<CreateSessionInput>(cloudScopeKey, `worker-create/${projectId}`);
+					if (!ownsSubmission()) return;
+					setReservedWorker(recovery);
+					cloudRequestReleased = recovery === null;
+				} catch {}
 			}
-			setOfferTUI(!cloudSpawn && mode === "chat" && isChatPreflightError(e));
-		} finally { submitting.current = false; if (mounted.current && spawnRequestIsCurrent(generation, catalogGeneration.current, requested, destinationRef.current)) setBusy(false); }
+			if (!ownsSubmission()) return;
+			setOfferTUI(cloudSpawn
+				? cloudRequestReleased && cloudMode === "chat" && e instanceof CloudApiError && e.status === 409 && e.code === "SESSION_MODE_UNSUPPORTED"
+				: mode === "chat" && isChatPreflightError(e));
+		} finally {
+			// Submission state belongs to this operation, not the currently
+			// selected destination. A late response must not strand the new draft.
+			submitting.current = false;
+			if (mounted.current) setBusy(false);
+		}
 	};
 
-	const content = (
+	const openCloudManager = () => {
+		if (!cloudSpawn || !cloudOrgId || !cloudScopeKey || !cloudAuth.isCurrentSession()) return;
+		Keyboard.dismiss(); setManagingCloud(true);
+	};
+	const content = connectingAgents && cloudSpawn && cloudOrgId && cloudScopeKey ? <View style={[styles.management, Platform.OS === "ios" && styles.iosManagement]}><CloudAgentConnections
+		inSheet
+		client={cloudClient} orgId={cloudOrgId} ownerKey={JSON.stringify([cloudAuth.baseUrl?.replace(/\/+$/, ""), cloudAuth.accountId, cloudAuth.sessionEpoch])}
+		isCurrent={cloudAuth.isCurrentSession} onBack={() => setConnectingAgents(false)}
+		onChanged={() => { if (cloudAuth.isCurrentSession()) setReloadKey((key) => key + 1); }}
+	/></View> : managingCloud && cloudSpawn && cloudOrgId && cloudScopeKey ? <View style={[styles.management, Platform.OS === "ios" && styles.iosManagement]}><CloudSessionManager
+		key={cloudScopeKey} client={cloudClient} orgId={cloudOrgId} scopeKey={cloudScopeKey} isCurrent={cloudAuth.isCurrentSession}
+		projectNames={Object.fromEntries(scopedBoard.projects.filter((entry) => entry.source.kind === "cloud" && entry.source.id === cloudOrgId).map((entry) => [entry.value.id, entry.value.name]))}
+		onBack={() => setManagingCloud(false)}
+		onChanged={() => { void refreshSource({ kind: "cloud", id: cloudOrgId }).catch(() => {}); }}
+	/></View> : (
 		<View style={[
 			styles.content,
 			Platform.OS === "ios" && styles.iosContent,
@@ -572,12 +646,8 @@ function SpawnModalContent() {
 
 		{hasComposerMessage ? <View style={styles.messages}>
 					{cloudSpawn && (catalogError || modelError) ? <Button title="Retry setup" variant="ghost" onPress={() => { setModelError(undefined); setReloadKey((key) => key + 1); }} /> : null}
-					{reservedWorker ? <View>
-						<Text style={styles.warn}>{reservedWorker.acceptedId ? "Worker created. Open it without starting another." : "A previous request may have completed. Retry with the same request or check workers."}</Text>
-						{reservedWorker.acceptedId && destination && projectId ? <Button title="Open worker" onPress={() => openWorker({ id: reservedWorker.acceptedId!, projectId }, destination, catalogGeneration.current)} /> : null}
-						<Button title="Check workers" variant="ghost" onPress={() => backOr(router, "/workers")} />
-						<Button title="Discard retry record" variant="ghost" onPress={discardWorkerRetry} />
-					</View> : null}
+					{showCloudLimit && cloudLimitError ? <CloudSessionLimitNotice error={cloudLimitError} busy={busy || operationLoading} onRetry={() => { void onSpawn(); }} /> : null}
+					{reservedWorker && !showCloudLimit ? <CloudSpawnRecoveryNotice accepted={!!reservedWorker.acceptedId} busy={busy || operationLoading} problem={error ?? undefined} onViewSessions={openCloudManager} onNewRequest={prepareNewWorkerRequest} /> : null}
 					{customModelOpen ? <View>
 						<Text style={styles.warn}>Enter a model ID supported by this Cloud agent.</Text>
 						<TextInput {...textSelectionColors(t)} accessibilityLabel="Custom model ID" value={customModel} onChangeText={setCustomModel} autoCapitalize="none" autoCorrect={false} returnKeyType="done" style={[styles.customModel, { color: t.textPrimary, backgroundColor: t.bgElevated }]} />
@@ -588,7 +658,7 @@ function SpawnModalContent() {
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
 					{Platform.OS === "android" ? voiceFeedback : null}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
-					{error ? <Text style={styles.error}>{error}</Text> : null}
+					{error && !reservedWorker ? <Text style={styles.error}>{error}</Text> : null}
 					{offerTUI ? <Button title="Create as Terminal UI instead" variant="ghost" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
 				</View> : null}
 
@@ -609,6 +679,7 @@ function SpawnModalContent() {
 				    the selectors and the button sit directly above it. */}
 				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
 				{Platform.OS === "ios" ? voiceFeedback : null}
+				{cloudSpawn ? <Button title="Connect coding agents" variant="text" disabled={busy || !cloudAuth.isCurrentSession()} onPress={() => { Keyboard.dismiss(); setConnectingAgents(true); }} /> : null}
 				<SpawnComposerControls
 					destinations={destinations}
 					destination={destination}
@@ -627,9 +698,12 @@ function SpawnModalContent() {
 					showAttachments={!cloudSpawn}
 					showModels={true}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
-					onSpawn={() => { void onSpawn(); }}
+					onSpawn={showCloudLimit ? openCloudManager : reservedWorker?.acceptedId && destination && projectId
+						? () => openWorker({ id: reservedWorker.acceptedId!, projectId }, destination, catalogGeneration.current)
+						: () => { void onSpawn(); }}
+					submitLabel={showCloudLimit ? "Manage Cloud sessions" : reservedWorker ? reservedWorker.acceptedId ? "Open worker" : "Retry" : undefined}
 					busy={busy}
-					disabled={!canSubmitSpawn(destination, projectId, harness, sourceFor) || busy || modelLoading || loading || listening || voice.state === "transcribing" || operationLoading || (cloudSpawn && (projectDetailLoadedFor !== projectId || !!modelError))}
+					disabled={showCloudLimit || reservedWorker ? busy || operationLoading || !cloudOrgId || !cloudScopeKey || !cloudAuth.isCurrentSession() : !canSubmitSpawn(destination, projectId, harness, sourceFor) || busy || modelLoading || loading || listening || voice.state === "transcribing" || operationLoading || (cloudSpawn && (projectDetailLoadedFor !== projectId || !!modelError))}
 				/>
 				</KeyboardStickyView>
 		</View>
@@ -639,11 +713,19 @@ function SpawnModalContent() {
 		return (
 			<View style={styles.androidModalRoot}>
 				<BottomSheet
+					key={androidSheetVersion}
 					index={0}
 					enablePanDownToClose
 					enableDynamicSizing
 					backgroundStyle={{ backgroundColor: t.bgBase }}
-					onClose={() => backOr(router)}
+					onClose={() => {
+						if (managingCloud || connectingAgents) {
+							setManagingCloud(false); setConnectingAgents(false);
+							// Android's native sheet handles Back itself. Reopen the
+							// draft after that dismissal instead of closing its route.
+							setAndroidSheetVersion((version) => version + 1);
+						} else backOr(router);
+					}}
 				>
 					<BottomSheetView style={styles.androidSheet}>
 						{content}
@@ -664,7 +746,7 @@ function spawnErrorCopy(e: unknown, environment: "local" | "cloud" | null): stri
 	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
 		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
-	if (environment === "cloud") return cloudRequestErrorCopy(e);
+	if (environment === "cloud") return cloudRequestErrorCopy(e, { includeReference: false });
 	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 
@@ -686,6 +768,8 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		content: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm, gap: space.sm },
+		management: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm },
+		iosManagement: { flex: 1, minHeight: 0, paddingTop: space.xxxl },
 		iosContent: { paddingTop: space.xxxl },
 		androidModalRoot: { flex: 1, backgroundColor: "transparent" },
 		androidSheet: {

@@ -1,14 +1,16 @@
 import type { DashboardPR, DashboardSession, PRReviewState, ReviewRun, SessionPRSummary, SessionReviews } from "./api";
+import type { SourceRef } from "./environment/scopedBoard";
 
-export function reviewRouteForSession(session: DashboardSession, hostId?: string) {
+export function reviewRouteForSession(session: DashboardSession, hostId?: string | SourceRef, scopeKey?: string) {
 	const pr = session.prs?.[0] ?? session.pr;
-	return pr ? reviewRouteForPR(session.id, pr, hostId) : undefined;
+	return pr ? reviewRouteForPR(session.id, pr, hostId, scopeKey) : undefined;
 }
 
-export function reviewRouteForPR(sessionId: string, pr: Pick<DashboardPR, "number" | "url">, hostId?: string) {
+export function reviewRouteForPR(sessionId: string, pr: Pick<DashboardPR, "number" | "url">, hostId?: string | SourceRef, scopeKey?: string) {
+	const owner = typeof hostId === "object" ? { source: hostId.kind, sourceId: hostId.id, ...(hostId.kind === "local" ? { hostId: hostId.id } : {}), ...(scopeKey ? { scopeKey } : {}) } : hostId ? { hostId } : {};
 	return {
 		pathname: "/review/[sessionId]" as const,
-		params: { sessionId, prNumber: String(pr.number), prUrl: pr.url, ...(hostId ? { hostId } : {}) },
+		params: { sessionId, prNumber: String(pr.number), prUrl: pr.url, ...owner },
 	};
 }
 
@@ -26,8 +28,14 @@ export function reviewForPullRequest(
 	if (prUrl) {
 		const exact = reviews.find((review) => review.prUrl === prUrl);
 		if (exact) return exact;
+		const identity = pullRequestIdentity(prUrl);
+		return identity ? reviews.find((review) => {
+			const candidate = pullRequestIdentity(review.prUrl);
+			return candidate?.repo === identity.repo && candidate.number === identity.number;
+		}) : undefined;
 	}
-	return prNumber ? reviews.find((review) => review.prNumber === prNumber) : undefined;
+	const candidates = prNumber ? reviews.filter((review) => review.prNumber === prNumber) : [];
+	return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 export function pullRequestSummaryForURL(

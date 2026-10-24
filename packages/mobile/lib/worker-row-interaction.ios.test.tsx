@@ -3,11 +3,12 @@ import { createElement, forwardRef, useImperativeHandle } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
 
+const closeSwipe = vi.hoisted(() => vi.fn());
 vi.mock("react-native", () => ({ View: "View" }));
 vi.mock("react-native-gesture-handler", () => ({}));
 vi.mock("react-native-gesture-handler/Swipeable", () => ({
 	default: forwardRef(function NativeSwipeBoundary(props: Record<string, any>, ref) {
-		useImperativeHandle(ref, () => ({ close: () => {} }));
+		useImperativeHandle(ref, () => ({ close: closeSwipe }));
 		return createElement("SwipeBoundary", props, props.renderRightActions(), props.children);
 	}),
 }));
@@ -66,4 +67,17 @@ it("releases native controls after a short swipe snaps closed without opening", 
 	expect(view.root.findAllByType(WorkerRowActions)).toHaveLength(1);
 	act(() => boundary().props.onSwipeableClose());
 	expect(view.root.findAllByType(WorkerRowActions)).toHaveLength(0);
+});
+
+it("closes an open swipe rail before dispatching a long-press menu action", () => {
+	closeSwipe.mockClear();
+	const onAction = vi.fn();
+	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+	act(() => { renderer = create(<WorkerRowInteraction {...props} onAction={onAction} />); });
+	const boundary = renderer!.root.findByType("SwipeBoundary" as any);
+	act(() => boundary.props.onSwipeableWillOpen());
+	act(() => renderer!.root.findByType("ContextMenu" as any).props.onAction("rename"));
+	expect(closeSwipe).toHaveBeenCalledOnce();
+	expect(onAction).toHaveBeenCalledExactlyOnceWith("rename");
+	expect(closeSwipe.mock.invocationCallOrder[0]).toBeLessThan(onAction.mock.invocationCallOrder[0]);
 });

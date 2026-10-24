@@ -101,6 +101,7 @@ describe("SpawnComposerControls", () => {
 			disabled: false,
 			showAttachments: false,
 			showModels: true,
+			submitLabel: "Manage Cloud sessions",
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];
 
 		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });
@@ -115,6 +116,10 @@ describe("SpawnComposerControls", () => {
 		expect(destination.findAll((node) => String(node.type) === "Feather")[0].props.name).toBe("cloud");
 		expect(labels).not.toContain("Attach a file");
 		expect(labels).toContain("Automatic");
+		const manage = renderer!.root.findAll((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Manage Cloud sessions")[0];
+		expect(manage.findAll((node) => String(node.type) === "Text").map((node) => node.props.children)).toContain("Manage Cloud sessions");
+		await act(async () => manage.props.onPress());
+		expect(props.onSpawn).toHaveBeenCalledOnce();
 	});
 });
 

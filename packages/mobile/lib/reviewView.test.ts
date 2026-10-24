@@ -15,6 +15,11 @@ const state = (over: Partial<PRReviewState> = {}): PRReviewState => ({
 });
 
 describe("mobile review presentation", () => {
+	it("never selects another repository when the URL disagrees or a number is ambiguous", () => {
+		const reviews = [state(), state({ prUrl: "https://github.com/other/repo/pull/12" })];
+		expect(reviewForPullRequest(reviews, "https://github.com/missing/repo/pull/12", 12)).toBeUndefined();
+		expect(reviewForPullRequest(reviews, undefined, 12)).toBeUndefined();
+	});
 	it("offers the first open PR in a session and skips closed or merged PRs", () => {
 		const merged = { number: 10, url: "merged", state: "merged" };
 		const open = { number: 12, url: "open", state: "open" };

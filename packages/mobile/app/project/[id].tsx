@@ -97,7 +97,7 @@ function ProjectScreenContent() {
 				}
 				right={<ProjectMachineIndicator source={source} hosts={hostStates} />}
 			/>
-			{source && status && <StaleBanner sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />}
+			{source && status && <StaleBanner sourceKey={sourceKey(source)} sourceLabel={source.kind === "cloud" ? "Cloud" : "Local"} sourceStatus={status} onRetry={onRefresh} />}
 
 			{route.kind === "ambiguous" || route.kind === "invalid" || route.kind === "missing" ? (
 				<EmptyState icon="folder" title="Choose a project from Projects" message="This link cannot safely identify its source."
@@ -129,6 +129,7 @@ function ProjectScreenContent() {
 					ListHeaderComponent={
 						<ProjectPageHeader
 							row={row}
+							source={source}
 							stats={stats}
 							busy={source ? busyProjects.has(resourceKey(source, row.project.id)) : false}
 							onPress={source && configured ? () => openOrchestrator({ source, value: row }) : undefined}

@@ -35,7 +35,7 @@ describe("Cloud project orchestrator", () => {
 		expect(createSession).not.toHaveBeenCalled();
 	});
 	it("applies model and effort only to the matching orchestrator agent", async () => {
-		const { client, createSession } = fakeClient({ orchestrator: { agent: "claude-code", agentConfig: { model: "configured", reasoningEffort: "high" } } });
+		const { client, createSession } = fakeClient({ orchestrator: { agent: "claude-code", agentConfig: { model: "configured", effort: "high" } } });
 		await spawnCloudOrchestrator(client, "org-1", "project-1", "request-1");
 		expect(createSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "configured", reasoningEffort: "high" }), { idempotencyKey: "request-1" });
 	});

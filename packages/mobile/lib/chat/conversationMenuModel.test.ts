@@ -4,6 +4,10 @@ import { conversationMenuSections, normalizeConversationTitle } from "./conversa
 describe("conversation overflow menu", () => {
 	it("groups every supported session action by user intent", () => {
 		const sections = conversationMenuSections({
+			canOpenFiles: true,
+			canOpenShell: true,
+			canPreview: true,
+			canPullRequests: true,
 			canRename: true,
 			canPin: true,
 			canCompact: true,
@@ -22,6 +26,10 @@ describe("conversation overflow menu", () => {
 
 	it("omits capability-gated maintenance actions without disturbing the core menu", () => {
 		const sections = conversationMenuSections({
+			canOpenFiles: true,
+			canOpenShell: true,
+			canPreview: true,
+			canPullRequests: true,
 			canRename: false,
 			canPin: false,
 			canCompact: false,
@@ -34,6 +42,28 @@ describe("conversation overflow menu", () => {
 		// An orchestrator has no delete here, so the section goes rather than
 		// rendering an empty group.
 		expect(sections.some((section) => section.title === "Session")).toBe(false);
+	});
+
+	it.each([
+		["worker", true, ["shell"]],
+		["orchestrator", false, []],
+	] as const)("offers only supported workspace actions for a Cloud %s", (_kind, canOpenShell, workspaceActions) => {
+		const sections = conversationMenuSections({
+			canOpenFiles: false,
+			canOpenShell,
+			canPreview: false,
+			canPullRequests: false,
+			canRename: false,
+			canPin: false,
+			canCompact: false,
+			canReloadMcp: false,
+			canDelete: false,
+		});
+
+		expect(sections.find((section) => section.title === "Workspace")?.actions ?? []).toEqual(workspaceActions);
+		expect(sections.find((section) => section.title === "Conversation")?.actions).toEqual(["map", "refresh", "settings"]);
+		expect(sections.find((section) => section.title === "Agent")?.actions).toEqual(["terminal_ui"]);
+		expect(sections.every((section) => section.actions.length > 0)).toBe(true);
 	});
 });
 

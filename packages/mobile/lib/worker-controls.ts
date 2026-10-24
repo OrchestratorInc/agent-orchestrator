@@ -8,15 +8,18 @@ export const ALL_WORKER_ENVIRONMENTS = "all";
 
 export const boardWorkerKey = (entry: Scoped<DashboardSession>): string => resourceKey(entry.source, entry.value.id);
 
-export function scopedWorkerProjectOptions(projects: readonly Scoped<ProjectInfo>[], source: SourceRef | null) {
+export function scopedWorkerProjectOptions(projects: readonly Scoped<ProjectInfo>[], source: SourceRef | null, environments: readonly WorkerEnvironment[] = []) {
 	return [
 		{ id: ALL_WORKER_PROJECTS, label: "All projects" },
 		...projects
 			.filter((entry) => !source || sourceKey(entry.source) === sourceKey(source))
-			.map((entry) => ({
-				id: resourceKey(entry.source, entry.value.id),
-				label: `${entry.value.name} · ${entry.source.kind === "cloud" ? "Cloud" : "Local"}`,
-			})),
+			.map((entry) => {
+				const owner = environments.find((environment) => environment.source && sourceKey(environment.source) === sourceKey(entry.source));
+				return {
+					id: resourceKey(entry.source, entry.value.id),
+					label: `${entry.value.name} · ${entry.source.kind === "cloud" ? "Cloud" : owner?.name.trim() || "Local"}`,
+				};
+			}),
 	];
 }
 

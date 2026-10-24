@@ -22,6 +22,19 @@ import {
 } from "./sessionRoute";
 
 describe("source-qualified session routes", () => {
+	it("accepts a reviewer terminal only with its explicit current Cloud account scope", () => {
+		const params = { id: "session-1", view: "reviewer", terminalId: "00000000-0000-0000-0000-000000000091", source: "cloud", sourceId: "org-1", scopeKey: "account:org-1" };
+		expect(resolveSessionRouteSource(params, [], "account:org-1")).toEqual({ kind: "found", source: { kind: "cloud", id: "org-1" } });
+		for (const invalid of [
+			{ terminalId: undefined }, { terminalId: "" }, { terminalId: "worker" }, { terminalId: [params.terminalId] },
+			{ scopeKey: undefined }, { scopeKey: "" }, { scopeKey: "another-account:org-1" }, { scopeKey: [params.scopeKey] },
+			{ source: undefined, sourceId: undefined }, { source: "local", sourceId: "desktop-1" }, { hostId: "desktop-1" },
+			{ view: undefined }, { view: "terminal" }, { view: ["reviewer"] }, { id: "../session-1" },
+		]) {
+			expect(resolveSessionRouteSource({ ...params, ...invalid }, [], "account:org-1")).toEqual({ kind: "invalid" });
+		}
+		expect(resolveSessionRouteSource(params, [], undefined)).toEqual({ kind: "invalid" });
+	});
 	it("shows an absent Cloud session only after its list loaded, without waiting forever", () => {
 		expect(cloudSessionListState({ listed: false, loading: true, error: null })).toBe("loading");
 		expect(cloudSessionListState({ listed: false, loading: false, error: "timeout" })).toBe("failed");
@@ -59,6 +72,15 @@ describe("source-qualified session routes", () => {
 });
 
 describe("sessionDisplaySurface", () => {
+	it.each(["chat", "tui"] as const)("keeps a Cloud reviewer separate from the %s worker interface", (sessionMode) => {
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode, requestedView: "reviewer" })).toBe("cloud-reviewer");
+	});
+	it.each(["chat", "tui"] as const)("opens a separate Cloud workspace shell without changing %s mode", (sessionMode) => {
+		expect(sessionDisplaySurface({ environment: "cloud", sessionMode, requestedView: "shell" })).toBe("cloud-shell");
+	});
+	it("does not interpret a Cloud shell link as a local controller switch", () => {
+		expect(sessionDisplaySurface({ environment: "local", sessionMode: "chat", requestedView: "shell" })).toBe("chat");
+	});
 	it("opens a Cloud terminal only for an explicit Cloud terminal view", () => {
 		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "chat", requestedView: "terminal" })).toBe("cloud-terminal");
 		expect(sessionDisplaySurface({ environment: "cloud", sessionMode: "chat", requestedView: undefined })).toBe("chat");

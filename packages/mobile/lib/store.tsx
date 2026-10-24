@@ -44,7 +44,7 @@ import {
 } from "./environment/boardSelection";
 import { resolveCloudSource, resolveLocalSource } from "./environment/resolve";
 import { shouldPollCloudSource, shouldPollLocalSource } from "./environment/shouldPoll";
-import { createScopedBoardComposer, type ScopedBoard, type SourceRef } from "./environment/scopedBoard";
+import { createScopedBoardComposer, sourceKey, type ScopedBoard, type SourceRef } from "./environment/scopedBoard";
 import { localConfigForSource } from "./environment/sourceResolution";
 import { createLocalSessionSource } from "./environment/local";
 import type { EnvironmentKind, SessionSource } from "./environment/types";
@@ -184,6 +184,8 @@ type AppState = {
 	 * Read it through useStaleness, which owns the clock.
 	 */
 	getLastSyncAt: () => number;
+	/** Last accepted success for an exact source key, independent of the active view. */
+	getSourceLastSyncAt: (key: string) => number;
 	// actions
 	/**
 	 * Races the selected machine's endpoints. Null means none passed the host
@@ -349,6 +351,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const cloudRequestGenerationRef = useRef(0);
 	const activeEnvironmentRef = useRef<EnvironmentKind | null>(environment);
 	const cloudBoardRequestRef = useRef<CloudBoardRequest<SessionSource> | undefined>(undefined);
+	const cloudReadRef = useRef<{ source: SessionSource; generation: number; sequence?: number; promise: Promise<void> } | undefined>(undefined);
+	const cloudLastSyncAtRef = useRef<{ source: SessionSource | undefined; at: number }>({ source: undefined, at: 0 });
 	const localSource = useMemo(() => resolveLocalSource(config), [config]);
 	const cloudSource = useMemo(() => resolveCloudSource({
 		client: cloudAuth.client,
@@ -567,6 +571,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				void reloadConfig();
 			}
 			setAppActive(active);
+			if (!active && cloudBoardRequestRef.current) {
+				cloudBoardRequestRef.current.sequence = (cloudBoardRequestRef.current.sequence ?? 0) + 1;
+			}
 		});
 		return () => sub.remove();
 	}, [reloadConfig]);
@@ -591,7 +598,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			primaryLoadRef.current?.controller.abort();
 			cfgRef.current = incoming.config;
 			const outgoing = primarySnapshotRef.current;
-			if (outgoing) otherHosts.adoptPrimary(outgoing);
+			if (outgoing) otherHosts.adoptPrimary({ ...outgoing, lastSyncAt: lastSyncAtRef.current });
 			promotedConfigRef.current = incoming.config;
 			setSelectedHostId(id);
 			setSelectedHostName(incoming.name);
@@ -731,19 +738,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			cloudSource
 				? { source: cloudSource, generation }
 				: undefined;
+		cloudLastSyncAtRef.current = { source: cloudSource, at: 0 };
 		setCloudBoardOwner(undefined);
 		setCloudBoard(cloudSource ? { ...EMPTY_BOARD, loading: true } : EMPTY_BOARD);
 	}, [cloudSource]);
 
-	const fetchCloudBoard = useCallback((): Promise<void> =>
-		dispatchCurrentCloudBoardRequest(
+	const fetchCloudBoard = useCallback((background = false): Promise<void> => {
+		const request = cloudBoardRequestRef.current;
+		if (!mountedRef.current || !pollActiveRef.current || !request) return Promise.resolve();
+		const pending = cloudReadRef.current;
+		if (background && pending?.source === request.source && pending.generation === request.generation && pending.sequence === request.sequence) return pending.promise;
+		const promise = dispatchCurrentCloudBoardRequest(
 			() => cloudBoardRequestRef.current,
 			async ({ source, generation, sequence }) => {
 				setCloudBoard((current) => ({ ...current, loading: true, error: null }));
 				try {
 					const board = await loadSessionSourceBoard(source);
+					if (!mountedRef.current || !pollActiveRef.current) return;
 					if (cloudBoardRequestRef.current?.generation === generation &&
-						cloudBoardRequestRef.current?.sequence === sequence) setCloudBoardOwner(source);
+						cloudBoardRequestRef.current?.sequence === sequence) {
+						cloudLastSyncAtRef.current = { source, at: Date.now() };
+						setCloudBoardOwner(source);
+					}
 					setCloudBoard((current) =>
 						publishCloudBoardResult({
 							current,
@@ -755,6 +771,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 						}) ?? current,
 					);
 				} catch (cause) {
+					if (!mountedRef.current || !pollActiveRef.current) return;
 					const message = cause instanceof Error ? cause.message : "Failed to load";
 					setCloudBoard((current) =>
 						publishCloudBoardResult({
@@ -768,7 +785,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					);
 				}
 			},
-		), []);
+		);
+		const read = { source: request.source, generation: request.generation, sequence: request.sequence, promise };
+		cloudReadRef.current = read;
+		return promise.finally(() => { if (cloudReadRef.current === read) cloudReadRef.current = undefined; });
+	}, []);
+	const refreshCloudBoard = useCallback(async (): Promise<void> => {
+		if (!mountedRef.current || !pollActiveRef.current) return;
+		await Promise.all([
+			fetchCloudBoard(),
+			// A board retry must also recover the workspace error it displays.
+			// Keep normal polling board-only, rather than polling /me as well.
+			...(cloudAuth.orgError ? [cloudAuth.retryOrgResolution()] : []),
+		]);
+	}, [fetchCloudBoard, cloudAuth.orgError, cloudAuth.retryOrgResolution]);
 
 	const cloudPollMs = cloudBoardPollInterval([
 		...cloudBoard.sessions,
@@ -777,9 +807,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	useEffect(() => {
 		if (!shouldPollCloudSource({ signedIn: cloudAuth.signedIn === true, orgId: cloudAuth.orgId, appActive })) return;
-		void fetchCloudBoard();
-		const poll = setInterval(() => void fetchCloudBoard(), cloudPollMs);
-		return () => clearInterval(poll);
+		let stopped = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const poll = async () => {
+			await fetchCloudBoard(true);
+			// Slow reads must finish before the next background read supersedes
+			// them. Explicit mutation refreshes still keep their sequence fence.
+			if (!stopped) timer = setTimeout(() => void poll(), cloudPollMs);
+		};
+		void poll();
+		return () => { stopped = true; clearTimeout(timer); };
 	}, [appActive, cloudPollMs, cloudAuth.signedIn, cloudAuth.orgId, cloudSource, fetchCloudBoard]);
 
 	// fetchAll returns false when it hit an auth failure (missing/wrong password
@@ -1076,6 +1113,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		...hostStates.map((host) => ({ kind: "local" as const, id: host.hostId })),
 		...(cloudOrgId && cloudSource ? [{ kind: "cloud" as const, id: cloudOrgId }] : []),
 	], [hostStates, cloudOrgId, cloudSource]);
+	// Keep clocks out of context state: unchanged successful polls should not
+	// invalidate every board row. Only each banner subscribes to elapsed time.
+	const sourceClockScopeRef = useRef({ hostStates, selectedHostId, cloudOrgId, cloudSource });
+	useLayoutEffect(() => {
+		sourceClockScopeRef.current = { hostStates, selectedHostId, cloudOrgId, cloudSource };
+	}, [hostStates, selectedHostId, cloudOrgId, cloudSource]);
 	// Published after commit, never during render: an interrupted or replayed
 	// render must not hand switchHost a snapshot that never reached the screen.
 	// A layout effect runs before any user event can call switchHost.
@@ -1218,11 +1261,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [requireConfig]);
 	const refresh = useCallback(async () => {
 		if (activeEnvironmentRef.current === "cloud") {
-			await fetchCloudBoard();
+			await refreshCloudBoard();
 			return;
 		}
 		await fetchAll(true);
-	}, [fetchAll, fetchCloudBoard]);
+	}, [fetchAll, refreshCloudBoard]);
 	const localSourceCache = useRef(new Map<string, { config: ServerConfig; source: SessionSource }>());
 	const sourceFor = useCallback((ref: SourceRef): SessionSource | undefined => {
 		if (ref.kind === "local") {
@@ -1239,14 +1282,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const refreshSource = useCallback(async (ref: SourceRef): Promise<void> => {
 		if (!sourceFor(ref)) throw new Error("This destination is no longer available.");
 		if (ref.kind === "local") await refreshHost(ref.id);
-		else await fetchCloudBoard();
-	}, [sourceFor, refreshHost, fetchCloudBoard]);
+		else await refreshCloudBoard();
+	}, [sourceFor, refreshHost, refreshCloudBoard]);
 	const refreshAll = useCallback(async (): Promise<void> => {
 		await Promise.allSettled([
 			...hostStates.map((host) => refreshHost(host.hostId)),
-			...(cloudSource ? [fetchCloudBoard()] : []),
+			...(cloudSource ? [refreshCloudBoard()] : []),
 		]);
-	}, [hostStates, refreshHost, cloudSource, fetchCloudBoard]);
+	}, [hostStates, refreshHost, cloudSource, refreshCloudBoard]);
 	const assertLocalSource = useCallback((ref: SourceRef): ServerConfig => {
 		const c = localConfigForSource(ref, configForHost);
 		if (!c || !isConfigured(c)) throw new Error("This paired desktop is no longer available.");
@@ -1315,6 +1358,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Stable for the life of the provider, which is what lets it sit in the memo's
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
+	const getSourceLastSyncAt = useCallback((key: string) => {
+		const scope = sourceClockScopeRef.current;
+		if (scope.cloudOrgId && key === sourceKey({ kind: "cloud", id: scope.cloudOrgId })) {
+			const sync = cloudLastSyncAtRef.current;
+			return sync.source === scope.cloudSource ? sync.at : 0;
+		}
+		const host = scope.hostStates.find((host) => key === sourceKey({ kind: "local", id: host.hostId }));
+		if (!host) return 0;
+		return host.hostId === scope.selectedHostId ? lastSyncAtRef.current : host.lastSyncAt;
+	}, []);
 
 	const value = useMemo<AppState>(
 		() => ({
@@ -1360,6 +1413,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			errorStatus: cloudEnvironment ? null : errorStatus,
 			unreachable: cloudEnvironment ? false : isDesktopUnreachable({ connection, error, errorStatus }),
 			getLastSyncAt: cloudEnvironment ? () => 0 : getLastSyncAt,
+			getSourceLastSyncAt,
 			reloadConfig,
 			switchHost,
 			refresh,
@@ -1422,6 +1476,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			activeError,
 			errorStatus,
 			getLastSyncAt,
+			getSourceLastSyncAt,
 			reloadConfig,
 			switchHost,
 			refresh,

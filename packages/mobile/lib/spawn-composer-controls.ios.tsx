@@ -62,6 +62,7 @@ export function SpawnComposerControls({
 	showModels = true,
 	voice,
 	onSpawn,
+	submitLabel = "Start task",
 	busy,
 	disabled,
 }: SpawnComposerControlsProps) {
@@ -219,7 +220,7 @@ export function SpawnComposerControls({
 
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={busy ? "Starting task" : "Start task"}
+				accessibilityLabel={busy ? "Starting task" : submitLabel}
 				accessibilityState={{ disabled }}
 				testID="spawn-submit"
 				disabled={disabled}
@@ -231,7 +232,7 @@ export function SpawnComposerControls({
 				]}
 			>
 				<RNText style={[styles.spawnLabel, { color: disabled ? t.textFaint : t.onAccent }]}>
-					{busy ? "Starting…" : "Start task"}
+					{busy ? "Starting…" : submitLabel}
 				</RNText>
 			</Pressable>
 		</View>

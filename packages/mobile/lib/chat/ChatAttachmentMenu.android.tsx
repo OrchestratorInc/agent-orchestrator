@@ -1,6 +1,6 @@
 import { Feather } from "../icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../haptics";
@@ -10,11 +10,13 @@ import { iconSize, radius, space, type } from "../tokens";
 
 export function ChatAttachmentMenu({
 	disabled,
+	canAttachPhoto,
 	canAttachFile,
 	onChoosePhoto,
 	onChooseFile,
 }: {
 	disabled: boolean;
+	canAttachPhoto: boolean;
 	canAttachFile: boolean;
 	onChoosePhoto(): void;
 	onChooseFile(): void;
@@ -23,12 +25,22 @@ export function ChatAttachmentMenu({
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
 	const [open, setOpen] = useState(false);
+	const permissions = useRef({ disabled, canAttachPhoto, canAttachFile, onChoosePhoto, onChooseFile });
+	permissions.current = { disabled, canAttachPhoto, canAttachFile, onChoosePhoto, onChooseFile };
 
-	const choose = (action: () => void) => {
+	const choose = (kind: "photo" | "file") => {
+		const current = permissions.current;
+		if (current.disabled || !(kind === "photo" ? current.canAttachPhoto : current.canAttachFile)) return;
 		haptics.tap();
 		setOpen(false);
-		setTimeout(action, 180);
+		setTimeout(() => {
+			const live = permissions.current;
+			if (live.disabled) return;
+			if (kind === "photo" && live.canAttachPhoto) live.onChoosePhoto();
+			if (kind === "file" && live.canAttachFile) live.onChooseFile();
+		}, 180);
 	};
+	if (!canAttachPhoto && !canAttachFile) return null;
 
 	return (
 		<>
@@ -39,6 +51,7 @@ export function ChatAttachmentMenu({
 				disabled={disabled}
 				android_ripple={{ color: t.accentTint, borderless: true, radius: 20 }}
 				onPress={() => {
+					if (disabled) return;
 					haptics.tap();
 					setOpen(true);
 				}}
@@ -65,8 +78,8 @@ export function ChatAttachmentMenu({
 						</Pressable>
 					</View>
 					<View style={styles.choices}>
-						<AttachmentChoice icon="image" label="Choose photo" onPress={() => choose(onChoosePhoto)} />
-						{canAttachFile ? <AttachmentChoice icon="file-text" label="Choose file" onPress={() => choose(onChooseFile)} bordered /> : null}
+						{canAttachPhoto ? <AttachmentChoice icon="image" label="Choose photo" onPress={() => choose("photo")} /> : null}
+						{canAttachFile ? <AttachmentChoice icon="file-text" label="Choose file" onPress={() => choose("file")} bordered={canAttachPhoto} /> : null}
 					</View>
 				</BottomSheetView>
 			</BottomSheet>

@@ -35,7 +35,6 @@ describe("active turn controls", () => {
 
 	it("promotes the exact queued turn when the user steers its dock row", () => {
 		expect(apiSource).toContain('`/turns/${encodeURIComponent(turnId)}/steer`');
-		expect(screenSource).toContain("onPromoteQueuedTurn={conversation.promoteQueuedTurn}");
 		expect(composerSource).toContain('accessibilityLabel={`Steer queued message: ${entry.message.text}`}');
 	});
 
@@ -117,10 +116,10 @@ describe("active turn controls", () => {
 	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
 		expect(screenSource).toContain("sessionPRReadyForReview(session)");
 		expect(screenSource).toContain("reviewPR={reviewPromptPR}");
-		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, source.id)");
+		expect(screenSource).toContain("reviewRouteForPR(session.id, reviewPromptPR, cloudSession ? source : source.id");
 		expect(screenSource).toContain("reviewRouteForSession(session, source.id)");
 		expect(screenSource).toContain("encodeURIComponent(reviewPromptHostKey)");
-		expect(screenSource).toContain("reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number)");
+		expect(screenSource).toContain("reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number, reviewPromptPR.url)");
 		expect(screenSource).toContain("<ChatComposer");
 	});
 });

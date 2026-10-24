@@ -64,6 +64,7 @@ export default function SettingsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const cloudAuth = useCloudAuth();
 	const { config, localConfigured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, loading: appLoading, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
@@ -126,6 +127,7 @@ export default function SettingsScreen() {
 				<SettingsSection title="Cloud account" footer="One account for Cloud projects and synced machines. Paired machines stay connected when you sign out.">
 					<SettingsCard>
 						<CloudAccountRow />
+						{cloudAuth.signedIn ? <CardRow icon="cpu" label="Cloud coding agents" onPress={() => router.push("/settings/cloud-agents")} /> : null}
 					</SettingsCard>
 				</SettingsSection>
 

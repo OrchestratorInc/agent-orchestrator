@@ -15,6 +15,7 @@ export default function SettingsLayout() {
 			}}
 		>
 			<Stack.Screen name="index" options={{ headerShown: false }} />
+			<Stack.Screen name="cloud-agents" options={{ title: "Cloud coding agents", animation: "slide_from_right", gestureEnabled: true }} />
 			<Stack.Screen
 				name="environments"
 				options={{

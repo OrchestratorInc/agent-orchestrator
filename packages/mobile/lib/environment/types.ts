@@ -1,9 +1,12 @@
 import type { DashboardSession, ProjectInfo, SpawnOptions } from "../api";
 import type { ConversationPage, SendMessageInput, SendMessageResult } from "../chat/api";
 import type { ConversationEvent } from "../chat/sse";
-import type { ChatModel, TurnSettings } from "../chat/types";
+import type { ChatConfigOption, ChatModel, ChatTurnOptions, TurnSettings } from "../chat/types";
 import type { RequestOptions, StartSessionInterfaceTransitionInput, SessionInterfaceTransition, WorkerOKResponse } from "@aoagents/cloud-client";
 import type { CloudInterfaceStatus } from "../cloud/interfaceTransition";
+import type { WorkspaceSource } from "../files/workspaceSource";
+import type { PullRequestSource } from "../pr/source";
+import type { PreviewSource } from "../preview/source";
 
 /** Which environment a source speaks for. */
 export type EnvironmentKind = "local" | "cloud";
@@ -13,13 +16,15 @@ export type EnvironmentKind = "local" | "cloud";
  *
  * Screens and the store depend on this rather than on daemon functions, so a
  * second environment does not mean threading a second config type through
- * every call site. Deliberately scoped to pass 1: terminal, workspace files,
- * and PRs are not here yet.
+ * every call site. Files, PRs and live browser streams are scoped capabilities.
  */
 export interface SessionSource {
 	readonly kind: EnvironmentKind;
 	/** Deployment/account/org identity; never a daemon credential. */
 	readonly scopeKey?: string;
+	readonly workspace?: WorkspaceSource;
+	readonly pullRequests?: PullRequestSource;
+	readonly preview?: PreviewSource;
 	listProjects(): Promise<ProjectInfo[]>;
 	listSessions(): Promise<DashboardSession[]>;
 	createSession(options: SpawnOptions): Promise<{ id: string }>;
@@ -49,5 +54,7 @@ export interface SessionSource {
 	/** Answer a Cloud Chat approval shown in the conversation timeline. */
 	decideApproval?(id: string, requestId: string, decisionId: string): Promise<void>;
 	getChatModels?(id: string): Promise<ChatModel[]>;
+	getChatTurnOptions?(id: string, options?: { adoptNativeSettings?: boolean }): Promise<ChatTurnOptions>;
+	setChatConfigOption?(id: string, optionId: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
 	setTurnSettings?(id: string, settings: TurnSettings): Promise<void>;
 }

@@ -4,10 +4,9 @@ import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "r
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
-import { authHeaders, httpBase } from "../config";
+import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { haptics } from "../haptics";
 import { Feather } from "../icons";
-import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { space, type } from "../tokens";
@@ -63,7 +62,8 @@ function useRenderTheme(): RenderTheme {
  * opaque origin. Theme rides in the fragment for first paint and is posted
  * after, so the page never reloads.
  */
-function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed }: {
+function RenderDocument({ config, path, displayMode, onHeight, onReady, onGone, onFailed }: {
+	config: ServerConfig | null;
 	path: string;
 	displayMode: RenderDisplayMode;
 	onHeight?: (height: number) => void;
@@ -73,7 +73,6 @@ function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed
 	onFailed: () => void;
 }) {
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
 	const web = useRef<WebView>(null);
 	const lastTouch = useRef(0);
 	const loaded = useRef(false);
@@ -155,7 +154,7 @@ function useRenderPage() {
 }
 
 /** The page over the whole screen, scrollable and pinch-zoomable. */
-function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible: boolean; onClose: () => void }) {
+function RenderViewer({ config, render, visible, onClose }: { config: ServerConfig | null; render: RenderRef; visible: boolean; onClose: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
@@ -181,7 +180,7 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
 			{failed
 				? <View style={styles.viewerError}><Text style={styles.fallbackTitle}>Couldn't load this page.</Text></View>
 				: visible ? <View style={styles.viewerBody}>
-					<RenderDocument key={page.mount} path={render.path} displayMode="fullscreen" onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} />
+					<RenderDocument key={page.mount} config={config} path={render.path} displayMode="fullscreen" onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} />
 					{page.loading ? <RenderSkeleton height={Number.POSITIVE_INFINITY} label={render.title} style={styles.viewerSkeleton} delayMs={SKELETON_DELAY_MS} /> : null}
 				</View> : null}
 		</View>
@@ -194,10 +193,9 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
  * of inlined images, and a thread can carry many. Out of range, a placeholder
  * keeps the page's last height so the thread does not jump when it returns.
  */
-export const RenderFrame = memo(function RenderFrame({ render }: { render: RenderRef }) {
+export const RenderFrame = memo(function RenderFrame({ config, render }: { config: ServerConfig | null; render: RenderRef }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
@@ -276,7 +274,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 
 	const height = clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
 	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
-		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
+		{width && live ? <RenderDocument key={page.mount} config={config} path={render.path} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
 		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
 		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} delayMs={measured ? SKELETON_DELAY_MS : 0} /> : null}
 		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}
@@ -288,9 +286,9 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		>
 			<View style={styles.expandChip}><Feather name="maximize" size={13} color={t.textSecondary} /></View>
 		</Pressable>
-		<RenderViewer render={render} visible={expanded} onClose={() => setExpanded(false)} />
+		<RenderViewer config={config} render={render} visible={expanded} onClose={() => setExpanded(false)} />
 	</View>;
-}, (previous, next) => sameRender(previous.render, next.render));
+}, (previous, next) => previous.config === next.config && sameRender(previous.render, next.render));
 
 /** The timeline re-reads each row on every update; the same page must not re-render. */
 function sameRender(a: RenderRef, b: RenderRef): boolean {

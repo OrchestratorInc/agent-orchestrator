@@ -1,5 +1,5 @@
 import { Feather } from "../lib/icons";
-import { useRouter, type Href } from "expo-router";
+import { useFocusEffect, useRouter, type Href } from "expo-router";
 import { useOpenPage } from "../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -23,7 +23,6 @@ import {
 import { haptics } from "../lib/haptics";
 import { NotificationTypeIcon } from "../lib/notification-type-icon";
 import {
-	notificationIdentity,
 	notificationsAcrossHosts,
 	notificationSections,
 	notificationAction,
@@ -44,11 +43,21 @@ import { userFacingError } from "../lib/connectionError";
 import { NotificationSwipeRow } from "../lib/NotificationSwipeRow";
 import { MachineIdentity } from "../lib/MachineIdentity";
 import { machineAppearance } from "../lib/machineAppearance";
+import { useCloudNotifications } from "../lib/cloud/notifications";
+import { cloudRequestErrorCopy } from "../lib/cloud/errorCopy";
+import { resourceKey, type SourceRef } from "../lib/environment/scopedBoard";
+import type { CloudNotification } from "@aoagents/cloud-client";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 const PAGE_SIZE = 50;
-type FeedItem = HostedNotification<NotificationRecord>;
+type FeedItem =
+	| (HostedNotification<NotificationRecord> & { environment: "local" })
+	| (CloudNotification & { environment: "cloud"; scopeKey: string; ownerKey: string; sourceRef: SourceRef });
+
+const feedKey = (item: FeedItem, id = item.id) => JSON.stringify([
+	item.environment, item.environment === "cloud" ? item.ownerKey : item.hostId, id,
+]);
 type HostFeed = {
 	hostId: string;
 	hostName: string;
@@ -71,8 +80,11 @@ function NotificationsContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
-	const { hostStates, configResolved, configForHost, restoreOn } = useApp();
+	const { hostStates, configResolved, configForHost, restoreOn, scopedBoard, refreshSource } = useApp();
+	const cloud = useCloudNotifications();
+	const cloudRef = useRef(cloud); cloudRef.current = cloud;
 	const [restoringId, setRestoringId] = useState<string>();
+	useEffect(() => { setRestoringId((key) => key?.startsWith('["cloud"') ? undefined : key); }, [cloud.ownerKey]);
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error.
 	const [notice, setNotice] = useState<string>();
@@ -82,13 +94,15 @@ function NotificationsContent() {
 	feedsRef.current = feeds;
 	const hostsRef = useRef(hostStates);
 	hostsRef.current = hostStates;
+	const configForHostRef = useRef(configForHost);
+	configForHostRef.current = configForHost;
 	const loadGeneration = useRef(0);
 	const loadingMoreRef = useRef(false);
 	const loadedOnceRef = useRef(false);
 	const [loading, setLoading] = useState(true);
 	const [refreshing, setRefreshing] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
-	const items = useMemo(() => notificationsAcrossHosts(Object.values(feeds).map((feed) => {
+	const localItems = useMemo(() => notificationsAcrossHosts(Object.values(feeds).map((feed) => {
 		const host = hostStates.find((candidate) => candidate.hostId === feed.hostId);
 		return {
 			hostId: feed.hostId,
@@ -97,10 +111,14 @@ function NotificationsContent() {
 			items: feed.items,
 		};
 	})), [feeds, hostStates]);
+	const items = useMemo<FeedItem[]>(() => [
+		...localItems.map((item) => ({ ...item, environment: "local" as const })),
+		...(cloud.source && cloud.scopeKey && cloud.ownerKey ? cloud.items.map((item) => ({ ...item, environment: "cloud" as const, sourceRef: cloud.source!, scopeKey: cloud.scopeKey!, ownerKey: cloud.ownerKey! })) : []),
+	].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt) || feedKey(left).localeCompare(feedKey(right))), [localItems, cloud.items, cloud.source, cloud.scopeKey, cloud.ownerKey]);
 	const sections = useMemo(() => notificationSections(items), [items]);
-	const unreadCount = useMemo(() => Object.values(feeds).reduce((count, feed) => count + feed.unreadCount, 0), [feeds]);
+	const unreadCount = useMemo(() => Object.values(feeds).reduce((count, feed) => count + feed.unreadCount, 0) + cloud.unreadCount, [feeds, cloud.unreadCount]);
 	const unavailableFeeds = useMemo(() => Object.values(feeds).filter((feed) => feed.error), [feeds]);
-	const hasMore = useMemo(() => Object.values(feeds).some((feed) => Boolean(feed.nextCursor)), [feeds]);
+	const hasMore = useMemo(() => Object.values(feeds).some((feed) => Boolean(feed.nextCursor)) || cloud.hasMore, [feeds, cloud.hasMore]);
 	const knownHostIds = useMemo(() => new Set(hostStates.map((host) => host.hostId)), [hostStates]);
 	const hostSignature = hostStates.map((host) => {
 		const source = host.config;
@@ -116,7 +134,7 @@ function NotificationsContent() {
 	}, []);
 
 	const load = useCallback(
-		async (mode: "initial" | "refresh" | "more") => {
+		async (mode: "initial" | "refresh" | "more" | "reconcile") => {
 			if (mode === "more" && loadingMoreRef.current) return;
 			const hosts = hostsRef.current;
 			const currentFeeds = feedsRef.current;
@@ -160,6 +178,7 @@ function NotificationsContent() {
 				for (const result of results) {
 					if (configForHost(result.host.hostId) !== result.source) continue;
 					const previousFeed = next[result.host.hostId];
+					if (mode === "reconcile" && previousFeed !== currentFeeds[result.host.hostId]) continue;
 					if ("error" in result) {
 						next[result.host.hostId] = {
 							hostId: result.host.hostId,
@@ -171,12 +190,14 @@ function NotificationsContent() {
 						};
 						continue;
 					}
-					const priorItems = mode === "more" ? previousFeed?.items ?? [] : [];
+					const priorItems = mode === "more" || mode === "reconcile" ? previousFeed?.items ?? [] : [];
 					const seen = new Set(priorItems.map((item) => item.id));
+					const incoming = new Set(result.page.notifications.map((item) => item.id));
 					next[result.host.hostId] = {
 						hostId: result.host.hostId,
 						hostName: result.host.name,
-						items: [...priorItems, ...result.page.notifications.filter((item) => !seen.has(item.id))],
+						items: mode === "reconcile" ? [...result.page.notifications, ...priorItems.filter((item) => !incoming.has(item.id))]
+							: [...priorItems, ...result.page.notifications.filter((item) => !seen.has(item.id))],
 						nextCursor: result.page.nextCursor,
 						unreadCount: result.page.unreadCount,
 					};
@@ -191,13 +212,46 @@ function NotificationsContent() {
 		},
 		[configForHost, updateFeeds],
 	);
+	const loadRef = useRef(load);
+	loadRef.current = load;
 
 	useEffect(() => {
 		void load("initial");
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [hostSignature]);
+	const refresh = useCallback(async () => {
+		await Promise.all([load("refresh"), cloud.refresh().catch(() => {})]);
+	}, [load, cloud.refresh]);
+	useFocusEffect(useCallback(() => { void cloud.refresh().catch(() => {}); }, [cloud.refresh]));
+	function ownsCloud(notification: Extract<FeedItem, { environment: "cloud" }>) {
+		return cloudRef.current.ownerKey === notification.ownerKey && cloudRef.current.scopeKey === notification.scopeKey && cloudRef.current.source?.id === notification.sourceRef.id;
+	}
+	function itemState(notification: FeedItem) {
+		if (notification.environment === "local") return sessionState(notification.hostId, notification.sessionId);
+		const entry = notification.sessionId ? [...scopedBoard.sessions, ...scopedBoard.orchestrators]
+			.find((entry) => resourceKey(entry.source, entry.value.id) === resourceKey(notification.sourceRef, notification.sessionId!))?.value : undefined;
+		return { terminated: Boolean(entry && ("projectName" in entry ? entry.isTerminal : entry.isTerminated)), sessionsReady: Boolean(entry) };
+	}
+	function actionFor(notification: FeedItem) {
+		return notificationAction(notification, itemState(notification), notification.environment);
+	}
 
 	function open(notification: FeedItem) {
+		if (notification.environment === "cloud") {
+			if (!ownsCloud(notification)) return;
+			haptics.tap();
+			if (notification.status === "unread") void cloud.markRead([notification.id]).catch((cause) => {
+				if (ownsCloud(notification)) setNotice(cloudRequestErrorCopy(cause));
+			});
+			const action = actionFor(notification);
+			if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, source: "cloud", sourceId: notification.sourceRef.id } });
+			else if (action.kind === "restore") setNotice("This session is archived. Tap restore to bring it back.");
+			else {
+				setNotice("Refreshing Cloud session. Try opening it again shortly.");
+				void refreshSource(notification.sourceRef).catch((cause) => { if (ownsCloud(notification)) setNotice(cloudRequestErrorCopy(cause)); });
+			}
+			return;
+		}
 		const source = configForHost(notification.hostId);
 		if (!source) {
 			haptics.warning();
@@ -233,6 +287,17 @@ function NotificationsContent() {
 	}
 
 	function clear(notification: FeedItem) {
+		if (notification.environment === "cloud") {
+			if (!ownsCloud(notification)) return false;
+			haptics.warning();
+			// Cloud owns the optimistic hide, server read, persistence, and rollback.
+			const record = cloud.items.find((item) => item.id === notification.id);
+			if (!record) return false;
+			void cloud.clearOne(record).catch((cause) => {
+				if (ownsCloud(notification)) { haptics.error(); setNotice(cloudRequestErrorCopy(cause)); }
+			});
+			return true;
+		}
 		const source = configForHost(notification.hostId);
 		if (!source) {
 			haptics.warning();
@@ -276,17 +341,23 @@ function NotificationsContent() {
 		};
 	}
 
-	function restoreSession(hostId: string, sessionId: string) {
-		const key = notificationIdentity(hostId, sessionId);
+	function restoreSession(notification: FeedItem) {
+		const sessionId = notification.sessionId;
+		if (!sessionId || actionFor(notification).kind !== "restore" || restoringId) return;
+		if (notification.environment === "cloud" && !ownsCloud(notification)) return;
+		const key = feedKey(notification, sessionId);
+		const source: SourceRef = notification.environment === "cloud" ? notification.sourceRef : { kind: "local", id: notification.hostId };
+		const current = () => notification.environment === "cloud" ? ownsCloud(notification) : Boolean(configForHost(notification.hostId));
 		haptics.tap();
 		setRestoringId(key);
-		void restoreOn({ kind: "local", id: hostId }, sessionId)
+		void restoreOn(source, sessionId)
 			.then(() => {
+				if (!current()) return;
 				haptics.success();
-				router.navigate({ pathname: "/session/[id]", params: { id: sessionId, hostId, source: "local", sourceId: hostId } });
+				router.navigate({ pathname: "/session/[id]", params: { id: sessionId, source: source.kind, sourceId: source.id, ...(source.kind === "local" ? { hostId: source.id } : {}) } });
 			})
-			.catch((cause) => Alert.alert("Couldn't restore the session", userFacingError(cause)))
-			.finally(() => setRestoringId(undefined));
+			.catch((cause) => { if (current()) Alert.alert("Couldn't restore the session", source.kind === "cloud" ? cloudRequestErrorCopy(cause) : userFacingError(cause)); })
+			.finally(() => setRestoringId((current) => current === key ? undefined : current));
 	}
 
 	async function markAll() {
@@ -294,20 +365,47 @@ function NotificationsContent() {
 			const source = feed.unreadCount > 0 ? configForHost(feed.hostId) : null;
 			return source ? [{ feed, source }] : [];
 		});
-		if (targets.length === 0) {
+		const cloudRead = cloud.source && cloud.unreadCount > 0;
+		const ownerKey = cloud.ownerKey;
+		if (targets.length === 0 && !cloudRead) {
 			haptics.warning();
 			setNotice("Unread notifications are on machines that are currently offline.");
 			return;
 		}
 		haptics.success();
-		const targetHostIds = new Set(targets.map(({ feed }) => feed.hostId));
-		updateFeeds((previous) => Object.fromEntries(Object.entries(previous).map(([hostId, feed]) => [hostId, targetHostIds.has(hostId) ? {
-			...feed,
-			items: feed.items.map((item) => ({ ...item, status: "read" })),
-			unreadCount: 0,
-		} : feed])));
-		const results = await Promise.allSettled(targets.map(({ source }) => markAllNotificationsRead(source)));
-		if (results.some((result) => result.status === "rejected")) void load("refresh");
+		const ownsLocal = ({ feed, source }: typeof targets[number]) => hostsRef.current.some((host) => host.hostId === feed.hostId)
+			&& configForHostRef.current(feed.hostId) === source;
+		const localRequests = targets.map(async (target) => {
+			try {
+				await markAllNotificationsRead(target.source);
+				const capturedIds = new Set(target.feed.items.map((item) => item.id));
+				updateFeeds((previous) => {
+					const feed = previous[target.feed.hostId];
+					if (!ownsLocal(target) || !feed) return previous;
+					const acknowledged = feed.items.filter((item) => capturedIds.has(item.id) && item.status === "unread").length;
+					return { ...previous, [feed.hostId]: { ...feed,
+						items: feed.items.map((item) => capturedIds.has(item.id) ? { ...item, status: "read" } : item),
+						unreadCount: feed === target.feed ? 0 : Math.max(0, feed.unreadCount - acknowledged),
+					} };
+				});
+			}
+			catch {
+				if (!ownsLocal(target)) return;
+				setNotice("Couldn't mark every notification read. Refresh and try again.");
+			}
+		});
+		const localReconciliation = Promise.all(localRequests).then(async () => {
+			// Start after every local mutation settles so the read cannot race a
+			// still-pending local write, or be superseded by a pre-mutation load.
+			// Keep server unread facts until then, including when recovery fails.
+			if (targets.some(ownsLocal)) await loadRef.current("reconcile");
+		});
+		const cloudRequest = cloudRead ? cloud.markAllRead().catch(async () => {
+			if (cloudRef.current.ownerKey !== ownerKey) return;
+			setNotice("Couldn't mark every notification read. Refresh and try again.");
+			await cloud.refresh().catch(() => {});
+		}) : Promise.resolve();
+		await Promise.all([localReconciliation, cloudRequest]);
 	}
 
 	useEffect(() => {
@@ -329,14 +427,14 @@ function NotificationsContent() {
 				}
 			/>
 
-			{loading ? (
+			{(loading || cloud.loading) && items.length === 0 ? (
 				<View style={styles.center}>
 					<ActivityIndicator color={t.accent} />
 				</View>
 			) : (
 				<SectionList
 					sections={sections}
-					keyExtractor={(item) => notificationIdentity(item.hostId, item.id)}
+					keyExtractor={(item) => feedKey(item)}
 					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={
 						items.length === 0
@@ -346,17 +444,22 @@ function NotificationsContent() {
 					stickySectionHeadersEnabled={false}
 					refreshControl={
 						<RefreshControl
-							refreshing={refreshing}
+							refreshing={refreshing || cloud.refreshing}
 							onRefresh={() => {
 								haptics.tap();
-								void load("refresh");
+								void refresh();
 							}}
 							tintColor={t.accent}
 						/>
 					}
-					onEndReached={() => { if (hasMore) void load("more"); }}
+					onEndReached={() => { if (hasMore) { void load("more"); if (cloud.hasMore) void cloud.loadMore().catch(() => {}); } }}
 					onEndReachedThreshold={0.4}
 					ListHeaderComponent={
+						cloud.error && items.length > 0 ? <View style={styles.inlineError}>
+							<Feather name="cloud" size={15} color={t.textSecondary} />
+							<Text style={styles.inlineErrorText}>Cloud: {cloud.error}</Text>
+							<Pressable accessibilityRole="button" accessibilityLabel="Retry Cloud notifications" onPress={() => void cloud.refresh().catch(() => {})}><Text style={styles.inlineErrorText}>Retry</Text></Pressable>
+						</View> :
 						unavailableFeeds.length > 0 && items.length > 0 ? (
 							<View style={styles.inlineError}>
 								<Feather name="wifi-off" size={15} color={t.textSecondary} />
@@ -377,29 +480,31 @@ function NotificationsContent() {
 						<NotificationRow
 							item={item}
 							now={now}
-							action={notificationAction(item, sessionState(item.hostId, item.sessionId)).kind}
-							restoring={restoringId === notificationIdentity(item.hostId, item.sessionId)}
+							action={actionFor(item).kind}
+							restoring={restoringId === feedKey(item, item.sessionId)}
 							onPress={() => open(item)}
-							onRestore={() => item.sessionId && restoreSession(item.hostId, item.sessionId)}
+							onRestore={() => restoreSession(item)}
 							onClear={() => clear(item)}
 						/>
 					)}
 					ListFooterComponent={
-						loadingMore ? (
+						loadingMore || cloud.loadingMore ? (
 							<View style={styles.footer}>
 								<ActivityIndicator color={t.accent} />
 							</View>
 						) : null
 					}
 					ListEmptyComponent={
-						hostStates.length > 0 && unavailableFeeds.length === hostStates.length ? (
+							cloud.error ? <EmptyState icon="cloud" title="Couldn't load Cloud notifications" message={cloud.error}
+								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void refresh()} />} /> :
+							!cloud.available && hostStates.length > 0 && unavailableFeeds.length === hostStates.length ? (
 							<EmptyState
 								icon="wifi-off"
 								title="Machines are offline"
 								message="Notifications will appear when at least one paired machine reconnects."
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={() => void load("refresh")} />}
 							/>
-						) : hostStates.length === 0 ? (
+							) : hostStates.length === 0 && !cloud.available ? (
 							// Shared with the tabs: "Connecting…" while the launch race runs,
 							// the pairing prompt only once it has found no machine.
 							<UnpairedState resolving={!configResolved} />
@@ -407,7 +512,7 @@ function NotificationsContent() {
 							<EmptyState
 								icon="check-circle"
 								title="All caught up"
-								message="Updates from workers and pull requests across your machines will appear here when they need you."
+									message="Updates from workers and pull requests across your environments will appear here."
 							/>
 						)
 					}
@@ -450,6 +555,8 @@ function NotificationRow({ item, now, action, restoring, onPress, onRestore, onC
 	const styles = useThemedStyles(makeStyles);
 	const visual = notificationVisual(t, item.type);
 	const unread = item.status === "unread";
+	const hostName = item.environment === "cloud" ? "Cloud" : item.hostName;
+	const appearance = item.environment === "cloud" ? { symbol: "cloud" as const } : machineAppearance({ id: item.hostId, name: hostName, appearance: item.hostAppearance });
 
 	return (
 		<NotificationSwipeRow onClear={onClear}>
@@ -458,7 +565,7 @@ function NotificationRow({ item, now, action, restoring, onPress, onRestore, onC
 					onPress={onPress}
 					accessibilityRole="button"
 					accessibilityState={{ disabled: action === "none" }}
-					accessibilityLabel={`${item.title || visual.label}, ${visual.label}, ${item.hostName} machine`}
+					accessibilityLabel={`${item.title || visual.label}, ${visual.label}, ${hostName}${item.environment === "local" ? " machine" : ""}`}
 					accessibilityHint={action === "restore" ? "This session is terminated. Use the restore button to bring it back." : undefined}
 					accessibilityActions={[{ name: "delete", label: "Clear notification" }]}
 					onAccessibilityAction={(event) => {
@@ -472,8 +579,8 @@ function NotificationRow({ item, now, action, restoring, onPress, onRestore, onC
 							<Text style={[styles.kind, unread && { color: visual.color }]} numberOfLines={1}>{visual.label}</Text>
 							{unread ? <Dot color={t.accent} size={7} /> : null}
 							<MachineIdentity
-								name={item.hostName}
-								appearance={machineAppearance({ id: item.hostId, name: item.hostName, appearance: item.hostAppearance })}
+								name={hostName}
+								appearance={appearance}
 								style={styles.machineIdentity}
 							/>
 							<Text style={styles.time}>{relativeTime(item.createdAt, now)}</Text>

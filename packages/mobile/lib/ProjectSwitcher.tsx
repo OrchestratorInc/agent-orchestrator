@@ -16,10 +16,15 @@ import { iconSize, space, type } from "./tokens";
 //
 // It opens the same sheet Settings uses, so there is one project picker in the
 // app instead of two controls that drift apart.
-export function ProjectSwitcher() {
+export function ProjectSwitcher({ hostId, selected, onSelect }: { hostId?: string; selected?: string; onSelect?(id: string): void } = {}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { projects, projectsKnown, activeProjectId, setActiveProject } = useApp();
+	const app = useApp();
+	const host = hostId === undefined ? undefined : app.hostStates.find((entry) => entry.hostId === hostId);
+	const projects = hostId === undefined ? app.projects : host?.projects ?? [];
+	const projectsKnown = hostId === undefined ? app.projectsKnown : host?.projectsKnown ?? false;
+	const activeProjectId = selected ?? app.activeProjectId;
+	const setActiveProject = onSelect ?? app.setActiveProject;
 	const router = useRouter();
 
 	// Nothing to switch between — a single-project user never sees this.
@@ -36,7 +41,7 @@ export function ProjectSwitcher() {
 						haptics.tap();
 						// No navigation on select — the board is already on screen, so the
 						// filter applying in place is the whole feedback.
-						router.push(projectSheetRoute({ selected: activeProjectId, onSelect: setActiveProject }));
+						router.push(projectSheetRoute({ selected: activeProjectId, onSelect: setActiveProject, hostId }));
 					}}
 					hitSlop={10}
 					style={({ pressed }) => [styles.trigger, pressed && styles.triggerPressed]}

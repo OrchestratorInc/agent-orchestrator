@@ -1,13 +1,14 @@
-import { CloudApiError, type CloudClient, type CreateSessionInput, type Turn } from "@aoagents/cloud-client";
+import { CloudApiError, type ChatMessageInput, type ChatModelsResponse, type CloudClient, type CreateSessionInput, type Session, type Turn } from "@aoagents/cloud-client";
 import type { DashboardSession, ProjectInfo, SpawnOptions } from "../api";
 import type { ConversationEvent } from "../chat/sse";
-import type { ConversationTurn, TurnSettings } from "../chat/types";
+import type { ApprovalMode, ChatConfigOption, ConversationTurn, TurnSettings } from "../chat/types";
 import type { SessionSource } from "../environment/types";
 import { fetchConversationReplay, pollCloudEvents, toConversationItems, toConversationTurns } from "./events";
 import { toDashboardSession, toProjectInfo } from "./mapping";
 import { cloudRoleDefaults } from "../spawnModel";
-import { acceptCloudOperation, prepareCloudOperation, readCloudOperation, reserveCloudOperation } from "./operation";
-import { cloudHeaderControllerState, cloudLifecycleStage, cloudStartupProblem } from "./lifecycle";
+import { acceptCloudOperation, prepareCloudOperation, readCloudOperation, rejectCloudOperation, reserveCloudOperation } from "./operation";
+import { isCloudSessionLimitError } from "./errorCopy";
+import { cloudHeaderControllerState, cloudLifecycleStage, cloudStartupProblem, isWorkspaceStartupError } from "./lifecycle";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { afterDraftWrites } from "../chat/pendingSend";
 import { cloudConversationCapabilities } from "./events";
@@ -16,14 +17,32 @@ import { cloudInterfaceDelay, cloudInterfaceInputLocked, cloudInterfaceSettledTa
 import type { RequestOptions, SessionInterfaceTransition, StartSessionInterfaceTransitionInput } from "@aoagents/cloud-client";
 import { mobileInterfaceTransitionIsActive, mobileInterfaceTransitionIsCancellable } from "../session/interfaceTransition";
 import { throwIfCloudRequestAborted } from "./cancellation";
+import { createCloudWorkspaceSource } from "./workspace";
+import { createCloudPullRequestSource } from "./pullRequests";
+import { createCloudPreviewSource } from "./browser";
 
 /** How often the cloud transcript is polled for new events. Matches the
  * tunnel-path conversation poll interval mobile already uses elsewhere. */
 const CLOUD_EVENT_POLL_MS = 2_000;
 const CHAT_HANDOFF_POLL_MS = 1_000;
 const CHAT_HANDOFF_TIMEOUT_MS = 60_000;
-const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+const reasoningEfforts = new Set(["default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
+function allowedApprovalModes(session: Session): ApprovalMode[] {
+	if (session.mode === "read-only" || !session.mode) return [];
+	if (session.mode === "standard") return session.harness === "codex" ? ["accept-edits", "auto"] : ["default", "accept-edits", "auto"];
+	return ["default", "accept-edits", "auto", "bypass-permissions"];
+}
+
+function effectiveTurnSettings(session: Session, overrides: TurnSettings): TurnSettings {
+	const { approvalMode: savedApproval, ...settings } = overrides;
+	const allowed = allowedApprovalModes(session);
+	const approvalMode = savedApproval && allowed.includes(savedApproval) ? savedApproval : allowed[0];
+	return {
+		...(session.model ? { model: session.model } : {}), ...settings,
+		...(approvalMode && (savedApproval || approvalMode !== "default") ? { approvalMode } : {}),
+	};
+}
 
 function toConversationTurn(turn: Turn): ConversationTurn {
 	const state = turn.state === "provisioning"
@@ -118,11 +137,17 @@ export function createCloudSessionSource(input: {
 		finally { if (--request.consumers === 0) request.controller.abort(); }
 	};
 	const settingsBySession = new Map<string, TurnSettings>();
+	const settingsRevision = new Map<string, number>();
+	const discoverySequence = new Map<string, number>();
+	const requireDiscovery = (id: string, sequence: number | undefined) => {
+		if (sequence !== undefined && discoverySequence.get(id) !== sequence) throw Object.assign(new Error("Cloud turn settings discovery was superseded."), { name: "AbortError" });
+	};
 	const settingsKey = (id: string) => "ao.cloud.turn-settings.v1." + encodeURIComponent(JSON.stringify([scopeKey, id]));
 	const normalizeSettings = (value: TurnSettings): TurnSettings => ({
 		...(typeof value.model === "string" && value.model.trim() ? { model: value.model.trim() } : {}),
 		...(typeof value.reasoningEffort === "string" && reasoningEfforts.has(value.reasoningEffort) ? { reasoningEffort: value.reasoningEffort } : {}),
 		...(value.approvalMode && ["default", "accept-edits", "auto", "bypass-permissions"].includes(value.approvalMode) ? { approvalMode: value.approvalMode } : {}),
+		...(value.executionMode === "agent" || value.executionMode === "plan" ? { executionMode: value.executionMode } : {}),
 	});
 	const readSettings = async (id: string): Promise<TurnSettings> => {
 		if (settingsBySession.has(id)) return settingsBySession.get(id)!;
@@ -133,6 +158,69 @@ export function createCloudSessionSource(input: {
 		});
 		if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
 		settingsBySession.set(id, value); return value;
+	};
+	const writeSettings = async (id: string, settings: TurnSettings, discovery?: { sequence: number; selectionRevision: number }) => {
+		requireCurrent();
+		if (!discovery && ("model" in settings || "reasoningEffort" in settings)) settingsRevision.set(id, (settingsRevision.get(id) ?? 0) + 1);
+		await readSettings(id);
+		await afterDraftWrites(settingsKey(id), async () => {
+			requireCurrent();
+			if (discovery) {
+				requireDiscovery(id, discovery.sequence);
+				if (discovery.selectionRevision !== (settingsRevision.get(id) ?? 0)) return;
+			}
+			const normalized = normalizeSettings({ ...settingsBySession.get(id), ...settings });
+			await AsyncStorage.setItem(settingsKey(id), JSON.stringify(normalized));
+			requireCurrent();
+			settingsBySession.set(id, normalized);
+		});
+	};
+	const listChatModels = async (id: string): Promise<ChatModelsResponse> => {
+		try { return await client.listChatModels(orgId, id); }
+		catch (cause) {
+			if (!(cause instanceof CloudApiError) || cause.code !== "WORKER_UNAVAILABLE") throw cause;
+		}
+		requireCurrent();
+		await client.resumeSession(orgId, id);
+		for (let attempt = 0; attempt < 20; attempt++) {
+			requireCurrent();
+			await cloudInterfaceDelay(500);
+			requireCurrent();
+			try { return await client.listChatModels(orgId, id); }
+			catch (cause) {
+				if (!(cause instanceof CloudApiError) || cause.code !== "WORKER_UNAVAILABLE" || attempt === 19) throw cause;
+			}
+		}
+		throw new Error("The Cloud worker did not become available.");
+	};
+	const cloudConfigOptions = (session: Session, catalog: ChatModelsResponse, settings: TurnSettings): ChatConfigOption[] =>
+		session.harness === "claude-code" && catalog.modes?.includes("plan") ? [{
+			id: "cloud-execution-mode", name: "Mode", category: "execution_mode", type: "select",
+			currentValue: session.mode === "read-only" || settings.executionMode === "plan" ? "plan" : "agent",
+			choices: [
+				...(session.mode !== "read-only" && catalog.modes.includes("default") ? [{ value: "agent", name: "Agent" }] : []),
+				{ value: "plan", name: "Plan" },
+			],
+		}] : [];
+	const getChatTurnOptions = async (id: string, options?: { adoptNativeSettings?: boolean }) => {
+		requireCurrent();
+		const sequence = options?.adoptNativeSettings === false ? undefined : (discoverySequence.get(id) ?? 0) + 1;
+		if (sequence !== undefined) discoverySequence.set(id, sequence);
+		const selectionRevision = settingsRevision.get(id) ?? 0;
+		const { session } = await client.getSession(orgId, id);
+		requireCurrent();
+		const catalog: ChatModelsResponse = session.harness === "codex" || session.harness === "claude-code"
+			? await listChatModels(id) : { models: [] };
+		requireCurrent();
+		requireDiscovery(id, sequence);
+		// Reopening Chat or explicitly refreshing follows the native controller.
+		// A phone selection made while that discovery ran still wins the race.
+		if (sequence !== undefined && selectionRevision === (settingsRevision.get(id) ?? 0) && (catalog.model || catalog.reasoningEffort)) {
+			await writeSettings(id, { ...(catalog.model ? { model: catalog.model } : {}), reasoningEffort: catalog.reasoningEffort || undefined }, { sequence, selectionRevision });
+		}
+		const settings = effectiveTurnSettings(session, await readSettings(id));
+		requireDiscovery(id, sequence);
+		return { models: catalog.models, configOptions: cloudConfigOptions(session, catalog, settings), settings };
 	};
 	const pendingSpawns = new Map<string, Promise<{ id: string }>>();
 	const acceptedSpawns = new Map<string, string>();
@@ -152,7 +240,10 @@ export function createCloudSessionSource(input: {
 			const defaults = cloudRoleDefaults(project.config, "worker", harness);
 			operation = prepareCloudOperation(undefined, scopeKey, {
 				projectId: options.projectId, kind: "worker", harness,
-				displayName: (options.prompt ?? "New session").slice(0, 80), prompt: options.prompt ?? "",
+				// Match desktop's Cloud task composer: prompt-derived titles, or
+				// the selected harness for an idle worker with no instructions yet.
+				displayName: (options.prompt ?? "").trim().slice(0, 100) || harness, prompt: options.prompt ?? "",
+				...(options.mode ? { interfaceMode: options.mode } : {}),
 				mode: "trusted", deniedCommands: [], model: options.model ?? defaults.model,
 				reasoningEffort: options.reasoningEffort ?? defaults.reasoningEffort,
 			} satisfies CreateSessionInput, () => options.clientRequestId!);
@@ -160,7 +251,15 @@ export function createCloudSessionSource(input: {
 		if (!isCurrent()) throw new Error("Cloud account changed. Reopen the task sheet.");
 		await reserveCloudOperation(slot, operation);
 		if (!isCurrent()) throw new Error("Cloud account changed. Reopen the task sheet.");
-		const { session } = await client.createSession(orgId, operation.payload, { idempotencyKey: operation.key });
+		const { session } = await client.createSession(orgId, operation.payload, { idempotencyKey: operation.key }).catch(async (cause: unknown) => {
+			// Quota is rejected transactionally after idempotency replay. Interface
+			// validation runs before replay, so only a fresh request proves that
+			// no earlier attempt could have created the Chat session.
+			if (isCloudSessionLimitError(cause) || !existing && cause instanceof CloudApiError && cause.status === 409 && cause.code === "SESSION_MODE_UNSUPPORTED") {
+				try { await rejectCloudOperation(scopeKey, slot, operation.key); } catch {}
+			}
+			throw cause;
+		});
 		// Acceptance precedes board refresh. Storage failure cannot undo a server
 		// acceptance; its reserved key still makes a future retry safe.
 		acceptedSpawns.set(operation.key, session.id);
@@ -170,6 +269,9 @@ export function createCloudSessionSource(input: {
 	return {
 		kind: "cloud",
 		scopeKey,
+		workspace: createCloudWorkspaceSource(input),
+		pullRequests: createCloudPullRequestSource(input),
+		preview: createCloudPreviewSource(input),
 		getInterfaceTransition,
 		startInterfaceTransition,
 		cancelInterfaceTransition: async (id, options) => {
@@ -232,21 +334,37 @@ export function createCloudSessionSource(input: {
 				// transcript the control plane will hand back today.
 				hasMoreBefore: false,
 				turns,
-				items: toConversationItems(events),
-				settings: { ...(session.model ? { model: session.model } : {}), ...overrides },
+				items: toConversationItems(events, { startupFailed: !session.isTerminated && session.desiredState === "running" && isWorkspaceStartupError(session.startupError?.code) && Boolean(session.startupError?.message?.trim()) }),
+				settings: effectiveTurnSettings(session, overrides),
+				approvalModes: allowedApprovalModes(session),
 				capabilities: cloudConversationCapabilities(session, events),
 			};
 		},
 		sendMessage: async (id, input) => {
 			const settings = input.settings === undefined ? await readSettings(id) : normalizeSettings(input.settings);
 			requireCurrent();
-			const message = settings && (settings.model || settings.reasoningEffort || settings.approvalMode)
+			let mode: "read-only" | undefined;
+			let approvalMode = settings.approvalMode;
+			if (settings.executionMode || approvalMode) {
+				const { session } = await client.getSession(orgId, id);
+				requireCurrent();
+				approvalMode = effectiveTurnSettings(session, settings).approvalMode;
+				if (session.mode === "read-only") mode = "read-only";
+				else if (settings.executionMode === "plan") {
+					const catalog = session.harness === "claude-code" ? await listChatModels(id) : undefined;
+					requireCurrent();
+					if (!catalog?.modes?.includes("plan")) throw new Error("Plan mode is unavailable for this Cloud session. Refresh turn settings.");
+					mode = "read-only";
+				}
+			}
+			const message = settings && (settings.model || settings.reasoningEffort || settings.approvalMode || mode)
 				? {
 					text: input.text,
 					...(settings.model ? { model: settings.model } : {}),
 					...(settings.reasoningEffort && reasoningEfforts.has(settings.reasoningEffort)
-						? { reasoningEffort: settings.reasoningEffort as "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra" } : {}),
-					...(settings.approvalMode ? { approvalMode: settings.approvalMode } : {}),
+						? { reasoningEffort: settings.reasoningEffort as ChatMessageInput["reasoningEffort"] } : {}),
+					...(mode ? { mode } : {}),
+					...(approvalMode && mode !== "read-only" ? { approvalMode } : {}),
 				} : input.text;
 			// The composer's clientMessageId is already a per-message unique id,
 			// so it doubles as the idempotency key: a retry after a dropped
@@ -262,12 +380,50 @@ export function createCloudSessionSource(input: {
 			return { duplicate: false };
 		},
 		steerMessage: async (id, input, targetTurnId) => {
-			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			requireCurrent();
 			const [{ session }, { events }] = await Promise.all([client.getSession(orgId, id), replay(id)]);
-			if (session.activeTurn?.id !== targetTurnId || !cloudConversationCapabilities(session, events).includes("steer")) throw new Error("The turn finished or cannot take guidance now. Queue a new message instead.");
-			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
-			await client.steerTurn(orgId, id, targetTurnId, input.text, { idempotencyKey: input.clientMessageId });
-			return { duplicate: false, turnId: targetTurnId };
+			requireCurrent();
+			const matches = (event: { sessionId?: string; payload?: unknown }) => {
+				const payload = event.payload as Record<string, unknown> | undefined;
+				return event.sessionId === id && payload?.turnId === targetTurnId && payload?.clientMessageId === input.clientMessageId;
+			};
+			// A retry must still recover an accepted command after its turn ends.
+			// The server returns that command's original event for the same key.
+			const requested = events.some((event) => matches(event) && String(event.type) === "chat.turn_steer_requested" && (event.payload as Record<string, unknown>).text === input.text);
+			if (!requested && (session.activeTurn?.id !== targetTurnId || !cloudConversationCapabilities(session, events).includes("steer"))) throw new Error("The turn finished or cannot take guidance now. Queue a new message instead.");
+			const unknown = () => new Error("The provider's steer result is still unknown. Your text was not queued as a new turn. Retry this guidance to check its result.");
+			const controller = new AbortController();
+			const unwatch = cloudConversationReplayCache.watchScope(scopeKey, () => controller.abort());
+			let timedOut = false;
+			const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30_000);
+			try {
+				const accepted = await awaitCloudReplay(client.steerTurn(orgId, id, targetTurnId, input.text, { idempotencyKey: input.clientMessageId, signal: controller.signal }), controller.signal);
+				requireCurrent(); throwIfCloudRequestAborted(controller.signal);
+				// HTTP 202 records a request, not provider acceptance. Its cursor is
+				// authoritative even on an idempotent retry of an older request.
+				if (!accepted?.event || !matches(accepted.event) || !Number.isSafeInteger(accepted.event.sequence) || accepted.event.sequence < 1) throw unknown();
+				let after = accepted.event.sequence;
+				for (;;) {
+					requireCurrent(); throwIfCloudRequestAborted(controller.signal);
+					const page = await awaitCloudReplay(client.replayEvents(orgId, id, { after, limit: 100, signal: controller.signal }), controller.signal);
+					requireCurrent(); throwIfCloudRequestAborted(controller.signal);
+					for (const event of page.events) {
+						if (event.sequence <= after || !matches(event)) continue;
+						if (String(event.type) === "chat.turn_steered") return { duplicate: false, turnId: targetTurnId };
+						if (String(event.type) === "chat.turn_steer_failed") {
+							const error = (event.payload as Record<string, unknown>).error;
+							throw new Error(typeof error === "string" && error ? error : "The provider declined the steer.");
+						}
+					}
+					if (page.hasMore && page.nextAfter <= after) throw unknown();
+					after = Math.max(after, page.nextAfter);
+					if (!page.hasMore) await cloudInterfaceDelay(500, controller.signal);
+				}
+			} catch (cause) {
+				requireCurrent();
+				if (timedOut) throw unknown();
+				throw cause;
+			} finally { clearTimeout(timer); unwatch(); controller.abort(); }
 		},
 		// Returns 202 with a body (ResumeSessionResponse), not 204 — the
 		// reconciler owns the actual provider/worker transition from here, so
@@ -284,8 +440,13 @@ export function createCloudSessionSource(input: {
 		retryStartup: async (id) => {
 			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
 			const { session } = await client.getSession(orgId, id);
-			if (session.isTerminated || session.desiredState !== "running" || cloudStartupProblem(toDashboardSession(session))?.phase !== "failed") throw new Error("This session is not waiting on a failed startup. Refresh its status.");
+			const problem = cloudStartupProblem(toDashboardSession(session));
+			if (session.isTerminated || session.desiredState !== "running" || problem?.phase !== "failed") throw new Error("This session is not waiting on a failed startup. Refresh its status.");
 			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
+			if (isWorkspaceStartupError(problem.code)) {
+				await client.requestWorkspaceCheckout(orgId, id);
+				return;
+			}
 			try { await client.retrySessionStartup(orgId, id); }
 			catch (cause) {
 				if (cause instanceof CloudApiError && cause.status === 409 && cause.code === "startup_retry_unavailable") await client.getSession(orgId, id);
@@ -314,17 +475,16 @@ export function createCloudSessionSource(input: {
 			await client.decideChatApproval(orgId, id, requestId, decisionId);
 			requireCurrent();
 		},
-		getChatModels: async (id) => {
-			const { session } = await client.getSession(orgId, id);
-			return session.harness === "codex" ? (await client.listChatModels(orgId, id)).models : [];
+		getChatModels: async (id) => (await getChatTurnOptions(id)).models,
+		getChatTurnOptions,
+		setChatConfigOption: async (id, optionId, value) => {
+			const { configOptions } = await getChatTurnOptions(id, { adoptNativeSettings: false });
+			const option = configOptions.find((option) => option.id === optionId);
+			if (!("value" in value) || !option?.choices.some((choice) => choice.value === value.value)) throw new Error("This Cloud turn option is unavailable. Refresh turn settings.");
+			await writeSettings(id, { executionMode: value.value as "agent" | "plan" });
+			return configOptions.map((option) => option.id === optionId ? { ...option, currentValue: value.value } : option);
 		},
-		setTurnSettings: async (id, settings) => {
-			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
-			const normalized = normalizeSettings(settings);
-			await afterDraftWrites(settingsKey(id), () => AsyncStorage.setItem(settingsKey(id), JSON.stringify(normalized)));
-			if (!isCurrent()) throw new Error("Cloud account changed. Try again.");
-			settingsBySession.set(id, normalized);
-		},
+		setTurnSettings: writeSettings,
 		cancelTurn: async (id, turnId) => {
 			requireCurrent();
 			// Keyed by the turn id, not freshly generated per call, so a retried

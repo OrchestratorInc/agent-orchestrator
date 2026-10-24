@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSessionPR, type SessionPRSummary } from "./api";
 import { machineIdentity, type ServerConfig } from "./config";
+import { pullRequestSummaryForURL } from "./reviewView";
 
 // Lazy, cached loader for the rich PR view.
 //
@@ -50,7 +51,7 @@ function retainNavigationSummary(config: ServerConfig, sessionId: string, summar
 
 export type PRSummaryLookup = {
 	/** The rich summary for one PR, or undefined until it has loaded. */
-	summaryFor(config: ServerConfig, sessionId: string, number: number): SessionPRSummary | undefined;
+	summaryFor(config: ServerConfig, sessionId: string, number: number, url?: string): SessionPRSummary | undefined;
 	/** Re-fetch everything — wired to pull-to-refresh. */
 	reload(): void;
 };
@@ -148,8 +149,12 @@ export function usePRSummaries(sessions: PRSummarySession[]): PRSummaryLookup {
 	// Reads the ref, so it stays correct without being re-created; the bump above
 	// is what re-renders the list to pick up new entries.
 	const summaryFor = useCallback(
-		(config: ServerConfig, sessionId: string, number: number) =>
-			(cache.current[authorizedCacheKey(config, sessionId)] ?? navigationSummary(config, sessionId))?.find((p) => p.number === number),
+		(config: ServerConfig, sessionId: string, number: number, url?: string) => {
+			const prs = cache.current[authorizedCacheKey(config, sessionId)] ?? navigationSummary(config, sessionId) ?? [];
+			if (url) return pullRequestSummaryForURL(prs, url);
+			const matches = prs.filter((p) => p.number === number);
+			return matches.length === 1 ? matches[0] : undefined;
+		},
 		[],
 	);
 

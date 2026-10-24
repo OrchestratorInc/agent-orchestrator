@@ -1,13 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import NativeAbortController from "abort-controller";
-const storage = vi.hoisted(() => ({ data: new Map<string, string>(), setItem: vi.fn() }));
+import { CloudApiError, CloudRequestTimeoutError } from "@aoagents/cloud-client";
+const storage = vi.hoisted(() => ({ data: new Map<string, string>(), setItem: vi.fn(), removeItem: vi.fn() }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => storage.data.get(key) ?? null,
-	setItem: storage.setItem, removeItem: async (key: string) => { storage.data.delete(key); },
+	setItem: storage.setItem, removeItem: storage.removeItem,
 } }));
-beforeEach(() => { storage.data.clear(); storage.setItem.mockReset().mockImplementation(async (key: string, value: string) => { storage.data.set(key, value); }); });
+beforeEach(() => {
+	storage.data.clear();
+	storage.setItem.mockReset().mockImplementation(async (key: string, value: string) => { storage.data.set(key, value); });
+	storage.removeItem.mockReset().mockImplementation(async (key: string) => { storage.data.delete(key); });
+});
 import { createCloudSessionSource as createSource } from "./source";
 import { cloudConversationReplayCache } from "./conversationReplay";
+import { acceptCloudOperation, clearCloudOperation, prepareCloudOperation, readCloudOperation, reserveCloudOperation } from "./operation";
 beforeEach(() => cloudConversationReplayCache.clear());
 function createCloudSessionSource(input: { client: never; orgId: string; scopeKey?: string; isCurrent?: () => boolean }) {
 	return createSource({ scopeKey: "test-scope", isCurrent: () => true, ...input });
@@ -117,6 +123,51 @@ describe("Cloud Chat with React Native cancellation signals", () => {
 });
 
 describe("createCloudSessionSource", () => {
+	it("binds PR and browser capabilities to the same account and rejects retired owners", async () => {
+		const listSessionPullRequests = vi.fn(async () => ({ pullRequests: [] }));
+		let current = true;
+		const source = createCloudSessionSource({ client: clientStub({ listSessionPullRequests }) as never, orgId: "o1", scopeKey: "account-parity", isCurrent: () => current });
+		expect(source.pullRequests?.scopeKey).toBe("account-parity");
+		expect(source.preview?.scopeKey).toBe("account-parity");
+		await expect(source.pullRequests!.list("s1")).resolves.toEqual([]);
+		expect(listSessionPullRequests).toHaveBeenCalledWith("o1", "s1", undefined);
+		current = false;
+		expect(source.preview!.isCurrent()).toBe(false);
+		await expect(source.pullRequests!.list("s1")).rejects.toThrow("Cloud account changed");
+		expect(listSessionPullRequests).toHaveBeenCalledTimes(1);
+	});
+	it("exposes Files through the same account-scoped Cloud owner", async () => {
+		const getWorkspaceReview = vi.fn(async () => ({ workspaceVersion: "v1", files: [], sections: { committed: [], staged: [], unstaged: [], untracked: [] }, summary: { files: 0, additions: 0, deletions: 0 }, truncated: false }));
+		let current = true;
+		const source = createCloudSessionSource({ client: clientStub({ getWorkspaceReview }) as never, orgId: "o1", scopeKey: "account-files", isCurrent: () => current });
+		expect(source.workspace?.scopeKey).toBe("account-files");
+		expect(await source.workspace!.getManifest("s1")).toMatchObject({ sessionId: "s1", workspaceVersion: "v1" });
+		current = false;
+		await expect(source.workspace!.getManifest("s1")).rejects.toThrow(/account changed/i);
+		expect(getWorkspaceReview).toHaveBeenCalledOnce();
+	});
+	it.each([
+		{ prompt: undefined, harness: "codex", title: "codex" },
+		{ prompt: "", harness: "claude-code", title: "claude-code" },
+		{ prompt: " \n\t ", harness: "opencode", title: "opencode" },
+		{ prompt: undefined, harness: undefined, title: "claude-code" },
+		{ prompt: "  Inspect the repository\n", harness: "codex", title: "Inspect the repository" },
+		{ prompt: "a".repeat(110), harness: "codex", title: "a".repeat(100) },
+	])("names a Cloud worker like desktop: $title", async ({ prompt, harness, title }) => {
+		const client = clientStub();
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await source.createSession({ projectId: "p1", prompt, harness, clientRequestId: "title-one" });
+		expect(client.createSession).toHaveBeenCalledWith("o1", expect.objectContaining({
+			displayName: title, harness: harness ?? "claude-code", prompt: prompt ?? "",
+		}), { idempotencyKey: "title-one" });
+	});
+	it("preserves an already reserved legacy title when retrying instead of changing its idempotent payload", async () => {
+		const payload = { projectId: "p1", kind: "worker" as const, harness: "codex", displayName: "New session", prompt: "", mode: "trusted" as const, deniedCommands: [] };
+		await reserveCloudOperation("worker-create/p1", prepareCloudOperation(undefined, "test-scope", payload, () => "legacy-one"));
+		const client = clientStub();
+		await createCloudSessionSource({ client: client as never, orgId: "o1" }).createSession({ projectId: "p1", harness: "codex", clientRequestId: "legacy-one" });
+		expect(client.createSession).toHaveBeenCalledWith("o1", payload, { idempotencyKey: "legacy-one" });
+	});
 	it("acknowledges the original recovery notice without unlocking either controller", async () => {
 		const acknowledge = vi.fn(async () => ({ ok: true }));
 		const transition = { id: "h1", sourceMode: "chat", targetMode: "tui", phase: "recovery_required", errorDetail: "Recovery needed" };
@@ -185,11 +236,15 @@ describe("createCloudSessionSource", () => {
 		expect(sendMessage).toHaveBeenCalledWith("o1", "s1", { text: "Inspect", model: "picked", reasoningEffort: "high" }, { idempotencyKey: "one" });
 	});
 	it("steers only the captured active turn instead of posting another user message", async () => {
-		const steerTurn = vi.fn(); const sendMessage = vi.fn();
+		const steerTurn = vi.fn(async () => ({ event: { sessionId: "s1", sequence: 2, type: "chat.turn_steer_requested", payload: { turnId: "t1", clientMessageId: "steer-one", text: "Guidance" }, createdAt: "now" } })); const sendMessage = vi.fn();
 		const current = { ...fullSession("s1"), interfaceMode: "chat", activeTurn: { id: "t1", state: "running", attemptCount: 1 } };
-		const source = createCloudSessionSource({ client: clientStub({ getSession: vi.fn(async () => ({ session: current })), replayEvents: vi.fn(async () => ({ events: [{ sessionId: "s1", sequence: 1, type: "chat.turn_capabilities", payload: { turnId: "t1", attempt: 1, steering: true }, createdAt: "now" }], nextAfter: 1, hasMore: false })), steerTurn, sendMessage }) as never, orgId: "o1" });
+		const source = createCloudSessionSource({ client: clientStub({ getSession: vi.fn(async () => ({ session: current })), replayEvents: vi.fn(async (_org: string, _session: string, options: { after?: number } = {}) => options.after === 2
+			? { events: [{ sessionId: "s1", sequence: 3, type: "chat.turn_steered", payload: { turnId: "t1", clientMessageId: "steer-one", text: "Guidance" }, createdAt: "now" }], nextAfter: 3, hasMore: false }
+			: { events: [{ sessionId: "s1", sequence: 1, type: "chat.turn_capabilities", payload: { turnId: "t1", attempt: 1, steering: true }, createdAt: "now" }], nextAfter: 1, hasMore: false }), steerTurn, sendMessage }) as never, orgId: "o1" });
+		await source.setTurnSettings!("s1", { reasoningEffort: "default" });
 		await source.steerMessage!("s1", { text: "Guidance", clientMessageId: "steer-one" }, "t1");
-		expect(steerTurn).toHaveBeenCalledWith("o1", "s1", "t1", "Guidance", { idempotencyKey: "steer-one" });
+		expect((await source.getConversationPage("s1")).settings.reasoningEffort).toBe("default");
+		expect(steerTurn).toHaveBeenCalledWith("o1", "s1", "t1", "Guidance", { idempotencyKey: "steer-one", signal: expect.anything() });
 		await expect(source.steerMessage!("s1", { text: "Guidance", clientMessageId: "steer-two" }, "older")).rejects.toThrow(/turn finished/i);
 		expect(sendMessage).not.toHaveBeenCalled();
 	});
@@ -205,6 +260,112 @@ describe("createCloudSessionSource", () => {
 		expect(await createCloudSessionSource({ client: client as never, orgId: "o1" }).createSession(options)).toEqual({ id: "accepted" });
 		expect(client.createSession).toHaveBeenCalledTimes(2);
 	});
+	it("forwards canonical worker project effort when no explicit override is selected", async () => {
+		const client = clientStub({ getProject: vi.fn(async () => ({ project: { config: { worker: { agent: "codex", agentConfig: { model: "project-model", effort: "high" } } } } })) });
+		await createCloudSessionSource({ client: client as never, orgId: "o1" }).createSession({ projectId: "p1", harness: "codex", clientRequestId: "canonical" });
+		expect(client.createSession).toHaveBeenCalledWith("o1", expect.objectContaining({ model: "project-model", reasoningEffort: "high" }), { idempotencyKey: "canonical" });
+	});
+	it("releases a confirmed quota rejection so an edited task can use a new identity", async () => {
+		const error = new CloudApiError(409, { error: "conflict", code: "SANDBOX_QUOTA_EXCEEDED", message: "Concurrent session limit reached.", requestId: "quota-request" });
+		const client = clientStub({ createSession: vi.fn().mockRejectedValueOnce(error).mockResolvedValue({ session: { id: "edited-task" } }) });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await expect(source.createSession({ projectId: "p1", prompt: "Original task", model: "first", clientRequestId: "rejected" })).rejects.toBe(error);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toBeNull();
+		expect(await source.createSession({ projectId: "p1", prompt: "Edited task", model: "second", clientRequestId: "fresh" })).toEqual({ id: "edited-task" });
+		expect(client.createSession.mock.calls[1]).toEqual(["o1", expect.objectContaining({ prompt: "Edited task", model: "second" }), { idempotencyKey: "fresh" }]);
+	});
+	it("releases an uncertain request after its unchanged retry receives a confirmed quota rejection", async () => {
+		const error = new CloudApiError(409, { error: "conflict", code: "SANDBOX_QUOTA_EXCEEDED", message: "Concurrent session limit reached.", requestId: "retry-quota" });
+		const client = clientStub({ createSession: vi.fn().mockRejectedValueOnce(new TypeError("Response lost")).mockRejectedValueOnce(error) });
+		const options = { projectId: "p1", prompt: "Original task", model: "original", clientRequestId: "uncertain" };
+		await expect(createCloudSessionSource({ client: client as never, orgId: "o1" }).createSession(options)).rejects.toThrow("Response lost");
+		await expect(createCloudSessionSource({ client: client as never, orgId: "o1" }).createSession({ ...options, prompt: "Edited task", model: "changed" })).rejects.toBe(error);
+		expect(client.createSession.mock.calls[1]).toEqual(client.createSession.mock.calls[0]);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toBeNull();
+	});
+	it("releases an authoritative unsupported-interface rejection so Terminal can use a fresh identity", async () => {
+		const error = new CloudApiError(409, { error: "conflict", code: "SESSION_MODE_UNSUPPORTED", message: "This harness cannot run in Chat.", requestId: "unsupported" });
+		const client = clientStub({ createSession: vi.fn().mockRejectedValueOnce(error).mockResolvedValue({ session: { id: "terminal-task" } }) });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await expect(source.createSession({ projectId: "p1", harness: "codex", mode: "chat", prompt: "Inspect", clientRequestId: "chat-request" })).rejects.toBe(error);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toBeNull();
+		expect(await source.createSession({ projectId: "p1", harness: "codex", mode: "tui", prompt: "Inspect", clientRequestId: "terminal-request" })).toEqual({ id: "terminal-task" });
+		expect(client.createSession.mock.calls[1]).toEqual(["o1", expect.objectContaining({ interfaceMode: "tui", prompt: "Inspect" }), { idempotencyKey: "terminal-request" }]);
+	});
+	it("preserves an uncertain Chat request when a later capability rejection happens before idempotency replay", async () => {
+		const error = new CloudApiError(409, { error: "conflict", code: "SESSION_MODE_UNSUPPORTED", message: "Chat is no longer available.", requestId: "capability-changed" });
+		const client = clientStub({ createSession: vi.fn().mockRejectedValueOnce(new TypeError("Response lost")).mockRejectedValueOnce(error) });
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		const input = { projectId: "p1", harness: "codex", mode: "chat" as const, prompt: "Original task", clientRequestId: "uncertain-chat" };
+		await expect(source.createSession(input)).rejects.toThrow("Response lost");
+		await expect(source.createSession({ ...input, prompt: "Edited task" })).rejects.toBe(error);
+		expect(client.createSession.mock.calls[1]).toEqual(client.createSession.mock.calls[0]);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toMatchObject({ key: "uncertain-chat", payload: { prompt: "Original task", interfaceMode: "chat" } });
+		await expect(source.createSession({ ...input, mode: "tui", clientRequestId: "changed" })).rejects.toThrow(/previous Cloud request/);
+	});
+	it.each([
+		new TypeError("Failed to fetch"),
+		new CloudRequestTimeoutError(),
+		new CloudApiError(503, { error: "internal_error", code: "internal_error", message: "Unavailable", requestId: "r1" }),
+		new CloudApiError(409, { error: "conflict", code: "IDEMPOTENCY_CONFLICT", message: "Key already used", requestId: "r1" }),
+		new CloudApiError(409, { error: "conflict", code: "conflict", message: "Concurrent session limit reached.", requestId: "r1" }),
+		new CloudApiError(500, { error: "internal_error", code: "SANDBOX_QUOTA_EXCEEDED", message: "Concurrent session limit reached.", requestId: "r1" }),
+		new CloudApiError(503, { error: "internal_error", code: "SESSION_MODE_UNSUPPORTED", message: "Unavailable", requestId: "r1" }),
+		new CloudApiError(409, { error: "conflict", code: "CHAT_DRIVER_UNAVAILABLE", message: "Unavailable", requestId: "r1" }),
+		new Error("SESSION_MODE_UNSUPPORTED"),
+		new Error("SANDBOX_QUOTA_EXCEEDED: Concurrent session limit reached."),
+	])("retains the original key and frozen payload for every other create failure (%s)", async (error) => {
+		const client = clientStub({ createSession: vi.fn().mockRejectedValueOnce(error).mockResolvedValue({ session: { id: "retry-accepted" } }) });
+		const options = { projectId: "p1", prompt: "Original task", model: "first", clientRequestId: "original" };
+		const source = createCloudSessionSource({ client: client as never, orgId: "o1" });
+		await expect(source.createSession(options)).rejects.toBe(error);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toMatchObject({ key: "original", payload: { prompt: "Original task", model: "first" } });
+		await expect(source.createSession({ ...options, clientRequestId: "changed" })).rejects.toThrow(/previous Cloud request/);
+		expect(await source.createSession({ ...options, prompt: "Edited task", model: "second" })).toEqual({ id: "retry-accepted" });
+		expect(client.createSession.mock.calls[1]).toEqual(client.createSession.mock.calls[0]);
+	});
+	it("releases only the rejected operation in its own account scope", async () => {
+		const otherProject = prepareCloudOperation(undefined, "test-scope", { projectId: "p2" }, () => "other-project");
+		const otherAccount = prepareCloudOperation(undefined, "other-account", { projectId: "p1" }, () => "other-account");
+		await reserveCloudOperation("worker-create/p2", otherProject);
+		await reserveCloudOperation("worker-create/p1", otherAccount);
+		const error = new CloudApiError(409, { error: "conflict", code: "SANDBOX_QUOTA_EXCEEDED", message: "Concurrent session limit reached.", requestId: "quota-request" });
+		const source = createCloudSessionSource({ client: clientStub({ createSession: vi.fn().mockRejectedValue(error) }) as never, orgId: "o1" });
+		await expect(source.createSession({ projectId: "p1", clientRequestId: "rejected" })).rejects.toBe(error);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toBeNull();
+		expect(await readCloudOperation("test-scope", "worker-create/p2")).toEqual(otherProject);
+		expect(await readCloudOperation("other-account", "worker-create/p1")).toEqual(otherAccount);
+	});
+	it("does not clear a newer operation when an older request is rejected", async () => {
+		const newer = prepareCloudOperation(undefined, "test-scope", { projectId: "p1", prompt: "Newer task" }, () => "newer");
+		const error = new CloudApiError(409, { error: "conflict", code: "SANDBOX_QUOTA_EXCEEDED", message: "Concurrent session limit reached.", requestId: "late-quota" });
+		const source = createCloudSessionSource({ client: clientStub({ createSession: vi.fn(async () => {
+			await clearCloudOperation("test-scope", "worker-create/p1", "older");
+			await reserveCloudOperation("worker-create/p1", newer);
+			throw error;
+		}) }) as never, orgId: "o1" });
+		await expect(source.createSession({ projectId: "p1", clientRequestId: "older" })).rejects.toBe(error);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toEqual(newer);
+	});
+	it("does not clear an acceptance recorded while a request is in flight", async () => {
+		const error = new CloudApiError(409, { error: "conflict", code: "SANDBOX_QUOTA_EXCEEDED", message: "Concurrent session limit reached.", requestId: "late-quota" });
+		const source = createCloudSessionSource({ client: clientStub({ createSession: vi.fn(async () => {
+			await acceptCloudOperation("test-scope", "worker-create/p1", "accepted", "accepted-session");
+			throw error;
+		}) }) as never, orgId: "o1" });
+		await expect(source.createSession({ projectId: "p1", clientRequestId: "accepted" })).rejects.toBe(error);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toMatchObject({ key: "accepted", acceptedId: "accepted-session" });
+	});
+	it.each(["remove", "save"])("preserves the original quota error and retry record if cleanup cannot %s storage", async (failure) => {
+		if (failure === "save") await reserveCloudOperation("worker-create/p2", prepareCloudOperation(undefined, "test-scope", { projectId: "p2" }, () => "other"));
+		const error = new CloudApiError(409, { error: "conflict", code: "SANDBOX_QUOTA_EXCEEDED", message: "Concurrent session limit reached.", requestId: "original-reference" });
+		const source = createCloudSessionSource({ client: clientStub({ createSession: vi.fn(async () => {
+			(failure === "remove" ? storage.removeItem : storage.setItem).mockRejectedValueOnce(new Error("Storage unavailable"));
+			throw error;
+		}) }) as never, orgId: "o1" });
+		await expect(source.createSession({ projectId: "p1", clientRequestId: "rejected" })).rejects.toBe(error);
+		expect(await readCloudOperation("test-scope", "worker-create/p1")).toMatchObject({ key: "rejected" });
+	});
 	it("blocks double taps and stops before POST if the retry record cannot be stored", async () => {
 		const client = clientStub();
 		storage.setItem.mockRejectedValueOnce(new Error("Storage unavailable"));
@@ -215,13 +376,24 @@ describe("createCloudSessionSource", () => {
 		await Promise.all([source.createSession(options), source.createSession(options)]);
 		expect(client.createSession).toHaveBeenCalledOnce();
 	});
-	it("carries model, effort, and reserved request identity to Cloud", async () => {
+	it.each(["chat", "tui"] as const)("carries %s mode, model, effort, and reserved request identity to Cloud", async (mode) => {
 		const client = clientStub();
 		const source = createCloudSessionSource({ client: client as never, orgId: "o1", scopeKey: "scope-one", isCurrent: () => true });
-		await source.createSession({ projectId: "p1", prompt: "Inspect", harness: "codex", model: "model-test", reasoningEffort: "high", clientRequestId: "spawn-one" });
+		await source.createSession({ projectId: "p1", prompt: "Inspect", harness: "codex", mode, model: "model-test", reasoningEffort: "high", clientRequestId: "spawn-one" });
 		expect(source.scopeKey).toBe("scope-one");
 		expect(client.createSession).toHaveBeenCalledWith("o1", expect.objectContaining({ model: "model-test", reasoningEffort: "high" }), { idempotencyKey: "spawn-one" });
-		expect(client.createSession.mock.calls[0][1]).not.toHaveProperty("interfaceMode");
+		expect(client.createSession.mock.calls[0][1]).toHaveProperty("interfaceMode", mode);
+	});
+	it.each(["repository_checkout_failed", "working_directory_unusable", "project_setup_failed"])("retries a connected worker after %s", async (code) => {
+		const retrySessionStartup = vi.fn(async () => { throw new CloudApiError(409, { error: "conflict", code: "startup_retry_unavailable", message: "Worker has already checked in", requestId: "workspace-retry" }); });
+		const requestWorkspaceCheckout = vi.fn(async () => ({ requested: true }));
+		const source = createCloudSessionSource({ client: clientStub({
+			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), desiredState: "running", observedState: "running", runtimeState: "running", startupError: { code, message: "Workspace preparation failed" } } })),
+			retrySessionStartup, requestWorkspaceCheckout,
+		}) as never, orgId: "o1" });
+		await source.retryStartup!("s1");
+		expect(requestWorkspaceCheckout).toHaveBeenCalledWith("o1", "s1");
+		expect(retrySessionStartup).not.toHaveBeenCalled();
 	});
 	it("rejects a Cloud spawn without reserved identity or after account change", async () => {
 		const client = clientStub();
@@ -313,14 +485,14 @@ describe("createCloudSessionSource", () => {
 		}, { idempotencyKey: "cm-1" });
 	});
 
-	it("does not offer Codex models to a Claude Code Cloud session", async () => {
-		const listChatModels = vi.fn();
+	it("loads the worker's Claude Code models and effort choices", async () => {
+		const listChatModels = vi.fn(async () => ({ models: [{ id: "claude-sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" }] }));
 		const source = createCloudSessionSource({ client: clientStub({
 			getSession: vi.fn(async () => ({ session: { ...fullSession("s1"), interfaceMode: "chat" } })),
 			listChatModels,
 		}) as never, orgId: "o1" });
-		expect(await source.getChatModels!("s1")).toEqual([]);
-		expect(listChatModels).not.toHaveBeenCalled();
+		expect(await source.getChatModels!("s1")).toEqual([{ id: "claude-sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" }]);
+		expect(listChatModels).toHaveBeenCalledWith("o1", "s1");
 	});
 
 	it("does not present a Terminal-mode cloud session as a Chat controller", async () => {

@@ -54,6 +54,15 @@ describe("cloudLifecycleStage", () => {
 
 describe("startup problems", () => {
 	const startupError = { code: "bootstrap_failed", message: "Worker could not start", at: "2026-10-13T00:00:00Z", detail: "Internal https://private.example/log" };
+	it.each(["repository_checkout_failed", "working_directory_unusable", "project_setup_failed"])("keeps %s failed even after the runtime connects", (code) => {
+		const session = { runtimeConnected: true, cloud: { ...base, runtimeState: "running", startupError: { ...startupError, code } } };
+		const problem = cloudStartupProblem(session);
+		expect(problem).toMatchObject({ phase: "failed", code, message: "Worker could not start", detail: startupError.detail, at: startupError.at });
+		const stage = cloudLifecycleStage(session);
+		expect(stage).toBe("failed");
+		expect(lifecycle.cloudHeaderControllerState(stage, "ready")).toBe("stopped");
+		expect(shouldShowCloudStartup({ spawnIntent: true, stage, startupProblem: problem, terminalReady: false })).toBe(false);
+	});
 	it("distinguishes final startup from retries and preserves archive as a separate fact", () => {
 		expect(cloudStartupProblem({ cloud: { runtimeState: "failed", startupError } })).toEqual({ phase: "retrying", message: startupError.message });
 		expect(cloudStartupProblem({ cloud: { runtimeState: "terminated", startupError } })).toMatchObject({ phase: "failed", code: "bootstrap_failed" });

@@ -18,10 +18,9 @@ import {
 	useWindowDimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { authHeaders, httpBase } from "../config";
+import { authHeaders, httpBase, type ServerConfig } from "../config";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
-import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { MascotLamp, Spinning } from "../ui";
@@ -86,6 +85,7 @@ type TimelineRow =
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
 export const ChatTimeline = memo(function ChatTimeline({
+	config,
 	snapshot,
 	loadingOlder,
 	onLoadOlder,
@@ -99,6 +99,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	answeredBelow,
 	startup,
 }: {
+	/** Exact routed machine, or null when no Local preview source is available. */
+	config: ServerConfig | null;
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
 	onLoadOlder(): void;
@@ -233,6 +235,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 				ListHeaderComponent={inverted ? standaloneStartup : olderControl}
 				ListFooterComponent={inverted ? olderControl : standaloneStartup}
 				renderItem={({ item: group }) => <ConversationTurnGroup
+					config={config}
 					group={group}
 					snapshot={snapshot}
 					approvalPending={approvalPending}
@@ -251,7 +254,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	);
 });
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked, startup }: {
+function ConversationTurnGroup({ config, group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, answeredBelow, workedOpen, onToggleWorked, startup }: {
+	config: ServerConfig | null;
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -273,7 +277,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		: group.items;
 	const renderRows = (list: ConversationItem[]) => activityRuns(list).map((row) => row.kind === "activities"
 		? <ActivityRun key={row.key} activities={row.items} />
-		: <TimelineItem key={row.key} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
+		: <TimelineItem key={row.key} config={config} item={row.items[0]} sessionId={snapshot.sessionId} conversationId={snapshot.conversationId} completed={group.turn?.state === "completed" && !group.turn.rolledBack} approvalPending={approvalPending} inputPending={inputPending} onDecide={onDecide} onResolveInput={onResolveInput} answeredBelow={answeredBelow} />);
 	if (startup) {
 		// The checklist sits exactly where the Working row will, under the brief,
 		// so the handoff moves nothing.
@@ -302,6 +306,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 }
 
 const TimelineItem = memo(function TimelineItem({
+	config,
 	item,
 	sessionId,
 	conversationId,
@@ -312,6 +317,7 @@ const TimelineItem = memo(function TimelineItem({
 	onResolveInput,
 	answeredBelow,
 }: {
+	config: ServerConfig | null;
 	item: ConversationItem;
 	sessionId: string;
 	conversationId: string;
@@ -333,7 +339,7 @@ const TimelineItem = memo(function TimelineItem({
 					<View style={[styles.userBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
 						<SentResponseQuotes content={item.content} />
 						{body ? <Text selectable style={styles.userText}>{body}</Text> : null}
-						{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
+						{attachments.length > 0 ? <StagedAttachments config={config} sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
 						{delivery ? <Text style={styles.delivery}>{delivery}</Text> : null}
 					</View>
 				</View>
@@ -361,13 +367,16 @@ const TimelineItem = memo(function TimelineItem({
 	if (item.activityKind === "system" && item.detail?.event === "compaction") {
 		return <CompactionMarker activity={item} />;
 	}
+	if (item.activityKind === "system" && item.detail?.event === "workspace.setup") {
+		return <ProjectSetupRow activity={item} />;
+	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		return <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
+		return <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments config={config} sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
-	if (render) return <RenderFrame render={render} />;
+	if (render) return <RenderFrame config={config} render={render} />;
 	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
@@ -380,17 +389,45 @@ function SystemSignal({ icon, title, detail, danger }: { icon: keyof typeof Feat
 	return <View style={[styles.systemSignal, danger && { borderColor: t.red }]}><Feather name={icon} size={15} color={danger ? t.red : t.textTertiary} /><View style={{ flex: 1 }}><Text style={[styles.systemTitle, danger && { color: t.red }]}>{title}</Text>{detail ? <Text style={styles.systemDetail}>{String(detail)}</Text> : null}</View></View>;
 }
 
+/** Cloud Setup completes before an agent turn; only its redacted output is expandable. */
+function ProjectSetupRow({ activity }: { activity: ConversationActivity }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const [expanded, setExpanded] = useState(false);
+	const detail = activity.detail ?? {};
+	const status = detail.setupStatus ?? (activity.status === "completed" ? "succeeded" : "failed");
+	const step = typeof detail.setupStep === "number" ? detail.setupStep : 1;
+	const seconds = typeof detail.durationMs === "number" ? Math.max(0, Math.round(detail.durationMs / 1000)) : undefined;
+	const duration = seconds === undefined ? undefined : seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+	const headline = status === "succeeded"
+		? duration ? `Setup passed in ${duration}` : "Setup passed"
+		: status === "timed_out" ? `Setup step ${step} timed out`
+			: typeof detail.exitCode === "number" && detail.exitCode >= 0 ? `Setup step ${step} failed (exit ${detail.exitCode})` : `Setup step ${step} failed`;
+	const output = typeof detail.output === "string" && detail.output.trim() ? commandOutputText(detail.output) : undefined;
+	const failed = status !== "succeeded";
+	return <View style={[styles.systemSignal, { flexDirection: "column" }, failed && { borderColor: t.red }]}>
+		<View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+			<Feather name={failed ? "alert-circle" : "terminal"} size={15} color={failed ? t.red : t.textTertiary} />
+			<Text selectable style={[styles.systemTitle, { flex: 1 }, failed && { color: t.red }]}>{headline}</Text>
+			{output ? <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? "Hide" : "Show"} Setup output`} accessibilityState={{ expanded }} onPress={() => { haptics.tap(); setExpanded((value) => !value); }} style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
+				<Text style={styles.systemDetail}>{expanded ? "Hide output" : "Show output"}</Text>
+				<Feather name={expanded ? "chevron-down" : "chevron-right"} size={12} color={t.textTertiary} />
+			</Pressable> : null}
+		</View>
+		{output && expanded ? <CodeOutput value={output} /> : null}
+	</View>;
+}
+
 /**
  * Files AO staged into the worktree for a human message. Images load through the
  * daemon's preview-files route with the connection's Bearer header, the same
  * credential every other mobile request uses; anything else stays a name chip.
  * Images sit in the bubble as center-cropped tiles and open full-screen on tap.
  * RN 0.86 Android forwards HTTP headers only for array sources, on both surfaces.
- * Render it only for messages that carry attachments: it subscribes to the app
- * store, and doing that for every bubble would defeat TimelineItem's memo.
+ * The routed config is explicit so memoized bubbles never borrow another
+ * machine's endpoint or credentials from the global active selection.
  */
-function StagedAttachments({ sessionId, paths, spaced }: { sessionId: string; paths: string[]; spaced: boolean }) {
-	const { config } = useApp();
+function StagedAttachments({ config, sessionId, paths, spaced }: { config: ServerConfig | null; sessionId: string; paths: string[]; spaced: boolean }) {
 	const styles = useThemedStyles(makeStyles);
 	const tileSize = attachmentTileSize(paths.filter(isImageAttachment).length);
 	return <View style={[styles.attachments, spaced && styles.attachmentsSpaced]}>

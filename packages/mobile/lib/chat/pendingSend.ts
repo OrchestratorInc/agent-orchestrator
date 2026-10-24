@@ -40,7 +40,8 @@ export async function readPendingSend(key: string): Promise<PendingSendRecord | 
 	if (!saved.id || typeof saved.draftText !== "string" || typeof saved.text !== "string" || typeof saved.hasAttachments !== "boolean" ||
 		(saved.kind !== undefined && saved.kind !== "send" && saved.kind !== "steer") ||
 		(saved.targetTurnId !== undefined && typeof saved.targetTurnId !== "string") ||
-		(saved.settings !== undefined && (!saved.settings || typeof saved.settings !== "object" || Object.entries(saved.settings).some(([key, value]) => !["model", "reasoningEffort", "approvalMode"].includes(key) || typeof value !== "string"))) ||
+		(saved.settings !== undefined && (!saved.settings || typeof saved.settings !== "object" || Object.entries(saved.settings).some(([key, value]) =>
+			key === "executionMode" ? value !== "agent" && value !== "plan" : !["model", "reasoningEffort", "approvalMode"].includes(key) || typeof value !== "string"))) ||
 		(saved.excerpts !== undefined && (!Array.isArray(saved.excerpts) || saved.excerpts.length > 8 || !saved.excerpts.every(isChatExcerpt)))) {
 		throw new Error("The previous message's retry record is damaged. Discard it before sending another message.");
 	}

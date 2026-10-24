@@ -15,6 +15,10 @@ export function ConversationActionsSheet({ entry, snapshot, onAction }: { entry:
 	const styles = useThemedStyles(makeStyles);
 	const turnInFlight = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");
 	const sections = conversationMenuSections({
+		canOpenFiles: entry.canOpenFiles,
+		canOpenShell: entry.canOpenShell,
+		canPreview: entry.canPreview,
+		canPullRequests: entry.canPullRequests,
 		canRename: entry.canRename && can(snapshot, "rename"),
 		canPin: entry.canPin,
 		canCompact: entry.compactSupported,

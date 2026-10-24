@@ -6,7 +6,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	removeItem: async (key: string) => { storage.data.delete(key); },
 	getAllKeys: async () => [...storage.data.keys()],
 } }));
-import { acceptCloudOperation, clearCloudOperation, clearCloudOperationsForAccount, clearCloudOperationsForScope, prepareCloudOperation, readCloudOperation, reserveCloudOperation } from "./operation";
+import { acceptCloudOperation, clearCloudOperation, clearCloudOperationsForAccount, clearCloudOperationsForScope, prepareCloudOperation, readCloudOperation, rejectCloudOperation, reserveCloudOperation } from "./operation";
 beforeEach(() => {
 	storage.data.clear();
 	storage.setItem.mockReset().mockImplementation(async (key: string, value: string) => { storage.data.set(key, value); });
@@ -48,6 +48,25 @@ describe("scoped Cloud operation journal", () => {
 	it("refuses a changed request until the uncertain write is explicitly resolved", async () => {
 		await reserveCloudOperation("project-create/repo", prepareCloudOperation(undefined, "scope", payload, () => "first"));
 		await expect(reserveCloudOperation("project-create/repo", prepareCloudOperation(undefined, "scope", { ...payload, displayName: "Other" }, () => "second"))).rejects.toThrow(/previous/i);
+	});
+	it("releases only a matching unaccepted operation after a confirmed rejection", async () => {
+		const operation = prepareCloudOperation(undefined, "scope", payload, () => "rejected");
+		await reserveCloudOperation("project-create/repo", operation);
+		await reserveCloudOperation("project-create/other", prepareCloudOperation(undefined, "scope", payload, () => "other"));
+		await reserveCloudOperation("project-create/repo", prepareCloudOperation(undefined, "other-scope", payload, () => "rejected"));
+		await rejectCloudOperation("scope", "project-create/repo", "older");
+		expect(await readCloudOperation("scope", "project-create/repo")).toEqual(operation);
+		await rejectCloudOperation("scope", "project-create/repo", "rejected");
+		expect(await readCloudOperation("scope", "project-create/repo")).toBeNull();
+		expect(await readCloudOperation("scope", "project-create/other")).toMatchObject({ key: "other" });
+		expect(await readCloudOperation("other-scope", "project-create/repo")).toMatchObject({ key: "rejected" });
+	});
+	it("checks acceptance inside the storage queue before releasing a rejected operation", async () => {
+		await reserveCloudOperation("project-create/repo", prepareCloudOperation(undefined, "scope", payload, () => "key"));
+		const acceptance = acceptCloudOperation("scope", "project-create/repo", "key", "project-accepted");
+		const rejection = rejectCloudOperation("scope", "project-create/repo", "key");
+		await Promise.all([acceptance, rejection]);
+		expect(await readCloudOperation("scope", "project-create/repo")).toMatchObject({ key: "key", acceptedId: "project-accepted" });
 	});
 	it("clears only the selected scope and cannot recreate it from a late acceptance", async () => {
 		for (const scope of ["one", "two"]) await reserveCloudOperation("worker-create/p1", prepareCloudOperation(undefined, scope, { projectId: "p1" }, () => scope));

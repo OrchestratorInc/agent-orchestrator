@@ -14,6 +14,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { CloudAuthProvider } from "../lib/cloud/authStore";
+import { CloudNotificationsProvider } from "../lib/cloud/notifications";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { PushManager } from "../lib/PushManager";
@@ -126,7 +127,9 @@ export default function RootLayout() {
 					<ThemeProvider initial={themeSettings}>
 						<CloudAuthProvider>
 							<AppProvider>
-								<Shell />
+								<CloudNotificationsProvider>
+									<Shell />
+								</CloudNotificationsProvider>
 							</AppProvider>
 						</CloudAuthProvider>
 					</ThemeProvider>

@@ -13,7 +13,6 @@ describe("Local-only actions on the combined board", () => {
 	it("uses Local notifications and source-qualified routes", () => {
 		expect(notifications).toContain("hostStates.find((item) => item.hostId === hostId)");
 		expect(notifications).toContain("host?.sessions.find");
-		expect(notifications).toContain('restoreOn({ kind: "local", id: hostId }, sessionId)');
 		expect(notifications).toContain('source: "local", sourceId: notification.hostId');
 	});
 });

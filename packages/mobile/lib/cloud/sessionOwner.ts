@@ -2,6 +2,7 @@ import * as Crypto from "expo-crypto";
 import { CloudApiError } from "@aoagents/cloud-client";
 import * as WebBrowser from "expo-web-browser";
 import type { Account } from "../account";
+import { clearCloudReviewsForAccount } from "../files/reviewStore";
 import { createMobileCloudClient } from "./client";
 import { CLOUD_CONFIGURATION_ERROR, CLOUD_DEPLOYMENT } from "./config";
 import type { CloudDeployment } from "./deployment";
@@ -32,6 +33,7 @@ export function createAccountSessionOwner({ tokens, readAccount, onSignOut }: {
 }): AccountSessionOwner {
 	let snapshot: AccountSessionSnapshot = { account: null, signedIn: null, epoch: 0, busy: false, error: null };
 	let initialization: { epoch: number; promise: Promise<void> } | null = null;
+	let signOutCleanup: Promise<void> | null = null;
 	const listeners = new Set<() => void>();
 	let lastVerifiedAccount: Account | null = null;
 	const publish = (patch: Partial<AccountSessionSnapshot>) => {
@@ -89,6 +91,10 @@ export function createAccountSessionOwner({ tokens, readAccount, onSignOut }: {
 					publish({ account: previous.account, signedIn: previous.signedIn });
 					return false;
 				}
+				// Cache retirement may still be enumerating the signed-out account's
+				// records. Finish it before a new login can reserve records in that scope.
+				if (signOutCleanup) await signOutCleanup.catch(() => {});
+				if (epoch !== snapshot.epoch) return false;
 				await tokens.replace(issued);
 				if (epoch !== snapshot.epoch) return false;
 				publish({ signedIn: true });
@@ -109,7 +115,15 @@ export function createAccountSessionOwner({ tokens, readAccount, onSignOut }: {
 			publish({ epoch: snapshot.epoch + 1, account: null, signedIn: false, busy: false, error: null });
 			const account = lastVerifiedAccount;
 			lastVerifiedAccount = null;
-			await Promise.all([tokens.signOut(), onSignOut?.(account)]);
+			// All cleanup must settle, even when one storage operation fails; a
+			// rejected token clear must not let a later login overtake cache removal.
+			const cleanup = Promise.allSettled([signOutCleanup, tokens.signOut(), onSignOut?.(account)]).then((results) => {
+				const failed = results.find((result) => result.status === "rejected");
+				if (failed?.status === "rejected") throw failed.reason;
+			});
+			signOutCleanup = cleanup;
+			try { await cleanup; }
+			finally { if (signOutCleanup === cleanup) signOutCleanup = null; }
 		},
 	};
 }
@@ -129,6 +143,7 @@ export function getAccountSessionOwner(deployment: CloudDeployment = CLOUD_DEPLO
 		tokens,
 		onSignOut: async (account) => {
 			if (!account) return;
+			clearCloudReviewsForAccount(deployment.baseUrl, account.id);
 			const { cloudConversationReplayCache } = await import("./conversationReplay");
 			const { clearCloudConversationPages } = await import("../chat/snapshot");
 			cloudConversationReplayCache.clearAccount(deployment.baseUrl, account.id);

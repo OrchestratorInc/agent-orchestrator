@@ -40,6 +40,7 @@ const org = { id: "same-org", slug: "ada", displayName: "Ada", role: "owner" };
 const account = { user: { id: "ada", email: "ada@example.com", displayName: "Ada", authProvider: "local" }, organizations: [org] };
 const newToken = `header.${btoa(JSON.stringify({ exp: 4_000_000_000 }))}.sig`;
 const unauthorized = () => new Response(JSON.stringify({ error: "Unauthorized", code: "AUTH_REQUIRED", message: "Expired", requestId: "test" }), { status: 401 });
+const forbidden = () => new Response(JSON.stringify({ error: "Forbidden", code: "forbidden", message: "Membership changed", requestId: "test" }), { status: 403 });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 
 let raw: string | null;
@@ -185,6 +186,125 @@ describe("CloudAuthProvider session boundaries", () => {
 });
 
 describe("CloudAuthProvider organization recovery", () => {
+	it("adopts the current workspace after an org-scoped refusal without replaying the rejected action", async () => {
+		await mount();
+		const epoch = auth.sessionEpoch;
+		const requests: string[] = [];
+		fetchImpl.mockImplementation(async (url) => {
+			requests.push(String(url));
+			if (String(url).endsWith("/projects")) return forbidden();
+			if (String(url).endsWith("/me")) return json({ ...account, activeOrganizationId: "new-org", organizations: [{ ...org, id: "new-org" }], offering: { kind: "b2c", providers: ["freestyle"], defaultProvider: "freestyle", features: [], billingMode: "self_serve" } });
+			throw new Error(`Unexpected request ${url}`);
+		});
+		await act(async () => { await expect(auth.client.listProjects("same-org")).rejects.toThrow("Membership changed"); });
+		expect(auth.orgId).toBe("new-org");
+		expect(auth.offering?.defaultProvider).toBe("freestyle");
+		expect(auth.signedIn).toBe(true); expect(auth.sessionEpoch).toBe(epoch);
+		expect(requests).toEqual([
+			"http://127.0.0.1:8081/api/cloud/v1/orgs/same-org/projects",
+			"http://127.0.0.1:8081/api/cloud/v1/me",
+		]);
+		expect(JSON.parse(raw!).tokens.accessToken).toBe("old");
+	});
+	it("coalesces forbidden responses and keeps cached data while membership is revalidated", async () => {
+		await mount();
+		const lookup = deferred<Response>();
+		let lookups = 0;
+		fetchImpl.mockImplementation(async (url) => {
+			if (String(url).endsWith("/me")) { lookups++; return lookup.promise; }
+			return forbidden();
+		});
+		await act(async () => {
+			await Promise.all([auth.client.listProjects("same-org"), auth.client.listSessions("same-org")].map((request) => request.catch(() => {})));
+		});
+		expect(lookups).toBe(1);
+		expect(auth.orgId).toBe("same-org"); expect(auth.orgLoading).toBe(false);
+		await act(async () => { lookup.resolve(json({ ...account, activeOrganizationId: "new-org", organizations: [{ ...org, id: "new-org" }] })); });
+		expect(auth.orgId).toBe("new-org");
+	});
+	it("does not replay a rejected mutation during membership recovery", async () => {
+		await mount(); const requests: Array<{ url: string; method: string | undefined }> = [];
+		fetchImpl.mockImplementation(async (url, init) => {
+			requests.push({ url: String(url), method: init?.method });
+			if (String(url).endsWith("/me")) return json(account);
+			return forbidden();
+		});
+		await act(async () => { await expect(auth.client.createProject("same-org", { displayName: "Draft", repositoryUrl: "https://github.com/example/repo", defaultBranch: "main" }, { idempotencyKey: "draft-key" })).rejects.toThrow("Membership changed"); });
+		expect(requests.filter((request) => request.method === "POST")).toEqual([{ url: "http://127.0.0.1:8081/api/cloud/v1/orgs/same-org/projects", method: "POST" }]);
+		expect(requests.filter((request) => request.url.endsWith("/me"))).toHaveLength(1);
+		expect(auth.orgId).toBe("same-org"); expect(auth.signedIn).toBe(true);
+	});
+	it.each(["provider_forbidden", "WORKSPACE_READ_ONLY"])("does not treat %s as a membership change", async (code) => {
+		await mount(); fetchImpl.mockClear().mockImplementation(async () => json({ error: "Forbidden", code, message: "Policy denied", requestId: "test" }, 403));
+		await act(async () => { await expect(auth.client.listProjects("same-org")).rejects.toThrow("Policy denied"); });
+		expect(fetchImpl).toHaveBeenCalledOnce(); expect(auth.orgId).toBe("same-org"); expect(auth.signedIn).toBe(true);
+	});
+	it("retains the workspace and offers recovery when membership revalidation is offline", async () => {
+		await mount();
+		fetchImpl.mockImplementation(async (url) => {
+			if (String(url).endsWith("/me")) throw new Error("Offline");
+			return forbidden();
+		});
+		await act(async () => { await auth.client.listProjects("same-org").catch(() => {}); });
+		expect(auth.orgId).toBe("same-org"); expect(auth.orgError).toBe("Offline"); expect(auth.signedIn).toBe(true);
+		fetchImpl.mockImplementation(async () => json(account));
+		await act(async () => { await auth.retryOrgResolution(); });
+		expect(auth.orgError).toBeNull();
+	});
+	it("does not recursively retry a forbidden membership lookup", async () => {
+		await mount(); fetchImpl.mockClear().mockImplementation(async () => forbidden());
+		await act(async () => { await auth.client.listProjects("same-org").catch(() => {}); });
+		expect(fetchImpl).toHaveBeenCalledTimes(2);
+		expect(auth.orgError).toBe("Membership changed"); expect(auth.signedIn).toBe(true);
+	});
+	it("ignores a former login's late org refusal", async () => {
+		await mount(); const response = deferred<Response>();
+		fetchImpl.mockImplementationOnce(() => response.promise);
+		const oldRequest = auth.client.listProjects("same-org").catch(() => {});
+		await act(async () => { await Promise.resolve(); });
+		await replaceSession("local"); fetchImpl.mockClear();
+		await act(async () => { response.resolve(forbidden()); await oldRequest; });
+		expect(fetchImpl).not.toHaveBeenCalled(); expect(auth.orgId).toBe("same-org"); expect(auth.signedIn).toBe(true);
+	});
+	it("does not start a membership lookup after the provider unmounts", async () => {
+		await mount(); const response = deferred<Response>();
+		fetchImpl.mockImplementationOnce(() => response.promise);
+		const oldRequest = auth.client.listProjects("same-org").catch(() => {});
+		await act(async () => { await Promise.resolve(); renderer?.unmount(); });
+		renderer = undefined; fetchImpl.mockClear();
+		await act(async () => { response.resolve(forbidden()); await oldRequest; });
+		expect(fetchImpl).not.toHaveBeenCalled();
+	});
+	it("refreshes a resolved workspace on foreground while retaining cached identity and coalescing reads", async () => {
+		await mount();
+		const client = auth.client;
+		const lookup = deferred<Response>();
+		fetchImpl.mockClear().mockImplementationOnce(() => lookup.promise);
+		await act(async () => { for (const listener of native.listeners) { listener("active"); listener("active"); } });
+		expect(fetchImpl).toHaveBeenCalledOnce();
+		expect(auth.orgId).toBe("same-org"); expect(auth.orgLoading).toBe(false);
+		expect(auth.client).toBe(client);
+		await act(async () => { lookup.resolve(json({ ...account, sandboxProviders: { available: ["freestyle", "coder"], default: "coder" } })); });
+		expect(auth.offering?.defaultProvider).toBe("coder");
+		expect(auth.client).toBe(client);
+		fetchImpl.mockRejectedValueOnce(new Error("Offline"));
+		await act(async () => { for (const listener of native.listeners) listener("active"); });
+		expect(auth.orgId).toBe("same-org"); expect(auth.offering?.defaultProvider).toBe("coder");
+		expect(auth.orgError).toBe("Offline"); expect(auth.orgLoading).toBe(false);
+		await act(async () => { for (const listener of native.listeners) listener("active"); });
+		expect(auth.orgError).toBeNull();
+	});
+	it("adopts an active organization change but ignores a former account's late foreground response", async () => {
+		await mount();
+		fetchImpl.mockResolvedValueOnce(json({ ...account, activeOrganizationId: "new-org", organizations: [org, { ...org, id: "new-org" }] }));
+		await act(async () => { for (const listener of native.listeners) listener("active"); });
+		expect(auth.orgId).toBe("new-org");
+		const lookup = deferred<Response>(); fetchImpl.mockImplementationOnce(() => lookup.promise);
+		await act(async () => { for (const listener of native.listeners) listener("active"); });
+		await act(async () => { await auth.signOut(); });
+		await act(async () => { lookup.resolve(json(account)); });
+		expect(auth.orgId).toBeNull(); expect(auth.offering).toBeNull(); expect(auth.signedIn).toBe(false);
+	});
 	it("does not create an organization from a previous account's late lookup", async () => {
 		const lookup = deferred<Response>();
 		fetchImpl.mockImplementationOnce(() => lookup.promise);

@@ -34,6 +34,36 @@ describe("createLocalSessionSource", () => {
 		expect(createLocalSessionSource(cfg).kind).toBe("local");
 	});
 
+	it("keeps PR actions on the bound Local source without a Cloud preview transport", () => {
+		const source = createLocalSessionSource(cfg);
+		expect(source.pullRequests?.kind).toBe("local");
+		expect(source.pullRequests?.scopeKey).toBe(source.workspace?.scopeKey);
+		expect(source.preview).toBeUndefined();
+	});
+
+	it("keeps workspace reads, images and user-authored feedback on the bound daemon", async () => {
+		const requests: Array<{ url: string; init?: RequestInit }> = [];
+		vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => { requests.push({ url, init }); return new Response(JSON.stringify({ workspaceVersion: "local-v1", content: "local file", entries: [], results: [] })); });
+		try {
+			const workspace = createLocalSessionSource({ ...cfg, hostId: "local-host" }).workspace;
+			expect(workspace).toBeDefined();
+			const controller = new AbortController();
+			expect((await workspace!.getManifest("s 1", { signal: controller.signal })).workspaceVersion).toBe("local-v1");
+			expect((await workspace!.getFile("s 1", "a b.ts", "staged", { signal: controller.signal })).content).toBe("local file");
+			await workspace!.getTree("s 1", "src"); await workspace!.search("s 1", "a b");
+			await workspace!.sendFeedback("s 1", [{ target: { path: "a.ts", side: "new", line: 1 }, feedback: "rename" }]);
+			expect(requests.map(({ url }) => url)).toEqual([
+				"http://10.0.0.2:3011/api/v1/sessions/s%201/workspace/manifest",
+				"http://10.0.0.2:3011/api/v1/sessions/s%201/workspace/file?path=a+b.ts&section=staged",
+				"http://10.0.0.2:3011/api/v1/sessions/s%201/workspace/tree?path=src",
+				"http://10.0.0.2:3011/api/v1/sessions/s%201/workspace/search?query=a+b&limit=50",
+				"http://10.0.0.2:3011/api/v1/sessions/s%201/send",
+			]);
+			expect(JSON.parse(String(requests[4].init?.body))).toMatchObject({ userAuthored: true, message: expect.stringContaining("rename") });
+			expect(workspace!.imageSource!("s 1", "a b.png", "after", "v1")).toEqual({ uri: "http://10.0.0.2:3011/api/v1/sessions/s%201/workspace/file/blob?path=a+b.png&side=after&v=v1", headers: { Authorization: "Bearer pw", "X-AO-Expected-Host-ID": "local-host" } });
+		} finally { vi.unstubAllGlobals(); }
+	});
+
 	it("forwards listProjects to the daemon with the active config", async () => {
 		getProjects.mockResolvedValue([{ id: "p1", name: "web" }]);
 		const result = await createLocalSessionSource(cfg).listProjects();

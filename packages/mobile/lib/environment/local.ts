@@ -5,8 +5,10 @@ import {
 	sendConversationMessage,
 } from "../chat/api";
 import { subscribeConversationEvents } from "../chat/conversationEvents";
-import type { ServerConfig } from "../config";
+import { machineIdentity, type ServerConfig } from "../config";
+import { getWorkspaceManifest, getWorkspaceFile, getWorkspaceTree, searchWorkspaceFiles, sendFileFeedback, workspaceImageSource } from "../files/api";
 import type { SessionSource } from "./types";
+import { createLocalPullRequestSource } from "../pr/local";
 
 /**
  * The paired-daemon environment, expressed as a SessionSource.
@@ -19,6 +21,17 @@ import type { SessionSource } from "./types";
 export function createLocalSessionSource(cfg: ServerConfig): SessionSource {
 	return {
 		kind: "local",
+		pullRequests: createLocalPullRequestSource(cfg),
+		workspace: {
+			scopeKey: JSON.stringify(["local", machineIdentity(cfg)]),
+			isCurrent: () => true,
+			getManifest: (id, options) => getWorkspaceManifest(cfg, id, options),
+			getFile: (id, path, section, options) => getWorkspaceFile(cfg, id, path, section, options),
+			getTree: (id, path, options) => getWorkspaceTree(cfg, id, path, options),
+			search: (id, query, options) => searchWorkspaceFiles(cfg, id, query, options),
+			imageSource: (id, path, side, version) => workspaceImageSource(cfg, id, path, side, version),
+			sendFeedback: (id, comments, onSent) => sendFileFeedback(cfg, id, comments, onSent),
+		},
 		listProjects: () => getProjects(cfg),
 		listSessions: async () => (await getSessions(cfg)).sessions,
 		createSession: async (options) => {

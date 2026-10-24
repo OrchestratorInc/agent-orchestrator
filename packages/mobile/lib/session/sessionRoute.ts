@@ -7,6 +7,7 @@ import type { EnvironmentKind } from "../environment/types";
 import { resolveUnscopedId, type Scoped, type SourceRef } from "../environment/scopedBoard";
 import { hostRouteMatches } from "../hostRoute";
 import type { ConnStatus } from "../store";
+import { isCloudReviewerTerminalId } from "../cloud/terminal";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
 
@@ -19,9 +20,14 @@ export function routeSource(params: { source?: string | string[]; sourceId?: str
 }
 
 export function resolveSessionRouteSource(
-	params: { id: string; source?: string | string[]; sourceId?: string | string[]; hostId?: string | string[] },
+	params: { id: string; source?: string | string[]; sourceId?: string | string[]; hostId?: string | string[]; view?: string | string[]; terminalId?: string | string[]; scopeKey?: string | string[] },
 	entries: readonly Scoped<{ id: string }>[],
+	cloudScopeKey?: string,
 ): { kind: "found"; source: SourceRef } | { kind: "missing" | "ambiguous" | "invalid" } {
+	const reviewer = params.view === "reviewer" || params.terminalId !== undefined || Array.isArray(params.view) && params.view.includes("reviewer");
+	if (reviewer && (params.view !== "reviewer" || params.source !== "cloud" || params.hostId !== undefined ||
+		!isCloudReviewerTerminalId(params.terminalId) || typeof params.scopeKey !== "string" || !params.scopeKey || params.scopeKey !== cloudScopeKey ||
+		!/^[a-z0-9][a-z0-9._:-]{0,255}$/i.test(params.id))) return { kind: "invalid" };
 	const explicit = routeSource(params);
 	if (params.hostId !== undefined) {
 		if (typeof params.hostId !== "string" || !params.hostId.trim()) return { kind: "invalid" };
@@ -78,8 +84,10 @@ export function sessionDisplaySurface(input: {
 	environment: EnvironmentKind | null;
 	sessionMode: "chat" | "tui";
 	requestedView?: string;
-}): "chat" | "local-terminal" | "cloud-terminal" {
+}): "chat" | "local-terminal" | "cloud-terminal" | "cloud-shell" | "cloud-reviewer" {
 	if (input.environment === "cloud") {
+		if (input.requestedView === "reviewer") return "cloud-reviewer";
+		if (input.requestedView === "shell") return "cloud-shell";
 		return input.requestedView === "terminal" || input.sessionMode === "tui" ? "cloud-terminal" : "chat";
 	}
 	return input.sessionMode === "chat" ? "chat" : "local-terminal";

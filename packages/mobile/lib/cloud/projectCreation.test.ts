@@ -14,6 +14,10 @@ describe("cloud project creation", () => {
     expect(coderSetupProblem({ configured: true }, [{ id: "template" }], "template")).toBeNull();
     expect(coderSetupProblem({ configured: true }, [], "missing")).toMatch(/template/i);
   });
+  it("requires selecting a managed Coder template when the deployment offers templates", () => {
+    expect(coderSetupProblem({ configured: false }, [{ id: "managed-template" }], "")).toMatch(/template/i);
+    expect(coderSetupProblem({ configured: false }, [{ id: "managed-template" }], "managed-template")).toBeNull();
+  });
   it.each([
     ["number", "not-a-number", [], true],
     ["number", "3", [], false],

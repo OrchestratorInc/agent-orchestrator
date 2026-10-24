@@ -42,6 +42,10 @@ export default function ChatSettingsRoute() {
 		await runSheetMutation(entry.onRefresh, (catalog) => {
 			setModels(catalog.models);
 			setOptions(catalog.configOptions);
+			// Cloud reports the live native selection with discovery. Local
+			// catalogs omit settings and keep the sheet's existing choices.
+			const settings = catalog.settings;
+			if (settings) setSnapshot((current) => current ? { ...current, settings } : current);
 		}, setError);
 		setRefreshing(false);
 	};

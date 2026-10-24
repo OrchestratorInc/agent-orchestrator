@@ -22,20 +22,36 @@ export type ConversationMenuSection = {
 };
 
 export function conversationMenuSections({
+	canOpenFiles,
+	canOpenShell,
+	canPreview,
+	canPullRequests,
 	canRename,
 	canPin,
 	canCompact,
 	canReloadMcp,
 	canDelete,
 }: {
+	canOpenFiles: boolean;
+	canOpenShell: boolean;
+	canPreview: boolean;
+	canPullRequests: boolean;
 	canRename: boolean;
 	canPin: boolean;
 	canCompact: boolean;
 	canReloadMcp: boolean;
 	canDelete: boolean;
 }): ConversationMenuSection[] {
-	return [
-		{ title: "Workspace", actions: ["files", "shell", "preview", "pull_requests"] },
+	const sections: ConversationMenuSection[] = [
+		{
+			title: "Workspace",
+			actions: [
+				...(canOpenFiles ? ["files" as const] : []),
+				...(canOpenShell ? ["shell" as const] : []),
+				...(canPreview ? ["preview" as const] : []),
+				...(canPullRequests ? ["pull_requests" as const] : []),
+			],
+		},
 		{
 			title: "Conversation",
 			actions: [
@@ -56,6 +72,7 @@ export function conversationMenuSections({
 		},
 		...(canDelete ? [{ title: "Session" as const, actions: ["delete" as const] }] : []),
 	];
+	return sections.filter((section) => section.actions.length > 0);
 }
 
 export function normalizeConversationTitle(value: string): string | undefined {

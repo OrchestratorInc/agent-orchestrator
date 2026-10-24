@@ -18,6 +18,7 @@ const screenRoutes = [
 	"(tabs)/prs.tsx",
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
+	"settings/cloud-agents.tsx",
 	"settings/environments.tsx",
 	"browser/[id].tsx",
 	"settings/theme.tsx",

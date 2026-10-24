@@ -1,6 +1,5 @@
 import { memo } from "react";
 import { Feather } from "./icons";
-import { useRouter } from "expo-router";
 import { useOpenPage } from "./pageNavigation";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
@@ -20,6 +19,7 @@ import {
 } from "./prView";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, space, type } from "./tokens";
+import { reviewRouteForPR } from "./reviewView";
 
 /** A pull-request row with the same hierarchy and density as WorkerListRow. */
 export const PRCard = memo(function PRCard({
@@ -29,6 +29,7 @@ export const PRCard = memo(function PRCard({
 	summary,
 	hostId,
 	hostName,
+	scopeKey,
 }: {
 	pr: DashboardPR;
 	session: DashboardSession;
@@ -36,11 +37,11 @@ export const PRCard = memo(function PRCard({
 	summary?: SessionPRSummary;
 	hostId: string;
 	hostName?: string;
+	scopeKey?: string;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
-	const router = useRouter();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
@@ -63,17 +64,7 @@ export const PRCard = memo(function PRCard({
 			onPress={() => {
 				if (!source) return;
 				haptics.tap();
-				if (source.kind === "local") {
-					openPage({
-						pathname: "/review/[sessionId]",
-						params: { sessionId: session.id, prNumber: String(pr.number), prUrl: pr.url, hostId: source.id },
-					});
-				} else {
-					router.push({
-						pathname: "/session/[id]",
-						params: { id: session.id, projectId: session.projectId, source: source.kind, sourceId: source.id },
-					});
-				}
+				openPage(reviewRouteForPR(session.id, pr, source, scopeKey));
 			}}
 			style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
 		>

@@ -16,7 +16,8 @@ describe("reviewer control integration", () => {
 		// The daemon's reviewerHarness names the last reviewer that ran, so it
 		// must never pick the model catalog after a switch.
 		expect(actions).not.toContain("result.reviewerHarness");
-		expect(actions).not.toContain("reviewState.reviewerHarness");
+		const localLoad = actions.slice(actions.indexOf("const [catalog, prs, session, reviewState]"), actions.indexOf("}, [cloud, config,"));
+		expect(localLoad).not.toContain("reviewState.reviewerHarness");
 		expect(actions).toContain("selectedReviewer={reviewerOverride}");
 		expect(actions).toContain("effectiveReviewer={effectiveReviewer}");
 	});
@@ -103,7 +104,7 @@ describe("reviewer control integration", () => {
 	});
 
 	it("chooses Open, Restore, or Stop from what is actually available", () => {
-		expect(detail).toContain("const controls = reviewerControls(data, review, sessionId);");
+		expect(detail).toContain("reviewerControls(data, review, sessionId)");
 		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <RowPill label=\"Open\"");
 		expect(detail).toContain(": controls.restore ? <RowPill label=\"Restore\"");
 		expect(detail).toContain("Push a new commit to run another review.");
@@ -132,7 +133,7 @@ describe("reviewer control integration", () => {
 	// A page pushed while a sheet is presented opens inside that sheet, so every
 	// way into review detail and the reviewer goes through useOpenPage.
 	it("opens review detail and the reviewer as pages, never inside a sheet", () => {
-		expect(source("./PRCard.tsx")).toMatch(/if \(source\.kind === "local"\)\s*\{\s*openPage\(\{\s*pathname: "\/review\/\[sessionId\]"/);
+		expect(source("./PRCard.tsx")).toContain("openPage(reviewRouteForPR(session.id, pr, source, scopeKey))");
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
 		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
 		expect(source("../app/notifications.tsx")).toContain('action.kind === "review") openPage(');
@@ -151,7 +152,7 @@ describe("reviewer control integration", () => {
 
 	it("merges like desktop: only when ready, fenced to the head commit, after confirmation", () => {
 		expect(detail).toContain("const merge = pr ? mergeReadiness(pr) : undefined;");
-		expect(detail).toContain("await mergeSessionPR(config, pr)");
+		expect(detail).toMatch(/await mergeSessionPR\(config!?, pr\)/);
 		expect(detail).toContain("This will squash-merge PR #${pr.number} in the remote repository.");
 	});
 

@@ -91,6 +91,17 @@ export function clearCloudOperation(scopeKey: string, slot: string, key: string)
 		await save(scopeKey, records);
 	});
 }
+/** Release a rejected or explicitly abandoned reservation, but never an acceptance. */
+export function rejectCloudOperation(scopeKey: string, slot: string, key: string): Promise<void> {
+	validateSlot(slot);
+	return afterDraftWrites(storageKey(scopeKey), async () => {
+		const records = await load(scopeKey);
+		const operation = records[slot];
+		if (!operation || operation.key !== key || operation.acceptedId !== undefined) return;
+		delete records[slot];
+		await save(scopeKey, records);
+	});
+}
 export function clearCloudOperationsForScope(scopeKey: string): Promise<void> {
 	generations.set(scopeKey, (generations.get(scopeKey) ?? 0) + 1);
 	return afterDraftWrites(storageKey(scopeKey), () => AsyncStorage.removeItem(storageKey(scopeKey)));

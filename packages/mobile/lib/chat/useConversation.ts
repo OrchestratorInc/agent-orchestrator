@@ -31,7 +31,7 @@ import {
 	recoverSentConversationMessage,
 	type ConversationPage,
 } from "./api";
-import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
+import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ChatTurnOptions, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, mobileConversationPageCache as conversationPageCache, discardHistoricalPages } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
 import { conversationAccess } from "./conversation-access";
@@ -46,7 +46,7 @@ import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
-const turnOptionsCache = createAsyncValueCache<string, { models: ChatModel[]; configOptions: ChatConfigOption[] }>(16, 30_000);
+const turnOptionsCache = createAsyncValueCache<string, ChatTurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
 
 export type PendingSend = {
@@ -96,7 +96,7 @@ export type MobileConversation = {
 	actionCodes: Partial<Record<ConversationAction, string>>;
 	refresh(): Promise<void>;
 	loadOlder(): Promise<void>;
-	loadTurnOptions(options?: { refresh?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
+	loadTurnOptions(options?: { refresh?: boolean }): Promise<ChatTurnOptions>;
 	loadSkills(): Promise<ChatSkill[]>;
 	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
 	retrySend(id: string): Promise<void>;
@@ -158,9 +158,14 @@ export function useMobileConversation(
 	const liveOwner = useRef({ cacheKey, source: sessionSource });
 	liveOwner.current = { cacheKey, source: sessionSource };
 	const stateOwner = useRef(cacheKey);
+	const turnOptionsOwner = useRef({ cacheKey, source: sessionSource, requested: false, loaded: false });
+	if (turnOptionsOwner.current.cacheKey !== cacheKey || turnOptionsOwner.current.source !== sessionSource) {
+		turnOptionsOwner.current = { cacheKey, source: sessionSource, requested: false, loaded: false };
+	}
 	const pendingOwner = useRef(pendingKey);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
+	const turnOptionsGate = useRef(createRequestGate()).current;
 	const refreshController = useRef<AbortController | undefined>(undefined);
 
 	const snapshot = useMemo(() => mergeConversationPages(stateOwner.current === cacheKey ? pages : conversationPageCache.get(cacheKey) ?? []), [cacheKey, pages]);
@@ -259,9 +264,14 @@ export function useMobileConversation(
 	}, [pendingKey, options?.reviewId]);
 
 	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean }) => {
-		if (unavailable || !hasConversation || (!cfg && !sessionSource?.getChatModels)) return { models, configOptions };
-		if (options?.refresh) turnOptionsCache.delete(cacheKey);
+		if (unavailable || !hasConversation || (!cfg && !sessionSource?.getChatModels && !sessionSource?.getChatTurnOptions)) return { models, configOptions };
+		const request = sessionSource?.kind === "cloud" ? turnOptionsGate.begin() : undefined;
+		const firstCloudLoad = sessionSource?.kind === "cloud" && !turnOptionsOwner.current.requested;
+		const adoptNativeSettings = (sessionSource?.kind === "cloud" && !turnOptionsOwner.current.loaded) || Boolean(options?.refresh);
+		if (options?.refresh || firstCloudLoad) turnOptionsCache.delete(cacheKey);
+		if (firstCloudLoad) turnOptionsOwner.current.requested = true;
 		const catalog = await turnOptionsCache.load(cacheKey, async () => {
+			if (sessionSource?.kind === "cloud" && sessionSource.getChatTurnOptions) return sessionSource.getChatTurnOptions(sessionId, { adoptNativeSettings });
 			if (sessionSource?.kind === "cloud" && sessionSource.getChatModels) {
 				return { models: await sessionSource.getChatModels(sessionId), configOptions: [] };
 			}
@@ -270,13 +280,20 @@ export function useMobileConversation(
 				loadModels: () => getConversationModels(cfg!, sessionId),
 				loadConfigOptions: () => getConversationConfigOptions(cfg!, sessionId),
 			});
+		}).catch((cause: unknown) => {
+			if (currentOwner() && request !== undefined && turnOptionsGate.isCurrent(request) && !turnOptionsOwner.current.loaded) turnOptionsOwner.current.requested = false;
+			throw cause;
 		});
+		if (request !== undefined && (!currentOwner() || !turnOptionsGate.isCurrent(request))) throw Object.assign(new Error("Cloud turn settings discovery was superseded."), { name: "AbortError" });
+		if (request !== undefined) turnOptionsOwner.current.loaded = true;
 		if (mounted.current) {
 			setModels(catalog.models);
 			setConfigOptions(catalog.configOptions);
+			if (sessionSource?.kind === "cloud" && catalog.settings) await refresh();
 		}
+		if (request !== undefined && (!currentOwner() || !turnOptionsGate.isCurrent(request))) throw Object.assign(new Error("Cloud turn settings discovery was superseded."), { name: "AbortError" });
 		return catalog;
-	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, sessionId, sessionSource, unavailable]);
+	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, refresh, sessionId, sessionSource, turnOptionsGate, unavailable]);
 
 	const loadSkills = useCallback(async () => {
 		if (!cfg || unavailable || !hasConversation) return skills;
@@ -483,8 +500,13 @@ export function useMobileConversation(
 		[access, runAction, sessionId],
 	);
 	const promoteQueuedTurn = useCallback(
-		(turnId: string) => runAction("queue", () => requireConfig(cfg, (c) => promoteQueuedConversationTurn(c, sessionId, turnId))),
-		[cfg, runAction, sessionId],
+		(turnId: string) => runAction("queue", () => {
+			// Cloud's steer endpoint injects text into a running turn; it cannot
+			// atomically promote a queued message like the paired daemon can.
+			if (sessionSource?.kind === "cloud") throw new Error("Queued Cloud messages cannot be steered. Leave it queued, or delete it and send new guidance to the active turn.");
+			return requireConfig(cfg, (c) => promoteQueuedConversationTurn(c, sessionId, turnId));
+		}),
+		[cfg, runAction, sessionId, sessionSource?.kind],
 	);
 	const interrupt = useCallback(
 		() => runAction("interrupt", () => {
@@ -524,20 +546,31 @@ export function useMobileConversation(
 		[cfg, runAction, sessionId],
 	);
 	const chooseSettings = useCallback(
-		(settings: TurnSettings) => runAction("settings", () => sessionSource?.kind === "cloud" && sessionSource.setTurnSettings
-			? sessionSource.setTurnSettings(sessionId, { ...snapshot?.settings, ...settings })
-			: requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings))),
-		[cfg, runAction, sessionId, sessionSource, snapshot?.settings],
+		(settings: TurnSettings) => runAction("settings", async () => {
+			if (sessionSource?.kind === "cloud" && sessionSource.setTurnSettings) {
+				const next = { ...snapshot?.settings, ...settings };
+				// A parked settings sheet can hold the mode from before its Plan
+				// option changed. Only that dedicated option owns execution mode.
+				delete next.executionMode;
+				await sessionSource.setTurnSettings(sessionId, next);
+				turnOptionsCache.delete(cacheKey);
+				return;
+			}
+			return requireConfig(cfg, (c) => setConversationSettings(c, sessionId, settings));
+		}),
+		[cacheKey, cfg, runAction, sessionId, sessionSource, snapshot?.settings],
 	);
 	const setConfigOption = useCallback(
 		(optionId: string, value: { value: string } | { enabled: boolean }) =>
 			runAction("config", async () => {
-				const options = await requireConfig(cfg, (c) => setConversationConfigOption(c, sessionId, optionId, value));
+				const options = sessionSource?.kind === "cloud" && sessionSource.setChatConfigOption
+					? await sessionSource.setChatConfigOption(sessionId, optionId, value)
+					: await requireConfig(cfg, (c) => setConversationConfigOption(c, sessionId, optionId, value));
 				setConfigOptions(options);
 				turnOptionsCache.set(cacheKey, { models, configOptions: options });
 				return options;
 			}),
-		[cacheKey, cfg, models, runAction, sessionId],
+		[cacheKey, cfg, models, runAction, sessionId, sessionSource],
 	);
 	const reloadMcp = useCallback(
 		async () => {

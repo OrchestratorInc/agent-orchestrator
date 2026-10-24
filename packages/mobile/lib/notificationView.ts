@@ -6,7 +6,7 @@ import type { MachineAppearance } from "./machineAppearance";
 
 export type NotificationVisual = {
 	/** lucide icon names, drawn from the renderer's own path data. */
-	icon: "message-square-dot" | "git-pull-request-arrow" | "git-merge" | "git-pull-request-closed" | "bell";
+	icon: "message-square-dot" | "git-pull-request-arrow" | "git-merge" | "git-pull-request-closed" | "circle-alert" | "check-check" | "bell";
 	color: string;
 	label: string;
 };
@@ -66,7 +66,12 @@ export function notificationSections<T extends { status: string }>(items: readon
 export function notificationVisual(t: Theme, type: string): NotificationVisual {
 	switch (type) {
 		case "needs_input":
+		case "review_feedback":
 			return { icon: "message-square-dot", color: t.amber, label: "Needs input" };
+		case "agent_failed":
+			return { icon: "circle-alert", color: t.red, label: "Agent failed" };
+		case "agent_completed":
+			return { icon: "check-check", color: t.green, label: "Agent completed" };
 		case "ready_to_merge":
 			return { icon: "git-pull-request-arrow", color: t.green, label: "Ready to merge" };
 		case "pr_merged":
@@ -145,8 +150,15 @@ export type NotificationAction =
 export function notificationAction(
 	n: { type: string; sessionId?: string; prUrl?: string },
 	state: { terminated: boolean; sessionsReady: boolean },
+	sourceKind: "local" | "cloud" = "local",
 ): NotificationAction {
 	const sessionId = n.sessionId?.trim();
+	// Cloud PR notifications currently open their owning workspace session on
+	// desktop too. Its metadata must never fall through to a local-only PR route.
+	if (sourceKind === "cloud") {
+		if (!sessionId || !state.sessionsReady) return { kind: "none" };
+		return { kind: state.terminated && n.type === "needs_input" ? "restore" : "open", sessionId };
+	}
 	if (n.type === "review_completed" || n.type === "review_changes_requested") {
 		return sessionId && n.prUrl
 			? { kind: "review", sessionId, prUrl: n.prUrl }

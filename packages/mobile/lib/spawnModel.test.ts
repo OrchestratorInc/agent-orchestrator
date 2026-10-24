@@ -6,11 +6,18 @@ it("changes request identity for account, source, model or effort edits", () => 
 	const fingerprint = spawnRequestFingerprint("scope-one", "cloud/o1", request);
 	for (const input of [spawnRequestFingerprint("scope-two", "cloud/o1", request), spawnRequestFingerprint("scope-one", "local/h1", request), spawnRequestFingerprint("scope-one", "cloud/o1", { ...request, model: "other" }), spawnRequestFingerprint("scope-one", "cloud/o1", { ...request, reasoningEffort: "low" })]) expect(input).not.toBe(fingerprint);
 });
-it("uses only matching project role defaults and rejects invalid effort values", () => {
-	const config = { worker: { agent: "codex", agentConfig: { model: " pinned ", reasoningEffort: "high" } } };
-	 expect(cloudRoleDefaults(config, "worker", "codex")).toEqual({ model: "pinned", reasoningEffort: "high" });
-	 expect(cloudRoleDefaults(config, "worker", "claude-code")).toEqual({});
-	 expect(cloudRoleDefaults({ worker: { agent: "codex", agentConfig: { reasoningEffort: "unknown" } } }, "worker", "codex")).toEqual({});
+it("does not reuse a Cloud request identity for a different controller", () => {
+	const request = { projectId: "p1", harness: "codex", prompt: "Inspect" };
+	expect(spawnRequestFingerprint("scope-one", "cloud/o1", { ...request, mode: "chat" }))
+		.not.toBe(spawnRequestFingerprint("scope-one", "cloud/o1", { ...request, mode: "tui" }));
+});
+it.each(["worker", "orchestrator"] as const)("uses canonical matching %s defaults and rejects invalid effort values", (role) => {
+	const config = { [role]: { agent: "codex", agentConfig: { model: " pinned ", effort: "high", reasoningEffort: "low" } } };
+	expect(cloudRoleDefaults(config, role, "codex")).toEqual({ model: "pinned", reasoningEffort: "high" });
+	expect(cloudRoleDefaults(config, role, "claude-code")).toEqual({});
+	for (const agentConfig of [{ effort: "unknown" }, {}, { reasoningEffort: "high" }]) {
+		expect(cloudRoleDefaults({ [role]: { agent: "codex", agentConfig } }, role, "codex")).toEqual({});
+	}
 });
 
 describe("spawn agent resolution", () => {

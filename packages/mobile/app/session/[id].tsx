@@ -16,6 +16,7 @@ import {
 	sessionRouteView,
 	resolveSessionRouteSource,
 	cloudSessionListState,
+	isRuntimeGone,
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
 import { useApp } from "../../lib/store";
@@ -25,6 +26,7 @@ import { Button, EmptyState } from "../../lib/ui";
 import { useCloudInterfaceTransition } from "../../lib/cloud/useCloudInterfaceTransition";
 import { cloudInterfaceDisplayMode, cloudInterfaceSettledTarget } from "../../lib/cloud/interfaceTransition";
 import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
+import { useCloudAuth } from "../../lib/cloud/authStore";
 
 /**
  * The committed session mode is daemon-authoritative, including after an
@@ -34,24 +36,30 @@ import { useCloudSignInAction } from "../../lib/cloud/useCloudSignInAction";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
-	const { id: rawId, view: requestedView, source: sourceParam, sourceId, startup, hostId } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string; startup?: string; hostId?: string }>();
+	const { id: rawId, view: requestedView, source: sourceParam, sourceId, startup, hostId, terminalId, scopeKey } = useLocalSearchParams<{ id: string; view?: string; source?: string; sourceId?: string; startup?: string; hostId?: string; terminalId?: string; scopeKey?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
 	const cloudSignIn = useCloudSignInAction();
+	const cloudAuth = useCloudAuth();
 	const { scopedBoard, sourceFor, refreshSource, configForHost, hostStates } = useApp();
-	const route = resolveSessionRouteSource({ id, source: sourceParam, sourceId, hostId }, [...scopedBoard.sessions, ...scopedBoard.orchestrators]);
+	const cloudScopeKey = sourceParam === "cloud" && typeof sourceId === "string" ? sourceFor({ kind: "cloud", id: sourceId })?.scopeKey : undefined;
+	const route = resolveSessionRouteSource({ id, view: requestedView, terminalId, scopeKey, source: sourceParam, sourceId, hostId }, [...scopedBoard.sessions, ...scopedBoard.orchestrators], cloudScopeKey);
 	const source: SourceRef | null = route.kind === "found" ? route.source : null;
 	const currentSource = source ? sourceFor(source) : undefined;
 	const refreshCloudSource = useCallback(async () => { if (source?.kind === "cloud") await refreshSource(source); }, [refreshSource, source?.kind, source?.id]);
-	const cloudInterface = useCloudInterfaceTransition(source?.kind === "cloud" ? currentSource : undefined, id, refreshCloudSource);
+	const cloudShell = source?.kind === "cloud" && requestedView === "shell";
+	const cloudReviewer = source?.kind === "cloud" && requestedView === "reviewer";
+	const separateCloudTerminal = cloudShell || cloudReviewer;
+	const cloudInterface = useCloudInterfaceTransition(source?.kind === "cloud" && !separateCloudTerminal ? currentSource : undefined, id, refreshCloudSource);
 	const listed = source ? [...scopedBoard.sessions, ...scopedBoard.orchestrators]
 		.find((entry) => resourceKey(entry.source, entry.value.id) === resourceKey(source, id))?.value : undefined;
 	const isListed = Boolean(listed);
-	useEffect(() => { if (source?.kind === "cloud" && listed) void cloudInterface.refresh(); }, [currentSource, id, listed?.mode, source?.kind]);
+	const runtimeGone = listed ? isRuntimeGone(listed) : undefined;
+	useEffect(() => { if (source?.kind === "cloud" && currentSource && !separateCloudTerminal && listed) void cloudInterface.refresh(); }, [separateCloudTerminal, currentSource, id, listed?.mode, runtimeGone, source?.kind]);
 	useEffect(() => {
-		if (source?.kind !== "cloud" || !cloudInterfaceSettledTarget(cloudInterface.status) || requestedView === undefined) return;
+		if (source?.kind !== "cloud" || separateCloudTerminal || !cloudInterfaceSettledTarget(cloudInterface.status) || requestedView === undefined) return;
 		router.replace({ pathname: "/session/[id]", params: { id, source: source.kind, sourceId: source.id } });
-	}, [cloudInterface.status, id, requestedView, router, source?.kind, source?.id]);
+	}, [cloudInterface.status, separateCloudTerminal, id, requestedView, router, source?.kind, source?.id]);
 	const status = source ? scopedBoard.sources[sourceKey(source)] : undefined;
 	const config = source?.kind === "local" ? configForHost(source.id) : null;
 	const connection = source?.kind === "local" ? hostStates.find((host) => host.hostId === source.id)?.connection ?? "closed" : "closed";
@@ -136,13 +144,31 @@ export default function MobileSessionRoute() {
 				action={<Button title="Open Workers" onPress={() => router.navigate("/")} />} />
 		</View>
 	);
-	if (source && !currentSource && status?.resolved) return (
+	if (source?.kind === "cloud" && !currentSource) {
+		if (cloudAuth.signedIn === null || cloudAuth.busy || (!cloudAuth.orgId && cloudAuth.orgLoading)) return (
+			<View style={styles.center}><ActivityIndicator color={t.accent} /></View>
+		);
+		if (!cloudAuth.signedIn) return (
+			<View style={styles.center}><EmptyState icon="cloud" title="Sign in to Orchestrator Cloud"
+				message="Sign in to the account that owns this Cloud session."
+				action={<Button title="Sign in to Orchestrator Cloud" loading={cloudSignIn.busy} onPress={() => void cloudSignIn.signIn()} />} /></View>
+		);
+		if (cloudAuth.orgId && cloudAuth.orgId !== source.id) return (
+			<View style={styles.center}><EmptyState icon="cloud" title="Cloud workspace changed"
+				message="This session belongs to a different workspace. Open a worker from your current board."
+				action={<Button title="Open Workers" onPress={() => router.navigate("/")} />} /></View>
+		);
+		return (
+			<View style={styles.center}><EmptyState icon="wifi-off" title="Couldn't load Cloud workspace"
+				message={cloudAuth.orgError ?? "Reconnect to Cloud to open this session."}
+				action={<Button title="Retry" onPress={() => void cloudAuth.retryOrgResolution()} />} /></View>
+		);
+	}
+	if (source?.kind === "local" && !currentSource && status?.resolved) return (
 		<View style={styles.center}>
-			<EmptyState icon="wifi-off" title={source.kind === "cloud" ? "Cloud session unavailable" : "Desktop session unavailable"}
+			<EmptyState icon="wifi-off" title="Desktop session unavailable"
 				message="This session belongs to a source that is no longer connected."
-				action={<Button title={source.kind === "cloud" ? "Sign in to Orchestrator Cloud" : "Pair desktop"}
-					loading={source.kind === "cloud" && cloudSignIn.busy}
-					onPress={() => { if (source.kind === "cloud") void cloudSignIn.signIn(); else router.push("/pair"); }} />} />
+				action={<Button title="Pair desktop" onPress={() => router.push("/pair")} />} />
 		</View>
 	);
 	if (source?.kind === "cloud" && currentSource) {
@@ -162,14 +188,21 @@ export default function MobileSessionRoute() {
 	switch (view.kind) {
 		case "screen": {
 			const sessionMode = source?.kind === "cloud" ? cloudInterfaceDisplayMode(cloudInterface.status, view.session.mode) : view.session.mode;
-			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode, requestedView: source?.kind === "cloud" && cloudInterface.transition ? undefined : requestedView });
+			const surface = sessionDisplaySurface({ environment: source?.kind ?? null, sessionMode, requestedView: source?.kind === "cloud" && !separateCloudTerminal && cloudInterface.transition ? undefined : requestedView });
+			// Chat discovery/resume guards and terminal buffers belong to one
+			// source/session. Cloud scope also distinguishes accounts in the same org.
+			const screenKey = source ? JSON.stringify([source.kind, source.id, currentSource?.scopeKey, id]) : undefined;
 			return (
-				<View style={styles.screen}>
-					{surface === "cloud-terminal" && source
-						? <CloudTerminalSessionScreen session={view.session} source={source} showSpawnStartup={startup === "spawn"} interfaceSwitch={cloudInterface} />
-						: surface === "local-terminal"
-							? <TerminalSessionScreen session={view.session} source={source ?? undefined} />
-							: source ? <ChatSessionScreen session={view.session} source={source} cloudInterface={source.kind === "cloud" ? cloudInterface : undefined} /> : null}
+				<View key={screenKey} style={styles.screen}>
+					{surface === "cloud-reviewer" && source
+						? <CloudTerminalSessionScreen key={`${sourceKey(source)}:${id}:reviewer:${terminalId}`} session={view.session} source={source} reviewerTerminalId={terminalId!} />
+						: surface === "cloud-shell" && source
+						? <CloudTerminalSessionScreen key={`${sourceKey(source)}:${id}:workspace`} session={view.session} source={source} kind="workspace" />
+						: surface === "cloud-terminal" && source
+							? <CloudTerminalSessionScreen key={`${sourceKey(source)}:${id}:agent`} session={view.session} source={source} showSpawnStartup={startup === "spawn"} interfaceSwitch={cloudInterface} />
+							: surface === "local-terminal"
+								? <TerminalSessionScreen session={view.session} source={source ?? undefined} />
+								: source ? <ChatSessionScreen session={view.session} source={source} cloudInterface={source.kind === "cloud" ? cloudInterface : undefined} /> : null}
 				</View>
 			);
 		}

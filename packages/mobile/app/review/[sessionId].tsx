@@ -14,7 +14,7 @@ import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
-import { HostScope, useApp } from "../../lib/store";
+import { useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { AgentLogo } from "../../lib/AgentLogo";
@@ -22,25 +22,29 @@ import { rowDividerWidth } from "../../lib/divider";
 import { SwipeToMerge } from "../../lib/SwipeToMerge";
 import { space, type } from "../../lib/tokens";
 import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
+import { PRScope, prOwnerParams, type PRRouteOwner } from "../../lib/pr/PRScope";
+import type { PullRequestSource, PullRequestPreferences, PullRequestRun } from "../../lib/pr/source";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function ReviewDetailScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewDetailContent /></HostScope> : <ReviewDetailContent />;
+	return <PRScope>{(source, owner) => <ReviewDetailContent cloud={owner.source.kind === "cloud" ? source : undefined} owner={owner} />}</PRScope>;
 }
 
-function ReviewDetailContent() {
+export function ReviewDetailContent({ cloud, owner }: { cloud?: PullRequestSource; owner: PRRouteOwner }) {
 	const t = useTheme();
 	const insets = useSafeAreaInsets();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
+	const { sessionId, prUrl, prNumber, hostId: explicitHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
+	const routeHostId = explicitHostId ?? (owner.source.kind === "local" ? owner.source.id : undefined);
 	const { config, sessions, currentHostId } = useApp();
-	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const autoReviewEnabled = sessions.find((session) => session.id === sessionId)?.autoReviewEnabled === true;
+	const hostMatches = cloud ? cloud.isCurrent() : hostRouteMatches(routeHostId, currentHostId);
+	const ownerParams = prOwnerParams(owner);
+	const [cloudPreferences, setCloudPreferences] = useState<PullRequestPreferences>();
+	const autoReviewEnabled = cloud ? cloudPreferences?.autoReviewEnabled === true : sessions.find((session) => session.id === sessionId)?.autoReviewEnabled === true;
 	const [data, setData] = useState<SessionReviews>();
 	const [prs, setPRs] = useState<SessionPRSummary[]>([]);
 	const [sentRuns, setSentRuns] = useState<ReadonlySet<string>>(new Set());
@@ -53,25 +57,34 @@ function ReviewDetailContent() {
 	const [refreshing, setRefreshing] = useState(false);
 	const [mutation, setMutation] = useState<"review" | "restore" | string>();
 	const latestLoad = useRef(0);
+	const lifetime = useRef(new AbortController());
+	const deliveryKeys = useRef(new Map<string, string>());
+	useEffect(() => {
+		const controller = new AbortController(); lifetime.current = controller;
+		return () => { controller.abort(); latestLoad.current++; };
+	}, []);
 
 	const load = useCallback(async (quiet = false) => {
-		if (!hostMatches || !config || !sessionId) return;
+		if (!hostMatches || (!cloud && !config) || !sessionId || lifetime.current.signal.aborted) return;
 		const request = ++latestLoad.current;
 		if (!quiet) setError("");
 		try {
-			const [next, nextPRs] = await Promise.all([getSessionReviews(config, sessionId), getSessionPR(config, sessionId).catch(() => undefined)]);
+			const options = { signal: lifetime.current.signal };
+			const [next, nextPRs, preferences] = await Promise.all([cloud ? cloud.reviews(sessionId, options) : getSessionReviews(config!, sessionId), cloud ? cloud.list(sessionId, options) : getSessionPR(config!, sessionId).catch(() => undefined), cloud?.preferences?.(sessionId, options)]);
 			if (request === latestLoad.current) {
 				setData(next);
 				if (nextPRs) setPRs(nextPRs);
+				if (preferences) setCloudPreferences(preferences);
 				setError("");
 			}
 		} catch (value) {
 			if (!quiet && request === latestLoad.current) setError(value instanceof Error ? value.message : "Could not load this review.");
 		}
-	}, [config, hostMatches, sessionId]);
+	}, [cloud, config, hostMatches, sessionId]);
 
 	useFocusEffect(useCallback(() => { void load(); }, [load]));
-	const review = reviewForPullRequest(data?.reviews ?? [], prUrl, Number(prNumber) || undefined);
+	const matchedSummary = prUrl ? pullRequestSummaryForURL(prs, prUrl) : prs.filter((pr) => pr.number === Number(prNumber)).length === 1 ? prs.find((pr) => pr.number === Number(prNumber)) : undefined;
+	const review = reviewForPullRequest(data?.reviews ?? [], prUrl, Number(prNumber) || undefined) ?? (cloud && matchedSummary ? { prUrl: matchedSummary.url, prNumber: matchedSummary.number, title: matchedSummary.title, targetSha: matchedSummary.headSha ?? "", status: matchedSummary.state === "open" && matchedSummary.headSha ? "needs_review" as const : "ineligible" as const } : undefined);
 	const autoReviewFailure = latestAutoReviewFailure(data?.reviews ?? [], autoReviewEnabled);
 	const autoReviewFailureId = autoReviewFailure?.id;
 	useEffect(() => {
@@ -86,22 +99,22 @@ function ReviewDetailContent() {
 	useLayoutEffect(() => navigation.setOptions({
 		headerRight: hostMatches && review?.prUrl ? () => <View style={styles.headerActions}>
 			<Pressable accessibilityRole="link" accessibilityLabel={`Open pull request ${review.prNumber} in GitHub`} hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); void openGitHub(review.prUrl); }}><Feather name="external-link" size={19} color={t.textSecondary} /></Pressable>
-			<Pressable accessibilityRole="button" accessibilityLabel="More review actions" hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); router.push({ pathname: "/sheets/review-actions", params: { sessionId, prUrl: review.prUrl, reviewer: data?.reviewerHarness ?? "", hostId: routeHostId } }); }}><Feather name="more-horizontal" size={21} color={t.textSecondary} /></Pressable>
+			<Pressable accessibilityRole="button" accessibilityLabel="More review actions" hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); router.push({ pathname: "/sheets/review-actions", params: { sessionId, prUrl: review.prUrl, reviewer: data?.reviewerHarness ?? "", ...ownerParams } }); }}><Feather name="more-horizontal" size={21} color={t.textSecondary} /></Pressable>
 		</View> : undefined,
-	}), [data?.reviewerHarness, hostMatches, navigation, review?.prNumber, review?.prUrl, routeHostId, router, sessionId, styles.headerAction, styles.headerActions, t.textSecondary]);
+	}), [data?.reviewerHarness, hostMatches, navigation, review?.prNumber, review?.prUrl, owner.source.kind, owner.source.id, owner.scopeKey, router, sessionId, styles.headerAction, styles.headerActions, t.textSecondary]);
 	const observedPR = review ? pullRequestSummaryForURL(prs, review.prUrl) : undefined;
 	const awaitingMerge = Boolean(mergedURL && observedPR && observedPR.url === mergedURL && observedPR.state !== "merged");
-	useEffect(() => {
+	useFocusEffect(useCallback(() => {
 		if (!awaitingMerge) return;
 		const timer = setInterval(() => void load(true), 2_000);
 		const giveUp = setTimeout(() => setMergedURL(undefined), 60_000);
 		return () => { clearInterval(timer); clearTimeout(giveUp); };
-	}, [awaitingMerge, load]);
-	useEffect(() => {
-		if (review?.status !== "running" && !autoReviewEnabled) return;
-		const timer = setInterval(() => void load(true), 2_000);
+	}, [awaitingMerge, load]));
+	useFocusEffect(useCallback(() => {
+		if (cloud ? !data?.reviews.some((item) => item.status === "running") : review?.status !== "running" && !autoReviewEnabled) return;
+		const timer = setInterval(() => void load(true), 2_500);
 		return () => clearInterval(timer);
-	}, [autoReviewEnabled, load, review?.status]);
+	}, [cloud, autoReviewEnabled, load, review?.status, data?.reviews.some((item) => item.status === "running")]));
 
 	const refresh = async () => {
 		haptics.tap();
@@ -113,10 +126,17 @@ function ReviewDetailContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="git-pull-request" title="Review belongs to another machine" message="Open it from that machine's session." /></View>;
 	if (!data && !error) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!data || !review) return <EmptyState icon={error ? "alert-triangle" : "git-pull-request"} title={error ? "Could not load review" : "No review found"} message={error || "Orchestrator has no review state for this pull request yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load()} />} />;
-	const primaryAction = reviewBatchAction(review, data.reviews);
+	const batchAction = reviewBatchAction(review, data.reviews);
+	const primaryAction = cloud && batchAction === "review_again" ? "none" : batchAction;
 	const runs = reviewRunsForPullRequest([...(data.runs ?? []), ...(review.latestRun ? [review.latestRun] : []), ...(review.previousRun ? [review.previousRun] : [])], review.prUrl);
 	const multiplePullRequests = data.reviews.length > 1;
+	const cloudTerminalFor = (state: SessionReviews) => [...state.runs, ...state.reviews.flatMap((item) => item.latestRun ? [item.latestRun] : [])].find((run) => run.status === "running" && run.prUrl === review.prUrl && Boolean((run as PullRequestRun).reviewerTerminalId)) as PullRequestRun | undefined;
+	const cloudReviewerTerminalId = cloud ? cloudTerminalFor(data)?.reviewerTerminalId : undefined;
 	const openReviewer = () => {
+		if (cloud) {
+			if (cloudReviewerTerminalId && cloud.isCurrent()) openPage({ pathname: "/session/[id]", params: { id: sessionId, view: "reviewer", terminalId: cloudReviewerTerminalId, ...ownerParams } });
+			return;
+		}
 		const destination = reviewerDestination(data, review, sessionId, routeHostId);
 		if (!destination) return;
 		haptics.tap();
@@ -149,15 +169,21 @@ function ReviewDetailContent() {
 		]);
 	};
 	const runPrimaryAction = async () => {
-		if (!config || primaryAction === "none" || mutation) return;
+		if ((!cloud && !config) || primaryAction === "none" || mutation) return;
 		haptics.tap();
 		setMutation("review");
 		setError("");
 		setReviewNotice("");
 		try {
-			if (primaryAction === "cancel") await cancelSessionReview(config, sessionId);
+			if (cloud) {
+				const result = await (primaryAction === "cancel" ? cloud.cancel(sessionId, { signal: lifetime.current.signal }) : cloud.trigger(sessionId, { signal: lifetime.current.signal }));
+				setData(result);
+				if (primaryAction !== "cancel" && !result.reviews.some((item) => item.status === "running")) setReviewNotice("This commit has already been reviewed or is not eligible. Push a new commit to run another review.");
+				const terminal = primaryAction !== "cancel" ? cloudTerminalFor(result)?.reviewerTerminalId : undefined;
+				if (terminal && cloud.isCurrent()) openPage({ pathname: "/session/[id]", params: { id: sessionId, view: "reviewer", terminalId: terminal, ...ownerParams } });
+			} else if (primaryAction === "cancel") await cancelSessionReview(config!, sessionId);
 			else {
-				const result = await triggerSessionReview(config, sessionId);
+				const result = await triggerSessionReview(config!, sessionId);
 				if (!result.created) setReviewNotice("This commit has already been reviewed. Push a new commit to run another review.");
 			}
 			await load();
@@ -168,11 +194,15 @@ function ReviewDetailContent() {
 		}
 	};
 	const sendRun = async (run: ReviewRun) => {
-		if (!config || mutation) return;
+		if ((!cloud && !config) || mutation) return;
 		setMutation(`send:${run.id}`);
 		setError("");
 		try {
-			await sendMessage(config, sessionId, formatReviewSummaryMessage(run));
+			if (cloud) {
+				if (!deliveryKeys.current.has(run.id)) deliveryKeys.current.set(run.id, `mobile-pr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+				await cloud.sendRun(sessionId, run, deliveryKeys.current.get(run.id)!, { signal: lifetime.current.signal });
+				deliveryKeys.current.delete(run.id);
+			} else await sendMessage(config!, sessionId, formatReviewSummaryMessage(run));
 			setSentRuns((current) => new Set(current).add(run.id));
 			haptics.success();
 		} catch (value) {
@@ -182,28 +212,28 @@ function ReviewDetailContent() {
 		}
 	};
 
-	const controls = reviewerControls(data, review, sessionId);
+	const controls = cloud ? { restore: false, stop: false, open: cloudReviewerTerminalId ? "terminal" as const : undefined } : reviewerControls(data, review, sessionId);
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
 	const merging = mutation === "merge";
 	// The swipe itself is the confirmation; only the screen reader path asks again.
 	const runMerge = async (): Promise<boolean> => {
-		if (!config || !pr || !merge?.canMerge || (mutation && !merging)) return false;
+		if ((!cloud && !config) || !pr || !merge?.canMerge || (mutation && !merging)) return false;
 		setMutation("merge"); setError("");
-		try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
+		try { if (cloud) await cloud.merge(sessionId, pr, { signal: lifetime.current.signal }); else await mergeSessionPR(config!, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
 		catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); return false; }
 		finally { setMutation(undefined); }
 	};
 	const confirmMerge = () => {
-		if (!config || !pr || !merge?.canMerge || mutation) return;
+		if ((!cloud && !config) || !pr || !merge?.canMerge || mutation) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Merge", onPress: () => void runMerge() },
 		]);
 	};
 
-	const reviewerHarness = data.reviewerSurface?.harness || data.reviewerHarness || "";
+	const reviewerHarness = data.reviewerSurface?.harness || data.reviewerHarness || cloudPreferences?.reviewerHarness || cloudPreferences?.workerHarness || "";
 	const activity = data.reviewerActivityState;
 	const activityColor = activity === "active" ? t.orange : activity === "exited" ? statusVisual(t, "exited").color : t.textTertiary;
 	const stopActions: ItemAction[] = controls.stop && !autoReviewEnabled

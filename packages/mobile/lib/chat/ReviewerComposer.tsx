@@ -127,7 +127,7 @@ export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onS
 		<View style={[styles.composer, stopped && { opacity: 0.55 }]}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
 			<View style={styles.composerRow}>
-				<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
+				<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachPhoto canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
 				<TextInput
 					accessibilityLabel="Reply to reviewer"
 					value={text}

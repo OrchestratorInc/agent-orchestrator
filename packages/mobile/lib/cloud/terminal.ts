@@ -3,16 +3,25 @@ import { cloudRequestErrorCopy } from "./errorCopy";
 
 export type CloudTerminalStatus = "connecting" | "waiting" | "attaching" | "ready" | "disconnected" | "exited" | "error";
 
+/** The Cloud ticket and stream endpoints require UUID terminal handles. */
+export function isCloudReviewerTerminalId(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
 export function createCloudTerminal(input: {
 	client: CloudClient;
 	orgId: string;
 	sessionId: string;
+	kind?: "agent" | "workspace";
+	terminalId?: string;
 	WebSocketImpl?: typeof WebSocket;
 	onStatus(status: CloudTerminalStatus): void;
 	onOutput(bytes: Uint8Array): void;
 	onError(message: string): void;
 }) {
 	const WS = input.WebSocketImpl ?? WebSocket;
+	const kind = input.kind ?? "agent";
+	const reviewer = input.terminalId !== undefined;
 	let socket: WebSocket | null = null;
 	const ticketController = new AbortController();
 	let connecting = false;
@@ -50,6 +59,11 @@ export function createCloudTerminal(input: {
 
 	const connect = async () => {
 		if (disposed || socket || connecting) return;
+		if (reviewer && (kind !== "agent" || !isCloudReviewerTerminalId(input.terminalId))) {
+			input.onStatus("error");
+			input.onError("Reviewer terminal unavailable. Open its review again to reconnect.");
+			return;
+		}
 		connecting = true;
 		ready = false;
 		bracketedPasteActive = false;
@@ -57,12 +71,12 @@ export function createCloudTerminal(input: {
 		input.onStatus("connecting");
 		let ticket: string;
 		try {
-			ticket = (await input.client.createTerminalTicket(input.orgId, input.sessionId, "agent", { signal: ticketController.signal })).ticket;
+			ticket = (await input.client.createTerminalTicket(input.orgId, input.sessionId, kind, { signal: ticketController.signal, ...(reviewer ? { terminalId: input.terminalId } : {}) })).ticket;
 		} catch (cause) {
 			if (disposed) return;
 			if (cause instanceof CloudApiError && cause.code === "TERMINAL_SESSION_EXITED") {
 				input.onStatus("exited");
-				input.onError("The coding-agent terminal has exited.");
+				input.onError(reviewer ? "The reviewer terminal has exited." : kind === "workspace" ? "The workspace terminal has exited." : "The coding-agent terminal has exited.");
 				return;
 			}
 			if (cause instanceof CloudApiError && ([401, 402, 403, 404, 410].includes(cause.status) || (cause.status === 409 && cause.code !== "WORKER_UNAVAILABLE" && cause.code !== "worker_unavailable"))) {
@@ -80,7 +94,7 @@ export function createCloudTerminal(input: {
 		} finally { connecting = false; }
 		if (disposed) return;
 		input.onStatus("attaching");
-		const url = new URL(input.client.terminalUrl(ticket, { after: 0, kind: "agent" }));
+		const url = new URL(input.client.terminalUrl(ticket, { after: 0, kind, ...(reviewer ? { terminalId: input.terminalId } : {}) }));
 		url.searchParams.set("protocol", "2");
 		let ws: WebSocket;
 		try {
@@ -127,7 +141,7 @@ export function createCloudTerminal(input: {
 			}
 			if (event.code === 1008) {
 				input.onStatus("error");
-				input.onError("The Cloud agent terminal is unavailable or terminal access is not allowed.");
+				input.onError(`The Cloud ${reviewer ? "reviewer" : kind} terminal is unavailable or terminal access is not allowed.`);
 				return;
 			}
 			input.onStatus("disconnected");
@@ -164,7 +178,9 @@ export function createCloudTerminal(input: {
 			return sendInput("\r");
 		},
 		resize: (columns: number, rows: number) => {
-			if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1) return;
+			// Match desktop: transient fits must not replace the settled grid
+			// that this shared PTY receives now and after a reconnect.
+			if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 20 || rows < 4) return;
 			dimensions = { columns, rows };
 			if (socket?.readyState === WS.OPEN) socket.send(JSON.stringify({ type: "resize", ...dimensions }));
 		},

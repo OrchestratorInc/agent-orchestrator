@@ -7,15 +7,17 @@ const fixtures = vi.hoisted(() => ({
 	platform: "ios",
 	hostStates: [] as HostSnapshot[],
 	cloud: null as { orgId: string; sessions: DashboardSession[]; projects: ProjectInfo[] } | null,
+	cloudNotifications: { available: false, unreadCount: 0 },
 	refreshAll: vi.fn(async () => {}),
 	refreshHost: vi.fn(async (_hostId: string) => {}),
 	showMenu: vi.fn(),
 	push: vi.fn(),
+	navigate: vi.fn(),
 	signIn: vi.fn(async () => true),
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 
-vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixtures.push, navigate: vi.fn() }) }));
+vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixtures.push, navigate: fixtures.navigate }) }));
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", Alert: { alert: vi.fn() }, FlatList: "FlatList", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
 	Keyboard: { dismiss: vi.fn() }, StyleSheet: { create: (styles: object) => styles },
@@ -27,6 +29,7 @@ vi.mock("react-native-keyboard-controller", () => ({
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 vi.mock("./cloud/authStore", () => ({ useCloudAuth: () => ({ signedIn: false, signInWithWorkOS: fixtures.signIn }) }));
+vi.mock("./cloud/notifications", () => ({ useCloudNotifications: () => fixtures.cloudNotifications }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
 vi.mock("@expo/ui/community/menu", async () => {
@@ -73,7 +76,8 @@ vi.mock("./useTabScrollToTop", () => ({ useTabScrollToTop: () => ({ current: nul
 vi.mock("./ui", async () => {
 	const React = await import("react");
 	return {
-		Button: "Button", HeaderIconButton: "HeaderIconButton", ScreenHeader: "ScreenHeader",
+		Button: "Button", HeaderIconButton: "HeaderIconButton",
+		ScreenHeader: (props: { right?: React.ReactNode }) => React.createElement("ScreenHeader", props, props.right),
 		EmptyState: (props: { action?: React.ReactNode }) => React.createElement("EmptyState", props, props.action),
 	};
 });
@@ -121,14 +125,44 @@ beforeEach(() => {
 	fixtures.refreshHost.mockClear();
 	fixtures.showMenu.mockClear();
 	fixtures.push.mockClear();
+	fixtures.navigate.mockClear();
 	fixtures.signIn.mockClear();
 	fixtures.cloud = null;
+	fixtures.cloudNotifications = { available: false, unreadCount: 0 };
 	fixtures.hostStates = [
 		snapshot({ hostId: "mac", name: "Mac", connection: "open", error: null, sessions: [session("worker-1")] }),
 		snapshot({}),
 	];
 });
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
+
+describe("Workers notification access", () => {
+	it("shows the Cloud inbox bell with no paired desktop", () => {
+		fixtures.hostStates = [];
+		fixtures.cloudNotifications = { available: true, unreadCount: 4 };
+		act(() => { renderer = create(<FleetScreen />); });
+		const bell = renderer.root.findByProps({ label: "Notifications" });
+		expect(bell.props.badge).toBe(4);
+		act(() => bell.props.onPress());
+		expect(fixtures.navigate).toHaveBeenCalledWith("/notifications");
+	});
+	it("adds Cloud unread notifications to every Local host once", () => {
+		fixtures.hostStates = fixtures.hostStates.map((host, index) => ({ ...host, notificationsUnread: index + 2 }));
+		fixtures.cloudNotifications = { available: true, unreadCount: 4 };
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findByProps({ label: "Notifications" }).props.badge).toBe(9);
+	});
+	it("keeps the Local inbox bell while a paired desktop is offline", () => {
+		fixtures.hostStates = [snapshot({ notificationsUnread: 3 })];
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findByProps({ label: "Notifications" }).props.badge).toBe(3);
+	});
+	it("hides the bell when no notification source is configured", () => {
+		fixtures.hostStates = [];
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findAllByProps({ label: "Notifications" })).toHaveLength(0);
+	});
+});
 
 it("opens hosted sign-in directly from the empty Workers board", async () => {
 	fixtures.hostStates = [];
@@ -139,6 +173,11 @@ it("opens hosted sign-in directly from the empty Workers board", async () => {
 });
 
 describe("Workers dock stability", () => {
+	it("keys stale warnings to each machine rather than the active machine", () => {
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findAllByType("StaleBanner" as never).map((node) => node.props.sourceKey))
+			.toEqual(['["local","mac"]', '["local","windows"]']);
+	});
 	it("keeps the dock's environments across polls that change only machine state", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		const before = renderer.root.findByType("WorkerDock" as never).props.environments;

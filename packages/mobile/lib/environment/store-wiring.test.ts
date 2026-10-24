@@ -62,6 +62,16 @@ describe("resolveSessionSource", () => {
 	});
 
 	describe("cloud environment", () => {
+		it("closes browser streams when its account owner is replaced or signed out", () => {
+			const cloud = { client: {} as CloudClient, signedIn: true, scopeKey: "browser-owner", isCurrent: () => true, orgId: "org1", sessionEpoch: 1 };
+			const first = resolveSessionSource({ environment: "cloud", cfg: null, cloud })!;
+			const closeFirst = vi.spyOn(first.preview!, "dispose");
+			const next = resolveSessionSource({ environment: "cloud", cfg: null, cloud: { ...cloud, sessionEpoch: 2 } })!;
+			expect(closeFirst).toHaveBeenCalledTimes(1);
+			const closeNext = vi.spyOn(next.preview!, "dispose");
+			resolveSessionSource({ environment: "cloud", cfg: null, cloud: { ...cloud, signedIn: false } });
+			expect(closeNext).toHaveBeenCalledTimes(1);
+		});
 		it("returns undefined when signed out", () => {
 			expect(
 				resolveSessionSource({

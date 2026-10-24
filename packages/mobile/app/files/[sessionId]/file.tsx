@@ -9,14 +9,13 @@ import { ChatMarkdown } from "../../../lib/chat/ChatMarkdown";
 import { userFacingError } from "../../../lib/connectionError";
 import { haptics } from "../../../lib/haptics";
 import { headerActionStyle, headerGlyphStyle } from "../../../lib/headerAction";
-import { hostRouteMatches } from "../../../lib/hostRoute";
 import { Feather } from "../../../lib/icons";
-import { HostScope, useApp } from "../../../lib/store";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
-import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
+import { type WorkspaceFileDetail } from "../../../lib/files/api";
+import { FilesScope, useFilesScope } from "../../../lib/files/FilesScope";
 import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SegmentedTabs, SelectionComposer, FileTypeIcon, type ComposerAction } from "../../../lib/files/components";
 import {
 	annotationTarget,
@@ -38,7 +37,7 @@ import {
 	withInlineComments,
 	type DisplayRow,
 } from "../../../lib/files/model";
-import { addReviewComment, reviewKey } from "../../../lib/files/reviewStore";
+import { addReviewComment, reviewLifetime } from "../../../lib/files/reviewStore";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
@@ -49,23 +48,20 @@ type Mode = "diff" | "file";
 type Selection = { anchor: number; focus: number };
 
 export default function SessionFileScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionFileContent /></HostScope> : <SessionFileContent />;
+	return <FilesScope><SessionFileContent /></FilesScope>;
 }
 
 function SessionFileContent() {
-	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string }>();
-	const id = String(params.sessionId ?? "");
-	const path = String(params.path ?? "");
+	const params = useLocalSearchParams<{ path: string; mode?: Mode; previousPath?: string }>();
+	const { sessionId: id, workspace, reviewKey: key } = useFilesScope();
+	const path = typeof params.path === "string" ? params.path : "";
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection, loading: appLoading } = useApp();
-	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { width } = useWindowDimensions();
 
-	const { manifest } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
+	const { manifest } = useWorkspaceManifest(workspace, id);
 	const changes = useMemo(() => manifest ? orderedChanges(changeGroups(manifest)) : [], [manifest]);
 	const position = changes.findIndex((file) => file.path === path);
 	const listed = position >= 0 ? changes[position] : undefined;
@@ -78,33 +74,47 @@ function SessionFileContent() {
 	const [rendered, setRendered] = useState(true);
 	const [revealed, setRevealed] = useState<Record<string, number>>({});
 	const [selection, setSelection] = useState<Selection | null>(null);
+	const currentSelection = useRef(selection);
+	currentSelection.current = selection;
 	const [busy, setBusy] = useState(false);
+	const feedbackRequest = useRef<object | null>(null);
 	const [actionError, setActionError] = useState<string>();
 	const [notice, setNotice] = useState<string>();
 	const list = useRef<FlatList<DisplayRow>>(null);
 	const request = useRef(0);
-
-	const key = reviewKey(currentHostId, id);
-	const review = useReviewSender(config, key, id);
+	const controller = useRef<AbortController | null>(null);
+	const mounted = useRef(true);
+	const currentRead = useRef({ workspace, id, path });
+	currentRead.current = { workspace, id, path };
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; ++request.current; controller.current?.abort(); };
+	}, []);
+	const review = useReviewSender(workspace, key, id);
+	const reviewVersion = reviewLifetime(key);
 
 	// What says the file changed under us: its fingerprint in the manifest, or the
 	// whole workspace version for a file the manifest does not list.
 	const fingerprint = listed?.fileFingerprint || manifest?.workspaceVersion || "";
 	const load = useCallback(async (quiet: boolean) => {
-		if (!config || !hostMatches || !path) return;
+		if (!workspace.isCurrent() || !path) return;
+		controller.current?.abort();
+		const abort = new AbortController();
+		controller.current = abort;
 		const ticket = ++request.current;
+		const current = () => mounted.current && ticket === request.current && !abort.signal.aborted && workspace.isCurrent() && currentRead.current.workspace === workspace && currentRead.current.id === id && currentRead.current.path === path;
 		if (!quiet) setLoading(true);
 		try {
-			const next = await getWorkspaceFile(config, id, path);
-			if (ticket !== request.current) return;
+			const next = await workspace.getFile(id, path, undefined, { signal: abort.signal });
+			if (!current()) return;
 			setDetail(next);
 			setLoadError(undefined);
 		} catch (cause) {
-			if (ticket === request.current && !quiet) setLoadError(userFacingError(cause, "Couldn't open this file."));
+			if (current() && !quiet) setLoadError(userFacingError(cause, "Couldn't open this file."));
 		} finally {
-			if (ticket === request.current) setLoading(false);
+			if (current()) setLoading(false);
 		}
-	}, [config, hostMatches, id, path]);
+	}, [workspace, id, path]);
 
 	// A new path starts from a clean slate; the same path reloads quietly when the
 	// agent edits it, keeping the reader's place.
@@ -113,6 +123,8 @@ function SessionFileContent() {
 		setRevealed({});
 		setSelection(null);
 		setActionError(undefined);
+		setBusy(false);
+		feedbackRequest.current = null;
 		void load(false);
 	}, [load]);
 	const seenFingerprint = useRef(fingerprint);
@@ -148,7 +160,7 @@ function SessionFileContent() {
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: name || "File",
-			headerRight: hostMatches && !image && !(markdown && rendered && effectiveMode === "file") ? () => (
+			headerRight: !image && !(markdown && rendered && effectiveMode === "file") ? () => (
 				<Pressable
 					accessibilityRole="switch"
 					accessibilityLabel="Wrap long lines"
@@ -161,7 +173,7 @@ function SessionFileContent() {
 				</Pressable>
 			) : undefined,
 		});
-	}, [effectiveMode, hostMatches, image, markdown, name, navigation, rendered, t.textPrimary, t.textTertiary, wrap]);
+	}, [effectiveMode, image, markdown, name, navigation, rendered, t.textPrimary, t.textTertiary, wrap]);
 
 	useEffect(() => {
 		if (!notice) return;
@@ -232,7 +244,9 @@ function SessionFileContent() {
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
-		if (!config || !detail || !chosen.length) return;
+		const ownerCurrent = () => mounted.current && workspace.isCurrent() && currentRead.current.workspace === workspace && currentRead.current.id === id && reviewLifetime(key) === reviewVersion;
+		const current = () => ownerCurrent() && currentRead.current.path === path && currentSelection.current === selection;
+		if (!current() || !detail || !chosen.length || feedbackRequest.current) return;
 		const feedback = text.trim();
 		const target = annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen);
 		const anchor = commentAnchor(chosen);
@@ -243,33 +257,40 @@ function SessionFileContent() {
 			setNotice(`Comment added to the review.`);
 			return;
 		}
+		const ticket = {};
+		feedbackRequest.current = ticket;
 		setBusy(true);
 		setActionError(undefined);
 		try {
-			await sendFileFeedback(config, id, [{ target, feedback }]);
+			await workspace.sendFeedback(id, [{ target, feedback }]);
+			if (!ownerCurrent()) return;
 			// What was sent stays on the line, like a posted review comment.
 			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor, status: "sent" });
+			// Matching path values are not enough: A → B → A can now hold a
+			// different selection or a new send. Keep accepted bookkeeping above,
+			// but never let that older completion close the replacement composer.
+			if (!current() || feedbackRequest.current !== ticket) return;
 			haptics.success();
 			setSelection(null);
 			setNotice("Sent. The agent's reply appears in the session.");
 		} catch (cause) {
+			if (!current() || feedbackRequest.current !== ticket) return;
 			haptics.error();
 			setActionError(userFacingError(cause, "Couldn't send that to the agent."));
 		} finally {
-			setBusy(false);
+			if (feedbackRequest.current === ticket) {
+				feedbackRequest.current = null;
+				if (ownerCurrent()) setBusy(false);
+			}
 		}
-	}, [chosen, config, detail, id, key, label, name, path]);
+	}, [chosen, workspace, detail, id, key, label, name, path, reviewVersion, selection]);
 
 	const copySelection = useCallback(() => {
 		void Clipboard.setStringAsync(chosen.map((row) => row.text).join("\n"));
 		setNotice(`Copied ${label.toLowerCase()}.`);
 	}, [chosen, label]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
-	// A cold start (a deep link, a notification) lands before the saved pairing
-	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
+	if (!path) return <View style={styles.center}><EmptyState icon="file" title="File path unavailable" message="Choose a file from this worker's Files screen." /></View>;
 
 	const pathBar = (
 		<View style={styles.pathBar}>
@@ -326,14 +347,14 @@ function SessionFileContent() {
 		body = <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Opening {name}…</Text></View>;
 	} else if (loadError && !detail) {
 		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load(false)} />} /></View>;
-	} else if (detail && image) {
+	} else if (detail && image && workspace.imageSource) {
 		body = <ImageCompare detail={detail} sources={{
-			before: detail.status !== "added" && changed ? workspaceImageSource(config!, id, path, "before", detail.workspaceVersion) : undefined,
-			after: !detail.deleted ? workspaceImageSource(config!, id, path, "after", detail.workspaceVersion) : undefined,
+			before: detail.status !== "added" && changed ? workspace.imageSource(id, path, "before", detail.workspaceVersion) : undefined,
+			after: !detail.deleted ? workspace.imageSource(id, path, "after", detail.workspaceVersion) : undefined,
 		}} />;
 	} else if (detail && svg && effectiveMode === "file" && lines && !detail.binary) {
 		body = <ScrollView contentContainerStyle={styles.preview}><SvgXml xml={detail.content} width="100%" height={width} /></ScrollView>;
-	} else if (detail?.binary) {
+	} else if (detail && (detail.binary || image && !workspace.imageSource)) {
 		body = <View style={styles.center}><EmptyState icon="file" title="Binary file" message="This file isn't text, so there's nothing to show line by line." /></View>;
 	} else if (detail && markdown && rendered && effectiveMode === "file") {
 		body = <ScrollView contentContainerStyle={styles.markdown}><ChatMarkdown text={detail.content} /></ScrollView>;

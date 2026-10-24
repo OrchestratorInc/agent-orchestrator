@@ -13,6 +13,8 @@ import type { NotificationTypeIconProps } from "./notification-type-icon.types";
  * lucide draws on a 24x24 grid with a 2px round stroke and no fill.
  */
 const ICONS: Record<NotificationTypeIconProps["icon"], React.ReactNode> = {
+	"circle-alert": <><Circle cx="12" cy="12" r="10" /><Path d="M12 8v4M12 16h.01" /></>,
+	"check-check": <><Path d="m18 6-7 7-3-3M22 10l-7 7-3-3M2 12l5 5 3-3" /></>,
 	// MessageSquareDot
 	"message-square-dot": (
 		<>

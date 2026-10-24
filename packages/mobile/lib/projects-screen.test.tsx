@@ -4,8 +4,8 @@ import type { HostSnapshot } from "./otherHosts";
 import type { Scoped, ScopedBoard } from "./environment/scopedBoard";
 import type { OrchestratorProjectRow } from "./orchestratorView";
 
-const state = vi.hoisted(() => ({ board: {} as ScopedBoard, hosts: [] as HostSnapshot[], scheme: "dark" as "dark" | "light" }));
-vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn(), navigate: vi.fn() }) }));
+const state = vi.hoisted(() => ({ board: {} as ScopedBoard, hosts: [] as HostSnapshot[], scheme: "dark" as "dark" | "light", cloudNotifications: { available: false, unreadCount: 0 }, notificationsUnread: 0, navigate: vi.fn() }));
+vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn(), navigate: state.navigate }) }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -24,11 +24,15 @@ vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./orchestrator-icon", () => ({ OrchestratorIcon: "OrchestratorIcon" }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 vi.mock("./cloud/authStore", () => ({ useCloudAuth: () => ({ signedIn: true, busy: false, signInWithWorkOS: vi.fn(async () => true) }) }));
-vi.mock("./store", () => ({ useApp: () => ({ scopedBoard: state.board, hostStates: state.hosts, refreshAll: vi.fn(async () => {}), notificationsUnread: 0 }) }));
+vi.mock("./cloud/notifications", () => ({ useCloudNotifications: () => state.cloudNotifications }));
+vi.mock("./store", () => ({ useApp: () => ({ scopedBoard: state.board, hostStates: state.hosts, refreshAll: vi.fn(async () => {}), notificationsUnread: state.notificationsUnread }) }));
 vi.mock("./useOrchestratorLauncher", () => ({ useOrchestratorLauncher: () => ({ busyProjects: new Set(), openOrchestrator: vi.fn() }) }));
 vi.mock("./useTabScrollToTop", () => ({ useTabScrollToTop: () => ({ current: null }) }));
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
-vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", HeaderIconButton: "HeaderIconButton", ListSectionHeader: "ListSectionHeader", ScreenHeader: "ScreenHeader", Dot: "Dot" }));
+vi.mock("./ui", async () => {
+	const React = await import("react");
+	return { Button: "Button", EmptyState: "EmptyState", HeaderIconButton: "HeaderIconButton", ListSectionHeader: "ListSectionHeader", ScreenHeader: (props: { right?: React.ReactNode }) => React.createElement("ScreenHeader", props, props.right), Dot: "Dot" };
+});
 vi.mock("./ThemeProvider", async () => {
 	const { darkTheme, lightTheme } = await import("./theme");
 	const current = () => state.scheme === "dark" ? darkTheme : lightTheme;
@@ -43,6 +47,9 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	state.scheme = "dark";
+	state.cloudNotifications = { available: false, unreadCount: 0 };
+	state.notificationsUnread = 0;
+	state.navigate.mockClear();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -60,7 +67,47 @@ beforeEach(() => {
 });
 afterEach(async () => { if (renderer) await act(async () => renderer?.unmount()); renderer = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+describe("Projects notification access", () => {
+	it("shows the Cloud inbox bell with no paired desktop", async () => {
+		state.hosts = [];
+		state.cloudNotifications = { available: true, unreadCount: 4 };
+		await act(async () => { renderer = create(<ProjectsScreen />); });
+		const bell = renderer!.root.findByProps({ label: "Notifications" });
+		expect(bell.props.badge).toBe(4);
+		act(() => bell.props.onPress());
+		expect(state.navigate).toHaveBeenCalledWith("/notifications");
+	});
+	it("adds Cloud unread notifications to every Local host once", async () => {
+		state.hosts = [{ ...state.hosts[0], notificationsUnread: 2 }, { ...state.hosts[0], hostId: "mac-2", notificationsUnread: 3 }];
+		state.notificationsUnread = 2;
+		state.cloudNotifications = { available: true, unreadCount: 4 };
+		await act(async () => { renderer = create(<ProjectsScreen />); });
+		expect(renderer!.root.findByProps({ label: "Notifications" }).props.badge).toBe(9);
+	});
+	it("does not revive the active-host fallback after every Local host is read", async () => {
+		state.notificationsUnread = 8;
+		state.cloudNotifications = { available: true, unreadCount: 4 };
+		await act(async () => { renderer = create(<ProjectsScreen />); });
+		expect(renderer!.root.findByProps({ label: "Notifications" }).props.badge).toBe(4);
+	});
+	it("keeps the Local inbox bell while a paired desktop is offline", async () => {
+		state.hosts[0] = { ...state.hosts[0], connection: "closed", notificationsUnread: 3 };
+		await act(async () => { renderer = create(<ProjectsScreen />); });
+		expect(renderer!.root.findByProps({ label: "Notifications" }).props.badge).toBe(3);
+	});
+	it("hides the bell when no notification source is configured", async () => {
+		state.hosts = [];
+		await act(async () => { renderer = create(<ProjectsScreen />); });
+		expect(renderer!.root.findAllByProps({ label: "Notifications" })).toHaveLength(0);
+	});
+});
+
 describe("combined Projects source identity", () => {
+	it("keys stale warnings to each local and Cloud source", async () => {
+		await act(async () => { renderer = create(<ProjectsScreen />); });
+		expect(renderer!.root.findAllByType("StaleBanner" as never).map((node) => node.props.sourceKey))
+			.toEqual(['["local","mac-1"]', '["cloud","org-1"]']);
+	});
 	it.each(["dark", "light"] as const)("renders the source machine and Cloud icon once from plain scoped projects in %s mode", async (scheme) => {
 		state.scheme = scheme;
 		await act(async () => { renderer = create(<ProjectsScreen />); });

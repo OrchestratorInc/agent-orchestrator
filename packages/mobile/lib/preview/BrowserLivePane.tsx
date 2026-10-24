@@ -6,30 +6,38 @@ import {
 	Pressable,
 	StyleSheet,
 	Text,
+	TextInput,
 	View,
 } from "react-native";
 import { BrowserLiveClient } from "../browserLive";
+import { safeBrowserURL } from "../cloud/browserProtocol";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, type BrowserFrameRect } from "../browserLiveProtocol";
 import { Feather } from "../icons";
 import { useApp } from "../store";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import type { Theme } from "../theme";
 import { iconSize, space, type } from "../tokens";
+import { textSelectionColors } from "../textSelection";
+import type { BrowserLiveHandlers, BrowserLiveTransport, PreviewFrame, PreviewSource } from "./source";
 
 type BrowserStatus = "connecting" | "open" | "error";
 
-export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; onDisabled?(): void }) {
+export function BrowserLivePane({ sessionID, source, onDisabled }: { sessionID: string; source?: PreviewSource; onDisabled?(): void }) {
 	const { config } = useApp();
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const client = useRef<BrowserLiveClient | null>(null);
+	const client = useRef<BrowserLiveTransport | null>(null);
 	const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	const [error, setError] = useState<string>();
 	const [notice, setNotice] = useState<string>();
-	const [frameURI, setFrameURI] = useState<string>();
-	const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
+	const identity = useMemo(() => ({}), [attempt, source, source ? undefined : config, sessionID]);
+	const [capture, setCapture] = useState<{ identity: object; uri: string; frame: PreviewFrame }>();
+	const frameURI = capture?.identity === identity && source?.isCurrent() !== false ? capture.uri : undefined;
+	const frameSize = frameURI && capture ? capture.frame.crop ?? capture.frame : { width: 1, height: 1 };
+	const [address, setAddress] = useState("");
+	const [page, setPage] = useState({ url: "", width: 1280, height: 800 });
 	const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
 	const frameRect = useMemo(() => containBrowserFrame(viewportSize, frameSize), [frameSize, viewportSize]);
 	const frameRectRef = useRef<BrowserFrameRect>(frameRect);
@@ -43,10 +51,18 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 	const [blank, setBlank] = useState(false);
 
 	useEffect(() => {
-		if (!config) {
+		setCapture(undefined);
+		setAddress("");
+		setPage({ url: "", width: 1280, height: 800 });
+		pageWidth.current = 0;
+		setBlank(false);
+		if (!source && !config) {
 			setStatus("error");
 			setError("Pair this phone with the desktop app first.");
 			return;
+		}
+		if (source && !source.isCurrent()) {
+			setStatus("error"); setError("Cloud workspace changed. Open Preview from your current worker."); return;
 		}
 		if (!sessionID) {
 			setStatus("error");
@@ -56,9 +72,10 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 		let disposed = false;
 		setStatus("connecting");
 		setError(undefined);
-		const live = new BrowserLiveClient(config, sessionID, {
+		const current = () => !disposed && source?.isCurrent() !== false;
+		const handlers: BrowserLiveHandlers = {
 			onStatus: (next, message) => {
-				if (disposed || next === "closed") return;
+				if (!current() || next === "closed") return;
 				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
 				if (next === "open") {
 					setError(undefined);
@@ -68,7 +85,7 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 						noticeTimer.current = setTimeout(() => {
 							noticeTimer.current = null;
 							setNotice(undefined);
-						}, 2500);
+						}, source?.kind === "cloud" ? 8000 : 2500);
 					}
 				} else {
 					if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -77,25 +94,26 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 					setError(message);
 				}
 			},
-			onDisabled: () => { if (!disposed) onDisabled?.(); },
+			onDisabled: () => { if (current()) onDisabled?.(); },
 			onState: (state) => {
-				if (disposed) return;
+				if (!current()) return;
 				pageWidth.current = state.width;
+				setPage({ url: state.url, width: state.width, height: state.height });
 				setBlank(!state.url);
 			},
 			onFrame: (frame) => {
-				if (disposed) return;
+				if (!current()) return;
 				try {
-					setFrameSize({ width: frame.width, height: frame.height });
-					setFrameURI(browserJPEGDataURI(frame.jpeg));
+					setCapture({ identity, frame, uri: browserJPEGDataURI(frame.jpeg) });
 				} catch {
 					setStatus("error");
 					setError("This mobile build couldn't display the browser frame.");
 				}
 			},
-		});
+		};
+		const live = source ? source.createLive(sessionID, handlers) : new BrowserLiveClient(config!, sessionID, handlers);
 		client.current = live;
-		live.connect();
+		void live.connect();
 
 		return () => {
 			disposed = true;
@@ -104,7 +122,7 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
-	}, [attempt, config, onDisabled, sessionID]);
+	}, [identity, source, source ? undefined : config, onDisabled, sessionID]);
 
 	const normalizedPoint = (x: number, y: number) => {
 		const rect = frameRectRef.current;
@@ -141,16 +159,30 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 	}), [status]);
 
 	const retry = () => setAttempt((value) => value + 1);
+	const navigate = () => {
+		if (!safeBrowserURL(address)) { setNotice("Enter a complete http:// or https:// address without a username or password."); return; }
+		client.current?.send({ type: "navigate", payload: { action: "open", url: address } });
+	};
+	const cloud = source?.kind === "cloud";
+	const imageSize = capture?.frame.crop ? { width: `${capture.frame.width / capture.frame.crop.width * 100}%` as const, height: `${capture.frame.height / capture.frame.crop.height * 100}%` as const } : styles.frameImage;
 
 	return <View style={styles.root}>
+		{cloud && status === "open" ? <View style={styles.navigation}>
+			<Text style={styles.sharedSize}>Shared agent browser · {page.width} × {page.height}</Text>
+			<View style={styles.addressRow}>
+				<TextInput accessibilityLabel="Browser address" value={address} placeholder={page.url || "https://example.com"} placeholderTextColor={t.textTertiary} onChangeText={setAddress} onSubmitEditing={navigate} autoCapitalize="none" autoCorrect={false} keyboardType="url" returnKeyType="go" {...textSelectionColors(t)} style={styles.address} />
+				<Pressable accessibilityRole="button" accessibilityLabel="Open browser address" onPress={navigate} style={styles.addressAction}><Feather name="arrow-right" size={iconSize.sm} color={t.accent} /></Pressable>
+				<Pressable accessibilityRole="button" accessibilityLabel="Reload browser page" onPress={() => client.current?.send({ type: "navigate", payload: { action: "reload" } })} style={styles.addressAction}><Feather name="refresh-cw" size={iconSize.sm} color={t.textSecondary} /></Pressable>
+			</View>
+		</View> : null}
 		<View
 			style={styles.viewport}
 			onLayout={(event) => setViewportSize(event.nativeEvent.layout)}
 			{...responder.panHandlers}
 		>
-			{frameURI && !blank ? <View pointerEvents="none" style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
-			{status === "open" && blank ? <View pointerEvents="none" style={styles.center}><Feather name="monitor" size={iconSize.lg} color={t.textTertiary} /><Text style={styles.supporting}>Nothing is open in the desktop browser yet.</Text></View> : null}
-			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>Waiting for the desktop browser…</Text></View> : null}
+			{frameURI && !blank ? <View pointerEvents="none" style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="stretch" style={imageSize} /></View> : null}
+			{status === "open" && blank ? <View pointerEvents="none" style={styles.center}><Feather name="monitor" size={iconSize.lg} color={t.textTertiary} /><Text style={styles.supporting}>{cloud ? "Enter an address above or ask the agent to open a page." : "Nothing is open in the desktop browser yet."}</Text></View> : null}
+			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>{cloud ? "Waiting for the Cloud browser…" : "Waiting for the desktop browser…"}</Text></View> : null}
 			{status === "open" && notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
 		</View>
@@ -167,14 +199,19 @@ function BrowserState({ status, error, retry }: { status: BrowserStatus; error?:
 		<View style={[styles.stateIcon, styles.stateIconError]}><Feather name="alert-triangle" size={iconSize.lg} color={t.red} /></View>
 		<Text style={styles.stateTitle}>Couldn't connect to the browser</Text>
 		<Text style={styles.stateCopy}>{error || "Couldn't reach the desktop browser. Make sure browser sharing is on in Connect Mobile, the session is still running, and another phone isn't already controlling it."}</Text>
-		<Pressable accessibilityRole="button" onPress={retry} style={styles.retry}><Feather name="refresh-cw" size={iconSize.sm} color={t.onAccent} /><Text style={styles.retryText}>Check again</Text></Pressable>
+		<Pressable accessibilityRole="button" accessibilityLabel="Reconnect browser" onPress={retry} style={styles.retry}><Feather name="refresh-cw" size={iconSize.sm} color={t.onAccent} /><Text style={styles.retryText}>Check again</Text></Pressable>
 	</View>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	root: { flex: 1, backgroundColor: t.bgBase },
+	navigation: { paddingHorizontal: space.md, paddingTop: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgSurface },
+	sharedSize: { color: t.textTertiary, fontFamily: "Geist_400Regular", fontSize: type.caption2.fontSize },
+	addressRow: { flexDirection: "row", alignItems: "center" },
+	address: { flex: 1, minHeight: 44, color: t.textPrimary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
+	addressAction: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
 	viewport: { flex: 1, overflow: "hidden", backgroundColor: "#050505" },
-	frame: { position: "absolute" },
+	frame: { position: "absolute", overflow: "hidden" },
 	frameImage: { width: "100%", height: "100%" },
 	center: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: space.sm },
 	supporting: { color: t.textTertiary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },

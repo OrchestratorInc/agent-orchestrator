@@ -64,8 +64,8 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 	const effortValue = effortOption ? providerChoiceLabel(effortOption) : selectedEffort ? effortChoiceLabel(selectedEffort) : NOT_REPORTED;
 	const permissionChoices = permissionOption
 		? permissionOption.choices.map((choice) => ({ value: choice.value, label: choice.name, description: choice.description }))
-		: APPROVALS.map((item) => ({ value: item.id, label: approvalLabel(item.id, snapshot.harness), description: item.description }));
-	const selectedPermission = permissionOption?.currentValue ?? snapshot.settings.approvalMode ?? "default";
+		: APPROVALS.filter((item) => !snapshot.approvalModes || snapshot.approvalModes.includes(item.id)).map((item) => ({ value: item.id, label: approvalLabel(item.id, snapshot.harness), description: item.description }));
+	const selectedPermission = permissionOption?.currentValue ?? snapshot.settings.approvalMode ?? snapshot.approvalModes?.[0] ?? "default";
 	const permissionDescription = permissionChoices.find((choice) => choice.value === selectedPermission)?.description;
 	const choose = (title: string, value: string, items: Choice[], onChange: (value: string) => void) => {
 		if (disabled) return;
@@ -100,7 +100,7 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 			</SettingsGroup> : null}
 
 			{permissionChoices.length ? <SettingsGroup title="PERMISSIONS">
-				<SettingRow icon="circle-dashed-check" label="Permission mode" value={permissionOption ? providerChoiceLabel(permissionOption) : approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)} description={permissionDescription} disabled={disabled} onPress={() => choose("Permission mode", selectedPermission, permissionChoices, (value) => {
+				<SettingRow icon="circle-dashed-check" label="Permission mode" value={permissionOption ? providerChoiceLabel(permissionOption) : approvalLabel(snapshot.settings.approvalMode ?? snapshot.approvalModes?.[0] ?? "default", snapshot.harness)} description={permissionDescription} disabled={disabled} onPress={() => choose("Permission mode", selectedPermission, permissionChoices, (value) => {
 					if (permissionOption) onOption(permissionOption.id, { value });
 					else onSettings({ ...snapshot.settings, approvalMode: value as TurnSettings["approvalMode"] });
 				})} />

@@ -12,6 +12,7 @@ import {
 	workerSearchPresentation,
 	scopedWorkerProjectOptions,
 	boardWorkerKey,
+	type WorkerEnvironment,
 } from "./worker-controls";
 import type { Scoped } from "./environment/scopedBoard";
 import type { ProjectInfo, DashboardSession } from "./api";
@@ -149,5 +150,40 @@ describe("combined Worker filters", () => {
 		const a = { source: local, value: { id: "same" } } as Scoped<DashboardSession>;
 		const b = { source: cloud, value: { id: "same" } } as Scoped<DashboardSession>;
 		expect(boardWorkerKey(a)).not.toBe(boardWorkerKey(b));
+	});
+});
+
+describe("named-machine scoped project options", () => {
+	const projects: Scoped<ProjectInfo>[] = [
+		{ source: { kind: "local", id: "same" }, value: { id: "app", name: "App" } },
+		{ source: { kind: "local", id: "desktop" }, value: { id: "app", name: "App" } },
+		{ source: { kind: "cloud", id: "same" }, value: { id: "app", name: "App" } },
+	];
+	const environments: WorkerEnvironment[] = [
+		{ id: "same", name: "Laptop", source: projects[0].source },
+		{ id: "desktop", name: " Studio Mac ", source: projects[1].source },
+		{ id: "cloud", name: "Not a machine", source: projects[2].source },
+	];
+	it("names each owning machine and Cloud without changing IDs, filtering or order", () => {
+		const all = scopedWorkerProjectOptions(projects, null, environments);
+		expect(all).toEqual([
+			{ id: "all", label: "All projects" },
+			{ id: '["local","same","app"]', label: "App · Laptop" },
+			{ id: '["local","desktop","app"]', label: "App · Studio Mac" },
+			{ id: '["cloud","same","app"]', label: "App · Cloud" },
+		]);
+		expect(scopedWorkerProjectOptions(projects, projects[1].source, environments)).toEqual([all[0], all[2]]);
+	});
+	it("renames labels without changing the selected resource key", () => {
+		const before = scopedWorkerProjectOptions(projects, null, environments);
+		const after = scopedWorkerProjectOptions(projects, null, environments.map((env) => env.id === "same" ? { ...env, name: "Build Laptop" } : env));
+		expect(after.map((item) => item.id)).toEqual(before.map((item) => item.id));
+		expect(after[1].label).toBe("App · Build Laptop");
+	});
+	it("uses a neutral fallback rather than borrowing another source's identity", () => {
+		expect(scopedWorkerProjectOptions(projects, null, [
+			{ ...environments[0], source: projects[2].source },
+			{ ...environments[1], name: " " },
+		]).map((item) => item.label)).toEqual(["All projects", "App · Local", "App · Local", "App · Cloud"]);
 	});
 });

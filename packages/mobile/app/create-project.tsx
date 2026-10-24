@@ -4,21 +4,24 @@ import { CloudApiError, type CoderTemplate, type CoderTemplateParameter, type Cr
 import * as Crypto from "expo-crypto";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, AppState, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, BackHandler, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { backOr } from "../lib/backNavigation";
 import { readyHarnesses } from "../lib/cloud/agentReadiness";
-import { useCloudAuth } from "../lib/cloud/authStore";
+import { useCloudAuth, type CloudAuthState } from "../lib/cloud/authStore";
 import { CloudAgentSelect } from "../lib/cloud/cloud-agent-select";
+import { CloudAgentConnections } from "../lib/cloud/CloudAgentConnections";
 import { loadGrantedRepositories } from "../lib/cloud/githubProjectRepositories";
 import { createGitHubConnectionAttempt } from "../lib/cloud/githubConnection";
 import { cloudAccountScopeKey } from "../lib/cloud/deployment";
 import { offersProviderChoice } from "../lib/cloud/offering";
 import { acceptCloudOperation, clearCloudOperation, prepareCloudOperation, readCloudOperationsForScope, reserveCloudOperation, type CloudOperation } from "../lib/cloud/operation";
 import { cloudProjectInput, coderParameterProblem, coderSetupProblem, findCloudProjectForRepository, initialProjectCreationStep, normalizedGitHubRepository, validGitHubRepositoryURL } from "../lib/cloud/projectCreation";
+import { cloudProjectSetupCache } from "../lib/cloud/projectSetupCache";
 import { haptics } from "../lib/haptics";
 import { Feather } from "../lib/icons";
 import { openGitHub } from "../lib/openGitHub";
+import { PickerOptions } from "../lib/PickerOptions";
 import { useApp } from "../lib/store";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemeState, useThemedStyles } from "../lib/ThemeProvider";
@@ -28,7 +31,7 @@ import { fontScaleCap, iconSize, radius, sheetInset, space, touchTarget, type as
 
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
-type Step = "loading" | "unavailable" | "github" | "github-token" | "repository" | "agents";
+type Step = "unavailable" | "github" | "github-token" | "repository" | "agents";
 type ProjectRequest = { kind: "app"; repositoryUrl: string; input: CreateGitHubProjectInput } | { kind: "manual"; repositoryUrl: string; input: CreateProjectInput };
 type ReservedProject = { slot: string; operation: CloudOperation<ProjectRequest> };
 
@@ -40,25 +43,37 @@ const AGENT_LABELS: Record<string, string> = {
 };
 
 export default function CreateCloudProject() {
+	const auth = useCloudAuth();
+	// Remount before rendering a different owner's draft or cached metadata.
+	const ownerKey = JSON.stringify([auth.baseUrl.replace(/\/+$/, ""), auth.accountId, auth.orgId, auth.sessionEpoch]);
+	return <CreateCloudProjectForm key={ownerKey} auth={auth} cacheKey={auth.signedIn && auth.accountId && auth.orgId ? ownerKey : null} />;
+}
+
+function CreateCloudProjectForm({ auth, cacheKey }: { auth: CloudAuthState; cacheKey: string | null }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { refreshSource } = useApp();
-	const auth = useCloudAuth();
-	const { client, signedIn, orgId, orgLoading, orgError, retryOrgResolution, accountId, baseUrl, sessionEpoch, offering } = auth;
+	const { client, signedIn, orgId, orgLoading, orgError, retryOrgResolution, accountId, baseUrl, offering } = auth;
 	const { scheme } = useThemeState();
 	const scopeKey = accountId && orgId ? cloudAccountScopeKey({ baseUrl, userId: accountId, orgId }) : null;
 	const manualDeployment = baseUrl.replace(/\/+$/, "") === "https://staging-api.aoagents.dev";
+	const cachedSetup = useMemo(() => cacheKey ? cloudProjectSetupCache.read(cacheKey) : {}, [cacheKey]);
+	const cachedAgents = cachedSetup.connections ? readyHarnesses(cachedSetup.connections.value) : [];
 	const authRef = useRef(auth); authRef.current = auth;
 	const mounted = useRef(true);
 	const createAbort = useRef<AbortController | null>(null);
 	const manualAbort = useRef<AbortController | null>(null);
 	const navigationAck = useRef<ReservedProject | null>(null);
-	const [reserved, setReserved] = useState<ReservedProject | null>(null);
+	const [reserved, setReservedState] = useState<ReservedProject | null>(null);
+	const reservedRef = useRef<ReservedProject | null>(null);
+	const setReserved = useCallback((value: ReservedProject | null) => {
+		reservedRef.current = value;
+		setReservedState(value);
+	}, []);
 	const [refreshError, setRefreshError] = useState<string | null>(null);
 	const [configDefaults, setConfigDefaults] = useState<ProjectConfig>({});
-	const [providerChoice, setProviderChoice] = useState("");
 	const [coderConfig, setCoderConfig] = useState<OrgCoderConfigResponse | null>(null);
 	const [coderTemplates, setCoderTemplates] = useState<CoderTemplate[]>([]);
 	const [templateId, setTemplateId] = useState("");
@@ -70,11 +85,10 @@ export default function CreateCloudProject() {
 	const [computeAttempt, setComputeAttempt] = useState(0);
 	const [parametersLoading, setParametersLoading] = useState(false);
 	const [parametersError, setParametersError] = useState<string | null>(null);
-	const effectiveProvider = providerChoice && offering?.providers.includes(providerChoice) ? providerChoice : offering?.defaultProvider ?? "";
-	const usesCoder = effectiveProvider === "coder";
-	const [step, setStep] = useState<Step>("loading");
-	const [setupScope, setSetupScope] = useState<string | null>(null);
+	const [step, setStep] = useState<Step>(manualDeployment ? "repository" : "github");
 	const [setupAttempt, setSetupAttempt] = useState(0);
+	const [requestRestored, setRequestRestored] = useState(false);
+	const [restoreError, setRestoreError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [token, setToken] = useState("");
@@ -82,11 +96,15 @@ export default function CreateCloudProject() {
 	const [displayName, setDisplayName] = useState("");
 	const [defaultBranch, setDefaultBranch] = useState("main");
 	const [readOnly, setReadOnly] = useState(false);
-	const [agents, setAgents] = useState<string[]>([]);
-	const [workerAgent, setWorkerAgent] = useState("");
-	const [orchestratorAgent, setOrchestratorAgent] = useState("");
-	const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
-	const [repositories, setRepositories] = useState<GitHubRepository[]>([]);
+	const [agents, setAgents] = useState<string[]>(cachedAgents);
+	const [agentsLoading, setAgentsLoading] = useState(!cachedSetup.connections);
+	const [agentsError, setAgentsError] = useState<string | null>(null);
+	const [workerAgent, setWorkerAgent] = useState(cachedAgents[0] ?? "");
+	const [orchestratorAgent, setOrchestratorAgent] = useState(cachedAgents[0] ?? "");
+	const [agentPicker, setAgentPicker] = useState<"worker" | "orchestrator" | null>(null);
+	const [connectingAgents, setConnectingAgents] = useState(false);
+	const [installations, setInstallations] = useState<GitHubInstallation[]>(cachedSetup.github?.value.installations ?? []);
+	const [repositories, setRepositories] = useState<GitHubRepository[]>(cachedSetup.github?.value.repositories ?? []);
 	const [repositorySearch, setRepositorySearch] = useState("");
 	const [repositoryPickerOpen, setRepositoryPickerOpen] = useState(false);
 	const [selectedRepositoryId, setSelectedRepositoryId] = useState("");
@@ -95,13 +113,16 @@ export default function CreateCloudProject() {
 	const [connecting, setConnecting] = useState(false);
 	const [openingGitHub, setOpeningGitHub] = useState(false);
 	const [loadingRepositories, setLoadingRepositories] = useState(false);
-	const [hasSavedToken, setHasSavedToken] = useState(false);
+	const [githubLoading, setGithubLoading] = useState(!manualDeployment && !cachedSetup.github);
+	const [hasSavedToken, setHasSavedToken] = useState(cachedSetup.connections ? initialProjectCreationStep(cachedSetup.connections.value) === "repository" : false);
 	const connectAttempt = useRef(0);
 	const connectionBaseline = useRef<Map<string, string> | null>(null);
 	const requestAbort = useRef<AbortController | null>(null);
 	const connectRequest = useRef<AbortController | null>(null);
 	const installationStarting = useRef(false);
 	const syncAttempted = useRef<Set<string>>(new Set());
+	const connectionsRequest = useRef(0);
+	const manualDraftStarted = useRef(false);
 	const selectedRepository = repositories.find((repository) => repository.githubRepositoryId === selectedRepositoryId);
 	const activeInstallations = installations.filter((installation) => installation.status === "active");
 	const readyInstallations = activeInstallations.filter((installation) => installation.syncStatus === "ready");
@@ -115,27 +136,53 @@ export default function CreateCloudProject() {
 		: `Repository sync needs attention for ${activeInstallations.map((item) => item.accountLogin).join(", ")}`;
 	const visibleRepositories = useMemo(() => repositorySearch.trim() ? repositories.filter((repository) => repository.fullName.toLowerCase().includes(repositorySearch.trim().toLowerCase())) : [], [repositories, repositorySearch]);
 	const shownRepositories = visibleRepositories.slice(0, 30);
-	const displayedStep = step === "loading" || step === "unavailable" || setupScope === scopeKey ? step : "loading";
+	const displayedStep = step;
+	const workspaceLoading = signedIn === null || orgLoading;
 	const scopedReserved = reserved?.operation.scopeKey === scopeKey ? reserved : null;
+	const selectionRef = useRef({ agentPicker, agents, busy, frozen: Boolean(scopedReserved), workerAgent, orchestratorAgent });
+	selectionRef.current = { agentPicker, agents, busy, frozen: Boolean(scopedReserved), workerAgent, orchestratorAgent };
+	// New projects inherit the Settings default. A retry keeps its recorded
+	// provider, including legacy Coder config, even if the offering has changed.
+	const reservedConfig = scopedReserved?.operation.payload.input.config as ProjectConfig | undefined;
+	const recordedProvider = typeof reservedConfig?.sandboxProvider === "string" ? reservedConfig.sandboxProvider.trim().toLowerCase() : "";
+	const effectiveProvider = recordedProvider || (reservedConfig?.coder !== null && typeof reservedConfig?.coder === "object" ? "coder" : offering?.defaultProvider ?? "");
+	const usesCoder = effectiveProvider === "coder";
 	const valueForParameter = (parameter: CoderTemplateParameter) => parameterValues[parameter.name] ??
 		(parameter.name === "size" ? configDefaults.coder?.size : parameter.name === "startup_script" ? configDefaults.coder?.startupScript : undefined) ??
 		coderConfig?.coderConfig?.parameters?.[parameter.name] ?? parameter.defaultValue;
+	useEffect(() => {
+		if (!agentPicker && !connectingAgents) return;
+		const listener = BackHandler.addEventListener("hardwareBackPress", () => { setAgentPicker(null); setConnectingAgents(false); return true; });
+		return () => listener.remove();
+	}, [agentPicker, connectingAgents]);
+	useEffect(() => {
+		if (busy || scopedReserved || !agents.length) setAgentPicker(null);
+	}, [busy, scopedReserved, agents.length]);
+	const openAgentPicker = (role: "worker" | "orchestrator") => {
+		const latest = selectionRef.current;
+		if (!mounted.current || !authRef.current.isCurrentSession() || latest.busy || latest.frozen || !latest.agents.length) return;
+		Keyboard.dismiss(); setAgentPicker(role);
+	};
+	const chooseAgent = useCallback((role: "worker" | "orchestrator", agent: string) => {
+		const latest = selectionRef.current;
+		if (!mounted.current || !authRef.current.isCurrentSession() || latest.agentPicker !== role || latest.busy || latest.frozen || !latest.agents.includes(agent)) return;
+		if (agent !== (latest.agentPicker === "worker" ? latest.workerAgent : latest.orchestratorAgent)) {
+			haptics.select();
+			if (latest.agentPicker === "worker") setWorkerAgent(agent); else setOrchestratorAgent(agent);
+		}
+		setAgentPicker(null);
+	}, []);
 
 	useEffect(() => {
 		mounted.current = true;
 		return () => {
 			mounted.current = false;
 			createAbort.current?.abort();
+			manualAbort.current?.abort();
 			const completed = navigationAck.current;
 			if (completed) void clearCloudOperation(completed.operation.scopeKey, completed.slot, completed.operation.key).catch(() => {});
 		};
 	}, []);
-	useEffect(() => {
-		manualAbort.current?.abort(); manualAbort.current = null;
-		setRepositoryPickerOpen(false); setRepositorySearch("");
-		setToken(""); setRepositoryUrl(""); setDisplayName(""); setDefaultBranch("main"); setReadOnly(false); setHasSavedToken(false); setBusy(false);
-		return () => { createAbort.current?.abort(); createAbort.current = null; manualAbort.current?.abort(); manualAbort.current = null; };
-	}, [scopeKey, sessionEpoch]);
 	useEffect(() => {
 		setCoderConfig(null); setCoderTemplates([]); setComputeError(null);
 		if (!usesCoder || !orgId) { setComputeLoading(false); return; }
@@ -164,59 +211,84 @@ export default function CreateCloudProject() {
 	const computeProblem = usesCoder ? computeError ?? parametersError ?? (computeLoading || parametersLoading ? "Loading Coder settings…" : coderConfig ? coderSetupProblem(coderConfig, coderTemplates, templateId) : "Could not load Coder settings.") : null;
 	const prefixProblem = usesCoder && coderConfig?.configured && workspacePrefix && (workspacePrefix.length > 20 || !/^[a-z]([a-z0-9]|-[a-z0-9])*$/.test(workspacePrefix)) ? "Use up to 20 lowercase letters, digits, and single hyphens, starting with a letter." : null;
 
+	const loadAgents = useCallback(async (signal?: AbortSignal) => {
+		const captured = authRef.current;
+		const request = ++connectionsRequest.current;
+		const current = () => mounted.current && !signal?.aborted && captured.isCurrentSession() && request === connectionsRequest.current;
+		setAgentsLoading(true); setAgentsError(null);
+		try {
+			const connections = await client.listUserProviderConnections({ signal });
+			if (!current()) return;
+			if (cacheKey) cloudProjectSetupCache.setConnections(cacheKey, connections);
+			const harnesses = readyHarnesses(connections);
+			setAgents(harnesses);
+			// Keep valid choices and frozen retry payloads, not disconnected cached defaults.
+			if (!reservedRef.current) {
+				setWorkerAgent((value) => harnesses.includes(value) ? value : harnesses[0] ?? "");
+				setOrchestratorAgent((value) => harnesses.includes(value) ? value : harnesses[0] ?? "");
+			}
+			const savedToken = initialProjectCreationStep(connections) === "repository";
+			setHasSavedToken(savedToken);
+			if (manualDeployment && !savedToken && !reservedRef.current && !manualDraftStarted.current) setStep((value) => value === "repository" ? "github-token" : value);
+		} catch (cause) {
+			if (current()) setAgentsError(messageFor(cause, "Could not load Cloud agent settings."));
+		} finally { if (current()) setAgentsLoading(false); }
+	}, [client, cacheKey, manualDeployment]);
+
 	const refreshGitHub = useCallback(async (signal: AbortSignal) => {
-		if (!orgId) return false;
-		if (manualDeployment) return false;
-		const nextInstallations = await client.listGitHubInstallations(orgId, { signal });
-		if (signal.aborted) return false;
-		setInstallations(nextInstallations);
-		let active = nextInstallations.filter((installation) => installation.status === "active");
-		let ready = active.some((installation) => installation.syncStatus === "ready");
-		const needsSync = active.filter((installation) => installation.syncStatus === "pending" && !syncAttempted.current.has(installation.id));
-		if (needsSync.length) {
-			for (const installation of needsSync) {
-				syncAttempted.current.add(installation.id);
-				await client.syncGitHubInstallation(orgId, installation.id, { signal });
-				if (signal.aborted) return false;
-			}
-				const updated = await client.listGitHubInstallations(orgId, { signal });
-				if (signal.aborted) return false;
-				setInstallations(updated);
-				active = updated.filter((installation) => installation.status === "active");
-				ready = active.some((installation) => installation.syncStatus === "ready");
-		}
-		const connectionReady = !installationStarting.current && ready && (connectionBaseline.current === null || active.some((installation) =>
-			installation.syncStatus === "ready" && connectionBaseline.current?.get(installation.id) !== installation.updatedAt,
-		));
-		if (!signal.aborted && !installationStarting.current && active.length > 0) {
-			if (connectionReady) {
-				connectionBaseline.current = null;
-				setConnecting(false);
-			}
-			else if (active.some((installation) => installation.syncStatus === "failed")) {
-				connectionBaseline.current = null;
-				setConnecting(false);
-				setGithubError(active.find((installation) => installation.syncStatus === "failed")?.lastError ?? "GitHub repository sync failed. Try again.");
-			} else setConnecting(true);
-		}
-		if (ready) {
-			setLoadingRepositories(true);
-			try {
-				const granted = await loadGrantedRepositories(client, orgId, signal);
-				if (!signal.aborted) {
-					setRepositories(granted);
-					setSelectedRepositoryId((previous) => granted.some((repository) => repository.githubRepositoryId === previous) ? previous : "");
-					setGithubError(null);
+		if (!orgId || manualDeployment) return false;
+		const captured = authRef.current;
+		const current = () => mounted.current && !signal.aborted && captured.isCurrentSession();
+		setGithubLoading(true);
+		try {
+			let nextInstallations = await client.listGitHubInstallations(orgId, { signal });
+			if (!current()) return false;
+			setInstallations(nextInstallations);
+			let active = nextInstallations.filter((installation) => installation.status === "active");
+			let ready = active.some((installation) => installation.syncStatus === "ready");
+			const needsSync = active.filter((installation) => installation.syncStatus === "pending" && !syncAttempted.current.has(installation.id));
+			if (needsSync.length) {
+				for (const installation of needsSync) {
+					syncAttempted.current.add(installation.id);
+					await client.syncGitHubInstallation(orgId, installation.id, { signal });
+					if (!current()) return false;
 				}
-			} finally {
-				if (!signal.aborted) setLoadingRepositories(false);
+				nextInstallations = await client.listGitHubInstallations(orgId, { signal });
+				if (!current()) return false;
+				setInstallations(nextInstallations);
+				active = nextInstallations.filter((installation) => installation.status === "active");
+				ready = active.some((installation) => installation.syncStatus === "ready");
 			}
-		} else if (!signal.aborted) {
-			setRepositories([]);
-			setSelectedRepositoryId("");
+			const connectionReady = !installationStarting.current && ready && (connectionBaseline.current === null || active.some((installation) =>
+				installation.syncStatus === "ready" && connectionBaseline.current?.get(installation.id) !== installation.updatedAt,
+			));
+			if (!installationStarting.current && active.length > 0) {
+				if (connectionReady) {
+					connectionBaseline.current = null;
+					setConnecting(false);
+				} else if (active.some((installation) => installation.syncStatus === "failed")) {
+					connectionBaseline.current = null;
+					setConnecting(false);
+					setGithubError(active.find((installation) => installation.syncStatus === "failed")?.lastError ?? "GitHub repository sync failed. Try again.");
+				} else setConnecting(true);
+			}
+			let granted: GitHubRepository[] = [];
+			if (ready) {
+				setLoadingRepositories(true);
+				granted = await loadGrantedRepositories(client, orgId, signal);
+				if (!current()) return false;
+				setGithubError(null);
+			}
+			setRepositories(granted);
+			setSelectedRepositoryId((previous) => granted.some((repository) => repository.githubRepositoryId === previous) ? previous : "");
+			if (cacheKey && !installationStarting.current && connectionBaseline.current === null && !active.some((installation) => installation.syncStatus === "pending")) {
+				cloudProjectSetupCache.setGitHub(cacheKey, { installations: nextInstallations, repositories: granted });
+			}
+			return connectionReady;
+		} finally {
+			if (current()) { setGithubLoading(false); setLoadingRepositories(false); }
 		}
-		return connectionReady;
-	}, [client, orgId, manualDeployment]);
+	}, [client, orgId, manualDeployment, cacheKey]);
 
 	const githubAttempt = useMemo(() => {
 		const attempt = createGitHubConnectionAttempt({
@@ -243,8 +315,6 @@ export default function CreateCloudProject() {
 
 	useEffect(() => {
 		if (signedIn === null || orgLoading) {
-			setError(null);
-			setStep("loading");
 			return;
 		}
 		if (!signedIn) {
@@ -257,50 +327,36 @@ export default function CreateCloudProject() {
 			setStep("unavailable");
 			return;
 		}
-		let active = true;
 		const abort = new AbortController();
 		requestAbort.current?.abort();
 		requestAbort.current = abort;
-		syncAttempted.current.clear();
 		setError(null);
-		setGithubError(null);
-		setProjectSource(manualDeployment ? "manual" : "app");
-		setSelectedRepositoryId("");
-		setRepositories([]);
-		setInstallations([]);
-		setConnecting(false);
-		setOpeningGitHub(false);
-		connectAttempt.current += 1;
-		connectionBaseline.current = null;
-		setStep("loading");
-		setReserved(null);
-		if (setupScope !== scopeKey) {
-			setConfigDefaults({}); setProviderChoice(""); setTemplateId(""); setParameterValues({}); setWorkspacePrefix("");
+		setProjectSource((value) => manualDeployment ? "manual" : value);
+		// Each section settles independently: GitHub must not wait for agents,
+		// and neither may hide the form or delay an accepted request's recovery.
+		if (!cachedSetup.connections?.fresh) {
+			void loadAgents(abort.signal);
+		} else if (manualDeployment && !hasSavedToken && !manualDraftStarted.current) setStep((value) => value === "repository" ? "github-token" : value);
+		if (!manualDeployment && !cachedSetup.github?.fresh) {
+			// Foreground, explicit, and initial reads share one sheet-owned flight.
+			void githubAttempt.refresh();
 		}
-		Promise.allSettled([client.listUserProviderConnections({ signal: abort.signal }), refreshGitHub(abort.signal), scopeKey ? readCloudOperationsForScope<ProjectRequest>(scopeKey) : Promise.resolve([])]).then((results) => {
-			if (!active) return;
-			if (results[0].status === "rejected") {
-				setError(messageFor(results[0].reason, "Could not load Cloud agent credentials."));
-				setStep("unavailable");
-				return;
-			}
-			const userConnections = results[0].value;
-			setSetupScope(scopeKey);
-			const harnesses = readyHarnesses(userConnections);
-			setAgents(harnesses);
-			setWorkerAgent(harnesses[0] ?? "");
-			setOrchestratorAgent(harnesses[0] ?? "");
-			setHasSavedToken(initialProjectCreationStep(userConnections) === "repository");
-			if (results[2].status === "rejected") {
-				setError(messageFor(results[2].reason, "Could not restore the previous Cloud request."));
-				setStep("unavailable"); return;
-			}
-			const previous = results[2].value.find((record) => record.slot.startsWith("project-create/"));
+		return () => { abort.abort(); githubAttempt.stop(); };
+	}, [signedIn, orgId, orgLoading, orgError, githubAttempt, loadAgents, cachedSetup, manualDeployment]);
+
+	useEffect(() => {
+		if (signedIn !== true || orgLoading || !scopeKey) return;
+		let active = true;
+		const captured = authRef.current;
+		const current = () => active && captured.isCurrentSession();
+		setRequestRestored(false); setRestoreError(null);
+		void readCloudOperationsForScope<ProjectRequest>(scopeKey).then((records) => {
+			if (!current()) return;
+			const previous = records.find((record) => record.slot.startsWith("project-create/"));
 			if (previous) {
 				const request = previous.operation.payload;
 				if (!request || !["app", "manual"].includes(request.kind) || !request.input || typeof request.input.displayName !== "string" || !validGitHubRepositoryURL(request.repositoryUrl)) {
-					setError("The saved project request could not be understood. Check existing projects before starting another request.");
-					setStep("unavailable"); return;
+					throw new Error("The saved project request could not be understood. Check existing projects before starting another request.");
 				}
 				const config = request.input.config as ProjectConfig ?? {};
 				setReserved(previous); setConfigDefaults(config);
@@ -309,29 +365,24 @@ export default function CreateCloudProject() {
 				if (request.kind === "manual") setDefaultBranch(request.input.defaultBranch);
 				else setSelectedRepositoryId(request.input.githubRepositoryId);
 				setWorkerAgent(config.worker?.agent ?? ""); setOrchestratorAgent(config.orchestrator?.agent ?? "");
-				setProviderChoice(typeof config.sandboxProvider === "string" ? config.sandboxProvider : "");
 				setTemplateId(config.coder?.templateId ?? ""); setParameterValues(config.coder?.parameters ?? {});
 				setWorkspacePrefix(config.coder?.workspaceNamePrefix ?? "");
 				setStep("agents");
-			} else { setConfigDefaults({}); setStep(manualDeployment ? initialProjectCreationStep(userConnections) : "github"); }
-			if (results[1].status === "rejected") {
-				setGithubError(messageFor(results[1].reason, "Could not load GitHub repositories."));
 			}
+			setRequestRestored(true);
 		}).catch((cause) => {
-			if (!active) return;
-			setError(messageFor(cause, "Could not load Cloud project setup."));
-			setStep("github");
+			if (current()) setRestoreError(messageFor(cause, "Could not restore the previous Cloud request."));
 		});
-		return () => { active = false; abort.abort(); };
-	}, [client, signedIn, orgId, orgLoading, orgError, refreshGitHub, setupAttempt, scopeKey, sessionEpoch, manualDeployment]);
+		return () => { active = false; };
+	}, [signedIn, orgLoading, scopeKey, setupAttempt, setReserved]);
 
 	useEffect(() => {
 		if (connecting && orgId && step === "github") githubAttempt.start();
-		else githubAttempt.stop();
 	}, [connecting, orgId, step, githubAttempt]);
 
 	const connectGitHub = async () => {
 		if (!orgId || connecting || manualDeployment) return;
+		if (cacheKey) cloudProjectSetupCache.invalidate(cacheKey, "github");
 		const attempt = ++connectAttempt.current;
 		setGithubError(null);
 		setConnecting(true);
@@ -373,10 +424,16 @@ export default function CreateCloudProject() {
 		connectionBaseline.current = null;
 		setConnecting(false);
 		setOpeningGitHub(false);
+		setGithubLoading(false);
+		setLoadingRepositories(false);
 	};
 
 	const syncRepositories = async () => {
 		if (!orgId || busy) return;
+		// A mutation must be followed by a new read, not join a pre-sync snapshot.
+		githubAttempt.stop();
+		setGithubLoading(false); setLoadingRepositories(false);
+		if (cacheKey) cloudProjectSetupCache.invalidate(cacheKey, "github");
 		setBusy(true);
 		setGithubError(null);
 		try {
@@ -384,6 +441,9 @@ export default function CreateCloudProject() {
 			for (const installation of activeInstallations.filter((item) => item.syncStatus !== "ready")) {
 				await client.syncGitHubInstallation(orgId, installation.id, { signal });
 			}
+			// Foreground reads may have started during the POSTs; retire those too.
+			githubAttempt.stop();
+			if (cacheKey) cloudProjectSetupCache.invalidate(cacheKey, "github");
 			await githubAttempt.refresh();
 		} catch (cause) {
 			setGithubError(messageFor(cause, "Could not refresh GitHub repositories."));
@@ -406,6 +466,9 @@ export default function CreateCloudProject() {
 			if (!current()) return;
 			setToken("");
 			setHasSavedToken(true);
+			if (cacheKey) cloudProjectSetupCache.invalidate(cacheKey, "connections");
+			// Supersede pre-save metadata reads before they can undo token readiness.
+			void loadAgents(requestAbort.current?.signal);
 			setStep("repository");
 		} catch (cause) {
 			if (current()) setError(messageFor(cause, "Could not save the GitHub token."));
@@ -464,7 +527,7 @@ export default function CreateCloudProject() {
 	}
 
 	async function submitOperation(record: ReservedProject, lookupOnly = false) {
-		if (!scopeKey || !orgId || createAbort.current) return;
+		if (!scopeKey || !orgId || createAbort.current || !requestRestored) return;
 		const captured = auth;
 		const current = () => captured.isCurrentSession() && record.operation.scopeKey === scopeKey;
 		if (!current()) return;
@@ -484,7 +547,7 @@ export default function CreateCloudProject() {
 					if (!current() || controller.signal.aborted) return;
 					if (!connected.includes(config.worker?.agent ?? "") || !connected.includes(config.orchestrator?.agent ?? "")) {
 						if (mounted.current) setAgents(connected);
-						throw new Error("Connect the project's personal default coding agents in desktop Settings, then retry this request.");
+						throw new Error("Connect the project's personal coding agents below, then retry this request.");
 					}
 					await reserveCloudOperation(record.slot, record.operation);
 					if (!current() || controller.signal.aborted) return;
@@ -522,13 +585,13 @@ export default function CreateCloudProject() {
 	}
 
 	const createProject = async () => {
-		if (busy || !scopeKey || !orgId) return;
+		if (busy || !scopeKey || !orgId || !requestRestored) return;
 		if (reserved) { await submitOperation(reserved); return; }
 		if (projectSource === "app" && !selectedRepository) {
 			setError("This repository is no longer available. Choose another repository.");
 			setStep("github"); return;
 		}
-		if (!workerAgent || !orchestratorAgent) { setError("Connect a Cloud coding agent in desktop Settings first."); return; }
+		if (!workerAgent || !orchestratorAgent) { setError("Connect a Cloud coding agent below first."); return; }
 		const overrides = Object.fromEntries(parameters.filter((parameter) => parameterValues[parameter.name] !== undefined &&
 			parameterValues[parameter.name] !== (coderConfig?.coderConfig?.parameters?.[parameter.name] ?? parameter.defaultValue))
 			.map((parameter) => [parameter.name, parameterValues[parameter.name]!]));
@@ -541,7 +604,7 @@ export default function CreateCloudProject() {
 			...configDefaults,
 			worker: { ...configDefaults.worker, agent: workerAgent as NonNullable<ProjectConfig["worker"]>["agent"] },
 			orchestrator: { ...configDefaults.orchestrator, agent: orchestratorAgent as NonNullable<ProjectConfig["orchestrator"]>["agent"] },
-			...(offering?.source === "server" && effectiveProvider ? { sandboxProvider: effectiveProvider } : {}),
+			...(offersProviderChoice(offering ?? undefined) && effectiveProvider ? { sandboxProvider: effectiveProvider } : {}),
 			...(usesCoder && Object.keys(coder).length ? { coder } : {}),
 		};
 		const payload: ProjectRequest = projectSource === "app" && selectedRepository
@@ -564,28 +627,22 @@ export default function CreateCloudProject() {
 		]);
 	};
 
-	const refreshAgents = async () => {
-		setBusy(true); setError(null);
-		const captured = auth;
-		try {
-			const available = readyHarnesses(await client.listUserProviderConnections({ signal: requestAbort.current?.signal }));
-			if (!mounted.current || !captured.isCurrentSession()) return;
-			setAgents(available);
-			if (!reserved) {
-				setWorkerAgent((value) => available.includes(value) ? value : available[0] ?? "");
-				setOrchestratorAgent((value) => available.includes(value) ? value : available[0] ?? "");
-			}
-		} catch (cause) { if (mounted.current && captured.isCurrentSession()) setError(messageFor(cause, "Could not refresh connected agents.")); }
-		finally { if (mounted.current && captured.isCurrentSession()) setBusy(false); }
-	};
+	const refreshAgents = () => loadAgents(requestAbort.current?.signal);
 
 	const back = () => {
 		haptics.tap();
+		if (connectingAgents) { setConnectingAgents(false); return; }
+		if (agentPicker) { setAgentPicker(null); return; }
 		if (step === "github" && repositoryPickerOpen) { setRepositoryPickerOpen(false); setRepositorySearch(""); Keyboard.dismiss(); return; }
 		if (step === "agents") { setError(null); setStep(projectSource === "app" ? "github" : "repository"); }
 		else if (step === "github-token" || step === "repository") { setError(null); setStep("github"); }
 		else backOr(router);
 	};
+
+	if (connectingAgents) return <View style={styles.screen} collapsable={false}>
+		<View style={styles.header}><Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.headerTitle}>Add Cloud project</Text><HeaderIconButton icon="close" label="Close" onPress={() => backOr(router)} /></View>
+		<View style={{ flex: 1, padding: space.lg }}><CloudAgentConnections inSheet client={client} orgId={orgId} ownerKey={JSON.stringify([baseUrl.replace(/\/+$/, ""), accountId, auth.sessionEpoch])} isCurrent={auth.isCurrentSession} onBack={() => setConnectingAgents(false)} onChanged={refreshAgents} /></View>
+	</View>;
 
 	return (
 		<View style={styles.screen} collapsable={false}>
@@ -596,6 +653,14 @@ export default function CreateCloudProject() {
 			</View>
 			<ScrollView contentInsetAdjustmentBehavior="automatic" automaticallyAdjustKeyboardInsets={Platform.OS === "ios"} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: insets.bottom + sheetInset.bottom }}>
 				<View style={styles.content}>
+				{agentPicker ? <PickerOptions
+					title={agentPicker === "worker" ? "Worker agent" : "Orchestrator agent"}
+					options={agents.map((agent) => ({ id: agent, label: AGENT_LABELS[agent] ?? agent }))}
+					selectedValue={agentPicker === "worker" ? workerAgent : orchestratorAgent}
+					showAgentLogos onSelect={(agent) => chooseAgent(agentPicker, agent)} onBack={() => setAgentPicker(null)}
+				/> : <>
+				{workspaceLoading ? <View style={styles.connectedRow}><ActivityIndicator color={t.accent} accessibilityLabel="Loading Cloud workspace" /><Text style={styles.hint}>Loading Cloud workspace…</Text></View> : null}
+				{restoreError ? <View style={styles.group}><Text accessibilityRole="alert" style={styles.error}>{restoreError}</Text><Button title="Retry request recovery" variant="text" onPress={() => setSetupAttempt((value) => value + 1)} /></View> : null}
 				{scopedReserved ? <View style={styles.group}>
 					<Text style={styles.title}>{scopedReserved.operation.acceptedId ? "Project created" : "Finish your previous request"}</Text>
 					<Text selectable style={styles.description}>{scopedReserved.operation.payload.input.displayName}{scopedReserved.operation.acceptedId ? " is ready to open." : " has a saved request. Retry keeps the same project settings and request key."}</Text>
@@ -603,7 +668,6 @@ export default function CreateCloudProject() {
 					{!scopedReserved.operation.acceptedId ? <Button title="Check existing projects" variant="text" disabled={busy} onPress={() => submitOperation(scopedReserved, true)} /> : null}
 					<Button title="Discard retry record" variant="text" disabled={busy} onPress={discardReserved} />
 				</View> : null}
-				{displayedStep === "loading" ? <ActivityIndicator color={t.accent} style={styles.loading} /> : null}
 				{displayedStep === "unavailable" ? (
 					<View style={styles.group}>
 						<Text style={styles.title}>Can't add a project yet</Text>
@@ -616,14 +680,15 @@ export default function CreateCloudProject() {
 					<View style={styles.group}>
 						<Text style={styles.title}>Choose a repository</Text>
 						<Text style={styles.description}>Import a repository you’ve granted AO access to on GitHub.</Text>
-						{activeInstallations.length === 0 ? (
+						{githubLoading && !workspaceLoading ? <View style={styles.connectedRow}><ActivityIndicator color={t.accent} accessibilityLabel="Loading GitHub connection" /><Text style={styles.hint}>{loadingRepositories ? "Loading repositories…" : "Checking GitHub connection…"}</Text></View> : null}
+						{activeInstallations.length === 0 && !githubLoading && !workspaceLoading ? (
 							<View style={styles.connectCard}>
 								<View style={styles.connectHeading}><BrandFeather name="github" size={iconSize.lg} color={t.textPrimary} /><Text style={styles.connectTitle}>Connect GitHub</Text></View>
 								<Text style={styles.hint}>GitHub will open in a browser so you can choose which repositories AO may access. No token to copy or paste.</Text>
 								<Button title={openingGitHub ? "Opening GitHub…" : connecting ? "Waiting for GitHub approval…" : "Connect GitHub"} loading={connecting} disabled={connecting} onPress={() => void connectGitHub()} />
 								{connecting ? <Button title="Stop waiting" variant="text" onPress={stopWaiting} /> : null}
 							</View>
-						) : (
+						) : activeInstallations.length > 0 ? (
 							<>
 								<View style={styles.connectedRow}>
 									<Feather name={githubReadyToImport ? "check-circle" : connecting ? "loader" : "alert-circle"} size={iconSize.md} color={githubReadyToImport ? t.green : t.amber} />
@@ -631,12 +696,11 @@ export default function CreateCloudProject() {
 								</View>
 								{activeInstallations.some((item) => item.syncStatus !== "ready") ? <Button title={connecting ? "Syncing repositories…" : "Retry repository sync"} variant="text" loading={busy} disabled={connecting} onPress={() => void syncRepositories()} /> : null}
 								{connecting ? <Button title="Stop waiting" variant="text" onPress={stopWaiting} /> : null}
-								{loadingRepositories ? <ActivityIndicator color={t.accent} /> : null}
 								{repositories.length > 0 ? (
 									<>
 										<View style={styles.field}>
 											<Text style={styles.label}>Repository</Text>
-											<Pressable accessibilityRole="combobox" accessibilityLabel="Select a repository" accessibilityValue={{ text: selectedRepository?.fullName ?? "None selected" }} accessibilityState={{ expanded: repositoryPickerOpen, disabled: busy || !githubReadyToImport || loadingRepositories || Boolean(scopedReserved) }} disabled={busy || !githubReadyToImport || loadingRepositories || Boolean(scopedReserved)}
+											<Pressable accessibilityRole="combobox" accessibilityLabel="Select a repository" accessibilityValue={{ text: selectedRepository?.fullName ?? "None selected" }} accessibilityState={{ expanded: repositoryPickerOpen, disabled: busy || !githubReadyToImport || Boolean(scopedReserved) }} disabled={busy || !githubReadyToImport || Boolean(scopedReserved)}
 												onPress={() => { haptics.tap(); setRepositoryPickerOpen(!repositoryPickerOpen); setRepositorySearch(""); if (repositoryPickerOpen) Keyboard.dismiss(); }}
 												style={styles.repositoryTrigger}>
 												<Feather name={selectedRepository?.isPrivate ? "lock" : "book"} size={iconSize.md} color={t.textSecondary} />
@@ -647,11 +711,11 @@ export default function CreateCloudProject() {
 										{repositoryPickerOpen ? <>
 											<View style={styles.repositorySearch}>
 												<Feather name="search" size={iconSize.md} color={t.textSecondary} />
-												<TextInput {...textSelectionColors(t)} style={styles.repositorySearchInput} value={repositorySearch} onChangeText={setRepositorySearch} placeholder="Search repositories" placeholderTextColor={t.textSecondary} autoFocus autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search repositories" editable={!busy && githubReadyToImport && !loadingRepositories && !scopedReserved} />
+												<TextInput {...textSelectionColors(t)} style={styles.repositorySearchInput} value={repositorySearch} onChangeText={setRepositorySearch} placeholder="Search repositories" placeholderTextColor={t.textSecondary} autoFocus autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search repositories" editable={!busy && githubReadyToImport && !scopedReserved} />
 											</View>
 											{!repositorySearch.trim() ? <Text style={styles.hint}>Search by repository name.</Text> : <View style={styles.repositoryList}>
 												{visibleRepositories.length === 0 ? <Text style={styles.emptyText}>No matching repositories</Text> : shownRepositories.map((repository) => (
-													<Pressable key={repository.githubRepositoryId} accessibilityRole="radio" accessibilityState={{ selected: selectedRepositoryId === repository.githubRepositoryId }} accessibilityLabel={`Select ${repository.fullName}`} disabled={busy || !githubReadyToImport || loadingRepositories || Boolean(scopedReserved)} onPress={() => { if (busy || !githubReadyToImport || loadingRepositories || scopedReserved) return; haptics.select(); setProjectSource("app"); setSelectedRepositoryId(repository.githubRepositoryId); setDisplayName(repository.name); setRepositoryUrl(repository.htmlUrl); setDefaultBranch(repository.defaultBranch); setRepositoryPickerOpen(false); setRepositorySearch(""); Keyboard.dismiss(); }} style={[styles.repositoryOption, selectedRepositoryId === repository.githubRepositoryId && styles.repositorySelected]}>
+													<Pressable key={repository.githubRepositoryId} accessibilityRole="radio" accessibilityState={{ selected: selectedRepositoryId === repository.githubRepositoryId }} accessibilityLabel={`Select ${repository.fullName}`} disabled={busy || !githubReadyToImport || Boolean(scopedReserved)} onPress={() => { if (busy || !githubReadyToImport || scopedReserved) return; haptics.select(); setProjectSource("app"); setSelectedRepositoryId(repository.githubRepositoryId); setDisplayName(repository.name); setRepositoryUrl(repository.htmlUrl); setDefaultBranch(repository.defaultBranch); setRepositoryPickerOpen(false); setRepositorySearch(""); Keyboard.dismiss(); }} style={[styles.repositoryOption, selectedRepositoryId === repository.githubRepositoryId && styles.repositorySelected]}>
 														<View style={styles.repositoryIdentity}><Feather name={repository.isPrivate ? "lock" : "book"} size={iconSize.md} color={t.textSecondary} /><View style={styles.repositoryCopy}><Text style={styles.repositoryName} numberOfLines={1}>{repository.fullName}</Text><Text style={styles.repositoryMeta}>{repository.defaultBranch}</Text></View></View>
 														{selectedRepositoryId === repository.githubRepositoryId ? <Feather name="check" size={iconSize.md} color={t.accent} /> : null}
 													</Pressable>
@@ -669,9 +733,10 @@ export default function CreateCloudProject() {
 								) : null}
 								<Button title="Refresh repositories" variant="text" onPress={() => { void githubAttempt.refresh(); }} />
 							</>
-						)}
+						) : null}
 						{githubError ? <Text accessibilityRole="alert" style={styles.error}>{githubError}</Text> : null}
-						<Button title="Set up manually with a token" variant="text" onPress={() => { setError(null); stopWaiting(); setProjectSource("manual"); setSelectedRepositoryId(""); setRepositoryUrl(""); setDisplayName(""); setStep(hasSavedToken ? "repository" : "github-token"); }} />
+						{githubError && activeInstallations.length === 0 ? <Button title="Retry GitHub connection" variant="text" disabled={githubLoading} onPress={() => void githubAttempt.refresh()} /> : null}
+						<Button title="Set up manually with a token" variant="text" disabled={workspaceLoading} onPress={() => { manualDraftStarted.current = true; setError(null); if (connecting || openingGitHub) stopWaiting(); setProjectSource("manual"); setSelectedRepositoryId(""); setRepositoryUrl(""); setDisplayName(""); setStep(hasSavedToken || agentsLoading || agentsError ? "repository" : "github-token"); }} />
 					</View>
 				) : null}
 				{displayedStep === "github-token" ? (
@@ -680,7 +745,7 @@ export default function CreateCloudProject() {
 						<Text style={styles.description}>For manual setup, add a fine-grained token with access to the repository. Orchestrator Cloud stores it securely and never shows it again.</Text>
 						<View style={styles.field}>
 							<Text style={styles.label}>GitHub access token</Text>
-							<TextInput {...textSelectionColors(t)} style={styles.input} value={token} onChangeText={setToken} placeholder="github_pat_…" placeholderTextColor={t.textTertiary} secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="password" accessibilityLabel="GitHub access token" />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={token} onChangeText={(value) => { manualDraftStarted.current = true; setToken(value); }} placeholder="github_pat_…" placeholderTextColor={t.textTertiary} secureTextEntry autoCapitalize="none" autoCorrect={false} textContentType="password" accessibilityLabel="GitHub access token" />
 						</View>
 						<Text style={styles.hint}>Use a fine-grained token with Contents read and write access to the repository.</Text>
 						<Button title="Create a GitHub token" variant="text" icon="external-link" onPress={() => void openGitHub("https://github.com/settings/personal-access-tokens/new", { fromSheet: true, throwOnFailure: true }).catch((cause) => setError(messageFor(cause, "Could not open GitHub.")))} />
@@ -693,19 +758,19 @@ export default function CreateCloudProject() {
 						<Text style={styles.description}>Enter the repository URL and branch for this project.</Text>
 						<View style={styles.field}>
 							<Text style={styles.label}>Repository URL</Text>
-							<TextInput {...textSelectionColors(t)} style={styles.input} value={repositoryUrl} onChangeText={(value) => { setRepositoryUrl(value); setReadOnly(false); }} placeholder="https://github.com/owner/repo" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Repository URL" editable={!busy && !scopedReserved} />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={repositoryUrl} onChangeText={(value) => { manualDraftStarted.current = true; setRepositoryUrl(value); setReadOnly(false); }} placeholder="https://github.com/owner/repo" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} keyboardType="url" accessibilityLabel="Repository URL" editable={!busy && !scopedReserved} />
 						</View>
 						<View style={styles.field}>
 							<Text style={styles.label}>Project name</Text>
-							<TextInput {...textSelectionColors(t)} style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="My project" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" editable={!busy && !scopedReserved} />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={displayName} onChangeText={(value) => { manualDraftStarted.current = true; setDisplayName(value); }} placeholder="My project" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" editable={!busy && !scopedReserved} />
 						</View>
 						<View style={styles.field}>
 							<Text style={styles.label}>Default branch</Text>
-							<TextInput {...textSelectionColors(t)} style={styles.input} value={defaultBranch} onChangeText={(value) => { setDefaultBranch(value); }} placeholder="main" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Default branch" editable={!busy && !scopedReserved} />
+							<TextInput {...textSelectionColors(t)} style={styles.input} value={defaultBranch} onChangeText={(value) => { manualDraftStarted.current = true; setDefaultBranch(value); }} placeholder="main" placeholderTextColor={t.textTertiary} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Default branch" editable={!busy && !scopedReserved} />
 						</View>
 						{readOnly ? <Text style={styles.warning}>Your GitHub token can read this repository but cannot push changes. Workers may be unable to publish their work.</Text> : null}
-						<Button title={readOnly ? "Continue anyway" : "Check repository access"} loading={busy} onPress={() => readOnly ? (setReadOnly(false), setStep("agents")) : void checkRepository()} />
-						<Button title="Change GitHub token" variant="text" onPress={() => { setError(null); setStep("github-token"); }} />
+						<Button title={readOnly ? "Continue anyway" : "Check repository access"} loading={busy} disabled={workspaceLoading} onPress={() => readOnly ? (setReadOnly(false), setStep("agents")) : void checkRepository()} />
+						<Button title="Change GitHub token" variant="text" onPress={() => { manualDraftStarted.current = true; setError(null); setStep("github-token"); }} />
 					</View>
 				) : null}
 				{displayedStep === "agents" && !scopedReserved?.operation.acceptedId ? (
@@ -714,13 +779,17 @@ export default function CreateCloudProject() {
 						{selectedRepository ? <View style={styles.selectedSummary}><Feather name="book" size={iconSize.md} color={t.textSecondary} /><View style={styles.repositoryCopy}><Text style={styles.repositoryName}>{selectedRepository.fullName}</Text><Text style={styles.repositoryMeta}>Default branch · {selectedRepository.defaultBranch}</Text></View></View> : null}
 						{selectedRepository ? <View style={styles.field}><Text style={styles.label}>Project name</Text><TextInput {...textSelectionColors(t)} style={styles.input} value={displayName} onChangeText={(value) => { setDisplayName(value); }} placeholder="Project name" placeholderTextColor={t.textTertiary} accessibilityLabel="Project name" editable={!busy && !scopedReserved} /></View> : null}
 						<Text style={styles.description}>Uses your connected coding agents. Creating a project doesn’t start any sessions.</Text>
-						{agents.length === 0 ? <><Text style={styles.warning}>Connect a personal default coding agent in desktop Settings, then refresh here. Your project draft will stay in place.</Text><Button title="Refresh connected agents" variant="text" disabled={busy} onPress={refreshAgents} /></> : (
+						{agentsLoading ? <View style={styles.connectedRow}><ActivityIndicator color={t.accent} accessibilityLabel="Loading coding agents" /><Text style={styles.hint}>{agents.length ? "Refreshing coding agents…" : "Loading coding agents…"}</Text></View> : null}
+						{agentsError ? <Text accessibilityRole="alert" style={styles.error}>{agentsError}</Text> : null}
+						{agents.length === 0 && !agentsLoading && !agentsError ? <Text style={styles.warning}>Connect a personal coding agent to continue. Your project draft will stay in place.</Text> : null}
+						<Button title="Connect coding agents" variant="text" disabled={busy} onPress={() => { Keyboard.dismiss(); setConnectingAgents(true); }} />
+						{agentsError || agents.length === 0 && !agentsLoading ? <Button title="Refresh connected agents" variant="text" disabled={busy || agentsLoading} onPress={refreshAgents} /> : null}
+						{agents.length > 0 ? (
 							<View style={styles.agentGroup}>
-								<CloudAgentSelect label="Worker agent" value={workerAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setWorkerAgent} enabled={!busy && !scopedReserved} />
-								<CloudAgentSelect label="Orchestrator agent" value={orchestratorAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setOrchestratorAgent} enabled={!busy && !scopedReserved} separator />
+								<CloudAgentSelect label="Worker agent" value={workerAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setWorkerAgent} onOpen={() => openAgentPicker("worker")} enabled={!busy && !scopedReserved} />
+								<CloudAgentSelect label="Orchestrator agent" value={orchestratorAgent} options={agents.map((agent) => ({ value: agent, label: AGENT_LABELS[agent] ?? agent }))} onChange={setOrchestratorAgent} onOpen={() => openAgentPicker("orchestrator")} enabled={!busy && !scopedReserved} separator />
 							</View>
-						)}
-						{offersProviderChoice(offering ?? undefined) ? <CloudChoice label="Cloud provider" value={effectiveProvider} options={offering!.providers.map((provider) => ({ value: provider, label: provider === "coder" ? "Coder" : provider === "freestyle" ? "Freestyle" : provider }))} onChange={setProviderChoice} enabled={!busy && !scopedReserved} styles={styles} scheme={scheme} /> : null}
+						) : null}
 						{usesCoder ? <>
 							<Text style={styles.label}>Workspace</Text>
 							{computeLoading ? <ActivityIndicator color={t.accent} /> : null}
@@ -745,11 +814,13 @@ export default function CreateCloudProject() {
 							{computeProblem || prefixProblem ? <Text selectable accessibilityRole="alert" style={styles.warning}>{computeProblem ?? prefixProblem}</Text> : null}
 							{computeError || parametersError ? <Button title="Retry Coder settings" variant="text" onPress={() => setComputeAttempt((value) => value + 1)} /> : null}
 						</> : null}
-						{!scopedReserved ? <Button title="Create project" loading={busy} disabled={busy || agents.length === 0 || !displayName.trim() || Boolean(computeProblem || prefixProblem || Object.keys(parameterErrors).length)} onPress={createProject} /> : null}
+						{!requestRestored && !restoreError ? <View style={styles.connectedRow}><ActivityIndicator color={t.accent} accessibilityLabel="Checking previous project requests" /><Text style={styles.hint}>Checking previous project requests…</Text></View> : null}
+						{!scopedReserved ? <Button title="Create project" loading={busy} disabled={busy || !requestRestored || agents.length === 0 || !displayName.trim() || Boolean(computeProblem || prefixProblem || Object.keys(parameterErrors).length)} onPress={createProject} /> : null}
 					</View>
 				) : null}
 				{error && displayedStep !== "unavailable" ? <Text selectable accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 				{refreshError ? <Text selectable accessibilityRole="alert" style={styles.warning}>{refreshError}</Text> : null}
+				</>}
 				</View>
 			</ScrollView>
 		</View>
@@ -781,7 +852,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	header: { minHeight: touchTarget + space.xl, flexDirection: "row", alignItems: "center", paddingHorizontal: space.sm },
 	headerTitle: { ...typography.title3, flex: 1, textAlign: "center", color: t.textPrimary },
 	content: { paddingHorizontal: space.lg, paddingTop: space.xs, gap: space.lg },
-	loading: { marginTop: space.huge },
 	group: { gap: space.md },
 	field: { gap: space.xs },
 	connectCard: { gap: space.md, paddingTop: space.sm },

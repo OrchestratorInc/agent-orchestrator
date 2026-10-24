@@ -31,6 +31,8 @@ export type WorkspaceManifest = {
 	ahead?: number | null;
 	behind?: number | null;
 	degraded: boolean;
+	/** Cloud multi-repository workspaces; absent for the existing Local API. */
+	repositories?: Array<{ name: string; label?: string; repository?: string; branch?: string; main?: boolean; present: boolean }>;
 };
 
 /** One file's content and its git diff, in a single read. */

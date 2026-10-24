@@ -298,14 +298,15 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 		}
 	}
 
-	if (!can(snapshot, "config_options") || !providerMode) {
-		const approval = snapshot.settings.approvalMode ?? "default";
+	const approvals = APPROVALS.filter((item) => !snapshot.approvalModes || snapshot.approvalModes.includes(item.value));
+	if ((!can(snapshot, "config_options") || !providerMode) && approvals.length) {
+		const approval = snapshot.settings.approvalMode ?? snapshot.approvalModes?.[0] ?? "default";
 		rows.push({
 			id: "approvals",
 			label: "Approvals",
 			value: approvalLabel(approval, snapshot.harness),
 			kind: "select",
-			choices: APPROVALS.map((item) => ({
+			choices: approvals.map((item) => ({
 				value: item.value,
 				label: approvalLabel(item.value, snapshot.harness),
 				description: item.description,
@@ -329,7 +330,7 @@ export function turnSettingsSummary(snapshot: ConversationSnapshot, models: Chat
 	return [
 		modelLabel(rows, snapshot),
 		named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
-		named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
+		named(permissions?.value ?? (snapshot.approvalModes?.length === 0 ? "" : approvalLabel(snapshot.settings.approvalMode ?? snapshot.approvalModes?.[0] ?? "default", snapshot.harness))),
 	].filter(Boolean).join(" · ");
 }
 

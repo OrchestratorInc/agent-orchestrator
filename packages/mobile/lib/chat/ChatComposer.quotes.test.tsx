@@ -16,7 +16,7 @@ vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, E
 vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }) }));
 vi.mock("expo-router", async () => { const { useEffect } = await import("react"); return { useRouter: () => ({ push: vi.fn() }), useFocusEffect: (effect: () => void) => useEffect(effect, [effect]) }; });
 vi.mock("expo-secure-store", () => ({}));
-vi.mock("expo-document-picker", () => ({}));
+vi.mock("expo-document-picker", () => ({ getDocumentAsync: vi.fn(async () => ({ canceled: true })) }));
 vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("../api", () => ({ apiRequest: request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
@@ -40,6 +40,7 @@ import { decodeResponseDraft, encodeResponseDraft } from "./responseQuotes";
 import { useMobileConversation } from "./useConversation";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { launchImageLibraryAsync } from "expo-image-picker";
+import { getDocumentAsync } from "expo-document-picker";
 
 const source = { conversationId: "conversation", messageId: "response", revision: 1 };
 it("flushes a scoped Cloud draft before interface handoff and restores it without a daemon config", async () => {
@@ -66,6 +67,76 @@ const props = () => ({
 } as unknown as ComponentProps<typeof ChatComposer>);
 let renderer: ReactTestRenderer;
 afterEach(() => { if (renderer) act(() => renderer.unmount()); vi.clearAllMocks(); vi.useRealTimers(); });
+
+function queuedProps() {
+	const p = props();
+	p.snapshot.capabilities = ["steer"];
+	p.snapshot.turns = [{ id: "running", state: "running", requestedAt: "now" }, { id: "queued", state: "queued", requestedAt: "now" }];
+	p.snapshot.items = [{ kind: "message", id: "queued-message", turnId: "queued", role: "user", origin: "human", text: "Next task", sequence: 2, revision: 1, streaming: false, createdAt: "now" }];
+	return p;
+}
+
+it("keeps Cloud queue deletion and live steering without offering unsupported queued promotion", async () => {
+	const p = queuedProps();
+	p.draftScopeKey = "cloud-queue-account";
+	p.onCancelQueuedTurn = vi.fn(async () => {});
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Steer queued message: Next task" })).toHaveLength(0);
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Delete queued message: Next task" }).props.onPress());
+	expect(p.onCancelQueuedTurn).toHaveBeenCalledExactlyOnceWith("queued");
+	// The server confirms cancellation in the next snapshot. Live steering has
+	// always stood down while there is queued work; preserve that local policy.
+	p.snapshot = { ...p.snapshot, turns: p.snapshot.turns.filter((turn) => turn.id !== "queued"), items: [] };
+	act(() => renderer.update(<ChatComposer {...p} />));
+	act(() => renderer.root.findByType(TextInput).props.onChangeText("Guide this turn"));
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Steer this turn now" })).toHaveLength(1);
+});
+
+it("preserves local queued-message steering through its exact turn callback", async () => {
+	const p = queuedProps();
+	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test", hostId: "local-host" };
+	p.onPromoteQueuedTurn = vi.fn(async () => {});
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Steer queued message: Next task" }).props.onPress());
+	expect(p.onPromoteQueuedTurn).toHaveBeenCalledExactlyOnceWith("queued");
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Delete queued message: Next task" })).toHaveLength(0);
+});
+
+it("disables both Cloud attachment paths even when the conversation advertises embedded files", async () => {
+	const p = props();
+	p.snapshot.capabilities = ["embedded_context", "images"];
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	const menu = renderer.root.findByType(ChatAttachmentMenu);
+	await act(async () => { await menu.props.onChoosePhoto(); await menu.props.onChooseFile(); });
+	expect(launchImageLibraryAsync).not.toHaveBeenCalled();
+	expect(getDocumentAsync).not.toHaveBeenCalled();
+	expect(menu.props.canAttachPhoto).toBe(false);
+	expect(menu.props.canAttachFile).toBe(false);
+});
+
+it("keeps local legacy photos available while guarding unsupported file picker calls", async () => {
+	vi.mocked(launchImageLibraryAsync).mockResolvedValue({ canceled: true, assets: null });
+	const p = props();
+	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test", hostId: "local-host" };
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	const menu = renderer.root.findByType(ChatAttachmentMenu);
+	await act(async () => { await menu.props.onChoosePhoto(); await menu.props.onChooseFile(); });
+	expect(launchImageLibraryAsync).toHaveBeenCalledOnce();
+	expect(getDocumentAsync).not.toHaveBeenCalled();
+	expect(menu.props.canAttachPhoto).toBe(true);
+	expect(menu.props.canAttachFile).toBe(false);
+});
+
+it("opens the local file picker only with embedded context support", async () => {
+	const p = props();
+	p.config = { host: "localhost", httpPort: "1234", muxPort: "1234", password: "test", hostId: "local-host" };
+	p.snapshot.capabilities = ["embedded_context"];
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	const menu = renderer.root.findByType(ChatAttachmentMenu);
+	expect(menu.props.canAttachFile).toBe(true);
+	await act(async () => { await menu.props.onChooseFile(); });
+	expect(getDocumentAsync).toHaveBeenCalledExactlyOnceWith({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
+});
 
 it("adds and removes selected text while preserving the existing editable reply, without sending", async () => {
 	const p = props();

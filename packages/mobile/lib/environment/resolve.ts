@@ -43,6 +43,7 @@ export function resolveLocalSource(cfg: ServerConfig | null): SessionSource | un
 
 export function resolveCloudSource(cloud: CloudResolveInput | undefined): SessionSource | undefined {
 	if (!cloud || !cloud.signedIn || !cloud.orgId || !cloud.scopeKey || !cloud.isCurrent) {
+		cachedCloudSource?.preview?.dispose?.();
 		cachedOrgId = undefined;
 		cachedCloudClient = undefined;
 		cachedCloudSessionEpoch = undefined;
@@ -51,6 +52,7 @@ export function resolveCloudSource(cloud: CloudResolveInput | undefined): Sessio
 	}
 	if (!cachedCloudSource || cachedOrgId !== cloud.orgId || cachedCloudClient !== cloud.client ||
 		cachedCloudSessionEpoch !== (cloud.sessionEpoch ?? 0) || cachedCloudScopeKey !== cloud.scopeKey) {
+		cachedCloudSource?.preview?.dispose?.();
 		cachedOrgId = cloud.orgId;
 		cachedCloudClient = cloud.client;
 		cachedCloudSessionEpoch = cloud.sessionEpoch ?? 0;

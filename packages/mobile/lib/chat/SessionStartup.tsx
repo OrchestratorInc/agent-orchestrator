@@ -29,10 +29,8 @@ import {
  * its failed step, the reason and Retry.
  */
 export function SessionStartupStatus({ startup, onRetry, retrying }: { startup: SessionStartupView; onRetry?(): void; retrying?: boolean }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
-	const title = startup.failed ? "Session setup failed" : "Setting up session";
 	return (
 		<Animated.View
 			accessibilityLabel="Session setup"
@@ -41,12 +39,7 @@ export function SessionStartupStatus({ startup, onRetry, retrying }: { startup: 
 			style={styles.wrap}
 			testID="session-startup"
 		>
-			<View style={styles.header}>
-				{startup.failed
-					? <Feather name="x" size={12} color={t.red} />
-					: <Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning>}
-				<Text accessibilityRole={startup.failed ? "alert" : undefined} accessibilityLiveRegion="polite" style={[styles.headerLabel, startup.failed && { color: t.red }]}>{title}</Text>
-			</View>
+			<SessionStartupHeader failed={startup.failed} />
 			{startup.steps.length ? <StartupSteps startup={startup} /> : null}
 			{startup.failed ? (
 				<View style={styles.failure}>
@@ -69,6 +62,20 @@ export function SessionStartupStatus({ startup, onRetry, retrying }: { startup: 
 	);
 }
 
+/** Shared startup chrome; each environment supplies its own observed steps. */
+export function SessionStartupHeader({ failed = false }: { failed?: boolean }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<View style={styles.header}>
+			{failed
+				? <Feather name="x" size={12} color={t.red} />
+				: <Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning>}
+			<Text accessibilityRole={failed ? "alert" : undefined} accessibilityLiveRegion="polite" style={[styles.headerLabel, failed && { color: t.red }]}>{failed ? "Session setup failed" : "Setting up session"}</Text>
+		</View>
+	);
+}
+
 function StartupSteps({ startup }: { startup: SessionStartupView }) {
 	// Ticks only while this is mounted, which is only while a session starts.
 	const now = useNow(1_000);
@@ -78,7 +85,7 @@ function StartupSteps({ startup }: { startup: SessionStartupView }) {
 				const status = stepStatus(step, startup.failed);
 				const elapsed = status === "failed" ? undefined : stepElapsedMs(step, now);
 				return (
-					<StepRow
+					<SessionStartupStepRow
 						key={step.id}
 						label={stepLabel(step.id, startup.agentName)}
 						status={status}
@@ -94,7 +101,7 @@ function StartupSteps({ startup }: { startup: SessionStartupView }) {
 
 const STATUS_COPY: Record<StepStatus, string> = { pending: "Pending", running: "In progress", done: "Done", failed: "Failed" };
 
-function StepRow({ label, status, detail, naming, elapsed }: { label: string; status: StepStatus; detail?: string; naming: boolean; elapsed?: string }) {
+export function SessionStartupStepRow({ label, status, detail, naming = false, elapsed }: { label: string; status: StepStatus; detail?: string; naming?: boolean; elapsed?: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const color = status === "pending" ? t.textFaint : status === "running" ? t.textPrimary : status === "failed" ? t.red : t.textTertiary;

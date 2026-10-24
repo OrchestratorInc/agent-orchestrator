@@ -1,11 +1,14 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PreviewRouteParams } from "./preview/route";
 
 const fixtures = vi.hoisted(() => ({
-	params: { id: "session-1", hostId: "host-1" },
+	params: { id: "session-1", hostId: "host-1" } as PreviewRouteParams,
 	config: { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test", hostId: "host-1" },
 	navigation: { setOptions: vi.fn() },
 	getPreview: vi.fn(),
+	cloudSource: null as any,
+	auth: { signedIn: true, orgId: "org", busy: false, orgLoading: false },
 }));
 
 vi.mock("react-native", async () => {
@@ -32,8 +35,10 @@ vi.mock("./connectionError", () => ({ userFacingError: String }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: React.ReactNode }) => children,
-	useApp: () => ({ config: fixtures.config, currentHostId: fixtures.config.hostId, connection: "open" }),
+	useApp: () => ({ config: fixtures.config, currentHostId: fixtures.config?.hostId, connection: "open", sourceFor: () => fixtures.cloudSource }),
 }));
+vi.mock("./cloud/authStore", () => ({ useCloudAuth: () => fixtures.auth }));
+vi.mock("./cloud/useCloudSignInAction", () => ({ useCloudSignInAction: () => ({ busy: false, signIn: vi.fn() }) }));
 vi.mock("./ThemeProvider", () => {
 	const theme = new Proxy({}, { get: () => "#888" });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
@@ -81,11 +86,11 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("IS_REACT_NATIVE_TEST_ENVIRONMENT", true);
-	fixtures.params.id = "session-1";
-	fixtures.params.hostId = "host-1";
+	fixtures.params = { id: "session-1", hostId: "host-1" };
 	fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test", hostId: "host-1" };
 	fixtures.navigation.setOptions.mockClear();
 	fixtures.getPreview.mockReset().mockResolvedValue(appPreview);
+	fixtures.cloudSource = null;
 });
 
 afterEach(() => {
@@ -95,6 +100,35 @@ afterEach(() => {
 });
 
 describe("session preview mode", () => {
+	it("opens a Cloud-only browser without local preview requests or a credential-bearing WebView", async () => {
+		fixtures.params = { id: "session-1", source: "cloud", sourceId: "org", scopeKey: "cloud-account-org" };
+		const preview = { kind: "cloud", scopeKey: "cloud-account-org", isCurrent: () => true, createLive: vi.fn() };
+		fixtures.cloudSource = { scopeKey: "cloud-account-org", preview };
+		fixtures.config = null as never;
+		await openPreview();
+		expect(fixtures.getPreview).not.toHaveBeenCalled(); expect(nodes("WebView")).toHaveLength(0);
+		expect(nodes("BrowserLivePane")[0].props.source).toBe(preview);
+		expect(toggle().props).toMatchObject({ disabled: true, accessibilityState: { checked: false, disabled: true } });
+	});
+	it("rejects an unqualified or conflicting route before any local request", async () => {
+		fixtures.params = { id: "session-1", source: "cloud", sourceId: "org", scopeKey: "scope", hostId: "host-1" };
+		await openPreview(); expect(nodes("BrowserLivePane")).toHaveLength(0); expect(fixtures.getPreview).not.toHaveBeenCalled();
+	});
+	it("rejects a retained route after the Cloud account lease changes even with the same durable scope", async () => {
+		fixtures.params = { id: "session-1", source: "cloud", sourceId: "org", scopeKey: "scope" };
+		const old = { kind: "cloud", scopeKey: "scope", isCurrent: () => true, createLive: vi.fn() };
+		fixtures.cloudSource = { scopeKey: "scope", preview: old }; await openPreview();
+		expect(nodes("BrowserLivePane")).toHaveLength(1);
+		fixtures.cloudSource = { scopeKey: "scope", preview: { ...old } };
+		await act(async () => screen.update(<SessionPreviewScreen />));
+		expect(nodes("BrowserLivePane")).toHaveLength(0); expect(nodes("WebView")).toHaveLength(0); expect(fixtures.getPreview).not.toHaveBeenCalled();
+		expect(nodes("EmptyState")[0].props.title).toBe("Cloud workspace changed");
+	});
+	it("rejects a Cloud link owned by another deployment or account", async () => {
+		fixtures.params = { id: "session-1", source: "cloud", sourceId: "org", scopeKey: "old-scope" };
+		fixtures.cloudSource = { scopeKey: "new-scope", preview: { scopeKey: "new-scope", isCurrent: () => true } };
+		await openPreview(); expect(nodes("BrowserLivePane")).toHaveLength(0); expect(fixtures.getPreview).not.toHaveBeenCalled();
+	});
 
 	it("defaults to the live browser with a labelled toggle only in the header", async () => {
 		await openPreview();
