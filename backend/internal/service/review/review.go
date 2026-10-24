@@ -91,6 +91,7 @@ type Service struct {
 	codexOperationGate ports.CodexOperationGate
 	notifications      reviewNotificationSink
 	prRefresher        PRRefresher
+	doneNotifier       DoneNotifier
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
@@ -142,6 +143,19 @@ type Option func(*Service)
 // requested review, so the pass covers the commit actually on the PR.
 func WithPRRefresher(r PRRefresher) Option {
 	return func(s *Service) { s.prRefresher = r }
+}
+
+// DoneNotifier sends the worker its pending "review done" messages.
+// Lifecycle owns delivery so the message follows forwarded review comments.
+type DoneNotifier interface {
+	DeliverReviewDoneNotices(ctx context.Context, workerID domain.SessionID) error
+}
+
+// WithReviewDoneNotifier tells the worker right away when a pass it is owed a
+// message for ends here (submit or cancel). Other endings are picked up by
+// the notifier's own sweep.
+func WithReviewDoneNotifier(n DoneNotifier) Option {
+	return func(s *Service) { s.doneNotifier = n }
 }
 
 // WithClock overrides the service clock for tests.
@@ -624,7 +638,20 @@ func (s *Service) Cancel(ctx context.Context, workerID domain.SessionID) (review
 	s.emit(ctx, "ao.review.cancelled", workerID, map[string]any{
 		"cancelled_runs": len(result.CancelledRuns),
 	})
+	s.notifyReviewDone(ctx, workerID)
 	return result, nil
+}
+
+// notifyReviewDone delivers the worker's pending "review done" messages. A
+// failure leaves them pending for the notifier's sweep; it never fails the
+// caller's already-recorded result.
+func (s *Service) notifyReviewDone(ctx context.Context, workerID domain.SessionID) {
+	if s.doneNotifier == nil {
+		return
+	}
+	if err := s.doneNotifier.DeliverReviewDoneNotices(ctx, workerID); err != nil {
+		slog.Default().WarnContext(ctx, "review done notice delivery failed", "session", workerID, "err", err)
+	}
 }
 
 // TerminateReviewer hard-destroys the reviewer pane for worker lifecycle
@@ -779,10 +806,12 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 		}
 		return nil, fmt.Errorf("%w: no submittable review runs in submission", ErrInvalid)
 	}
-	// The result reaches the worker through the PR itself: the reviewer posts
+	// The findings reach the worker through the PR itself: the reviewer posts
 	// its review on the provider, and the SCM observer forwards unresolved
-	// review comments to the worker like any other reviewer's. AO does not send
-	// a second, separate verdict message.
+	// review comments to the worker like any other reviewer's. AO adds only a
+	// short "review done" notice per pass, so the worker knows the round ended
+	// even when there are no comments to forward.
+	s.notifyReviewDone(ctx, workerID)
 	return runs, nil
 }
 
