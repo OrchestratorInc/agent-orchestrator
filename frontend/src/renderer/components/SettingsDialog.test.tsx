@@ -291,8 +291,8 @@ describe("SettingsDialog", () => {
 		const form = await screen.findByTestId("global-settings-section");
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
-		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
-		expect(screen.getByRole("button", { name: "Subscriptions" })).not.toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("data-active", "true");
+		expect(screen.getByRole("button", { name: "Accounts" })).not.toHaveAttribute("data-active", "true");
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {
@@ -309,7 +309,7 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("global-settings-section")).toHaveAttribute("data-focus-agent", "claude-code");
 
 		await userEvent.click(screen.getByRole("button", { name: "General" }));
-		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 
 		expect(screen.getByTestId("global-settings-section")).not.toHaveAttribute("data-focus-agent");
 	});
@@ -319,7 +319,7 @@ describe("SettingsDialog", () => {
 		renderSettingsDialog();
 
 		await vi.waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
-		await userEvent.click(screen.getByRole("button", { name: "Harness" }));
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
