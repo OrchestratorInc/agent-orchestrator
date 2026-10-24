@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -27,6 +28,7 @@ type Server struct {
 
 	shutdownRequested chan struct{}
 	shutdownOnce      sync.Once
+	stopAgents        atomic.Bool
 }
 
 // NewWithDeps constructs a Server with API dependencies supplied by the daemon
@@ -66,7 +68,8 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 	}
 	srv.http = &http.Server{
 		Handler: NewRouterWithControl(cfg, log, termMgr, deps, ControlDeps{
-			RequestShutdown: srv.requestShutdown,
+			RequestShutdown:      srv.requestShutdown,
+			RequestAgentShutdown: srv.requestAgentShutdown,
 		}),
 		// ReadHeaderTimeout guards against slow-loris even on loopback;
 		// per-request body/handler timeouts are applied per-surface.
@@ -175,3 +178,25 @@ func (s *Server) requestShutdown() {
 // RequestShutdown triggers the same clean shutdown as POST /shutdown: it makes
 // Run return so the daemon exits without tearing down sessions. Idempotent.
 func (s *Server) RequestShutdown() { s.requestShutdown() }
+
+// RequestShutdownAfterDesktopExit handles loss of the desktop supervisor,
+// including Force Quit. A shutdown already requested for replacement wins.
+func (s *Server) RequestShutdownAfterDesktopExit() {
+	s.shutdownOnce.Do(func() {
+		if os.Getenv("AO_OWNER") == "app" && s.cfg.AppRunID != "" {
+			s.stopAgents.Store(true)
+		}
+		close(s.shutdownRequested)
+	})
+}
+
+func (s *Server) requestAgentShutdown(appRunID string) bool {
+	if appRunID == "" || appRunID != s.cfg.AppRunID || os.Getenv("AO_OWNER") != "app" {
+		return false
+	}
+	s.stopAgents.Store(true)
+	return true
+}
+
+// StopAgentsRequested distinguishes desktop exit from daemon replacement.
+func (s *Server) StopAgentsRequested() bool { return s.stopAgents.Load() }

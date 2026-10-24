@@ -378,6 +378,10 @@ const browserCleanupPromises = new Set<Promise<void>>();
 let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
+let preserveAgentsOnQuit = false;
+let agentQuitCleanupComplete = false;
+let agentQuitCleanupPromise: Promise<void> | null = null;
+let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;
 const desktopQuit = createDesktopQuitController({
 	platform: process.platform,
@@ -2418,6 +2422,32 @@ function killDaemon(child: ChildProcess): void {
 	}
 }
 
+async function shutdownDaemonForDesktopQuit(): Promise<void> {
+	if (keepDaemonAlive(process.env)) return;
+	const status = daemonStatus;
+	if (status.state !== "ready" || !status.port) return;
+	const handshakePath = runFilePath();
+	if (!handshakePath) throw new Error("Daemon ownership record is unavailable");
+	const info = parseRunFile(await readFile(handshakePath, "utf8"));
+	if (!info || info.pid !== status.pid || info.port !== status.port) {
+		throw new Error("Daemon ownership changed before desktop quit");
+	}
+	if (!shouldLinkOnAttach(info.owner)) return;
+	if (!info.appRunId) throw new Error("Daemon app ownership is unavailable");
+	const response = await fetch(`http://127.0.0.1:${info.port}/shutdown`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			stopAgents: !preserveAgentsOnQuit && !isUpdateRestartRequested(),
+			appRunId: info.appRunId,
+		}),
+		signal: AbortSignal.timeout(3000),
+	});
+	if (!response.ok) throw new Error(`Agent shutdown returned HTTP ${response.status}`);
+	desktopAgentShutdownAccepted = true;
+	if (daemonProcess) daemonStoppingProcess = daemonProcess;
+}
+
 function stopDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
@@ -3042,6 +3072,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
+	preserveAgentsOnQuit = true;
 	app.relaunch();
 	desktopQuit.quitCompletely();
 });
@@ -3583,7 +3614,7 @@ app.whenReady().then(async () => {
 // self-stops ~5s after the last client (this process) drops its connection.
 // Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
 // Full exit drops the supervisor socket, stopping the app-owned daemon after
-// its grace period. Sessions survive.
+// its grace period and stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
@@ -3601,7 +3632,27 @@ app.on("before-quit", (event) => {
 			chatDraftQuitConfirmed = true;
 			app.quit();
 		} else {
+			preserveAgentsOnQuit = false;
 			desktopQuit.cancelQuit();
+		}
+		return;
+	}
+	if (!agentQuitCleanupComplete) {
+		event.preventDefault();
+		if (!agentQuitCleanupPromise) {
+			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
+				.then(() => {
+					agentQuitCleanupComplete = true;
+					app.quit();
+				})
+				.catch((error) => {
+					console.error("AO: daemon shutdown on desktop quit failed", error);
+					preserveAgentsOnQuit = false;
+					desktopQuit.cancelQuit();
+					dialog.showErrorBox("Could not quit AO", "AO could not stop its agents. Try quitting again.");
+					focusMainWindow();
+				})
+				.finally(() => { agentQuitCleanupPromise = null; });
 		}
 		return;
 	}
@@ -3663,7 +3714,7 @@ app.on("before-quit", (event) => {
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
-	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env)) {
+	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env) && !desktopAgentShutdownAccepted) {
 		killDaemon(daemonProcess);
 	}
 });
