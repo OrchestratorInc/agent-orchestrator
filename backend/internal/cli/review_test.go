@@ -521,6 +521,35 @@ func TestReviewListGetsReviews(t *testing.T) {
 	}
 }
 
+func TestReviewListShowsOnlyLatestFailedRunError(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, _ := reviewServer(t, http.StatusOK, `{
+		"reviews":[
+			{"prNumber":42,"status":"needs_review","title":"Failed review",
+			 "latestRun":{"id":"failed","status":"failed","body":"invalid_request_error: model unavailable\nHTTP 400\u001b[31m"}},
+			{"prNumber":43,"status":"up_to_date","title":"Completed review",
+			 "latestRun":{"id":"complete","status":"completed","body":"private completed review body"},
+			 "previousRun":{"id":"previous","status":"failed","body":"obsolete failure"}},
+			{"prNumber":44,"status":"running","title":"Running review"}
+		]
+	}`)
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, aliveDeps(), "review", "ls", "mer-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	for _, want := range []string{`invalid_request_error: model unavailable\nHTTP 400\x1b[31m`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want %q", out, want)
+		}
+	}
+	for _, unwanted := range []string{"private completed review body", "obsolete failure", "\x1b"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("stdout contains unrelated body or terminal control: %q", out)
+		}
+	}
+}
+
 func TestReviewListJSONPreservesResponse(t *testing.T) {
 	cfg := setReviewEnv(t)
 	srv, _ := reviewServer(t, http.StatusOK, `{
