@@ -716,6 +716,12 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		queuedBeforeFirstController = firstController && len(running) == 0
 		preserveUndispatchedQueue = len(running) == 0 && (sessionRecord.ProvisionState.IsProvisioning() || waking)
 	}
+	// A first controller normally has no provider history to fence off. A project
+	// conversation it inherited is the exception: its active branch still carries
+	// the previous orchestrator's provider handle, and only a new boundary
+	// publishes this session's own.
+	branchHoldsAnotherSessionsHandle := activeBranch.ProviderConversationID != "" &&
+		activeBranch.SessionID != "" && activeBranch.SessionID != cfg.SessionID
 	providerBoundaryID := ""
 	if cfg.ProviderSwitch != nil {
 		providerBoundaryID = s.newID()
@@ -724,7 +730,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	} else if !providerHandleOwnedByActiveBranch {
 		providerBoundaryID = providerScopeID
 	} else if cfg.ProviderConversationID == "" && cfg.ProviderScopeID == "" &&
-		!queuedBeforeFirstController &&
+		(!queuedBeforeFirstController || branchHoldsAnotherSessionsHandle) &&
 		(activeBranch.ProviderConversationID != "" || hadProviderHistory ||
 			(!preserveUndispatchedQueue && conversation.LatestSequence > 0)) {
 		// This conversation already owns provider history, but the caller proved it
