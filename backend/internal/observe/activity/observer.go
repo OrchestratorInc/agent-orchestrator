@@ -152,7 +152,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	}
 	var output string
 	var err error
-	if requiresRendered {
+	if _, guarded := agent.(ports.TerminalMessageInputGuard); requiresRendered || guarded {
 		reader, ok := o.runtime.(interface {
 			GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
 		})

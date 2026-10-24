@@ -100,6 +100,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</div></div>;
 	}
 	const data = catalog.data;
+	const acceptsDirectModel = (data?.customModelEntry ?? (data?.allowCustom ? "direct" : "none")) === "direct";
 	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
@@ -186,7 +187,7 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</label> : null}
 		{error ? <p role="alert" className="text-xs text-error">{error}</p> : null}
 		{catalog.isPending ? null
-			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : "settings.harness.models.empty")}</p>
+			: !models.length ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t(normalizedModelSearch ? "settings.options.noMatches" : acceptsDirectModel ? "settings.harness.models.directEntry" : "settings.harness.models.empty", { agent })}</p>
 			: <ul className={cn(HARNESS_CARD_CLASS, "settings-thin-scrollbar min-h-0 flex-initial overflow-y-auto overscroll-contain")} tabIndex={0} aria-label={t("settings.harness.models.title")}>
 				{visibleModels.map((model) => <li key={model.id} className={cn(HARNESS_CARD_ROW_CLASS, "shrink-0 gap-4")}>
 					<span className="min-w-0 flex-1">

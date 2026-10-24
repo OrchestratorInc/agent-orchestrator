@@ -155,3 +155,35 @@ func TestBindingReusesPluginRuntimeEnvironment(t *testing.T) {
 		t.Fatalf("plugin data dir/env = %q, %#v", plugin.dataDir, launch.Env)
 	}
 }
+
+func TestBindingRechecksVersionBeforeReplacementLaunch(t *testing.T) {
+	var changed bool
+	configured := false
+	mismatch := errors.New("distribution changed")
+	cfg := buildConfig(fakePlugin{binary: "/user/provider"}, Config{
+		Harness: domain.HarnessCodeBuddy,
+		VersionProbe: func(_ context.Context, binary string) error {
+			if binary != "/user/provider" {
+				t.Fatalf("wrong binary: %s", binary)
+			}
+			if changed {
+				return mismatch
+			}
+			return nil
+		},
+		Configure: func(context.Context, acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+			configured = true
+			return []string{"--acp"}, nil, nil
+		},
+	}, nil)
+	if err := cfg.Probe(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	changed = true
+	if _, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{}); !errors.Is(err, ports.ErrChatDriverIncompatible) || !errors.Is(err, mismatch) {
+		t.Fatalf("changed distribution launched: %v", err)
+	}
+	if configured {
+		t.Fatal("incompatible launch prepared native state")
+	}
+}

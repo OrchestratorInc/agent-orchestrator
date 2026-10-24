@@ -1,0 +1,10 @@
+{
+  "version": "2.164.0",
+  "hashes": {
+    "bin/codebuddy": "426186a82e36466d5be485f335ced1b0d664539c53b72a5f10ba3a267e60dab6",
+    "package.json": "68e0ff61dfa12f526d40e6cc1de24ad7d7f06e93aa3f235753b61b0ddc5a11b8",
+    "dist/codebuddy-broker.js": "b0194faff17e9bc881f1a9482c98f4a91bad406a0307e9332745b843a8a9a257",
+    "dist/codebuddy-headless.js": "f9affe2aed036a3a3ee8486b82e77b176a2a4b21f7bed721074c1c1e4a312e65"
+  },
+  "npmIntegrity": "sha512-1DvSEszHJQUysANsE1GF78dn6tWWjUpQYI4xZfJe5MTQqj3AfZDTywrNYJRKW2jTLYK8QaIX5rOSB8hUNFp8wA=="
+}

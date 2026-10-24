@@ -223,13 +223,15 @@ var shippedMigrations = map[int64]string{
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
 	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 	20261022172135175: "20261022172135175_session_branch_naming.sql",
+	20261023181512240: "20261023181512240_allow_codebuddy_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
-// shipped in a release and were then deleted, so real installs have them
-// recorded as applied while this repository ships no file with that number. A
+// shipped in a release or preview build and were then deleted, so databases can
+// have them recorded as applied while this repository ships no such file. A
 // new file claiming one would be skipped silently there.
 //
+//   - 207 was used by competing draft harness builds before renumbering.
 //   - 22 shipped in a nightly (#2412) and was deleted by the revert.
 //
 // Beware of the adjacent hazard this cannot catch: at least one field profile
@@ -239,7 +241,7 @@ var shippedMigrations = map[int64]string{
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
 	// 203 was used by the historical Hermes candidate and must not be reused.
-	return v == 22 || v == 203
+	return v == 22 || v == 203 || v == 207
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

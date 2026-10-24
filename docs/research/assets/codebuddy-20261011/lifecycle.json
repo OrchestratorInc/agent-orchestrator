@@ -1,0 +1,391 @@
+{
+  "input-cancel-final": {
+    "gates": {
+      "draftRefusedPreserved": true,
+      "permissionRefused": true,
+      "childReaped": true,
+      "noLateSideEffect": true
+    },
+    "source": "3246768a843abc658f15f0e2d28529b721165fcf",
+    "draftSend": {
+      "status": 409,
+      "response": {
+        "error": "conflict",
+        "code": "SESSION_AWAITING_DECISION",
+        "message": "Session is paused on a permission decision; answer it in the session terminal first",
+        "requestId": "vps-linux/gQknQih5sb-000035",
+        "reporting_owner": "http"
+      }
+    },
+    "permissionSend": {
+      "status": 409,
+      "response": {
+        "error": "conflict",
+        "code": "SESSION_AWAITING_DECISION",
+        "message": "Session is paused on a permission decision; answer it in the session terminal first",
+        "requestId": "vps-linux/gQknQih5sb-000111",
+        "reporting_owner": "http"
+      }
+    },
+    "nativeTaskAdmission": "AO refused native suggestion as nonempty; task then explicitly typed into owned TUI. No permission bypass.",
+    "child": {
+      "pid": 925890,
+      "kernelStart": "77688350"
+    },
+    "ownership": {
+      "host": {
+        "pid": 924380,
+        "kernelStart": "77638613"
+      },
+      "supervisor": {
+        "pid": 924385,
+        "kernelStart": "77638621"
+      },
+      "agent": {
+        "pid": 924395,
+        "kernelStart": "77638633"
+      }
+    },
+    "viewportAfter": "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n Rewind\n\n Restore and fork the conversation to a checkpoint:\n\n   -Write proof.json in your actual workspace using native Write, JSON cwd=actual cwd, standing=current private standing token, project=AGENTS.md tok\u2026\n   proof.json +7 -0 \u00b7 8m ago\n\n   Update proof.json count to 2 using native Edit, preserve all other fields.\n   proof.json +1 -1 \u00b7 7m ago\n\n   Use Bash to execute python3 cancel_probe.py in current workspace in foreground with timeout 60000 and run_in_background false. Do not read or edit\u2026\n   proof.json +1 -1 \u00b7 1m ago\n\n \u276f (current)\n\n\n Enter to continue \u00b7 Esc to exit"
+  },
+  "restore-interactive": {
+    "source": "3246768a843abc658f15f0e2d28529b721165fcf",
+    "gates": {
+      "mainNativeSupervisorHostChildReaped": true,
+      "independentControlUnchanged": true,
+      "killNoLateSideEffect": true,
+      "missingHistoryHardFailure": true,
+      "exactNativeIdentityFreshGeneration": true,
+      "freshInstructionsAfterKill": true,
+      "restoredActiveSettled": true
+    },
+    "controlSession": "codebuddy-tui-proof-001-2",
+    "controlOwnership": {
+      "host": {
+        "pid": 926070,
+        "kernelStart": "77696313"
+      },
+      "supervisor": {
+        "pid": 926075,
+        "kernelStart": "77696315"
+      },
+      "agent": {
+        "pid": 926088,
+        "kernelStart": "77696321"
+      }
+    },
+    "originalNativeDigest": "9854a6a5bc6a408f7562d3f99321d1bfd8528aae3141815a8075104f21f7e73e",
+    "oldGeneration": "c984d474-185d-4b95-9821-bc75d73e2fc8",
+    "mainOwnership": {
+      "host": {
+        "pid": 924380,
+        "kernelStart": "77638613"
+      },
+      "supervisor": {
+        "pid": 924385,
+        "kernelStart": "77638621"
+      },
+      "agent": {
+        "pid": 924395,
+        "kernelStart": "77638633"
+      }
+    },
+    "shellTaskAdmission": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "codebuddy-tui-proof-001-1",
+        "message": "Use Bash to execute python3 kill_probe.py in current workspace in foreground with timeout 60000 and run_in_background false. Do not read or edit script. Do not retry interrupted tools."
+      }
+    },
+    "child": {
+      "pid": 926370,
+      "kernelStart": "77704820"
+    },
+    "killResponse": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "codebuddy-tui-proof-001-1"
+      },
+      "utc": "2026-10-11T15:08:16.617013+00:00"
+    },
+    "killResponseNote": "Optional freed omitted (false); authoritative process/terminated state and no delayed effect independently checked.",
+    "missingHistoryResponse": {
+      "status": 500,
+      "body": {
+        "error": "internal",
+        "code": "INTERNAL_ERROR",
+        "message": "Internal server error",
+        "requestId": "vps-linux/gQknQih5sb-000225",
+        "reporting_owner": "http"
+      }
+    },
+    "restoreResponse": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "codebuddy-tui-proof-001-1",
+        "restoreMode": "native",
+        "session": {
+          "id": "codebuddy-tui-proof-001-1",
+          "projectId": "codebuddy-tui-proof-001",
+          "kind": "worker",
+          "harness": "codebuddy",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "CodeBuddy Code 2.164.0 native TUI proof",
+          "mode": "tui",
+          "activity": {
+            "state": "idle",
+            "lastActivityAt": "2026-10-11T15:09:22.392723693Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-11T14:57:12.918637316Z",
+          "updatedAt": "2026-10-11T15:09:22.392723693Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "idle",
+          "kanbanColumn": "building",
+          "displayStatus": "Awaiting PR",
+          "terminalHandleId": "ptyhost-v1:codebuddy-tui-proof-001-1",
+          "branch": "ao/codebuddy-tui-proof-001-1/root",
+          "terminalGeneration": "b3dba48f-79da-4ef8-9daa-f983ef609f44",
+          "model": "glm-5.3-flash",
+          "lastUserMessageAt": "2026-10-11T15:08:08.78778232Z",
+          "lastInteractionAt": "2026-10-11T15:08:08.78778232Z",
+          "lastEventAt": "2026-10-11T15:09:22.392723693Z",
+          "prs": []
+        }
+      },
+      "utc": "2026-10-11T15:09:22.410762+00:00"
+    },
+    "restoredOwnership": {
+      "host": {
+        "pid": 926527,
+        "kernelStart": "77711511"
+      },
+      "supervisor": {
+        "pid": 926540,
+        "kernelStart": "77711520"
+      },
+      "agent": {
+        "pid": 926549,
+        "kernelStart": "77711531"
+      }
+    },
+    "restoredGeneration": "b3dba48f-79da-4ef8-9daa-f983ef609f44",
+    "restoredNativeDigest": "9854a6a5bc6a408f7562d3f99321d1bfd8528aae3141815a8075104f21f7e73e",
+    "staticRestoreFailure": "Lab launcher CI=1 enables native bundled Ink static mode; no native modifications. Preserve original restored viewport and guard failures.",
+    "staticCleanupResponse": {
+      "ok": true,
+      "sessionId": "codebuddy-tui-proof-001-1"
+    },
+    "interactiveRestoreResponse": {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "sessionId": "codebuddy-tui-proof-001-1",
+        "restoreMode": "native",
+        "session": {
+          "id": "codebuddy-tui-proof-001-1",
+          "projectId": "codebuddy-tui-proof-001",
+          "kind": "worker",
+          "harness": "codebuddy",
+          "reviewerConfig": {},
+          "autoReviewEnabled": false,
+          "displayName": "CodeBuddy Code 2.164.0 native TUI proof",
+          "mode": "tui",
+          "activity": {
+            "state": "idle",
+            "lastActivityAt": "2026-10-11T15:19:54.1600414Z"
+          },
+          "isTerminated": false,
+          "terminateOnPrMerge": false,
+          "autoInjectReview": true,
+          "autoInjectCI": true,
+          "outputType": "none",
+          "createdAt": "2026-10-11T14:57:12.918637316Z",
+          "updatedAt": "2026-10-11T15:19:54.1600414Z",
+          "isPinned": false,
+          "provisionState": "ready",
+          "branchState": {
+            "commits": 0,
+            "unpushed": 0
+          },
+          "statusReadiness": "ready",
+          "chatProviderPreserved": false,
+          "status": "idle",
+          "kanbanColumn": "building",
+          "displayStatus": "Awaiting PR",
+          "terminalHandleId": "ptyhost-v1:codebuddy-tui-proof-001-1",
+          "branch": "ao/codebuddy-tui-proof-001-1/root",
+          "terminalGeneration": "b6c62d37-e6cd-4be1-9c6d-e1ac6a3829cb",
+          "model": "glm-5.3-flash",
+          "lastUserMessageAt": "2026-10-11T15:08:08.78778232Z",
+          "lastInteractionAt": "2026-10-11T15:08:08.78778232Z",
+          "lastEventAt": "2026-10-11T15:19:54.1600414Z",
+          "prs": []
+        }
+      },
+      "utc": "2026-10-11T15:19:54.173827+00:00"
+    },
+    "interactiveOwnership": {
+      "host": {
+        "pid": 928832,
+        "kernelStart": "77774696"
+      },
+      "supervisor": {
+        "pid": 928837,
+        "kernelStart": "77774697"
+      },
+      "agent": {
+        "pid": 928844,
+        "kernelStart": "77774698"
+      }
+    },
+    "interactiveGeneration": "b6c62d37-e6cd-4be1-9c6d-e1ac6a3829cb",
+    "restoredProof": {
+      "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/codebuddy/ao-001/data/worktrees/codebuddy-tui-proof-001/codebuddy-tui-proof-001-1",
+      "standing": "STANDING_CB_AO_6509",
+      "project": "PROJECT_CB_AO_6509",
+      "count": 3,
+      "historyCount": 2,
+      "currentStanding": "RESTORE_CB_AO_6509"
+    },
+    "nativeCI": "false"
+  },
+  "permission-reject": {
+    "source": "5827f13d75b639eac6ed76f6d572b6752c060da5",
+    "gates": {
+      "permissionGuard": true,
+      "nativeRejectNoSideEffect": true
+    },
+    "blockedMessage": {
+      "status": 409,
+      "body": {
+        "error": "conflict",
+        "code": "SESSION_AWAITING_DECISION",
+        "message": "Session is paused on a permission decision; answer it in the session terminal first",
+        "requestId": "vps-linux/hfvK0KqIox-000205",
+        "reporting_owner": "http"
+      }
+    },
+    "utc": "2026-10-11T15:22:21.255243+00:00"
+  },
+  "initial": {
+    "gates": {
+      "nativeManualPermission": true,
+      "initialOnceLeadingDashWorkspacePrivateAgents": true,
+      "initialActiveSettled": true,
+      "secondActiveSettled": true
+    },
+    "model": "glm-5.3-flash",
+    "nativeVersion": "2.164.0",
+    "source": "3246768a843abc658f15f0e2d28529b721165fcf",
+    "binarySHA": "963250afdbe43b4ebd90db95829e2a6d0836a5359810322279c7e0ee2195a3d2",
+    "sessionID": "codebuddy-tui-proof-001-1",
+    "workspace": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/codebuddy/ao-001/data/worktrees/codebuddy-tui-proof-001/codebuddy-tui-proof-001-1",
+    "firstProof": {
+      "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/codebuddy/ao-001/data/worktrees/codebuddy-tui-proof-001/codebuddy-tui-proof-001-1",
+      "standing": "STANDING_CB_AO_6509",
+      "project": "PROJECT_CB_AO_6509",
+      "count": 1
+    },
+    "secondProof": {
+      "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/codebuddy/ao-001/data/worktrees/codebuddy-tui-proof-001/codebuddy-tui-proof-001-1",
+      "standing": "STANDING_CB_AO_6509",
+      "project": "PROJECT_CB_AO_6509",
+      "count": 2
+    }
+  },
+  "native": {
+    "001": {
+      "pid": 918888,
+      "started": "2026-10-11T14:25:30.500149+00:00",
+      "model": "glm-5.3-flash"
+    },
+    "002": {
+      "pid": 919112,
+      "started": "2026-10-11T14:27:01.860232+00:00",
+      "model": "glm-5.3-flash"
+    },
+    "003": {
+      "pid": 919268,
+      "started": "2026-10-11T14:28:33.398107+00:00",
+      "model": "glm-5.3-flash"
+    },
+    "004": {
+      "pid": 919489,
+      "started": "2026-10-11T14:30:05.010002+00:00",
+      "model": "glm-5.3-flash"
+    },
+    "005": {
+      "nativeVersion": "2.164.0",
+      "model": "glm-5.3-flash",
+      "started": "2026-10-11T14:31:46.588677+00:00",
+      "gates": {
+        "defaultNativeApproval": true,
+        "leadingDashPrivateWorkspaceAgents": {
+          "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/codebuddy/native-005/workspace",
+          "standing": "STANDINGCB6509",
+          "project": "PROJECTCB6509",
+          "count": 1
+        },
+        "secondMessage": true,
+        "nativeIdentity": true,
+        "nativeTerminated": true
+      },
+      "pid": 919627,
+      "nativeIDDigest": "50287553efe93a0c16cba1e39103586c82da39854918a3bb593f54a345528ea5",
+      "restorePID": 919925,
+      "error": "TimeoutError: native current-screen condition timed out",
+      "finished": "2026-10-11T14:34:02.060096+00:00"
+    },
+    "006": {
+      "nativeVersion": "2.164.0",
+      "model": "glm-5.3-flash",
+      "started": "2026-10-11T14:34:58.428849+00:00",
+      "gates": {
+        "exactRestoreFreshInstructions": {
+          "cwd": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/codebuddy/native-005/workspace",
+          "standing": "STANDINGCB6509",
+          "project": "PROJECTCB6509",
+          "count": 3,
+          "restore": "RESTORECB6509"
+        },
+        "agentsPreserved": true
+      },
+      "restorePID": 921235,
+      "nativeIDDigest": "50287553efe93a0c16cba1e39103586c82da39854918a3bb593f54a345528ea5",
+      "finished": "2026-10-11T14:35:16.841509+00:00"
+    },
+    "007": {
+      "nativeVersion": "2.164.0",
+      "model": "glm-5.3-flash",
+      "started": "2026-10-11T14:36:53.874374+00:00",
+      "gates": {
+        "childStarted": true,
+        "childReaped": true,
+        "noLateSideEffect": true,
+        "nativeHooks": true
+      },
+      "pid": 921692,
+      "child": {
+        "pid": 921850,
+        "kernelStart": "77518131"
+      },
+      "finished": "2026-10-11T14:37:37.144069+00:00"
+    }
+  }
+}

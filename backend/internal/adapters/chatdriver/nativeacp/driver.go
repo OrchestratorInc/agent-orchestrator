@@ -63,6 +63,7 @@ type Config struct {
 	ClientExtension              acpdriver.ClientExtensionHandler
 	ClientExtensionAliases       map[string]string
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
+	ValidateConfigOption         func(string, ports.ChatConfigOptionValue) error
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
@@ -131,6 +132,14 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
+			if cfg.VersionProbe != nil {
+				versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				versionErr := cfg.VersionProbe(versionCtx, binary)
+				cancel()
+				if versionErr != nil {
+					return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, versionErr)
+				}
+			}
 			args, overrides, err := cfg.Configure(ctx, launchCfg)
 			if err != nil {
 				return acpdriver.Launch{}, err
@@ -162,6 +171,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
+		ValidateConfigOption:         cfg.ValidateConfigOption,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 		QuickStop:                    cfg.QuickStop,

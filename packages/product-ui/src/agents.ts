@@ -38,6 +38,7 @@ export const AGENT_OPTIONS = [
 	"openhands",
 	"command-code",
 	"memcode",
+	"codebuddy",
 	"hermes",
 ] as const;
 
@@ -87,6 +88,7 @@ export const AGENT_LABELS: Record<AgentId, string> = {
 	openhands: "OpenHands",
 	"command-code": "Command Code",
 	memcode: "memcode",
+	"codebuddy": "CodeBuddy Code",
 	"hermes": "Hermes Agent",
 };
 

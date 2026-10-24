@@ -301,6 +301,9 @@ func migrate(db *sql.DB) error {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set goose dialect: %w", err)
 	}
+	if err := repairRenumberedCodeBuddyMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered CodeBuddy migration history: %w", err)
+	}
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
@@ -2123,7 +2126,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsCodeBuddy := !strings.Contains(schema, "'codebuddy'")
+	if !needsCodeBuddy && !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2253,6 +2257,11 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsCodeBuddy {
+		// Append only AFTER every historical exact-shape repair above. Migration
+		// The CodeBuddy migration skips incomplete old lists to keep their recognizers intact.
+		repairs = append(repairs, replacement{"'fake'))", "'codebuddy', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2307,6 +2316,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'codebuddy'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing CodeBuddy Code")
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")

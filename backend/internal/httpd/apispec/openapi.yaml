@@ -16243,6 +16243,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - codebuddy
           - hermes
           - fake
           type: string
@@ -16944,6 +16945,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - codebuddy
           - hermes
           - cloudflared
           type: string
@@ -20293,6 +20295,7 @@ components:
           - openhands
           - command-code
           - memcode
+          - codebuddy
           - hermes
           type: string
         issueId:

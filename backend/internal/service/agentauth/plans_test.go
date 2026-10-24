@@ -55,6 +55,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"deepseek-harness", "Set up DeepSeek", "dsh", "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness", "", ActionSetup, []string{"dsh", "--profile", "web"}},
 		{"openhands", "Set up OpenHands", "openhands", "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start", "", ActionSetup, []string{"openhands"}},
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
+		{"codebuddy", "Set up CodeBuddy Code", "codebuddy", "Use native first-run login, or select Open setup after CodeBuddy finishes starting to open /login; configure third-party endpoints and keys in CodeBuddy", "https://www.codebuddy.ai/docs/cli/quickstart", "/login\r", ActionSetup, []string{"codebuddy"}},
 		{"hermes", "Set up Hermes Agent", "hermes", "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs", "", ActionSetup, []string{"hermes", "model"}},
 	}
 

@@ -496,7 +496,7 @@ func Run(buildVersion string) error {
 	}
 	codexOperationGate := codexops.NewGate()
 	agentDeps := agentsvc.Deps{
-		Cache: store, Discoverer: modelDiscoverer, Sessions: store, Context: ctx, Logger: log,
+		Cache: store, Discoverer: modelDiscoverer, Sessions: store, Context: ports.WithAgentAuthDataDir(ctx, cfg.DataDir), Logger: log,
 		ModelDiscoveryDir:      filepath.Join(cfg.DataDir, "model-discovery"),
 		CodexAccountRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "accounts"),
 		CodexPendingRoot:       filepath.Join(cfg.StateDir, "harnesses", "codex", "pending-accounts"),

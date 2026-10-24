@@ -455,6 +455,7 @@ type Manager struct {
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
+	serializedInput           map[domain.SessionID]bool
 	inputDrained              map[domain.SessionID]chan struct{}
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
@@ -2234,6 +2235,11 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 	// to the TUI instead of making every launch and restore fail.
 	if harness == domain.HarnessMemcode && validateSpawnModel(harness, merged.Model) != nil {
 		merged.Model = ""
+	}
+	// CodeBuddy uses native interactive permissions unless a project, role, or
+	// request explicitly chooses another policy. Do not synthesize Auto.
+	if harness == domain.HarnessCodeBuddy && merged.Permissions == "" {
+		merged.Permissions = ports.PermissionModeDefault
 	}
 	return merged
 }
@@ -6564,6 +6570,9 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id do
 }
 
 func (m *Manager) prepareRuntimeLaunch(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
+	if _, guarded := agent.(ports.TerminalMessageInputGuard); guarded {
+		m.enableSerializedInput(id)
+	}
 	preparer, ok := agent.(runtimeLaunchPreparer)
 	if !ok {
 		return nil
@@ -6857,7 +6866,7 @@ func restoreArgv(ctx context.Context, agent ports.Agent, id domain.SessionID, wo
 			ports.MetadataKeySessionMode:    string(domain.SessionModeTUI),
 		},
 	}
-	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
+	cmd, ok, err := agent.GetRestoreCommand(ctx, ports.RestoreConfig{Env: env, Session: ref, Kind: kind, DataDir: dataDir, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile, Config: agentConfig, Permissions: agentConfig.Permissions})
 	if err != nil {
 		return nil, "", "", fmt.Errorf("restore command: %w", err)
 	}
