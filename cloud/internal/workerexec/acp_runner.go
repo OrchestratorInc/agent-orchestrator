@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,7 +160,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 			return err
 		}
 	}
-	if err := configureACPSession(ctx, conn, sessionID, turn, command.CursorMode, configOptions, modes); err != nil {
+	if err := configureACPSession(ctx, conn, sessionID, turn, command.CursorMode, configOptions, modes, publish); err != nil {
 		return err
 	}
 	active := &acpSession{conn: conn, sessionID: sessionID, turnID: turn.ID, steering: acpSteeringSupported(initialized.Meta)}
@@ -227,7 +228,10 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 	}
 }
 
-func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, turn worker.Turn, cursorMode string, options []acp.SessionConfigOption, modes *acp.SessionModeState) error {
+// configureACPSession applies the turn's model, approval mode and effort to
+// the session. publish, when set, carries the notice of an approval mode the
+// turn's model does not offer, so the timeline says which mode ran instead.
+func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, turn worker.Turn, cursorMode string, options []acp.SessionConfigOption, modes *acp.SessionModeState, publish func(Output) error) error {
 	setOption := func(id, value string) error {
 		if value == "" {
 			return nil
@@ -256,6 +260,10 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 		if _, err := conn.SetSessionMode(ctx, acp.SetSessionModeRequest{SessionId: sessionID, ModeId: acp.SessionModeId(mode)}); err != nil {
 			return fmt.Errorf("set Claude approval mode: %w", err)
 		}
+		if wanted := claudeACPApprovalMode(turn); mode != wanted && publish != nil {
+			// The timeline is a view of the turn: a notice it rejects never fails it.
+			_ = publish(Output{Activity: approvalModeSubstitutedActivity(wanted, mode, acpSelectedChoiceName(options, "model", turn.Model))})
+		}
 	}
 	if turn.Harness == "cursor" && cursorMode != "" {
 		// The project's plan or ask mode, set on every turn so a restored
@@ -271,24 +279,102 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 	return setOption("effort", turn.ReasoningEffort)
 }
 
+// claudeApprovalStepDown is the order a Claude approval mode steps down in
+// when the turn's model does not offer it, most permissive first:
+// bypassPermissions never asks, auto lets a classifier approve routine
+// actions, acceptEdits approves file edits only, and default asks. A mode
+// steps down only to the modes after it, so a substitute stays as close to
+// the user's choice as the model allows without approving more than asked.
+// Claude ACP offers auto only for models that support it, so auto on Haiku
+// runs as acceptEdits.
+var claudeApprovalStepDown = []string{"bypassPermissions", "auto", "acceptEdits", "default"}
+
 // claudeACPOfferedMode is the turn's approval mode adjusted to what the adapter
-// offers: auto falls back to default, and a mode taken from the session rather
-// than chosen for the turn steps down to the closest offered one instead of
-// failing the turn. A mode chosen for the turn is never silently weakened.
+// offers for the session's model: the first mode at or after it in
+// claudeApprovalStepDown that the session offers, whether it was chosen for
+// the turn or taken from the session's mode. configureACPSession reports a
+// substitute in the timeline, so a weaker mode is never applied silently. A
+// read-only turn's plan mode never steps down, and a mode with no offered
+// substitute is returned unchanged so the turn fails instead of widening.
 func claudeACPOfferedMode(turn worker.Turn, options []acp.SessionConfigOption, modes *acp.SessionModeState) string {
 	mode := claudeACPApprovalMode(turn)
-	if mode == "auto" && !acpModeOffered(options, modes, mode) && acpModeOffered(options, modes, "default") {
-		return "default"
-	}
-	if turn.ApprovalMode != "" || turn.Mode == "read-only" {
+	start := slices.Index(claudeApprovalStepDown, mode)
+	if start < 0 {
 		return mode
 	}
-	for _, candidate := range []string{mode, "acceptEdits", "default"} {
+	for _, candidate := range claudeApprovalStepDown[start:] {
 		if acpModeOffered(options, modes, candidate) {
 			return candidate
 		}
 	}
 	return mode
+}
+
+// claudeACPModeApproval maps a Claude ACP session mode to AO's approval mode,
+// or "" for a mode AO does not offer as one (plan, dontAsk).
+func claudeACPModeApproval(mode string) string {
+	switch mode {
+	case "default":
+		return "default"
+	case "acceptEdits":
+		return "accept-edits"
+	case "auto":
+		return "auto"
+	case "bypassPermissions":
+		return "bypass-permissions"
+	}
+	return ""
+}
+
+// approvalModeLabels name Claude's session modes the way the Chat approval
+// menu names AO's approval modes. default only ever reads as a substitute.
+var approvalModeLabels = map[string]string{
+	"bypassPermissions": "Bypass permissions",
+	"auto":              "Auto-approve",
+	"acceptEdits":       "Accept edits",
+	"default":           "agent permissions",
+}
+
+// approvalModeSubstitutedActivity is the timeline notice for a turn that runs
+// a weaker approval mode than it asked for because its model does not offer
+// that one: "Auto-approve isn't available for Haiku; using Accept edits."
+func approvalModeSubstitutedActivity(wanted, used, model string) *worker.ChatActivity {
+	if model == "" {
+		model = "this model"
+	}
+	return &worker.ChatActivity{
+		ID: "approval-mode-substituted", Kind: "system", Status: "completed",
+		Summary: fmt.Sprintf("%s isn't available for %s; using %s.", approvalModeLabels[wanted], model, approvalModeLabels[used]),
+		Detail: map[string]any{
+			"event": "approval_mode.substituted", "model": model,
+			"requestedApprovalMode": claudeACPModeApproval(wanted), "approvalMode": claudeACPModeApproval(used),
+		},
+	}
+}
+
+// acpSelectedChoiceName is the display name of the choice a select option
+// currently holds, or fallback when the session does not name it.
+func acpSelectedChoiceName(options []acp.SessionConfigOption, id, fallback string) string {
+	for _, option := range options {
+		if option.Select == nil || string(option.Select.Id) != id {
+			continue
+		}
+		var choices []acp.SessionConfigSelectOption
+		if option.Select.Options.Ungrouped != nil {
+			choices = append(choices, *option.Select.Options.Ungrouped...)
+		}
+		if option.Select.Options.Grouped != nil {
+			for _, group := range *option.Select.Options.Grouped {
+				choices = append(choices, group.Options...)
+			}
+		}
+		for _, choice := range choices {
+			if choice.Value == option.Select.CurrentValue && strings.TrimSpace(choice.Name) != "" {
+				return strings.TrimSpace(choice.Name)
+			}
+		}
+	}
+	return fallback
 }
 
 // claudeACPApprovalMode is the Claude approval mode a Chat turn runs with. A

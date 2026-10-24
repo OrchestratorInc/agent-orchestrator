@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,7 +226,7 @@ func TestClaudeACPApprovalModesUseSessionSetMode(t *testing.T) {
 			defer cancel()
 			if err := configureACPSession(ctx, conn, "session-1", worker.Turn{
 				Harness: "claude-code", Mode: test.mode, ApprovalMode: test.approval,
-			}, "", nil, modes); err != nil {
+			}, "", nil, modes, nil); err != nil {
 				t.Fatal(err)
 			}
 			select {
@@ -315,7 +317,7 @@ func TestCursorACPRunsTheProjectModeWithoutForce(t *testing.T) {
 		conn := acp.NewClientSideConnection(&cloudACPClient{}, clientToAgentW, agentToClientR)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := configureACPSession(ctx, conn, "session-1", worker.Turn{Harness: "cursor", Mode: "trusted"}, mode, nil, modes)
+		err := configureACPSession(ctx, conn, "session-1", worker.Turn{Harness: "cursor", Mode: "trusted"}, mode, nil, modes, nil)
 		select {
 		case got := <-agent.selected:
 			return got, true, err
@@ -516,12 +518,164 @@ func TestClaudeACPModeFollowsSessionMode(t *testing.T) {
 		{"turn choice wins over session", worker.Turn{Mode: "trusted", ApprovalMode: "default"}, all, "default"},
 		{"no session mode asks", worker.Turn{}, all, "default"},
 		{"trusted steps down when bypass is not offered", worker.Turn{Mode: "trusted"}, noBypass, "acceptEdits"},
-		{"chosen bypass is not weakened", worker.Turn{Mode: "trusted", ApprovalMode: "bypass-permissions"}, noBypass, "bypassPermissions"},
-		{"auto falls back to default", worker.Turn{Mode: "trusted", ApprovalMode: "auto"}, noBypass, "default"},
+		{"chosen bypass steps down without widening", worker.Turn{Mode: "trusted", ApprovalMode: "bypass-permissions"}, noBypass, "acceptEdits"},
+		{"auto steps down to accept edits", worker.Turn{Mode: "trusted", ApprovalMode: "auto"}, noBypass, "acceptEdits"},
 	} {
 		if got := claudeACPOfferedMode(tc.turn, nil, tc.modes); got != tc.want {
 			t.Errorf("%s: mode = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// claudeTestOptions are the options Claude ACP advertises with current as the
+// session's model. As claude-agent-acp's buildAvailableModes, auto is offered
+// only for a model that supports it, which Haiku does not.
+func claudeTestOptions(current string) []acp.SessionConfigOption {
+	models := acp.SessionConfigSelectOptionsUngrouped{{Value: "opus", Name: "Opus"}, {Value: "haiku", Name: "Haiku"}}
+	var modes acp.SessionConfigSelectOptionsUngrouped
+	if current != "haiku" {
+		modes = append(modes, acp.SessionConfigSelectOption{Value: "auto", Name: "Auto"})
+	}
+	modes = append(modes, acp.SessionConfigSelectOptionsUngrouped{
+		{Value: "default", Name: "Manual"}, {Value: "acceptEdits", Name: "Accept Edits"}, {Value: "plan", Name: "Plan Mode"},
+		{Value: "dontAsk", Name: "Don't Ask"}, {Value: "bypassPermissions", Name: "Bypass Permissions"},
+	}...)
+	return []acp.SessionConfigOption{
+		{Select: &acp.SessionConfigOptionSelect{Id: "mode", CurrentValue: "default", Options: acp.SessionConfigSelectOptions{Ungrouped: &modes}}},
+		{Select: &acp.SessionConfigOptionSelect{Id: "model", CurrentValue: acp.SessionConfigValueId(current), Options: acp.SessionConfigSelectOptions{Ungrouped: &models}}},
+	}
+}
+
+// claudeModelAgent answers a model change as Claude ACP does, with the options
+// for the new model, and records the session mode each turn sets.
+type claudeModelAgent struct {
+	modeSpyAgent
+	mu       sync.Mutex
+	switched []string
+}
+
+func (a *claudeModelAgent) SetSessionConfigOption(_ context.Context, request acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
+	if request.ValueId == nil || request.ValueId.ConfigId != "model" {
+		return acp.SetSessionConfigOptionResponse{}, errors.New("unexpected config option")
+	}
+	model := string(request.ValueId.Value)
+	a.mu.Lock()
+	a.switched = append(a.switched, model)
+	a.mu.Unlock()
+	return acp.SetSessionConfigOptionResponse{ConfigOptions: claudeTestOptions(model)}, nil
+}
+
+func (a *claudeModelAgent) models() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.switched...)
+}
+
+func claudeTestConnection(t *testing.T, agent acp.Agent) *acp.ClientSideConnection {
+	t.Helper()
+	clientToAgentR, clientToAgentW := io.Pipe()
+	agentToClientR, agentToClientW := io.Pipe()
+	t.Cleanup(func() {
+		_ = clientToAgentR.Close()
+		_ = clientToAgentW.Close()
+		_ = agentToClientR.Close()
+		_ = agentToClientW.Close()
+	})
+	_ = acp.NewAgentSideConnection(agent, agentToClientW, clientToAgentR)
+	return acp.NewClientSideConnection(&cloudACPClient{}, clientToAgentW, agentToClientR)
+}
+
+// An approval mode the turn's model does not offer steps down only to a mode
+// that approves less on its own (bypass, auto, accept edits, ask), so the
+// substitute is never more permissive than the choice, and a choice with no
+// such substitute is kept for the turn to fail on.
+func TestClaudeACPApprovalModeStepsDownWithoutWidening(t *testing.T) {
+	offered := func(ids ...string) *acp.SessionModeState {
+		state := &acp.SessionModeState{}
+		for _, id := range ids {
+			state.AvailableModes = append(state.AvailableModes, acp.SessionMode{Id: acp.SessionModeId(id)})
+		}
+		return state
+	}
+	opus := offered("auto", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions")
+	haiku := offered("default", "acceptEdits", "plan", "dontAsk", "bypassPermissions")
+	for _, tc := range []struct {
+		name     string
+		approval string
+		modes    *acp.SessionModeState
+		want     string
+	}{
+		{"auto runs where the model offers it", "auto", opus, "auto"},
+		{"auto on Haiku accepts edits", "auto", haiku, "acceptEdits"},
+		{"auto without accept edits asks", "auto", offered("default", "plan"), "default"},
+		{"bypass without bypass uses auto", "bypass-permissions", offered("auto", "default", "acceptEdits"), "auto"},
+		{"accept edits without it asks", "accept-edits", offered("default", "auto", "bypassPermissions"), "default"},
+		{"nothing weaker keeps the choice", "accept-edits", offered("auto", "bypassPermissions"), "acceptEdits"},
+	} {
+		turn := worker.Turn{Harness: "claude-code", Mode: "trusted", ApprovalMode: tc.approval}
+		if got := claudeACPOfferedMode(turn, nil, tc.modes); got != tc.want {
+			t.Errorf("%s: mode = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// Exhaustively: whatever the model offers, a substitute never sits above
+	// the choice in the step-down order.
+	for _, approval := range []string{"bypass-permissions", "auto", "accept-edits", "default"} {
+		wanted := slices.Index(claudeApprovalStepDown, claudeACPApprovalMode(worker.Turn{ApprovalMode: approval}))
+		for subset := 0; subset < 1<<len(claudeApprovalStepDown); subset++ {
+			var ids []string
+			for index, id := range claudeApprovalStepDown {
+				if subset&(1<<index) != 0 {
+					ids = append(ids, id)
+				}
+			}
+			got := claudeACPOfferedMode(worker.Turn{Mode: "trusted", ApprovalMode: approval}, nil, offered(ids...))
+			if slices.Index(claudeApprovalStepDown, got) < wanted {
+				t.Fatalf("%s with %v ran %q, more permissive than asked", approval, ids, got)
+			}
+		}
+	}
+}
+
+// Auto-approve picked for a Haiku turn runs as Accept edits, and the timeline
+// says so; a turn whose model offers its mode runs it with no notice.
+func TestClaudeACPNoticesApprovalModeSubstitution(t *testing.T) {
+	run := func(t *testing.T, model string) (acp.SessionModeId, []Output) {
+		t.Helper()
+		agent := &claudeModelAgent{modeSpyAgent: modeSpyAgent{selected: make(chan acp.SessionModeId, 1)}}
+		conn := claudeTestConnection(t, agent)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		var published []Output
+		turn := worker.Turn{Harness: "claude-code", Mode: "standard", ApprovalMode: "auto", Model: model}
+		if err := configureACPSession(ctx, conn, "session-1", turn, "", claudeTestOptions("opus"), nil, func(output Output) error {
+			published = append(published, output)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case mode := <-agent.selected:
+			return mode, published
+		default:
+			t.Fatal("ACP did not receive session/set_mode")
+			return "", nil
+		}
+	}
+	mode, published := run(t, "haiku")
+	if mode != "acceptEdits" {
+		t.Fatalf("Haiku auto turn ran %q, want acceptEdits", mode)
+	}
+	if len(published) != 1 || published[0].Activity == nil {
+		t.Fatalf("published = %+v, want one notice", published)
+	}
+	notice := published[0].Activity
+	if notice.Kind != "system" || notice.Summary != "Auto-approve isn't available for Haiku; using Accept edits." ||
+		notice.Detail["event"] != "approval_mode.substituted" || notice.Detail["requestedApprovalMode"] != "auto" ||
+		notice.Detail["approvalMode"] != "accept-edits" || notice.Detail["model"] != "Haiku" {
+		t.Fatalf("notice = %+v", notice)
+	}
+	if mode, published := run(t, "opus"); mode != "auto" || len(published) != 0 {
+		t.Fatalf("Opus auto turn ran %q with notices %+v, want auto and none", mode, published)
 	}
 }
 
