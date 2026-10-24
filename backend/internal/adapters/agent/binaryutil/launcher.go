@@ -84,6 +84,20 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 			continue
 		}
 		commandName := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
+		if commandName == "sh" || commandName == "bash" || commandName == "sh.exe" || commandName == "bash.exe" {
+			return append(invocations, discoveryShellInvocations(tokens[i+1:], depth)...)
+		}
+		if !batch && (commandName == "command" || commandName == "nohup" || commandName == "time") {
+			next, query, err := discoveryCommandPrefix(commandName, tokens, i+1)
+			if err != "" {
+				return append(invocations, discoveryInvocation{refusal: err})
+			}
+			if query {
+				return invocations
+			}
+			i, explicit = next, true
+			continue
+		}
 		if discoveryPowerShell(commandName) {
 			if _, ok := discoveryPowerShellFile(tokens[i+1:]); !ok {
 				return append(invocations, discoveryInvocation{refusal: "cannot inspect PowerShell command mode; use an explicit -File launcher"})
@@ -142,7 +156,7 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 		case ".", "source":
 			explicit = true
 			i++ // Loading a profile is not an extensionless executable redirect.
-		case "then", "else", "do":
+		case "then", "else", "do", "!":
 			i++
 		case "--":
 			i++
@@ -179,21 +193,124 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 			for i < len(tokens) && strings.HasPrefix(tokens[i], "/") {
 				i++
 			}
-		case "if":
+		case "if", "elif":
 			i++
+			if !batch {
+				continue // A POSIX condition can itself execute an agent.
+			}
+			if i < len(tokens) && strings.EqualFold(tokens[i], "/i") {
+				i++
+			}
 			if i < len(tokens) && strings.EqualFold(tokens[i], "not") {
 				i++
 			}
-			if i < len(tokens) && strings.EqualFold(tokens[i], "exist") {
-				i += 2 // Skip EXIST and the tested filename.
-			} else {
-				return invocations // POSIX condition; subsequent segments/body are inspected.
+			if i >= len(tokens) {
+				return invocations // A condition may precede a parenthesized block.
+			}
+			switch strings.ToLower(tokens[i]) {
+			case "[", "[[", "test", "true", "false":
+				return invocations // POSIX tests do not provide routing evidence.
+			case "exist", "defined", "errorlevel", "cmdextversion":
+				i += 2 // These test an operand, not an executable.
+			default:
+				if strings.Contains(tokens[i], "==") {
+					i++
+				} else if i+2 < len(tokens) && discoveryBatchComparison(tokens[i+1]) {
+					i += 3
+				} else {
+					return append(invocations, discoveryInvocation{refusal: "cannot inspect batch IF condition"})
+				}
 			}
 		default:
 			return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
 		}
 	}
 	return invocations
+}
+
+func discoveryBatchComparison(token string) bool {
+	switch strings.ToLower(token) {
+	case "==", "equ", "neq", "lss", "leq", "gtr", "geq":
+		return true
+	}
+	return false
+}
+
+// Prefixes execute the following command; lookup/help flags do not execute it.
+func discoveryCommandPrefix(name string, tokens []string, next int) (int, bool, string) {
+	for next < len(tokens) && strings.HasPrefix(tokens[next], "-") {
+		option := tokens[next]
+		next++
+		if option == "--" {
+			break
+		}
+		if (name == "command" && (option == "-v" || option == "-V")) ||
+			(name != "command" && (option == "--help" || option == "--version")) {
+			return next, true, ""
+		}
+		if name == "command" && option == "-p" {
+			continue
+		}
+		if name == "time" {
+			switch option {
+			case "-p", "-v", "-a", "-q", "--portability", "--verbose", "--append", "--quiet":
+				continue
+			case "-f", "-o", "--format", "--output":
+				next++
+				continue
+			}
+			if strings.HasPrefix(option, "--format=") || strings.HasPrefix(option, "--output=") {
+				continue
+			}
+		}
+		return next, false, "cannot inspect command prefix option " + option
+	}
+	return next, false, ""
+}
+
+func discoveryShellInvocations(arguments []string, depth int) []discoveryInvocation {
+	refuse := []discoveryInvocation{{refusal: "cannot inspect shell command mode; use a literal command or script path"}}
+	for i := 0; i < len(arguments); i++ {
+		option := arguments[i]
+		if option == "--noprofile" || option == "--norc" {
+			continue
+		}
+		if strings.HasPrefix(option, "-") && option != "-" {
+			if strings.Trim(option[1:], "celuxv") != "" {
+				return refuse
+			}
+			if !strings.Contains(option, "c") {
+				continue
+			}
+			if i+1 >= len(arguments) {
+				return refuse
+			}
+			payload := arguments[i+1]
+			if len(payload) >= 2 && (payload[0] == '\'' || payload[0] == '"') && payload[len(payload)-1] == payload[0] {
+				payload = payload[1 : len(payload)-1]
+			}
+			if strings.Contains(payload, "$(") || strings.Contains(payload, "`") {
+				return refuse
+			}
+			commands := discoveryLauncherInvocationsAtDepth(payload, false, depth+1)
+			for k := range commands {
+				if strings.ContainsAny(commands[k].target, "$`") {
+					return refuse
+				}
+				switch commands[k].target {
+				case ":", "true", "false", "echo", "printf", "exit", "cd", "pwd", "read", "set", "export", "unset", "shift", "break", "continue", "return", "test", "[", "[[", "fi", "done", "esac":
+				default:
+					commands[k].explicit = true
+				}
+			}
+			return commands // Remaining shell arguments are $0/$1, not commands.
+		}
+		if option == "-" {
+			return refuse // Script supplied on stdin cannot be inspected.
+		}
+		return []discoveryInvocation{{target: strings.Trim(option, `"'`), explicit: true, arguments: arguments[i+1:]}}
+	}
+	return refuse
 }
 
 func discoveryRuntimeTarget(target string) bool {
