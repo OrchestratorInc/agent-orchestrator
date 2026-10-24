@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -72,7 +72,7 @@ func TestDiscoveryExecutableRejectsForeignAgent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)
-			_, err := verifyDiscoveryExecutable(context.Background(), tc.agent, path)
+			_, err := binaryutil.VerifyExecutable(context.Background(), tc.agent, path)
 			if err == nil || !strings.Contains(err.Error(), "instead of "+tc.agent) {
 				t.Fatalf("verification = %v, want a foreign-agent rejection", err)
 			}
@@ -116,7 +116,7 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)
-			verified, err := verifyDiscoveryExecutable(context.Background(), tc.agent, path)
+			verified, err := binaryutil.VerifyExecutable(context.Background(), tc.agent, path)
 			if err != nil || verified != path {
 				t.Fatalf("verification = %q, %v, want %q", verified, err, path)
 			}
@@ -139,7 +139,7 @@ func TestDiscoveryExecutableRequiresExecutedOwnershipEvidence(t *testing.T) {
 		root := t.TempDir()
 		launcher := writeDiscoveryLauncher(t, root, "agent.cmd", body)
 		writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
-		if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify executable") {
+		if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify executable") {
 			t.Errorf("non-executed reference vouched for launcher %q: %v", body, err)
 		}
 	}
@@ -150,7 +150,7 @@ func TestDiscoveryExecutableRequiresExecutedOwnershipEvidence(t *testing.T) {
 			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", body)
 			writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
 			writeDiscoveryLauncher(t, root, foreign+".exe", "MZ fixture")
-			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "redirects to "+foreign+" instead of grok") {
+			if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "redirects to "+foreign+" instead of grok") {
 				t.Fatalf("foreign executable accepted after ownership decoy: %v", err)
 			}
 		})
@@ -159,19 +159,19 @@ func TestDiscoveryExecutableRequiresExecutedOwnershipEvidence(t *testing.T) {
 	body := "IF EXIST \"%~dp0gemini.exe\" echo ok\nSET UNUSED=%~dp0qwen.exe\necho \"%~dp0goose.exe\"\n\"%~dp0grok.exe\" %*\n"
 	launcher := writeDiscoveryLauncher(t, root, "agent.cmd", body)
 	writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err != nil {
 		t.Fatalf("non-executed foreign references blocked the intended executable: %v", err)
 	}
 	writeDiscoveryLauncher(t, root, "agent.cmd", "node --require \"%~dp0autohand.js\" \"%~dp0node_modules/grok-cli/dist/cli.js\"\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
 		t.Fatalf("executed foreign preload accepted: %v", err)
 	}
 	writeDiscoveryLauncher(t, root, "agent.cmd", "SET \"target=%~dp0grok.exe\"\n\"%TARGET%\" %*\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err != nil {
 		t.Fatalf("executed SET target did not establish ownership: %v", err)
 	}
 	writeDiscoveryLauncher(t, root, "agent.cmd", "SET \"target=%~dp0gemini.exe\"\n\"%TARGET%\" %*\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "gemini") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "gemini") {
 		t.Fatalf("executed foreign SET target accepted: %v", err)
 	}
 }
@@ -206,7 +206,7 @@ func TestDiscoveryPOSIXLauncherFixtures(t *testing.T) {
 				t.Fatalf("invalid fixture CLI output: %#v, %v", models, err)
 			}
 			writeDiscoveryLauncher(t, root, "node", "#!/bin/sh\nprintf '"+strings.ReplaceAll(output, "\n", `\n`)+"'\n")
-			if _, err := verifyDiscoveryExecutable(context.Background(), tc.agent, launcher); err != nil {
+			if _, err := binaryutil.VerifyExecutable(context.Background(), tc.agent, launcher); err != nil {
 				t.Fatalf("POSIX launcher rejected: %v", err)
 			}
 			if runtime.GOOS == "windows" {
@@ -249,13 +249,13 @@ func TestDiscoveryExecutableInspectsNPMCmdShim(t *testing.T) {
 			body := strings.ReplaceAll(string(fixture), "grok-cli", agentPackage.pkg)
 			launcher := writeDiscoveryLauncher(t, root, agentPackage.agent+".cmd", body)
 			writeDiscoveryLauncher(t, root, "node_modules/"+agentPackage.pkg+"/dist/cli.js", "#!/usr/bin/env node\n")
-			if _, err := verifyDiscoveryExecutable(context.Background(), agentPackage.agent, launcher); err != nil {
+			if _, err := binaryutil.VerifyExecutable(context.Background(), agentPackage.agent, launcher); err != nil {
 				t.Fatalf("npm cmd-shim rejected: %v", err)
 			}
 			// Label calls must not hide foreign commands in the subroutine body.
 			body = strings.ReplaceAll(body, "SET dp0=%~dp0", "SET dp0=%~dp0\r\nCALL autohand %*")
 			writeDiscoveryLauncher(t, root, agentPackage.agent+".cmd", body)
-			if _, err := verifyDiscoveryExecutable(context.Background(), agentPackage.agent, launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+			if _, err := binaryutil.VerifyExecutable(context.Background(), agentPackage.agent, launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
 				t.Fatalf("foreign command in npm subroutine accepted: %v", err)
 			}
 		})
@@ -312,7 +312,7 @@ func TestDiscoveryExecutableRejectsUnverifiableRedirect(t *testing.T) {
 			}
 			t.Setenv("PATH", root)
 			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", invocation+"\n")
-			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify launcher command") {
+			if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify launcher command") {
 				t.Fatalf("verification = %v, want unverifiable intermediate launcher rejected", err)
 			}
 		})
@@ -325,7 +325,7 @@ func TestDiscoveryExecutableInspectsNestedLaunchers(t *testing.T) {
 		launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@call \"%~dp0bridge.bat\" %*\n")
 		writeDiscoveryLauncher(t, root, "bridge.bat", "@\"%~dp0grok.exe\" %*\n")
 		writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
-		if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
+		if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err != nil {
 			t.Fatalf("inspectable same-agent launcher rejected: %v", err)
 		}
 	})
@@ -334,7 +334,7 @@ func TestDiscoveryExecutableInspectsNestedLaunchers(t *testing.T) {
 			root := t.TempDir()
 			launcher := writeDiscoveryLauncher(t, root, "agent.cmd", "@call \"%~dp0bridge.cmd\" %*\n")
 			writeDiscoveryLauncher(t, root, "bridge.cmd", "@\"%~dp0autohand.exe\" %*\n")
-			if _, err := verifyDiscoveryExecutable(context.Background(), agent, launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+			if _, err := binaryutil.VerifyExecutable(context.Background(), agent, launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
 				t.Fatalf("verification = %v, want nested redirect rejected", err)
 			}
 		})
@@ -342,13 +342,13 @@ func TestDiscoveryExecutableInspectsNestedLaunchers(t *testing.T) {
 	root := t.TempDir()
 	launcher := writeDiscoveryLauncher(t, root, "cursor-agent/agent.cmd", "@powershell.exe -File \"%SCRIPT_DIR%/agent.ps1\" %*\n")
 	child := writeDiscoveryLauncher(t, root, "cursor-agent/agent.ps1", "$scriptPath = Split-Path -parent $MyInvocation.MyCommand.Definition\n& \"$scriptPath/versions/$versionName/node.exe\" \"$scriptPath/versions/$versionName/index.js\" $args\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "cursor", launcher); err != nil {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "cursor", launcher); err != nil {
 		t.Fatalf("native Cursor launcher rejected: %v", err)
 	}
 	if err := os.WriteFile(child, []byte("& \"$PSScriptRoot/autohand.exe\" $args\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifyDiscoveryExecutable(context.Background(), "cursor", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "cursor", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
 		t.Fatalf("overwritten Cursor PowerShell launcher accepted: %v", err)
 	}
 }
@@ -356,42 +356,19 @@ func TestDiscoveryExecutableInspectsNestedLaunchers(t *testing.T) {
 func TestDiscoveryExecutableRejectsAmbiguousAliasAndCycles(t *testing.T) {
 	root := t.TempDir()
 	ambiguous := writeDiscoveryLauncher(t, root, "agent.cmd", "@echo unknown agent\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "cursor", ambiguous); err == nil || !strings.Contains(err.Error(), "cannot verify") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "cursor", ambiguous); err == nil || !strings.Contains(err.Error(), "cannot verify") {
 		t.Fatalf("ambiguous alias accepted: %v", err)
 	}
 	cycle := writeDiscoveryLauncher(t, root, "grok.cmd", "@call \"%~dp0bridge.cmd\" %*\n")
 	writeDiscoveryLauncher(t, root, "bridge.cmd", "@call \"%~dp0grok.cmd\" %*\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", cycle); err == nil || !strings.Contains(err.Error(), "cyclic") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", cycle); err == nil || !strings.Contains(err.Error(), "cyclic") {
 		t.Fatalf("cyclic launcher accepted: %v", err)
-	}
-}
-
-func TestDiscoveryExecutableLimitsTotalFiles(t *testing.T) {
-	for _, files := range []int{discoveryLauncherFileLimit, discoveryLauncherFileLimit + 1} {
-		t.Run(fmt.Sprint(files), func(t *testing.T) {
-			root := t.TempDir()
-			var body strings.Builder
-			for i := 1; i < files; i++ {
-				name := fmt.Sprintf("bridge-%d.cmd", i)
-				writeDiscoveryLauncher(t, root, name, "@echo off\n")
-				fmt.Fprintf(&body, "@call \"%%~dp0%s\" %%*\n", name)
-			}
-			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", body.String())
-			_, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher)
-			if files <= discoveryLauncherFileLimit {
-				if err != nil {
-					t.Fatalf("launcher within file budget rejected: %v", err)
-				}
-			} else if err == nil || !strings.Contains(err.Error(), "total file inspection limit") {
-				t.Fatalf("verification = %v, want total file limit rejection", err)
-			}
-		})
 	}
 }
 
 func TestDiscoveryExecutableBoundsNestedShellCommands(t *testing.T) {
 	launcher := writeDiscoveryLauncher(t, t.TempDir(), "grok.cmd", strings.Repeat("cmd /c ", 12)+"grok\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "uninspectable nested shell command") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "uninspectable nested shell command") {
 		t.Fatalf("verification = %v, want bounded shell nesting", err)
 	}
 }
@@ -399,22 +376,8 @@ func TestDiscoveryExecutableBoundsNestedShellCommands(t *testing.T) {
 func TestDiscoveryExecutableBoundsVariableExpansion(t *testing.T) {
 	root := t.TempDir()
 	launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "A=x\n"+strings.Repeat("A=\"$A$A\"\n", 20)+"exec node\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "variable expansion exceeds inspection limit") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "variable expansion exceeds inspection limit") {
 		t.Fatalf("verification = %v, want bounded variable expansion", err)
-	}
-}
-
-func TestDiscoveryExecutableReusesSharedTargets(t *testing.T) {
-	root := t.TempDir()
-	// Repeated quoted commands and branches must reuse completed results rather
-	// than reread each file.
-	shared := strings.Repeat("\"%~dp0grok.exe\" %*\n", discoveryLauncherFileLimit+1)
-	writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
-	writeDiscoveryLauncher(t, root, "left.cmd", shared)
-	writeDiscoveryLauncher(t, root, "right.cmd", shared)
-	launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@call \"%~dp0left.cmd\" %*\n@call \"%~dp0right.cmd\" %*\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
-		t.Fatalf("repeated shared targets rejected: %v", err)
 	}
 }
 
@@ -422,7 +385,7 @@ func TestDiscoveryExecutableInspectsQuotedPathAndUTF16(t *testing.T) {
 	root := t.TempDir()
 	launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@call \"%~dp0path with spaces/bridge.cmd\" %*\n")
 	writeDiscoveryLauncher(t, root, "path with spaces/bridge.cmd", "@\"%~dp0autohand.exe\" %*\n")
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
 		t.Fatalf("quoted redirect accepted: %v", err)
 	}
 	units := utf16.Encode([]rune("& \"$PSScriptRoot/autohand.exe\" $args\n"))
@@ -432,7 +395,7 @@ func TestDiscoveryExecutableInspectsQuotedPathAndUTF16(t *testing.T) {
 		binary.LittleEndian.PutUint16(body[2+i*2:], unit)
 	}
 	launcher = writeDiscoveryLauncher(t, root, "cursor-agent.ps1", string(body))
-	if _, err := verifyDiscoveryExecutable(context.Background(), "cursor", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "cursor", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
 		t.Fatalf("UTF-16 redirect accepted: %v", err)
 	}
 }
@@ -447,46 +410,8 @@ func TestDiscoveryExecutableInspectsSymlinkTarget(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", link); err == nil || !strings.Contains(err.Error(), "autohand") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", link); err == nil || !strings.Contains(err.Error(), "autohand") {
 		t.Fatalf("foreign symlink target accepted: %v", err)
-	}
-}
-
-func TestDiscoveryExecutableAllowsNativeManagerSymlinks(t *testing.T) {
-	for _, tc := range []struct{ name, target, body string }{
-		{"mise", ".local/bin/mise", "\x7fELF\x00fixture"},
-		{"volta", ".volta/bin/volta-shim", "\xcf\xfa\xed\xfe\x00fixture"},
-		{"renamed native", "releases/release-9f31b7", "MZ fixture"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			target := writeDiscoveryLauncher(t, root, tc.target, tc.body)
-			name := "grok"
-			if runtime.GOOS == "windows" {
-				name += ".exe"
-			}
-			link := filepath.Join(root, name)
-			if err := os.Symlink(target, link); err != nil {
-				if runtime.GOOS == "windows" {
-					t.Skipf("symlink creation unavailable: %v", err)
-				}
-				t.Fatal(err)
-			}
-			verified, err := verifyDiscoveryExecutable(context.Background(), "grok", link)
-			if err != nil || verified != link {
-				t.Fatalf("native manager verification = %q, %v, want launcher %q", verified, err, link)
-			}
-			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", target); err == nil {
-				t.Fatal("unidentified native target accepted without an agent entry point")
-			}
-			inspection := &discoveryInspection{active: map[string]bool{}, completed: map[string]discoveryInspectionResult{}}
-			if ok, err := inspectDiscoveryExecutable(context.Background(), "grok", link, inspection); err != nil || !ok {
-				t.Fatalf("agent alias rejected: %v", err)
-			}
-			if ok, err := inspectDiscoveryExecutable(context.Background(), "grok", target, inspection); err != nil || ok {
-				t.Fatalf("cached agent alias identity leaked to unidentified target: %t, %v", ok, err)
-			}
-		})
 	}
 }
 
@@ -500,7 +425,7 @@ func TestDiscoveryExecutableDoesNotTrustScriptAliasName(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", link); err == nil || !strings.Contains(err.Error(), "autohand") {
+	if _, err := binaryutil.VerifyExecutable(context.Background(), "grok", link); err == nil || !strings.Contains(err.Error(), "autohand") {
 		t.Fatalf("foreign script accepted through agent alias: %v", err)
 	}
 }
@@ -518,7 +443,7 @@ func TestDiscoveryExecutableAllowsPackageSymlink(t *testing.T) {
 		}
 		t.Fatal(err)
 	}
-	verified, err := verifyDiscoveryExecutable(context.Background(), "pi", link)
+	verified, err := binaryutil.VerifyExecutable(context.Background(), "pi", link)
 	if err != nil || verified != link {
 		t.Fatalf("package symlink verification = %q, %v, want launcher %q", verified, err, link)
 	}
@@ -535,7 +460,7 @@ func TestDiscoveryPreservesSymlinkInvocationName(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
-	verified, err := verifyDiscoveryExecutable(context.Background(), "opencode-v2", "opencode2")
+	verified, err := binaryutil.VerifyExecutable(context.Background(), "opencode-v2", "opencode2")
 	if err != nil || verified != link {
 		t.Fatalf("verification = %q, %v, want PATH launcher %q", verified, err, link)
 	}
@@ -575,7 +500,7 @@ func TestDiscoveryUsesVerifiedExecutable(t *testing.T) {
 func TestDiscoveryExecutableHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := verifyDiscoveryExecutable(ctx, "grok", "grok"); !errors.Is(err, context.Canceled) {
+	if _, err := binaryutil.VerifyExecutable(ctx, "grok", "grok"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("verification = %v, want cancellation", err)
 	}
 }
@@ -589,7 +514,7 @@ func TestDiscoveryExecutableChecksPATHAlias(t *testing.T) {
 	writeDiscoveryLauncher(t, root, name, "#!/bin/sh\nexec autohand \"$@\"\n")
 	t.Setenv("PATH", root)
 	for _, agent := range []string{"grok", "cursor"} {
-		if _, err := verifyDiscoveryExecutable(context.Background(), agent, "agent"); err == nil || !strings.Contains(err.Error(), "autohand") {
+		if _, err := binaryutil.VerifyExecutable(context.Background(), agent, "agent"); err == nil || !strings.Contains(err.Error(), "autohand") {
 			t.Fatalf("%s PATH alias verification = %v, want foreign target rejected", agent, err)
 		}
 	}
@@ -613,6 +538,44 @@ func TestDiscoveryRejectsRedirectBeforeAnyProbe(t *testing.T) {
 			}
 			if _, err := os.Stat(marker); !os.IsNotExist(err) {
 				t.Fatalf("launcher ran before rejection: marker stat = %v", err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryCallbacksRejectRedirectBeforeProbe(t *testing.T) {
+	for _, agent := range []string{"codex", "claude-code", "cline", "deepseek-harness", "devin"} {
+		t.Run(agent, func(t *testing.T) {
+			called := false
+			d := Discoverer{
+				CodexModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
+					called = true
+					return nil, nil
+				},
+				ClaudeModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+					called = true
+					return nil, nil
+				},
+				ClaudeFingerprint: func(context.Context, ports.AgentModelDiscoveryRequest) string { called = true; return "unsafe" },
+				ACPOptions: map[string]ACPOptionListFunc{agent: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+					called = true
+					return nil, nil
+				}},
+			}
+			root := t.TempDir()
+			marker := filepath.Join(root, "login-started")
+			launcher := writeDiscoveryLauncher(t, root, "agent.cmd", "@echo login > \""+marker+"\"\n@call autohand %*\n")
+			request := ports.AgentModelDiscoveryRequest{AgentID: agent, Binary: launcher}
+			_, err := d.Discover(context.Background(), request)
+			if err == nil || !strings.Contains(err.Error(), "autohand") {
+				t.Fatalf("discovery = %v, want redirect refusal", err)
+			}
+			d.CatalogFingerprint(context.Background(), request)
+			if called {
+				t.Fatal("probe callback ran through a foreign launcher")
+			}
+			if _, err := os.Stat(marker); !os.IsNotExist(err) {
+				t.Fatalf("launcher executed: %v", err)
 			}
 		})
 	}

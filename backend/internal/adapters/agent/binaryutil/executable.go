@@ -1,4 +1,4 @@
-package modelcatalog
+package binaryutil
 
 import (
 	"bytes"
@@ -29,17 +29,20 @@ type discoveryInspectionResult struct {
 	native   bool
 }
 
+// VerifyExecutable inspects an agent launcher before a background probe runs.
+// It returns the original absolute launcher path, preserving alias semantics.
+//
 // Agent installers can replace another tool's wrapper while retaining its name.
 // Inspect launchers without running even --version: a redirected probe can open
 // an interactive login before printing anything. This is a local routing check,
 // not an attestation of arbitrary executable contents.
-func verifyDiscoveryExecutable(ctx context.Context, agentID, binaryPath string) (string, error) {
+func VerifyExecutable(ctx context.Context, agentID, binaryPath string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	resolved, err := exec.LookPath(binaryPath)
 	if err != nil {
-		return "", fmt.Errorf("%s model discovery: resolve executable: %w", agentID, err)
+		return "", fmt.Errorf("%s executable verification: resolve executable: %w", agentID, err)
 	}
 	resolved, err = filepath.Abs(resolved)
 	if err != nil {
@@ -50,10 +53,10 @@ func verifyDiscoveryExecutable(ctx context.Context, agentID, binaryPath string) 
 	inspection := &discoveryInspection{active: map[string]bool{}, completed: map[string]discoveryInspectionResult{}}
 	verified, err := inspectDiscoveryExecutable(ctx, agentID, resolved, inspection)
 	if err != nil {
-		return "", fmt.Errorf("%s model discovery: refusing executable %q: %w; repair or reinstall the intended agent's launcher", agentID, resolved, err)
+		return "", fmt.Errorf("%s executable verification: refusing executable %q: %w; repair or reinstall the intended agent's launcher", agentID, resolved, err)
 	}
 	if !verified {
-		return "", fmt.Errorf("%s model discovery: cannot verify executable %q belongs to %s; use that agent's own launcher instead of a shared agent alias", agentID, resolved, agentID)
+		return "", fmt.Errorf("%s executable verification: cannot verify executable %q belongs to %s; use that agent's own launcher instead of a shared agent alias", agentID, resolved, agentID)
 	}
 	return resolved, nil
 }

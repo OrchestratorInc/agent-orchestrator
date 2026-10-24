@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -285,7 +286,7 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 
 func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	if request.AgentID == "fx" && request.CredentialType == "" {
-		binary, err := verifyDiscoveryExecutable(ctx, request.AgentID, request.Binary)
+		binary, err := binaryutil.VerifyExecutable(ctx, request.AgentID, request.Binary)
 		if err != nil {
 			return Base(request.AgentID), err
 		}
@@ -304,6 +305,11 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
 	if list := d.ACPOptions[request.AgentID]; list != nil {
+		binary, err := binaryutil.VerifyExecutable(ctx, request.AgentID, request.Binary)
+		if err != nil {
+			return Base(request.AgentID), err
+		}
+		request.Binary = binary
 		catalog, err := discoverACPOptionCatalog(ctx, request, list)
 		if err == nil {
 			return catalog, nil
@@ -388,6 +394,11 @@ func discoverClaudeCatalog(
 	if list == nil {
 		return base, errors.New("claude-code model discovery is unavailable")
 	}
+	binary, err := binaryutil.VerifyExecutable(ctx, request.AgentID, request.Binary)
+	if err != nil {
+		return base, err
+	}
+	request.Binary = binary
 	models, err := list(ctx, request)
 	if err != nil {
 		return base, fmt.Errorf("claude-code model discovery: %w", err)
@@ -446,6 +457,11 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {
 		return fingerprint
 	}
+	binary, err := binaryutil.VerifyExecutable(ctx, request.AgentID, request.Binary)
+	if err != nil {
+		return fingerprint
+	}
+	request.Binary = binary
 	extra := d.ClaudeFingerprint(ctx, request)
 	hash := sha256.Sum256([]byte(fingerprint + "\x00" + extra))
 	return fmt.Sprintf("%x", hash[:8])
@@ -472,7 +488,7 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		return base, errors.New("agent binary is not installed")
 	}
 	var err error
-	binary, err = verifyDiscoveryExecutable(ctx, agentID, binary)
+	binary, err = binaryutil.VerifyExecutable(ctx, agentID, binary)
 	if err != nil {
 		return base, err
 	}
@@ -608,6 +624,11 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 	if list == nil {
 		return base, errors.New("codex app-server model discovery is unavailable")
 	}
+	binary, err := binaryutil.VerifyExecutable(ctx, request.AgentID, request.Binary)
+	if err != nil {
+		return base, err
+	}
+	request.Binary = binary
 	models, err := list(ctx, request)
 	if err != nil {
 		return base, fmt.Errorf("codex model discovery: %w", err)

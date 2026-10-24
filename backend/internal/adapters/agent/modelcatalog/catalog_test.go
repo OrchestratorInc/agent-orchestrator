@@ -743,7 +743,7 @@ func TestCodexDiscoveryUsesStructuredProviderCatalog(t *testing.T) {
 			{ID: "gpt-other", DisplayName: "GPT Other"},
 		}, nil
 	}}
-	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "codex", Binary: "/bin/codex"})
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "codex", Binary: writeDiscoveryLauncher(t, t.TempDir(), "codex.exe", "MZ fixture")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -767,7 +767,7 @@ func TestCodexDiscoveryListsNewestModelsFirst(t *testing.T) {
 			{ID: "sol-6", DisplayName: "Sol 6"},
 		}, nil
 	}}
-	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "codex", Binary: "/bin/codex"})
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "codex", Binary: writeDiscoveryLauncher(t, t.TempDir(), "codex.exe", "MZ fixture")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +795,7 @@ func TestClineDiscoveryUsesACPModelOptions(t *testing.T) {
 			{ID: "mode", Name: "Mode", Category: "mode", Type: ports.ChatConfigOptionSelect},
 		}, nil
 	}}}
-	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "cline", Binary: "/bin/cline"})
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "cline", Binary: writeDiscoveryLauncher(t, t.TempDir(), "cline.exe", "MZ fixture")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -827,7 +827,7 @@ func TestDevinDiscoveryUsesACPModelOptions(t *testing.T) {
 			},
 		}, nil
 	}}}
-	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "devin", Binary: "devin"})
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "devin", Binary: writeDiscoveryLauncher(t, t.TempDir(), "devin.exe", "MZ fixture")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1317,7 +1317,7 @@ func TestACPOnlyHarnessReportsDiscoveryFailure(t *testing.T) {
 				},
 			}}
 			_, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{
-				AgentID: agentID, Binary: "/bin/agent",
+				AgentID: agentID, Binary: writeDiscoveryLauncher(t, t.TempDir(), agentID+".exe", "MZ fixture"),
 			})
 			if err == nil {
 				t.Fatal("an ACP-only harness swallowed its discovery failure; the caller will cache an empty catalog as success")
