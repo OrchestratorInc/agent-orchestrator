@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -562,4 +563,37 @@ func TestReviewDoneNotice_NamesAUserCancelledNewerPass(t *testing.T) {
 		t.Fatalf("want one notice, got %v", msg.msgs)
 	}
 	assertContains(t, msg.msgs[0], "A newer review of this PR (run run-2, head abc123) was cancelled by the user.")
+}
+
+// unconfirmedMessenger writes the message but cannot confirm the agent
+// accepted it (the session manager's ErrDeliveryUnconfirmed).
+type unconfirmedMessenger struct{ sends int }
+
+func (f *unconfirmedMessenger) Send(_ context.Context, id domain.SessionID, _ string) error {
+	f.sends++
+	return fmt.Errorf("send %s: %w", id, ports.ErrDeliveryUnconfirmed)
+}
+
+// An unconfirmed delivery reached the worker's pane, so the notice counts as
+// sent and is not pasted again; the warning stays on the run.
+func TestReviewDoneNotice_UnconfirmedDeliveryIsNotResent(t *testing.T) {
+	st := &noticeStore{fakeStore: newFakeStore()}
+	st.sessions["w-1"] = working("w-1")
+	unconfirmed := &unconfirmedMessenger{}
+	m := New(st, unconfirmed)
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "reviewer exited before submitting a result")}
+
+	for i := 0; i < 3; i++ {
+		m.SweepReviewDoneNotices(ctx)
+		now = now.Add(reviewNoticeRetryMax)
+	}
+	got := st.run("run-1")
+	if unconfirmed.sends != 1 || got.WorkerNotice != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("sends=%d notice=%q, want one send and the notice sent", unconfirmed.sends, got.WorkerNotice)
+	}
+	if got.WorkerNoticeAttempts != 1 || !strings.Contains(got.WorkerNoticeError, "not acknowledged") {
+		t.Fatalf("warning not kept on the run: %+v", got)
+	}
 }

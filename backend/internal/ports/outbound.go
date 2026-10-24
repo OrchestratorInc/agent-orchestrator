@@ -75,6 +75,11 @@ type AgentMessenger interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
 }
 
+// ErrDeliveryUnconfirmed is returned by an AgentMessenger that wrote the
+// message to the agent but could not confirm the agent accepted it. The
+// message is not lost; callers must not resend it as if it never arrived.
+var ErrDeliveryUnconfirmed = errors.New("session: message delivery was not acknowledged")
+
 // ---- runtime / agent / workspace plugin ports ----
 
 // Runtime is the full runtime adapter contract: session creation/teardown plus

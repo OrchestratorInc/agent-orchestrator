@@ -131,7 +131,7 @@ var (
 	// harness never confirmed that the agent became active before the
 	// confirmation budget was exhausted (e.g. trailing Enter absorbed or dropped).
 	// The API maps it to a 409; the caller retries or inspects the terminal.
-	ErrDeliveryUnconfirmed = errors.New("session: message delivery was not acknowledged")
+	ErrDeliveryUnconfirmed = ports.ErrDeliveryUnconfirmed
 
 	// Spawn-stage sentinels. Each is the existing log word after "spawn" /
 	// "spawn <id>:" so wrapping them does not change daemon-log wording, while

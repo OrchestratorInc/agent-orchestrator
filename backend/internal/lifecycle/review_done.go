@@ -2,12 +2,14 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
@@ -91,6 +93,17 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 			return nil
 		}
 		outcome, err := m.guard.Nudge(ctx, id, msg)
+		if errors.Is(err, ports.ErrDeliveryUnconfirmed) {
+			// The message reached the worker's pane; only its acceptance was
+			// not confirmed, and the messenger already re-sent Enter. Count it
+			// as sent so it is not pasted again, and keep the warning on the
+			// run for diagnosis.
+			slog.Default().WarnContext(ctx, "lifecycle: review done notice delivery unconfirmed", "session", id, "run", run.ID, "err", err)
+			if _, recErr := store.RecordReviewRunNoticeFailure(ctx, run.ID, err.Error(), m.clock()); recErr != nil {
+				return recErr
+			}
+			err = nil
+		}
 		if err != nil {
 			// The send failed, including a messenger error the guard reports
 			// as Sent: the worker did not get the message. Keep it pending and
