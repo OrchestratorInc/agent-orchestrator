@@ -991,7 +991,6 @@
 	"mobile.keepAwake.label": "保持这台 Mac 唤醒",
 	"mobile.keepAwake.combinedHelp": "即使合上盖子，也能让 Mac 保持运行。",
 	"mobile.keepAwake.details": "关于保持这台 Mac 唤醒",
-	"mobile.keepAwake.defaultDataRequired": "需要使用 AO 的默认数据文件夹。",
 	"mobile.keepAwake.help": "离开时仍可从手机访问。",
 	"mobile.keepAwake.laptopNote": "除非 MacBook 接通电源并连接外接显示器，否则合上盖子仍会让它进入睡眠。",
 	"mobile.keepAwake.lidLabel": "合上盖子后保持唤醒",

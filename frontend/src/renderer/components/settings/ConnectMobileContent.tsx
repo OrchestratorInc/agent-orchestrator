@@ -994,11 +994,9 @@ function KeepAwakeRow({
 		keepAwake.lidReason === "helper_upgrade_required";
 	const status = keepAwake.lidActive && keepAwake.enabled
 		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-		: keepAwake.lidReason === "isolated_data_dir"
-			? t("mobile.keepAwake.defaultDataRequired")
-			: keepAwake.lidReason || lidUnavailable
-				? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
-				: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
+		: keepAwake.lidReason || lidUnavailable
+			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
+			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
 		<SettingsRow
 			data-testid="mobile-keep-awake"
@@ -1022,7 +1020,7 @@ function KeepAwakeRow({
 							{keepAwake.lidReason === "isolated_data_dir" && <p className="mt-1">{t("mobile.keepAwake.lidReason.isolated_data_dir")}</p>}
 						</TooltipContent>
 					</Tooltip>
-					{lidNeedsAttention && (
+					{lidNeedsAttention && keepAwake.lidReason !== "isolated_data_dir" && (
 						<span className="mt-1 block" role="status">{status}</span>
 					)}
 				</>

@@ -991,7 +991,6 @@
 	"mobile.keepAwake.label": "この Mac をスリープさせない",
 	"mobile.keepAwake.combinedHelp": "蓋を閉じたままでも Mac を起動状態に保ちます。",
 	"mobile.keepAwake.details": "この Mac のスリープ防止について",
-	"mobile.keepAwake.defaultDataRequired": "AO の既定のデータフォルダが必要です。",
 	"mobile.keepAwake.help": "離席中もスマートフォンから接続できます。",
 	"mobile.keepAwake.laptopNote": "MacBook は、電源と外部ディスプレイに接続していない限り、蓋を閉じるとスリープします。",
 	"mobile.keepAwake.lidLabel": "ふたを閉じてもスリープさせない",
