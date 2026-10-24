@@ -102,6 +102,9 @@ func inspectDiscoveryManagerShim(ctx context.Context, agentID, selected string, 
 		// A known manager name must not hide an installer overwrite either.
 		for _, line := range strings.Split(string(content), "\n") {
 			for _, invocation := range discoveryLauncherInvocations(strings.TrimSpace(line), false) {
+				if invocation.refusal != "" {
+					return true, fmt.Errorf("%s runtime: %s", manager, invocation.refusal)
+				}
 				targets := []string{invocation.target}
 				for _, app := range discoveryInterpreterApplications(invocation.target, invocation.arguments) {
 					targets = append(targets, app.target)

@@ -112,17 +112,20 @@ func TestDiscoveryExecutableManagerShimLayouts(t *testing.T) {
 				writeDiscoveryLauncher(t, root, "shims/"+name, body)
 				// A recognizable script dispatcher cannot hide a direct overwrite.
 				if manager != "asdf" {
-					f, err := os.OpenFile(managerPath, os.O_APPEND|os.O_WRONLY, 0)
+					original, err := os.ReadFile(managerPath)
 					if err != nil {
 						t.Fatal(err)
 					}
-					_, err = f.WriteString("\nexec autohand \"$@\"\n")
-					_ = f.Close()
-					if err != nil {
-						t.Fatal(err)
-					}
-					if _, err := VerifyExecutable(t.Context(), agent, shim); err == nil || !strings.Contains(err.Error(), "autohand") {
-						t.Fatalf("overwritten manager = %v", err)
+					for _, overwrite := range []struct{ command, diagnostic string }{
+						{`exec autohand "$@"`, "autohand"},
+						{`pwsh -Command autohand`, "PowerShell command mode"},
+					} {
+						if err := os.WriteFile(managerPath, []byte(string(original)+"\n"+overwrite.command+"\n"), 0o700); err != nil {
+							t.Fatal(err)
+						}
+						if _, err := VerifyExecutable(t.Context(), agent, shim); err == nil || !strings.Contains(err.Error(), overwrite.diagnostic) {
+							t.Fatalf("overwritten manager (%s) = %v", overwrite.command, err)
+						}
 					}
 				}
 			})
