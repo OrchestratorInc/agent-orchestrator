@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -995,6 +996,272 @@ func TestAddWorktreeRefusesBranchCheckedOutElsewhere(t *testing.T) {
 	if !strings.Contains(err.Error(), strconv.Quote(otherPath)) {
 		t.Fatalf("err = %v, want message to include conflicting path %q", err, otherPath)
 	}
+}
+
+// TestAddWorktreeReportsOrphanedWorktreeFromPreviousDataRoot covers #6918 Part A:
+// a worktree registration left behind by a previous AO data root (same managed-
+// relative path, outside the current managed root) is NOT removed automatically
+// (see resolveBranchConflict), but the typed 409 names it as an orphan and gives
+// the exact removal command, so the spawn is no longer a dead end.
+func TestAddWorktreeReportsOrphanedWorktreeFromPreviousDataRoot(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	oldRoot := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	orphanPath := filepath.Join(oldRoot, "proj", "sess")
+	managedPath := filepath.Join(root, "proj", "sess")
+	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree remove"):
+			t.Fatalf("an orphan must not be removed automatically: %v", args)
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			return []byte("worktree " + orphanPath + "\nbranch refs/heads/feature/x\n"), nil
+		case strings.Contains(joined, "rev-parse"):
+			return []byte("commit"), nil
+		default:
+			t.Fatalf("unexpected git invocation: %v", args)
+			return nil, nil
+		}
+	}
+	_, err = ws.addWorktree(context.Background(), repo, managedPath, "feature/x", "", "", "", false)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ports.ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if !strings.Contains(err.Error(), orphanPath) {
+		t.Fatalf("err = %v, want conflicting path %q", err, orphanPath)
+	}
+	if !strings.Contains(err.Error(), "worktree remove "+quoteRecoveryPath(orphanPath)) {
+		t.Fatalf("err = %v, want quoted remediation command", err)
+	}
+}
+
+// TestQuoteRecoveryPath covers the shell-escaping used by the remediation
+// commands: the user copies the command into a shell, so the path must arrive as
+// one argument even when an old data root contains spaces.
+func TestQuoteRecoveryPath(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"plain", "/managed/proj/sess", `"/managed/proj/sess"`},
+		{"windows", `D:/managed/proj/sess`, `"D:/managed/proj/sess"`},
+		{"spaces", `D:/AO Lab/worktrees/proj/sess`, `"D:/AO Lab/worktrees/proj/sess"`},
+		{"embedded quote", `/tmp/weird"name/proj/sess`, `"/tmp/weird\"name/proj/sess"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := quoteRecoveryPath(tc.path); got != tc.want {
+				t.Fatalf("quoteRecoveryPath(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAddWorktreeQuotesOrphanRemediationPath covers the recovery command for an
+// orphan under a data root that contains spaces: the command must quote the path
+// so copying it into a shell does not split it into several arguments.
+func TestAddWorktreeQuotesOrphanRemediationPath(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	orphanPath := filepath.Join(t.TempDir(), "AO Lab", "proj", "sess")
+	managedPath := filepath.Join(root, "proj", "sess")
+	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree remove"):
+			t.Fatalf("an orphan must not be removed automatically: %v", args)
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			return []byte("worktree " + orphanPath + "\nbranch refs/heads/feature/x\n"), nil
+		case strings.Contains(joined, "rev-parse"):
+			return []byte("commit"), nil
+		default:
+			t.Fatalf("unexpected git invocation: %v", args)
+			return nil, nil
+		}
+	}
+	_, err = ws.addWorktree(context.Background(), repo, managedPath, "feature/x", "", "", "", false)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ports.ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	wantCommand := "worktree remove " + quoteRecoveryPath(orphanPath)
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("err = %v, want quoted remediation command %q", err, wantCommand)
+	}
+	if strings.Contains(err.Error(), "worktree remove "+orphanPath) {
+		t.Fatalf("err = %v, remediation command path must be quoted", err)
+	}
+}
+
+// TestAddWorktreeRefusesForeignCheckoutOutsideManagedRoot covers the guard:
+// a registration that is outside the managed root but does not match AO's own
+// layout is not reclaimed; it stays a typed 409 and no remove is attempted.
+func TestAddWorktreeRefusesForeignCheckoutOutsideManagedRoot(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	oldRoot := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	foreignPath := filepath.Join(oldRoot, "somewhere", "else")
+	var removed bool
+	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree remove"):
+			removed = true
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			return []byte("worktree " + foreignPath + "\nbranch refs/heads/feature/x\n"), nil
+		case strings.Contains(joined, "rev-parse"):
+			return []byte("commit"), nil
+		default:
+			t.Fatalf("unexpected git invocation: %v", args)
+			return nil, nil
+		}
+	}
+	_, err = ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/x"})
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ports.ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if removed {
+		t.Fatalf("a foreign checkout must not be removed")
+	}
+}
+
+// TestAddWorktreeRefusesAOOwnedCheckoutInsideManagedRoot covers the guard that
+// protects registrations AO still owns: a path inside the managed root is never
+// reclaimed even when it is AO-shaped, so a live sibling session or an earlier
+// sessionPrefix is not deleted.
+func TestAddWorktreeRefusesAOOwnedCheckoutInsideManagedRoot(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ownedPath := filepath.Join(root, "proj", "orchestrator", "old-orchestrator")
+	var removed bool
+	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree remove"):
+			removed = true
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			return []byte("worktree " + ownedPath + "\nbranch refs/heads/ao/proj-orchestrator\n"), nil
+		case strings.Contains(joined, "rev-parse"):
+			return []byte("commit"), nil
+		default:
+			t.Fatalf("unexpected git invocation: %v", args)
+			return nil, nil
+		}
+	}
+	cfg := ports.WorkspaceConfig{ProjectID: "proj", SessionID: "proj-1", Kind: domain.KindOrchestrator, SessionPrefix: "proj", Branch: "ao/proj-orchestrator"}
+	_, err = ws.Create(context.Background(), cfg)
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ports.ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if removed {
+		t.Fatalf("an AO-owned checkout must not be removed")
+	}
+}
+
+// TestAddWorktreeRefusesLockedOrphanedWorktree covers the guard: a locked
+// orphan is an explicit operator signal and is never reclaimed automatically.
+func TestAddWorktreeRefusesLockedOrphanedWorktree(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	oldRoot := t.TempDir()
+	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	orphanPath := filepath.Join(oldRoot, "proj", "sess")
+	var removed bool
+	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "check-ref-format"):
+			return nil, nil
+		case strings.Contains(joined, "worktree remove"):
+			removed = true
+			return nil, nil
+		case strings.Contains(joined, "worktree list --porcelain"):
+			return []byte("worktree " + orphanPath + "\nbranch refs/heads/feature/x\nlocked\n"), nil
+		case strings.Contains(joined, "rev-parse"):
+			return []byte("commit"), nil
+		default:
+			t.Fatalf("unexpected git invocation: %v", args)
+			return nil, nil
+		}
+	}
+	_, err = ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "feature/x"})
+	if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+		t.Fatalf("err = %v, want ports.ErrWorkspaceBranchCheckedOutElsewhere", err)
+	}
+	if !strings.Contains(err.Error(), "unlock it") {
+		t.Fatalf("err = %v, want lock remediation", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "confirm it is no longer in use") {
+		t.Fatalf("err = %v, want a confirmation step before unlocking", err)
+	}
+	// Unlocking alone leaves the registration and the branch checkout in place,
+	// and removing a locked worktree fails, so the message must spell out the
+	// sequence that works: confirm, unlock, remove, retry.
+	unlockAt := strings.Index(msg, "worktree unlock "+quoteRecoveryPath(orphanPath))
+	removeAt := strings.Index(msg, "worktree remove "+quoteRecoveryPath(orphanPath))
+	if unlockAt < 0 || removeAt < 0 {
+		t.Fatalf("err = %v, want quoted unlock and remove commands for %q", err, orphanPath)
+	}
+	if unlockAt > removeAt {
+		t.Fatalf("err = %v, unlock must be suggested before remove", err)
+	}
+	if removed {
+		t.Fatalf("a locked orphan must not be removed")
+	}
+}
+
+// TestAddWorktreeCrossVolumeOrphanClassification covers the Windows case where
+// the orphan sits on a different volume than the managed root: filepath.Rel
+// errors across volumes, which must not make the orphan unclassifiable.
+func TestAddWorktreeCrossVolumeOrphanClassification(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("cross-volume paths are a Windows concept")
+	}
+	root := `C:\managed`
+	orphan := `D:\old-data\proj\sess`
+	if !orphanedManagedWorktreeForTest(root, orphan, filepath.Join(root, "proj", "sess")) {
+		t.Fatalf("cross-volume orphan was not classified as an AO orphan")
+	}
+}
+
+// orphanedManagedWorktreeForTest is a thin exported shim for the cross-volume
+// classification check; it mirrors orphanedManagedWorktree but takes the managed
+// root explicitly so the test can exercise a root that is not a real directory.
+func orphanedManagedWorktreeForTest(managedRoot, path, managedPath string) bool {
+	w := &Workspace{managedRoot: managedRoot}
+	return w.orphanedManagedWorktree(path, managedPath)
 }
 
 // TestCreateRejectsInvalidBranchName covers the residual of #152 Bug 3: a branch
