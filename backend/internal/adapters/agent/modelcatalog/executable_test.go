@@ -63,12 +63,18 @@ func TestDiscoveryExecutableRejectsForeignAgent(t *testing.T) {
 		{"npm exec foreign command", "grok", "grok.cmd", "npm exec -- autohand\n"},
 		{"inline conditional foreign command", "grok", "grok.cmd", "if exist marker autohand\n"},
 		{"posix conditional foreign command", "grok", "grok.cmd", "if true; then autohand; fi\n"},
+		{"cmd shell foreign command", "grok", "grok.cmd", "cmd /c autohand %*\n"},
+		{"cmd keep-open foreign command", "grok", "grok.ps1", "cmd /k \"autohand %*\"\n"},
+		{"cmd quoted chained foreign command", "grok", "grok.cmd", "cmd /c \"echo ready && autohand\"\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)
 			_, err := verifyDiscoveryExecutable(context.Background(), tc.agent, path)
 			if err == nil || !strings.Contains(err.Error(), "instead of "+tc.agent) {
 				t.Fatalf("verification = %v, want a foreign-agent rejection", err)
+			}
+			if strings.Contains(tc.body, "autohand") && !strings.Contains(err.Error(), "autohand") {
+				t.Fatalf("verification = %v, want the actual Autohand redirect identified", err)
 			}
 		})
 	}
@@ -89,6 +95,7 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 		{"npm shim", "grok", "grok.cmd", "@\"node.exe\" \"%~dp0/node_modules/grok/dist/cli.js\" %*\n"},
 		{"opencode shared v2 binary", "opencode-v2", "opencode.exe", "MZ fixture"},
 		{"command code windows", "command-code", "cmdc.exe", "MZ fixture"},
+		{"command code cmd alias", "command-code", "cmd.cmd", "@echo off\n"},
 		{"comments are not redirects", "grok", "grok.cmd", "@echo off\nREM replaced autohand.exe\n:: autohand.exe\n# autohand.exe\n\"%~dp0grok.exe\" %*\n"},
 		{"cursor exec argv0", "cursor", "cursor-agent.cmd", "#!/bin/bash\nNODE_BIN=\"$SCRIPT_DIR/node\"\nexec -a \"$0\" \"$NODE_BIN\" \"$SCRIPT_DIR/index.js\" \"$@\"\n"},
 		{"pnpm adjacent node", "grok", "grok.cmd", "#!/bin/sh\nexec \"$basedir/node\" \"$basedir/node_modules/grok-cli/dist/cli.js\" \"$@\"\n"},
@@ -96,6 +103,11 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 		{"forward positional arguments", "grok", "grok.cmd", "#!/bin/sh\nexec \"$@\"\n"},
 		{"source shell profile", "grok", "grok.cmd", "#!/bin/sh\n. \"$HOME/.profile\"\nexec node \"$basedir/node_modules/grok-cli/dist/cli.js\" \"$@\"\n"},
 		{"quoted operators are arguments", "grok", "grok.cmd", "#!/bin/sh\necho \"text && autohand\"\nexec node \"$basedir/node_modules/grok-cli/dist/cli.js\" \"$@\"\n"},
+		{"cmd shell batch launcher", "grok", "grok.cmd", "cmd /c \"%~dp0grok.exe\" %*\n"},
+		{"cmd shell powershell launcher", "grok", "grok.ps1", "cmd /c \"$PSScriptRoot/grok.exe\" @args\n"},
+		{"cmd shell options", "grok", "grok.cmd", "cmd /d /s /k \"%~dp0grok.exe\" %*\n"},
+		{"cmd executable path", "grok", "grok.cmd", "\"C:/Windows/System32/cmd.exe\" /c \"%~dp0grok.exe\" %*\n"},
+		{"cmd builtin before agent", "grok", "grok.cmd", "cmd /c \"echo ready && grok\"\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)
@@ -218,6 +230,7 @@ func TestDiscoveryExecutableRejectsUnverifiableRedirect(t *testing.T) {
 		"@call bridge.bat %*", "@call bridge.cmd %*", "& bridge.ps1 @args", "exec bridge.sh \"$@\"",
 		"@bridge.bat %*", "@bridge.cmd %*", "& './bridge.ps1' @args",
 		"@call \"%~dp0missing.bat\" %*",
+		"cmd /c bridge %*", "cmd /k bridge.bat %*",
 	} {
 		t.Run(invocation, func(t *testing.T) {
 			root := t.TempDir()
@@ -307,6 +320,13 @@ func TestDiscoveryExecutableLimitsTotalFiles(t *testing.T) {
 				t.Fatalf("verification = %v, want total file limit rejection", err)
 			}
 		})
+	}
+}
+
+func TestDiscoveryExecutableBoundsNestedShellCommands(t *testing.T) {
+	launcher := writeDiscoveryLauncher(t, t.TempDir(), "grok.cmd", strings.Repeat("cmd /c ", 12)+"grok\n")
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "uninspectable nested shell command") {
+		t.Fatalf("verification = %v, want bounded shell nesting", err)
 	}
 }
 
