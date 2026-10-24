@@ -156,7 +156,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { SubagentTeam } from "./SubagentTeam";
-import { isSubagentLaunch, partitionSubagentSteps, readSubagent } from "./subagent-team";
+import { isSubagentLaunch, partitionSubagentSteps } from "./subagent-team";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
@@ -4402,15 +4402,11 @@ const TurnGroup = memo(function TurnGroup({
 	// Questions, errors, and system warnings stay readable after the turn settles, and
 	// so does anything the user said mid-turn: folding a steer away would leave the
 	// reply under the Worked row answering a message the reader can no longer see.
-	// So does a team with a child still working: folding live work under a settled
-	// "Worked for" row would hide it from the reader.
+	// So does a subagent team, working or settled: its outcomes are the turn's result,
+	// and staying in this flat list keeps the card, and any report the reader has
+	// open, mounted through the handoff instead of vanishing into "Worked for".
 	const noticeRuns = group.outcome
-		? workedRuns.filter((run) =>
-			isHumanRun(run.items[0]) ||
-			isNoticeRun(run) ||
-			(run.kind === "subagents" && run.items.some((launch) =>
-				readSubagent(launch, subagentSteps.get(launch.id) ?? [], subagentsLive).state === "working",
-			)))
+		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run) || run.kind === "subagents")
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
@@ -5244,7 +5240,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 	return groups.flatMap((group) => {
 		const { steps } = partitionSubagentSteps(group.items);
 		const segments = splitAtSteers(group);
-		if (steps.size === 0) return segments;
+		if (steps.size === 0 && !group.items.some(isSubagentLaunch)) return segments;
 		const stepIds = new Set([...steps.values()].flat().map((step) => step.id));
 		return segments.map((segment) => withSubagentSteps(segment, steps, stepIds, Boolean(group.live)));
 	});
@@ -5257,7 +5253,9 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
  * land after the steer while its launch stays before it. Read one segment at a time,
  * the team would never get its report and the child's steps would read as the
  * parent's. So the turn is partitioned before the split, and each segment takes its
- * own launches' steps and the real turn's live state.
+ * own launches' steps and the real turn's live state. A launch whose child has not
+ * recorded a step yet still takes the live state, or the steer would leave it
+ * reading as finished with no report until its first step arrived.
  */
 function withSubagentSteps(
 	segment: TimelineGroup,
@@ -5268,9 +5266,8 @@ function withSubagentSteps(
 	const steps = new Map<string, ConversationActivity[]>();
 	const stepIds = new Set<string>();
 	for (const item of segment.items) {
-		const own = turnSteps.get(item.id);
-		if (own) steps.set(item.id, own);
 		if (turnStepIds.has(item.id)) stepIds.add(item.id);
+		else if (isSubagentLaunch(item)) steps.set(item.id, turnSteps.get(item.id) ?? []);
 	}
 	if (steps.size === 0 && stepIds.size === 0) return segment;
 	return { ...segment, subagents: { steps, stepIds, live } };
@@ -5365,6 +5362,7 @@ function isQuietWorkerGroup(group: TimelineGroup | undefined): boolean {
 			&& !group.diff
 			&& quietWorkerReply(group.items) !== undefined
 			&& !group.items.some(isNoticeItem)
+			&& !group.items.some(isSubagentLaunch)
 			&& spawnedSessionIds(group.items).length === 0;
 		quietWorkerGroups.set(group, quiet);
 	}

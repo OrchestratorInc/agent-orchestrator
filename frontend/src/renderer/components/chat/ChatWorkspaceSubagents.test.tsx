@@ -137,54 +137,76 @@ describe("ChatWorkspace subagents", () => {
 		expect(await screen.findByRole("button", { name: /Ran 2 tool calls/ })).toHaveAttribute("aria-expanded", "true");
 	});
 
-	it("folds a finished team into the settled turn's work, like any other run", async () => {
-		const user = userEvent.setup();
+	it("keeps a finished team and its outcomes in view instead of folding it into the work", () => {
 		render(<ChatWorkspace snapshot={snapshot("completed")} />);
 
 		expect(screen.getByText("Both audits are summarized above.")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /2 subagents/ })).not.toBeInTheDocument();
-
-		await user.click(screen.getByRole("button", { name: /Worked for/ }));
-		const header = await screen.findByRole("button", { name: /2 subagents/ });
+		expect(screen.getByRole("button", { name: /Worked for/ })).toHaveAttribute("aria-expanded", "false");
+		const header = screen.getByRole("button", { name: /2 subagents/ });
 		// The background child never handed back, so its outcome is unknown, not done.
 		expect(within(header).getByText("1 done")).toBeInTheDocument();
+		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument();
+	});
+
+	it("keeps the team, and a report the reader opened, mounted when the turn settles", async () => {
+		const user = userEvent.setup();
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running")} />);
+
+		await user.click(screen.getByRole("button", { name: /Audit: testing gaps/ }));
+		// Open, the report shows in full under the row's one-line preview of it.
+		expect(await screen.findByText("Report")).toBeInTheDocument();
+		expect(screen.getAllByText("Ranked 5 tests to write first.")).toHaveLength(2);
+		const team = screen.getByTestId("subagent-team");
+
+		rerender(<ChatWorkspace snapshot={snapshot("completed")} />);
+
+		// Wait for the Working row to hand over to the settled "Worked for" row.
+		expect(await screen.findByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+		// Same element, not a remount: nothing replays and the open report stays open.
+		expect(screen.getByTestId("subagent-team")).toBe(team);
+		expect(screen.getByRole("button", { name: /Audit: testing gaps/ })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("Report")).toBeInTheDocument();
+		expect(screen.getAllByText("Ranked 5 tests to write first.")).toHaveLength(2);
 		await waitFor(() =>
 			expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument(),
 		);
 	});
 
-	it("keeps a child's steps and report with its launch when the user steers mid-run", async () => {
-		const user = userEvent.setup();
+	it("keeps a child's steps and report with its launch when the user steers mid-run", () => {
 		// The steer opens a new visual turn, but the child keeps going in the same AO
-		// turn, so its later command and its hand-back land after the steer.
+		// turn, so its first command and its hand-back land after the steer.
 		const steered = (items: ConversationItem[]): ConversationSnapshot => ({
 			...chatFixtureEmpty,
 			harness: "claude-code",
 			controller: { state: "busy" },
-			latestSequence: items.length,
+			latestSequence: 3 + items.length,
 			turns: [{ id: turnId, state: "running", requestedAt: at(0), startedAt: at(0) }],
 			items: [
 				text("prompt", 1, "user", "Audit the storefront with a subagent"),
 				launch("pages", 2, "Audit: info pages"),
 				steer("steer", 3, "Check the FAQ too"),
-				child("p1", 4, "tool-pages", "cd /repo; cat src/app/faq/page.tsx"),
 				...items,
 			],
 		});
+		const firstCommand = child("p1", 4, "tool-pages", "cd /repo; cat src/app/faq/page.tsx");
 		const { rerender } = render(<ChatWorkspace snapshot={steered([])} />);
 
-		// The real turn is still running, so the child is working, not "No report", and
-		// its command is not a loose row in the steer's part of the turn.
-		const header = screen.getByRole("button", { name: /1 subagent/ });
-		expect(within(header).getByText("1 working")).toBeInTheDocument();
+		// No step yet, but the real turn is still running: the child is working, not
+		// "No report", and its team stays in view above the steer.
+		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 working")).toBeInTheDocument();
+		expect(screen.queryByText("No report")).not.toBeInTheDocument();
+
+		rerender(<ChatWorkspace snapshot={steered([firstCommand])} />);
+
+		// Its first command hangs under it, not loose in the steer's part of the turn.
+		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 working")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("cat src/app/faq/page.tsx");
 		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
 
-		rerender(<ChatWorkspace snapshot={steered([handback("p2", 5, "tool-pages", "The FAQ never mentions shipping.")])} />);
+		rerender(<ChatWorkspace snapshot={steered([firstCommand, handback("p2", 5, "tool-pages", "The FAQ never mentions shipping.")])} />);
 
-		// Done, the team folds into the work before the steer, carrying the report.
-		await user.click(screen.getByRole("button", { name: /Worked for/ }));
-		const settled = await screen.findByRole("button", { name: /1 subagent/ });
-		expect(within(settled).getByText("1 done")).toBeInTheDocument();
+		// Done, and still in view: the report reaches the launch before the steer.
+		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
 		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
 	});
