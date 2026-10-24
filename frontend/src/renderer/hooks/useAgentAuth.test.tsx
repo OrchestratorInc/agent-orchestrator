@@ -4,7 +4,7 @@ import type { PropsWithChildren } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../lib/api-client";
 import { shellTerminalsQueryKey } from "./useShellTerminals";
-import { probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "./useAgentAuth";
+import { cancelAgentUILogin, probeAgentAuth, startAgentUILogin, useAgentAuthPlans, useStartAgentAuth } from "./useAgentAuth";
 
 function wrapper(queryClient: QueryClient) {
 	return ({ children }: PropsWithChildren) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -12,6 +12,27 @@ function wrapper(queryClient: QueryClient) {
 
 describe("agent authentication hooks", () => {
 	afterEach(() => vi.restoreAllMocks());
+
+	it("resumes an existing background login without another native command", async () => {
+		vi.spyOn(apiClient, "POST").mockResolvedValue({ error: { code: "AGENT_AUTH_IN_PROGRESS", details: { operationId: "existing" } } } as never);
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { id: "existing", status: "running", method: "browser" } } as never);
+		const result = await startAgentUILogin("codex", "browser", "");
+		expect(result.id).toBe("existing");
+		expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: "codex", operationId: "existing" } } });
+	});
+
+	it("does not put credential submissions into the query mutation cache", async () => {
+		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: { id: "login", status: "running" } } as never);
+		await startAgentUILogin("codex", "api_key", "test-secret");
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations", { params: { path: { agent: "codex" } }, body: { method: "api_key", secret: "test-secret" } });
+	});
+
+	it("treats an already-removed login as cancelled but preserves other errors", async () => {
+		const remove = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ error: { code: "AGENT_AUTH_OPERATION_NOT_FOUND" } } as never);
+		await expect(cancelAgentUILogin("codex", "old")).resolves.toBeUndefined();
+		remove.mockResolvedValue({ error: { code: "AGENT_AUTH_CANCEL_PENDING", message: "Login is still stopping" } } as never);
+		await expect(cancelAgentUILogin("codex", "old")).rejects.toThrow("Login is still stopping");
+	});
 
 	it("loads display-safe authentication plans", async () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue({

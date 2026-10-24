@@ -23,6 +23,66 @@ type fakeAgentAuthService struct {
 	startErr    error
 	startedID   string
 	startCalls  int
+	uiResult    agentauth.LoginSnapshot
+	uiMethod    string
+	uiSecret    string
+	uiOperation string
+}
+
+func (f *fakeAgentAuthService) StartLogin(_ context.Context, agentID, method, secret string) (agentauth.LoginSnapshot, error) {
+	f.startedID, f.uiMethod, f.uiSecret = agentID, method, secret
+	f.startCalls++
+	return f.uiResult, f.startErr
+}
+
+func (f *fakeAgentAuthService) Login(_ context.Context, agentID, id string) (agentauth.LoginSnapshot, error) {
+	f.startedID, f.uiOperation = agentID, id
+	return f.uiResult, f.startErr
+}
+
+func (f *fakeAgentAuthService) CancelLogin(ctx context.Context, agentID, id string) (agentauth.LoginSnapshot, error) {
+	return f.Login(ctx, agentID, id)
+}
+
+func TestAgentUILoginValidatesRequestBeforeStarting(t *testing.T) {
+	for _, body := range []string{
+		`{"method":"browser","command":"arbitrary"}`,
+		`{"method":"browser"} {"method":"sso"}`,
+		`{"method":`, ``,
+		`{"method":"api_key","secret":"` + strings.Repeat("x", 21*1024) + `"}`,
+	} {
+		svc := &fakeAgentAuthService{}
+		response, status, _ := doRequest(t, newAgentAuthTestServer(t, svc), http.MethodPost, "/api/v1/agents/codex/auth/operations", body)
+		if status != http.StatusBadRequest || svc.startCalls != 0 || !strings.Contains(string(response), `"requestId"`) {
+			t.Fatalf("status=%d calls=%d body=%s", status, svc.startCalls, response)
+		}
+	}
+}
+
+func TestAgentUILoginPassesCredentialWithoutReturningIt(t *testing.T) {
+	svc := &fakeAgentAuthService{uiResult: agentauth.LoginSnapshot{ID: "login-1", AgentID: "codex", Method: "api_key", Status: "running"}}
+	server := newAgentAuthTestServer(t, svc)
+	body, status, headers := doRequest(t, server, http.MethodPost, "/api/v1/agents/codex/auth/operations", `{"method":"api_key","secret":"test-secret"}`)
+	if status != http.StatusAccepted || svc.uiSecret != "test-secret" || svc.uiMethod != "api_key" || svc.startedID != "codex" || headers.Get("Cache-Control") != "no-store" {
+		t.Fatalf("status=%d headers=%v body=%s", status, headers, body)
+	}
+	if strings.Contains(string(body), "test-secret") {
+		t.Fatal("returned secret")
+	}
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		_, status, headers := doRequest(t, server, method, "/api/v1/agents/codex/auth/operations/login-1", "")
+		if status != http.StatusOK || svc.uiOperation != "login-1" || svc.startedID != "codex" || headers.Get("Cache-Control") != "no-store" {
+			t.Fatalf("method=%s status=%d", method, status)
+		}
+	}
+}
+
+func TestAgentUILoginErrorsPreserveEnvelope(t *testing.T) {
+	svc := &fakeAgentAuthService{startErr: apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "Login in progress", map[string]any{"operationId": "existing"})}
+	body, status, _ := doRequest(t, newAgentAuthTestServer(t, svc), http.MethodPost, "/api/v1/agents/codex/auth/operations", `{"method":"browser"}`)
+	if status != http.StatusConflict || !strings.Contains(string(body), `"code":"AGENT_AUTH_IN_PROGRESS"`) || !strings.Contains(string(body), `"requestId"`) || !strings.Contains(string(body), `"operationId":"existing"`) {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
 }
 
 func (f *fakeAgentAuthService) Plans(context.Context) []agentauth.Plan { return f.plans }
@@ -141,6 +201,9 @@ func TestAgentAuthNotImplementedWithoutService(t *testing.T) {
 		{method: http.MethodGet, path: "/api/v1/agents/auth-plans"},
 		{method: http.MethodPost, path: "/api/v1/agents/codex/auth"},
 		{method: http.MethodPost, path: "/api/v1/agents/codex/logout"},
+		{method: http.MethodPost, path: "/api/v1/agents/codex/auth/operations"},
+		{method: http.MethodGet, path: "/api/v1/agents/codex/auth/operations/login-1"},
+		{method: http.MethodDelete, path: "/api/v1/agents/codex/auth/operations/login-1"},
 	} {
 		body, status, _ := doRequest(t, server, request.method, request.path, "")
 		if status != http.StatusNotImplemented || !strings.Contains(string(body), `"code":"NOT_IMPLEMENTED"`) {

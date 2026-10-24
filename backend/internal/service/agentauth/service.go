@@ -1,17 +1,21 @@
 // Package agentauth owns the fixed, daemon-trusted authentication plans for
-// supported harnesses. Clients select only an agent ID; they never provide
-// commands or credentials.
+// supported harnesses. Clients select an agent and a reviewed login method;
+// commands stay private, and optional credentials travel only through stdin.
 package agentauth
 
 import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -71,9 +75,11 @@ type Plan struct {
 	Guidance         string `json:"guidance,omitempty"`
 	DocumentationURL string `json:"documentationUrl"`
 	Reason           string `json:"reason,omitempty"`
-	command          []string
-	title            string
-	terminalInput    string
+	// Methods lists the login methods supported by the background UI flow.
+	Methods       []LoginMethod `json:"methods,omitempty"`
+	command       []string
+	title         string
+	terminalInput string
 	// initialInput and initialInputReadyStates, when set, make the daemon inject
 	// the reviewed input automatically once the terminal renders a known ready
 	// state, instead of waiting for the user to trigger terminalInput.
@@ -117,6 +123,11 @@ type Service struct {
 	terminals      TerminalOpener
 	dataDir        string
 	selfExecutable func() (string, error)
+	mu             sync.Mutex
+	operations     map[string]*loginOperation
+	closed         bool
+	commandContext func(context.Context, string, ...string) *exec.Cmd
+	loginTimeout   time.Duration
 }
 
 // New creates an authentication-plan service.
@@ -127,7 +138,7 @@ func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 // NewWithAgentResolver creates a service that uses AO's adapter-aware binary
 // resolver as the authoritative validation and discovery boundary.
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
-	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable}
+	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), commandContext: process.CommandContext, loginTimeout: loginLifetime}
 }
 
 // Plans returns every known harness plan in stable Harness settings order.
@@ -182,6 +193,18 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 }
 
 func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, op := range s.operations {
+		if op.snapshot.AgentID != plan.AgentID {
+			continue
+		}
+		select {
+		case <-op.done:
+		default:
+			return StartResult{}, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "Stop the background login before opening a terminal login.", map[string]any{"operationId": op.snapshot.ID})
+		}
+	}
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_UNAVAILABLE", plan.Reason, nil)
@@ -259,6 +282,7 @@ func (s *Service) prepareAuthWorkspace(ctx context.Context, plan Plan) (string, 
 }
 
 func (s *Service) resolve(ctx context.Context, plan Plan) Plan {
+	plan.Methods = loginMethods(plan.AgentID)
 	plan.command = append([]string(nil), plan.command...)
 	if len(plan.command) == 0 {
 		plan.Available = true
