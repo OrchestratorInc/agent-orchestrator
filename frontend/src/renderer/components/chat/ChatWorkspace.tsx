@@ -3804,6 +3804,10 @@ export function Timeline({
 			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
+		// Older history loads as the reader scrolls up within a screen of the top,
+		// before they reach it. The button above the first turn stays as the
+		// loading state and for histories too short to scroll.
+		if (movedUp && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
 		updateScrollbar();
 	}
 

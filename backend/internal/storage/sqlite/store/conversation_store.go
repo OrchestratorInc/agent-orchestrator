@@ -3504,13 +3504,30 @@ type ConversationSnapshot struct {
 	HasMoreBefore                    bool
 }
 
-// DefaultConversationPageSize is the standard bounded read size for conversation snapshots.
+// DefaultConversationPageSize is the standard number of messages in a conversation page.
 const DefaultConversationPageSize = 200
 
+// Tool activity rides along with the messages around it and does not count toward
+// a page, so a long tool run cannot push its own prompt onto an older page. These
+// bounds only stop a pathological history, thousands of tool calls or megabytes of
+// output, from making one page unbounded.
+const (
+	conversationPageMaxActivities = 1000
+	conversationPageMaxBytes      = 4 << 20
+	conversationPageActivityChunk = 200
+)
+
+// conversationPageRow is one row of the merged timeline as the page walk sees it.
+type conversationPageRow struct {
+	sequence int64
+	turnID   sql.NullString
+}
+
 // LoadConversationSnapshotPage reads a bounded slice ending immediately before
-// beforeSequence. Zero starts at the live edge. Messages and activities share one
-// sequence, so the store merges their bounded reads and trims them as one page;
-// a noisy command cannot crowd prose out by making either table unbounded.
+// beforeSequence. Zero starts at the live edge. limit counts messages; activities
+// in between come along, within the bounds above. The page ends between two turns
+// so a turn is never split from its prompt, unless the newest turn alone is larger
+// than a page.
 func (s *Store) LoadConversationSnapshotPage(
 	ctx context.Context,
 	conversationID string,
@@ -3566,47 +3583,107 @@ func (s *Store) LoadConversationSnapshotPage(
 		}
 		return snapshot, nil
 	}
-	fetchLimit := limit + 1
-
+	// Both reads come back newest-first. Messages are bounded by limit up front;
+	// activities are read in chunks only as far as the walk below needs them.
 	messageRows, err := s.qr.SelectConversationMessagesPage(ctx, gen.SelectConversationMessagesPageParams{
 		ConversationID: conversationID,
 		BeforeSequence: beforeSequence,
-		PageLimit:      fetchLimit,
+		PageLimit:      limit + 1,
 	})
 	if err != nil {
 		return ConversationSnapshot{}, fmt.Errorf("select message page: %w", err)
 	}
-	activityRows, err := s.qr.SelectConversationActivitiesPage(ctx, gen.SelectConversationActivitiesPageParams{
-		ConversationID: conversationID,
-		BeforeSequence: beforeSequence,
-		PageLimit:      fetchLimit,
-	})
-	if err != nil {
-		return ConversationSnapshot{}, fmt.Errorf("select activity page: %w", err)
+	var activityRows []gen.ConversationActivity
+	activitiesDone := false
+	activityAt := func(index int) (*gen.ConversationActivity, error) {
+		for index >= len(activityRows) && !activitiesDone {
+			cursor := beforeSequence
+			if n := len(activityRows); n > 0 {
+				cursor = activityRows[n-1].Sequence
+			}
+			chunk, err := s.qr.SelectConversationActivitiesPage(ctx, gen.SelectConversationActivitiesPageParams{
+				ConversationID: conversationID,
+				BeforeSequence: cursor,
+				PageLimit:      conversationPageActivityChunk,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("select activity page: %w", err)
+			}
+			activitiesDone = len(chunk) < conversationPageActivityChunk
+			for _, row := range chunk {
+				if row.Sequence <= visibleAfterSequence {
+					activitiesDone = true
+					break
+				}
+				activityRows = append(activityRows, row)
+			}
+		}
+		if index < len(activityRows) {
+			return &activityRows[index], nil
+		}
+		return nil, nil
 	}
 
-	sequences := make([]int64, 0, len(messageRows)+len(activityRows))
-	for _, row := range messageRows {
-		if row.Sequence > visibleAfterSequence {
-			sequences = append(sequences, row.Sequence)
+	// Walk the merged timeline newest-first until the next row would overflow
+	// the page; that row is the first one left for the older page.
+	var walked []conversationPageRow
+	var next *conversationPageRow
+	var messages int64
+	activities, pageBytes, messageIndex, activityIndex := 0, 0, 0, 0
+	for {
+		var message *gen.ConversationMessage
+		if messageIndex < len(messageRows) && messageRows[messageIndex].Sequence > visibleAfterSequence {
+			message = &messageRows[messageIndex]
+		}
+		activity, err := activityAt(activityIndex)
+		if err != nil {
+			return ConversationSnapshot{}, err
+		}
+		if message == nil && activity == nil {
+			break
+		}
+		isMessage := message != nil && (activity == nil || message.Sequence > activity.Sequence)
+		var row conversationPageRow
+		var size int
+		var full bool
+		if isMessage {
+			row = conversationPageRow{sequence: message.Sequence, turnID: message.TurnID}
+			size = len(message.Text) + len(message.DeliveryContentJson)
+			full = messages == limit
+		} else {
+			row = conversationPageRow{sequence: activity.Sequence, turnID: activity.TurnID}
+			size = len(activity.Summary) + len(activity.DetailJson) + len(activity.CommandOutput) + len(activity.StreamedText)
+			full = activities == conversationPageMaxActivities
+		}
+		if full || (len(walked) > 0 && pageBytes+size > conversationPageMaxBytes) {
+			next = &row
+			break
+		}
+		walked = append(walked, row)
+		pageBytes += size
+		if isMessage {
+			messages++
+			messageIndex++
+		} else {
+			activities++
+			activityIndex++
 		}
 	}
-	for _, row := range activityRows {
-		if row.Sequence > visibleAfterSequence {
-			sequences = append(sequences, row.Sequence)
+	hasMore := next != nil
+	if next != nil && next.turnID.Valid {
+		// Move the end back to the start of the turn the page would split. A turn
+		// larger than a whole page is the one case left to split.
+		end := len(walked)
+		for end > 0 && walked[end-1].turnID == next.turnID {
+			end--
+		}
+		if end > 0 {
+			walked = walked[:end]
 		}
 	}
-	sort.Slice(sequences, func(i, j int) bool { return sequences[i] > sequences[j] })
-	hasMore := int64(len(sequences)) > limit
-	if int64(len(sequences)) > limit {
-		sequences = sequences[:limit]
-	}
-	oldest := beforeSequence
-	if len(sequences) > 0 {
-		oldest = sequences[len(sequences)-1]
-	}
-	if len(sequences) == 0 || oldest < visibleAfterSequence {
-		oldest = visibleAfterSequence
+	oldest := visibleAfterSequence
+	if len(walked) > 0 {
+		oldest = walked[len(walked)-1].sequence
 	}
 	if oldest <= visibleAfterSequence {
 		hasMore = false
