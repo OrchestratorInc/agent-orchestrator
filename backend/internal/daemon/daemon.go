@@ -435,7 +435,7 @@ func Run(buildVersion string) error {
 	codexModelPlugin := codexagent.New()
 	modelDiscoverer := modelcatalog.Discoverer{
 		CodexModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error) {
-			return codexappserver.DiscoverModels(listCtx, request.Binary, request.WorkingDir, request.Env)
+			return codexappserver.DiscoverModels(listCtx, request.Binary, request.WorkingDir, request.Env, log)
 		},
 		ACPOptions: map[string]modelcatalog.ACPOptionListFunc{
 			"cline": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
