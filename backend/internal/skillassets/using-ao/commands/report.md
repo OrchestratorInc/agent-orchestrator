@@ -16,7 +16,7 @@ ao report --done --note <text> [output flags]
 Output flags are repeatable:
 
 ```text
---artifact <opaque-reference>
+--artifact <absolute-path>
 --pr-created <pr-or-mr-url>
 --pr-reviewed <pr-or-mr-url>
 ```
@@ -26,10 +26,11 @@ outputs, and terminal judgment. Do not file a report for routine commands. Outpu
 imply completion, and `--done` does not terminate the session.
 
 Attach a reviewable deliverable as soon as it is ready, not only at `--done`:
-use `--artifact <reference>` on the report for the milestone that produced it.
-Examples include a requested document, a rendered dashboard, or another output
-the orchestrator or human needs to open directly. `--artifact` takes any opaque
-reference string; it is not validated as a URL.
+use `--artifact <absolute-path>` on the report for the milestone that produced it,
+one flag per deliverable, not its supporting files. Examples include a requested
+document, a rendered dashboard, or another output the orchestrator or human
+needs to open directly. `--artifact` takes only a path to a file in the session
+artifact directory; mention issues, links, and other URLs in the note.
 In a chat session, an HTML file from the artifact directory that you attach
 with `--artifact` also shows in the thread.
 
