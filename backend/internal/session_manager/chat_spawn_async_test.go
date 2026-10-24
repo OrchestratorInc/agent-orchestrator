@@ -341,20 +341,22 @@ func TestResumeFailedAsyncChatSpawnPreservesResolvedEffort(t *testing.T) {
 
 func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		providerDefault bool
-		chatModel       string
-		catalogDrift    bool
-		catalogError    bool
-		wantModel       string
-		wantEffort      string
+		name         string
+		model        string
+		chatModel    string
+		catalogDrift bool
+		catalogError bool
+		wantModel    string
+		wantEffort   string
 	}{
-		{name: "empty_saved_model_ignores_changed_project_model", providerDefault: true, wantEffort: "xhigh"},
-		{name: "provider_default_capabilities_changed", providerDefault: true, catalogDrift: true},
-		{name: "chat_model_lacks_saved_effort", chatModel: "small", wantModel: "small"},
-		{name: "chat_model_supports_saved_effort", chatModel: "large", wantModel: "large", wantEffort: "xhigh"},
-		{name: "saved_model_capabilities_changed", catalogDrift: true, wantModel: "original"},
-		{name: "catalog_unavailable", catalogError: true},
+		{name: "empty_saved_model_ignores_changed_project_model", model: "", wantEffort: "xhigh"},
+		{name: "provider_default_capabilities_changed", model: "", catalogDrift: true},
+		{name: "empty_saved_model_then_chat_model_lacks_effort", model: "", chatModel: "small", wantModel: "small"},
+		{name: "empty_saved_model_then_chat_model_supports_effort", model: "", chatModel: "large", wantModel: "large", wantEffort: "xhigh"},
+		{name: "chat_model_lacks_saved_effort", model: "original", chatModel: "small", wantModel: "small"},
+		{name: "chat_model_supports_saved_effort", model: "original", chatModel: "large", wantModel: "large", wantEffort: "xhigh"},
+		{name: "saved_model_capabilities_changed", model: "original", catalogDrift: true, wantModel: "original"},
+		{name: "catalog_unavailable", model: "original", catalogError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			launcher := &recordingLauncher{}
@@ -371,18 +373,19 @@ func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 			ws := m.workspace.(*fakeWorkspace)
 			ws.createErr = errors.New("temporary git failure")
 			cfg := asyncChatSpawnConfig("do the thing")
-			cfg.AgentConfig = ports.AgentConfig{Model: "original", Effort: "xhigh"}
+			cfg.AgentConfig = ports.AgentConfig{Model: tc.model, Effort: "xhigh"}
 			cfg.EffortOverride = true
-			if tc.providerDefault {
-				cfg.AgentConfig.Model = ""
-			}
 			rec, _, _, err := m.Spawn(context.Background(), cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
 			(*deferred)[0]()
-			if failed := st.sessions[rec.ID]; failed.ProvisionState != domain.SessionProvisionFailed || failed.Metadata.ProviderConversationID != "" {
+			failed := st.sessions[rec.ID]
+			if failed.ProvisionState != domain.SessionProvisionFailed || failed.Metadata.ProviderConversationID != "" {
 				t.Fatalf("initial failure = %+v, want failed before provider start", failed)
+			}
+			if failed.Metadata.Model != tc.model || failed.Metadata.Effort != "xhigh" {
+				t.Fatalf("saved model/effort = %q/%q, want %q/xhigh", failed.Metadata.Model, failed.Metadata.Effort, tc.model)
 			}
 			project := st.projects[string(chatTestProject)]
 			project.Config.AgentConfig = domain.AgentConfig{Model: "small", Effort: "low"}
@@ -390,6 +393,10 @@ func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
 			if tc.chatModel != "" {
 				if err := m.PersistChatModel(context.Background(), rec.ID, tc.chatModel); err != nil {
 					t.Fatal(err)
+				}
+				updated := st.sessions[rec.ID]
+				if updated.Metadata.Model != tc.chatModel || updated.Metadata.Effort != "xhigh" {
+					t.Fatalf("saved pair before Retry = %q/%q, want %q/xhigh", updated.Metadata.Model, updated.Metadata.Effort, tc.chatModel)
 				}
 			}
 			if tc.catalogDrift {
