@@ -993,8 +993,6 @@
 	"mobile.keepAwake.lidReason.lease_failed": "Esta função não está disponível. Desligue e ligue esta opção novamente para tentar de novo.",
 	"mobile.devices.empty": "Nenhum dispositivo emparelhado ainda.",
 	"mobile.devices.loading": "Carregando dispositivos…",
-	"mobile.devices.notificationsFor": "Notificações de {{name}}",
-	"mobile.devices.notificationsOffOnPhone": "As notificações estão desativadas em {{name}} — ative-as no app móvel do AO",
 	"mobile.devices.registryUnavailable": "Registro de dispositivos indisponível — o AO não conseguiu ler seus dispositivos salvos.",
 	"mobile.devices.removeAria": "Remover {{name}}",
 	"mobile.devices.removed": "{{name}} removido",

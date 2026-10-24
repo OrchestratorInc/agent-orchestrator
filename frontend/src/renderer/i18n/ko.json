@@ -985,8 +985,6 @@
 	"mobile.keepAwake.lidReason.lease_failed": "현재 사용할 수 없습니다. 다시 시도하려면 이 옵션을 껐다가 다시 켜세요.",
 	"mobile.devices.empty": "아직 페어링된 기기가 없습니다.",
 	"mobile.devices.loading": "기기를 불러오는 중…",
-	"mobile.devices.notificationsFor": "{{name}}의 알림",
-	"mobile.devices.notificationsOffOnPhone": "{{name}}에서 알림이 꺼져 있습니다. AO 모바일 앱에서 켜세요",
 	"mobile.devices.registryUnavailable": "기기 레지스트리를 사용할 수 없습니다 — AO가 저장된 기기를 읽지 못했습니다.",
 	"mobile.devices.removeAria": "{{name}} 제거",
 	"mobile.devices.removed": "{{name}} 제거됨",

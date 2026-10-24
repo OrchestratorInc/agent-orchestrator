@@ -437,7 +437,7 @@ function SidebarSectionScroller({
 
 	return (
 		<div className={`relative min-h-0 ${wrapperClassName ?? ""}`}>
-			<div ref={scrollerRef} className={className} data-testid={testId} style={style}>
+			<div ref={scrollerRef} className={className} data-sidebar-section-scroller="" data-testid={testId} style={style}>
 				{children}
 			</div>
 			{scrollEdges.top ? <div aria-hidden="true" className="sidebar-section-scroll-fade sidebar-section-scroll-fade--top" /> : null}
@@ -1445,6 +1445,8 @@ const ProjectItem = memo(function ProjectItem({
 	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
 	const prefersReducedMotion = useReducedMotion();
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
+	const projectHeaderRef = useRef<HTMLDivElement>(null);
+	const projectSessionsRef = useRef<HTMLDivElement>(null);
 	const dashboardActive = activeProjectMatches && !selection.activeSessionId;
 	const orchestratorActive =
 		activeProjectMatches &&
@@ -1497,6 +1499,28 @@ const ProjectItem = memo(function ProjectItem({
 		showAll: showAllSessions,
 		toggleShowAll: toggleShowAllSessions,
 	} = useShowMoreCap(sessions, SIDEBAR_PROJECT_SESSION_LIMIT, selection.activeSessionId);
+	useLayoutEffect(() => {
+		const header = projectHeaderRef.current;
+		const content = projectSessionsRef.current;
+		const scroller = header?.closest<HTMLElement>("[data-sidebar-section-scroller]");
+		if (!activeProjectMatches || !expanded || !header || !content || !scroller) return;
+		// Keep the sticky header clear while preventing session rows from painting
+		// through it. Scroll/resize only changes the clip, not the list's layout.
+		const updateClip = () => {
+			const covered = Math.max(0, header.getBoundingClientRect().bottom - content.getBoundingClientRect().top);
+			content.style.clipPath = `inset(${covered}px 0 0 0)`;
+		};
+		updateClip();
+		scroller.addEventListener("scroll", updateClip, { passive: true });
+		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateClip);
+		observer?.observe(header);
+		observer?.observe(content);
+		return () => {
+			scroller.removeEventListener("scroll", updateClip);
+			observer?.disconnect();
+			content.style.removeProperty("clip-path");
+		};
+	}, [activeProjectMatches, expanded, showAllSessions]);
 	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
 	const commitSessionOrder = useCallback(
@@ -1683,6 +1707,7 @@ const ProjectItem = memo(function ProjectItem({
 					transition={prefersReducedMotion ? { duration: 0 } : { type: "spring", stiffness: 520, damping: 42, mass: 0.55 }}
 				>
 					<div
+						ref={projectHeaderRef}
 						className={cn(
 							"relative",
 							activeProjectMatches && "sticky top-0 z-20 bg-sidebar group-data-[collapsible=icon]:static",
@@ -1881,6 +1906,7 @@ const ProjectItem = memo(function ProjectItem({
 			{expanded && sessions.length > 0 && (
 				<motion.div
 					key="sessions"
+					ref={projectSessionsRef}
 					initial={
 						animReady && (!suppressInitialExpandAnimation || hasInteractedWithDisclosure.current) ? { gridTemplateRows: "0fr" } : false
 					}

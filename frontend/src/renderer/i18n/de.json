@@ -985,8 +985,6 @@
 	"mobile.keepAwake.lidReason.lease_failed": "Diese Funktion ist nicht verfügbar. Zum Wiederholen diese Option aus- und wieder einschalten.",
 	"mobile.devices.empty": "Noch keine Geräte gekoppelt.",
 	"mobile.devices.loading": "Geräte werden geladen…",
-	"mobile.devices.notificationsFor": "Benachrichtigungen für {{name}}",
-	"mobile.devices.notificationsOffOnPhone": "Benachrichtigungen sind auf {{name}} deaktiviert – aktiviere sie in der AO-Mobile-App",
 	"mobile.devices.registryUnavailable": "Geräteregister nicht verfügbar — AO konnte Ihre gespeicherten Geräte nicht lesen.",
 	"mobile.devices.removeAria": "{{name}} entfernen",
 	"mobile.devices.removed": "{{name}} entfernt",

@@ -982,8 +982,6 @@
 	"mobile.keepAwake.lidReason.lease_failed": "The wake lease could not be renewed. Turn this option off and on to retry.",
 	"mobile.devices.empty": "No devices paired yet.",
 	"mobile.devices.loading": "Loading devices…",
-	"mobile.devices.notificationsFor": "Notifications for {{name}}",
-	"mobile.devices.notificationsOffOnPhone": "Notifications are off on {{name}} — turn them on in the AO mobile app",
 	"mobile.devices.registryUnavailable": "Device registry unavailable — AO could not read your saved devices.",
 	"mobile.devices.removeAria": "Remove {{name}}",
 	"mobile.devices.removed": "{{name}} removed",

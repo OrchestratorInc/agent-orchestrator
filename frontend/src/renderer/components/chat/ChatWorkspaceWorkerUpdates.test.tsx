@@ -55,13 +55,13 @@ function snapshot(items: ConversationItem[]): ConversationSnapshot {
 	};
 }
 
-function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = []) {
+function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator") {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaces);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ChatWorkspace snapshot={snapshot(items)} sessionRole="orchestrator" onRollback={onRollback} />
+				<ChatWorkspace snapshot={snapshot(items)} sessionRole={sessionRole} onRollback={onRollback} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -145,5 +145,34 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByTestId("worker-update")).toHaveTextContent("Menus");
 		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^Worked for/ })).toBeInTheDocument();
+	});
+});
+
+describe("orchestrator messages in a worker chat", () => {
+	const workspaces = [{
+		id: "proj", name: "proj", path: "/tmp/proj",
+		sessions: [
+			{ id: "proj-1", workspaceId: "proj", title: "Orchestrator", provider: "codex", kind: "orchestrator", status: "working", prs: [] },
+			{ id: "proj-7", workspaceId: "proj", title: "Sibling worker", provider: "codex", kind: "worker", status: "idle", prs: [] },
+		],
+	}] as unknown as WorkspaceSummary[];
+	const sent = (text: string, sender: string): ConversationMessage => ({
+		...automation("t1", 1, `[from ${sender}] ${text}`), senderSessionId: sender, senderProjectId: "proj",
+	});
+
+	it("draws the orchestrator's message under its name, linked to its session", () => {
+		renderOrchestrator([sent("Keep the draft local until Dhruv approves.", "proj-1"), reply("t1", 2, "Kept it local.")], vi.fn(), workspaces, "worker");
+
+		const message = screen.getByTestId("orchestrator-message");
+		expect(message).toHaveTextContent("Keep the draft local until Dhruv approves.");
+		expect(message).not.toHaveTextContent("[from");
+		expect(within(message).getByRole("link", { name: "Orchestrator" })).toHaveAttribute("href", "ao://sessions/proj/proj-1");
+	});
+
+	it("leaves a message from any other session as it was", () => {
+		renderOrchestrator([sent("Rebased on main.", "proj-7"), reply("t1", 2, "Noted.")], vi.fn(), workspaces, "worker");
+
+		expect(screen.queryByTestId("orchestrator-message")).not.toBeInTheDocument();
+		expect(screen.getByText("Rebased on main.")).toBeInTheDocument();
 	});
 });

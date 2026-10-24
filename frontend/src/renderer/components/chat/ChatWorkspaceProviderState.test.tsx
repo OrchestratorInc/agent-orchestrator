@@ -1,6 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import {
@@ -11,7 +10,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
+import { renderChat as render } from "../../test/render-chat";
 
 // The sign-in banner reads the session's account; these tests cover the chrome
 // without a daemon, so the account reads answer nothing.
@@ -21,14 +20,6 @@ vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => ({
 	useAgentAccounts: () => ({ data: undefined }),
 	useAgentAccountActions: () => ({}),
 }));
-
-function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-	return {
-		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
-	};
-}
 
 // The surface-level wiring: which snapshot fields produce which chrome, and — the part
 // that is easy to get wrong — which combinations stay quiet.

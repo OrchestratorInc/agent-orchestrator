@@ -3255,7 +3255,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: List paired mobile devices with their live/muted status
+      summary: List paired mobile devices with their live status
       tags:
       - mobile
   /api/v1/mobile/devices/{installId}:
@@ -3285,52 +3285,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Remove a paired device from the roster
-      tags:
-      - mobile
-    patch:
-      operationId: muteMobileDevice
-      parameters:
-      - description: The device's stable install id.
-        in: path
-        name: installId
-        required: true
-        schema:
-          description: The device's stable install id.
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MuteDeviceRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                additionalProperties:
-                  type: boolean
-                type: object
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Mute or unmute push notifications for a paired device
       tags:
       - mobile
   /api/v1/mobile/disable:
@@ -17478,8 +17432,6 @@ components:
         live:
           description: True when the phone's app is open and polling.
           type: boolean
-        muted:
-          type: boolean
         notificationsEnabled:
           description: True when this device has a push token registered.
           type: boolean
@@ -17492,7 +17444,6 @@ components:
           type: string
       required:
       - installId
-      - muted
       - live
       - notificationsEnabled
       - createdAt
@@ -17592,14 +17543,6 @@ components:
       - hostname
       - location
       - lastError
-      type: object
-    MuteDeviceRequest:
-      properties:
-        muted:
-          description: True to stop sending push notifications to this device.
-          type: boolean
-      required:
-      - muted
       type: object
     NotificationEnvelope:
       properties:
