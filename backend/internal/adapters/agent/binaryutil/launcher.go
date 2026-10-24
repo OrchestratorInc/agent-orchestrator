@@ -1,4 +1,4 @@
-package modelcatalog
+package binaryutil
 
 import (
 	"fmt"

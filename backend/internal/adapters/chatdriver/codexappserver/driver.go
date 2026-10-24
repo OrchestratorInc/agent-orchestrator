@@ -102,12 +102,7 @@ func New(plugin codexPlugin, log *slog.Logger) *Driver {
 // conversation without creating a provider thread.
 func DiscoverModels(ctx context.Context, binary, workdir string, env map[string]string) ([]ports.ChatModel, error) {
 	driver := New(fixedCodexPlugin(binary), slog.New(slog.DiscardHandler))
-	conv, err := driver.connect(ctx, workdir, env, "")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = conv.Close() }()
-	return conv.ListModels(ctx)
+	return driver.DiscoverModels(ctx, workdir, env)
 }
 
 var _ ports.ChatDriver = (*Driver)(nil)
