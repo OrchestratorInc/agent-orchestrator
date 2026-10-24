@@ -184,11 +184,12 @@ export function useArchivedSessions(
 	const merged = useMemo(() => mergeArchiveStreams([
 		{ rows: inline, done: true },
 		// A machine that failed, or a search that hit its cap, holds nothing back:
-		// its rows show as they are rather than hiding every other machine's.
+		// its rows show as they are rather than hiding every other machine's. The
+		// cap is a search's alone; browsing pages on as far as the user scrolls.
 		...ordered.map((stream) => stream
-			? { rows: stream.rows, done: stream.done || stream.error !== null || stream.rows.length >= ARCHIVE_SEARCH_LIMIT }
+			? { rows: stream.rows, done: stream.done || stream.error !== null || (options.exhaustive && stream.rows.length >= ARCHIVE_SEARCH_LIMIT) }
 			: { rows: [], done: true }),
-	]), [inline, ordered]);
+	]), [inline, ordered, options.exhaustive]);
 	const limitingRef = useRef<number | null>(null);
 	limitingRef.current = merged.limiting;
 

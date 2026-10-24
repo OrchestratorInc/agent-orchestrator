@@ -386,6 +386,30 @@ describe("a machine that pages its archive", () => {
 		act(() => renderer.unmount());
 	});
 
+	// The 1,000-row cap bounds a search, which reads the archive by itself.
+	// Browsing pages only as far as the user scrolls, so it must never stop there.
+	it("keeps paging past 1,000 rows while browsing", async () => {
+		archivePages.requests.length = 0;
+		const base = Date.parse("2026-10-01T00:00:00Z");
+		const page = (index: number) => Array.from({ length: 50 }, (_, row) => {
+			const n = index * 50 + row;
+			return { ...session, id: `old-${String(n).padStart(4, "0")}`, isTerminated: true, status: "terminated", updatedAt: new Date(base - n * 60_000).toISOString() };
+		});
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(1200))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		for (let index = 0; index < 20; index++) {
+			if (index > 0) act(() => { list(renderer).props.onEndReached(); });
+			expect(archivePages.requests).toHaveLength(1);
+			await answer({ sessions: page(index), nextCursor: `after-${index}` });
+		}
+		expect(archivedIds(renderer)).toHaveLength(1000);
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-19" })]);
+		expect(rows(renderer).at(-1)?.kind).toBe("archive-status");
+		act(() => renderer.unmount());
+	});
+
 	it("drops a restored session from the archive as soon as it is live again", async () => {
 		archivePages.requests.length = 0;
 		let renderer!: ReactTestRenderer;
