@@ -98,6 +98,7 @@ import {
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
+import { requestDesktopShutdown } from "./main/desktop-shutdown";
 import { createQuitConfirmController } from "./main/quit-confirm";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
@@ -378,6 +379,10 @@ const browserCleanupPromises = new Set<Promise<void>>();
 let browserQuitCleanupPromise: Promise<void> | null = null;
 let browserCleanupComplete = false;
 let browserQuitRequested = false;
+let preserveAgentsOnQuit = false;
+let agentQuitCleanupComplete = false;
+let agentQuitCleanupPromise: Promise<void> | null = null;
+let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;
 const desktopQuit = createDesktopQuitController({
 	platform: process.platform,
@@ -2418,6 +2423,29 @@ function killDaemon(child: ChildProcess): void {
 	}
 }
 
+async function shutdownDaemonForDesktopQuit(): Promise<void> {
+	const accepted = await requestDesktopShutdown({
+		keepAlive: keepDaemonAlive(process.env),
+		appRunId,
+		status: daemonStatus,
+		preserveAgents: () => preserveAgentsOnQuit || isUpdateRestartRequested(),
+		readRunInfo: async () => {
+			const handshakePath = runFilePath();
+			if (!handshakePath) throw new Error("Daemon ownership record is unavailable");
+			return parseRunFile(await readFile(handshakePath, "utf8"));
+		},
+		requestShutdown: (port, body) => fetch(`http://127.0.0.1:${port}/shutdown`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(3000),
+		}),
+	});
+	if (!accepted) return;
+	desktopAgentShutdownAccepted = true;
+	if (daemonProcess) daemonStoppingProcess = daemonProcess;
+}
+
 function stopDaemon(): DaemonStatus {
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
@@ -3042,6 +3070,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
+	preserveAgentsOnQuit = true;
 	app.relaunch();
 	desktopQuit.quitCompletely();
 });
@@ -3583,7 +3612,7 @@ app.whenReady().then(async () => {
 // self-stops ~5s after the last client (this process) drops its connection.
 // Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
 // Full exit drops the supervisor socket, stopping the app-owned daemon after
-// its grace period. Sessions survive.
+// its grace period and stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
 	if (!browserQuitRequested) focusMainWindow();
 });
@@ -3601,7 +3630,27 @@ app.on("before-quit", (event) => {
 			chatDraftQuitConfirmed = true;
 			app.quit();
 		} else {
+			preserveAgentsOnQuit = false;
 			desktopQuit.cancelQuit();
+		}
+		return;
+	}
+	if (!agentQuitCleanupComplete) {
+		event.preventDefault();
+		if (!agentQuitCleanupPromise) {
+			agentQuitCleanupPromise = shutdownDaemonForDesktopQuit()
+				.then(() => {
+					agentQuitCleanupComplete = true;
+					app.quit();
+				})
+				.catch((error) => {
+					console.error("AO: daemon shutdown on desktop quit failed", error);
+					preserveAgentsOnQuit = false;
+					desktopQuit.cancelQuit();
+					dialog.showErrorBox("Could not quit AO", "AO could not stop its agents. Try quitting again.");
+					focusMainWindow();
+				})
+				.finally(() => { agentQuitCleanupPromise = null; });
 		}
 		return;
 	}
@@ -3663,7 +3712,7 @@ app.on("before-quit", (event) => {
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
-	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env)) {
+	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env) && !desktopAgentShutdownAccepted) {
 		killDaemon(daemonProcess);
 	}
 });

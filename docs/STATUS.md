@@ -45,7 +45,7 @@ surface (`npm run sqlc`, `npm run api`).
   message outbox preserve the one-controller invariant.
 - Codex and registered ACP Chat providers are
   owned by authenticated, detached
-  per-session hosts. Desktop close, full quit, and updater daemon replacement
+  per-session hosts. Desktop close and updater daemon replacement
   detach and reconnect without relaunching the provider or interrupting an
   in-flight turn; explicit session termination destroys the host. ACP reconnect
   restores the initialized session snapshot, JSON-RPC correlation, pending
@@ -197,7 +197,10 @@ surface (`npm run sqlc`, `npm run api`).
 - On macOS, window close and desktop Quit/Cmd+Q destroy the window while the
   Dock, menu-bar tray, app-owned daemon, and enabled mobile access remain alive.
   Reopening creates a fresh window; **Quit AO Completely** in the tray performs
-  a full exit. Desktop browser targets stop with the window. Updates and system
+  a full exit and stops agents owned by that desktop's daemon, keeping session
+  history and worktrees available for resume. Unexpected desktop exit also stops
+  those agents after the supervisor grace period. Planned updates and restarts
+  preserve them. Desktop browser targets stop with the window. Updates and system
   shutdown still exit the app; Windows/Linux quit behavior is unchanged.
 - Shell: sidebar (projects + sessions, add/remove project), sessions board,
   session view + inspector, project settings, pull-requests page,
