@@ -124,6 +124,58 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 	}
 }
 
+func TestDiscoveryExecutableRequiresExecutedOwnershipEvidence(t *testing.T) {
+	for _, body := range []string{
+		"IF EXIST \"%~dp0grok.exe\" echo ok\n",
+		"SET TARGET=%~dp0grok.exe\n",
+		"echo \"%~dp0grok.exe\"\n",
+		"node -e \"console.log('%~dp0grok.exe')\"\n",
+		"node --eval=\"console.log('ok')\" \"%~dp0grok.js\"\n",
+		"node -econsole.log \"%~dp0grok.js\"\n",
+		"node -r \"%~dp0grok.js\" -e \"console.log('ok')\"\n",
+		"npx --package=grok-cli node -e \"console.log('ok')\"\n",
+		"npx -p grok-cli node -e \"console.log('ok')\"\n",
+	} {
+		root := t.TempDir()
+		launcher := writeDiscoveryLauncher(t, root, "agent.cmd", body)
+		writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+		if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "cannot verify executable") {
+			t.Errorf("non-executed reference vouched for launcher %q: %v", body, err)
+		}
+	}
+	for _, foreign := range []string{"gemini", "qwen", "goose"} {
+		t.Run(foreign, func(t *testing.T) {
+			root := t.TempDir()
+			body := "IF EXIST \"%~dp0grok.exe\" echo ok\n\"%~dp0" + foreign + ".exe\" %*\n"
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", body)
+			writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+			writeDiscoveryLauncher(t, root, foreign+".exe", "MZ fixture")
+			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "redirects to "+foreign+" instead of grok") {
+				t.Fatalf("foreign executable accepted after ownership decoy: %v", err)
+			}
+		})
+	}
+	root := t.TempDir()
+	body := "IF EXIST \"%~dp0gemini.exe\" echo ok\nSET UNUSED=%~dp0qwen.exe\necho \"%~dp0goose.exe\"\n\"%~dp0grok.exe\" %*\n"
+	launcher := writeDiscoveryLauncher(t, root, "agent.cmd", body)
+	writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
+		t.Fatalf("non-executed foreign references blocked the intended executable: %v", err)
+	}
+	writeDiscoveryLauncher(t, root, "agent.cmd", "node --require \"%~dp0autohand.js\" \"%~dp0node_modules/grok-cli/dist/cli.js\"\n")
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+		t.Fatalf("executed foreign preload accepted: %v", err)
+	}
+	writeDiscoveryLauncher(t, root, "agent.cmd", "SET \"target=%~dp0grok.exe\"\n\"%TARGET%\" %*\n")
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
+		t.Fatalf("executed SET target did not establish ownership: %v", err)
+	}
+	writeDiscoveryLauncher(t, root, "agent.cmd", "SET \"target=%~dp0gemini.exe\"\n\"%TARGET%\" %*\n")
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "gemini") {
+		t.Fatalf("executed foreign SET target accepted: %v", err)
+	}
+}
+
 func TestDiscoveryPOSIXLauncherFixtures(t *testing.T) {
 	for _, tc := range []struct{ agent, fixture string }{
 		{"cursor", "cursor-posix-launcher.sh"}, {"grok", "pnpm-posix-launcher.sh"},
@@ -144,7 +196,16 @@ func TestDiscoveryPOSIXLauncherFixtures(t *testing.T) {
 				name += ".cmd"
 			}
 			launcher := writeDiscoveryLauncher(t, root, name, string(body))
-			writeDiscoveryLauncher(t, root, "node", "#!/bin/sh\nprintf 'Available models:\\n  * "+tc.agent+"-shim-smoke\\n'\n")
+			header := "Available models:"
+			if tc.agent == "cursor" {
+				header = "Available models"
+			}
+			output := header + "\n  * " + tc.agent + "-shim-smoke\n"
+			models, err := commandSpecs[tc.agent].parser([]byte(output))
+			if err != nil || len(models) != 1 || models[0].ID != tc.agent+"-shim-smoke" {
+				t.Fatalf("invalid fixture CLI output: %#v, %v", models, err)
+			}
+			writeDiscoveryLauncher(t, root, "node", "#!/bin/sh\nprintf '"+strings.ReplaceAll(output, "\n", `\n`)+"'\n")
 			if _, err := verifyDiscoveryExecutable(context.Background(), tc.agent, launcher); err != nil {
 				t.Fatalf("POSIX launcher rejected: %v", err)
 			}
@@ -345,8 +406,8 @@ func TestDiscoveryExecutableBoundsVariableExpansion(t *testing.T) {
 
 func TestDiscoveryExecutableReusesSharedTargets(t *testing.T) {
 	root := t.TempDir()
-	// A quoted command matches both reference extractors; repeated lines and
-	// branches must also reuse completed results rather than reread each file.
+	// Repeated quoted commands and branches must reuse completed results rather
+	// than reread each file.
 	shared := strings.Repeat("\"%~dp0grok.exe\" %*\n", discoveryLauncherFileLimit+1)
 	writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
 	writeDiscoveryLauncher(t, root, "left.cmd", shared)

@@ -74,6 +74,10 @@ var discoveryExecutableOwners = map[string]string{
 	"opencode": "opencode", "opencode2": "opencode", "opencode-ai": "opencode",
 	"mimo-ai":      "mimo-code",
 	"command-code": "command-code", "cmdc": "command-code",
+	"gemini": "gemini", "gemini-cli": "gemini", "qwen": "qwen", "qwen-code": "qwen", "goose": "goose",
+	"cline": "cline", "cn": "continue", "continuedev": "continue", "dsh": "deepseek-harness", "deepseek-harness": "deepseek-harness",
+	"devin": "devin", "hermes": "hermes", "hermes-agent": "hermes", "memcode": "memcode", "muse": "muse",
+	"openhands": "openhands", "vibe": "vibe", "mistral-vibe": "vibe", "unreal-agent": "unreal-agent",
 }
 
 func discoveryExecutableOwner(path string) string {
@@ -116,8 +120,6 @@ func discoveryExecutableOwner(path string) string {
 }
 
 var discoveryVersionedExecutable = regexp.MustCompile(`^([a-z][a-z0-9-]*?)-(?:v?\d|windows-|darwin-|linux-)`)
-
-var discoveryLauncherReference = regexp.MustCompile(`(?i)"[^"\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)"|'[^'\r\n]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)'|[^\s"'<>|&;]+\.(?:exe|com|cmd|bat|ps1|js|mjs|cjs|py)\b`)
 
 func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspection *discoveryInspection) (verified bool, err error) {
 	if err := ctx.Err(); err != nil {
@@ -215,16 +217,25 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "::") || strings.HasPrefix(strings.ToLower(line), "rem ") {
 			continue
 		}
-		if assignment := discoveryLauncherAssignment.FindStringSubmatch(line); len(assignment) > 2 {
+		assignmentLine := line
+		batchSet := (ext == ".cmd" || ext == ".bat") && strings.HasPrefix(strings.ToUpper(line), "SET ")
+		if batchSet {
+			assignmentLine = strings.Trim(strings.TrimSpace(line[4:]), `"`)
+		}
+		if assignment := discoveryLauncherAssignment.FindStringSubmatch(assignmentLine); len(assignment) > 2 {
+			name := assignment[1]
+			if batchSet {
+				name = strings.ToUpper(name)
+			}
 			value, expandErr := discoveryExpandLauncherTarget(strings.Trim(assignment[2], `"'`), variables)
 			if expandErr != nil {
 				return false, expandErr
 			}
-			variableBytes += len(value) - len(variables[assignment[1]])
+			variableBytes += len(value) - len(variables[name])
 			if variableBytes > discoveryLauncherReadLimit {
 				return false, fmt.Errorf("launcher variable data exceeds inspection limit")
 			}
-			variables[assignment[1]] = value
+			variables[name] = value
 		}
 		if strings.HasPrefix(line, "set -- ") {
 			if arguments := discoveryLauncherTokens.FindAllString(strings.TrimPrefix(line, "set -- "), -1); len(arguments) > 0 {
@@ -239,8 +250,9 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 				variables["@"] = value
 			}
 		}
-		references := discoveryLauncherReference.FindAllString(line, -1)
+		var references []string
 		explicitTargets := map[string]bool{}
+		ownershipTargets := map[string]bool{}
 		for _, invocation := range discoveryLauncherInvocations(line, ext == ".cmd" || ext == ".bat") {
 			target, expandErr := discoveryExpandLauncherTarget(invocation.target, variables)
 			if expandErr != nil {
@@ -248,6 +260,16 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 			}
 			references = append(references, target)
 			explicitTargets[target] = explicitTargets[target] || invocation.explicit
+			ownershipTargets[target] = ownershipTargets[target] || !invocation.dependency
+			for _, application := range discoveryInterpreterApplications(target, invocation.arguments) {
+				applicationTarget, expandErr := discoveryExpandLauncherTarget(application.target, variables)
+				if expandErr != nil {
+					return false, expandErr
+				}
+				references = append(references, applicationTarget)
+				explicitTargets[applicationTarget] = true
+				ownershipTargets[applicationTarget] = ownershipTargets[applicationTarget] || application.main
+			}
 		}
 		lineReferences := make(map[string]bool, len(references))
 		for _, reference := range references {
@@ -260,7 +282,9 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 			if targetOwner != "" && targetOwner != agentID {
 				return false, fmt.Errorf("launcher redirects to %s instead of %s", targetOwner, agentID)
 			}
-			verified = verified || targetOwner == agentID
+			if ownershipTargets[reference] {
+				verified = verified || targetOwner == agentID
+			}
 			target := discoveryLauncherTarget(canonical, reference)
 			ext := strings.ToLower(filepath.Ext(reference))
 			script := ext == ".cmd" || ext == ".bat" || ext == ".ps1" || ext == ".sh"
@@ -284,7 +308,9 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 			if inspectErr != nil {
 				return false, inspectErr
 			}
-			verified = verified || targetVerified
+			if ownershipTargets[reference] {
+				verified = verified || targetVerified
+			}
 		}
 	}
 	return verified, nil
