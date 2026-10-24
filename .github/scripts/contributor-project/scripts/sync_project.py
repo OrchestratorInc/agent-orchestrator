@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextvars import ContextVar
 import fnmatch
 from math import log, sqrt
 import json
@@ -24,6 +25,9 @@ ROUTING_FIELD = "Suggested area"
 OWNER_FIELD = "Suggested owner"
 RECORD_FIELD = "Sync record"
 BOT_ARCHIVED = "bot_archived"
+PENDING_PREFIX = "pending:"
+PROJECT_CAPACITY = 50_000
+PROJECT_CAPACITY_WARNING = 40_000
 SIMILARITY_MIN = 0.3
 SIMILARITY_MARGIN = 0.1
 PATH_SIMILARITY_MIN = 0.2
@@ -39,6 +43,32 @@ class SyncError(RuntimeError):
 
 class RateLimitError(SyncError):
     """GitHub is still rate limited after the one allowed retry."""
+
+
+class WriteBudgetExceeded(SyncError):
+    """Leave enough budget to finish an item before starting another."""
+
+
+@dataclass
+class WriteBudget:
+    limit: int
+    interval: float = 0
+    used: int = 0
+    last_write: float | None = None
+
+    def ensure(self, count: int) -> None:
+        if self.used + count > self.limit:
+            raise WriteBudgetExceeded("write budget exhausted")
+
+    def consume(self) -> None:
+        self.ensure(1)
+        if self.last_write is not None and self.interval:
+            time.sleep(max(0, self.interval - (time.monotonic() - self.last_write)))
+        self.used += 1
+        self.last_write = time.monotonic()
+
+
+WRITE_BUDGET: ContextVar[WriteBudget | None] = ContextVar("write_budget", default=None)
 
 
 TRANSIENT_RETRY_SECONDS = 5.0
@@ -78,6 +108,7 @@ class ProjectSnapshot:
     url: str
     fields: list[FieldInfo]
     items: list[ItemInfo]
+    total_items: int | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +152,7 @@ class SyncPlan:
     archived_source_item_count: int
     preserved_item_count: int
     fields: dict[str, FieldInfo]
+    total_items: int | None = None
 
 
 def _nonempty(value: Any) -> bool:
@@ -356,7 +388,9 @@ def _record(text: str | None) -> dict[str, str]:
 def _managed(item: ItemInfo, field: FieldInfo, record: dict[str, str]) -> bool:
     value = item.values.get(field.id, {})
     current = value.get("name" if field.data_type == "SINGLE_SELECT" else "text")
-    return not _has_nonempty_value(item, field) or (field.name in record and current == record[field.name])
+    return (not _has_nonempty_value(item, field)
+            or (field.name in record and current == record[field.name])
+            or (PENDING_PREFIX + field.name in record and current == record[PENDING_PREFIX + field.name]))
 
 
 class Classifier:
@@ -475,6 +509,8 @@ def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSn
         if not area_id:
             area_id = labeled_areas[0] if len(labeled_areas) == 1 else classifier.classify(issue)
         record = _record(item_values.values.get(record_field.id, {}).get("text")) if item_values and record_field else {}
+        if any(PENDING_PREFIX + name in record for name in (ROUTING_FIELD, OWNER_FIELD)):
+            operations.append(Operation("recover", issue, item_id=item_id))
         area_label = next(area["label"] for area in mapping["areas"] if area["id"] == area_id)
         if routing is None or item_values is None or (_managed(item_values, routing, record) and
                 item_values.values.get(routing.id, {}).get("name") != area_label):
@@ -527,6 +563,7 @@ def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSn
         archived_source_item_count=archived_source_count,
         preserved_item_count=preserved_count,
         fields=fields,
+        total_items=snapshot.total_items,
     )
 
 
@@ -595,6 +632,12 @@ def _api_request(arguments: list[str], request: str | None = None) -> Any:
                         delay = (parsedate_to_datetime(retry[1]) - datetime.now(timezone.utc)).total_seconds()
                     except (TypeError, ValueError):
                         pass
+            elif re.search(r"(?im)^x-ratelimit-remaining:[ \t]*0[ \t]*$", headers):
+                reset = re.search(r"(?im)^x-ratelimit-reset:[ \t]*(\d+)", headers)
+                if reset:
+                    delay = max(0, float(reset[1]) - time.time())
+            if delay > 60:
+                raise RateLimitError(f"GitHub API retry is due in {delay:.0f}s; defer to the next run")
             rate_limit_retried = True
             time.sleep(max(0, delay))
             continue
@@ -608,6 +651,9 @@ def _api_request(arguments: list[str], request: str | None = None) -> Any:
 
 
 def _graphql_payload(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+    budget = WRITE_BUDGET.get()
+    if budget is not None and query.lstrip().startswith("mutation"):
+        budget.consume()
     request = json.dumps({"query": query, "variables": variables}, ensure_ascii=False)
     payload = _api_request(["graphql", "--input", "-"], request)
     data = payload.get("data") if isinstance(payload, dict) else None
@@ -638,6 +684,7 @@ query($owner: String!, $number: Int!, $after: String) {
     projectV2(number: $number) {
       id
       url
+      itemCount: items(archivedStates: [ARCHIVED, NOT_ARCHIVED]) { totalCount }
       fields(first: 100, after: $after) {
         nodes {
           ... on ProjectV2FieldCommon { id name dataType }
@@ -651,10 +698,10 @@ query($owner: String!, $number: Int!, $after: String) {
 """
 
 PROJECT_ITEMS_QUERY = """
-query($projectId: ID!, $after: String) {
+query($projectId: ID!, $after: String, $archivedStates: [ProjectV2ItemArchivedState!], $filter: String) {
   node(id: $projectId) {
     ... on ProjectV2 {
-      items(first: 100, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+      items(first: 100, after: $after, archivedStates: $archivedStates, query: $filter) {
         nodes {
           id
           isArchived
@@ -738,7 +785,7 @@ query($itemId: ID!, $fieldName: String!) {
 """
 
 
-def _can_fill_field(item_id: str, field: FieldInfo, record_field: FieldInfo) -> dict[str, str] | None:
+def _read_item_field(item_id: str, field: FieldInfo, record_field: FieldInfo) -> tuple[dict[str, str], ItemInfo] | None:
     data = _graphql_payload(FIELD_VALUE_QUERY, {"itemId": item_id, "fieldName": field.name})
     node = data.get("node")
     if not isinstance(node, dict) or not isinstance(node.get("isArchived"), bool) or "fieldValueByName" not in node or "syncRecord" not in node:
@@ -751,13 +798,21 @@ def _can_fill_field(item_id: str, field: FieldInfo, record_field: FieldInfo) -> 
     record = _record(stored.get("text") if stored else None)
     value = node["fieldValueByName"]
     if value is None:
-        return record
+        return record, _normalize_item({"id": item_id, "isArchived": False, "fieldValues": {"nodes": []}})
     if not isinstance(value, dict) or not isinstance(value.get("field"), dict):
         raise SyncError("GitHub returned an incomplete current field value")
     current_field = value["field"]
     if current_field.get("id") != field.id or current_field.get("dataType") != field.data_type:
         raise SyncError(f"managed field {field.name!r} changed while the sync was running")
     item = _normalize_item({"id": item_id, "isArchived": False, "fieldValues": {"nodes": [value]}})
+    return record, item
+
+
+def _can_fill_field(item_id: str, field: FieldInfo, record_field: FieldInfo) -> dict[str, str] | None:
+    state = _read_item_field(item_id, field, record_field)
+    if state is None:
+        return None
+    record, item = state
     return record if _managed(item, field, record) else None
 
 
@@ -766,6 +821,7 @@ def fetch_project(ref: ProjectRef) -> ProjectSnapshot:
     fields: list[dict[str, Any]] = []
     project_id = ""
     project_url = ref.url
+    total_items = None
     cursor: str | None = None
     while True:
         data = _graphql_payload(PROJECT_FIELDS_QUERY % owner_field, {"owner": ref.owner, "number": ref.number, "after": cursor})
@@ -775,6 +831,9 @@ def fetch_project(ref: ProjectRef) -> ProjectSnapshot:
             raise SyncError("GitHub did not return the requested project")
         project_id = str(project.get("id") or "")
         project_url = str(project.get("url") or project_url)
+        total_items = (project.get("itemCount") or {}).get("totalCount")
+        if total_items is not None and (type(total_items) is not int or total_items < 0):
+            raise SyncError("GitHub returned an invalid Project item count")
         connection = project.get("fields")
         if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
             raise SyncError("GitHub returned an incomplete project fields connection")
@@ -789,52 +848,58 @@ def fetch_project(ref: ProjectRef) -> ProjectSnapshot:
             raise SyncError("GitHub project fields pagination did not provide a cursor")
 
     items: list[dict[str, Any]] = []
-    cursor = None
-    while True:
-        data = _graphql_payload(PROJECT_ITEMS_QUERY, {"projectId": project_id, "after": cursor})
-        node = data.get("node")
-        connection = node.get("items") if isinstance(node, dict) else None
-        if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
-            raise SyncError("GitHub returned an incomplete project items connection")
-        for item in connection["nodes"]:
-            if not isinstance(item, dict):
-                raise SyncError("GitHub returned an incomplete project item")
-            item_values = item.get("fieldValues")
-            if not isinstance(item_values, dict) or not isinstance(item_values.get("nodes"), list) or not isinstance(item_values.get("pageInfo"), dict):
-                raise SyncError("GitHub returned an incomplete project field-values connection")
-            if item_values.get("pageInfo", {}).get("hasNextPage"):
-                item_cursor = item_values.get("pageInfo", {}).get("endCursor")
-                if not item_cursor:
-                    raise SyncError("GitHub project field-values pagination did not provide a cursor")
-                extra_values: list[dict[str, Any]] = []
-                while item_cursor:
-                    value_data = _graphql_payload(ITEM_FIELD_VALUES_QUERY, {"itemId": item["id"], "after": item_cursor})
-                    value_node = value_data.get("node")
-                    value_connection = value_node.get("fieldValues") if isinstance(value_node, dict) else None
-                    if not isinstance(value_connection, dict) or not isinstance(value_connection.get("nodes"), list):
-                        raise SyncError("GitHub returned an incomplete paginated field-values connection")
-                    extra_values.extend(value_connection["nodes"])
-                    value_page = value_connection.get("pageInfo")
-                    if not isinstance(value_page, dict):
-                        raise SyncError("GitHub returned an incomplete paginated field-values page")
-                    if not value_page.get("hasNextPage"):
-                        item_cursor = None
-                    else:
-                        item_cursor = value_page.get("endCursor")
-                        if not item_cursor:
-                            raise SyncError("GitHub project field-values pagination did not provide a cursor")
-                item["fieldValues"]["nodes"] = item_values.get("nodes", []) + extra_values
-            items.append(item)
-        page_info = connection.get("pageInfo")
-        if not isinstance(page_info, dict):
-            raise SyncError("GitHub returned an incomplete project items page")
-        if not page_info.get("hasNextPage"):
-            break
-        cursor = page_info.get("endCursor")
-        if not cursor:
-            raise SyncError("GitHub project items pagination did not provide a cursor")
+    for archived_states, item_filter in [(["NOT_ARCHIVED"], None), (["ARCHIVED"], "is:open")]:
+        cursor = None
+        while True:
+            data = _graphql_payload(PROJECT_ITEMS_QUERY, {"projectId": project_id, "after": cursor, "archivedStates": archived_states, "filter": item_filter})
+            node = data.get("node")
+            connection = node.get("items") if isinstance(node, dict) else None
+            if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
+                raise SyncError("GitHub returned an incomplete project items connection")
+            for item in connection["nodes"]:
+                if not isinstance(item, dict):
+                    raise SyncError("GitHub returned an incomplete project item")
+                item_values = item.get("fieldValues")
+                if not isinstance(item_values, dict) or not isinstance(item_values.get("nodes"), list) or not isinstance(item_values.get("pageInfo"), dict):
+                    raise SyncError("GitHub returned an incomplete project field-values connection")
+                if item_values.get("pageInfo", {}).get("hasNextPage"):
+                    item_cursor = item_values.get("pageInfo", {}).get("endCursor")
+                    if not item_cursor:
+                        raise SyncError("GitHub project field-values pagination did not provide a cursor")
+                    extra_values: list[dict[str, Any]] = []
+                    while item_cursor:
+                        value_data = _graphql_payload(ITEM_FIELD_VALUES_QUERY, {"itemId": item["id"], "after": item_cursor})
+                        value_node = value_data.get("node")
+                        value_connection = value_node.get("fieldValues") if isinstance(value_node, dict) else None
+                        if not isinstance(value_connection, dict) or not isinstance(value_connection.get("nodes"), list):
+                            raise SyncError("GitHub returned an incomplete paginated field-values connection")
+                        extra_values.extend(value_connection["nodes"])
+                        value_page = value_connection.get("pageInfo")
+                        if not isinstance(value_page, dict):
+                            raise SyncError("GitHub returned an incomplete paginated field-values page")
+                        if not value_page.get("hasNextPage"):
+                            item_cursor = None
+                        else:
+                            item_cursor = value_page.get("endCursor")
+                            if not item_cursor:
+                                raise SyncError("GitHub project field-values pagination did not provide a cursor")
+                    item["fieldValues"]["nodes"] = item_values.get("nodes", []) + extra_values
+                items.append(item)
+            page_info = connection.get("pageInfo")
+            if not isinstance(page_info, dict):
+                raise SyncError("GitHub returned an incomplete project items page")
+            if not page_info.get("hasNextPage"):
+                break
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                raise SyncError("GitHub project items pagination did not provide a cursor")
 
-    return normalize_project_snapshot({"id": project_id, "url": project_url, "fields": {"nodes": fields}, "items": {"nodes": items}}, ref.url)
+    unique = {item["id"]: item for item in items}
+    snapshot = normalize_project_snapshot({"id": project_id, "url": project_url, "fields": {"nodes": fields}, "items": {"nodes": list(unique.values())}}, ref.url)
+    snapshot.total_items = total_items
+    if total_items is not None and total_items >= PROJECT_CAPACITY_WARNING:
+        print(f"::warning::Project contains {total_items}/{PROJECT_CAPACITY} items including archives. Rotate to a new private Project before capacity is reached; see the contributor Project README.", file=sys.stderr)
+    return snapshot
 
 
 CREATE_FIELD_MUTATION = """
@@ -1002,10 +1067,86 @@ def _sync_archive(plan: SyncPlan, operation: Operation, record_field: FieldInfo)
     return changed
 
 
-def apply_plan(plan: SyncPlan) -> dict[str, int]:
-    """Apply only operations already validated and present in ``plan``."""
-    summary = {"fields_updated": 0, "fields_created": 0, "items_added": 0,
-               "fields_filled": 0, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0}
+def _recover_item(plan: SyncPlan, item_id: str, fields: dict[str, FieldInfo]) -> bool:
+    record = None
+    completed: dict[str, str] = {}
+    pending = []
+    for name in (ROUTING_FIELD, OWNER_FIELD):
+        if name not in fields:
+            continue
+        state = _read_item_field(item_id, fields[name], fields[RECORD_FIELD])
+        if state is None:
+            return False
+        record, item = state
+        key = PENDING_PREFIX + name
+        if key not in record:
+            continue
+        pending.append(key)
+        current = item.values.get(fields[name].id, {}).get("name" if fields[name].data_type == "SINGLE_SELECT" else "text") or ""
+        if current == record[key]:
+            completed[name] = current
+    if record is None or not pending:
+        return False
+    record.update(completed)
+    for key in pending:
+        record.pop(key, None)
+    _write_record(plan.project_id, item_id, fields[RECORD_FIELD], record)
+    return True
+
+
+def _fill_item(plan: SyncPlan, item_id: str, operations: list[Operation], fields: dict[str, FieldInfo], summary: dict[str, Any]) -> None:
+    eligible = []
+    record = {}
+    for operation in operations:
+        field = fields[operation.field_name]
+        current = _can_fill_field(item_id, field, fields[RECORD_FIELD])
+        if current is None:
+            summary["fields_skipped_after_recheck"] += 1
+            continue
+        record = current
+        eligible.append(operation)
+    if not eligible:
+        return
+    # A durable intent recognizes either the previous bot value or this target
+    # after interruption. Keep both until every field write is confirmed.
+    for operation in eligible:
+        record[PENDING_PREFIX + operation.field_name] = operation.value
+    _write_record(plan.project_id, item_id, fields[RECORD_FIELD], record)
+    for operation in eligible:
+        field = fields[operation.field_name]
+        input_data = {"projectId": plan.project_id, "itemId": item_id, "fieldId": field.id}
+        if operation.value:
+            if field.data_type == "SINGLE_SELECT":
+                option_id = field.options.get(operation.value, {}).get("id")
+                if not option_id:
+                    raise SyncError(f"managed field {field.name!r} has no option for {operation.value!r}")
+                input_data["value"] = {"singleSelectOptionId": option_id}
+            else:
+                input_data["value"] = {"text": operation.value}
+        mutation = UPDATE_FIELD_MUTATION if operation.value else CLEAR_FIELD_MUTATION
+        data = _graphql_payload(mutation, {"input": input_data})
+        payload = data.get("updateProjectV2ItemFieldValue" if operation.value else "clearProjectV2ItemFieldValue")
+        if not isinstance(payload, dict) or payload.get("projectV2Item", {}).get("id") != item_id:
+            raise SyncError(f"GitHub did not confirm the field update for issue #{operation.issue.number}")
+        summary["fields_filled"] += 1
+        record[field.name] = operation.value
+        record.pop(PENDING_PREFIX + field.name)
+    _write_record(plan.project_id, item_id, fields[RECORD_FIELD], record)
+
+
+def apply_plan(plan: SyncPlan, max_writes: int = 100, write_interval: float = 0) -> dict[str, Any]:
+    """Finish one item at a time, retaining recoverable intent on interruption."""
+    if max_writes < 10 or write_interval < 0:
+        raise SyncError("max-writes must be at least 10 and write-interval must be nonnegative")
+    summary: dict[str, Any] = {"fields_updated": 0, "fields_created": 0, "items_added": 0,
+               "fields_filled": 0, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0,
+               "records_recovered": 0, "complete": True, "deferred_reason": None, "remaining_items": 0, "writes": 0}
+    groups: dict[str, list[Operation]] = {}
+    for operation in plan.operations:
+        groups.setdefault(operation.item_id or f"new:{operation.issue.number}", []).append(operation)
+    summary["remaining_items"] = len(groups)
+    budget = WriteBudget(max_writes, write_interval)
+    token = WRITE_BUDGET.set(budget)
     try:
         fields = dict(plan.fields)
         for name, labels in plan.field_updates.items():
@@ -1016,72 +1157,45 @@ def apply_plan(plan: SyncPlan) -> dict[str, int]:
                 raise SyncError(f"refusing to create already-present managed field {spec.name!r}")
             fields[spec.name] = _create_field(plan.project_id, spec)
             summary["fields_created"] += 1
-
-        routing = fields.get(ROUTING_FIELD)
-        if routing is None:
+        if ROUTING_FIELD not in fields:
             raise SyncError(f"managed field {ROUTING_FIELD!r} was not available after field creation")
-        added: dict[int, str] = {}
-        for operation in plan.operations:
-            if operation.kind != "add":
-                continue
-            data = _graphql_payload(
-                ADD_ITEM_MUTATION,
-                {"input": {"projectId": plan.project_id, "contentId": operation.issue.node_id}},
-            )
-            payload = data.get("addProjectV2ItemById")
-            item = payload.get("item") if isinstance(payload, dict) else None
-            item_id = item.get("id") if isinstance(item, dict) else None
-            if not item_id:
-                raise SyncError(f"GitHub did not return a project item for issue #{operation.issue.number}")
-            added[operation.issue.number] = str(item_id)
-            summary["items_added"] += 1
-
-        for operation in plan.operations:
-            if operation.kind in {"archive", "unarchive"}:
-                if _sync_archive(plan, operation, fields[RECORD_FIELD]):
-                    summary["items_archived" if operation.kind == "archive" else "items_unarchived"] += 1
-            if operation.kind != "fill":
-                continue
-            field = fields.get(operation.field_name or "")
-            if field is None:
-                raise SyncError(f"managed field {operation.field_name!r} was not available after field creation")
-            item_id = operation.item_id or added.get(operation.issue.number)
-            if not item_id:
-                raise SyncError(f"cannot fill issue #{operation.issue.number} without a project item id")
-            # Recheck added items too: addProjectV2ItemById returns the existing item when the
-            # Project item list lagged, so a "new" item may already hold a human value.
-            record = _can_fill_field(item_id, field, fields[RECORD_FIELD])
-            if record is None:
-                summary["fields_skipped_after_recheck"] += 1
-                continue
-            if field.data_type == "SINGLE_SELECT":
-                option_id = field.options.get(operation.value, {}).get("id")
-                if not option_id:
-                    raise SyncError(f"managed field {field.name!r} has no option for {operation.value!r}")
-                value: dict[str, Any] = {"singleSelectOptionId": option_id}
-            elif field.data_type == "TEXT":
-                value = {"text": operation.value}
-            else:
-                raise SyncError(f"cannot update managed field {field.name!r} of type {field.data_type}")
-            input_data = {"projectId": plan.project_id, "itemId": item_id, "fieldId": field.id}
-            if operation.value:
-                input_data["value"] = value
-            mutation = UPDATE_FIELD_MUTATION if operation.value else CLEAR_FIELD_MUTATION
-            data = _graphql_payload(mutation, {"input": input_data})
-            payload = data.get("updateProjectV2ItemFieldValue" if operation.value else "clearProjectV2ItemFieldValue")
-            updated_item = payload.get("projectV2Item") if isinstance(payload, dict) else None
-            if not isinstance(updated_item, dict) or updated_item.get("id") != item_id:
-                raise SyncError(f"GitHub did not confirm the field update for issue #{operation.issue.number}")
-            summary["fields_filled"] += 1
-            record[field.name] = operation.value
-            _write_record(plan.project_id, item_id, fields[RECORD_FIELD], record)
-    except RateLimitError:
-        applied_count = sum(summary[key] for key in ("fields_updated", "fields_created", "items_added", "fields_filled", "items_archived", "items_unarchived"))
-        print(f"rate limited; {applied_count} operations applied, remaining resume on the next run", file=sys.stderr)
+        for operations in groups.values():
+            fills = [op for op in operations if op.kind == "fill"]
+            # Reserve the entire item, including intent and final tracking writes.
+            required = sum(1 if op.kind in {"add", "recover"} else 2 if op.kind in {"archive", "unarchive"} else 0 for op in operations)
+            budget.ensure(required + (len(fills) + 2 if fills else 0))
+            item_id = operations[0].item_id
+            for operation in operations:
+                if operation.kind == "add":
+                    if plan.total_items is not None and plan.total_items + summary["items_added"] >= PROJECT_CAPACITY:
+                        raise SyncError("Project is at capacity; rotate to a new private Project before adding issues")
+                    data = _graphql_payload(ADD_ITEM_MUTATION, {"input": {"projectId": plan.project_id, "contentId": operation.issue.node_id}})
+                    item_id = (data.get("addProjectV2ItemById") or {}).get("item", {}).get("id")
+                    if not item_id:
+                        raise SyncError(f"GitHub did not return a project item for issue #{operation.issue.number}")
+                    summary["items_added"] += 1
+                elif operation.kind in {"archive", "unarchive"}:
+                    if _sync_archive(plan, operation, fields[RECORD_FIELD]):
+                        summary["items_archived" if operation.kind == "archive" else "items_unarchived"] += 1
+                elif operation.kind == "recover":
+                    if _recover_item(plan, item_id, fields):
+                        summary["records_recovered"] += 1
+            if fills:
+                if not item_id:
+                    raise SyncError("cannot fill fields without a Project item id")
+                _fill_item(plan, item_id, fills, fields, summary)
+            summary["remaining_items"] -= 1
+    except (RateLimitError, WriteBudgetExceeded) as exc:
+        summary["complete"] = False
+        summary["deferred_reason"] = "rate_limit" if isinstance(exc, RateLimitError) else "write_budget"
+        print(f"::warning::Incomplete Project sync: {exc}; {summary['remaining_items']} items remain for the next run.", file=sys.stderr)
+    finally:
+        summary["writes"] = budget.used
+        WRITE_BUDGET.reset(token)
     return summary
 
 
-def plan_to_json(plan: SyncPlan, mode: str, applied: dict[str, int] | None = None) -> dict[str, Any]:
+def plan_to_json(plan: SyncPlan, mode: str, applied: dict[str, Any] | None = None) -> dict[str, Any]:
     operations = []
     for operation in plan.operations:
         row: dict[str, Any] = {
@@ -1104,6 +1218,7 @@ def plan_to_json(plan: SyncPlan, mode: str, applied: dict[str, int] | None = Non
         "counts": {
             "source_open_issues": plan.source_issue_count,
             "project_items": plan.project_item_count,
+            "project_items_total": plan.total_items,
             "source_items": plan.source_item_count,
             "archived_source_items_skipped": plan.archived_source_item_count,
             "unrelated_or_private_items_preserved": plan.preserved_item_count,
@@ -1111,6 +1226,7 @@ def plan_to_json(plan: SyncPlan, mode: str, applied: dict[str, int] | None = Non
             "fields_to_fill": sum(operation.kind == "fill" for operation in plan.operations),
             "items_to_archive": sum(operation.kind == "archive" for operation in plan.operations),
             "items_to_unarchive": sum(operation.kind == "unarchive" for operation in plan.operations),
+            "records_to_recover": sum(operation.kind == "recover" for operation in plan.operations),
             "fields_to_create": len(plan.field_creates),
             "fields_to_update": len(plan.field_updates),
         },
@@ -1158,7 +1274,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         snapshot = fetch_project(project_ref)
 
     plan = build_plan(mapping, issues, snapshot, owners=owners, classifier=Classifier(mapping, issues, rules))
-    applied = apply_plan(plan) if args.apply else None
+    applied = apply_plan(plan, max_writes=args.max_writes, write_interval=args.write_interval) if args.apply else None
     return plan_to_json(plan, "apply" if args.apply else "dry-run", applied)
 
 
@@ -1171,6 +1287,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--issues-file", help="offline open-issues JSON fixture")
     parser.add_argument("--project-file", help="offline Project snapshot JSON fixture (dry-run only)")
     parser.add_argument("--evaluate-classifier", action="store_true", help="report leave-one-out precision and coverage without reading a Project")
+    parser.add_argument("--max-writes", type=int, default=100, help="maximum mutations per apply run, reserving complete items")
+    parser.add_argument("--write-interval", type=float, default=1.0, help="minimum seconds between mutations")
     parser.add_argument("--apply", action="store_true", help="apply the validated plan; default is dry-run")
     return parser
 
@@ -1184,7 +1302,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
+    return 3 if result.get("applied", {}).get("complete") is False else 0
 
 
 if __name__ == "__main__":

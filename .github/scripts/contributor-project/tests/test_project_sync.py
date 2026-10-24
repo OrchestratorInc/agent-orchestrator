@@ -156,7 +156,9 @@ class ProjectSyncTests(unittest.TestCase):
             {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_new"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_new"}}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_new"}}},
             {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_existing"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_existing"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_existing"}}},
         ]
@@ -278,7 +280,7 @@ class ProjectSyncTests(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
             sleep.assert_not_called()
 
-    def test_apply_rate_limit_returns_partial_summary_and_cli_success(self):
+    def test_apply_rate_limit_returns_explicit_incomplete_summary(self):
         plan = sync_project.build_plan(mapping(), [issue(1), issue(2)], project())
         for limited in [
             response({"message": "Rate limited"}, 429),
@@ -300,9 +302,10 @@ class ProjectSyncTests(unittest.TestCase):
                 patch.object(sync_project.sys, "stderr", err),
             ):
                 exit_code = sync_project.main(["--project-url", "https://github.com/orgs/OrchestratorInc/projects/7", "--apply"])
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(json.loads(out.getvalue())["applied"], {"fields_updated": 0, "fields_created": 0, "items_added": 1, "fields_filled": 0, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0})
-            self.assertIn("rate limited; 1 operations applied, remaining resume on the next run", err.getvalue())
+            self.assertEqual(exit_code, 3)
+            applied = json.loads(out.getvalue())["applied"]
+            self.assertEqual((applied["items_added"], applied["fields_filled"], applied["complete"], applied["deferred_reason"]), (1, 0, False, "rate_limit"))
+            self.assertIn("Incomplete Project sync", err.getvalue())
             self.assertEqual(run.call_count, 3)
             sleep.assert_called_once_with(60)
 
@@ -310,7 +313,7 @@ class ProjectSyncTests(unittest.TestCase):
         snapshot = project([project_item("PVTI_1", 1), project_item("PVTI_2", 2)], include_owner=False)
         plan = sync_project.build_plan(mapping(), [issue(1), issue(2)], snapshot, owners=owners())
         created = sync_project.FieldInfo(OWNER_FIELD_ID, "Suggested owner", "TEXT", {})
-        responses = [{"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}}, sync_project.RateLimitError("rate limited")]
+        responses = [{"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}}, {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}}, sync_project.RateLimitError("rate limited")]
         with (
             patch.object(sync_project, "_create_field", return_value=created),
             patch.object(sync_project, "_can_fill_field", return_value={}),
@@ -318,9 +321,9 @@ class ProjectSyncTests(unittest.TestCase):
             patch.object(sync_project.sys, "stderr", io.StringIO()) as err,
         ):
             summary = sync_project.apply_plan(plan)
-        self.assertEqual(summary, {"fields_updated": 0, "fields_created": 1, "items_added": 0, "fields_filled": 1, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0})
-        self.assertEqual(graphql.call_count, 2)
-        self.assertIn("rate limited; 2 operations applied", err.getvalue())
+        self.assertEqual((summary["fields_created"], summary["fields_filled"], summary["complete"]), (1, 1, False))
+        self.assertEqual(graphql.call_count, 3)
+        self.assertIn("Incomplete Project sync", err.getvalue())
 
     def test_rate_limit_during_field_setup_returns_partial_counts(self):
         plan = sync_project.build_plan(mapping(), [], project(), owners=owners())
@@ -330,7 +333,8 @@ class ProjectSyncTests(unittest.TestCase):
         with patch.object(sync_project, "_create_field", side_effect=[created, sync_project.RateLimitError("rate limited")]), patch.object(sync_project.sys, "stderr", io.StringIO()) as err:
             summary = sync_project.apply_plan(plan)
         self.assertEqual(summary["fields_created"], 1)
-        self.assertIn("rate limited; 1 operations applied", err.getvalue())
+        self.assertFalse(summary["complete"])
+        self.assertIn("Incomplete Project sync", err.getvalue())
 
     def test_transient_failures_retry_once_after_five_seconds(self):
         no_headers = unittest.mock.Mock(returncode=1, stdout="", stderr="read: can't assign requested address")
@@ -505,13 +509,14 @@ class ProjectSyncTests(unittest.TestCase):
             {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
         ]
         with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
             result = sync_project.apply_plan(plan)
         self.assertEqual(result["fields_created"], 1)
         self.assertEqual(result["fields_filled"], 1)
         writes = [call for call in graphql.call_args_list if "input" in call.args[1]]
-        self.assertEqual([call.args[0] for call in writes], [sync_project.CREATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION])
+        self.assertEqual([call.args[0] for call in writes], [sync_project.CREATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION, sync_project.UPDATE_FIELD_MUTATION])
         self.assertEqual(writes[-2].args[1]["input"]["fieldId"], OWNER_FIELD_ID)
         self.assertEqual(writes[-2].args[1]["input"]["value"], {"text": "@alice, @bob"})
 
@@ -685,12 +690,13 @@ class ProjectSyncTests(unittest.TestCase):
             {"node": {"isArchived": False, "syncRecord": None, "fieldValueByName": None}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_1"}}},
         ]
         with patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
             applied = sync_project.apply_plan(plan)
         self.assertEqual(applied["fields_filled"], 1)
         writes = [call.args[1]["input"] for call in graphql.call_args_list if "input" in call.args[1]]
-        self.assertEqual([write["fieldId"] for write in writes], [ROUTING_FIELD_ID, RECORD_FIELD_ID])
+        self.assertEqual([write["fieldId"] for write in writes], [RECORD_FIELD_ID, ROUTING_FIELD_ID, RECORD_FIELD_ID])
 
     def test_incomplete_field_value_page_stops_before_any_mutation(self):
         fields = project().fields
@@ -827,7 +833,7 @@ class ProjectSyncTests(unittest.TestCase):
             confirmation = {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "existing"}}}
             responses = [{"addProjectV2ItemById": {"item": {"id": "existing"}}}, {"node": node}]
             if expected:
-                responses += [confirmation, confirmation]
+                responses += [confirmation, confirmation, confirmation]
             with self.subTest(current=current, record=record), patch.object(sync_project, "_graphql_payload", side_effect=responses) as graphql:
                 summary = sync_project.apply_plan(plan)
             self.assertEqual(summary["fields_filled"], expected)
@@ -840,7 +846,7 @@ class ProjectSyncTests(unittest.TestCase):
         stored = {"field": {"id": RECORD_FIELD_ID, "dataType": "TEXT"}, "text": json.dumps({"Suggested owner": "@human"})}
         confirm = {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}}
         with patch.object(sync_project, "_graphql_payload", side_effect=[
-            {"node": {"isArchived": False, "fieldValueByName": None, "syncRecord": stored}}, confirm, confirm]) as graphql:
+            {"node": {"isArchived": False, "fieldValueByName": None, "syncRecord": stored}}, confirm, confirm, confirm]) as graphql:
             sync_project.apply_plan(plan)
         self.assertEqual(json.loads(graphql.call_args.args[1]["input"]["value"]["text"]),
                          {"Suggested area": "Desktop UI", "Suggested owner": "@human"})
@@ -882,10 +888,11 @@ class ProjectSyncTests(unittest.TestCase):
         plan = sync_project.build_plan(mapped, [issue(1)], project([item], include_owner=True), owners=owners())
         self.assertEqual([(op.field_name, op.value) for op in plan.operations], [("Suggested owner", "")])
         with patch.object(sync_project, "_can_fill_field", return_value={"Suggested owner": "@old"}), patch.object(sync_project, "_graphql_payload", side_effect=[
+            {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}},
             {"clearProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}},
             {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}}]) as graphql:
             sync_project.apply_plan(plan)
-        self.assertEqual(graphql.call_args_list[0].args[0], sync_project.CLEAR_FIELD_MUTATION)
+        self.assertEqual(graphql.call_args_list[1].args[0], sync_project.CLEAR_FIELD_MUTATION)
         self.assertEqual(json.loads(graphql.call_args.args[1]["input"]["value"]["text"]), {"Suggested owner": ""})
 
     def test_closed_issue_archive_uses_content_state_and_preserves_other_content(self):
@@ -906,7 +913,7 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(json.loads(record_write["value"]["text"]),
                          {"Suggested owner": "@alice", "bot_archived": "true"})
         self.assertIn("number state repository", sync_project.PROJECT_ITEMS_QUERY)
-        self.assertIn("archivedStates: [ARCHIVED, NOT_ARCHIVED]", sync_project.PROJECT_ITEMS_QUERY)
+        self.assertIn("archivedStates: $archivedStates", sync_project.PROJECT_ITEMS_QUERY)
 
     def archive_node(self, item_id, number, state="OPEN", archived=False, record=None, repo=REPO):
         stored = None if record is None else {"field": {"id": RECORD_FIELD_ID, "dataType": "TEXT"},
