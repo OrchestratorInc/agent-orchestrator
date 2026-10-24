@@ -3331,7 +3331,7 @@
 	"settings.billing.downgrade": "Downgrade",
 	"settings.billing.featureAgents_one": "{{count}} simultaneous cloud agent",
 	"settings.billing.featureAgents_other": "{{count}} simultaneous cloud agents",
-	"settings.billing.freeAgents": "Claude Code, Codex and Cursor",
+	"settings.billing.freeAgents": "Any supported coding agent, including Claude Code, Codex and Cursor",
 	"settings.billing.freeOrchestrator": "Orchestrator, workers and PR reviews",
 	"settings.billing.freeDevices": "2 devices logged in at once",
 	"settings.billing.freeNetwork": "Same-network connectivity (no cloud relay)",
