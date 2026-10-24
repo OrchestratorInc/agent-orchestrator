@@ -134,8 +134,11 @@ func (c *conversation) requestUserInput(ctx context.Context, req serverRequest) 
 		ActivityStatus: domain.ActivityStatusPending, Summary: input.Message, Input: &input,
 	})
 	wait := approvalWait
-	if ms := parked.params.AutoResolutionMs; ms != nil && *ms < uint64(wait/time.Millisecond) {
-		wait = time.Duration(*ms) * time.Millisecond
+	if ms := parked.params.AutoResolutionMs; ms != nil {
+		milliseconds := *ms
+		if milliseconds < uint64(approvalWait/time.Millisecond) {
+			wait = time.Duration(milliseconds) * time.Millisecond
+		}
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
@@ -178,7 +181,7 @@ func (c *conversation) ResolveInput(ctx context.Context, requestID string, respo
 	reply, err := parked.reply(response)
 	if err != nil {
 		c.mu.Unlock()
-		return fmt.Errorf("%w: %s", ports.ErrChatDecisionNotOffered, err)
+		return fmt.Errorf("%w: %w", ports.ErrChatDecisionNotOffered, err)
 	}
 	detail, err := json.Marshal(map[string]any{"action": response.Action, "content": response.Content})
 	if err != nil {
