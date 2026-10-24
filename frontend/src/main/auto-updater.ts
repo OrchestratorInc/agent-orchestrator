@@ -1829,6 +1829,7 @@ function wireUpdaterEvents(): void {
       forgetInstallRejections();
     }
     pendingUpdateVersion = info?.version;
+    emitUpdateOutcome({ event: "ao.renderer.update_check_succeeded", phase: "check", trigger: activeUpdateTrigger() });
     offeredReleaseNotes = normalizeReleaseNotes(info?.releaseNotes) ?? directFeedReleaseNotes;
     broadcastCompletedCheck({ state: "available", version: info?.version });
     if (autoUpdater.autoDownload) {
@@ -1841,6 +1842,7 @@ function wireUpdaterEvents(): void {
     clearDownloadStallWatchdog();
   });
   autoUpdater.on("update-not-available", (info) => {
+    emitUpdateOutcome({ event: "ao.renderer.update_check_succeeded", phase: "check", trigger: activeUpdateTrigger() });
     // A successful check proves the network stack is healthy.
     consecutiveAutomaticNetFailures = 0;
     consecutiveAutomaticCheckFailures = 0;

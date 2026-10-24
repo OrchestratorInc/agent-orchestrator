@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -72,18 +73,11 @@ type wiringTestRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f wiringTestRoundTripper) Do(req *http.Request) (*http.Response, error) { return f(req) }
 
-// TestTelemetryWiringAggregatesUsageErrorsAndPreservesCountOnTheWire builds
-// the real aggregation -> rate-limit -> PostHog chain (the same shape
-// newTelemetrySink wires up), using the actual aggregatedEventNames list, and
-// asserts an event named exactly as httpd/router.go emits it
-// ("ao.cli.usage_errors") both gets folded into one rollup AND that the
-// rollup's count survives PostHog's remote payload allowlist onto the wire.
-// This is the test that would have caught two real bugs during review: an
-// aggregatedEventNames entry that didn't match the emitted event name
-// (silently skipping aggregation for that name), and count/window_start/
-// window_end being absent from the allowlist (silently stripped before
-// reaching PostHog even once aggregation ran correctly).
-func TestTelemetryWiringAggregatesUsageErrorsAndPreservesCountOnTheWire(t *testing.T) {
+// TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire builds the
+// daily summary in front of PostHog, the shape newTelemetrySink wires up, and
+// asserts ao.cli.usage_errors becomes one event whose count survives the
+// allowlist. Raw error text must not.
+func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	remote, err := telemetryadapter.NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "",
 		wiringTestRoundTripper(func(req *http.Request) (*http.Response, error) {
@@ -99,26 +93,24 @@ func TestTelemetryWiringAggregatesUsageErrorsAndPreservesCountOnTheWire(t *testi
 		t.Fatalf("NewPostHogSink: %v", err)
 	}
 
-	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
-	// flushEvery is intentionally long: the test controls flushing via
-	// Close(), not the background ticker, so it can't be flaky on timing.
-	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Hour)
-
+	daily := telemetryadapter.NewDailySummarySink(remote, filepath.Join(t.TempDir(), "cli-usage.json"))
+	day := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {
-		aggregated.Emit(context.Background(), ports.TelemetryEvent{
-			Name:   "ao.cli.usage_errors",
-			Source: "cli",
-			Level:  ports.TelemetryLevelWarn,
+		daily.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       "ao.cli.usage_errors",
+			Source:     "cli",
+			OccurredAt: day,
+			Level:      ports.TelemetryLevelWarn,
 			Payload: map[string]any{
-				"component":  "cli",
-				"operation":  "command_parse",
-				"error_kind": "usage",
+				"component":    "cli",
+				"operation":    "command_parse",
+				"error_kind":   "usage",
+				"command_path": "ao session",
+				"error":        "do not send raw text",
 			},
 		})
 	}
-	if err := aggregated.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	daily.FlushCompleted(context.Background(), day.Add(24*time.Hour))
 
 	select {
 	case req := <-requests:
@@ -133,14 +125,14 @@ func TestTelemetryWiringAggregatesUsageErrorsAndPreservesCountOnTheWire(t *testi
 		if !ok || count != 3 {
 			t.Fatalf("properties.count = %#v, want 3 (rollup count must survive the PostHog allowlist)", props["count"])
 		}
-		if ws, ok := props["window_start"].(string); !ok || ws == "" {
-			t.Fatalf("properties.window_start = %#v, want a non-empty timestamp string", props["window_start"])
-		}
-		if we, ok := props["window_end"].(string); !ok || we == "" {
-			t.Fatalf("properties.window_end = %#v, want a non-empty timestamp string", props["window_end"])
-		}
 		if props["component"] != "cli" || props["operation"] != "command_parse" {
-			t.Fatalf("rollup lost sample dims: %#v", props)
+			t.Fatalf("summary lost sample dims: %#v", props)
+		}
+		if props["command_path"] != "ao session" || props["error_kind"] != "usage" {
+			t.Fatalf("command properties = %#v", props)
+		}
+		if props["error"] != nil {
+			t.Fatalf("raw error reached PostHog: %#v", props["error"])
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send the aggregated rollup")

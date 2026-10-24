@@ -1020,8 +1020,8 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 			if got[0].Payload["trigger"] != c.want {
 				t.Fatalf("trigger = %#v, want %q", got[0].Payload["trigger"], c.want)
 			}
-			if got[0].Payload["reused"] != false {
-				t.Fatalf("reused = %#v, want false", got[0].Payload["reused"])
+			if _, ok := got[0].Payload["reused"]; ok {
+				t.Fatalf("reused is still present: %#v", got[0].Payload["reused"])
 			}
 		})
 	}
@@ -1039,10 +1039,8 @@ func TestTriggerFailureReportsWhichPassFailed(t *testing.T) {
 	if _, err := svc.TriggerAuto(context.Background(), "worker-1", "codex"); err == nil {
 		t.Fatal("TriggerAuto: want error")
 	}
-	if got := sink.named("ao.review.triggered"); len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1 even on failure", len(got))
-	} else if got[0].Payload["trigger"] != "auto" {
-		t.Fatalf("triggered payload = %#v, want trigger=auto", got[0].Payload)
+	if got := sink.named("ao.review.triggered"); len(got) != 0 {
+		t.Fatalf("ao.review.triggered count = %d, want 0 on failure", len(got))
 	}
 	got := sink.named("ao.review.trigger_failed")
 	if len(got) != 1 {
@@ -1126,12 +1124,12 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
 	}
-	if got[0].Payload["reused"] != false || got[0].Payload["created_runs"] != 0 {
+	if _, ok := got[0].Payload["reused"]; ok || got[0].Payload["created_runs"] != 0 {
 		t.Fatalf("payload = %#v, want reused=false created_runs=0 for a restart", got[0].Payload)
 	}
 }
 
-func TestReusedManualPassStaysATrigger(t *testing.T) {
+func TestReusedManualPassDoesNotReportNewReview(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
@@ -1144,21 +1142,17 @@ func TestReusedManualPassStaysATrigger(t *testing.T) {
 		t.Fatalf("TriggerRequested: %v", err)
 	}
 	got := sink.named("ao.review.triggered")
-	if len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
+	if len(got) != 0 {
+		t.Fatalf("ao.review.triggered count = %d, want 0 for reuse", len(got))
 	}
-	if got[0].Payload["reused"] != true || got[0].Payload["trigger"] != "manual" {
-		t.Fatalf("payload = %#v, want reused=true trigger=manual", got[0].Payload)
-	}
-	if n := len(sink.events); n != 1 {
-		t.Fatalf("emitted %d events, want only the trigger for a manual reuse", n)
+	if n := len(sink.events); n != 0 {
+		t.Fatalf("emitted %d events, want none for a manual reuse", n)
 	}
 }
 
-// ao.review.triggered now counts every attempt, including automatic no-op
-// sweeps. created_runs and reused distinguish real work from an already
-// running or skipped pass.
-func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
+// An automatic sweep with an existing review or a skipped session is not a
+// newly triggered review.
+func TestReusedOrSkippedAutoPassDoesNotCountAsTriggered(t *testing.T) {
 	cases := []struct {
 		name    string
 		result  reviewcore.TriggerResult
@@ -1187,16 +1181,8 @@ func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
 				}
 			}
 			got := sink.named("ao.review.triggered")
-			if len(got) != 6 {
-				t.Fatalf("ao.review.triggered count = %d, want 6", len(got))
-			}
-			for i, ev := range got {
-				if ev.Payload["trigger"] != "auto" || ev.Payload["created_runs"] != 0 || ev.Payload["reused"] != true {
-					t.Fatalf("event %d payload = %#v, want trigger=auto created_runs=0 reused=true", i, ev.Payload)
-				}
-				if ev.Payload["harness"] != c.harness {
-					t.Fatalf("event %d harness = %#v, want %#v", i, ev.Payload["harness"], c.harness)
-				}
+			if len(got) != 0 {
+				t.Fatalf("ao.review.triggered count = %d, want 0", len(got))
 			}
 			if failed := sink.named("ao.review.trigger_failed"); len(failed) != 0 {
 				t.Fatalf("ao.review.trigger_failed count = %d, want 0", len(failed))

@@ -38,7 +38,6 @@ export function useCreateArtifactSession() {
 		async (projectId?: string) => {
 			const scope = projectId ? "project" : "standalone";
 			setPending(true);
-			void captureRendererEvent("ao.renderer.artifact_create_requested", { scope });
 			try {
 				const harness = projectId ? (await projectWorkerAgent(queryClient, projectId)) || readyAgent : readyAgent;
 				const { data, error } = await apiClient.POST("/api/v1/sessions", {

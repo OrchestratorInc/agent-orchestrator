@@ -510,7 +510,7 @@ func (s *Service) WaitCodexAccountStoreReady(ctx context.Context) error {
 	if !errors.As(err, &failure) {
 		return err
 	}
-	return apierr.New(apierr.KindUnavailable, "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account setup did not complete", map[string]any{
+	return apierr.New(apierr.KindUnavailable, "CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete", map[string]any{
 		"reasonCode": failure.reason, "retryable": failure.retryable,
 	})
 }
