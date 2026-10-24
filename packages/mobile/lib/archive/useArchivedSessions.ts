@@ -62,8 +62,12 @@ function appendPage(stream: Stream, rows: DashboardSession[], nextCursor: string
  * - a first page with no cursor is the whole archive, and replaces everything;
  * - a smaller count, or more rows than the count, means something left: the
  *   rows past page one go, and paging resumes from the new first page;
- * - otherwise only additions happened (they land in page one), and the rows
- *   past it stay, so the list does not collapse under someone scrolling it.
+ * - so does a first page that shares no row with the loaded ones: more than a
+ *   page was archived since, and keeping the old rows and end state would hide
+ *   the sessions in between for good. Following the new cursor from here is
+ *   gap-free, and fetches the older rows again only as someone scrolls to them;
+ * - otherwise only additions happened, all within page one, and the rows past
+ *   it stay, so the list does not collapse under someone scrolling it.
  */
 function refreshFirstPage(stream: Stream, rows: DashboardSession[], nextCursor: string | null, count: number): Stream {
 	if (!stream.loaded) return { ...appendPage(stream, rows, nextCursor), seenCount: count };
@@ -71,7 +75,9 @@ function refreshFirstPage(stream: Stream, rows: DashboardSession[], nextCursor: 
 	const last = rows[rows.length - 1];
 	const firstPageIds = new Set(rows.map((row) => row.id));
 	const kept = last ? stream.rows.filter((row) => !firstPageIds.has(row.id) && compareArchived(row, last) > 0) : [];
-	if (count < stream.seenCount || rows.length + kept.length > count) {
+	const loadedIds = new Set(stream.rows.map((row) => row.id));
+	const reachesLoaded = rows.some((row) => loadedIds.has(row.id));
+	if (!reachesLoaded || count < stream.seenCount || rows.length + kept.length > count) {
 		return { ...stream, rows, cursor: nextCursor, done: false, loading: false, seenCount: count };
 	}
 	return {

@@ -478,6 +478,30 @@ describe("a machine that pages its archive", () => {
 		act(() => renderer.unmount());
 	});
 
+	// More than a page archived since the last refresh: page one no longer
+	// reaches the rows loaded before, so keeping them with the old end state
+	// would leave sessions in between that nothing ever loads.
+	it("follows the refreshed cursor when the new first page does not reach the loaded rows", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(1))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: numbered(1000, 1), nextCursor: null });
+		expect(archivedIds(renderer)).toEqual(["old-1000"]);
+		// 51 newer sessions are archived while the phone is in the background.
+		act(() => { renderer.update(board([live], source(52))); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: null })]);
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-0049" });
+		expect(archivedIds(renderer)).toHaveLength(50);
+		expect(rows(renderer).at(-1)?.kind).toBe("archive-status");
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-0049" })]);
+		await answer({ sessions: [...numbered(50, 1), ...numbered(1000, 1)], nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(52);
+		expect(archivedIds(renderer).slice(-2)).toEqual(["old-0050", "old-1000"]);
+		act(() => renderer.unmount());
+	});
+
 	it("drops a restored session from the archive as soon as it is live again", async () => {
 		archivePages.requests.length = 0;
 		let renderer!: ReactTestRenderer;
