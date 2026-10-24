@@ -363,7 +363,7 @@ function ShellLayout() {
 	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
-	useWindowZoomFactor();
+	const windowZoomFactor = useWindowZoomFactor();
 	// Drag is on immediately for a normal windowed launch. After leaving fullscreen,
 	// wait for the pad/height transition so the growing strip cannot steal clicks.
 	const [trafficLightDragActive, setTrafficLightDragActive] = useState(isMac);
@@ -1548,6 +1548,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					<TitlebarNav
 						historyLocked={isHomeRoute}
 						isFullScreen={isFullScreen}
+						zoomFactor={windowZoomFactor}
 					/>
 				</SidebarProvider>
 				<OrchestratorReplacementDialog

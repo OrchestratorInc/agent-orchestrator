@@ -326,10 +326,11 @@ export const SIDEBAR_DEFAULT_WIDTH = 240;
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_BRAND_TRAILING_GAP = 12;
-/** Narrowest the sidebar may get: just wide enough to show the whole brand
- *  label. Measured, because the label's left edge moves with window zoom (the
- *  traffic-light reserve is divided by the zoom factor). Falls back to
- *  SIDEBAR_MIN_WIDTH when no brand is rendered (collapsed rail, tests). */
+/** Narrowest the sidebar may get: SIDEBAR_MIN_WIDTH, widened to show the whole
+ *  brand label. Measured, because the label's left edge moves with window zoom
+ *  (the traffic-light reserve is divided by the zoom factor) and native
+ *  fullscreen (no reserve). The label alone fits in less than the footer's
+ *  Settings row needs, so never go below SIDEBAR_MIN_WIDTH. */
 function sidebarMinWidth(): number {
 	const brand = Array.from(document.querySelectorAll<HTMLElement>("[data-sidebar-brand]")).find(
 		(el) => el.getBoundingClientRect().width > 0,
@@ -345,7 +346,7 @@ function sidebarMinWidth(): number {
 	const fit = label
 		? Math.ceil(label.getBoundingClientRect().left + label.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP + 1)
 		: Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
-	return Math.min(SIDEBAR_MAX_WIDTH, fit);
+	return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, fit));
 }
 /** Initial item count shown in expanded sections; Show more/less toggles the remainder.
  *  Collapsed icon rail always shows the full list so projects stay reachable. */
