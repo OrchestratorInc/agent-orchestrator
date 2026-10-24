@@ -9,17 +9,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// searchConversationMessagesSQL ranks finished chat messages with FTS5 bm25
-// (conversation_messages_fts), then keeps the ones the transcript shows: the
-// SelectConversationMessages rule (active branch path; rolled-back, promoted
-// and cancelled turns hidden). Snippets are built only for those, with matches
-// wrapped in \x02 and \x03. Hand-written: sqlc cannot parse rowid or FTS5.
+// searchConversationMessagesSQL orders finished chat messages matching ?1
+// (conversation_messages_fts) by relevance (FTS5 bm25, with messages holding
+// the query as typed, phrase ?3, first) or, when a query is too common to rank
+// cheaply, newest first. It keeps the ones the transcript shows:
+// the SelectConversationMessages rule (active branch path; rolled-back,
+// promoted and cancelled turns hidden). Snippets are built only for those, with
+// matches wrapped in \x02 and \x03. Hand-written: sqlc cannot parse rowid or
+// FTS5.
 const searchConversationMessagesSQL = `
 WITH RECURSIVE hits AS MATERIALIZED (
-    SELECT rowid AS message_rowid, rank AS score
+    SELECT rowid AS message_rowid, %[1]s AS score
     FROM conversation_messages_fts
     WHERE conversation_messages_fts MATCH ?1
-    ORDER BY rank
+    ORDER BY %[2]s
     LIMIT ?2
 ), active_path(conversation_id, branch_id, max_sequence) AS (
     SELECT conversations.id, conversations.active_branch_id, CAST(NULL AS INTEGER)
@@ -60,8 +63,18 @@ WHERE (path.max_sequence IS NULL OR message.sequence <= path.max_sequence)
   ))
 ORDER BY hits.score`
 
+var (
+	searchMessagesByRelevanceSQL = fmt.Sprintf(searchConversationMessagesSQL,
+		"rank - 1e6 * (rowid IN (SELECT rowid FROM conversation_messages_fts WHERE conversation_messages_fts MATCH ?3))", "score")
+	// FTS5 walks rowids in reverse and stops at the limit; bm25 would score
+	// every match first.
+	searchMessagesByRecencySQL = fmt.Sprintf(searchConversationMessagesSQL, "-rowid", "rowid DESC")
+)
+
 const (
-	chatSearchResults = 8
+	// Past this many matches a query is too common to rank by relevance.
+	chatSearchRankLimit = 2000
+	chatSearchResults   = 8
 	// Matches read past the page: some fall on edited-away branches or repeat.
 	chatSearchCandidates = 4 * chatSearchResults
 )
@@ -71,28 +84,40 @@ const (
 // as it may be half typed); when none does, any word may, so one misspelled
 // word does not hide the message.
 func (s *Store) SearchConversationMessages(ctx context.Context, query string) ([]domain.ChatSearchHit, error) {
-	terms := domain.SearchTerms(query)
-	words := make([]string, 0, len(terms))
-	for _, term := range terms {
-		words = append(words, strings.FieldsFunc(term, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })...)
-	}
+	words := ftsWords(strings.Join(domain.SearchTerms(query), " "))
 	if len(words) == 0 {
 		return nil, nil
 	}
-	terms = make([]string, len(words))
+	terms := make([]string, len(words))
 	for i, word := range words {
 		terms[i] = `"` + word + `"`
 	}
 	terms[len(terms)-1] += "*"
-	hits, err := s.searchConversationMessages(ctx, strings.Join(terms, " "))
+	// Every word, filler included, in the order typed.
+	phrase := `"` + strings.Join(ftsWords(query), " ") + `"*`
+	hits, err := s.searchConversationMessages(ctx, strings.Join(terms, " "), phrase)
 	if err != nil || len(hits) > 0 || len(terms) == 1 {
 		return hits, err
 	}
-	return s.searchConversationMessages(ctx, strings.Join(terms, " OR "))
+	return s.searchConversationMessages(ctx, strings.Join(terms, " OR "), phrase)
 }
 
-func (s *Store) searchConversationMessages(ctx context.Context, match string) ([]domain.ChatSearchHit, error) {
-	rows, err := s.readDB.QueryContext(ctx, searchConversationMessagesSQL, match, chatSearchCandidates)
+// ftsWords keeps the letters and digits of text as words, so punctuation and
+// FTS5 operators are never parsed as query syntax.
+func ftsWords(text string) []string {
+	return strings.FieldsFunc(text, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
+}
+
+func (s *Store) searchConversationMessages(ctx context.Context, match, phrase string) ([]domain.ChatSearchHit, error) {
+	var matches int
+	if err := s.readDB.QueryRowContext(ctx, `SELECT count(*) FROM (SELECT 1 FROM conversation_messages_fts WHERE conversation_messages_fts MATCH ? LIMIT ?)`, match, chatSearchRankLimit).Scan(&matches); err != nil {
+		return nil, fmt.Errorf("count conversation message matches: %w", err)
+	}
+	query, args := searchMessagesByRelevanceSQL, []any{match, chatSearchCandidates, phrase}
+	if matches == chatSearchRankLimit {
+		query, args = searchMessagesByRecencySQL, args[:2]
+	}
+	rows, err := s.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search conversation messages: %w", err)
 	}

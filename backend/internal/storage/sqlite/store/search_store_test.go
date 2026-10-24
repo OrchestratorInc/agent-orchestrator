@@ -65,11 +65,15 @@ func TestSearchConversationMessagesFollowsTranscript(t *testing.T) {
 	if got := searchMessageIDs(t, s, "walrus"); len(got) != 0 {
 		t.Fatalf("streaming walrus = %v", got)
 	}
-	if err := s.SettleAssistantMessage(ctx, conversation.ID, "assistant-2", "provider-turn-2", "settled walrus", "message-assistant-2", testNow); err != nil {
+	if err := s.SettleAssistantMessage(ctx, conversation.ID, "assistant-2", "provider-turn-2", "prompt prompt prompt walrus first first first", "message-assistant-2", testNow); err != nil {
 		t.Fatal(err)
 	}
 	if got := searchMessageIDs(t, s, "walrus"); !slices.Equal(got, []string{"message-assistant-2"}) {
 		t.Fatalf("settled walrus = %v", got)
+	}
+	// Words in the order typed beat a message that repeats them out of order.
+	if hits, err := s.SearchConversationMessages(ctx, "first prompt"); err != nil || len(hits) != 2 || hits[0].MessageID != "message-1" {
+		t.Fatalf("first prompt = %#v err=%v", hits, err)
 	}
 	if got := searchMessageIDs(t, s, "streaming"); len(got) != 0 {
 		t.Fatalf("replaced text still matches: %v", got)
