@@ -1061,6 +1061,62 @@ func redeemBootstrapTicketAgain(
 	return nil
 }
 
+// WorkerLaunch is a session's newest worker bootstrap ticket. The reconciler
+// issues one for every worker it launches, right before the launch, so it is
+// the durable record of when the newest worker was launched and on which epoch.
+type WorkerLaunch struct {
+	Epoch int64
+	// IssuedAt is when the ticket was issued, just before the launch.
+	IssuedAt time.Time
+	// RedeemedAt is when the worker first redeemed the ticket. Nil means the
+	// worker has not reached the control plane with it.
+	RedeemedAt *time.Time
+	// WorkerSeen reports whether the sandbox's worker has checked in (sent a
+	// heartbeat), read in the same statement so a check-in that landed after
+	// the reconciler claimed the row is not missed.
+	WorkerSeen bool
+}
+
+// LatestWorkerLaunch returns the session's newest worker bootstrap ticket, or
+// ErrNotFound when the session has never had one. Issuing a ticket marks every
+// older one consumed, so only the newest ticket's consumed_at is its
+// redemption.
+func (s *Store) LatestWorkerLaunch(
+	ctx context.Context,
+	orgID, sessionID string,
+) (WorkerLaunch, error) {
+	var launch WorkerLaunch
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(
+			ctx,
+			`SELECT ticket.worker_epoch, ticket.created_at, ticket.consumed_at,
+				sandbox.worker_last_seen_at IS NOT NULL
+			FROM ao_access_tickets ticket
+			JOIN ao_sandboxes sandbox
+				ON sandbox.org_id = ticket.org_id AND sandbox.session_id = ticket.session_id
+			WHERE ticket.org_id = $1
+				AND ticket.session_id = $2
+				AND ticket.purpose = 'worker_bootstrap'
+				AND ticket.worker_epoch IS NOT NULL
+			ORDER BY ticket.worker_epoch DESC
+			LIMIT 1`,
+			orgID,
+			sessionID,
+		).Scan(&launch.Epoch, &launch.IssuedAt, &launch.RedeemedAt, &launch.WorkerSeen)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("read latest worker launch: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return WorkerLaunch{}, err
+	}
+	return launch, nil
+}
+
 func scanAccessTicket(row pgx.Row, ticket *domain.AccessTicket) error {
 	return row.Scan(
 		&ticket.ID,

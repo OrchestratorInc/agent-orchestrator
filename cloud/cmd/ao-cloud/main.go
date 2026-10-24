@@ -212,6 +212,7 @@ func reconcilerOptions(
 		Interval:               cfg.ReconcileInterval,
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
+		WorkerCheckInTimeout:   cfg.WorkerCheckInTimeout,
 		AllowAnonymousCheckout: cfg.AllowAnonymousCheckout,
 		KeepWarm:               cfg.KeepWarm(),
 		Logger:                 logger,
@@ -650,6 +651,7 @@ func run(logger *slog.Logger) error {
 				"interval", cfg.ReconcileInterval,
 				"startup_timeout", cfg.SandboxStartupTimeout,
 				"heartbeat_timeout", cfg.WorkerHeartbeatTimeout,
+				"checkin_timeout", cfg.WorkerCheckInTimeout,
 			)
 			if err := reconciler.Run(ctx); err != nil {
 				logger.Error("sandbox reconciler stopped", "error", err)

@@ -86,6 +86,15 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
+/** Approval modes the session allows that the selected model cannot run. */
+export interface ApprovalModeLimits {
+	/** The selected model's name, for the reason each unavailable mode shows. */
+	model: string;
+	unavailable: ApprovalMode[];
+	/** The mode asked for, when `settings.approvalMode` is the one that runs in its place. */
+	requested?: ApprovalMode;
+}
+
 const TRIGGER_CLASS =
 	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
 const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
@@ -96,6 +105,7 @@ export function TurnSettingsBar({
 	harness,
 	showApprovalMode = true,
 	approvalModes,
+	approvalModeLimits,
 	reroute,
 	onChange,
 	onRememberPermissions,
@@ -121,6 +131,12 @@ export function TurnSettingsBar({
 	/** Cloud permissions are fixed for the session, not a per-turn setting. */
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
+	/**
+	 * Modes shown disabled, with the reason, because the selected model cannot
+	 * run them. When the pick is one of them, settings.approvalMode is the mode
+	 * that runs instead and the menu says so.
+	 */
+	approvalModeLimits?: ApprovalModeLimits;
 	/**
 	 * The provider answered with a different model than the one chosen. Separate from
 	 * `settings` all the way down: settings are what the user asked for, this is what
@@ -206,6 +222,11 @@ export function TurnSettingsBar({
 	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : harness === "agy" ? AGY_APPROVAL_COPY : APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
+	const approvalUnavailable = (mode: ApprovalMode) =>
+		approvalModeLimits?.unavailable.includes(mode) ? `Not available for ${approvalModeLimits.model}` : undefined;
+	const approvalNote = approvalModeLimits?.requested
+		? `${approvalCopy[approvalModeLimits.requested].label} isn't available for ${approvalModeLimits.model}; using ${approvalLabel}.`
+		: undefined;
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
@@ -532,14 +553,18 @@ export function TurnSettingsBar({
 													disabled={optionDisabled}
 								leadIcon={unified ? permissionIcon(permissionLook(harness, settings.approvalMode ?? "default")) : undefined}
 							>
-								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode)).map((mode) => (
+								{approvalNote ? (
+									<p role="note" className="px-3 py-2 text-[11px] leading-snug text-muted-foreground">{approvalNote}</p>
+								) : null}
+								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode) || approvalUnavailable(mode)).map((mode) => (
 									unified ? (
 										<PermissionRow
 											key={mode}
 											mode={permissionLook(harness, mode)}
 											title={approvalCopy[mode].label}
-											description={approvalCopy[mode].description}
+											description={approvalUnavailable(mode) ?? approvalCopy[mode].description}
 											active={mode === (settings.approvalMode ?? "default")}
+											disabled={Boolean(approvalUnavailable(mode))}
 											onSelect={() => onChange({ ...settings, approvalMode: mode })}
 										/>
 									) : (
@@ -547,6 +572,7 @@ export function TurnSettingsBar({
 										key={mode}
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
+										disabled={Boolean(approvalUnavailable(mode))}
 										onSelect={() => onChange({ ...settings, approvalMode: mode }, "approvalMode")}
 										className={cn("text-xs")}
 									>
@@ -560,6 +586,9 @@ export function TurnSettingsBar({
 										>
 											{approvalCopy[mode].label}
 										</span>
+										{approvalUnavailable(mode) ? (
+											<span className="ml-auto pl-3 text-[11px] text-muted-foreground">{approvalUnavailable(mode)}</span>
+										) : null}
 									</OptionMenuItem>
 									)
 								))}
