@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -376,16 +377,17 @@ func TestTerminalReplayAfterPruneRequestsRepaint(t *testing.T) {
 	}
 }
 
-// A frame that never reaches the replay log (lost in transit, or a failing
-// mirror) used to stop a client's live output for good: every later live
-// frame waited for the durable pass to fill the gap. After
-// terminalRelayGapWait the client skips the gap and the program repaints.
-func TestTerminalLiveOutputSkipsUnfilledGap(t *testing.T) {
-	store := &resizeStubStore{}
+// liveOutputHarness runs writeTerminalOutput for terminal "term" against
+// store, with a worker stream registered so the mirror's progress is visible,
+// and returns that stream and a reader for the client's output frames.
+func liveOutputHarness(t *testing.T, store *resizeStubStore) (*terminalStreams, *workerTerminalStream, func() terminalServerMessage) {
+	t.Helper()
 	registry := newTerminalStreams()
+	stream := &workerTerminalStream{send: make(chan []byte, 1), done: make(chan struct{})}
+	registry.registerWorker("term", stream)
 	server := &Server{store: store, logger: slog.Default(), terminalRelayEnabled: true, terminalStreams: registry}
 	relayCtx, cancelRelay := context.WithCancel(context.Background())
-	defer cancelRelay()
+	t.Cleanup(cancelRelay)
 	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		connection, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -397,15 +399,29 @@ func TestTerminalLiveOutputSkipsUnfilledGap(t *testing.T) {
 			ID: "term", OrgID: "org", SessionID: "session", WorkerEpoch: 1,
 		}, 0, true, &writeMu)
 	}))
-	defer listener.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	t.Cleanup(listener.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
 	connection, _, err := websocket.Dial(ctx, "ws"+listener.URL[len("http"):], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.CloseNow()
-	readOutput := func() terminalServerMessage {
+	t.Cleanup(func() { connection.CloseNow() })
+	// writeTerminalOutput subscribes to live output itself; wait for it.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		registry.mu.Lock()
+		subscribed := len(registry.clients["term"]) > 0
+		registry.mu.Unlock()
+		if subscribed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("client never subscribed to live output")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return registry, stream, func() terminalServerMessage {
 		t.Helper()
 		for {
 			_, payload, err := connection.Read(ctx)
@@ -421,32 +437,29 @@ func TestTerminalLiveOutputSkipsUnfilledGap(t *testing.T) {
 			}
 		}
 	}
-	// writeTerminalOutput subscribes to live output itself; wait for it.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		registry.mu.Lock()
-		subscribed := len(registry.clients["term"]) > 0
-		registry.mu.Unlock()
-		if subscribed {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("client never subscribed to live output")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+}
+
+// A frame that never reaches the replay log (lost in transit, or a failing
+// mirror) used to stop a client's live output for good: every later live
+// frame waited for the durable pass to fill the gap. Once the mirror has
+// finished with the missing frame and the log still lacks it, the client
+// skips the gap and the program repaints.
+func TestTerminalLiveOutputSkipsLostGap(t *testing.T) {
+	store := &resizeStubStore{}
+	registry, stream, readOutput := liveOutputHarness(t, store)
 	registry.relayOutput("term", terminalRelayOutput{sequence: 1, data: []byte("one")})
 	if got := readOutput(); got.Sequence != 1 {
 		t.Fatalf("first live frame = %+v", got)
 	}
-	// Frame 2 is lost and the durable log never receives it.
+	// Frame 2 is lost: the mirror finished with it (and 3) without storing it.
+	stream.markMirrored(3)
 	registry.relayOutput("term", terminalRelayOutput{sequence: 3, data: []byte("three")})
-	time.Sleep(terminalRelayGapWait + 200*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	registry.relayOutput("term", terminalRelayOutput{sequence: 4, data: []byte("four")})
 	if got := readOutput(); got.Sequence != 4 {
 		t.Fatalf("live frame after the gap = %+v, want sequence 4", got)
 	}
-	deadline = time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, repaints := store.snapshot(); repaints == 1 {
 			return
@@ -455,6 +468,41 @@ func TestTerminalLiveOutputSkipsUnfilledGap(t *testing.T) {
 			t.Fatal("skipped gap did not request a repaint")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Under a flood the worker may run its whole unacknowledged window ahead of
+// the durable mirror, seconds of output. Frames a saturated live buffer
+// dropped are still on their way into the log, so the client must wait for
+// them however long that takes, not skip them after a fixed delay.
+func TestTerminalLiveOutputWaitsForALaggingMirror(t *testing.T) {
+	store := &resizeStubStore{}
+	registry, stream, readOutput := liveOutputHarness(t, store)
+	registry.relayOutput("term", terminalRelayOutput{sequence: 1, data: []byte("one")})
+	if got := readOutput(); got.Sequence != 1 {
+		t.Fatalf("first live frame = %+v", got)
+	}
+	stream.markMirrored(1)
+	// Frame 2 was dropped by the live buffer; the mirror has not reached it.
+	registry.relayOutput("term", terminalRelayOutput{sequence: 3, data: []byte("three")})
+	time.Sleep(2500 * time.Millisecond)
+	registry.relayOutput("term", terminalRelayOutput{sequence: 4, data: []byte("four")})
+	time.Sleep(200 * time.Millisecond)
+	// The mirror catches up and stores 2 to 4.
+	store.mu.Lock()
+	for sequence, data := range map[int64]string{2: "two", 3: "three", 4: "four"} {
+		store.frames = append(store.frames, domain.TerminalOutput{Sequence: sequence, Data: []byte(data)})
+	}
+	sort.Slice(store.frames, func(i, j int) bool { return store.frames[i].Sequence < store.frames[j].Sequence })
+	store.mu.Unlock()
+	stream.markMirrored(4)
+	for _, want := range []int64{2, 3, 4} {
+		if got := readOutput(); got.Sequence != want {
+			t.Fatalf("output = %+v, want sequence %d", got, want)
+		}
+	}
+	if _, repaints := store.snapshot(); repaints != 0 {
+		t.Fatalf("repaints = %d, want 0: nothing was skipped", repaints)
 	}
 }
 

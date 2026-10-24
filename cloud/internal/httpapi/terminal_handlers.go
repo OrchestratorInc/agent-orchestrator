@@ -43,10 +43,12 @@ const (
 	// terminal to open, checking every agentTicketPoll.
 	agentTicketWait = 8 * time.Second
 	agentTicketPoll = 250 * time.Millisecond
-	// terminalRelayGapWait is how long a client's live output waits for the
-	// replay log to fill a sequence gap before it skips the gap. Frames lost in
-	// transit, or a failing durable mirror, must not freeze a live terminal.
-	terminalRelayGapWait = 2 * time.Second
+	// terminalRelayGapMaxWait bounds how long a client's live output waits on
+	// a sequence gap when it cannot see the durable mirror's progress (the
+	// worker stream ended or moved to another replica). Normally a gap is
+	// skipped as soon as the mirror has finished with it and the replay log
+	// still lacks it, however far behind the mirror runs.
+	terminalRelayGapMaxWait = 10 * time.Second
 	// terminalRepaintInterval limits how often one attachment asks the
 	// terminal's program to redraw over output it skipped.
 	terminalRepaintInterval = 5 * time.Second
@@ -624,6 +626,9 @@ func (s *Server) writeTerminalOutput(
 	skipped := false
 	var repaintedAt time.Time
 	var gapSince time.Time
+	// gapChecked notes that the replay log was read again after the mirror
+	// finished with the current gap; a gap still open after that is lost.
+	gapChecked := false
 	// Poll once to establish state and replay existing output. Once relay mode
 	// is live, only the ticker/NOTIFY fallback asks Postgres again; a hot output
 	// frame must not wait behind a database round trip.
@@ -685,6 +690,7 @@ func (s *Server) writeTerminalOutput(
 				}
 				after = frame.Sequence
 				gapSince = time.Time{}
+				gapChecked = false
 			}
 			if structured && ready && !replayComplete {
 				writeMu.Lock()
@@ -718,11 +724,12 @@ func (s *Server) writeTerminalOutput(
 			}
 		case frame := <-live:
 			// A direct frame uses the same sequence that the ordered durable
-			// mirror will commit. A gap is first left to the next durable replay
-			// pass, which fills it and preserves byte order after a saturated
-			// live-client buffer. A gap the log has not filled within
-			// terminalRelayGapWait never will be (the frames were lost, or the
-			// mirror is failing): skip it and repaint rather than freeze.
+			// mirror will commit. A gap (a saturated live-client buffer, or a
+			// lost frame) is left to the durable replay pass, which fills it in
+			// byte order. The gap is skipped, with a repaint, only once it can
+			// no longer fill: the mirror has finished with every frame before
+			// this one and a fresh read of the log still lacks them. A mirror
+			// running seconds behind under a flood is waited for, not skipped.
 			if frame.sequence <= after {
 				continue
 			}
@@ -730,7 +737,14 @@ func (s *Server) writeTerminalOutput(
 				if gapSince.IsZero() {
 					gapSince = time.Now()
 				}
-				if time.Since(gapSince) < terminalRelayGapWait {
+				mirrored, known := s.terminalStreams.mirroredThrough(terminal.ID)
+				passed := known && mirrored >= frame.sequence-1
+				if !passed && time.Since(gapSince) < terminalRelayGapMaxWait {
+					pollDurable = true
+					continue
+				}
+				if passed && !gapChecked {
+					gapChecked = true
 					pollDurable = true
 					continue
 				}
@@ -738,6 +752,7 @@ func (s *Server) writeTerminalOutput(
 				pollDurable = true
 			}
 			gapSince = time.Time{}
+			gapChecked = false
 			writeMu.Lock()
 			var writeErr error
 			if structured {

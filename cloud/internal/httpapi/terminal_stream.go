@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -57,6 +58,20 @@ type workerTerminalStream struct {
 	// frame types it does not know.
 	control chan worker.TerminalStreamFrame
 	done    chan struct{}
+	// mirrored is the highest sequence the durable mirror has finished with,
+	// stored or given up on. A browser missing a frame at or below it will
+	// not get that frame from the replay log unless the log already has it.
+	mirrored atomic.Int64
+}
+
+// markMirrored records that the mirror has finished with sequence.
+func (w *workerTerminalStream) markMirrored(sequence int64) {
+	for {
+		current := w.mirrored.Load()
+		if sequence <= current || w.mirrored.CompareAndSwap(current, sequence) {
+			return
+		}
+	}
 }
 
 // terminalRelayOutput is the live branch of the terminal data plane. Sequence
@@ -188,6 +203,18 @@ func (t *terminalStreams) registerWorker(
 		}
 		t.mu.Unlock()
 	}
+}
+
+// mirroredThrough reports the highest sequence the terminal's current worker
+// stream has mirrored, and false when this replica holds no stream for it.
+func (t *terminalStreams) mirroredThrough(terminalID string) (int64, bool) {
+	t.mu.Lock()
+	stream := t.workers[terminalID]
+	t.mu.Unlock()
+	if stream == nil {
+		return 0, false
+	}
+	return stream.mirrored.Load(), true
 }
 
 func (t *terminalStreams) lookupWorker(terminalID string) *workerTerminalStream {
@@ -501,12 +528,14 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 					// Acknowledge it anyway: the browser has it, and a resend
 					// cannot fix a failing store, while holding the worker's
 					// window open would stall the live terminal.
+					stream.markMirrored(frame.ID)
 					if err := writeFrame(worker.TerminalStreamFrame{Type: "ack", ID: frame.ID}); err != nil {
 						cancel()
 						return
 					}
 					continue
 				}
+				stream.markMirrored(frame.ID)
 				if err := writeFrame(worker.TerminalStreamFrame{
 					Type: "ack", ID: frame.ID, Sequence: sequence,
 				}); err != nil {
