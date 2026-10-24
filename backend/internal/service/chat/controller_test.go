@@ -5092,6 +5092,17 @@ func TestServiceStopTerminatesPersistentConversation(t *testing.T) {
 	}
 }
 
+func TestServiceTerminateAllTerminatesPersistentConversation(t *testing.T) {
+	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	if err := h.svc.TerminateAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !provider.terminated.Load() {
+		t.Fatal("desktop quit detached the persistent provider instead of terminating it")
+	}
+}
+
 func TestServiceStopAllRetainsControllerUntilItsEventStreamActuallyEnds(t *testing.T) {
 	base := newFakeConversation()
 	h := newHarnessWithConversation(t, &stuckConversation{
