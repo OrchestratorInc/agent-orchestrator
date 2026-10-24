@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -891,6 +892,65 @@ func TestAcquireHostLockReclaimsDeadOwner(t *testing.T) {
 		t.Fatalf("acquire stale host lock: %v", err)
 	}
 	release()
+}
+
+// After a reboot or update kills a host, the OS can hand its pid to an
+// unrelated process. Resume must then relaunch, not report the stale records
+// as a live owner forever (#6695).
+func TestReusedHostPIDIsNotALiveOwner(t *testing.T) {
+	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" {
+		t.Skip("process start times are only read on Windows and macOS")
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	// The test process holds the recorded pid. Records written before it
+	// started name a dead host whose pid it reused; records written after
+	// could be its own.
+	for _, tc := range []struct {
+		name       string
+		recordedAt time.Time
+		connectErr error
+		lockErr    error
+	}{
+		{"reused", time.Now().Add(-time.Hour), ErrNotRunning, nil},
+		{"live", time.Now(), ErrOwnershipInconclusive, ErrHostExists},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			if err := writeDescriptor(dataDir, Descriptor{
+				Version: ProtocolVersion, SessionID: tc.name, Address: address, Token: "test",
+				PID: os.Getpid(), StartedAt: tc.recordedAt,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			cfg := Config{SessionID: tc.name, DataDir: dataDir, Workdir: t.TempDir(), ReconnectOnly: true}
+			if _, err := ConnectOrStart(context.Background(), cfg); !errors.Is(err, tc.connectErr) {
+				t.Fatalf("connect = %v, want %v", err, tc.connectErr)
+			}
+
+			path, err := lockPath(dataDir, tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(path, tc.recordedAt, tc.recordedAt); err != nil {
+				t.Fatal(err)
+			}
+			release, err := acquireHostLock(dataDir, tc.name)
+			if !errors.Is(err, tc.lockErr) {
+				t.Fatalf("acquire lock = %v, want %v", err, tc.lockErr)
+			}
+			if release != nil {
+				release()
+			}
+		})
+	}
 }
 
 func TestConnectOrStartWaitsForOldControllerToDetach(t *testing.T) {

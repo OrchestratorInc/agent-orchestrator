@@ -51,7 +51,9 @@ Codex app-server uses the original raw protocol profile:
 - Startup orphan reconciliation only destroys a compatible host when durable
   state proves its Chat session is terminated, absent, or no longer Chat. An unreadable
   store, incompatible descriptor, live PID with an unreachable endpoint, or
-  failed auth is preserved rather than treated as death.
+  failed auth is preserved rather than treated as death. On Windows and macOS,
+  a PID whose process started after the host wrote its descriptor or launch
+  lock was reused by another process, so that host counts as dead.
 - Branch activation first fences an idle source controller, then explicitly
   terminates its host before opening the replacement. If replacement fails, AO
   restores the source branch through native resume. This keeps one provider
