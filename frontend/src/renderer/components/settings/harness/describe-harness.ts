@@ -78,7 +78,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const updateAvailable = hasConfirmedHarnessUpdate(advisory);
 	const currentVersion = advisory?.currentVersion?.trim();
 	const busy = pending || isActiveInstallJob(job);
-	const currentOperation = attempt && (pending || actionError || attempt.startedAt === job?.startedAt) ? attempt.operation : undefined;
+	// A job started elsewhere (the update notice, another window) names its own operation.
+	const currentOperation = attempt && (pending || actionError || attempt.startedAt === job?.startedAt) ? attempt.operation
+		: isActiveInstallJob(job) ? job?.operation : undefined;
 	const jobFailed = isFailedInstallJob(job);
 	const failed = jobFailed || Boolean(actionError);
 	const availableMethodsLabel = availableMethods.length > 0
