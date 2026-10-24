@@ -3412,7 +3412,7 @@
 	"settings.billing.freeAgents": "Claude Code, Codex et Cursor",
 	"settings.billing.freeOrchestrator": "Orchestrateur, workers et revues de PR",
 	"settings.billing.freeDevices": "2 appareils connectés à la fois",
-	"settings.billing.freeNetwork": "Connexion sur le même réseau (sans relais cloud)",
+	"settings.billing.freeNetwork": "Connexion sur le même réseau, ou de n'importe où via Tailscale ou le tunnel HTTPS",
 	"settings.billing.starterRelay": "Relais cloud pour une connexion fluide entre vos appareils",
 	"settings.billing.starterDevices": "Appareils illimités, mobiles compris (apportez les vôtres)",
 	"settings.billing.cloudAway": "Les agents continuent quand votre ordinateur est en veille",

@@ -3353,7 +3353,7 @@
 	"settings.billing.freeAgents": "Claude Code、Codex、Cursor",
 	"settings.billing.freeOrchestrator": "オーケストレーター、ワーカー、PR レビュー",
 	"settings.billing.freeDevices": "同時ログインは2台まで",
-	"settings.billing.freeNetwork": "同一ネットワーク内での接続（クラウドリレーなし）",
+	"settings.billing.freeNetwork": "同一ネットワークで接続、または Tailscale か HTTPS トンネルでどこからでも接続",
 	"settings.billing.starterRelay": "クラウドリレーでデバイス間をシームレスに接続",
 	"settings.billing.starterDevices": "デバイス数無制限（モバイル含む、手持ちのデバイスを利用）",
 	"settings.billing.cloudAway": "コンピューターがスリープしてもエージェントは作業を継続",

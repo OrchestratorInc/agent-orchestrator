@@ -3353,7 +3353,7 @@
 	"settings.billing.freeAgents": "Claude Code, Codex, Cursor",
 	"settings.billing.freeOrchestrator": "오케스트레이터, 워커, PR 리뷰",
 	"settings.billing.freeDevices": "동시 로그인 기기 2대",
-	"settings.billing.freeNetwork": "같은 네트워크 연결 (클라우드 릴레이 없음)",
+	"settings.billing.freeNetwork": "같은 네트워크에서 연결하거나, Tailscale 또는 HTTPS 터널로 어디서든 연결",
 	"settings.billing.starterRelay": "기기 간 원활한 연결을 위한 클라우드 릴레이",
 	"settings.billing.starterDevices": "기기 무제한, 모바일 포함 (보유 기기 사용)",
 	"settings.billing.cloudAway": "컴퓨터가 잠자기 상태여도 에이전트가 계속 작업",
