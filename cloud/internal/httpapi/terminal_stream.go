@@ -26,14 +26,10 @@ const (
 	// terminalRelayOutputBuffer limits data held only for a currently attached
 	// browser. Durable replay remains the recovery path after a disconnect.
 	terminalRelayOutputBuffer = 128
-	// terminalRelayAuditBuffer bounds background output mirroring. A full
-	// buffer briefly backpressures the worker stream (terminalRelayAuditWait);
-	// past that the frame is left out of the replay log rather than stalling
-	// output a browser is already showing.
+	// terminalRelayAuditBuffer is the background output mirror's queue. It
+	// matches the worker's unacknowledged-output window, so a worker can never
+	// fill it; a slow mirror slows the worker instead of losing output.
 	terminalRelayAuditBuffer = 256
-	// terminalRelayAuditWait is how long one relayed frame may wait for room in
-	// the durable mirror before the relay stops waiting for it.
-	terminalRelayAuditWait = 250 * time.Millisecond
 	// terminalRelayFailureLogInterval rate-limits the warning for a durable
 	// mirror that keeps failing, so a broken store cannot log at frame rate.
 	terminalRelayFailureLogInterval = 30 * time.Second
@@ -395,33 +391,20 @@ func terminalOutputRejection(err error) string {
 }
 
 // queueRelayMirror hands a relayed frame to the durable mirror. The browser
-// already has the frame, so a mirror that cannot keep up must not stall the
-// worker stream: after one bounded wait the relay stops waiting (shedding)
-// and leaves frames out of the replay log until the mirror has room again.
-// Replay readers see the resulting sequence gap and repaint.
+// already has the frame. A worker keeps at most terminalRelayAuditBuffer
+// frames unacknowledged, so the mirror's queue has room for every frame it can
+// send; a slow mirror slows the worker down (its window fills) rather than
+// losing output. Only an older worker without that window can fill the queue,
+// and then the stream waits here, which is the same backpressure. It reports
+// false only when the stream ends.
 func queueRelayMirror(
 	ctx context.Context,
 	audit chan<- worker.TerminalStreamFrame,
 	frame worker.TerminalStreamFrame,
-	shedding *bool,
 ) bool {
 	select {
 	case audit <- frame:
-		*shedding = false
 		return true
-	default:
-	}
-	if *shedding {
-		return false
-	}
-	timer := time.NewTimer(terminalRelayAuditWait)
-	defer timer.Stop()
-	select {
-	case audit <- frame:
-		return true
-	case <-timer.C:
-		*shedding = true
-		return false
 	case <-ctx.Done():
 		return false
 	}
@@ -515,6 +498,13 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 							"error", persistErr, "terminal_id", terminalID,
 							"sequence", frame.ID, "suppressed", suppressed)
 					}
+					// Acknowledge it anyway: the browser has it, and a resend
+					// cannot fix a failing store, while holding the worker's
+					// window open would stall the live terminal.
+					if err := writeFrame(worker.TerminalStreamFrame{Type: "ack", ID: frame.ID}); err != nil {
+						cancel()
+						return
+					}
 					continue
 				}
 				if err := writeFrame(worker.TerminalStreamFrame{
@@ -560,8 +550,6 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	var shedding bool
-	var shed relayFailureLog
 	for {
 		_, message, err := connection.Read(ctx)
 		if err != nil {
@@ -604,14 +592,8 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 					"terminal_id", terminalID, "sequence", frame.ID,
 					"bytes", len(frame.Data), "saturated_clients", dropped)
 			}
-			if !queueRelayMirror(ctx, audit, frame, &shedding) {
-				if ctx.Err() != nil {
-					return
-				}
-				if suppressed, ok := shed.allow(time.Now()); ok && s.logger != nil {
-					s.logger.Warn("terminal relay durable mirror is behind; frame left out of replay",
-						"terminal_id", terminalID, "sequence", frame.ID, "suppressed", suppressed)
-				}
+			if !queueRelayMirror(ctx, audit, frame) {
+				return
 			}
 			continue
 		}

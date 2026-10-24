@@ -203,3 +203,83 @@ func waitForOutput(t *testing.T, output chan []byte, want string) {
 		}
 	}
 }
+
+// openSinkStream dials a server that reads and discards every frame, so writes
+// always succeed and only the unacknowledged window limits the sender.
+func openSinkStream(t *testing.T) (*terminalStream, context.CancelFunc) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			if _, _, err := conn.Read(r.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	conn, _, err := websocket.Dial(ctx, server.URL, nil)
+	if err != nil {
+		cancel()
+		t.Fatalf("dial: %v", err)
+	}
+	return &terminalStream{conn: conn, ctx: ctx}, cancel
+}
+
+// A program flooding its terminal must be slowed down, not lose output: with
+// the window full, the next frame waits for an acknowledgement instead of
+// evicting the oldest unacknowledged frame.
+func TestStreamOutputWaitsForAcknowledgementWhenWindowIsFull(t *testing.T) {
+	stream, cancel := openSinkStream(t)
+	defer cancel()
+	for id := int64(1); id <= maxStreamUnackedFrames; id++ {
+		if !stream.sendOutput(id, []byte("x")) {
+			t.Fatalf("frame %d refused before the window was full", id)
+		}
+	}
+	sent := make(chan bool, 1)
+	go func() { sent <- stream.sendOutput(maxStreamUnackedFrames+1, []byte("x")) }()
+	select {
+	case <-sent:
+		t.Fatal("a frame past the window was sent without an acknowledgement")
+	case <-time.After(200 * time.Millisecond):
+	}
+	stream.acknowledgeOutput(10)
+	select {
+	case ok := <-sent:
+		if !ok {
+			t.Fatal("the waiting frame was refused after the acknowledgement")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting frame never went out after the acknowledgement")
+	}
+	stream.mu.Lock()
+	first, count := stream.unacked[0].id, len(stream.unacked)
+	stream.mu.Unlock()
+	if first != 11 || count != maxStreamUnackedFrames-10+1 {
+		t.Fatalf("unacknowledged window starts at %d with %d frames; nothing may be evicted", first, count)
+	}
+}
+
+// A window nobody acknowledges ends the stream after streamAckWait, handing
+// every unacknowledged frame back for the ordered HTTP resend.
+func TestStreamOutputGivesUpOnASilentWindow(t *testing.T) {
+	previous := streamAckWait
+	streamAckWait = 100 * time.Millisecond
+	defer func() { streamAckWait = previous }()
+	stream, cancel := openSinkStream(t)
+	defer cancel()
+	for id := int64(1); id <= maxStreamUnackedFrames; id++ {
+		stream.sendOutput(id, []byte("x"))
+	}
+	if stream.sendOutput(maxStreamUnackedFrames+1, []byte("x")) {
+		t.Fatal("a frame went out on a window that was never acknowledged")
+	}
+	if frames := stream.retire(); len(frames) != maxStreamUnackedFrames || frames[0].id != 1 {
+		t.Fatalf("retired %d frames starting at %v, want all %d from 1", len(frames), frames, maxStreamUnackedFrames)
+	}
+}

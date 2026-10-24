@@ -25,11 +25,18 @@ const (
 	streamRedialFloor   = 500 * time.Millisecond
 	streamRedialCeiling = 5 * time.Second
 	maxStreamInputBytes = 16 << 10
-	// maxStreamUnackedFrames bounds output a stream wrote but the control plane
-	// has not yet acknowledged storing. It matches the control plane's mirror
-	// buffer; past it the oldest frames are left to the replay gap handling.
+	// maxStreamUnackedFrames is the stream's flow-control window: output
+	// written but not yet acknowledged by the control plane. At the window the
+	// stream waits for acknowledgements, so a program that floods its terminal
+	// is slowed down (its writes block) instead of losing output. It matches
+	// the control plane's mirror buffer.
 	maxStreamUnackedFrames = 256
 )
+
+// streamAckWait is how long a full window waits for an acknowledgement before
+// the stream is treated as broken and its frames go through HTTP. A variable
+// so tests can shorten it.
+var streamAckWait = 30 * time.Second
 
 // streamOutput is one output frame written to a stream and kept until the
 // control plane acknowledges it.
@@ -49,14 +56,17 @@ type terminalStream struct {
 	mu      sync.Mutex
 	broken  bool
 	unacked []streamOutput
-	acksMu  sync.Mutex
-	acks    map[string]chan bool
+	// space is signalled when acknowledgements free room in a full window or
+	// the stream retires.
+	space  chan struct{}
+	acksMu sync.Mutex
+	acks   map[string]chan bool
 }
 
 func (t *terminalStream) sendOutput(id int64, data []byte) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.broken {
+	if !t.waitForWindow() {
 		return false
 	}
 	frame, err := json.Marshal(worker.TerminalStreamFrame{
@@ -71,11 +81,57 @@ func (t *terminalStream) sendOutput(id int64, data []byte) bool {
 		t.broken = true
 		return false
 	}
-	if len(t.unacked) == maxStreamUnackedFrames {
-		t.unacked = append(t.unacked[:0], t.unacked[1:]...)
-	}
 	t.unacked = append(t.unacked, streamOutput{id: id, data: data})
 	return true
+}
+
+// waitForWindow blocks, with t.mu held on entry and on return, until the
+// unacknowledged window has room. It reports false when the stream is broken,
+// its context ends, or no acknowledgement arrives within streamAckWait; the
+// caller then falls back to HTTP with every unacknowledged frame, in order.
+func (t *terminalStream) waitForWindow() bool {
+	if t.broken {
+		return false
+	}
+	if len(t.unacked) < maxStreamUnackedFrames {
+		return true
+	}
+	timer := time.NewTimer(streamAckWait)
+	defer timer.Stop()
+	for !t.broken && len(t.unacked) >= maxStreamUnackedFrames {
+		space := t.spaceSignal()
+		t.mu.Unlock()
+		select {
+		case <-space:
+		case <-timer.C:
+			t.mu.Lock()
+			t.broken = true
+			return false
+		case <-t.ctx.Done():
+			t.mu.Lock()
+			t.broken = true
+			return false
+		}
+		t.mu.Lock()
+	}
+	return !t.broken
+}
+
+// spaceSignal returns the channel signalled when the window gains room; t.mu
+// must be held.
+func (t *terminalStream) spaceSignal() chan struct{} {
+	if t.space == nil {
+		t.space = make(chan struct{}, 1)
+	}
+	return t.space
+}
+
+// signalSpace wakes a sender waiting on a full window; t.mu must be held.
+func (t *terminalStream) signalSpace() {
+	select {
+	case t.spaceSignal() <- struct{}{}:
+	default:
+	}
 }
 
 // acknowledgeOutput drops frames up to id: the control plane mirrors output
@@ -88,6 +144,9 @@ func (t *terminalStream) acknowledgeOutput(id int64) {
 		kept++
 	}
 	t.unacked = append(t.unacked[:0], t.unacked[kept:]...)
+	if kept > 0 {
+		t.signalSpace()
+	}
 }
 
 // retire stops the stream taking output and returns, in order, the frames it
@@ -98,6 +157,7 @@ func (t *terminalStream) retire() []streamOutput {
 	t.broken = true
 	unacked := t.unacked
 	t.unacked = nil
+	t.signalSpace()
 	return unacked
 }
 
