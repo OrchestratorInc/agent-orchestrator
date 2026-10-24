@@ -143,6 +143,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
+	useRouterState: ({ select }: { select: (state: { location: { search: unknown } }) => unknown }) =>
+		select({ location: { search: shellMocks.state.routeSearch ?? {} } }),
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -297,10 +299,10 @@ vi.mock("../components/ui/sidebar", () => ({
 	),
 }));
 
-vi.mock("../components/GlobalNewTaskDialog", async () => {
+vi.mock("../components/NewTaskNavigator", async () => {
 	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
 	return {
-		GlobalNewTaskDialog: () => {
+		NewTaskNavigator: () => {
 			const request = useStore((state) => state.newTaskRequest);
 			return request ? <div data-testid="new-task-flow" data-project={request.projectId} /> : null;
 		},
@@ -403,6 +405,8 @@ function emitShortcut() {
 }
 
 beforeEach(() => {
+	// The shell remembers the last project for ⌘N outside one; start each test clean.
+	window.localStorage.removeItem("ao.newTask.lastProject");
 	shellMocks.navigate.mockReset();
 	shellMocks.onNewSessionShortcut.mockClear();
 	shellMocks.onKeyboardShortcutsHelp.mockClear();
@@ -1075,6 +1079,17 @@ describe("shell new-session shortcut subscription", () => {
 
 		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "__standalone__");
 		expect(screen.queryByTestId("create-project-flow")).not.toBeInTheDocument();
+	});
+
+	it("stays with the project the new chat page shows, not the last one opened", async () => {
+		window.localStorage.setItem("ao.newTask.lastProject", "proj-1");
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "proj-2" };
+		await renderShell();
+
+		emitShortcut();
+
+		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "proj-2");
 	});
 });
 

@@ -282,6 +282,19 @@ func nameNow(name generatedTaskName) func() generatedTaskName {
 	return func() generatedTaskName { return name }
 }
 
+// A send while the prepared worktree is still being created reads the session
+// before preparation publishes its workspace; naming must still name it.
+func TestTaskNamingAcceptsWorkspacePublishedAfterRead(t *testing.T) {
+	m, st, ws, _ := newGitTaskPreparationManager(t)
+	rec, root := launchedTaskSession(t, m, st, ws)
+	stale := rec
+	stale.Metadata.Branch, stale.Metadata.WorkspacePath = "", ""
+	m.nameTaskBranchLater(context.Background(), stale, root, nil, nameNow(generatedTaskName{Slug: "login-redirect"}), func() {})
+	if actual := st.sessions[rec.ID]; actual.Metadata.Branch != "ao/login-redirect/root" || actual.Metadata.WorkspacePath != root.Path {
+		t.Fatalf("naming refused a workspace published after the read: %+v", actual.Metadata)
+	}
+}
+
 func TestTaskNamingPreservesManualRename(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)

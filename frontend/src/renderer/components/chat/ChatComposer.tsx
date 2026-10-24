@@ -1,4 +1,5 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { useTranslation } from "react-i18next";
 /**
  * The Chat composer.
  *
@@ -113,6 +114,8 @@ import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
+	// The new chat page could not create the session this brief would start.
+	"TASK_CREATE_FAILED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -189,6 +192,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled,
 	disabledPlaceholder,
 	starting,
+	attachLater,
 	settings,
 	addMenuItems,
 	approval,
@@ -267,6 +271,8 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
 	starting?: boolean;
+	/** Draw the attach control disabled, for a chat whose workspace does not exist yet. */
+	attachLater?: boolean;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -354,6 +360,7 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
+	const { t } = useTranslation();
 	const draftScope = useMemo<ChatDraftScope | undefined>(
 		() =>
 			draftSessionId
@@ -371,8 +378,11 @@ export const ChatComposer = memo(function ChatComposer({
 	const boundarySessionId = draftSessionId ?? queuedDraftScope?.sessionId;
 	const [retainedAttachments, setRetainedAttachments] = useState<StoredComposerAttachment[]>(draftSeed?.attachments ?? []);
 	const visibleRetainedAttachments = editingQueuedTurnId ? retainedAttachments : [];
-	const [hasText, setHasText] = useState(false);
-	const hasTextRef = useRef(false);
+	// Seeded from the saved draft, so a remounted composer is not reported empty
+	// for the moment before its editor loads that text.
+	const [hasText, setHasText] = useState(() =>
+		Boolean(draftScope && !queuedDraftScope && readChatSessionDraft(draftScope).composer.text.trim()));
+	const hasTextRef = useRef(hasText);
 	const [trigger, setTrigger] = useState<ComposerTrigger>();
 	/**
 	 * The trigger position the user dismissed with Escape. Held so the menu stays
@@ -2041,6 +2051,26 @@ export const ChatComposer = memo(function ChatComposer({
 								</Tooltip>
 								)}
 							</>
+						) : attachLater ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									{/* Focusable so keyboard users reach the explanation the disabled button cannot. */}
+									<span className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring" tabIndex={0} aria-label={t("chat.composer.attachLater")}>
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											disabled
+											aria-hidden="true"
+											tabIndex={-1}
+											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground"
+										>
+											<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t("chat.composer.attachLater")}</TooltipContent>
+							</Tooltip>
 						) : null}
 						{settings}
 					</div>
@@ -2072,7 +2102,7 @@ export const ChatComposer = memo(function ChatComposer({
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
-										) : continuing || submitting || steerPending || savingQueuedEditPending || sendPending ? (
+										) : continuing || (!starting && (submitting || steerPending || savingQueuedEditPending || sendPending)) ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
 										) : showsSteer ? (
 											<CornerUpRight aria-hidden="true" className="size-3.5" />

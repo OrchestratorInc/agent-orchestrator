@@ -173,6 +173,8 @@ export type ConversationLocalEcho = {
 		/** The newest sequence seen when it was sent; the daemon's own line comes after it. */
 		afterSequence: number;
 	};
+	/** A new session's brief, sent before the session existed; its first human message is this. */
+	opening?: boolean;
 };
 type ConversationLocalEchosBySession = Record<string, ConversationLocalEcho[]>;
 
@@ -202,6 +204,16 @@ function addConversationLocalEcho(
 			echo,
 		],
 	}));
+}
+
+/** Shows a new session's brief before its first conversation read lands. */
+export function seedOpeningLocalEcho(
+	queryClient: QueryClient,
+	sessionId: string,
+	hostId: string | undefined,
+	echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "createdAt">,
+): void {
+	addConversationLocalEcho(queryClient, sessionUiKey(sessionId, hostId), { ...echo, opening: true });
 }
 
 function acceptConversationLocalEcho(
@@ -1086,9 +1098,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		[queryClient, sessionId, stateSessionId],
 	);
 	const acknowledgeLocalEcho = useCallback(
-		(turnId: string) => {
-			if (!sessionId) return;
-			releaseConversationLocalEcho(queryClient, stateSessionId as string, undefined, turnId);
+		(turnId: string | undefined, clientMessageId?: string) => {
+			if (!sessionId || (!turnId && !clientMessageId)) return;
+			releaseConversationLocalEcho(queryClient, stateSessionId as string, turnId ? undefined : clientMessageId, turnId);
 		},
 		[queryClient, sessionId, stateSessionId],
 	);
