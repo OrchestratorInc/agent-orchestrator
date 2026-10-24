@@ -308,6 +308,59 @@ func TestGuard_InputLeaseCoversActualPaneWrite(t *testing.T) {
 	}
 }
 
+func chatRecord(state domain.ActivityState) domain.SessionRecord {
+	rec := record(state, false)
+	rec.Mode = domain.SessionModeChat
+	return rec
+}
+
+// A chat send has no pane to protect, and waking a hibernated chat waits for
+// every input lease to drain, so the lease must not be held across the send.
+func TestGuard_ChatSendDoesNotHoldInputLeaseAcrossSend(t *testing.T) {
+	lease := &observedInputLease{acquired: make(chan struct{}), released: make(chan struct{})}
+	messenger := &blockingMessenger{started: make(chan struct{}), unblock: make(chan struct{})}
+	g := New(&fakeStore{rec: chatRecord(domain.ActivityIdle), ok: true}, messenger, nil)
+	g.SetInputLease(lease)
+
+	done := make(chan struct{})
+	var got Outcome
+	var gotErr error
+	go func() {
+		got, gotErr = g.Deliver(context.Background(), "s1", "x")
+		close(done)
+	}()
+
+	<-lease.acquired
+	<-messenger.started
+	select {
+	case <-lease.released:
+	default:
+		t.Fatal("input lease still held while the chat send is in flight")
+	}
+	close(messenger.unblock)
+	<-done
+	if gotErr != nil || got != Sent {
+		t.Fatalf("Deliver = (%v, %v), want (Sent, nil)", got, gotErr)
+	}
+}
+
+func TestGuard_ClosedInputGateStillSuppressesChatSend(t *testing.T) {
+	messenger := &fakeMessenger{}
+	g := New(&fakeStore{rec: chatRecord(domain.ActivityIdle), ok: true}, messenger, nil)
+	g.SetInputLease(fixedInputLease(false))
+
+	got, err := g.Deliver(context.Background(), "s1", "x")
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if got != SuppressedInputGated {
+		t.Fatalf("outcome = %v, want SuppressedInputGated", got)
+	}
+	if len(messenger.sent) != 0 {
+		t.Fatalf("messenger was called %d times through a closed gate, want 0", len(messenger.sent))
+	}
+}
+
 func TestGuard_DeliverPostWriteRunsBeforeInputLeaseRelease(t *testing.T) {
 	lease := &observedInputLease{acquired: make(chan struct{}), released: make(chan struct{})}
 	g := New(&fakeStore{rec: record(domain.ActivityActive, false), ok: true}, &fakeMessenger{}, nil)
