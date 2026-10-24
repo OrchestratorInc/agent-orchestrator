@@ -69,7 +69,7 @@ func (l mutableSessionLister) ListAllSessions(context.Context) ([]domain.Session
 func windowsIdleService(t *testing.T, failUpdate bool) (*Service, *idleCoordinatorStub, *[]ports.InstallCommand) {
 	t.Helper()
 	s := newTestService("windows", "npm")
-	s.windowsUpdateWhenIdle = true
+	s.updateWhenIdle = true
 	sessions := []domain.SessionRecord{{ID: "auggie-1", Harness: domain.AgentHarness(TargetAuggie), Activity: domain.Activity{State: domain.ActivityIdle}}}
 	coordinator := &idleCoordinatorStub{sessions: &sessions}
 	s.sessions = mutableSessionLister{mu: &coordinator.mu, sessions: &sessions}
@@ -259,4 +259,52 @@ func TestIdleUpdateReportsSessionsItCouldNotResume(t *testing.T) {
 		}
 	}
 	t.Fatalf("no resume failure was reported: %+v", events.events)
+}
+
+func TestUpdatesThatCannotRunBesideSessionsWaitForIdleOnEveryPlatform(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		s := newTestService(goos, "npm")
+		s.updateWhenIdle = true
+		s.SetIdleUpdateCoordinator(&idleCoordinatorStub{})
+		for _, level := range []UpdateWhileRunning{UpdateWhileRunningWarn, UpdateWhileRunningBlocked} {
+			if got := s.effectiveUpdateLevel(level); got != UpdateWhileRunningIdle {
+				t.Errorf("%s %s = %s, want idle", goos, level, got)
+			}
+		}
+		if got := s.effectiveUpdateLevel(UpdateWhileRunningSafe); got != UpdateWhileRunningSafe {
+			t.Errorf("%s safe = %s", goos, got)
+		}
+		s.updateWhenIdle = false
+		if got := s.effectiveUpdateLevel(UpdateWhileRunningWarn); got != UpdateWhileRunningBlocked {
+			t.Errorf("%s warn without update-when-idle = %s, want blocked", goos, got)
+		}
+	}
+}
+
+// Regression: StartAgentOperation recorded the level under s.mu, and
+// effectiveUpdateLevel locks s.mu to check the coordinator, so an update with
+// update-when-idle on and no live session hung the daemon.
+func TestUpdateWhenIdleWithoutSessionsDoesNotDeadlock(t *testing.T) {
+	for _, goos := range []string{"darwin", "windows"} {
+		s, coordinator, ran := windowsIdleService(t, false)
+		s.goos = goos
+		*coordinator.sessions = nil
+		started := make(chan error, 1)
+		go func() {
+			_, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, "")
+			started <- err
+		}()
+		select {
+		case err := <-started:
+			if err != nil {
+				t.Fatalf("%s: update = %v", goos, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: StartAgentOperation deadlocked", goos)
+		}
+		waitForJob(t, s, TargetAuggie, func(job Job) bool { return job.Status == StatusSucceeded })
+		if len(*ran) != 1 {
+			t.Fatalf("%s: installs = %v", goos, *ran)
+		}
+	}
 }

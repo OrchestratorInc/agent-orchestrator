@@ -597,22 +597,22 @@ describe("harness updates while sessions run", () => {
 		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292" });
 	});
 
-	it("offers the sessions to end instead of an update that cannot run alongside them", async () => {
+	it("only offers Update, never the sessions, even when they block the update", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "blocked" } };
 		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "View sessions (2)" }));
-		expect(await screen.findByRole("dialog")).toHaveTextContent("Sessions using Claude Code");
-		expect(installs).toHaveLength(0);
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await waitFor(() => expect(installs).toHaveLength(1));
+		expect(screen.queryByRole("button", { name: /View sessions/ })).toBeNull();
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
-	it("never offers Retry when the daemon says sessions must end first", async () => {
+	it("explains a refusal for open sessions without listing them", async () => {
 		installResponse = () => ({ error: { error: "conflict", code: "HARNESS_ACTIVE", message: "end active sessions", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "blocked", starting: false } } });
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		expect(await screen.findByRole("button", { name: "View sessions (1)" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Retry update" })).toBeNull();
-		expect(screen.queryByRole("alert")).toBeNull();
-		expect(screen.getByRole("status")).toHaveTextContent("1 open session is using Claude Code.");
+		expect(await screen.findByRole("alert")).toHaveTextContent("1 open session is using Claude Code.");
+		expect(screen.queryByRole("button", { name: /View sessions/ })).toBeNull();
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
 	it("retries an update the daemon refused only because the harness was starting", async () => {
@@ -624,22 +624,9 @@ describe("harness updates while sessions run", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
 		starting = false;
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Retry update" }));
 		await waitFor(() => expect(installs).toHaveLength(2));
 		expect(screen.queryByRole("dialog")).toBeNull();
-	});
-
-	it("checks again after the sessions the daemon named have been seen", async () => {
-		installResponse = () => ({ error: { error: "conflict", code: "HARNESS_ACTIVE", message: "end active sessions", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "blocked", starting: false } } });
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		await userEvent.click(await screen.findByRole("button", { name: "View sessions (1)" }));
-		expect(await screen.findByRole("dialog")).toHaveTextContent("Sessions using Claude Code");
-		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-		installResponse = (agent) => ({ data: { target: agent, status: "installing" } });
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		await waitFor(() => expect(installs).toHaveLength(2));
 	});
 
 	it("updates all without asking, skips harnesses whose sessions must end, and summarizes", async () => {
@@ -655,22 +642,12 @@ describe("harness updates while sessions run", () => {
 		expect(await screen.findByText("Updating 2 · Skipped Codex (2)")).toBeInTheDocument();
 	});
 
-	it("explains a Windows update waiting for idle sessions and lets the user cancel it", async () => {
-		jobs = [{ target: "claude-code", status: "waiting_for_idle", startedAt: new Date().toISOString(), waitingOn: [{ sessionId: "s1", reason: "command" }] }];
-		mountNotice();
-		const status = await screen.findByText("Updating when sessions are idle");
-		expect(status).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install/cancel", { params: { path: { agent: "claude-code" } } }));
-		expect(installs).toHaveLength(0);
-	});
-
-	it("names the session a long-waiting update waits for", async () => {
+	it("shows an update waiting for idle sessions as Updating, with no session list", async () => {
 		jobs = [{ target: "claude-code", status: "waiting_for_idle", startedAt: new Date(Date.now() - 10 * 60_000).toISOString(), waitingOn: [{ sessionId: "s1", reason: "command" }] }];
 		mountNotice();
-		expect(await screen.findByText("Waiting for s1 (dev server or command running)")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "View" }));
-		expect(await screen.findByRole("dialog", { name: "Sessions using Claude Code" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: /Updating/ })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "View" })).toBeNull();
+		expect(screen.queryByText(/Waiting for s1/)).toBeNull();
 	});
 
 	it("keeps a finished update busy until its advisory has refreshed", async () => {
@@ -696,7 +673,7 @@ describe("harness updates while sessions run", () => {
 		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
 	});
 
-	it("starts a Windows update that waits for idle sessions without asking", async () => {
+	it("starts an update that waits for idle sessions without asking", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "idle" } };
 		mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));

@@ -63,7 +63,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{s.planNPM(target, "@anthropic-ai/claude-code"), official}
 		}
 	case TargetCodex:
-		official := s.officialByOS(target, "https://chatgpt.com/codex/install.sh", "sh", "https://chatgpt.com/codex/install.ps1", agentDocumentationURLs[target])
+		official := s.officialByOS(target, codexInstallScriptURL, "sh", "https://chatgpt.com/codex/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
 			plans = []Plan{s.planBrewCask(target, "codex"), s.planNPM(target, "@openai/codex"), official}
 		} else {
@@ -408,6 +408,16 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	if operation == AgentOperationUpdate {
 		switch plan.Method {
 		case "homebrew":
+			// A cask whose upgrade would delete files running sessions load is
+			// updated with the vendor's installer into a release of AO's own.
+			if entry, ok := officialManagedCaskFor(s.goos, plan); ok && s.managedRoot != "" {
+				if script := s.planShellInstaller(plan.Target, entry.url, entry.shell).Script; script != nil {
+					if _, ok := s.officialManagedRecipeFor(Plan{Target: plan.Target, Method: plan.Method, Package: plan.Package, PackageCask: true, Script: script}); ok {
+						plan.Script = script
+						break
+					}
+				}
+			}
 			// The runner sets HOMEBREW_NO_AUTO_UPDATE, and the advisory reads the
 			// live Homebrew API, so refresh local metadata before upgrading.
 			plan.Prepare = [][]string{{"brew", "update"}}
@@ -428,6 +438,15 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
+			// A vendor installer AO can run into a release of its own updates
+			// beside the copy sessions run (officialManagedRecipes).
+			if installScript != nil && s.managedRoot != "" {
+				if _, ok := s.officialManagedRecipeFor(Plan{Target: plan.Target, Method: plan.Method, Script: installScript}); ok {
+					plan.Command = nil
+					plan.Script = installScript
+					break
+				}
+			}
 			// These self-updaters do not reliably replace the installed binary
 			// headlessly: installerUpdateTargets on every platform, and these
 			// Windows ones. Re-run the vendor's installer instead; ownership and
@@ -450,7 +469,7 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.Reason = "This installation method does not provide a supported update command."
 		}
 		if !plan.Unsupported {
-			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask)
+			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask, plan.Package)
 		}
 		if s.managedEligible(plan) {
 			// Installed side by side, so no session's files are touched, on any
