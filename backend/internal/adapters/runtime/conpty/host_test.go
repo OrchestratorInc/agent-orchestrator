@@ -182,6 +182,20 @@ func (tc *testClient) send(msgType byte, payload []byte) error {
 
 func (tc *testClient) close() { _ = tc.conn.Close() }
 
+// attach sends the MsgAttach hello, which makes the host classify this
+// connection as a viewer: it replays the scrollback when replay is true and
+// receives live output. cols/rows > 0 size the shared PTY from the hello.
+func (tc *testClient) attach(t *testing.T, replay bool, cols, rows int) {
+	t.Helper()
+	payload, err := json.Marshal(AttachPayload{Cols: cols, Rows: rows, Replay: replay})
+	if err != nil {
+		t.Fatalf("marshal attach hello: %v", err)
+	}
+	if err := tc.send(MsgAttach, payload); err != nil {
+		t.Fatalf("send attach hello: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helper: start a Serve with a freshly created listener + fakePTY.
 // ---------------------------------------------------------------------------
@@ -198,6 +212,14 @@ type serveFixture struct {
 
 func startServe(t *testing.T, pid int) *serveFixture {
 	t.Helper()
+	return startServeConfigured(t, pid, nil)
+}
+
+// startServeConfigured is startServe plus a hook to set host fields (the
+// classification timers) before any serve goroutine starts, so a test that
+// shortens one is ordered before every read of it.
+func startServeConfigured(t *testing.T, pid int, configure func(*host)) *serveFixture {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -212,6 +234,9 @@ func startServe(t *testing.T, pid int) *serveFixture {
 		PTY:       pty,
 		Ring:      ring,
 	})
+	if configure != nil {
+		configure(h)
+	}
 	go func() { done <- h.run(ctx) }()
 	return &serveFixture{
 		host:   h,
@@ -238,7 +263,7 @@ func (f *serveFixture) waitDone(t *testing.T) {
 // Tests
 // ---------------------------------------------------------------------------
 
-// TestScrollbackReplay: seed the ring, connect a client; first frame must be
+// TestScrollbackReplay: seed the ring, attach a viewer; its first frame must be
 // MsgTerminalData containing the ring snapshot.
 func TestScrollbackReplay(t *testing.T) {
 	f := startServe(t, 100)
@@ -250,6 +275,7 @@ func TestScrollbackReplay(t *testing.T) {
 
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	c.attach(t, true, 0, 0)
 
 	typ, payload := c.readFrame(t)
 	if typ != MsgTerminalData {
@@ -302,6 +328,7 @@ func TestScrollbackLiveOrdering_NoDrop(t *testing.T) {
 	// Connect mid-stream so the snapshot is taken while chunks are in flight.
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	c.attach(t, true, 0, 0)
 
 	// Collect frames until the client's stream contains the final chunk (the
 	// last line the PTY emits), or until the overall deadline. The sentinel is
@@ -380,6 +407,12 @@ func TestFanOut(t *testing.T) {
 	c2 := newTestClient(t, f.addr)
 	defer c2.close()
 
+	// Each attach hello declares its connection a viewer; without it the status
+	// req below would classify the connection as a probe that never receives
+	// the broadcast. The ring is empty, so the hello queues no replay frame.
+	c1.attach(t, true, 0, 0)
+	c2.attach(t, true, 0, 0)
+
 	// Write PTY output after both clients have connected.
 	// We need to give the server a moment to register both clients; use a
 	// brief sync by sending a status req from each and waiting for responses.
@@ -420,6 +453,7 @@ func TestSlowClientDoesNotBlockFanOut(t *testing.T) {
 	h := &host{clients: make(map[net.Conn]*clientState)}
 	slow := newClientState()
 	fast := newClientState()
+	slow.viewer, fast.viewer = true, true // broadcast reaches viewers only
 	h.clients[slowHost] = slow
 	h.clients[fastHost] = fast
 	go h.writeClient(slowHost, slow)
@@ -466,6 +500,7 @@ func TestBroadcastWaitsForASlowClientInsteadOfDroppingIt(t *testing.T) {
 	hostEnd, peer := net.Pipe()
 	h := &host{clients: make(map[net.Conn]*clientState), shutdownC: make(chan struct{})}
 	client := newClientState()
+	client.viewer = true // broadcast reaches viewers only
 	h.clients[hostEnd] = client
 	go h.writeClient(hostEnd, client)
 	t.Cleanup(func() { h.removeClient(hostEnd, client); _ = peer.Close() })
@@ -513,6 +548,7 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	fastHost, fastPeer := net.Pipe()
 	h := &host{clients: make(map[net.Conn]*clientState), shutdownC: make(chan struct{})}
 	stalled, fast := newClientState(), newClientState()
+	stalled.viewer, fast.viewer = true, true // broadcast reaches viewers only
 	h.clients[stalledHost], h.clients[fastHost] = stalled, fast
 	go h.writeClient(stalledHost, stalled)
 	go h.writeClient(fastHost, fast)
@@ -551,7 +587,96 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	}
 }
 
-// TestTerminalInput: MsgTerminalInput from a client reaches the fakePTY's input.
+// assertNoFrame fails if a frame arrives within d, or if the connection drops.
+// It is the short-window counterpart to readFrame: the input-only assertions
+// below need "nothing arrives", and readFrame's 2s failure timeout would make
+// them needlessly slow.
+func assertNoFrame(t *testing.T, c *testClient, d time.Duration, why string) {
+	t.Helper()
+	select {
+	case f, ok := <-c.frameC:
+		if !ok {
+			t.Fatalf("%s: connection dropped within %s; input-only connections stay open", why, d)
+		}
+		t.Fatalf("%s: received frame 0x%02x (%d bytes) within %s; want silence", why, f.typ, len(f.payload), d)
+	case <-time.After(d):
+	}
+}
+
+// TestInputFirstConnectionIsInputOnly: clientSendMessage/clientSendInput (see
+// client.go) dial fresh write-only connections whose first and only frame is
+// MsgTerminalInput, never read a response, and close after writing. Such a
+// connection is input-only: its bytes go to the PTY, and it must receive no
+// replay and no broadcast — otherwise every automated send pays the multi-MB
+// scrollback this connection shape exists to avoid.
+func TestInputFirstConnectionIsInputOnly(t *testing.T) {
+	f := startServeConfigured(t, 318, func(h *host) {
+		// An hour: the silent-viewer fallback must not fire while the input
+		// frame is in flight. On a loaded runner a 2s firstFrameTimeout could
+		// otherwise turn the connection into a legacy viewer that receives the
+		// replay, making the test fail for the wrong reason.
+		h.firstFrameTimeout = time.Hour
+	})
+	defer f.cancel()
+
+	// A multi-MB ring: if classification slips, the replay queues ~12
+	// MaxReplayChunk frames and the no-frame assertion below cannot miss it.
+	f.ring.Append(bytes.Repeat([]byte("x"), 3<<20))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+
+	input := []byte("hello\r")
+	if err := c.send(MsgTerminalInput, input); err != nil {
+		t.Fatalf("send input: %v", err)
+	}
+
+	// Reading the bytes from the PTY proves the frame was dispatched.
+	got := make([]byte, len(input))
+	if _, err := io.ReadFull(f.pty.inR, got); err != nil {
+		t.Fatalf("read from pty input: %v", err)
+	}
+	if !bytes.Equal(got, input) {
+		t.Fatalf("pty input = %q, want %q", got, input)
+	}
+
+	// The connection is registered but must not be a viewer. The clients map
+	// is keyed by the server-side accepted conn, not the dialing conn held
+	// here, so match it by the address the dialer sees as its LocalAddr.
+	f.host.mu.Lock()
+	var (
+		cs     *clientState
+		viewer bool
+	)
+	for conn, state := range f.host.clients {
+		if conn.RemoteAddr().String() == c.conn.LocalAddr().String() {
+			cs, viewer = state, state.viewer
+			break
+		}
+	}
+	f.host.mu.Unlock()
+	if cs == nil {
+		t.Fatal("input-only connection is not registered")
+	}
+	if viewer {
+		t.Fatal("input-first connection was classified as a viewer; it must be input-only")
+	}
+
+	// No replay was queued at classification...
+	assertNoFrame(t, c, 150*time.Millisecond, "after an input-only frame")
+	// ...and live output skips it like any other non-viewer.
+	frame, err := EncodeMessage(MsgTerminalData, []byte("broadcast to viewers only"))
+	if err != nil {
+		t.Fatalf("encode broadcast: %v", err)
+	}
+	f.host.broadcast(frame)
+	assertNoFrame(t, c, 150*time.Millisecond, "after a broadcast")
+}
+
+// TestTerminalInput: MsgTerminalInput from a client reaches the fakePTY's
+// input. An input-first connection is input-only (see classifyConn), so this
+// exercises that path: the bytes are dispatched to the PTY and the connection
+// is never a viewer — it gets no replay and no broadcast.
 func TestTerminalInput(t *testing.T) {
 	f := startServe(t, 102)
 	defer f.cancel()
@@ -713,6 +838,8 @@ func TestResizeMatchesSingleLargestClient(t *testing.T) {
 }
 
 // TestGetOutputReq: MsgGetOutputReq returns MsgGetOutputRes with ring.Tail(n).
+// A connection whose first frame is the request is a probe: it gets its
+// response and never pays the scrollback replay (see classifyConn).
 func TestGetOutputReq(t *testing.T) {
 	f := startServe(t, 104)
 	defer f.cancel()
@@ -722,9 +849,6 @@ func TestGetOutputReq(t *testing.T) {
 	c := newTestClient(t, f.addr)
 	defer c.close()
 
-	// Drain scrollback frame.
-	c.readFrame(t)
-
 	reqPayload, _ := json.Marshal(GetOutputReq{Lines: 2})
 	if err := c.send(MsgGetOutputReq, reqPayload); err != nil {
 		t.Fatalf("send: %v", err)
@@ -732,11 +856,89 @@ func TestGetOutputReq(t *testing.T) {
 
 	typ, payload := c.readFrame(t)
 	if typ != MsgGetOutputRes {
-		t.Fatalf("got type 0x%02x, want MsgGetOutputRes", typ)
+		t.Fatalf("got type 0x%02x, want MsgGetOutputRes (a probe must not receive a replay first)", typ)
 	}
 	want := f.ring.Tail(2)
 	if string(payload) != want {
 		t.Fatalf("GetOutputRes = %q, want %q", payload, want)
+	}
+}
+
+// TestProbeNeverPaysForTheScrollbackReplay is the CPU regression test: a probe
+// connection (GetOutput/Status/Kill) used to receive the full scrollback replay
+// before its response, so every daemon poll (a fresh connection per check; see
+// client.go) drained the replay to reach its response. With a multi-MB ring,
+// the probe's first frame must be its response, and nothing may follow it.
+func TestProbeNeverPaysForTheScrollbackReplay(t *testing.T) {
+	f := startServe(t, 312)
+	defer f.cancel()
+
+	// A full-screen repaint: megabytes with no newline, the shape that made a
+	// 1000-"line" ring reach tens of MB.
+	for i := 0; i < 6; i++ {
+		if _, err := f.pty.WriteOutput(bytes.Repeat([]byte("x"), 512<<10)); err != nil {
+			t.Fatalf("write repaint %d: %v", i, err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(f.ring.Replay()) < 2<<20 {
+		if time.Now().After(deadline) {
+			t.Fatalf("ring retained only %d bytes; the test needs a multi-MB replay", len(f.ring.Replay()))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+
+	reqPayload, _ := json.Marshal(GetOutputReq{Lines: 1})
+	if err := c.send(MsgGetOutputReq, reqPayload); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	typ, payload := c.readFrame(t)
+	if typ != MsgGetOutputRes {
+		t.Fatalf("first frame type 0x%02x, want MsgGetOutputRes (the probe paid a replay)", typ)
+	}
+	if len(payload) > MaxTailBytes {
+		t.Fatalf("GetOutputRes = %d bytes, want at most the %d-byte tail cap", len(payload), MaxTailBytes)
+	}
+
+	// Nothing else may arrive: a replay queued at classification would have
+	// preceded the response, but guard the ordering explicitly.
+	select {
+	case fr, ok := <-c.frameC:
+		if ok {
+			t.Fatalf("probe received an extra frame 0x%02x after its response", fr.typ)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// An attach hello with replay=false declares a viewer that already has its
+// history: it receives live output only, with no scrollback prelude.
+func TestAttachHelloWithoutReplaySkipsTheScrollback(t *testing.T) {
+	f := startServe(t, 313)
+	defer f.cancel()
+
+	f.ring.Append([]byte("old scrollback\n"))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	c.attach(t, false, 0, 0)
+
+	// A status round-trip on the same connection proves the hello was
+	// classified before the output below, so the output is queued live.
+	_ = c.send(MsgStatusReq, nil)
+	if typ, _ := c.readFrame(t); typ != MsgStatusRes {
+		t.Fatalf("sync frame type 0x%02x, want MsgStatusRes", typ)
+	}
+
+	if _, err := f.pty.WriteOutput([]byte("live output\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	typ, payload := c.readFrame(t)
+	if typ != MsgTerminalData || string(payload) != "live output\n" {
+		t.Fatalf("first output frame = 0x%02x %q, want the live output alone", typ, payload)
 	}
 }
 
@@ -748,6 +950,10 @@ func TestStatusReq_AliveAndExited(t *testing.T) {
 
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	// Attach as a viewer so the exit broadcast below (pumpPTY → viewers) and
+	// its status response both reach this connection. The ring is empty, so
+	// the hello queues no frame.
+	c.attach(t, true, 0, 0)
 
 	// While running: expect alive:true.
 	if err := c.send(MsgStatusReq, nil); err != nil {
@@ -904,6 +1110,7 @@ func TestLateAttachReceivesNegotiatedModes(t *testing.T) {
 
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	c.attach(t, true, 0, 0)
 
 	typ, payload := c.readFrame(t)
 	if typ != MsgTerminalData {
@@ -943,6 +1150,7 @@ func TestAttachAfterProgramLeftAltScreen(t *testing.T) {
 
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	c.attach(t, true, 0, 0)
 	typ, payload := c.readFrame(t)
 	if typ != MsgTerminalData {
 		t.Fatalf("got type 0x%02x, want MsgTerminalData", typ)
@@ -973,12 +1181,127 @@ func TestEarlyAttachGetsTheBareReplay(t *testing.T) {
 
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	c.attach(t, true, 0, 0)
 	typ, payload := c.readFrame(t)
 	if typ != MsgTerminalData {
 		t.Fatalf("got type 0x%02x, want MsgTerminalData", typ)
 	}
 	if !bytes.Equal(payload, f.ring.Replay()) {
 		t.Fatalf("payload = %q, want the bare ring replay %q", payload, f.ring.Replay())
+	}
+}
+
+// An attach that announced itself with a probe-shaped frame (Status — the
+// pre-hello attach's ambiguous first frame) and then resizes is an attach: the
+// resize upgrades it and replays without waiting for the grace.
+func TestResizeUpgradesAStatusFirstConnectionToViewer(t *testing.T) {
+	// An hour: the upgrade must come from the resize, not the grace.
+	f := startServeConfigured(t, 317, func(h *host) {
+		h.legacyViewerGrace = time.Hour
+	})
+	defer f.cancel()
+
+	f.ring.Append([]byte("scrollback\n"))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	if err := c.send(MsgStatusReq, nil); err != nil {
+		t.Fatalf("send status: %v", err)
+	}
+	if typ, _ := c.readFrame(t); typ != MsgStatusRes {
+		t.Fatalf("sync frame type 0x%02x, want MsgStatusRes", typ)
+	}
+
+	resize, _ := json.Marshal(ResizePayload{Cols: 80, Rows: 24})
+	if err := c.send(MsgResize, resize); err != nil {
+		t.Fatalf("send resize: %v", err)
+	}
+	typ, payload := c.readFrame(t)
+	if typ != MsgTerminalData || !bytes.Equal(payload, f.ring.Replay()) {
+		t.Fatalf("frame after resize = 0x%02x %q, want the ring replay", typ, payload)
+	}
+}
+
+// A pre-hello client reveals itself by sending MsgResize as its first frame
+// (the attach path did, right after connect): it is a legacy viewer and still
+// receives the replay before any live output.
+func TestLegacyResizeFirstConnectionStillGetsTheReplay(t *testing.T) {
+	f := startServe(t, 314)
+	defer f.cancel()
+
+	f.ring.Append([]byte("legacy scrollback\n"))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	resize, _ := json.Marshal(ResizePayload{Cols: 80, Rows: 24})
+	if err := c.send(MsgResize, resize); err != nil {
+		t.Fatalf("send resize: %v", err)
+	}
+	typ, got := c.readFrame(t)
+	if typ != MsgTerminalData || !bytes.Equal(got, f.ring.Replay()) {
+		t.Fatalf("first frame = 0x%02x %q, want the ring replay", typ, got)
+	}
+}
+
+// A client that connects and only reads — every client used to behave that way
+// — still gets the replay once firstFrameTimeout passes.
+func TestSilentConnectionGetsTheLegacyReplay(t *testing.T) {
+	f := startServeConfigured(t, 315, func(h *host) {
+		h.firstFrameTimeout = 50 * time.Millisecond
+	})
+	defer f.cancel()
+
+	f.ring.Append([]byte("silent scrollback\n"))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	typ, got := c.readFrame(t)
+	if typ != MsgTerminalData || !bytes.Equal(got, f.ring.Replay()) {
+		t.Fatalf("first frame = 0x%02x %q, want the ring replay", typ, got)
+	}
+}
+
+// A connection whose first frame is MsgStatusReq is ambiguous: an attach with
+// unknown dimensions looks exactly like a status probe. Staying open past
+// legacyViewerGrace makes it a viewer: it is replayed, then receives live
+// output.
+func TestStatusFirstConnectionIsUpgradedToViewerAfterGrace(t *testing.T) {
+	f := startServeConfigured(t, 316, func(h *host) {
+		h.legacyViewerGrace = 50 * time.Millisecond
+	})
+	defer f.cancel()
+
+	f.ring.Append([]byte("status-first scrollback\n"))
+
+	c := newTestClient(t, f.addr)
+	defer c.close()
+	if err := c.send(MsgStatusReq, nil); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	sawStatus, sawReplay := false, false
+	for !sawStatus || !sawReplay {
+		typ, payload := c.readFrame(t)
+		switch typ {
+		case MsgStatusRes:
+			sawStatus = true
+		case MsgTerminalData:
+			if !bytes.Equal(payload, f.ring.Replay()) {
+				t.Fatalf("replay frame = %q, want the ring replay %q", payload, f.ring.Replay())
+			}
+			sawReplay = true
+		default:
+			t.Fatalf("unexpected frame type 0x%02x", typ)
+		}
+	}
+
+	// A viewer now: live output reaches it.
+	if _, err := f.pty.WriteOutput([]byte("live\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	typ, payload := c.readFrame(t)
+	if typ != MsgTerminalData || string(payload) != "live\n" {
+		t.Fatalf("live frame = 0x%02x %q, want %q", typ, payload, "live\n")
 	}
 }
 
@@ -1090,6 +1413,7 @@ func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 	}()
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	c.attach(t, true, 0, 0)           // a viewer hello; it classified behind h.mu like an attach
 	time.Sleep(50 * time.Millisecond) // let the attach queue on h.mu first
 
 	more := []byte("$ make\nok\n")
@@ -1143,6 +1467,7 @@ func TestOutputHeldForASlowViewerReachesANewAttachOnce(t *testing.T) {
 	// fills as output is recorded.
 	stalledHost, stalledPeer := net.Pipe()
 	stalled := newClientState()
+	stalled.viewer = true // broadcast reaches viewers only
 	f.host.mu.Lock()
 	f.host.clients[stalledHost] = stalled
 	f.host.mu.Unlock()
@@ -1179,6 +1504,7 @@ func TestOutputHeldForASlowViewerReachesANewAttachOnce(t *testing.T) {
 
 	c := newTestClient(t, f.addr)
 	defer c.close()
+	c.attach(t, true, 0, 0)
 	typ, snap := c.readFrame(t)
 	if typ != MsgTerminalData {
 		t.Fatalf("first frame type 0x%02x, want the snapshot", typ)

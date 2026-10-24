@@ -1,8 +1,9 @@
 // attach.go - conpty Attach: a loopback Stream over the B3 pty-host. Unlike
 // tmux, conpty does not spawn an attach CLI; it dials the session's
-// loopback host and speaks the B1 framing protocol directly. The host replays
-// the scrollback Snapshot as the first MsgTerminalData on connect, so a fresh
-// Read naturally yields the repaint first.
+// loopback host and speaks the B1 framing protocol directly. The attach sends a
+// MsgAttach hello first, so the host knows the connection is a viewer and
+// replays the scrollback for it; a fresh Read naturally yields the repaint
+// first.
 package conpty
 
 import (
@@ -18,8 +19,9 @@ import (
 var _ ports.Attacher = (*Runtime)(nil)
 
 // Attach opens a fresh attach Stream for the session by dialing its loopback
-// pty-host. rows/cols size the host's PTY from birth when known (a MsgResize is
-// sent right after connect). ctx cancellation closes the Stream.
+// pty-host. rows/cols size the host's PTY from birth when known: the MsgAttach
+// hello carries them, and a MsgResize follows for hosts that predate the hello
+// so they still size from the first attach. ctx cancellation closes the Stream.
 func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, cols uint16) (ports.Stream, error) {
 	sess, err := r.resolveWithEvidence(ctx, handle.ID)
 	if err != nil {
@@ -35,6 +37,23 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 
 	pipe := newBytePipe()
 	s := &loopbackStream{conn: conn, pr: pipe, pw: pipe}
+
+	// The host classifies each connection by its FIRST frame (host.go,
+	// classifyConn): this hello declares the connection a viewer and asks for
+	// the scrollback replay, so the daemon's GetOutput/Status probes never pay
+	// for one. Hosts that predate the hello ignore the unknown message and
+	// still replay on connect, which is why the Resize and status request
+	// below stay.
+	helloPayload, _ := json.Marshal(AttachPayload{Cols: int(cols), Rows: int(rows), Replay: true}) // small JSON, never overflows uint32
+	hello, err := EncodeMessage(MsgAttach, helloPayload)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if _, err := conn.Write(hello); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 
 	// Pump host frames: MsgTerminalData payloads go into the pipe that Read
 	// drains. The first such frame is the scrollback snapshot, so the replay
