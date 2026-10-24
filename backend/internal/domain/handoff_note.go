@@ -29,6 +29,7 @@ const (
 	handoffOriginalTaskCap  = 2_000
 	handoffChangedFileLimit = 50
 	handoffChangedFileCap   = 160
+	handoffArtifactLimit    = 50
 	handoffHistoryPathCap   = 400
 
 	// A note delivered as a launch argument must also fit the operating
@@ -70,8 +71,12 @@ type HandoffNoteInput struct {
 	At            time.Time
 	OriginalTask  string
 	ChangedFiles  []string
-	Turns         []HandoffTurn
-	Terminal      bool
+	// ArtifactDir is the session's artifact directory and Artifacts the files
+	// in it, in the order the note lists them.
+	ArtifactDir string
+	Artifacts   []SessionArtifactFile
+	Turns       []HandoffTurn
+	Terminal    bool
 	// HistoryFiles point at the agent's own record for an agent whose answers
 	// AO did not record, because it reports no turns through hooks.
 	HistoryFiles []HandoffHistoryFile
@@ -163,6 +168,18 @@ func renderHandoffNote(in HandoffNoteInput, older, recent []HandoffTurn) string 
 				break
 			}
 			fmt.Fprintf(&b, "- %s\n", quoteHandoffLine(name, handoffChangedFileCap))
+		}
+	}
+
+	if len(in.Artifacts) > 0 {
+		fmt.Fprintf(&b, "\n## Session artifacts\nFiles already in the session artifact directory `%s` (%d). Read the one a request is about before writing it again, and update it instead of starting over:\n",
+			quoteHandoffLine(in.ArtifactDir, handoffHistoryPathCap), len(in.Artifacts))
+		for index, file := range in.Artifacts {
+			if index == handoffArtifactLimit {
+				fmt.Fprintf(&b, "(and %d more)\n", len(in.Artifacts)-handoffArtifactLimit)
+				break
+			}
+			fmt.Fprintf(&b, "- %s (%d bytes, updated %s)\n", quoteHandoffLine(file.Path, handoffChangedFileCap), file.Size, file.UpdatedAt.UTC().Format(time.RFC3339))
 		}
 	}
 

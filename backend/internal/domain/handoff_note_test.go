@@ -143,3 +143,28 @@ func TestQuotedTextCannotAddToTheHandoffNotesStructure(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildHandoffNoteListsTheSessionArtifacts(t *testing.T) {
+	artifacts := make([]SessionArtifactFile, 0, handoffArtifactLimit+2)
+	for index := range handoffArtifactLimit + 2 {
+		artifacts = append(artifacts, SessionArtifactFile{Path: fmt.Sprintf("doc-%02d.md", index), Size: 42, UpdatedAt: time.Unix(1_700_000_000, 0)})
+	}
+	got := BuildHandoffNote(HandoffNoteInput{
+		SourceHarness: HarnessClaudeCode, TargetHarness: HarnessCodex,
+		ArtifactDir: "/data/artifacts/s-1", Artifacts: artifacts, Turns: handoffTestTurns(1),
+	})
+	for _, want := range []string{
+		"## Session artifacts", "`/data/artifacts/s-1` (52)", "- doc-00.md (42 bytes, updated 2023-11-14T22:13:20Z)", "(and 2 more)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("note is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "doc-50.md") {
+		t.Errorf("note lists more than %d artifacts", handoffArtifactLimit)
+	}
+
+	if got := BuildHandoffNote(HandoffNoteInput{ArtifactDir: "/data/artifacts/s-1", Turns: handoffTestTurns(1)}); strings.Contains(got, "## Session artifacts") {
+		t.Errorf("note has an artifacts section with no artifacts:\n%s", got)
+	}
+}
