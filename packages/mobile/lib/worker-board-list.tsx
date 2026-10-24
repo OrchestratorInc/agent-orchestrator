@@ -272,9 +272,12 @@ export function WorkerBoardList({
 	const listSections = useMemo<ListSection[]>(() => {
 		if (searching) {
 			const data = [...filteredGroups.pinned, ...filteredGroups.sections.flatMap((section) => section.data), ...searchedArchive];
-			// Kept while the archive is still being read, so its status row shows
-			// instead of "no results" for a match that has not arrived yet.
-			return data.length === 0 && !pagedArchive.loading ? [] : [{ zone: "search", label: "Search results", color: t.accent, data }];
+			// Kept while the archive is still being read, or could not be, so its
+			// status row (progress, or the error and Retry) shows instead of "no
+			// results" for a match that has not arrived yet.
+			return data.length === 0 && !pagedArchive.loading && !pagedArchive.error
+				? []
+				: [{ zone: "search", label: "Search results", color: t.accent, data }];
 		}
 		const liveSections: ListSection[] = [
 			...(pinned.length ? [{ zone: "pinned" as const, label: "Pinned", color: t.amber, data: pinned }] : []),
@@ -285,7 +288,7 @@ export function WorkerBoardList({
 			...liveSections,
 			{ zone: "archive" as const, label: "Archive", color: t.textFaint, data: archiveOpen ? archived : [] },
 		];
-	}, [searching, filteredGroups, searchedArchive, pagedArchive.loading, pinned, sections, archiveCount, archived, archiveOpen, t]);
+	}, [searching, filteredGroups, searchedArchive, pagedArchive.loading, pagedArchive.error, pinned, sections, archiveCount, archived, archiveOpen, t]);
 
 	// Headers and rows as one array of siblings, so a row changing section is a
 	// reorder rather than an unmount. See BoardRow.

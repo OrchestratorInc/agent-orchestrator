@@ -434,6 +434,22 @@ describe("a machine that pages its archive", () => {
 		act(() => renderer.unmount());
 	});
 
+	// A search with no match yet must not read as "no results" when the archive
+	// could not be read: the error and Retry stay until it succeeds.
+	it("keeps a failed archive search's Retry when nothing matched", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(3), "only-in-the-archive")); });
+		expect(archivePages.requests).toHaveLength(1);
+		await act(async () => { archivePages.requests.shift()!.reject(new Error("socket hang up")); });
+		const retry = renderer.root.findAllByType("Pressable" as never).find((node) => node.props.accessibilityLabel === "Retry loading archived sessions");
+		expect(retry).toBeTruthy();
+		expect(rows(renderer).map((row) => row.kind)).toEqual(["header", "archive-status"]);
+		act(() => { retry!.props.onPress(); });
+		expect(archivePages.requests).toHaveLength(1);
+		act(() => renderer.unmount());
+	});
+
 	it("offers a retry when a page fails", async () => {
 		archivePages.requests.length = 0;
 		let renderer!: ReactTestRenderer;
