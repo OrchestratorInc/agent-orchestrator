@@ -15,6 +15,7 @@ import {
 	Pencil,
 } from "lucide-react";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
+import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
@@ -52,6 +53,7 @@ export function SessionBranchSummary({
 	hostId,
 	onOpenFiles,
 	openPRNumber,
+	pullRequest,
 	pullRequests,
 	session,
 	title,
@@ -60,6 +62,7 @@ export function SessionBranchSummary({
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
+	pullRequest?: Pick<SessionPRSummary, "sourceBranch" | "targetBranch">;
 	pullRequests: ReactNode;
 	session: WorkspaceSession;
 	title: string;
@@ -128,7 +131,12 @@ export function SessionBranchSummary({
 
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
-	const { branch, naming } = sessionBranchPresentation(session);
+	// An attached PR names the branch it was opened from; the session's own branch is the fallback.
+	const presented = sessionBranchPresentation(session);
+	const branch = pullRequest?.sourceBranch || presented.branch;
+	const { naming } = presented;
+	// Fact-only PR summaries have no target branch yet; keep the git-derived base.
+	const base = pullRequest?.targetBranch || facts.base;
 	if (!branch && !naming && !pullRequests && !hasWork) return null;
 
 	const sendError = send.error instanceof Error ? send.error.message : null;
@@ -154,7 +162,7 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
-				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
+				{branch || naming ? <BranchLine base={base} branch={branch} naming={naming} /> : null}
 				{cards}
 				{facts.uncommitted.length > 0 ? (
 					<GitStatusRow

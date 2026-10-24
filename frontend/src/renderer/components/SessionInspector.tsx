@@ -468,6 +468,7 @@ const SummaryView = memo(function SummaryView({
 					hostId={hostId}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
+					pullRequest={prSummaries[0]}
 					pullRequests={hasPRs ? (
 						<>
 							{prSummaries.map((pr) => (
