@@ -309,13 +309,28 @@ func provisioningOrchestrator(t *testing.T, st *sqlite.Store, id domain.SessionI
 	}
 }
 
-func startOrchestratorController(t *testing.T, svc *chatsvc.Service, id domain.SessionID) {
+func startOrchestratorController(t *testing.T, st *sqlite.Store, svc *chatsvc.Service, id domain.SessionID) {
 	t.Helper()
 	if _, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
 		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
-		ControllerReady: func(chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
-			return chatsvc.ControllerCommit{}, nil
+		ControllerReady: func(result chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			if result.ProviderBoundary == nil {
+				return chatsvc.ControllerCommit{}, nil
+			}
+			record, _, err := st.GetSession(context.Background(), id)
+			if err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			record.ProvisionState = domain.SessionProvisionReady
+			record.Metadata.ProviderConversationID = result.ProviderConversationID
+			record.Metadata.ControllerGeneration = result.ControllerGeneration
+			if err := st.CommitChatSpawn(context.Background(), record, *result.ProviderBoundary); err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			committed := result.Conversation
+			committed.ActiveBranchID = result.ProviderBoundary.ID
+			return chatsvc.ControllerCommit{Conversation: committed}, nil
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -364,7 +379,7 @@ func TestOrchestratorOpeningPromptDrainsInProjectConversation(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			startOrchestratorController(t, svc, id)
+			startOrchestratorController(t, st, svc, id)
 			if err := svc.DrainQueued(ctx, id); err != nil {
 				t.Fatalf("drain after controller start: %v", err)
 			}
@@ -424,7 +439,7 @@ func TestStrandedPromptFromEarlierRunIsNotReplayed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	startOrchestratorController(t, svc, id)
+	startOrchestratorController(t, st, svc, id)
 	if err := svc.DrainQueued(ctx, id); err != nil {
 		t.Fatalf("drain after restart: %v", err)
 	}
@@ -475,7 +490,7 @@ func TestQueuedSendRacingFirstStartLandsInProjectConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	startOrchestratorController(t, svc, id)
+	startOrchestratorController(t, st, svc, id)
 	if err := svc.DrainQueued(ctx, id); err != nil {
 		t.Fatalf("drain after controller start: %v", err)
 	}
