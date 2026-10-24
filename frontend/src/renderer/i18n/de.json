@@ -965,7 +965,6 @@
 	"mobile.keepAwake.label": "Diesen Mac wach halten",
 	"mobile.keepAwake.combinedHelp": "Halte deinen Mac auch bei geschlossenem Deckel wach.",
 	"mobile.keepAwake.details": "Informationen zum Wachhalten dieses Mac",
-	"mobile.keepAwake.defaultDataRequired": "Erfordert den Standard-Datenordner von AO.",
 	"mobile.keepAwake.help": "Bleibt von deinem Telefon aus erreichbar, während du weg bist.",
 	"mobile.keepAwake.laptopNote": "Beim Zuklappen geht ein MacBook trotzdem in den Ruhezustand, außer es ist am Strom und mit einem externen Display verbunden.",
 	"mobile.keepAwake.lidLabel": "Bei geschlossenem Deckel wach bleiben",

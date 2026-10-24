@@ -922,9 +922,15 @@ test.each([undefined, "isolated_data_dir", "helper_missing"])("never falls back 
 	expect(toggle).not.toBeChecked();
 	expect(toggle).toBeDisabled();
 	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("even with the lid closed");
-	expect(screen.getByRole("status")).toHaveTextContent(lidReason === "isolated_data_dir"
-		? "Requires AO’s default data folder."
-		: lidReason === "helper_missing" ? "The desktop wake helper is missing." : "Closed-lid wakefulness is unavailable on this Mac or macOS version.");
+	if (lidReason === "isolated_data_dir") {
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		expect(screen.queryByText("Requires AO’s default data folder.")).not.toBeInTheDocument();
+		await userEvent.hover(screen.getByRole("button", { name: "About keeping this Mac awake" }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Closed-lid wakefulness is disabled for custom or isolated data directories.");
+	} else {
+		expect(screen.getByRole("status")).toHaveTextContent(lidReason === "helper_missing"
+			? "The desktop wake helper is missing." : "Closed-lid wakefulness is unavailable on this Mac or macOS version.");
+	}
 	expect(screen.queryByText(/Closing the lid still/)).not.toBeInTheDocument();
 	await userEvent.click(toggle);
 	expect(apiClient.POST).not.toHaveBeenCalled();

@@ -973,7 +973,6 @@
 	"mobile.keepAwake.label": "Mantener este Mac activo",
 	"mobile.keepAwake.combinedHelp": "Mantén tu Mac activo, incluso con la tapa cerrada.",
 	"mobile.keepAwake.details": "Acerca de mantener este Mac activo",
-	"mobile.keepAwake.defaultDataRequired": "Requiere la carpeta de datos predeterminada de AO.",
 	"mobile.keepAwake.help": "Sigue accesible desde tu teléfono mientras no estás.",
 	"mobile.keepAwake.laptopNote": "Cerrar la tapa sigue poniendo el MacBook en reposo, salvo que esté conectado a la corriente y a una pantalla externa.",
 	"mobile.keepAwake.lidLabel": "Mantener activo con la tapa cerrada",
