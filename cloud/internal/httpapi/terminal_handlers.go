@@ -50,6 +50,9 @@ const (
 	// terminalRepaintInterval limits how often one attachment asks the
 	// terminal's program to redraw over output it skipped.
 	terminalRepaintInterval = 5 * time.Second
+	// terminalClientRepaintInterval bounds repaints a client asks for after
+	// its screen reflowed, so a panel being toggled cannot flood the program.
+	terminalClientRepaintInterval = time.Second
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")
@@ -374,6 +377,7 @@ func (s *Server) readTerminalInput(
 	operate := terminalScope(terminal.Scopes, "terminal:operate")
 	resizes := newTerminalResizes()
 	go s.deliverTerminalResizes(ctx, terminal, resizes)
+	var clientRepaintAt time.Time
 	for {
 		_, data, err := connection.Read(ctx)
 		if err != nil {
@@ -391,6 +395,10 @@ func (s *Server) readTerminalInput(
 			Data    string `json:"data,omitempty"`
 			Columns uint16 `json:"columns,omitempty"`
 			Rows    uint16 `json:"rows,omitempty"`
+			// Repaint marks a resize back to the size the program already has,
+			// sent after the client's screen reflowed at sizes in between (a
+			// burst of panel toggles): the program redraws for the client.
+			Repaint bool `json:"repaint,omitempty"`
 		}
 		if json.Unmarshal(data, &message) == nil {
 			if message.Type == "resize" {
@@ -411,6 +419,10 @@ func (s *Server) readTerminalInput(
 					continue
 				}
 				resizes.request(message.Columns, message.Rows)
+				if message.Repaint && time.Since(clientRepaintAt) >= terminalClientRepaintInterval {
+					clientRepaintAt = time.Now()
+					s.requestTerminalRepaint(terminal, "client reflowed")
+				}
 				continue
 			}
 			if message.Type == "input" {
@@ -519,15 +531,15 @@ func (s *Server) deliverTerminalResizes(
 	}
 }
 
-// requestTerminalRepaint asks the terminal's program to redraw because this
-// client skipped output: the replay log's head was pruned, or frames were
-// lost. A full-screen program repaints its whole screen; a line-mode shell
+// requestTerminalRepaint asks the terminal's program to redraw: this client
+// skipped output (the replay log's head was pruned, or frames were lost), or
+// the client's screen reflowed at sizes the program never saw. A full-screen program repaints its whole screen; a line-mode shell
 // only loses the skipped scrollback. It is best effort and never blocks the
 // output path.
-func (s *Server) requestTerminalRepaint(terminal domain.TerminalSession) {
+func (s *Server) requestTerminalRepaint(terminal domain.TerminalSession, reason string) {
 	if s.logger != nil {
-		s.logger.Info("terminal replay skipped output; requesting repaint",
-			"terminal_id", terminal.ID, "kind", terminal.Kind)
+		s.logger.Info("requesting terminal repaint",
+			"terminal_id", terminal.ID, "kind", terminal.Kind, "reason", reason)
 	}
 	if s.terminalStreamEnabled && s.terminalStreams != nil && s.terminalStreams.pushControl(
 		terminal.ID, worker.TerminalStreamFrame{Type: "repaint"},
@@ -688,7 +700,7 @@ func (s *Server) writeTerminalOutput(
 			if skipped && state == "open" && time.Since(repaintedAt) >= terminalRepaintInterval {
 				skipped = false
 				repaintedAt = time.Now()
-				s.requestTerminalRepaint(terminal)
+				s.requestTerminalRepaint(terminal, "skipped output")
 			}
 			if state == "failed" {
 				return errTerminalProcessUnavailable

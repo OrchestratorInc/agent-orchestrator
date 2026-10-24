@@ -126,7 +126,8 @@ func receiveLive(t *testing.T, live chan terminalRelayOutput) terminalRelayOutpu
 // A durable-mirror failure used to cancel the whole worker stream, which also
 // cut live output to the browser; the worker redialed into the same failure
 // and the terminal looked frozen. The mirror is best effort: live frames keep
-// flowing, later frames are still mirrored, and only stored frames are acked.
+// flowing, later frames are still mirrored, and every processed frame is acked
+// (only stored ones with a replay sequence).
 func TestTerminalRelayMirrorFailureKeepsLiveStream(t *testing.T) {
 	store := &mirrorStubStore{appendErrors: map[int64]error{
 		1: errors.New("database unavailable"),
@@ -143,9 +144,17 @@ func TestTerminalRelayMirrorFailureKeepsLiveStream(t *testing.T) {
 			t.Fatalf("live frame sequence = %d, want %d", got.sequence, id)
 		}
 	}
-	ack := readWorkerFrame(t, connection)
-	if ack.Type != "ack" || ack.ID != 3 {
-		t.Fatalf("worker got %+v, want the ack for frame 3 (frames 1 and 2 were not stored)", ack)
+	// Every processed frame is acknowledged, stored or not, so the worker's
+	// flow-control window never stalls on a failing store; only frame 3 has a
+	// replay sequence.
+	for id := int64(1); id <= 3; id++ {
+		ack := readWorkerFrame(t, connection)
+		if ack.Type != "ack" || ack.ID != id {
+			t.Fatalf("worker got %+v, want the ack for frame %d", ack, id)
+		}
+		if stored := ack.Sequence != 0; stored != (id == 3) {
+			t.Fatalf("ack for frame %d has sequence %d; only frame 3 was stored", id, ack.Sequence)
+		}
 	}
 	store.mu.Lock()
 	appended := append([]int64(nil), store.appended...)
@@ -446,5 +455,58 @@ func TestTerminalLiveOutputSkipsUnfilledGap(t *testing.T) {
 			t.Fatal("skipped gap did not request a repaint")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A burst of panel toggles that ends at the size the program already has sends
+// no size change, but the client's screen reflowed at the sizes in between. The
+// client marks that final resize with repaint, and the program is asked to
+// redraw once, however many such resizes arrive within the interval.
+func TestTerminalResizeRepaintFlagRequestsOneRepaint(t *testing.T) {
+	store := &resizeStubStore{}
+	server := &Server{store: store, logger: slog.Default()}
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	defer cancelServer()
+	listener := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connection, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer connection.CloseNow()
+		var writeMu sync.Mutex
+		_ = server.readTerminalInput(serverCtx, connection, domain.TerminalSession{
+			ID: "term", OrgID: "org", SessionID: "session", WorkerEpoch: 1, Scopes: []string{"terminal:operate"},
+		}, &writeMu)
+	}))
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := websocket.Dial(ctx, "ws"+listener.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	for _, message := range []string{
+		`{"type":"resize","columns":148,"rows":43}`,
+		`{"type":"resize","columns":148,"rows":43,"repaint":true}`,
+		`{"type":"resize","columns":148,"rows":43,"repaint":true}`,
+	} {
+		if err := connection.Write(ctx, websocket.MessageText, []byte(message)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, repaints := store.snapshot(); repaints >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a resize marked repaint did not request a repaint")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, repaints := store.snapshot(); repaints != 1 {
+		t.Fatalf("repaints = %d, want 1 (the second within the interval is dropped)", repaints)
 	}
 }

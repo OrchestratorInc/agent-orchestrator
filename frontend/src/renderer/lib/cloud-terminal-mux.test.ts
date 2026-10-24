@@ -197,11 +197,30 @@ describe("createCloudTerminalMux resize coalescing", () => {
 		vi.advanceTimersByTime(150);
 		mux.resize("workspace", 100, 30);
 		vi.advanceTimersByTime(150);
-		// Bouncing away and back inside one debounce window is no change either.
-		mux.resize("workspace", 90, 30);
-		mux.resize("workspace", 100, 30);
-		vi.advanceTimersByTime(150);
 		expect(resizes(ws)).toEqual([{ type: "resize", columns: 100, rows: 30 }]);
+		mux.dispose();
+	});
+
+	it("asks for a repaint when a burst ends at the size already sent but the screen reflowed", async () => {
+		const { mux, ws } = await openMux();
+		mux.resize("agent", 148, 43);
+		vi.advanceTimersByTime(150);
+		// A side panel toggled open and closed quickly: the pane fits at the
+		// narrower width and back, and the program never sees a size change.
+		for (let toggle = 0; toggle < 24; toggle++) {
+			mux.resize("agent", toggle % 2 === 0 ? 81 : 148, 43);
+			vi.advanceTimersByTime(100);
+		}
+		mux.resize("agent", 148, 43);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toEqual([
+			{ type: "resize", columns: 148, rows: 43 },
+			{ type: "resize", columns: 148, rows: 43, repaint: true },
+		]);
+		// Nothing reflowed since, so a later fit at the same size sends nothing.
+		mux.resize("agent", 148, 43);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toHaveLength(2);
 		mux.dispose();
 	});
 

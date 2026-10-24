@@ -87,6 +87,9 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	let pendingResize: { cols: number; rows: number } | null = null;
 	let sentResize: { cols: number; rows: number } | null = null;
 	let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+	// reflowed records that the pane fitted to a size other than the last one
+	// sent since that send, so the screen no longer matches the program's.
+	let reflowed = false;
 	const pendingInput: string[] = [];
 
 	const setConnectionState = (next: MuxConnectionState) => {
@@ -276,13 +279,24 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			resizeTimer = null;
 		}
 		if (!pendingResize) return;
-		if (sentResize && sentResize.cols === pendingResize.cols && sentResize.rows === pendingResize.rows) return;
+		if (sentResize && sentResize.cols === pendingResize.cols && sentResize.rows === pendingResize.rows) {
+			// The burst ended at the size the program already has, so no size
+			// change goes out; but the screen reflowed at the sizes in between.
+			// Ask the program to redraw it (an older control plane ignores the
+			// flag and applies a same-size resize, which changes nothing).
+			if (reflowed && sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows, repaint: true })) {
+				reflowed = false;
+			}
+			return;
+		}
 		if (sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows })) {
 			sentResize = pendingResize;
+			reflowed = false;
 		}
 	};
 	const sendResize = (cols: number, rows: number) => {
 		if (cols < MIN_RESIZE_COLS || rows < MIN_RESIZE_ROWS) return;
+		if (sentResize && (sentResize.cols !== cols || sentResize.rows !== rows)) reflowed = true;
 		pendingResize = { cols, rows };
 		if (resizeTimer !== null) clearTimeout(resizeTimer);
 		resizeTimer = setTimeout(flushResize, RESIZE_DEBOUNCE_MS);
