@@ -60,4 +60,28 @@ test.describe("GitHub onboarding through the real daemon @connected", () => {
 		await expect(page.getByTestId("github-device-code")).toHaveCount(0);
 		await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
 	});
+
+	test("requires an old CLI update before sign-in and rechecks after a manual update", async ({ page, request }) => {
+		expect((await request.post(`${fixtureUrl}/old-cli`)).ok()).toBe(true);
+		const update = page.getByRole("button", { name: "Update GitHub CLI", exact: true });
+		await expect(update).toBeVisible();
+		await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeDisabled();
+		await expect(page.getByRole("button", { name: "Sign in with GitHub", exact: true })).toHaveCount(0);
+		const response = page.waitForResponse((result) => result.request().method() === "POST" && result.url().endsWith("/system/install/gh"));
+		await update.click();
+		const job = await (await response).json() as { status: string };
+		if (job.status === "unsupported") {
+			// Linux deliberately hands root-only updates to the user. Simulate
+			// completing that command, without updating any system packages.
+			await expect(page.getByRole("button", { name: "Download GitHub CLI", exact: true })).toBeVisible();
+			await expect(update).toBeVisible();
+			expect((await request.post(`${fixtureUrl}/reset`)).ok()).toBe(true);
+		}
+		// macOS uses the fixture's fake Homebrew; it updates only the fixture
+		// version banner, while login still runs the released gh binary.
+		await expect(update).toHaveCount(0);
+		const signIn = page.getByRole("button", { name: "Sign in with GitHub", exact: true });
+		if (await signIn.isVisible()) await signIn.click();
+		await expect(page.getByTestId("github-device-code")).toHaveText("ABCD-1234");
+	});
 });
