@@ -23,6 +23,7 @@ vi.mock("../lib/api-client", () => ({
 let client: QueryClient;
 let state: AwakeState;
 let mobile: { keepAwake: { supported: boolean; enabled: boolean; active: boolean; lidClosed: boolean } };
+let mobileEnabled: boolean;
 let release: (() => void) | undefined;
 let blockStart: boolean;
 function snapshot() { return structuredClone(state); }
@@ -37,13 +38,15 @@ beforeEach(() => {
 	client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	state = { settings: { lidClosed: true }, sessions: [], rules: [], activeRules: [], active: false, paused: false, capabilities: [{ id: "idle", available: true }] } as unknown as AwakeState;
 	mobile = { keepAwake: { supported: true, enabled: false, active: false, lidClosed: false } };
+	mobileEnabled = false;
 	test.get.mockReset().mockImplementation(async (path) => ({ data: path === "/api/v1/awake" ? snapshot() : structuredClone(mobile) }));
 	test.post.mockReset().mockImplementation(async (path, options) => {
 		if (path === "/api/v1/mobile/keep-awake") {
 			Object.assign(mobile.keepAwake, options.body);
-			if (!options.body.enabled) mobile.keepAwake.active = false;
+			mobile.keepAwake.active = options.body.enabled;
 			return { data: structuredClone(mobile) };
 		}
+		if (path === "/api/v1/mobile/disable") mobileEnabled = false;
 		if (path === "/api/v1/awake/sessions") {
 			if (blockStart) await new Promise<void>((resolve) => { release = resolve; });
 			state.sessions.push(awakeSession({ id: "new", ...options.body }));
@@ -71,25 +74,50 @@ async function show() {
 }
 function coffee() { return screen.getByRole("button", { name: "Stay Awake" }); }
 
-async function showCombinedMobile() {
+async function showCombinedMobile(bridgeEnabled = false) {
+	mobileEnabled = bridgeEnabled;
 	const mobileSnapshot = () => ({
-		enabled: false, browserRemoteAccess: false, loopbackOnly: false, noPublicTunnel: false,
+		enabled: mobileEnabled, browserRemoteAccess: false, loopbackOnly: false, noPublicTunnel: false,
 		host: "", hostId: "h_fixture", tailscaleHost: "", port: 0, password: "", warning: "", endpoints: [],
 		tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "" },
 		securePairing: { enabled: false, available: false, active: false, host: "", port: 0, reason: "" },
-		keepAwake: { ...mobile.keepAwake, hasBattery: true, lidSupported: true, lidActive: false },
+		keepAwake: { ...mobile.keepAwake, hasBattery: true, lidSupported: true, lidActive: mobile.keepAwake.active && mobile.keepAwake.lidClosed },
 	});
 	test.get.mockImplementation(async (path) => ({ data: path === "/api/v1/awake" ? snapshot() : mobileSnapshot() }));
 	const post = test.post.getMockImplementation()!;
 	test.post.mockImplementation(async (path, options) => {
 		const response = await post(path, options);
-		return path === "/api/v1/mobile/keep-awake" && response.data ? { ...response, data: mobileSnapshot() } : response;
+		return path.startsWith("/api/v1/mobile/") && response.data ? { ...response, data: mobileSnapshot() } : response;
 	});
 	render(<QueryClientProvider client={client}><AwakeControl /><ConnectMobileContent active /></QueryClientProvider>);
 	await waitFor(() => expect(screen.getByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled());
 }
 
 describe("combined mobile wake with the shared hook", () => {
+	it.each([false, true])("keeps both wake modes independent of mobile access (initially enabled=%s)", async (bridgeEnabled) => {
+		await showCombinedMobile(bridgeEnabled);
+		const toggle = screen.getByRole("switch", { name: "Keep this Mac awake" });
+		await userEvent.click(toggle);
+		await waitFor(() => expect(toggle).toBeEnabled());
+		expect(toggle).toBeChecked();
+		expect(mobile.keepAwake).toMatchObject({ enabled: true, active: true, lidClosed: true });
+		expect(mobileEnabled).toBe(bridgeEnabled);
+		expect(coffee()).toHaveAttribute("aria-pressed", "true");
+		if (bridgeEnabled) {
+			await userEvent.click(screen.getByRole("button", { name: "Turn off mobile connection" }));
+			await waitFor(() => expect(mobileEnabled).toBe(false));
+			await waitFor(() => expect(toggle).toBeEnabled());
+			expect(toggle).toBeChecked();
+			expect(mobile.keepAwake.active).toBe(true);
+			expect(test.post).not.toHaveBeenCalledWith("/api/v1/awake/stop");
+		}
+		await userEvent.click(toggle);
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		expect(mobile.keepAwake).toMatchObject({ enabled: false, active: false, lidClosed: false });
+		expect(mobileEnabled).toBe(false);
+		expect(test.post.mock.calls.some(([path]) => path === "/api/v1/mobile/enable" || path === "/api/v1/mobile/start-remote-access")).toBe(false);
+	});
+
 	it.each(["empty", "existing", "paused"])("preserves %s desktop ownership when lid registration fails", async (ownership) => {
 		if (ownership === "existing") {
 			state.sessions = [awakeSession({ id: "existing" })];

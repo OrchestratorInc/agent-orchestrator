@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Check, Coffee, Copy, Info, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useStayAwake } from "../../hooks/useStayAwake";
@@ -780,9 +780,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 			</PairingLayout>
 
-			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
-			    whether or not the bridge is on: the choice is remembered and takes
-			    effect whenever the mobile connection is. */}
+			{/* macOS wake ownership is independent of the mobile connection. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
@@ -833,6 +831,13 @@ function KeepAwakeRow({
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
+	const status = keepAwake.lidActive && keepAwake.enabled
+		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
+		: keepAwake.lidReason === "isolated_data_dir"
+			? t("mobile.keepAwake.defaultDataRequired")
+			: keepAwake.lidReason || lidUnavailable
+				? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
+				: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
 		<SettingsRow
 			data-testid="mobile-keep-awake"
@@ -840,19 +845,24 @@ function KeepAwakeRow({
 			label={t("mobile.keepAwake.label")}
 			description={
 				<>
-					{t("mobile.keepAwake.combinedHelp", "Keep your Mac running even with the lid closed. Stay reachable from your phone while you're away.")}
-					<span className="mt-1 block">{t("mobile.keepAwake.lidHelp")}</span>
+					{t("mobile.keepAwake.combinedHelp")}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								aria-label={t("mobile.keepAwake.details")}
+								className="ml-1 inline-flex align-middle text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							>
+								<Info className="size-3.5" aria-hidden="true" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72">
+							{t("mobile.keepAwake.lidHelp")}
+							{keepAwake.lidReason === "isolated_data_dir" && <p className="mt-1">{t("mobile.keepAwake.lidReason.isolated_data_dir")}</p>}
+						</TooltipContent>
+					</Tooltip>
 					{lidNeedsAttention && (
-						<span className="mt-1 block" role="status">
-							{keepAwake.lidActive && keepAwake.enabled
-								? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-								: keepAwake.lidReason || lidUnavailable
-									? t(
-										`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`,
-										"Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.",
-									)
-									: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
-						</span>
+						<span className="mt-1 block" role="status">{status}</span>
 					)}
 				</>
 			}

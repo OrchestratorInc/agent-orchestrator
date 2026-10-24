@@ -874,7 +874,7 @@ test("explains that the Mac keeps running with the lid closed", async () => {
 	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: true, lidSupported: true, lidClosed: true };
 	renderMobileSettings();
 	expect(await screen.findByRole("switch", { name: "Keep this Mac awake" })).toBeChecked();
-	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("Keep your Mac running even with the lid closed");
+	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("Keep your Mac running, even with the lid closed");
 	expect(screen.queryByText(/Closing the lid still/)).not.toBeInTheDocument();
 });
 
@@ -889,8 +889,8 @@ test("turning on closed-lid mode also enables idle wake in one request", async (
 	expect(toggle).not.toBeChecked();
 	expect(screen.queryByRole("switch", { name: "Keep awake with lid closed" })).not.toBeInTheDocument();
 	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("even with the lid closed");
-	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("even when your phone disconnects");
-	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("Stops below 10% battery or at critical heat");
+	expect(screen.getByTestId("mobile-keep-awake")).not.toHaveTextContent("mobile access");
+	expect(screen.getByTestId("mobile-keep-awake")).not.toHaveTextContent("Stops below");
 	expect(screen.queryByTestId("mobile-keep-awake-laptop")).not.toBeInTheDocument();
 	await userEvent.click(toggle);
 	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: true } });
@@ -923,11 +923,24 @@ test.each([undefined, "isolated_data_dir", "helper_missing"])("never falls back 
 	expect(toggle).toBeDisabled();
 	expect(screen.getByTestId("mobile-keep-awake")).toHaveTextContent("even with the lid closed");
 	expect(screen.getByRole("status")).toHaveTextContent(lidReason === "isolated_data_dir"
-		? "Closed-lid wakefulness is disabled for custom or isolated data directories."
+		? "Requires AO’s default data folder."
 		: lidReason === "helper_missing" ? "The desktop wake helper is missing." : "Closed-lid wakefulness is unavailable on this Mac or macOS version.");
 	expect(screen.queryByText(/Closing the lid still/)).not.toBeInTheDocument();
 	await userEvent.click(toggle);
 	expect(apiClient.POST).not.toHaveBeenCalled();
+});
+
+test("keeps safety details accessible without filling the awake row", async () => {
+	mobileStatus.enabled = false;
+	mobileStatus.keepAwake = { supported: true, enabled: false, active: false, hasBattery: true, lidSupported: true };
+	renderMobileSettings();
+	expect(await screen.findByRole("switch", { name: "Keep this Mac awake" })).toBeEnabled();
+	const details = screen.getByRole("button", { name: "About keeping this Mac awake" });
+	await userEvent.hover(details);
+	const tooltip = await screen.findByRole("tooltip");
+	expect(tooltip).toHaveTextContent("Uses more battery. Keep your Mac ventilated.");
+	expect(tooltip).toHaveTextContent("Stops below 10% battery or at critical heat.");
+	expect(tooltip).not.toHaveTextContent("mobile access");
 });
 
 test.each([false, true])("shows helper upgrade recovery with lid preference %s", async (lidClosed) => {

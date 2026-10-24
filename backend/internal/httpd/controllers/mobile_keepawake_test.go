@@ -18,9 +18,17 @@ type fakeKeepAwake struct {
 	active  bool
 	battery bool
 	starts  int
+	idleErr error
 }
 
-func (f *fakeKeepAwake) Start() error     { f.active = true; f.starts++; return nil }
+func (f *fakeKeepAwake) Start() error {
+	if f.idleErr != nil {
+		return f.idleErr
+	}
+	f.active = true
+	f.starts++
+	return nil
+}
 func (f *fakeKeepAwake) Stop()            { f.active = false }
 func (f *fakeKeepAwake) Active() bool     { return f.active }
 func (f *fakeKeepAwake) HasBattery() bool { return f.battery }
@@ -57,25 +65,23 @@ func TestKeepAwakeUnsupportedWithoutController(t *testing.T) {
 	}
 }
 
-// Turning the option on while the bridge is off only records the choice; the
-// assertion is taken when the bridge comes up and released when it goes down.
-func TestKeepAwakeFollowsBridge(t *testing.T) {
+func TestKeepAwakeIndependentOfBridge(t *testing.T) {
 	ka := &fakeKeepAwake{battery: true}
-	b, _ := newKeepAwakeBridge(t, ka)
+	b, lan := newKeepAwakeBridge(t, ka)
 
 	res, err := b.SetKeepAwake(true)
 	if err != nil {
 		t.Fatalf("SetKeepAwake: %v", err)
 	}
-	if !res.KeepAwake.Supported || !res.KeepAwake.Enabled || res.KeepAwake.Active || !res.KeepAwake.HasBattery {
+	if !res.KeepAwake.Supported || !res.KeepAwake.Enabled || !res.KeepAwake.Active || !res.KeepAwake.HasBattery || lan.Running() {
 		t.Fatalf("with bridge off: %+v", res.KeepAwake)
 	}
 
 	if _, err := b.Enable(); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
-	if !ka.active {
-		t.Fatal("enable should take the assertion when the option is on")
+	if !ka.active || ka.starts != 1 {
+		t.Fatal("enabling mobile must not acquire another awake hold")
 	}
 	// Enable rewrites persisted state; the choice must survive it.
 	if st, _ := mobilebridge.Load(b.ConfigPath); !st.KeepAwake {
@@ -85,11 +91,14 @@ func TestKeepAwakeFollowsBridge(t *testing.T) {
 	if err := b.Disable(); err != nil {
 		t.Fatalf("Disable: %v", err)
 	}
-	if ka.active {
-		t.Fatal("disable should release the assertion")
+	if !ka.active {
+		t.Fatal("disabling mobile must leave the independent awake hold active")
 	}
 	if !b.Status().KeepAwake.Enabled {
 		t.Fatal("disable should keep the preference")
+	}
+	if res, err := b.SetKeepAwake(false); err != nil || res.KeepAwake.Active || lan.Running() {
+		t.Fatalf("awake off with mobile disabled: %+v, %v", res.KeepAwake, err)
 	}
 }
 
@@ -122,6 +131,28 @@ func TestKeepAwakeRestoredOnBoot(t *testing.T) {
 	b.ShutdownKeepAwake()
 	if ka.active {
 		t.Fatal("shutdown should release the assertion")
+	}
+}
+
+func TestKeepAwakeRestoredDespiteMobileBindFailure(t *testing.T) {
+	ka := &fakeLidController{supported: true}
+	b, _ := newKeepAwakeBridge(t, ka)
+	bindErr := errors.New("listener bind failed")
+	b.LAN = &startErrorLAN{err: bindErr}
+	err := b.RestoreOnBoot(mobilebridge.State{Enabled: true, KeepAwake: true, KeepAwakeLid: true})
+	if !errors.Is(err, bindErr) || !ka.active || !ka.lidActive || b.LAN.Running() {
+		t.Fatalf("listener failure affected wake restoration: wake=%+v error=%v", ka, err)
+	}
+	b.ShutdownKeepAwake()
+}
+
+func TestKeepAwakeRestoreFailureDoesNotPreventMobileStart(t *testing.T) {
+	wakeErr := errors.New("cannot start awake hold")
+	ka := &fakeKeepAwake{idleErr: wakeErr}
+	b, lan := newKeepAwakeBridge(t, ka)
+	err := b.RestoreOnBoot(mobilebridge.State{Enabled: true, KeepAwake: true})
+	if !errors.Is(err, wakeErr) || !lan.Running() || ka.active {
+		t.Fatalf("wake failure affected mobile restoration: running=%v active=%v error=%v", lan.Running(), ka.active, err)
 	}
 }
 
@@ -178,7 +209,7 @@ func (f *fakeLidController) LidStatus() (bool, bool, string) {
 }
 func (f *fakeLidController) Stop() { f.fakeKeepAwake.Stop(); f.lidActive = false }
 
-func TestLidAwakeFollowsServingBridgeAndSurvivesLegacyRequests(t *testing.T) {
+func TestLidAwakeIndependentOfBridgeAndSurvivesLegacyRequests(t *testing.T) {
 	ka := &fakeLidController{supported: true}
 	b, _ := newKeepAwakeBridge(t, ka)
 	if _, err := b.SetBrowserRemoteAccess(true); err != nil {
@@ -188,7 +219,7 @@ func TestLidAwakeFollowsServingBridgeAndSurvivesLegacyRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ka.lidActive || ka.active || !res.KeepAwake.LidClosed || ka.setups != 1 {
+	if !ka.lidActive || !ka.active || !res.KeepAwake.LidClosed || ka.setups != 1 || res.Enabled {
 		t.Fatalf("bridge off: %+v %+v", res.KeepAwake, ka)
 	}
 	if _, err := b.Enable(); err != nil {
@@ -219,11 +250,15 @@ func TestLidAwakeFollowsServingBridgeAndSurvivesLegacyRequests(t *testing.T) {
 	if err := b.Disable(); err != nil {
 		t.Fatal(err)
 	}
-	if ka.lidActive {
-		t.Fatal("mobile disable did not release lid control")
+	if !ka.lidActive || !ka.active {
+		t.Fatal("mobile disable released the independent awake hold")
 	}
 	if !b.Status().KeepAwake.LidClosed {
 		t.Fatal("disable erased preference")
+	}
+	res, err = b.SetKeepAwakeLid(false, false)
+	if err != nil || ka.lidActive || ka.active || res.Enabled || res.KeepAwake.Enabled || res.KeepAwake.LidClosed {
+		t.Fatalf("awake off with mobile disabled: %+v, %v", res, err)
 	}
 }
 
@@ -311,7 +346,7 @@ type failedStopLAN struct{ *fakeLAN }
 
 func (f *failedStopLAN) Stop(context.Context) error { return errors.New("listener stop failed") }
 
-func TestLidAwakeReleasesOnFailedMobileDisable(t *testing.T) {
+func TestLidAwakeSurvivesFailedMobileDisable(t *testing.T) {
 	ka := &fakeLidController{supported: true}
 	b, lan := newKeepAwakeBridge(t, ka)
 	b.LAN = &failedStopLAN{lan}
@@ -327,11 +362,31 @@ func TestLidAwakeReleasesOnFailedMobileDisable(t *testing.T) {
 	if !lan.Running() {
 		t.Fatal("test must leave listener running")
 	}
-	if ka.lidActive || ka.active {
-		t.Fatal("failed mobile shutdown must still release both wake controls")
+	if !ka.lidActive || !ka.active {
+		t.Fatal("failed mobile shutdown must preserve independent wake controls")
 	}
 	if !b.Status().KeepAwake.LidClosed {
 		t.Fatal("failed stop must retain the saved lid preference")
+	}
+}
+
+func TestKeepAwakeStartFailurePreservesPreferencesWithMobileOff(t *testing.T) {
+	for _, lid := range []bool{false, true} {
+		ka := &fakeLidController{supported: true, fakeKeepAwake: fakeKeepAwake{idleErr: errors.New("cannot start awake hold")}}
+		b, lan := newKeepAwakeBridge(t, ka)
+		var err error
+		if lid {
+			_, err = b.SetKeepAwakeLid(true, true)
+		} else {
+			_, err = b.SetKeepAwake(true)
+		}
+		if err == nil {
+			t.Fatal("expected wake start failure while mobile is off")
+		}
+		st, loadErr := mobilebridge.Load(b.ConfigPath)
+		if loadErr != nil || st.Enabled || st.KeepAwake || st.KeepAwakeLid || ka.active || ka.lidActive || lan.Running() {
+			t.Fatalf("failed start changed ownership: state=%+v active=%v lid=%v error=%v", st, ka.active, ka.lidActive, loadErr)
+		}
 	}
 }
 
