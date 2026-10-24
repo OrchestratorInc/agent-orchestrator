@@ -822,11 +822,42 @@ class OfferingTests(unittest.TestCase):
         self.assertNotIn("nodeops", files["staging"]["AO_CLOUD_SANDBOX_PROVIDERS"])
         self.assertEqual(files["staging"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
         self.assertEqual(files["production"]["AO_CLOUD_SANDBOX_PROVIDER"], "coder")
+        self.assertEqual(files["staging"]["AO_CLOUD_ARTIFACT_BUCKET"], "ao-cloud-staging-tenant-artifacts")
+        self.assertEqual(files["production"]["AO_CLOUD_ARTIFACT_BUCKET"], "ao-cloud-production-tenant-artifacts")
+
         # The Coder rollout flags run in staging first; production turns them
         # on one release later, so its rollback target can read what they write.
         for name in ("AO_CLOUD_CODER_READABLE_NAMES", "AO_CLOUD_CODER_WORKER_WORKING_FOLDER"):
             self.assertEqual(files["staging"][name], "true")
             self.assertEqual(files["production"][name], "false")
+
+    def test_artifacts_default_off_and_need_a_bucket_when_on(self):
+        validate_offering(**offering())
+        validate_offering(
+            **offering(),
+            artifacts="1",
+            artifact_bucket="ao-cloud-staging-tenant-artifacts",
+            artifact_region="eu-north-1",
+        )
+        with self.assertRaisesRegex(ValueError, "AO_CLOUD_ARTIFACTS must be 0 or 1"):
+            validate_offering(**offering(), artifacts="yes")
+        with self.assertRaisesRegex(ValueError, "AO_CLOUD_ARTIFACT_BUCKET"):
+            validate_offering(**offering(), artifacts="1", artifact_region="eu-north-1")
+        with self.assertRaisesRegex(ValueError, "AO_CLOUD_ARTIFACT_REGION"):
+            validate_offering(
+                **offering(), artifacts="1", artifact_bucket="ao-cloud-staging-tenant-artifacts"
+            )
+
+    def test_artifacts_reject_the_worker_binary_bucket_and_bad_names(self):
+        for bucket in ("ao-cloud-staging-artifacts", "ao-cloud-production-artifacts"):
+            with self.subTest(bucket=bucket), self.assertRaisesRegex(ValueError, "worker binary bucket"):
+                validate_offering(
+                    **offering(), artifacts="1", artifact_bucket=bucket, artifact_region="eu-north-1"
+                )
+        with self.assertRaisesRegex(ValueError, "not a valid bucket name"):
+            validate_offering(**offering(), artifact_bucket="Bad_Bucket")
+        with self.assertRaisesRegex(ValueError, "not an AWS region"):
+            validate_offering(**offering(), artifact_region="europe")
 
 
 def offering_file(environment):
@@ -852,6 +883,9 @@ def offering_arguments(values):
         "paywalled_features": split("AO_CLOUD_PAYWALLED_FEATURES"),
         "idle_pause_threshold": values["AO_CLOUD_IDLE_PAUSE_THRESHOLD"],
         "freestyle_idle_pause_threshold": values["AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"],
+        "artifacts": values["AO_CLOUD_ARTIFACTS"],
+        "artifact_bucket": values["AO_CLOUD_ARTIFACT_BUCKET"],
+        "artifact_region": values["AO_CLOUD_ARTIFACT_REGION"],
         "coder_readable_names": values["AO_CLOUD_CODER_READABLE_NAMES"],
         "coder_worker_working_folder": values["AO_CLOUD_CODER_WORKER_WORKING_FOLDER"],
     }
@@ -1077,6 +1111,9 @@ class BillingAndOfferingTaskDefinitionTests(unittest.TestCase):
             ("AO_CLOUD_DEFAULT_ORG_BILLING", "free"),
             ("AO_CLOUD_IDLE_PAUSE_THRESHOLD", "30s"),
             ("AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD", "15"),
+            ("AO_CLOUD_ARTIFACTS", "on"),
+            ("AO_CLOUD_ARTIFACT_BUCKET", "ao-cloud-staging-artifacts"),
+            ("AO_CLOUD_ARTIFACT_ENDPOINT", "http://minio:9000"),
             ("AO_CLOUD_CODER_READABLE_NAMES", "yes"),
             ("AO_CLOUD_CODER_WORKER_WORKING_FOLDER", "on"),
         ):

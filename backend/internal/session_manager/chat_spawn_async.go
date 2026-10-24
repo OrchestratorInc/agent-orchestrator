@@ -127,6 +127,13 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	var workspaceProject *ports.WorkspaceProjectInfo
 	var err error
 	reusePublishedWorkspace := in.retry && in.record.Metadata.WorkspacePath != ""
+	if reusePublishedWorkspace {
+		if missing, _ := workspacePathMissing(in.record.Metadata.WorkspacePath); missing {
+			// A saved worktree that no longer exists (removed by hand, or left
+			// mid-move by an older build) is created again, with every step shown.
+			reusePublishedWorkspace, in.record.ProvisionSteps = false, nil
+		}
+	}
 	plan := provisionPlan(in, reusePublishedWorkspace)
 	progress := m.startProvisionProgress(ctx, id, plan)
 	if reusePublishedWorkspace {
@@ -258,8 +265,8 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		m.failAsyncChatSpawn(ctx, id, err)
 		return
 	}
-	namingHandedOff = true
-	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
+	// The agent owns the checkout now; nothing below touches the workspace.
+	releaseWorkspaceGate()
 	m.logAsyncChatSpawnStage(id, "controller_start", stageStarted)
 	stageStarted = time.Now()
 	if err := m.chat.DrainChatQueue(ctx, id); err != nil {
@@ -274,6 +281,9 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	}
 	m.logAsyncChatSpawnStage(id, "mark_ready", stageStarted)
 	progress.complete(ctx, domain.SessionProvisionStepAgent)
+	// Only a start that succeeded gets a generated branch name.
+	namingHandedOff = true
+	m.nameTaskBranchLater(ctx, record, ws, workspaceProject, taskName, cancelNaming)
 	m.logAsyncChatSpawnStage(id, "total", totalStarted)
 }
 
@@ -461,16 +471,25 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		return RestoreResult{}, false, wrapSpawnStage(rec.ID, ErrSpawnSystemPrompt, err)
 	}
 	config := restoredAgentConfig(rec, project.Config)
-	if rec.Metadata.Model != "" {
-		config.Model = rec.Metadata.Model
-	}
-	if rec.Metadata.Permissions != "" {
-		config.Permissions = rec.Metadata.Permissions
-	}
 	cfg := ports.SpawnConfig{
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
+	}
+	if rec.Harness == domain.HarnessCodex {
+		// ChatUI can change the saved model independently of effort, and provider
+		// capabilities can change between attempts. Validate the actual pair
+		// without merging today's project defaults back into the saved choices.
+		cfg.EffortOverride = true
+		resolved, err := m.resolveAgentConfig(ctx, cfg, domain.ProjectConfig{})
+		if errors.Is(err, ports.ErrUnsupportedEffort) {
+			cfg.AgentConfig.Effort = "" // use this model's provider default
+			resolved, err = m.resolveAgentConfig(ctx, cfg, domain.ProjectConfig{})
+		}
+		if err != nil {
+			return RestoreResult{}, false, err
+		}
+		cfg.AgentConfig = resolved
 	}
 	projectKind := projectKindForSession(project, rec.ProjectID)
 	branch := rec.Metadata.Branch

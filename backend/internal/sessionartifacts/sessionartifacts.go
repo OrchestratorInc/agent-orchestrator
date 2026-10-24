@@ -43,8 +43,8 @@ const MaxFiles = 1000
 const MaxVisited = 10000
 
 // List walks a session's artifact directory and returns up to MaxFiles of its
-// regular files outside VersionsDir, sorted by path. Unreadable entries are skipped rather than
-// failing the walk.
+// regular files outside VersionsDir, sorted by path. Entries matched by
+// ignored are skipped, as are unreadable entries rather than failing the walk.
 func List(dir string) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
@@ -71,6 +71,12 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 			return filepath.SkipAll
 		}
 		if d.Type()&os.ModeSymlink != 0 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path != root && ignored(d.Name()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -110,6 +116,26 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 		return files[i].Path < files[j].Path
 	})
 	return files, nil
+}
+
+// ignoredNames are OS metadata files and tool directories that List skips,
+// matched case-insensitively.
+var ignoredNames = map[string]bool{
+	".ds_store":       true,
+	".spotlight-v100": true,
+	".trashes":        true,
+	".fseventsd":      true,
+	"thumbs.db":       true,
+	"desktop.ini":     true,
+	".git":            true,
+	"node_modules":    true,
+	"__pycache__":     true,
+}
+
+// ignored reports whether List skips an entry named name: ignoredNames and
+// macOS "._" resource-fork files.
+func ignored(name string) bool {
+	return strings.HasPrefix(name, "._") || ignoredNames[strings.ToLower(name)]
 }
 
 func inferKind(relPath string) domain.SessionArtifactKind {

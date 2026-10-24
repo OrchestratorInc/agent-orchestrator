@@ -243,7 +243,7 @@ Network capture is off by default. When enabled, it records bounded metadata onl
 | `AO_RUN_FILE` | `~/.ao/running.json` | Daemon identity and port handshake. |
 | `AO_DATA_DIR` | `~/.ao/data` | Daemon data directory. |
 | `AO_REQUEST_TIMEOUT` | `60s` | REST request timeout. |
-| `AO_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown limit. |
+| `AO_SHUTDOWN_TIMEOUT` | `10s` | Graceful shutdown limit. It also scales how long a starting daemon waits for a previous daemon to release the data directory (9 × this + 18 s). |
 | `AO_SESSION_ID` | unset | Current session context for preview, browser, and in-session calls. |
 | `AO_PROJECT_ID` | unset | Current project context for spawn resolution. |
 

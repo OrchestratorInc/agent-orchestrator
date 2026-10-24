@@ -96,13 +96,13 @@ describe("initTelemetry recovery", () => {
 });
 
 describe("PostHog identity and opt-out", () => {
-	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", disabledEvents: [], eventsEnabled: true, consentGeneration: "g" };
+	const bootstrap = { appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test", installId: "ins_test", disabledEvents: [], eventsEnabled: true, consentGeneration: "g" };
 
 	function mockBridge(getBootstrap: () => Promise<unknown>) {
 		mockPosthog();
 		vi.doMock("./bridge", () => ({
 			aoBridge: {
-				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null) },
+				telemetry: { getBootstrap, getGithubLogin: vi.fn(async () => null), capture: vi.fn(async () => undefined) },
 				updateSettings: { get: vi.fn(async () => ({})) },
 			},
 		}));
@@ -115,7 +115,7 @@ describe("PostHog identity and opt-out", () => {
 
 	it("identifies the WorkOS user once with email as a person property, never as a super property", async () => {
 		mockBridge(async () => bootstrap);
-		const { identifyCloudUser, captureRendererEvent } = await import("./telemetry");
+		const { identifyCloudUser, captureRendererEvent, captureRendererException } = await import("./telemetry");
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 
@@ -134,19 +134,25 @@ describe("PostHog identity and opt-out", () => {
 		const captured = posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>];
 		expect(JSON.stringify(captured)).not.toContain("dev@example.com");
 		expect(captured[1]).not.toHaveProperty("$process_person_profile");
+		expect(captured[1].install_id).toBe("ins_test");
+		await captureRendererException(new Error("test"), { install_id: "spoofed" });
+		expect((posthogStub.captureException.mock.calls.at(-1) as unknown as [Error, Record<string, unknown>])[1].install_id).toBe("ins_test");
+		const init = posthogStub.init.mock.calls[0] as unknown as [string, { before_send: (event: Record<string, unknown>) => Record<string, unknown> }];
+		const sent = init[1].before_send({ event: "ao.test", properties: { install_id: "spoofed" } });
+		expect((sent.properties as Record<string, unknown>).install_id).toBe("ins_test");
 	});
 
 	it("keeps events anonymous before sign-in and after sign-out", async () => {
 		mockBridge(async () => bootstrap);
 		const { identifyCloudUser, clearCloudUser, captureRendererEvent } = await import("./telemetry");
 		await captureRendererEvent("ao.renderer.support_opened");
-		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
 
 		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
 		clearCloudUser();
 		expect(posthogStub.reset).toHaveBeenCalledTimes(1);
 		await captureRendererEvent("ao.renderer.mobile_connect_opened", { bridge_enabled: true });
-		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1]).toMatchObject({ $process_person_profile: false, install_id: "ins_test" });
 	});
 
 	it("does not identify a user who signed out while init was still pending", async () => {
@@ -200,7 +206,7 @@ describe("PostHog identity and opt-out", () => {
 
 	it("opt-out stops capture and resets the SDK identity; a later sign-in does not identify", async () => {
 		mockBridge(async () => bootstrap);
-		const { initTelemetry, identifyCloudUser, applyAnalyticsOptOut } = await import("./telemetry");
+		const { initTelemetry, identifyCloudUser, applyAnalyticsOptOut, captureRendererEvent } = await import("./telemetry");
 		await initTelemetry();
 		await applyAnalyticsOptOut(true);
 		expect(posthogStub.opt_out_capturing).toHaveBeenCalledTimes(1);
@@ -213,6 +219,8 @@ describe("PostHog identity and opt-out", () => {
 		await applyAnalyticsOptOut(false);
 		expect(posthogStub.opt_in_capturing).toHaveBeenLastCalledWith({ captureEventName: false });
 		expect(posthogStub.identify).toHaveBeenCalledWith("user_01H", expect.objectContaining({ email: "dev@example.com" }));
+		await captureRendererEvent("ao.renderer.support_opened", { install_id: "spoofed" });
+		expect((posthogStub.capture.mock.calls.at(-1) as unknown as [string, Record<string, unknown>])[1].install_id).toBe("ins_test");
 	});
 
 	it("a launch that started opted out never builds a client, and opting in initializes one", async () => {

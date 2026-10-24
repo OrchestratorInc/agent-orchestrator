@@ -458,14 +458,11 @@ describe("SessionFileExplorer", () => {
 		expect(onOpenFile).not.toHaveBeenCalled();
 	});
 
-	it("opens in the center and closes the maximized overlay in one action", async () => {
-  const onOpenFile=vi.fn();const onToggleMaximized=vi.fn();
-  renderWithQuery(<SessionFileExplorer isMaximized onOpenFile={onOpenFile} onToggleMaximized={onToggleMaximized} sessionId="sess-review-center-maximized" />);
+	it("drops the open-diff-in-center action from the maximized review", async () => {
+		renderWithQuery(<SessionFileExplorer isMaximized onOpenFile={vi.fn()} onToggleMaximized={vi.fn()} sessionId="sess-review-center-maximized" />);
 
 		expect(await screen.findByRole("button", { name: "Edit src/App.tsx" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", {name:"Open diff in center"}));
-  expect(onToggleMaximized).toHaveBeenCalledWith(false);
-  expect(onOpenFile).toHaveBeenCalledWith("src/App.tsx",expect.objectContaining({mode:"diff"}));
+		expect(screen.queryByRole("button", { name: "Open diff in center" })).not.toBeInTheDocument();
 	});
 
 	it("moves the maximized full-file preview into the center while keeping its source", async () => {

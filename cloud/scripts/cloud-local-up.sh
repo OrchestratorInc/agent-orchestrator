@@ -44,6 +44,12 @@ export AO_CLOUD_DOCKER_GID
 AO_CLOUD_DOCKER_GID="$(ao_docker_socket_gid)"
 export AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION="true"
 
+# MinIO runs as this user and writes to a directory this user owns.
+export AO_CLOUD_LOCAL_UID AO_CLOUD_LOCAL_GID
+AO_CLOUD_LOCAL_UID="$(id -u)"
+AO_CLOUD_LOCAL_GID="$(id -g)"
+mkdir -p "${AO_CLOUD_LOCAL_MINIO_DATA_DIR:-$state_root/cloud/minio}"
+
 compose_env_file=""
 if [[ "${AO_CLOUD_GITHUB_LOCAL_TEST:-false}" == "1" || "${AO_CLOUD_GITHUB_LOCAL_TEST:-false}" == "true" ]]; then
 	local_env_file="$repository_root/.env.local"

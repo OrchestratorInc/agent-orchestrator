@@ -152,13 +152,19 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
 	}
-	// Like the real store, a full-row update never writes artifact_dir,
-	// session_output_type or runtime_released_launch_id; only their narrow
-	// writes do.
+	// Like the real store, a full-row update never writes the title,
+	// artifact_dir, session_output_type, runtime_released_launch_id or branch
+	// naming facts; only their narrow writes do. Nor does it put back a
+	// renamed task's temporary branch.
 	if existing, ok := f.sessions[rec.ID]; ok {
+		rec.DisplayName = existing.DisplayName
 		rec.Metadata.ArtifactDir = existing.Metadata.ArtifactDir
 		rec.OutputType = existing.OutputType
 		rec.Metadata.RuntimeReleasedLaunchID = existing.Metadata.RuntimeReleasedLaunchID
+		rec.BranchNaming, rec.TemporaryBranch = existing.BranchNaming, existing.TemporaryBranch
+		if existing.TemporaryBranch != "" && rec.Metadata.Branch == existing.TemporaryBranch {
+			rec.Metadata.Branch = existing.Metadata.Branch
+		}
 	}
 	f.sessions[rec.ID] = rec
 	return nil
@@ -229,15 +235,39 @@ func (f *fakeStore) SetSessionProvisionedWorkspace(_ context.Context, id domain.
 	return true, nil
 }
 
-func (f *fakeStore) SetSessionTaskBranch(_ context.Context, id domain.SessionID, expectedBranch, branch string, now time.Time) (bool, error) {
+func (f *fakeStore) SetSessionTaskBranch(_ context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	rec, ok := f.sessions[id]
-	if !ok || rec.IsTerminated || rec.Metadata.Branch != expectedBranch {
+	if !ok || rec.Metadata.Branch != expectedBranch {
 		return false, nil
 	}
-	rec.Metadata.Branch = branch
+	if branch != expectedBranch {
+		rec.TemporaryBranch = expectedBranch
+	}
+	rec.Metadata.Branch, rec.BranchNaming = branch, false
 	rec.UpdatedAt = now
 	f.sessions[id] = rec
+	for i, row := range f.worktrees[id] {
+		if repoBranch, ok := repoBranches[row.RepoName]; ok {
+			f.worktrees[id][i].Branch = repoBranch
+		}
+	}
 	return true, nil
+}
+
+func (f *fakeStore) SetSessionBranchNaming(_ context.Context, id domain.SessionID, naming bool) error {
+	if rec, ok := f.sessions[id]; ok {
+		rec.BranchNaming = naming
+		f.sessions[id] = rec
+	}
+	return nil
+}
+
+func (f *fakeStore) ClearSessionBranchNaming(context.Context) error {
+	for id, rec := range f.sessions {
+		rec.BranchNaming = false
+		f.sessions[id] = rec
+	}
+	return nil
 }
 
 func (f *fakeStore) SetTaskPreparationBase(_ context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
@@ -4860,9 +4890,9 @@ func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.
 	}
 }
 
-func TestRestore_AppliesProjectAgentConfig(t *testing.T) {
+func TestRestore_AppliesProjectAgentMode(t *testing.T) {
 	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "restore-model"}}}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "changed-model", Effort: "low", Mode: "restore-mode"}}}
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
 	agent := &recordingAgent{}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
@@ -4871,8 +4901,8 @@ func TestRestore_AppliesProjectAgentConfig(t *testing.T) {
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
-	if agent.lastConfig.Model != "restore-model" {
-		t.Fatalf("restore config model = %q, want restore-model (config must carry across restore)", agent.lastConfig.Model)
+	if agent.lastConfig.Mode != "restore-mode" || agent.lastConfig.Model != "" || agent.lastConfig.Effort != "" {
+		t.Fatalf("restore config = %+v, want project mode with provider-default model and effort", agent.lastConfig)
 	}
 }
 
@@ -11404,7 +11434,7 @@ func TestSend_ConfirmsAndNudgesUntilActive(t *testing.T) {
 
 func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 	// A signaling harness that never goes active must still terminate: at most
-	// maxAttempts Sends (initial + maxAttempts-1 nudges), and Send never errors.
+	// maxAttempts Sends (initial + maxAttempts-1 nudges), and Send surfaces ErrDeliveryUnconfirmed.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityIdle}})
@@ -11413,8 +11443,9 @@ func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 	var logBuf bytes.Buffer
 	m.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
 
-	if err := m.Send(context.Background(), "s1", "stuck prompt", nil); err != nil {
-		t.Fatalf("Send: %v", err)
+	err := m.Send(context.Background(), "s1", "stuck prompt", nil)
+	if !errors.Is(err, ErrDeliveryUnconfirmed) {
+		t.Fatalf("Send error = %v, want ErrDeliveryUnconfirmed", err)
 	}
 	if len(msg.msgs) > m.sendConfirm.maxAttempts {
 		t.Fatalf("Send calls = %d, want <= %d (budget cap)", len(msg.msgs), m.sendConfirm.maxAttempts)
@@ -11430,6 +11461,59 @@ func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 		t.Fatalf("log = %q, want exhausted confirmation warning with session and attempt count", logText)
 	}
 }
+
+func TestSend_ConfirmAcceptsRetainedSubmissionEvidence(t *testing.T) {
+	// A user prompt whose UserPromptSubmit hook lands AFTER delivery (advancing
+	// LatestUserPromptAt past the delivery instant) but whose turn completes
+	// between activity polls leaves the session idle, with Active never observed.
+	// Confirmation must treat that later durable submission evidence as success
+	// instead of returning a false ErrDeliveryUnconfirmed, which would prompt a
+	// duplicate retry of an already-delivered message. The baseline is the
+	// delivery instant (options.InteractionAt), so the hook's later write is
+	// detectable regardless of when, relative to a store read, it arrives.
+	st := newFakeStore()
+	base := time.Now()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{LatestUserPromptAt: base}})
+	msg := &advancePromptOnNudgeMessenger{sessionID: "s1", store: st, at: base.Add(time.Hour)}
+	m := newSendTestManager(t, signalingAgent{}, msg, st)
+
+	if err := m.SendWithOptions(context.Background(), "s1", "do the thing", nil,
+		ports.MessageDeliveryOptions{AuthoredByUser: true}); err != nil {
+		t.Fatalf("Send error = %v, want nil (retained submission evidence recognized)", err)
+	}
+	if got := st.sessions["s1"].Activity.State; got == domain.ActivityActive {
+		t.Fatalf("Activity.State = active, want it to have stayed idle (evidence path, not the active path)")
+	}
+}
+
+func TestSend_CoordinationDeliveryIgnoresPromptEvidence(t *testing.T) {
+	// A coordination (ao send) delivery deliberately leaves LatestUserPromptAt
+	// unchanged, so that marker is the wrong evidence for it: an advance during
+	// the confirm window can only come from an unrelated concurrent user prompt,
+	// and crediting it would falsely confirm a coordination send. Here the nudge
+	// advances LatestUserPromptAt but no coordination checkpoint is recorded, so
+	// confirmation must still exhaust its budget and surface ErrDeliveryUnconfirmed.
+	st := newFakeStore()
+	base := time.Now().Add(-time.Hour)
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{LatestUserPromptAt: base}})
+	msg := &advancePromptOnNudgeMessenger{sessionID: "s1", store: st, at: time.Now()}
+	m := newSendTestManager(t, signalingAgent{}, msg, st)
+
+	err := m.Send(context.Background(), "s1", "status update please", nil)
+	if !errors.Is(err, ErrDeliveryUnconfirmed) {
+		t.Fatalf("Send error = %v, want ErrDeliveryUnconfirmed (coordination send ignores prompt evidence)", err)
+	}
+}
+
+// The positive coordination-acceptance case (marker recorded, session back to
+// idle before confirmation polls) is covered end-to-end against a real sqlite
+// store and the real lifecycle write path by
+// TestSend_CoordinationAcceptanceMarker_RealStore in
+// send_confirm_coordination_integration_test.go.
 
 func TestSend_BlockedSessionRejectsDelivery(t *testing.T) {
 	// A session paused on a permission decision (blocked) must not receive the
@@ -11696,6 +11780,29 @@ func (m *flipOnNudgeMessenger) Send(_ context.Context, _ domain.SessionID, msg s
 			m.store.sessions[m.sessionID] = rec
 		}
 		m.flipped = true
+	}
+	return nil
+}
+
+// advancePromptOnNudgeMessenger models an Enter-only nudge whose prompt is
+// accepted (UserPromptSubmit advances LatestUserPromptAt) while the turn
+// completes within the poll gap, so Activity never settles on Active.
+type advancePromptOnNudgeMessenger struct {
+	msgs      []string
+	sessionID domain.SessionID
+	store     *fakeStore
+	at        time.Time
+	advanced  bool
+}
+
+func (m *advancePromptOnNudgeMessenger) Send(_ context.Context, _ domain.SessionID, msg string) error {
+	m.msgs = append(m.msgs, msg)
+	if msg == "" && !m.advanced {
+		if rec, ok := m.store.sessions[m.sessionID]; ok {
+			rec.Metadata.LatestUserPromptAt = m.at
+			m.store.sessions[m.sessionID] = rec
+		}
+		m.advanced = true
 	}
 	return nil
 }
