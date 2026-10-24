@@ -70,9 +70,23 @@ describe("telemetry sanitizers", () => {
 		const raw = storage.getItem("ao.telemetry.updateFailures.v1");
 		const parked = JSON.parse(raw ?? "{}") as { pendingDays?: unknown };
 		parked.pendingDays = [{ day: "2026-10-19", failure_count: 3 }];
-		storage.setItem("ao.telemetry.updateFailures.v1", JSON.stringify({ ...JSON.parse(raw ?? "{}"), day: "2026-10-20", dayCount: 2, pendingDays: parked.pendingDays }));
+		storage.setItem("ao.telemetry.updateFailures.v1", JSON.stringify({
+			...JSON.parse(raw ?? "{}"),
+			day: "2026-10-21",
+			dayCount: 0,
+			pendingDays: [
+				{ day: "2026-10-19", failure_count: 3 },
+				{ day: "2026-10-20", failure_count: 2 },
+			],
+		}));
 		const wednesday = claimUpdateFailure(storage, failure, monday + 2 * 86_400_000);
 		expect(wednesday.dailies?.map((day) => day.day)).toEqual(["2026-10-19", "2026-10-20"]);
+		wednesday.ackDaily("2026-10-19");
+		wednesday.rollback();
+		const restored = JSON.parse(storage.getItem("ao.telemetry.updateFailures.v1") ?? "{}") as {
+			pendingDays?: Array<{ day: string }>;
+		};
+		expect(restored.pendingDays?.map((pending) => pending.day)).toEqual(["2026-10-20"]);
 	});
 	it("allows only the fixed session management summary schema", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.session_management_summary", {

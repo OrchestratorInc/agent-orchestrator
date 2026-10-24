@@ -107,12 +107,23 @@ export function claimUpdateFailure(
 	storage: DailyActiveStorage,
 	properties: TelemetryProperties,
 	now = Date.now(),
-): { emit: boolean; extra: TelemetryProperties; streak?: boolean; daily?: TelemetryProperties; dailies?: TelemetryProperties[]; rollback: () => void } {
-	const none = { emit: false, extra: {}, streak: false, rollback: () => undefined };
+): { emit: boolean; extra: TelemetryProperties; streak?: boolean; daily?: TelemetryProperties; dailies?: TelemetryProperties[]; ackDaily: (day: string) => void; rollback: () => void } {
+	const none = { emit: false, extra: {}, streak: false, ackDaily: () => undefined, rollback: () => undefined };
 	const snapshot = storage.getItem(UPDATE_FAILURE_STORAGE_KEY);
+	let restore = snapshot;
 	const rollback = () => {
-		if (snapshot === null) storage.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
-		else storage.setItem(UPDATE_FAILURE_STORAGE_KEY, snapshot);
+		if (restore === null) storage.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
+		else storage.setItem(UPDATE_FAILURE_STORAGE_KEY, restore);
+	};
+	const ackDaily = (day: string) => {
+		const state = restore === null ? {} : JSON.parse(restore) as UpdateFailureState;
+		state.pendingDays = (state.pendingDays ?? []).filter((pending) => pending.day !== day);
+		if (state.pendingDay === day) {
+			delete state.pendingDay;
+			delete state.pendingCount;
+		}
+		if (state.day === day) state.dayCount = 0;
+		restore = JSON.stringify(state);
 	};
 	try {
 		const state = readUpdateFailureState(storage);
@@ -148,9 +159,9 @@ export function claimUpdateFailure(
 		if (dailies.length > 0) state.pendingDays = [];
 		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
 		if (streakOpen && dailies.length === 0) return none;
-		return { emit: true, extra: {}, streak: !streakOpen, daily, dailies, rollback };
+		return { emit: true, extra: {}, streak: !streakOpen, daily, dailies, ackDaily, rollback };
 	} catch {
-		return { emit: true, extra: {}, streak: true, rollback: () => undefined };
+		return { emit: true, extra: {}, streak: true, ackDaily: () => undefined, rollback: () => undefined };
 	}
 }
 
@@ -1277,6 +1288,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 					releaseUpdateFailureClaim();
 					return false;
 				}
+				if (typeof daily.day === "string") decision.ackDaily(daily.day);
 			}
 			if (!decision.streak) return true;
 		}
