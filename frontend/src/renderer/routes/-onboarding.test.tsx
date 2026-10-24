@@ -54,6 +54,8 @@ vi.mock("../lib/api-client", async (original) => {
 	}) } };
 });
 
+import { aoBridge } from "../lib/bridge";
+
 import { OnboardingPage } from "../components/OnboardingPage";
 
 async function renderOnboarding() {
@@ -83,6 +85,26 @@ beforeEach(() => {
 });
 
 describe("onboarding route", () => {
+	it("handles native quit confirmation before the user enters the app shell", async () => {
+		let requestQuit: ((request: { keepsRunning: boolean }) => void) | undefined;
+		const subscribe = vi.spyOn(aoBridge.app, "onQuitConfirmRequest").mockImplementation((listener) => {
+			requestQuit = listener;
+			return () => undefined;
+		});
+		const resolve = vi.spyOn(aoBridge.app, "resolveQuitConfirm");
+		try {
+			await renderOnboarding();
+			if (!requestQuit) throw new Error("quit listener missing from onboarding");
+			act(() => requestQuit?.({ keepsRunning: true }));
+			expect(await screen.findByRole("dialog", { name: "Quit AO?" })).toBeVisible();
+			await userEvent.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+			expect(resolve).toHaveBeenLastCalledWith(false);
+		} finally {
+			subscribe.mockRestore();
+			resolve.mockRestore();
+		}
+	});
+
 	it("shows the GitHub device code in the page and hides Back while sign-in is active", async () => {
 		mocks.githubWorkflowActive = true;
 		const user = userEvent.setup();
