@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -1929,5 +1930,35 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 				t.Fatalf("Blockers = %v, want %v", got.Blockers, tc.wantBlockers)
 			}
 		})
+	}
+}
+
+// A branch lookup asks GitHub to filter by head owner:branch in one request,
+// so a repository's other open PRs are never paged through.
+func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
+	f := newFakeGH(t)
+	var query url.Values
+	f.on(http.MethodGet, "/repos/acme/repo/pulls", func(w http.ResponseWriter, r *http.Request) {
+		query = r.URL.Query()
+		_ = json.NewEncoder(w).Encode([]map[string]any{{
+			"number": 7, "html_url": "https://github.com/acme/repo/pull/7", "state": "open",
+			"head": map[string]any{"ref": "ao/x/fix", "repo": map[string]any{"full_name": "acme/repo"}},
+			"base": map[string]any{"ref": "main", "repo": map[string]any{"full_name": "acme/repo"}},
+		}})
+	})
+	p := newProviderForTest(t, f)
+
+	prs, err := p.ListOpenPRsByBranch(ctx(), ports.SCMRepo{Provider: "github", Owner: "acme", Name: "repo", Repo: "acme/repo"}, "ao/x/fix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if query.Get("head") != "acme:ao/x/fix" || query.Get("state") != "open" {
+		t.Fatalf("query = %v, want head=acme:ao/x/fix state=open", query)
+	}
+	if len(prs) != 1 || prs[0].HTMLURL != "https://github.com/acme/repo/pull/7" || prs[0].SourceBranch != "ao/x/fix" {
+		t.Fatalf("prs = %+v", prs)
+	}
+	if n := f.callsTo(http.MethodGet, "/repos/acme/repo/pulls"); n != 1 {
+		t.Fatalf("list requests = %d, want 1", n)
 	}
 }

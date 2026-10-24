@@ -520,3 +520,57 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+// branchPRLister lists a repository's open PRs from one branch, filtered by
+// the provider. The production SCM provider implements it; it stays optional
+// so claim-only fakes keep working.
+type branchPRLister interface {
+	ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
+}
+
+// FindBranchPRs returns the web URLs of open PRs in the project's repository
+// whose source branch is the session's branch, so a caller can attach a PR
+// the SCM observer has not discovered yet. PRs from forks are skipped. It
+// returns nothing when the session has no branch or the provider cannot list.
+func (s *Service) FindBranchPRs(ctx context.Context, id domain.SessionID) ([]string, error) {
+	rec, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get %s: %w", id, err)
+	}
+	if !ok {
+		return nil, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	}
+	branch := strings.TrimSpace(rec.Metadata.Branch)
+	lister, canList := s.scm.(branchPRLister)
+	if branch == "" || !canList {
+		return nil, nil
+	}
+	project, ok, err := s.store.GetProject(ctx, string(rec.ProjectID))
+	if err != nil {
+		return nil, fmt.Errorf("project %s: %w", rec.ProjectID, err)
+	}
+	if !ok {
+		return nil, nil
+	}
+	repo, ok := s.scm.ParseRepository(firstNonEmpty(project.Config.CanonicalRepoURL, project.RepoOriginURL))
+	if !ok {
+		return nil, nil
+	}
+	pulls, err := lister.ListOpenPRsByBranch(ctx, repo, branch)
+	if err != nil {
+		return nil, fmt.Errorf("list open PRs for %s/%s: %w", repo.Owner, repo.Name, err)
+	}
+	var urls []string
+	for _, pr := range pulls {
+		if pr.SourceBranch != branch || pr.Merged || pr.Closed {
+			continue
+		}
+		if pr.HeadRepo != "" && pr.BaseRepo != "" && !strings.EqualFold(pr.HeadRepo, pr.BaseRepo) {
+			continue
+		}
+		if prURL := firstNonEmpty(pr.HTMLURL, pr.URL); prURL != "" {
+			urls = append(urls, prURL)
+		}
+	}
+	return urls, nil
+}
