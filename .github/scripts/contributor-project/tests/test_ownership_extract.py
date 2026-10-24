@@ -212,3 +212,34 @@ class IncrementalExtractionTests(unittest.TestCase):
             self.assertEqual(fetch.call_args.args[2], original_now)
             self.assertEqual(raw["meta"]["generated_at"], original_now.isoformat())
             self.assertFalse(progress.exists())
+
+    def test_failed_pagination_reuses_successful_api_pages_on_next_attempt(self):
+        def connection(nodes, next_cursor=None):
+            return {"nodes": nodes, "pageInfo": {"hasNextPage": next_cursor is not None, "endCursor": next_cursor}}
+        def node(number):
+            return {"number": number, "mergedAt": self.now.isoformat(), "changedFiles": 0,
+                    "author": {"login": "alice", "__typename": "User"},
+                    "files": connection([]), "reviews": connection([])}
+        first = {"data": {"search": {"issueCount": 2, **connection([node(1)], "next")}}}
+        last = {"data": {"search": {"issueCount": 2, **connection([node(2)])}}}
+        failed = ownership.subprocess.CalledProcessError(1, ["gh"], stderr="temporarily unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(ownership, "ROOT", root), patch.object(sys, "argv", ["ownership_extract.py"]), \
+                    patch.object(ownership, "datetime", wraps=datetime) as clock, \
+                    patch.object(ownership.subprocess, "run", side_effect=[ownership.subprocess.CompletedProcess([], 0, json.dumps(first)), failed, failed, failed]), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ownership.subprocess.CalledProcessError):
+                clock.now.return_value = self.now
+                ownership.main()
+            self.assertEqual(len(list((root / "research/ownership-cache").glob("*.json"))), 1)
+            with patch.object(ownership, "ROOT", root), patch.object(sys, "argv", ["ownership_extract.py"]), \
+                    patch.object(ownership, "datetime", wraps=datetime) as clock, \
+                    patch.object(ownership.subprocess, "run", return_value=ownership.subprocess.CompletedProcess([], 0, json.dumps(last))) as api, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                clock.now.return_value = self.now + timedelta(days=1)
+                ownership.main()
+            self.assertEqual(api.call_count, 1)
+            raw = json.loads((root / "research/ownership-raw.json").read_text())
+            self.assertEqual([p["number"] for p in raw["prs"]], [1, 2])
+            self.assertEqual(raw["meta"]["generated_at"], self.now.isoformat())
+            self.assertFalse((root / "research/ownership-cache").exists())
