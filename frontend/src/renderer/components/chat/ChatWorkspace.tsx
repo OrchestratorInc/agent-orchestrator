@@ -4922,6 +4922,12 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 	groups.sort((a, b) => a.anchor - b.anchor);
 
+	// A list the agent keeps across turns reaches every later turn as a copy of the
+	// same list. Only the latest copy is current, so only that turn shows it.
+	const currentSpanningPlanTurn = groups.findLast(
+		(group) => group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns,
+	)?.turnId;
+
 	for (const group of groups) {
 		if (!group.turnId) continue;
 		const turn = byTurn.get(group.turnId);
@@ -4930,7 +4936,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
-		group.plan = turn.plan?.steps.length ? turn.plan : undefined;
+		const stalePlan = turn.plan?.spansTurns && group.turnId !== currentSpanningPlanTurn;
+		group.plan = turn.plan?.steps.length && !stalePlan ? turn.plan : undefined;
 		// A stopped controller cannot be producing live activity: showing the
 		// turn as live spun "Working for…" forever over a dead controller (#6064).
 		group.live = turn.state === "running" && snapshot.controller.state !== "stopped";

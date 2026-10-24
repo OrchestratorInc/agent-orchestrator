@@ -113,6 +113,41 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — done")).toBeInTheDocument();
 	});
 
+	// Claude keeps one task list for the session and re-sends it into every later turn.
+	// Those are copies of one list, so only the latest turn's copy is current.
+	it("shows a list that spans turns once, on the latest turn that carries it", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const spanning: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan:
+					turn.id === "turn-1"
+						? {
+								spansTurns: true,
+								steps: current.steps.map((step) => ({ ...step, status: "pending" as const })),
+							}
+						: { ...current, spansTurns: true },
+			})),
+		};
+		render(<ChatWorkspace snapshot={spanning} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+	});
+
+	it("keeps a separate plan on each turn when the plans are per turn", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const perTurn: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan: turn.id === "turn-1" ? { steps: [{ text: "Read the store", status: "completed" }] } : current,
+			})),
+		};
+		render(<ChatWorkspace snapshot={perTurn} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
+	});
+
 	// A plan whose turn AO never correlated — one from before this controller started.
 	it("still renders a plan row whose turn carries none", () => {
 		const orphan: ConversationSnapshot = {

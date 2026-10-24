@@ -1609,6 +1609,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 								status: step.status as PlanStepStatus,
 							}),
 						),
+						spansTurns: turn.plan.spansTurns || undefined,
 					}
 				: undefined,
 			rolledBack: turn.rolledBack ?? undefined,

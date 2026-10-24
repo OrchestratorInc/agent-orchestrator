@@ -74,6 +74,7 @@ const WIRE = {
 					{ text: "one", status: "completed" },
 					{ text: "two", status: "in_progress" },
 				],
+				spansTurns: true,
 			},
 		},
 	],
@@ -782,6 +783,7 @@ describe("useConversation snapshot mapping", () => {
 			{ text: "one", status: "completed" },
 			{ text: "two", status: "in_progress" },
 		]);
+		expect(snapshot.turns[0]!.plan?.spansTurns).toBe(true);
 	});
 
 	it("maps retry lineage and consumed-source facts from the daemon", async () => {
