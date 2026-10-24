@@ -112,7 +112,7 @@ export async function launchTriageInTerminal(
 			// even inside quotes. PowerShell receives only a base64 argument.
 			const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 			manualCommand = [...overrides.map(([key, value]) => `$env:${key}=${quote(value)}`), `& ${[command, ...args].map(quote).join(" ")}`].join("; ");
-			argv = [path.win32.join(stateEnv.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoProfile", "-EncodedCommand", Buffer.from(manualCommand, "utf16le").toString("base64")];
+			argv = [path.win32.join(stateEnv.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), "-NoExit", "-NoProfile", "-EncodedCommand", Buffer.from(manualCommand, "utf16le").toString("base64")];
 		} else {
 			argv = [...(overrides.length ? ["/usr/bin/env", ...overrides.map(([key, value]) => `${key}=${value}`)] : []), command, ...args];
 			const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
