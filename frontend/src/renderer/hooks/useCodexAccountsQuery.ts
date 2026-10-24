@@ -17,6 +17,10 @@ export type CodexActiveLogin = components["schemas"]["CodexActiveLoginResponse"]
 export type CodexAccountSwitch = components["schemas"]["CodexAccountSwitchResponse"];
 
 const CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE = "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE";
+const CODEX_ENSURE_BACKOFF_CODES = new Set([
+	CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE,
+	"CODEX_ACCOUNT_SETUP_INCOMPLETE",
+]);
 
 function readApiErrorCode(error: unknown): string | undefined {
 	try {
@@ -28,6 +32,11 @@ function readApiErrorCode(error: unknown): string | undefined {
 
 function codexAccountManagementUnavailable(error: unknown): boolean {
 	return readApiErrorCode(error) === CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE;
+}
+
+function codexEnsureShouldBackOff(error: unknown): boolean {
+	const code = readApiErrorCode(error);
+	return code !== undefined && CODEX_ENSURE_BACKOFF_CODES.has(code);
 }
 
 function throwCodexRequest(error: unknown): never {
@@ -148,7 +157,7 @@ export function useEnsureCodexAccounts(): void {
 			const cached = queryClient.getQueryData(codexAccountsQueryKey);
 			const ready = cached ? Promise.resolve() : queryClient.fetchQuery(codexAccountsQueryOptions).then(() => undefined).catch(() => undefined);
 			void ready.then(() => ensureCodexAccounts()).then((next) => { if (active) writeCodexAccounts(queryClient, next, "replace"); }).catch((error: unknown) => {
-				if (codexAccountManagementUnavailable(error)) noteCodexAccountsUnavailable();
+				if (codexEnsureShouldBackOff(error)) noteCodexAccountsUnavailable();
 			});
 		};
 		const stopBaseUrl = subscribeApiBaseUrl(() => {

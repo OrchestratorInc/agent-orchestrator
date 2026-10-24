@@ -98,8 +98,10 @@ describe("Codex account query", () => {
 		setIntervalSpy.mockRestore();
 	});
 
-	it("backs off automatic ensure while Codex account management is unavailable", async () => {
-		postMock.mockResolvedValue({ error: { code: "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", message: "unavailable" } });
+	it.each(["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "CODEX_ACCOUNT_SETUP_INCOMPLETE"])(
+		"backs off automatic ensure while Codex returns %s",
+		async (code) => {
+		postMock.mockResolvedValue({ error: { code, message: "unavailable" } });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(codexAccountsQueryKey, response);
 		renderHook(() => useEnsureCodexAccounts(), { wrapper: wrapper(queryClient) });
