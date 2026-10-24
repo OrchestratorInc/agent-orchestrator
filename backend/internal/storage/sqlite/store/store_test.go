@@ -933,6 +933,34 @@ func TestSessionCreateAssignsPerProjectID(t *testing.T) {
 	}
 }
 
+func TestListOrchestratorSessionsSkipsWorkers(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	seedProject(t, s, "ao")
+	orch := sampleRecord("mer")
+	orch.Kind = domain.KindOrchestrator
+	if _, err := s.CreateSession(ctx, sampleRecord("mer")); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.CreateSession(ctx, orch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch.ProjectID = "ao"
+	second, err := s.CreateSession(ctx, orch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListOrchestratorSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != second.ID || got[1].ID != first.ID {
+		t.Fatalf("orchestrators = %+v, want %s then %s in project order", got, second.ID, first.ID)
+	}
+}
+
 func TestSessionCreateAssignsStandaloneIDsWithoutProject(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

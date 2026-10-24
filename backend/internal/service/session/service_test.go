@@ -395,6 +395,20 @@ func (f *fakeStore) ListAllSessions(_ context.Context) ([]domain.SessionRecord, 
 	return out, nil
 }
 
+func (f *fakeStore) ListOrchestratorSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	all, err := f.ListAllSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, r := range all {
+		if r.Kind == domain.KindOrchestrator {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) RenameSession(_ context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error) {
 	r, ok := f.sessions[id]
 	if !ok {
