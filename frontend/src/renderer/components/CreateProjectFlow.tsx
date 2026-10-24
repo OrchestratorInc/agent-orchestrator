@@ -2152,7 +2152,7 @@ function ImportSourcePicker({
 							</button>
 						))}
 						{onCreateStandaloneAgent ? (
-							<button type="button" className="group flex min-h-[76px] items-center gap-3 px-3.5 py-3 text-left hover:bg-accent/50" aria-label={t("home.newStandaloneAgent")} disabled={disabled} onClick={createStandaloneAgent}>
+							<button type="button" className="group flex min-h-[76px] items-center gap-3 px-3.5 py-3 text-left hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50" aria-label={t("home.newStandaloneAgent")} disabled={disabled} onClick={createStandaloneAgent}>
 								<span className="grid w-9 shrink-0 place-items-center text-muted-foreground group-hover:text-foreground">
 									<MessageSquarePlus className="size-5" aria-hidden="true" strokeWidth={1.8} />
 								</span>
