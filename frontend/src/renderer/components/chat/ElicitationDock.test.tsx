@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import type { ConversationActivity } from "../../types/conversation";
 import { ElicitationDock } from "./ElicitationDock";
+import codexInput from "../../../../../backend/internal/adapters/chatdriver/codexappserver/testdata/user_input.json";
 
 function activity(detail: ConversationActivity["detail"]): ConversationActivity {
 	return {
@@ -21,6 +22,43 @@ function activity(detail: ConversationActivity["detail"]): ConversationActivity 
 }
 
 describe("ElicitationDock", () => {
+	it("renders Codex question, header and option descriptions and submits the native question id", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn();
+		render(<ElicitationDock activity={activity({ ...codexInput.detail, inputMode: "form", schema: { ...codexInput.detail.schema, type: "object" } })} onResolve={onResolve} />);
+		expect(screen.getAllByText(codexInput.params.questions[0].question).length).toBeGreaterThan(0);
+		expect(screen.getByRole("group", { name: "Direction *" })).toBeVisible();
+		expect(screen.getByText("Use the native protocol")).toBeVisible();
+		expect(screen.getByText("Keep the bridge")).toBeVisible();
+		expect(screen.queryByText("Do you want to run this command?")).not.toBeInTheDocument();
+		expect(onResolve).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("radio", { name: /Bridge/ }));
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { first_value: "Bridge" });
+	});
+
+	it("can answer a Codex Other question with free text without inventing an option", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn();
+		render(<ElicitationDock activity={activity({
+			...codexInput.detail,
+			inputMode: "form",
+			schema: {
+				...codexInput.detail.schema,
+				type: "object",
+				required: [],
+				properties: {
+					...codexInput.detail.schema.properties,
+					codex_other_0: { type: "string", title: "Direction — other answer or additional details", description: codexInput.detail.message },
+				},
+			},
+		})} onResolve={onResolve} />);
+		await user.type(screen.getByRole("textbox", { name: /other answer or additional details/ }), "SDK wrapper");
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledExactlyOnceWith("request-1", "accept", { codex_other_0: "SDK wrapper" });
+		expect(screen.getAllByRole("radio")).toHaveLength(2);
+	});
+
 	const claudeQuestions = {
 		type: "object" as const,
 		required: ["question_0", "question_1"],
