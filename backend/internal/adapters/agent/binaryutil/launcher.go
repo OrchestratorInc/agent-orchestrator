@@ -196,7 +196,7 @@ func discoveryRuntimeTarget(target string) bool {
 		return true
 	}
 	name := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
-	return name == "node" || name == "node.exe"
+	return name == "node" || name == "node.exe" || name == "bun" || name == "bun.exe"
 }
 
 // Only an interpreter's program argument is executable ownership evidence.
@@ -254,6 +254,10 @@ func discoveryInterpreterApplications(target string, arguments []string) []disco
 		case ".js", ".mjs", ".cjs", ".py", ".ps1":
 			return append(applications, discoveryApplication{target: argument, main: true})
 		default:
+			// npm also publishes extensionless Node/Bun bin applications.
+			if strings.Contains(strings.ReplaceAll(argument, `\`, "/"), "/node_modules/") {
+				return append(applications, discoveryApplication{target: argument, main: true})
+			}
 			return applications // The first positional argument is the program, not later CLI data.
 		}
 	}

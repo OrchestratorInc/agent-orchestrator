@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -78,6 +79,11 @@ func (v *Verifier) Verify(ctx context.Context, target Target) (VerifyResult, err
 		}
 		return VerifyResult{}, err
 	}
+	verifiedPath, err := binaryutil.VerifyExecutable(probeCtx, string(target), path)
+	if err != nil {
+		return VerifyResult{ResolvedPath: path}, fmt.Errorf("verify installed %s executable: %w", target, err)
+	}
+	path = verifiedPath
 	out := &capturedOutput{max: maxOutputBytes}
 	if err := v.commands.Run(probeCtx, []string{path, "--version"}, out, out); err != nil {
 		result := VerifyResult{ResolvedPath: path, Output: out.String()}
