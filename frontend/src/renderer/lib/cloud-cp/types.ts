@@ -834,6 +834,7 @@ export interface CloudCpWorkspaceReviewCommit {
 }
 
 export interface CloudCpWorkspaceReviewResponse {
+	workspaceRoot?: string;
 	workspaceVersion: string;
 	compareBaseSha?: string;
 	compareBaseRef?: string;
