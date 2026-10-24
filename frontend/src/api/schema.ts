@@ -5088,6 +5088,11 @@ export interface components {
              * @description Deprecated compatibility alias for processedTokens.
              */
             totalTokens: number;
+            /**
+             * @description Why estimatedCost is null, when the session has usage.
+             * @enum {null|string}
+             */
+            unpricedReason: "pending_attribution" | "unidentified_route" | "no_catalog_rates" | null;
         };
         ConsumeAgentAccountResetCreditRequest: {
             idempotencyKey: string;
@@ -7474,6 +7479,11 @@ export interface components {
             processedTokens: null | number;
             /** @description Input not read from an existing provider cache. Includes cache writes. */
             uncachedInputTokens: null | number;
+            /**
+             * @description Why estimatedCost is null, when the scope has usage. Distinguishes an estimate that is still pending attribution from one that can never arrive.
+             * @enum {null|string}
+             */
+            unpricedReason: "pending_attribution" | "unidentified_route" | "no_catalog_rates" | null;
         };
         VerifyAgentAccountLoginResponse: {
             account?: components["schemas"]["AgentAccountResponse"];
