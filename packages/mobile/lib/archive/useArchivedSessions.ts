@@ -159,17 +159,21 @@ export function useArchivedSessions(
 	}, [options.active, streams, fetchPage]);
 
 	// The poll's count moved: a session was archived or restored on that machine.
+	// Acted on once the stream is idle. A count that moves while a page is in
+	// flight is still unseen when that request settles, and this re-runs on
+	// every stream change, so it is picked up then. A failed stream waits for
+	// Retry rather than retrying on its own.
 	const counts = sources.map((source) => `${sourceKey(source)}=${archiveSourceCount(source)}`).join("\t");
 	useEffect(() => {
 		for (const source of sourcesRef.current) {
 			const key = sourceKey(source);
-			const stream = streamsRef.current[key];
+			const stream = streams[key];
 			const count = archiveSourceCount(source);
-			if (!stream || stream.seenCount === count) continue;
+			if (!stream || stream.seenCount === count || stream.loading || stream.error) continue;
 			if (stream.loaded && options.active) void fetchPage(key, "refresh");
 			else setStreams((current) => current[key] ? { ...current, [key]: { ...freshStream(source) } } : current);
 		}
-	}, [counts, options.active, fetchPage]);
+	}, [counts, options.active, streams, fetchPage]);
 
 	// A search reads on until it has seen everything (within the cap).
 	useEffect(() => {

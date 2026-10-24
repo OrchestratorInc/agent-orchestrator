@@ -410,6 +410,27 @@ describe("a machine that pages its archive", () => {
 		act(() => renderer.unmount());
 	});
 
+	// A count change that lands while a page is in flight cannot refresh then;
+	// it must when that request settles, or a newly archived session stays
+	// missing until the count moves again.
+	it("refreshes the archive once an in-flight page settles after the count moved", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(3))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: [arch("a3", 3), arch("a2", 2)], nextCursor: "after-a2" });
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-a2" })]);
+		const nextPage = archivePages.requests.shift()!;
+		act(() => { renderer.update(board([live], source(4))); });
+		expect(archivePages.requests).toHaveLength(0);
+		await act(async () => { nextPage.resolve({ sessions: [arch("a1", 1)], nextCursor: null }); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: null })]);
+		await answer({ sessions: [arch("a4", 4), arch("a3", 3), arch("a2", 2), arch("a1", 1)], nextCursor: null });
+		expect(archivedIds(renderer)).toEqual(["a4", "a3", "a2", "a1"]);
+		act(() => renderer.unmount());
+	});
+
 	it("drops a restored session from the archive as soon as it is live again", async () => {
 		archivePages.requests.length = 0;
 		let renderer!: ReactTestRenderer;
