@@ -8,8 +8,10 @@ import (
 )
 
 type discoveryInvocation struct {
-	target   string
-	explicit bool
+	target     string
+	explicit   bool
+	arguments  []string
+	dependency bool
 }
 
 // Quotes keep spaces and shell operators inside an argument. Unquoted shell
@@ -17,15 +19,18 @@ type discoveryInvocation struct {
 var discoveryLauncherTokens = regexp.MustCompile(`(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s"';&|()])+|[;&|()]`)
 
 var discoveryLauncherAssignment = regexp.MustCompile(`^(?:export\s+)?([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$`)
-var discoveryLauncherVariable = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*|@)\}|\$([a-zA-Z_][a-zA-Z0-9_]*|@)`)
+var discoveryLauncherVariable = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*|@)\}|\$([a-zA-Z_][a-zA-Z0-9_]*|@)|%[a-zA-Z_][a-zA-Z0-9_]*%`)
 
 func discoveryExpandLauncherTarget(target string, variables map[string]string) (string, error) {
 	var expanded strings.Builder
 	start := 0
 	for _, match := range discoveryLauncherVariable.FindAllStringIndex(target, -1) {
 		reference := target[match[0]:match[1]]
-		name := strings.Trim(strings.TrimPrefix(reference, "$"), "{}")
+		name := strings.Trim(strings.TrimPrefix(reference, "$"), "{}%")
 		value, ok := variables[name]
+		if !ok && strings.HasPrefix(reference, "%") {
+			value, ok = variables[strings.ToUpper(name)]
+		}
 		if !ok {
 			value = reference
 		}
@@ -141,12 +146,12 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 				option := tokens[i]
 				i++
 				if pkg, ok := strings.CutPrefix(option, "--package="); ok {
-					invocations = append(invocations, discoveryInvocation{target: strings.Trim(pkg, `"'`)})
+					invocations = append(invocations, discoveryInvocation{target: strings.Trim(pkg, `"'`), dependency: true})
 				}
 				if (option == "-u" || option == "--unset" || option == "-p" || option == "--package") && i < len(tokens) {
 					// Package names can themselves identify a foreign agent.
 					if option == "-p" || option == "--package" {
-						invocations = append(invocations, discoveryInvocation{target: strings.Trim(tokens[i], `"'`)})
+						invocations = append(invocations, discoveryInvocation{target: strings.Trim(tokens[i], `"'`), dependency: true})
 					}
 					i++
 				}
@@ -156,7 +161,7 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 				explicit = true
 				i += 2
 			} else {
-				return append(invocations, discoveryInvocation{target: target, explicit: explicit})
+				return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
 			}
 		case "start":
 			explicit = true
@@ -178,7 +183,7 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 				return invocations // POSIX condition; subsequent segments/body are inspected.
 			}
 		default:
-			return append(invocations, discoveryInvocation{target: target, explicit: explicit})
+			return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
 		}
 	}
 	return invocations
@@ -192,4 +197,65 @@ func discoveryRuntimeTarget(target string) bool {
 	}
 	name := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
 	return name == "node" || name == "node.exe"
+}
+
+// Only an interpreter's program argument is executable ownership evidence.
+// Paths printed by echo, tested by IF, assigned by SET, or embedded in eval
+// strings must not vouch for an otherwise unidentified launcher.
+type discoveryApplication struct {
+	target string
+	main   bool
+}
+
+func discoveryInterpreterApplications(target string, arguments []string) []discoveryApplication {
+	name := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
+	if name == "powershell" || name == "powershell.exe" || name == "pwsh" || name == "pwsh.exe" {
+		for i := 0; i+1 < len(arguments); i++ {
+			if strings.EqualFold(arguments[i], "-Command") || strings.EqualFold(arguments[i], "-EncodedCommand") {
+				return nil
+			}
+			if strings.EqualFold(arguments[i], "-File") {
+				return []discoveryApplication{{target: strings.Trim(arguments[i+1], `"'`), main: true}}
+			}
+		}
+		return nil
+	}
+	if !discoveryRuntimeTarget(target) && name != "python" && name != "python3" && name != "python.exe" && name != "python3.exe" {
+		return nil
+	}
+	var applications []discoveryApplication
+	for i := 0; i < len(arguments); i++ {
+		argument := strings.Trim(arguments[i], `"'`)
+		if strings.HasPrefix(argument, "-") {
+			if strings.HasPrefix(argument, "--eval=") || strings.HasPrefix(argument, "--print=") {
+				return applications
+			}
+			if len(argument) > 2 && (strings.HasPrefix(argument, "-e") || strings.HasPrefix(argument, "-p") || strings.HasPrefix(argument, "-c") || strings.HasPrefix(argument, "-m")) {
+				return applications
+			}
+			switch argument {
+			case "-e", "--eval", "-p", "--print", "-c", "-m":
+				return applications
+			case "-r", "--require", "--loader", "--import":
+				i++
+				if i < len(arguments) {
+					applications = append(applications, discoveryApplication{target: strings.Trim(arguments[i], `"'`)})
+				}
+			default:
+				for _, prefix := range []string{"--require=", "--loader=", "--import="} {
+					if value, ok := strings.CutPrefix(argument, prefix); ok {
+						applications = append(applications, discoveryApplication{target: strings.Trim(value, `"'`)})
+					}
+				}
+			}
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(argument)) {
+		case ".js", ".mjs", ".cjs", ".py", ".ps1":
+			return append(applications, discoveryApplication{target: argument, main: true})
+		default:
+			return applications // The first positional argument is the program, not later CLI data.
+		}
+	}
+	return applications
 }
