@@ -27,6 +27,11 @@ vi.mock("./settings/DefaultCloudSandboxRow", () => ({
 	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
 }));
 
+// The real section polls the daemon's /computer-use routes; ComputerUseSection.test covers it.
+vi.mock("./settings/ComputerUseSection", () => ({
+	ComputerUseSection: () => <div data-testid="computer-use-section" />,
+}));
+
 const {
 	getUpdate,
 	setUpdate,

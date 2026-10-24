@@ -257,7 +257,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
-		MCPServers:              m.aoMCPServers(in.cfg.Harness, env),
+		MCPServers:              m.aoMCPServers(ctx, in.cfg.Harness, env),
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -344,11 +344,12 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 
 // aoMCPServers is the tool server every chat session gets: `ao mcp` from the
 // daemon's own binary, which gives the agent the html_preview and html_render
-// tools. Chat Service keeps it for every later start and resume of the
-// session (edit, rollback, fork). Its env holds only what the CLI needs to
-// reach this daemon for this session, never a credential such as
-// AO_BROWSER_CAPABILITY.
-func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
+// tools, and the computer-use tools while "Let agents use this computer" is
+// on, read like the system prompt when the chat starts or restores. Chat
+// Service keeps it for every later start and resume of the session (edit,
+// rollback, fork). Its env holds only what the CLI needs to reach this daemon
+// for this session, never a credential such as AO_BROWSER_CAPABILITY.
+func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
 	if harness == domain.HarnessUnreal {
 		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
@@ -361,11 +362,14 @@ func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]strin
 	}
 	// AO_DATA_DIR too: a harness may start the server with exactly this env, and
 	// without it config.Load needs $HOME to find the data dir.
-	serverEnv := make(map[string]string, 3)
+	serverEnv := make(map[string]string, 4)
 	for _, key := range []string{EnvSessionID, EnvRunFile, EnvDataDir} {
 		if value := env[key]; value != "" {
 			serverEnv[key] = value
 		}
+	}
+	if m.computerUseEnabled(ctx) {
+		serverEnv[envComputerUse] = "1"
 	}
 	return []ports.ChatMCPServerConfig{{
 		Name: "ao", Type: "stdio", Command: executable, Args: []string{"mcp"}, Env: serverEnv,
@@ -541,7 +545,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		MCPServers:              m.aoMCPServers(rec.Harness, env),
+		MCPServers:              m.aoMCPServers(ctx, rec.Harness, env),
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
