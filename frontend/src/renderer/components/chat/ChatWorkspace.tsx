@@ -4348,23 +4348,27 @@ const TurnGroup = memo(function TurnGroup({
 	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
-	const { runs, subagentSteps } = useMemo(() => {
-		// A subagent's steps leave the turn's flow and hang under its launch, so the
-		// child's commands stop reading as the parent's own.
-		const { items, steps } = partitionSubagentSteps(
-			group.items.filter((item) => {
-				if (item.id === group.liveProviderFailure?.id) return false;
-				if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
-				return !(
-					hasTerminalFailure &&
-					item.kind === "activity" &&
-					item.detail?.event === "provider.failure" &&
-					item.status === "failed"
-				);
-			}),
-		);
-		return { runs: runsOf(items), subagentSteps: steps };
-	}, [group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure]);
+	const subagentSteps = group.subagents?.steps ?? NO_SUBAGENT_STEPS;
+	const subagentsLive = group.subagents?.live ?? Boolean(group.live);
+	const runs = useMemo(
+		() =>
+			runsOf(
+				group.items.filter((item) => {
+					// A subagent's steps leave the turn's flow and hang under its launch, so
+					// the child's commands stop reading as the parent's own.
+					if (group.subagents?.stepIds.has(item.id)) return false;
+					if (item.id === group.liveProviderFailure?.id) return false;
+					if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
+					return !(
+						hasTerminalFailure &&
+						item.kind === "activity" &&
+						item.detail?.event === "provider.failure" &&
+						item.status === "failed"
+					);
+				}),
+			),
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
+	);
 	const lastAssistantId = [...group.items]
 		.reverse()
 		.find((item) => item.kind === "message" && item.role === "assistant" && item.text.trim() !== "")?.id;
@@ -4405,7 +4409,7 @@ const TurnGroup = memo(function TurnGroup({
 			isHumanRun(run.items[0]) ||
 			isNoticeRun(run) ||
 			(run.kind === "subagents" && run.items.some((launch) =>
-				readSubagent(launch, subagentSteps.get(launch.id) ?? [], false).state === "working",
+				readSubagent(launch, subagentSteps.get(launch.id) ?? [], subagentsLive).state === "working",
 			)))
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
@@ -4428,7 +4432,7 @@ const TurnGroup = memo(function TurnGroup({
 				key={run.key}
 				launches={run.items}
 				steps={subagentSteps}
-				live={Boolean(group.live)}
+				live={subagentsLive}
 				harness={harness}
 				disclosureKey={`${group.key}:${run.key}`}
 				disclosureOverrides={activityDisclosureOverrides}
@@ -4952,11 +4956,27 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		sameContent(a.outcome, b.outcome) &&
 		sameContent(a.diff, b.diff) &&
 		sameContent(a.plan, b.plan) &&
+		sameSubagents(a.subagents, b.subagents) &&
 		a.items.length === b.items.length &&
 		// The items are already identity-stable by the time a group is compared, so a
 		// reference check here is exact and avoids walking their contents twice.
 		a.items.every((item, index) => item === b.items[index])
 	);
+}
+
+/**
+ * A child's steps can sit in a later group than its launch, so the launch's group
+ * changes when they do even though its own items stay as they were.
+ */
+function sameSubagents(a: GroupSubagents | undefined, b: GroupSubagents | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.live !== b.live || a.steps.size !== b.steps.size || a.stepIds.size !== b.stepIds.size) return false;
+	for (const id of a.stepIds) if (!b.stepIds.has(id)) return false;
+	for (const [launchId, steps] of a.steps) {
+		const other = b.steps.get(launchId);
+		if (other?.length !== steps.length || steps.some((step, index) => step !== other[index])) return false;
+	}
+	return true;
 }
 
 /**
@@ -5011,7 +5031,20 @@ type TimelineGroup = {
 	rollbackable?: boolean;
 	/** An account switch stopped this turn; its notice replaces the outcome. */
 	accountSwitched?: boolean;
+	/** Subagents' steps, read from the whole AO turn. See `withSubagentSteps`. */
+	subagents?: GroupSubagents;
 };
+
+type GroupSubagents = {
+	/** Each of this group's launches, with every step its child took in the turn. */
+	steps: ReadonlyMap<string, ConversationActivity[]>;
+	/** This group's items that are a child's steps, wherever the child's launch is. */
+	stepIds: ReadonlySet<string>;
+	/** The AO turn is still running, even when this group is a settled part before a steer. */
+	live: boolean;
+};
+
+const NO_SUBAGENT_STEPS: ReadonlyMap<string, ConversationActivity[]> = new Map();
 
 type GroupPreview = { title: string; detail?: string };
 
@@ -5208,7 +5241,39 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return groups.flatMap(splitAtSteers);
+	return groups.flatMap((group) => {
+		const { steps } = partitionSubagentSteps(group.items);
+		const segments = splitAtSteers(group);
+		if (steps.size === 0) return segments;
+		const stepIds = new Set([...steps.values()].flat().map((step) => step.id));
+		return segments.map((segment) => withSubagentSteps(segment, steps, stepIds, Boolean(group.live)));
+	});
+}
+
+/**
+ * Give a group the subagent steps read from its whole AO turn.
+ *
+ * A child keeps working while the user steers, so its later steps and its hand-back
+ * land after the steer while its launch stays before it. Read one segment at a time,
+ * the team would never get its report and the child's steps would read as the
+ * parent's. So the turn is partitioned before the split, and each segment takes its
+ * own launches' steps and the real turn's live state.
+ */
+function withSubagentSteps(
+	segment: TimelineGroup,
+	turnSteps: ReadonlyMap<string, ConversationActivity[]>,
+	turnStepIds: ReadonlySet<string>,
+	live: boolean,
+): TimelineGroup {
+	const steps = new Map<string, ConversationActivity[]>();
+	const stepIds = new Set<string>();
+	for (const item of segment.items) {
+		const own = turnSteps.get(item.id);
+		if (own) steps.set(item.id, own);
+		if (turnStepIds.has(item.id)) stepIds.add(item.id);
+	}
+	if (steps.size === 0 && stepIds.size === 0) return segment;
+	return { ...segment, subagents: { steps, stepIds, live } };
 }
 
 /**

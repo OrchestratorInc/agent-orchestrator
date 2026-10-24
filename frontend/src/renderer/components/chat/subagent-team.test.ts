@@ -219,6 +219,25 @@ describe("readSubagent", () => {
 	it("marks a cancelled launch as stopped", () => {
 		expect(readSubagent(launch("a", { status: "cancelled" }), [], true).state).toBe("stopped");
 	});
+
+	it("takes only its own hand-back when a child started a child of its own", () => {
+		const outer = launch("outer");
+		const inner = { ...launch("inner"), detail: { ...launch("inner").detail, parentProviderItemId: "tool-outer" } };
+		const innerReport = handback("hi", "tool-inner", "Inner report.", at(5));
+		const outerReport = handback("ho", "tool-outer", "Outer report.", at(9));
+		const readOuter = (items: ConversationItem[]) =>
+			readSubagent(outer, partitionSubagentSteps(items).steps.get("outer") ?? [], true);
+
+		// The inner child finishing says nothing about the outer one.
+		const midway = readOuter([outer, inner, innerReport]);
+		expect(midway.state).toBe("working");
+		expect(midway.report).toBeUndefined();
+
+		const finished = readOuter([outer, inner, innerReport, outerReport]);
+		expect(finished).toMatchObject({ state: "done", report: "Outer report." });
+		// The inner hand-back stays readable among the outer child's steps.
+		expect(finished.steps.map((item) => item.id)).toEqual(["inner", "hi"]);
+	});
 });
 
 describe("latestSubagentLine", () => {

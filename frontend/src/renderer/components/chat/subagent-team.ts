@@ -121,8 +121,13 @@ export function readSubagent(
 	live: boolean,
 ): Subagent {
 	const input = launchInput(launch);
-	const handback = allSteps.find(isHandback);
-	const steps = allSteps.filter((step) => !isHandback(step));
+	// The steps carry the whole chain under this launch, so an inner child's hand-back
+	// is among them. Only the one addressed to this launch is its report; the rest are
+	// steps the reader can open like any other.
+	const handback = allSteps.find(
+		(step) => isHandback(step) && launch.providerItemId !== undefined && step.detail?.parentProviderItemId === launch.providerItemId,
+	);
+	const steps = allSteps.filter((step) => step !== handback);
 	const result = launchResultText(launch);
 	const background = ASYNC_RESULT.test(result);
 	const startedAt = timeOf(launch.createdAt);

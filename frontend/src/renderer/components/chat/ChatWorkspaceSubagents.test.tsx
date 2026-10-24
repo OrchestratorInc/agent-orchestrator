@@ -8,18 +8,13 @@
  * and none of the provider's internal notes.
  */
 
-import { render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixtureEmpty } from "../../lib/chat-fixture";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-}
+import { renderChat as render } from "../../test/render-chat";
 
 const turnId = "turn-subagents";
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 24, 10, 0, seconds)).toISOString();
@@ -70,6 +65,17 @@ function text(id: string, sequence: number, role: "user" | "assistant", body: st
 		kind: "message", id, turnId, sequence, revision: 0,
 		role, origin: role === "user" ? "human" : "provider",
 		text: body, streaming: false, createdAt: at(sequence),
+	};
+}
+
+function steer(id: string, sequence: number, body: string): ConversationActivity {
+	return {
+		kind: "activity", id, turnId, sequence, revision: 0,
+		activityKind: "system",
+		status: "completed",
+		summary: body,
+		detail: { event: "steer", text: body, origin: "human" },
+		createdAt: at(sequence),
 	};
 }
 
@@ -145,5 +151,41 @@ describe("ChatWorkspace subagents", () => {
 		await waitFor(() =>
 			expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument(),
 		);
+	});
+
+	it("keeps a child's steps and report with its launch when the user steers mid-run", async () => {
+		const user = userEvent.setup();
+		// The steer opens a new visual turn, but the child keeps going in the same AO
+		// turn, so its later command and its hand-back land after the steer.
+		const steered = (items: ConversationItem[]): ConversationSnapshot => ({
+			...chatFixtureEmpty,
+			harness: "claude-code",
+			controller: { state: "busy" },
+			latestSequence: items.length,
+			turns: [{ id: turnId, state: "running", requestedAt: at(0), startedAt: at(0) }],
+			items: [
+				text("prompt", 1, "user", "Audit the storefront with a subagent"),
+				launch("pages", 2, "Audit: info pages"),
+				steer("steer", 3, "Check the FAQ too"),
+				child("p1", 4, "tool-pages", "cd /repo; cat src/app/faq/page.tsx"),
+				...items,
+			],
+		});
+		const { rerender } = render(<ChatWorkspace snapshot={steered([])} />);
+
+		// The real turn is still running, so the child is working, not "No report", and
+		// its command is not a loose row in the steer's part of the turn.
+		const header = screen.getByRole("button", { name: /1 subagent/ });
+		expect(within(header).getByText("1 working")).toBeInTheDocument();
+		expect(screen.queryByText(/Ran \d+ tool call/)).not.toBeInTheDocument();
+
+		rerender(<ChatWorkspace snapshot={steered([handback("p2", 5, "tool-pages", "The FAQ never mentions shipping.")])} />);
+
+		// Done, the team folds into the work before the steer, carrying the report.
+		await user.click(screen.getByRole("button", { name: /Worked for/ }));
+		const settled = await screen.findByRole("button", { name: /1 subagent/ });
+		expect(within(settled).getByText("1 done")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
+		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
 	});
 });
