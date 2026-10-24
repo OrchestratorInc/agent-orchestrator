@@ -413,6 +413,10 @@ type SessionBranchState struct {
 	// Unpushed is how many branch commits are not on RemoteBranch. It equals
 	// Commits while RemoteBranch is empty.
 	Unpushed int `json:"unpushed"`
+	// HeadSHA is the branch's current tip. It tells whether a merged PR
+	// already shipped exactly this commit, which commit counts cannot do
+	// after a squash or rebase merge.
+	HeadSHA string `json:"headSha,omitempty"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.

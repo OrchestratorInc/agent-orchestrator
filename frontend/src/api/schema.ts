@@ -6551,6 +6551,7 @@ export interface components {
         };
         SessionBranchState: {
             commits: number;
+            headSha?: string;
             remoteBranch?: string;
             unpushed: number;
         };
