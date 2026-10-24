@@ -4,12 +4,10 @@ import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
-import type { TerminalMux } from "../../lib/terminal-mux";
 import { useResolvedTheme } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
-import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { HarnessDetailGroup } from "./harness/harness-ui";
 import { formatCompactNumber, formatPercentage, formatPlanName, formatResetTime } from "./CodexAccountDetails";
@@ -216,31 +214,10 @@ function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale:
 	</>;
 }
 
-/** The sign-in terminal on its own, for signing a saved account in again from
- * outside Settings, such as a chat whose agent was refused. Closing cancels. */
-export function AgentAccountLoginDialog({ login, note, pending, createMux, onCheck, onClose }: {
+function LoginTerminal({ login, note, pending, onCheck, onClose }: {
 	login: AgentAccountLogin;
 	note: string;
 	pending: boolean;
-	/** The daemon that started the sign-in, when it is a remote host's. */
-	createMux?: () => TerminalMux;
-	onCheck: (login: AgentAccountLogin) => void;
-	onClose: (login: AgentAccountLogin) => void;
-}) {
-	const { t } = useTranslation();
-	return <Dialog open onOpenChange={(open) => { if (!open) onClose(login); }}>
-		<DialogContent aria-describedby={undefined} showCloseButton={false} className="z-overlay w-[min(560px,calc(100vw-24px))] max-w-none p-0">
-			<DialogTitle className="sr-only">{t("settings.agentAccounts.loginTitle", { provider: providerNames[login.provider] })}</DialogTitle>
-			<LoginTerminal login={login} note={note} pending={pending} createMux={createMux} onCheck={onCheck} onClose={onClose} />
-		</DialogContent>
-	</Dialog>;
-}
-
-function LoginTerminal({ login, note, pending, createMux, onCheck, onClose }: {
-	login: AgentAccountLogin;
-	note: string;
-	pending: boolean;
-	createMux?: () => TerminalMux;
 	onCheck: (login: AgentAccountLogin) => void;
 	onClose: (login: AgentAccountLogin) => void;
 }) {
@@ -260,7 +237,7 @@ function LoginTerminal({ login, note, pending, createMux, onCheck, onClose }: {
 			<p className="truncate text-xs font-medium text-foreground">{t("settings.agentAccounts.loginTitle", { provider: providerNames[login.provider] })}</p>
 			<Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.codexAccounts.loginClose")} className="shrink-0 text-muted-foreground" onClick={() => onClose(login)}><X aria-hidden="true" /></Button>
 		</div>
-		<div className="h-[300px] min-h-0"><TerminalPane key={login.operationId} createMux={createMux} daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={state === "attached"} fontSize={12} onTerminalStateChange={handleState} terminalTarget={{ kind: "shell", handleId: login.shellTerminal.handleId, generation: login.shellTerminal.createdAt, title: login.shellTerminal.title }} theme={theme} /></div>
+		<div className="h-[300px] min-h-0"><TerminalPane key={login.operationId} daemonReady={shell ? shell.daemonStatus.state === "ready" : true} focusRequested={state === "attached"} fontSize={12} onTerminalStateChange={handleState} terminalTarget={{ kind: "shell", handleId: login.shellTerminal.handleId, generation: login.shellTerminal.createdAt, title: login.shellTerminal.title }} theme={theme} /></div>
 		<div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2">
 			<p className="min-w-0 truncate text-xs text-muted-foreground" role="status" aria-live="polite">{note}</p>
 			<Button type="button" size="sm" variant="outline" disabled={pending} onClick={() => onCheck(login)}>{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.agentAccounts.checkSignIn")}</Button>
