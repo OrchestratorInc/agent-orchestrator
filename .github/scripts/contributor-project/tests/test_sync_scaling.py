@@ -141,12 +141,37 @@ class SyncScalingTests(unittest.TestCase):
         self.assertEqual(runs, 26)
         self.assertEqual(api.mutations, 512 * 5)
 
-    def test_capacity_prevents_adds_without_touching_existing_data(self):
+    def test_capacity_skips_adds_but_still_updates_existing_items(self):
         api = ProjectAPI()
+        self.apply(api)
         api.state.total_items = sync.PROJECT_CAPACITY
-        with self.assertRaisesRegex(sync.SyncError, "capacity"):
-            self.apply(api)
-        self.assertEqual(api.mutations, 0)
+        mapped = mapping()
+        mapped["issues"]["1"]["area"] = "comma-area"
+        result = self.apply(api, mapped=mapped, issues=[issue(1), issue(2)])
+        self.assertEqual(result["items_skipped_at_capacity"], 1)
+        self.assertEqual(result["items_added"], 0)
+        self.assertGreater(result["fields_filled"], 0)
+        self.assertEqual(len(api.state.items), 1)
+
+    def test_main_exit_codes_separate_progress_from_stalls(self):
+        for applied, code in [({"complete": True, "writes": 5}, 0), ({"complete": False, "writes": 5}, 3),
+                              ({"complete": False, "writes": 0}, 4),
+                              ({"complete": True, "writes": 5, "items_skipped_at_capacity": 1}, 2)]:
+            with self.subTest(applied=applied), patch.object(sync, "run", return_value={"applied": applied}), \
+                    patch.object(sync.sys, "stdout", io.StringIO()):
+                self.assertEqual(sync.main(["--project-url", "https://github.com/users/Rishet11/projects/1"]), code)
+
+    def test_rate_limit_wait_defers_when_it_would_pass_the_run_deadline(self):
+        from test_project_sync import response
+        token = sync.RUN_DEADLINE.set(100)
+        try:
+            with patch.object(sync.subprocess, "run", return_value=response({"message": "limited"}, 429, "retry-after: 30\r\n")), \
+                    patch.object(sync.time, "monotonic", return_value=90), patch.object(sync.time, "sleep") as sleep:
+                with self.assertRaisesRegex(sync.RateLimitError, "deadline"):
+                    sync._graphql_payload("query { viewer { login } }", {})
+            sleep.assert_not_called()
+        finally:
+            sync.RUN_DEADLINE.reset(token)
 
     def test_write_pacing_uses_monotonic_time(self):
         budget = sync.WriteBudget(10, interval=1)

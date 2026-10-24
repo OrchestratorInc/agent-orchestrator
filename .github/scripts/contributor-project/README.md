@@ -30,7 +30,7 @@ ignored `research/owners/`.
 Owner builds and Project sync run as independent jobs with separate concurrency
 groups. A slow sync cannot displace a queued owner refresh. Both jobs use trusted
 default-branch code. Sync can use yesterday's owners while today's build runs.
-CI caches one successful owner build per UTC day, keyed by its scripts and data.
+CI caches one successful owner build per UTC day, keyed by the owner scripts and data.
 Only successful builds save owner output. Failed builds retain restored owners;
 sync warns if their timestamp is invalid or older than seven days.
 
@@ -39,7 +39,9 @@ a seven-day overlap, refreshes that overlap, and removes evidence older than 540
 days. A full refresh runs at least every 30 days, or with `--full-refresh`.
 Extraction pins its capture time and saves successful API pages across failed or
 timed-out attempts. The next owner job resumes the same requests instead of
-restarting the cold build. Evidence is saved even if extraction fails; owner
+restarting the cold build. Evidence is saved after a failed extraction that made
+progress, after a successful one once owners build, or when no evidence was cached
+yet; while builds keep failing, later runs re-fetch only the recent overlap. Owner
 output is saved only if the build succeeds. After extraction completes, temporary
 API pages and the progress marker are removed. Cached evidence contains public
 PR data, not credentials. Extraction uses the workflow's `GITHUB_TOKEN` and has
@@ -76,8 +78,9 @@ Other repositories, PRs, assignees, labels, status and area evidence are left al
 
 Normal scans fetch active items and archived open items, skipping closed archives.
 The separate capacity count includes all items. At 40,000 total items, sync warns
-that the board needs rotation; GitHub allows 50,000 including archives. Sync refuses
-new additions when that capacity is reached. It never deletes archive history.
+that the board needs rotation; GitHub allows 50,000 including archives. At capacity,
+sync skips new additions, still updates existing items, and fails the job with an
+error until the board is rotated. It never deletes archive history.
 
 Before the old board reaches capacity, create a private successor Project. Copy
 active issues and any human-set fields to it before enabling writes. Verify a dry
@@ -171,10 +174,12 @@ snapshot updates with map changes; add new areas to the snapshot before building
 
 Rate limits retry after `Retry-After`, the primary limit's reset time, or 60
 seconds if neither is available. A delay longer than 60 seconds defers work to a
-later run rather than sleeping through the job timeout. Transient failures retry
-once after five seconds. An exhausted write budget or persistent rate limit emits
+later run rather than sleeping through the job timeout, as does any wait that
+would run past 30 minutes into the sync. Transient failures retry once after five
+seconds. An exhausted write budget or persistent rate limit emits
 an explicit `complete: false` result with the reason and remaining item count,
-and exits 3. Completed runs exit 0; other errors retain their nonzero exit status.
-The workflow posts the JSON result to its job summary and annotates deferred work
-as a warning. It treats exit 3 as expected scheduled continuation; other failures
-still fail the job.
+and exits 3, or 4 if the run wrote nothing. Completed runs exit 0; other errors
+retain their nonzero exit status. The workflow posts the JSON result to its job
+summary and annotates deferred work as a warning. It treats exit 3 as expected
+scheduled continuation; exit 4 means the backlog is stalled and fails the job, as
+do other errors.

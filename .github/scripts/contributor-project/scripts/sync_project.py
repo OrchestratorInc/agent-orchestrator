@@ -69,6 +69,9 @@ class WriteBudget:
 
 
 WRITE_BUDGET: ContextVar[WriteBudget | None] = ContextVar("write_budget", default=None)
+# Rate-limit waits defer once they would run past this point, so the job exits cleanly before its 45-minute timeout.
+RUN_DEADLINE: ContextVar[float | None] = ContextVar("run_deadline", default=None)
+RUN_DEADLINE_SECONDS = 30 * 60
 
 
 TRANSIENT_RETRY_SECONDS = 5.0
@@ -643,6 +646,9 @@ def _api_request(arguments: list[str], request: str | None = None) -> Any:
                     delay = max(0, float(reset[1]) - time.time())
             if delay > 60:
                 raise RateLimitError(f"GitHub API retry is due in {delay:.0f}s; defer to the next run")
+            deadline = RUN_DEADLINE.get()
+            if deadline is not None and time.monotonic() + delay > deadline:
+                raise RateLimitError("GitHub API retry would pass the run deadline; defer to the next run")
             rate_limit_retried = True
             time.sleep(max(0, delay))
             continue
@@ -1145,7 +1151,8 @@ def apply_plan(plan: SyncPlan, max_writes: int = 100, write_interval: float = 0)
         raise SyncError("max-writes must be at least 10 and write-interval must be nonnegative")
     summary: dict[str, Any] = {"fields_updated": 0, "fields_created": 0, "items_added": 0,
                "fields_filled": 0, "fields_skipped_after_recheck": 0, "items_archived": 0, "items_unarchived": 0,
-               "records_recovered": 0, "complete": True, "deferred_reason": None, "remaining_items": 0, "writes": 0}
+               "records_recovered": 0, "items_skipped_at_capacity": 0, "complete": True, "deferred_reason": None,
+               "remaining_items": 0, "writes": 0}
     groups: dict[str, list[Operation]] = {}
     for operation in plan.operations:
         groups.setdefault(operation.item_id or f"new:{operation.issue.number}", []).append(operation)
@@ -1165,6 +1172,12 @@ def apply_plan(plan: SyncPlan, max_writes: int = 100, write_interval: float = 0)
         if ROUTING_FIELD not in fields:
             raise SyncError(f"managed field {ROUTING_FIELD!r} was not available after field creation")
         for operations in groups.values():
+            if (operations[0].kind == "add" and plan.total_items is not None
+                    and plan.total_items + summary["items_added"] >= PROJECT_CAPACITY):
+                # Skip only the add; archives, unarchives and fills on existing items still run.
+                summary["items_skipped_at_capacity"] += 1
+                summary["remaining_items"] -= 1
+                continue
             fills = [op for op in operations if op.kind == "fill"]
             # Reserve the entire item, including intent and final tracking writes.
             required = sum(1 if op.kind in {"add", "recover"} else 2 if op.kind in {"archive", "unarchive"} else 0 for op in operations)
@@ -1172,8 +1185,6 @@ def apply_plan(plan: SyncPlan, max_writes: int = 100, write_interval: float = 0)
             item_id = operations[0].item_id
             for operation in operations:
                 if operation.kind == "add":
-                    if plan.total_items is not None and plan.total_items + summary["items_added"] >= PROJECT_CAPACITY:
-                        raise SyncError("Project is at capacity; rotate to a new private Project before adding issues")
                     data = _graphql_payload(ADD_ITEM_MUTATION, {"input": {"projectId": plan.project_id, "contentId": operation.issue.node_id}})
                     item_id = (data.get("addProjectV2ItemById") or {}).get("item", {}).get("id")
                     if not item_id:
@@ -1197,6 +1208,9 @@ def apply_plan(plan: SyncPlan, max_writes: int = 100, write_interval: float = 0)
     finally:
         summary["writes"] = budget.used
         WRITE_BUDGET.reset(token)
+    if summary["items_skipped_at_capacity"]:
+        print(f"::error::Project is at capacity; {summary['items_skipped_at_capacity']} issues were not added. "
+              "Rotate to a new private Project; see the contributor Project README.", file=sys.stderr)
     return summary
 
 
@@ -1301,13 +1315,22 @@ def make_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = make_parser()
     args = parser.parse_args(argv)
+    token = RUN_DEADLINE.set(time.monotonic() + RUN_DEADLINE_SECONDS)
     try:
         result = run(args)
     except SyncError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    finally:
+        RUN_DEADLINE.reset(token)
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 3 if result.get("applied", {}).get("complete") is False else 0
+    applied = result.get("applied", {})
+    if applied.get("items_skipped_at_capacity"):
+        return 2
+    if applied.get("complete") is False:
+        # A deferred run that wrote nothing made no progress; fail so a stalled backlog is visible.
+        return 3 if applied.get("writes") else 4
+    return 0
 
 
 if __name__ == "__main__":
