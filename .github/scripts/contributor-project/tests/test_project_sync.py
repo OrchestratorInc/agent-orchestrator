@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import re
 from datetime import datetime, timedelta, timezone
 import subprocess
 import textwrap
@@ -463,6 +464,20 @@ class ProjectSyncTests(unittest.TestCase):
         plan = sync_project.build_plan(mapped, [issue(2), issue(42)], project(), owners=owners())
         self.assertFalse(any(op.field_name == "Suggested owner" for op in plan.operations))
 
+    def test_owner_follows_human_selected_area(self):
+        bot_owner = {"Suggested owner": "@alice, @bob"}
+        for human_area, mapped_area, owner, record, expected in [
+            ("Desktop UI", "comma-area", "", {}, [("Suggested owner", "@alice, @bob")]),
+            ("Needs area review", "desktop-ui", "@alice, @bob", bot_owner, [("Suggested owner", "")]),
+            ("Custom area", "comma-area", "@alice, @bob", bot_owner, []),
+        ]:
+            with self.subTest(area=human_area):
+                mapped = mapping()
+                mapped["issues"]["1"]["area"] = mapped_area
+                item = project_item("item", 1, area=human_area, owner=owner, record=record)
+                plan = sync_project.build_plan(mapped, [issue(1)], project([item], include_owner=True), owners=owners())
+                self.assertEqual([(op.field_name, op.value) for op in plan.operations], expected)
+
     def test_owner_field_must_be_text(self):
         snapshot = project(include_owner=True)
         snapshot.fields[-1].data_type = "SINGLE_SELECT"
@@ -544,6 +559,13 @@ class ProjectSyncTests(unittest.TestCase):
         for url in ("https://github.com/someone/else/issues/1", f"https://github.com/{REPO}/issues/2"):
             with self.subTest(url=url), self.assertRaisesRegex(sync_project.SyncError, "invalid open issue metadata"):
                 sync_project.normalize_open_issues([{"number": 1, "node_id": "I1", "html_url": url}], REPO)
+
+    def test_archive_mutations_name_github_input_types(self):
+        for mutation, name in [(sync_project.ARCHIVE_MUTATION, "archiveProjectV2Item"),
+                               (sync_project.UNARCHIVE_MUTATION, "unarchiveProjectV2Item")]:
+            with self.subTest(name=name):
+                self.assertEqual(re.findall(r"\$input: (\w+)!", mutation), [name[0].upper() + name[1:] + "Input"])
+                self.assertEqual(re.findall(r"(\w+)\(input:", mutation), [name])
 
     def test_graphql_archive_state_preserves_archived_issue(self):
         archived = project_item("PVTI_archived", 1)
@@ -832,7 +854,9 @@ class ProjectSyncTests(unittest.TestCase):
                     snapshot = project([project_item("item", 1, area=values["Suggested area"],
                         owner=values["Suggested owner"], record=intended)], include_owner=True)
                     plan = sync_project.build_plan(mapping(), [issue(1)], snapshot, owners=owners())
-                    self.assertEqual([op.field_name for op in plan.operations], [name] if not current else [])
+                    # A kept nonblank area reads as human-set, so its unowned area clears the bot-written owner.
+                    expected = [name] if not current else ["Suggested owner"] if name == "Suggested area" else []
+                    self.assertEqual([op.field_name for op in plan.operations], expected)
                     field = next(f for f in snapshot.fields if f.name == name)
                     record_field = next(f for f in snapshot.fields if f.name == "Sync record")
                     value = None if not current else {"field": {"id": field.id, "dataType": field.data_type},

@@ -489,7 +489,14 @@ def build_plan(mapping: dict[str, Any], issues: list[Issue], snapshot: ProjectSn
                 )
             )
         if owners is not None:
-            area_owners = owners["areas"][area_id]["owners"] if area_id not in {"shared-infra", "needs-area"} else []
+            owner_area_id = area_id
+            if routing is not None and item_values is not None and not _managed(item_values, routing, record):
+                # A human picked the area, so suggest owners for that area; skip options the map does not know.
+                current_area = item_values.values.get(routing.id, {}).get("name")
+                owner_area_id = next((area["id"] for area in mapping["areas"] if area["label"] == current_area), None)
+                if owner_area_id is None:
+                    return
+            area_owners = owners["areas"][owner_area_id]["owners"] if owner_area_id not in {"shared-infra", "needs-area"} else []
             owner_text = ", ".join("@" + person["login"] for person in area_owners)
             if (owner_text or (record.get(OWNER_FIELD) and item_values)) and (owner is None or item_values is None or (_managed(item_values, owner, record) and
                     item_values.values.get(owner.id, {}).get("text", "") != owner_text)):
@@ -870,7 +877,12 @@ mutation($input: ArchiveProjectV2ItemInput!) {
   archiveProjectV2Item(input: $input) { item { id } }
 }
 """
-UNARCHIVE_MUTATION = ARCHIVE_MUTATION.replace("Archive", "Unarchive").replace("archiveProject", "unarchiveProject")
+
+UNARCHIVE_MUTATION = """
+mutation($input: UnarchiveProjectV2ItemInput!) {
+  unarchiveProjectV2Item(input: $input) { item { id } }
+}
+"""
 
 ARCHIVE_STATE_QUERY = """
 query($itemId: ID!) {
