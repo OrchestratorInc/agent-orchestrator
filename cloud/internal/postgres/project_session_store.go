@@ -166,6 +166,11 @@ func (s *Store) ArchiveProject(
 		} else if err != nil {
 			return err
 		}
+		// A deleted project's artifacts go with it; this also finishes the
+		// cleanup for a project deleted before artifacts were removed.
+		if err := deleteProjectArtifactsTx(ctx, tx, orgID, projectID); err != nil {
+			return err
+		}
 		if archived {
 			return nil
 		}
@@ -802,10 +807,10 @@ func createSessionTx(
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
-			auto_review_enabled
+			auto_review_enabled, requested_output
 		)
 		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16, $18
 		FROM generated
 		RETURNING `+sessionInsertReturning,
 		orgID,
@@ -825,6 +830,7 @@ func createSessionTx(
 		prefix,
 		autoReview,
 		input.Branch,
+		input.RequestedOutput,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -1235,6 +1241,15 @@ const sessionSelect = `
 				  AND review_terminal_run.review_terminal_id = terminal.id
 			)
 		), 0),
+		session.requested_output,
+		CASE
+			WHEN NOT EXISTS (
+				SELECT 1 FROM ao_pull_requests session_pr
+				WHERE session_pr.org_id = session.org_id AND session_pr.session_id = session.id
+			) THEN session.output_type
+			WHEN session.output_type IN ('artifact', 'pr_artifact') THEN 'pr_artifact'
+			ELSE 'pr'
+		END,
 		session.created_at, session.updated_at
 	FROM ao_sessions session
 	LEFT JOIN ao_sandboxes sandbox
@@ -1249,7 +1264,8 @@ const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	display_name, branch, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
-	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', '', 0, created_at, updated_at`
+	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', '', 0,
+	requested_output, output_type, created_at, updated_at`
 
 func getSession(
 	ctx context.Context,
@@ -1333,6 +1349,8 @@ func scanSession(row scanner, session *domain.Session) error {
 		&coderWorkspace.NamePrefix,
 		&coderWorkspace.Name,
 		&session.WorkerEpoch,
+		&session.RequestedOutput,
+		&session.OutputType,
 		&session.CreatedAt,
 		&session.UpdatedAt,
 	)

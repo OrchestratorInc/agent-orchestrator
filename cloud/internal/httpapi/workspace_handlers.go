@@ -221,11 +221,7 @@ func (s *Server) runWorkspaceRequest(
 	if !ok {
 		return nil, false
 	}
-	timeout := s.workerRequestTimeout
-	if kind == "chat.models" {
-		timeout = max(timeout, 30*time.Second)
-	}
-	return s.runWorkerRequest(w, r, orgID, sessionID, kind, payload, timeout)
+	return s.runWorkerRequest(w, r, orgID, sessionID, kind, payload, s.workerRequestTimeout)
 }
 
 // withWorkspaceRepository adds the request's optional "repository" query

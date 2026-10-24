@@ -74,6 +74,8 @@ creates new task-definition revisions; it never mutates an older image tag.
 - CloudWatch log group: `/ao-cloud/staging/control-plane` (30-day retention)
 - ECR repositories: `ao-cloud-control-plane` and `ao-cloud-worker` (immutable
   tags, 30-image retention)
+- tenant artifact bucket: `ao-cloud-staging-tenant-artifacts` (see
+  [Session artifacts](#session-artifacts))
 
 The ALB probes `/readyz`, which checks both draining state and database
 connectivity. Deployment scripts set one desired task and, by default,
@@ -125,6 +127,83 @@ by the Freestyle secret, the task that ran before the deploy, the task now
 running, or any task definition the staging or production service is running
 or rolling to. If any of those cannot be read it deletes nothing, and a failed
 prune never fails the deploy.
+
+## Session artifacts
+
+Session artifacts (`AO_CLOUD_ARTIFACTS`, see
+[control-plane.md](control-plane.md#session-artifacts)) need one private,
+versioned bucket per environment: `ao-cloud-staging-tenant-artifacts` and
+`ao-cloud-production-tenant-artifacts`. They hold customer files and are
+separate from the `ao-cloud-<environment>-artifacts` buckets of worker
+binaries; the deploy validation rejects those names.
+
+Create the bucket in the service's region with public access blocked, bucket
+owner enforced, SSE-S3 encryption, versioning, a policy that refuses requests
+without TLS, and a lifecycle rule. The control plane's sweeper deletes
+uncommitted and replaced versions itself; the lifecycle rule is the backstop:
+it expires noncurrent versions after 30 days, removes delete markers with no
+versions left, and aborts incomplete multipart uploads after a day.
+
+```bash
+B=ao-cloud-staging-tenant-artifacts
+R=eu-north-1
+aws s3api create-bucket --bucket $B --region $R \
+  --create-bucket-configuration LocationConstraint=$R \
+  --object-ownership BucketOwnerEnforced
+aws s3api put-public-access-block --bucket $B \
+  --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api put-bucket-encryption --bucket $B --server-side-encryption-configuration \
+  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+aws s3api put-bucket-versioning --bucket $B \
+  --versioning-configuration Status=Enabled
+aws s3api put-bucket-policy --bucket $B --policy '{"Version":"2012-10-17","Statement":[{
+  "Sid":"DenyInsecureTransport","Effect":"Deny","Principal":"*","Action":"s3:*",
+  "Resource":["arn:aws:s3:::'$B'","arn:aws:s3:::'$B'/*"],
+  "Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}'
+aws s3api put-bucket-lifecycle-configuration --bucket $B \
+  --lifecycle-configuration '{"Rules":[{"ID":"expire-old-versions","Status":"Enabled","Filter":{},
+  "NoncurrentVersionExpiration":{"NoncurrentDays":30},
+  "Expiration":{"ExpiredObjectDeleteMarker":true},
+  "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}'
+```
+
+Give the control plane's ECS **task role** (not the execution role) access to
+that bucket only: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`,
+`s3:DeleteObject`, `s3:DeleteObjectVersion` (the sweeper deletes by version),
+and `s3:AbortMultipartUpload` on `arn:aws:s3:::<bucket>/*`, and
+`s3:ListBucket`, `s3:ListBucketVersions`, and `s3:ListBucketMultipartUploads` on
+`arn:aws:s3:::<bucket>`. Without `s3:ListBucket`, a missing version reads as 403
+instead of 404, so a stale commit and a removed file both become server
+errors. Credentials come from the task role; nothing is stored in a secret.
+
+The offering files set the deploy values: `AO_CLOUD_ARTIFACTS` (`0` or `1`),
+`AO_CLOUD_ARTIFACT_BUCKET`, and `AO_CLOUD_ARTIFACT_REGION`.
+`AO_CLOUD_ARTIFACT_ENDPOINT` is for a local S3-compatible server and is
+rejected in a hosted task. With the flag on, the control plane refuses to start
+without the bucket, the region, or `AO_CLOUD_PROVIDER_SECRET_KEY` (artifact
+links are signed with a key derived from it), and `deploy-staging.sh` and
+`promote-production.sh` stop unless the bucket exists with versioning enabled
+and the service's task role may use it (checked with
+`iam simulate-principal-policy`, so the deploying identity needs
+`iam:SimulatePrincipalPolicy`). `promote-production.sh` also refuses `1` in
+production until staging serves artifacts. Migration 00084 runs with the flag
+off.
+
+Rollout: deploy with `AO_CLOUD_ARTIFACTS=0`, deploy the worker and desktop
+releases, then turn staging on by committing `AO_CLOUD_ARTIFACTS=1` to
+`scripts/offering/staging.env`; a value set only in the deploying shell is
+reverted by the next deploy. Check that an artifact session's HTML file and
+the image it references open, that an edit adds a version, and that after the
+session is archived and restored its files open again. Repeat for production.
+
+The desktop frames artifacts from the control-plane origins it was built
+with (staging, production, and `AO_CLOUD_CONTROL_PLANE_URL` at build time). A
+packaged build pointed at another control plane at runtime cannot frame its
+HTML artifacts.
+
+Locally, `npm run cloud:local` runs MinIO with the bucket
+`ao-cloud-local-tenant-artifacts`; start it with `AO_CLOUD_ARTIFACTS=1`.
 
 ## Monitoring
 

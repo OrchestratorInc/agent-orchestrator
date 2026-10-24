@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -492,28 +491,11 @@ func (s *Server) listUserAgentModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "This agent does not support worker model discovery. Use its native default or enter a model ID.")
 		return
 	}
-	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, "chat.models", json.RawMessage(`{}`))
+	result, ok := s.discoverModelCatalog(w, r, orgID, sessionID, agent)
 	if !ok {
 		return
 	}
-	var response worker.ChatModelsResponse
-	if err := json.Unmarshal(result, &response); err != nil || response.Models == nil {
-		writeError(w, r, http.StatusBadGateway, "INVALID_WORKER_RESPONSE", "The worker returned an invalid model catalog.")
-		return
-	}
-	if len(response.Models) == 0 {
-		writeError(w, r, http.StatusConflict, "MODEL_CATALOG_UNAVAILABLE", "The worker did not report model choices. Use the agent default or enter a model ID.")
-		return
-	}
-	seen := make(map[string]bool, len(response.Models))
-	for _, model := range response.Models {
-		if strings.TrimSpace(model.ID) == "" || strings.TrimSpace(model.DisplayName) == "" || seen[model.ID] {
-			writeError(w, r, http.StatusBadGateway, "INVALID_WORKER_RESPONSE", "The worker returned an invalid model catalog.")
-			return
-		}
-		seen[model.ID] = true
-	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) putUserAgentConnection(w http.ResponseWriter, r *http.Request) {

@@ -365,7 +365,6 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			</button>
 			{headerActions}
 			{sessionTabAction}
-			{interfaceSwitch?.control}
 			{interfaceSwitch?.errorNotice}
 			<div role="tablist">
 				{workspaceTabs?.map((tab) => (
@@ -442,9 +441,9 @@ vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 		</div>
 	),
 }));
-// The terminal tab's menu is stood in for by the switch control it wraps.
+// The session tab's menu is stood in for by the switch control it wraps.
 vi.mock("./TerminalAgentControls", () => ({
-	TerminalSessionMenu: ({ switchControl }: { switchControl?: ReactNode }) => (
+	SessionTabMenu:({ switchControl }: { switchControl?: ReactNode }) => (
 		<>
 			{switchControl}
 		</>

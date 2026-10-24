@@ -107,10 +107,12 @@ describe("ContextMeter", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	it("does not claim a failed turn with zero reported used is 0% full", () => {
+	it("draws a failed turn with zero reported used as an empty 0% ring", () => {
 		render(<ContextMeter usage={usage({ contextUsed: 0, contextWindow: 262_144 })} />);
-		expect(screen.getByRole("img", { name: "Context unknown / 262,144" })).toBeInTheDocument();
-		expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+		expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
+		// An empty track, not the sliver a nearly-empty conversation gets.
+		expect(fill()).toHaveAttribute("stroke-dasharray", "0 100");
+		expect(screen.queryByText("?")).not.toBeInTheDocument();
 	});
 
 	it("renders nothing before the provider has reported anything", () => {

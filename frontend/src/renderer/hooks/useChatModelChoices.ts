@@ -5,32 +5,43 @@ import type { ChatConfigOption, ChatModel } from "../types/conversation";
 import { agentModelsQueryOptions } from "./useAgentModelsQuery";
 import { useOfferedModels } from "./useOfferedModels";
 
-/** The models and provider options a chat composer offers, for local and cloud chats alike. */
+/**
+ * The models and provider options a chat composer offers, for local and cloud chats alike.
+ * `liveModelsLoaded` reports whether `controllerModels` is the provider's answer yet;
+ * until it is, the agent's saved device catalog is shown so the picker never waits.
+ */
 export function useChatModelChoices(
 	harness: string | undefined,
 	controllerModels: ChatModel[],
 	options: ChatConfigOption[] | undefined,
 	currentModel: string | undefined,
 	hostId?: string,
+	liveModelsLoaded = true,
 ) {
 	// Claude's live list is family aliases; the new-task picker's catalog carries the versions.
 	const isClaude = harness === "claude-code";
-	const claudeCatalog = useQuery({ ...agentModelsQueryOptions("claude-code", "", hostId), enabled: isClaude }).data;
+	// A provider's own model option (ACP config) replaces the native list below,
+	// so the same setting narrows its choices; other options pass through as is.
+	const providerModelOption = options?.find(
+		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
+	);
+	// Other agents show their saved catalog until the live list arrives, then the
+	// live list, which reflects this account's entitlements, replaces it.
+	const showSavedCatalog = isClaude || (!liveModelsLoaded && !providerModelOption);
+	const savedCatalog = useQuery({ ...agentModelsQueryOptions(harness ?? "", "", hostId), enabled: Boolean(harness) && showSavedCatalog }).data;
 	const catalogModels = useMemo(() => {
-		if (!isClaude || !claudeCatalog?.models.length) return controllerModels;
-		return claudeCatalog.models
-			.filter((model) => model.id.toLowerCase() !== "default")
+		// A catalog response may omit models (an older daemon or a mock); treat that
+		// like an empty catalog rather than reading through it.
+		const savedModels = savedCatalog?.models ?? [];
+		if (!showSavedCatalog || savedModels.length === 0) return controllerModels;
+		return savedModels
+			.filter((model) => typeof model?.id === "string" && model.id.toLowerCase() !== "default")
 			.map((model) => ({
 				id: model.id,
 				displayName: model.label || model.id,
 				default: Boolean(model.isDefault),
 			}));
-	}, [isClaude, claudeCatalog, controllerModels]);
-	// A provider's own model option (ACP config) replaces the native list above,
-	// so the same setting narrows its choices; other options pass through as is.
-	const providerModelOption = options?.find(
-		(option) => option.type === "select" && (option.category === "model" || option.id === "model"),
-	);
+	}, [showSavedCatalog, savedCatalog, controllerModels]);
 	const providerModelChoices = useMemo(
 		() => providerModelOption?.choices.map((choice) => ({ id: choice.value, name: choice.name })),
 		[providerModelOption],
@@ -38,8 +49,8 @@ export function useChatModelChoices(
 	// Resolve current Claude aliases before filtering so their labels cannot move
 	// to an older enabled model when the current concrete entry is switched off.
 	const resolveClaudeChoice = useMemo(
-		() => isClaude && claudeCatalog ? claudeChoiceModel(claudeCatalog.models) : undefined,
-		[isClaude, claudeCatalog],
+		() => isClaude && savedCatalog?.models ? claudeChoiceModel(savedCatalog.models) : undefined,
+		[isClaude, savedCatalog],
 	);
 	const currentModels = [currentModel, providerModelOption?.currentValue];
 	const { models } = useOfferedModels(harness, catalogModels, {

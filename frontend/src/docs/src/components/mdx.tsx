@@ -2,6 +2,8 @@ import Link from "next/link";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { Children, cloneElement, isValidElement, type ComponentPropsWithoutRef, type ReactElement, type ReactNode } from "react";
 import type { MDXComponents } from "mdx/types";
+import type { CodeBlockProps } from "fumadocs-ui/components/codeblock";
+import { LocalizedCodeBlock } from "./code-block";
 import { Tab, Tabs } from "./docs-tabs";
 
 function textOf(node: ReactNode): string {
@@ -282,6 +284,7 @@ export function InstallDownloads() {
 export function getMDXComponents(components?: MDXComponents) {
   return {
     ...defaultMdxComponents,
+    pre: (props) => <LocalizedCodeBlock {...(props as CodeBlockProps)} />,
     h2: (props) => <Heading level={2} {...props} />,
     h3: (props) => <Heading level={3} {...props} />,
     h4: (props) => <Heading level={4} {...props} />,
