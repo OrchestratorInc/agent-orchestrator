@@ -487,7 +487,7 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE\tERROR"); err != nil {
 		return err
 	}
 	for _, review := range res.Reviews {
@@ -495,7 +495,12 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 		if review.LatestRun != nil && review.LatestRun.Verdict != "" {
 			verdict = review.LatestRun.Verdict
 		}
-		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title); err != nil {
+		failure := "-"
+		if run := review.LatestRun; run != nil && run.Status == "failed" && strings.TrimSpace(run.Body) != "" {
+			// Keep multiline provider errors in one row and escape terminal controls.
+			failure = fmt.Sprintf("%q", run.Body)
+		}
+		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title, failure); err != nil {
 			return err
 		}
 	}
