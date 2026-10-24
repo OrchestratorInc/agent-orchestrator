@@ -1,9 +1,12 @@
 package computeruse
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,6 +84,36 @@ func (s imageStore) prune(dir string) {
 	}
 }
 
+// dropDebugImages removes click's debug_image_out from a call and from each
+// of its steps, so no image the driver writes lands outside AO's folder. Steps
+// that carry one are copied rather than changed in the caller's arguments.
+func dropDebugImages(arguments map[string]any) {
+	delete(arguments, "debug_image_out")
+	steps, ok := arguments["steps"].([]any)
+	if !ok {
+		return
+	}
+	copied := make([]any, len(steps))
+	for index, raw := range steps {
+		copied[index] = raw
+		step, _ := raw.(map[string]any)
+		tool, stepArguments := stepAction(step)
+		if !has(stepArguments, "debug_image_out") {
+			continue
+		}
+		stepArguments = maps.Clone(stepArguments)
+		delete(stepArguments, "debug_image_out")
+		step = maps.Clone(step)
+		if _, written := step["tool"].(string); written {
+			step["args"] = stepArguments
+		} else {
+			step[tool] = stepArguments
+		}
+		copied[index] = step
+	}
+	arguments["steps"] = copied
+}
+
 // savedImages collects the files one call produced.
 type savedImages struct {
 	store  imageStore
@@ -91,9 +124,14 @@ type savedImages struct {
 	images []Image
 }
 
+// nextPath names the call's next file. The random part keeps concurrent calls
+// in one scope apart when they start in the same millisecond; the timestamp
+// leads so names still sort by age for prune.
 func (c *savedImages) nextPath(extension string) string {
 	if c.stamp == "" {
-		c.stamp = time.Now().UTC().Format("20060102T150405.000Z")
+		nonce := make([]byte, 6)
+		_, _ = rand.Read(nonce)
+		c.stamp = time.Now().UTC().Format("20060102T150405.000Z") + "-" + hex.EncodeToString(nonce)
 	}
 	c.count++
 	return filepath.Join(c.scope, fmt.Sprintf("%s-%s-%d%s", c.stamp, c.tool, c.count, extension))

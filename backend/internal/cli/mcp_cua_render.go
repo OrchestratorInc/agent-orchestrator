@@ -144,6 +144,12 @@ func (t *cuaText) window(state map[string]any) {
 		}
 		t.line("")
 		t.line(tree)
+	} else if elements, _ := state["elements"].([]any); len(elements) > 0 {
+		// tree_format "elements": each element carries its own token.
+		t.line("")
+		for _, element := range elements {
+			t.line(compactJSON(element))
+		}
 	}
 	if state["truncated"] == true {
 		t.line(fmt.Sprintf("Tree truncated: %s of %s elements shown; pass query, or a higher max_elements.", cuaNumber(state["returned_element_count"]), cuaNumber(state["total_element_count"])))

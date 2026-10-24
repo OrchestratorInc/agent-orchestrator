@@ -40,6 +40,28 @@ Invalidated snapshots s0000002d: their element_tokens are stale.
 	}
 }
 
+func TestRenderCuaWindowReadAsElements(t *testing.T) {
+	response := decodeCuaResponse(t, `{"tool":"get_window_state","result":{
+		"window_id":9,"pid":7,"element_count":2,"snapshot_id":"s1",
+		"elements":[
+			{"element_index":1,"element_token":"s1:1","role":"AXWindow","label":"Calculator","depth":0},
+			{"element_index":2,"element_token":"s1:2","role":"AXButton","label":"Clear","frame":{"x":1,"y":2,"w":3,"h":4},"parent_index":1,"depth":1}
+		]},
+		"images":[]}`)
+	text, ok := renderCuaCall(response)
+	if !ok {
+		t.Fatal("window read not rendered")
+	}
+	want := `window_id=9 pid=7 elements=2 snapshot_id=s1
+
+{"depth":0,"element_index":1,"element_token":"s1:1","label":"Calculator","role":"AXWindow"}
+{"depth":1,"element_index":2,"element_token":"s1:2","frame":{"h":4,"w":3,"x":1,"y":2},"label":"Clear","parent_index":1,"role":"AXButton"}
+`
+	if text != want {
+		t.Fatalf("text =\n%s\nwant\n%s", text, want)
+	}
+}
+
 func TestRenderCuaActionWithObservation(t *testing.T) {
 	response := decodeCuaResponse(t, `{"tool":"click","result":{
 		"summary":"✅ Performed AXPress on [12] AXButton \"\".","effect":"unverifiable","hint":"Read what changed.",

@@ -150,6 +150,29 @@ describe("ComputerUseSection", () => {
 		expect(writeText).toHaveBeenCalledWith("curl -fsSL https://cua.ai/driver/install.sh | bash");
 	});
 
+	it("hands over the command for an update AO cannot run here", async () => {
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+		const unsupported = { target: "cua-driver", status: "unsupported", command: "curl -fsSL https://cua.ai/driver/install.sh | bash", error: "bash was not found on PATH." };
+		daemon({ status: () => ({ ...installed, platform: "linux", latestVersion: "0.37.0", updateAvailable: true }), job: unsupported });
+		renderSection();
+
+		expect(await screen.findByText("bash was not found on PATH.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Update to 0.37.0" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Open installation guide" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Copy command" }));
+		expect(writeText).toHaveBeenCalledWith("curl -fsSL https://cua.ai/driver/install.sh | bash");
+	});
+
+	it("ignores an unsupported installer once Cua Driver is current", async () => {
+		daemon({ status: () => ({ ...installed, platform: "linux" }), job: { target: "cua-driver", status: "unsupported", command: "curl -fsSL https://cua.ai/driver/install.sh | bash", error: "bash was not found on PATH." } });
+		renderSection();
+
+		expect(await screen.findByText("Installed")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Copy command" })).not.toBeInTheDocument();
+		expect(screen.queryByText("bash was not found on PATH.")).not.toBeInTheDocument();
+	});
+
 	it("shows a failed install and its output", async () => {
 		daemon({ status: () => notInstalled, job: { target: "cua-driver", status: "failed", error: "exit status 1", output: "error: /Applications is not writable", command: "/bin/bash <downloaded from https://cua.ai/driver/install.sh>" } });
 		renderSection();

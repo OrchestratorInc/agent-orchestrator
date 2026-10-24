@@ -112,8 +112,10 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	const installed = Boolean(current?.installed);
 	const installing = action === "install" || jobStatus === "running";
 	const failed = jobStatus === "failed" || jobStatus === "interrupted";
-	// Unsupported with a command: AO knows the command but cannot run it here.
-	const manualCommand = jobStatus === "unsupported" ? job.data?.command : undefined;
+	// Unsupported with a command: AO knows the command but cannot run it here,
+	// for a fresh install or an update alike.
+	const needsInstaller = !installed || Boolean(current?.updateAvailable);
+	const manualCommand = jobStatus === "unsupported" && needsInstaller ? job.data?.command : undefined;
 	const permissions = current?.permissions;
 
 	const driverAction = installing ? (
@@ -121,7 +123,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 			<LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
 			{t(installed ? "settings.computerUse.updating" : "settings.computerUse.installing")}
 		</span>
-	) : !installed && manualCommand ? (
+	) : manualCommand ? (
 		<Button type="button" size="sm" variant="ghost" onClick={() => void copyCommand(manualCommand)}>
 			{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
 			{t(copied ? "settings.harness.copied" : "settings.harness.copyCommand")}
@@ -139,7 +141,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	) : null;
 
 	const driverDescription = failed && job.data?.error ? <span className="text-error">{job.data.error}</span>
-		: !installed && manualCommand ? job.data?.error || t("settings.computerUse.manualInstall")
+		: manualCommand ? job.data?.error || t("settings.computerUse.manualInstall")
 		: installed && current?.version ? <span className="font-mono">{current.version}</span>
 		: t("settings.computerUse.driverDescription");
 
@@ -226,7 +228,7 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 				</SettingsSection>
 			) : null}
 
-			{!installed && status.isSuccess && !installing ? (
+			{(!installed || manualCommand) && status.isSuccess && !installing ? (
 				<div className="flex px-(--settings-row-inset)">
 					<Button type="button" size="sm" variant="ghost" className="-ml-2.5 text-settings-muted hover:text-settings-label" onClick={() => void aoBridge.app.openExternal(RELEASES_URL)}>
 						<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}

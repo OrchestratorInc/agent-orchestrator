@@ -96,6 +96,9 @@ const (
 	probeTimeout  = 10 * time.Second
 	callTimeout   = 45 * time.Second
 	doctorTimeout = 30 * time.Second
+	// batchTimeout is the driver's 60 s limit for a whole run_steps batch,
+	// plus time for its step report and closing window read.
+	batchTimeout = 75 * time.Second
 	// grantTimeout bounds a permission request left waiting on the user.
 	grantTimeout = 10 * time.Minute
 	// daemonStartWait is how long Start waits for the service to answer.
@@ -347,6 +350,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	}
 	saved := &savedImages{store: s.images, scope: scope, tool: tool, images: []Image{}}
 	screenshot := saved.requestScreenshotFile(tool, arguments)
+	dropDebugImages(arguments)
 	// Each `cua-driver call` is a new connection, and the driver gives each
 	// one a disposable implicit session. A pixel click or zoom needs the
 	// screenshot an earlier call took in the same session, so every call for
@@ -502,7 +506,11 @@ func rejectsSession(stdout []byte) bool {
 }
 
 func (s *Service) runCall(ctx context.Context, binary, tool string, arguments []byte) ([]byte, []byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	timeout := callTimeout
+	if tool == "run_steps" {
+		timeout = batchTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return s.driver.Run(ctx, binary, "call", tool, string(arguments))
 }

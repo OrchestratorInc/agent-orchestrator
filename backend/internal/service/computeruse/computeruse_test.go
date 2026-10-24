@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -179,6 +180,38 @@ func TestCallWritesScreenshotsToFiles(t *testing.T) {
 	}
 	if len(result.Images) != 1 || result.Images[0].Path != path || result.Images[0].MimeType != "image/png" {
 		t.Fatalf("Images = %+v", result.Images)
+	}
+}
+
+func TestConcurrentReadsGetDistinctScreenshotFiles(t *testing.T) {
+	const reads = 32
+	driver := &fakeDriver{daemonUp: true}
+	var mu sync.Mutex
+	paths := map[string]bool{}
+	driver.onCall = func(args []string) ([]byte, []byte, error) {
+		var sent map[string]any
+		if err := json.Unmarshal([]byte(args[2]), &sent); err != nil {
+			return nil, nil, err
+		}
+		path, _ := sent["screenshot_out_file"].(string)
+		mu.Lock()
+		paths[path] = true
+		mu.Unlock()
+		return []byte(`{"elements":[]}`), nil, nil
+	}
+	s := newTestService(t, driver, "darwin")
+
+	var wg sync.WaitGroup
+	for range reads {
+		wg.Go(func() {
+			if _, err := s.Call(context.Background(), CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9}, SessionID: "ao-12"}); err != nil {
+				t.Errorf("Call() error = %v", err)
+			}
+		})
+	}
+	wg.Wait()
+	if len(paths) != reads {
+		t.Fatalf("%d concurrent reads used %d distinct screenshot files", reads, len(paths))
 	}
 }
 
@@ -718,6 +751,16 @@ func TestRunStepsObservesWithAScreenshot(t *testing.T) {
 		"caller opt-out is kept": {map[string]any{"pid": 7, "window_id": 9, "steps": tokenStep, "observe": map[string]any{"include_screenshot": false}}, "worker-1", func(o map[string]any, ok bool) bool {
 			return ok && o["include_screenshot"] == false && o["screenshot_out_file"] == nil
 		}},
+		"caller file is dropped with an opt-out": {map[string]any{"pid": 7, "window_id": 9, "steps": tokenStep, "observe": map[string]any{"include_screenshot": false, "screenshot_out_file": "/etc/elsewhere.png"}}, "worker-1", func(o map[string]any, ok bool) bool {
+			return ok && o["include_screenshot"] == false && o["screenshot_out_file"] == nil
+		}},
+		"caller file is dropped for an unknown window": {map[string]any{"steps": tokenStep, "observe": map[string]any{"screenshot_out_file": "/etc/elsewhere.png"}}, "worker-2", func(o map[string]any, ok bool) bool {
+			return ok && o["screenshot_out_file"] == nil
+		}},
+		"caller file is replaced by AO's": {map[string]any{"pid": 7, "window_id": 9, "steps": tokenStep, "observe": map[string]any{"screenshot_out_file": "/etc/elsewhere.png"}}, "worker-1", func(o map[string]any, ok bool) bool {
+			path, _ := o["screenshot_out_file"].(string)
+			return ok && o["include_screenshot"] == true && path != "" && !strings.HasPrefix(path, "/etc/")
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: tc.arguments, SessionID: tc.session}); err != nil {
@@ -728,6 +771,38 @@ func TestRunStepsObservesWithAScreenshot(t *testing.T) {
 				t.Fatalf("observe = %v (present %v)", observe, present)
 			}
 		})
+	}
+}
+
+func TestCallDropsClickDebugImages(t *testing.T) {
+	recorder := &observingDriver{}
+	s := newTestService(t, recorder.driver(), "darwin")
+	ctx := context.Background()
+	if _, err := s.Call(ctx, CallRequest{Tool: "click", Arguments: map[string]any{"pid": 7, "window_id": 9, "element_index": 3, "debug_image_out": "/etc/click.png"}}); err != nil {
+		t.Fatalf("click: %v", err)
+	}
+	if sent := recorder.sent[0]; has(sent, "debug_image_out") {
+		t.Fatalf("click sent %v", sent)
+	}
+
+	given := map[string]any{"pid": 7, "window_id": 9, "element_index": 3, "debug_image_out": "/etc/step.png"}
+	steps := []any{
+		map[string]any{"tool": "click", "args": given},
+		map[string]any{"click": map[string]any{"pid": 7, "window_id": 9, "element_index": 4, "debug_image_out": "/etc/step.png"}},
+	}
+	if _, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"pid": 7, "window_id": 9, "steps": steps}}); err != nil {
+		t.Fatalf("run_steps: %v", err)
+	}
+	batch := recorder.sent[len(recorder.sent)-1]
+	sentSteps, _ := batch["steps"].([]any)
+	for index, raw := range sentSteps {
+		_, arguments := stepAction(raw.(map[string]any))
+		if arguments == nil || has(arguments, "debug_image_out") {
+			t.Fatalf("step %d sent %v", index+1, raw)
+		}
+	}
+	if given["debug_image_out"] != "/etc/step.png" {
+		t.Fatalf("caller's step arguments changed: %v", given)
 	}
 }
 
@@ -941,5 +1016,40 @@ func TestCallFailureStatusFollowsTheDriverAnswer(t *testing.T) {
 				t.Fatalf("err = %#v, want COMPUTER_USE_CALL_FAILED with kind %v", err, tc.want)
 			}
 		})
+	}
+}
+
+// deadlineDriver records how long each driver call was given.
+type deadlineDriver struct {
+	*fakeDriver
+	budgets map[string]time.Duration
+}
+
+func (d *deadlineDriver) Run(ctx context.Context, binary string, args ...string) ([]byte, []byte, error) {
+	if deadline, ok := ctx.Deadline(); ok && args[0] == "call" {
+		d.budgets[args[1]] = time.Until(deadline)
+	}
+	return d.fakeDriver.Run(ctx, binary, args...)
+}
+
+func TestRunStepsGetsTheDriverBatchBudget(t *testing.T) {
+	driver := &deadlineDriver{fakeDriver: &fakeDriver{daemonUp: true}, budgets: map[string]time.Duration{}}
+	s := New(driver, t.TempDir())
+	s.goos = "darwin"
+	s.SetEnabled(func(context.Context) bool { return true })
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	ctx := context.Background()
+	if _, err := s.Call(ctx, CallRequest{Tool: "get_window_state", Arguments: map[string]any{"pid": 7, "window_id": 9}}); err != nil {
+		t.Fatalf("get_window_state: %v", err)
+	}
+	steps := []any{map[string]any{"click": map[string]any{"pid": 7, "window_id": 9, "element_index": 3}}}
+	if _, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"pid": 7, "window_id": 9, "steps": steps}}); err != nil {
+		t.Fatalf("run_steps: %v", err)
+	}
+	if read := driver.budgets["get_window_state"]; read > callTimeout {
+		t.Fatalf("get_window_state budget = %v, want at most %v", read, callTimeout)
+	}
+	if batch := driver.budgets["run_steps"]; batch <= 60*time.Second {
+		t.Fatalf("run_steps budget = %v, want more than the driver's 60 s batch limit", batch)
 	}
 }

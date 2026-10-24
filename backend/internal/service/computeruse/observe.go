@@ -158,6 +158,12 @@ func (s *Service) prepareObserve(saved *savedImages, arguments map[string]any) s
 	for key, value := range given {
 		observe[key] = value
 	}
+	// AO alone picks where a screenshot goes, and a caller's file would also
+	// force a capture the caller turned off.
+	delete(observe, "screenshot_out_file")
+	if given != nil {
+		arguments["observe"] = observe
+	}
 	if !has(observe, "pid") || !has(observe, "window_id") {
 		if !s.batchNamesWindow(arguments) {
 			target, found := s.lastTokenWindow(arguments)
