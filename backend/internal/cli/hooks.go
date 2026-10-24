@@ -523,25 +523,56 @@ type claudePermissionHookOutput struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// reviewerSubmitCommandPattern matches the exact command shapes the review
-// prompt dictates: a single-quoted JSON literal fed through `printf '%s'` into
-// either the GitHub review POST or `ao review submit`. Claude Code ≥ 2.1.257
-// prompts on any Bash command its analyzer cannot verify statically, and allow
-// rules never match such commands, so the headless reviewer would hang. The
-// shape is safe to auto-allow: `printf '%s'` performs no format interpretation
-// and a single-quoted operand (quote-backslash-quote-quote for embedded single
-// quotes, as the prompt instructs) cannot expand or run anything. The
-// captured session id is checked against AO_REVIEW_WORKER_SESSION_ID after the
-// match.
+// The review prompt's submit commands feed review text to one of
+// reviewerSubmitCommand's shapes: the GitHub review POST, or `ao review submit`
+// recording one run (--body -) or a JSON batch (--reviews -). Claude Code ≥
+// 2.1.257 prompts on any Bash command its analyzer cannot verify statically,
+// and allow rules never match such commands, so the headless reviewer would
+// hang. The text arrives through one of two inputs, both safe to auto-allow:
+//   - a quoted here-document (reviewerSubmitHeredocPattern): the quoted
+//     delimiter disables every expansion, and reviewerSubmitSession rejects a
+//     body line equal to the delimiter, so nothing after the body can run;
+//   - the read-only-sandbox fallback `printf '%s' '<literal>' | ...`
+//     (reviewerSubmitPipePattern): `printf '%s'` performs no format
+//     interpretation and a single-quoted operand (quote-backslash-quote-quote
+//     for embedded single quotes) cannot expand or run anything.
+//
+// The captured session id is checked against AO_REVIEW_WORKER_SESSION_ID
+// after the match.
+const reviewerSubmitCommand = `(?:gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
+	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) ` +
+	`(?:--reviews -|--run [A-Za-z0-9_.:-]+ --verdict (?:approved|changes_requested)(?: --review-id [0-9]+)? --body -))`
+
 const reviewerSubmitJSONLiteral = `'[^']*(?:'\\''[^']*)*'`
 
-var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| (?:` +
-	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
-	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
+var (
+	reviewerSubmitPipePattern    = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| ` + reviewerSubmitCommand + `$`)
+	reviewerSubmitHeredocPattern = regexp.MustCompile(`^` + reviewerSubmitCommand + ` <<'` + ports.ReviewSubmitHeredocDelimiter + `'\n(?P<body>(?s:.*\n)?)` + ports.ReviewSubmitHeredocDelimiter + `\n?$`)
+)
+
+// reviewerSubmitSession reports whether command is one of the review prompt's
+// submit commands and returns the worker session id it names ("" for the
+// GitHub review POST).
+func reviewerSubmitSession(command string) (string, bool) {
+	if m := reviewerSubmitPipePattern.FindStringSubmatch(command); m != nil {
+		return m[reviewerSubmitPipePattern.SubexpIndex("session")], true
+	}
+	m := reviewerSubmitHeredocPattern.FindStringSubmatch(command)
+	if m == nil {
+		return "", false
+	}
+	for _, line := range strings.Split(m[reviewerSubmitHeredocPattern.SubexpIndex("body")], "\n") {
+		if line == ports.ReviewSubmitHeredocDelimiter {
+			return "", false
+		}
+	}
+	return m[reviewerSubmitHeredocPattern.SubexpIndex("session")], true
+}
 
 const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+	"and the exact submit commands from the review task, fed by a quoted <<'" + ports.ReviewSubmitHeredocDelimiter + "' heredoc " +
+	"or, in a read-only sandbox, by `printf '%s' '<text>' | ...`."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
 // allow the exact submit shapes, deny everything else so the session degrades
@@ -561,11 +592,11 @@ func reviewerPermissionDecision(payload []byte, workerSessionID string) claudePe
 	if p.ToolName != "Bash" {
 		return out
 	}
-	m := reviewerSubmitCommandPattern.FindStringSubmatch(strings.TrimSpace(p.ToolInput.Command))
-	if m == nil {
+	session, ok := reviewerSubmitSession(strings.TrimSpace(p.ToolInput.Command))
+	if !ok {
 		return out
 	}
-	if session := m[reviewerSubmitCommandPattern.SubexpIndex("session")]; workerSessionID == "" || (session != "" && session != workerSessionID) {
+	if workerSessionID == "" || (session != "" && session != workerSessionID) {
 		// An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
 		// launcher always sets it); admit nothing rather than any worker.
 		return out

@@ -2371,7 +2371,9 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 	// answer, so the hook decides: the exact submit shapes are allowed, anything
 	// else is denied, and no blocked activity is reported either way.
 	// The shell literal, JSON-escaped for the hook payload; `it'\''s` is the
-	// prompt's shell-escaped single quote.
+	// printf fallback's shell-escaped single quote. Heredoc bodies carry quotes,
+	// $(...), and backticks verbatim because the quoted delimiter disables
+	// expansion.
 	const submitJSON = `'{ \"reviews\": [ { \"runId\": \"run-1\", \"verdict\": \"approved\", \"body\": \"it'\\''s fine\" } ] }'`
 	cases := []struct {
 		name    string
@@ -2383,7 +2385,18 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --reviews -"}}`, "deny"},
 		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`, "deny"},
 		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"heredoc submit", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.json <<'EOF'\n{}\nEOF\nao review submit --session worker-7 --reviews - < /tmp/r.json"}}`, "deny"},
+		{"single-run body pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'it'\\''s fine' | ao review submit --session worker-7 --run run-1 --verdict approved --review-id 42 --body -"}}`, "allow"},
+		{"gh api review heredoc", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{\n  \"event\": \"COMMENT\",\n  \"body\": \"it's $(fine) ` + "`ok`" + `\"\n}\nAO_REVIEW_EOF"}}`, "allow"},
+		{"single-run body heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict changes_requested --review-id 42 --body - <<'AO_REVIEW_EOF'\n## Review\nThe worker's nil check doesn't run.\nAO_REVIEW_EOF\n"}}`, "allow"},
+		{"single-run heredoc without review id", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nLooks good.\nAO_REVIEW_EOF"}}`, "allow"},
+		{"batch heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews - <<'AO_REVIEW_EOF'\n{ \"reviews\": [] }\nAO_REVIEW_EOF"}}`, "allow"},
+		{"heredoc for other worker session", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-9 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc body ends early then runs a command", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc with command after terminator", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned"}}`, "deny"},
+		{"unquoted heredoc delimiter", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<AO_REVIEW_EOF\n$(id)\nAO_REVIEW_EOF"}}`, "deny"},
+		{"other heredoc delimiter", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'EOF'\nok\nEOF"}}`, "deny"},
+		{"indented heredoc terminator", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\n    AO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc into a file", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.json <<'AO_REVIEW_EOF'\n{}\nAO_REVIEW_EOF\nao review submit --session worker-7 --reviews - < /tmp/r.json"}}`, "deny"},
 		{"env inspection", `{"tool_name":"Bash","tool_input":{"command":"pip3 show pkg | sed -n 1p; cat \"$(pip3 show pkg)\" || python3 -c \"print(1)\""}}`, "deny"},
 		{"non-bash tool", `{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}`, "deny"},
 	}
