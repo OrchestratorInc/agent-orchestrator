@@ -194,10 +194,12 @@ jobs:
           set -e
           cat research/sync-summary.json
           if [ "$sync_exit_code" -eq 0 ] || [ "$sync_exit_code" -eq 3 ]; then
-            echo '### Contributor Project sync' >> "$GITHUB_STEP_SUMMARY"
-            echo '```json' >> "$GITHUB_STEP_SUMMARY"
-            cat research/sync-summary.json >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo '### Contributor Project sync'
+              echo '```json'
+              cat research/sync-summary.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "$sync_exit_code" -eq 3 ]; then
             echo '::warning::Project sync is incomplete; remaining items resume on the next scheduled run.'
