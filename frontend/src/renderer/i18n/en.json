@@ -2750,7 +2750,7 @@
 	"settings.project.roleApproval": "{{role}} approval",
 	"settings.project.tuningInvalid": "Choose supported model tuning values before saving.",
 	"shell.signIn": "Sign in",
-	"shell.signInToAOCloud": "Sign in to AO Cloud",
+	"shell.signInToAOCloud": "Sign in to cloud",
 	"shell.signedInAs": "Signed in as {{email}}",
 	"shell.signOut": "Sign out",
 	"shell.signOutWithEmail": "{{email}} · Sign out",
