@@ -366,6 +366,59 @@ func TestDiscoveryExecutableInspectsSymlinkTarget(t *testing.T) {
 	}
 }
 
+func TestDiscoveryExecutableAllowsNativeManagerSymlinks(t *testing.T) {
+	for _, tc := range []struct{ name, target, body string }{
+		{"mise", ".local/bin/mise", "\x7fELF\x00fixture"},
+		{"volta", ".volta/bin/volta-shim", "\xcf\xfa\xed\xfe\x00fixture"},
+		{"renamed native", "releases/release-9f31b7", "MZ fixture"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := writeDiscoveryLauncher(t, root, tc.target, tc.body)
+			name := "grok"
+			if runtime.GOOS == "windows" {
+				name += ".exe"
+			}
+			link := filepath.Join(root, name)
+			if err := os.Symlink(target, link); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("symlink creation unavailable: %v", err)
+				}
+				t.Fatal(err)
+			}
+			verified, err := verifyDiscoveryExecutable(context.Background(), "grok", link)
+			if err != nil || verified != link {
+				t.Fatalf("native manager verification = %q, %v, want launcher %q", verified, err, link)
+			}
+			if _, err := verifyDiscoveryExecutable(context.Background(), "grok", target); err == nil {
+				t.Fatal("unidentified native target accepted without an agent entry point")
+			}
+			inspection := &discoveryInspection{active: map[string]bool{}, completed: map[string]discoveryInspectionResult{}}
+			if ok, err := inspectDiscoveryExecutable(context.Background(), "grok", link, inspection); err != nil || !ok {
+				t.Fatalf("agent alias rejected: %v", err)
+			}
+			if ok, err := inspectDiscoveryExecutable(context.Background(), "grok", target, inspection); err != nil || ok {
+				t.Fatalf("cached agent alias identity leaked to unidentified target: %t, %v", ok, err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryExecutableDoesNotTrustScriptAliasName(t *testing.T) {
+	root := t.TempDir()
+	target := writeDiscoveryLauncher(t, root, "dispatch", "#!/bin/sh\nexec autohand \"$@\"\n")
+	link := filepath.Join(root, "grok.exe")
+	if err := os.Symlink(target, link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", link); err == nil || !strings.Contains(err.Error(), "autohand") {
+		t.Fatalf("foreign script accepted through agent alias: %v", err)
+	}
+}
+
 func TestDiscoveryExecutableAllowsPackageSymlink(t *testing.T) {
 	root := t.TempDir()
 	target := writeDiscoveryLauncher(t, root, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js", strings.Repeat("// application code\n", 5000))
