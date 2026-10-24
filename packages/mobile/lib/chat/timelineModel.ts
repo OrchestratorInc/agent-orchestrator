@@ -2,6 +2,7 @@ import type {
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
+	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
 } from "./types";
@@ -57,6 +58,21 @@ export function queuedConversationMessages(snapshot: ConversationSnapshot, openi
 			? [{ turnId: item.turnId, message: item }]
 			: [],
 	);
+}
+
+/**
+ * The plan a turn's summary draws. A plan the agent keeps for the whole conversation
+ * comes back on every turn, so it is drawn once, on the latest turn that carries one
+ * rather than as the same checklist under every prompt. An empty list counts as the
+ * latest word, since that is how the agent clears it, and draws nothing.
+ */
+export function visibleTurnPlan(snapshot: ConversationSnapshot, turn: ConversationTurn): ConversationPlan | undefined {
+	const plan = turn.plan;
+	if (!plan?.steps.length) return undefined;
+	if (!plan.sessionScoped) return plan;
+	let latest: ConversationTurn | undefined;
+	for (const candidate of snapshot.turns) if (candidate.plan?.sessionScoped) latest = candidate;
+	return latest?.id === turn.id ? plan : undefined;
 }
 
 /** Keep conversation signal while removing provider telemetry/noise. */

@@ -491,6 +491,11 @@ type ConversationPlan struct {
 	// Explanation is the agent's note about the plan as a whole, when it gives one.
 	Explanation string                 `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStep `json:"steps"`
+	// SessionScoped marks a plan that belongs to the whole conversation rather
+	// than to the turn it arrived on. The provider keeps one list for the session
+	// and re-sends it with its real statuses, so AO must not infer anything about
+	// it when a turn ends.
+	SessionScoped bool `json:"sessionScoped,omitempty"`
 }
 
 // ConversationPlanStep is one step of a plan.

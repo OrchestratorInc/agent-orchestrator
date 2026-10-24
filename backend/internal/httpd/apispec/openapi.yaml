@@ -15683,6 +15683,8 @@ components:
       properties:
         explanation:
           type: string
+        sessionScoped:
+          type: boolean
         steps:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'

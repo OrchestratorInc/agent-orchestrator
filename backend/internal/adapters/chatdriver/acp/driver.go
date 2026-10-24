@@ -106,6 +106,10 @@ type Config struct {
 	// session did not advertise. Set it for agents that acknowledge an unknown
 	// option without applying it, so the choice fails visibly instead.
 	RequireAdvertisedOptions bool
+	// SessionScopedPlan marks the plans this agent sends as belonging to the whole
+	// session. Set it for an agent that keeps one task list across turns and
+	// re-sends it, so AO does not treat each copy as a finished turn's plan.
+	SessionScopedPlan bool
 	// CloseSessionBeforeReload closes the session before a history refresh
 	// reloads it on the same connection. Set it for agents that answer a second
 	// session/load with "already loaded". It applies only when the agent
@@ -733,6 +737,7 @@ func (d *Driver) initialize(
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
+	conv.sessionScopedPlan = d.cfg.SessionScopedPlan
 	if proc.reconnected {
 		state := proc.acpState
 		if state == nil || state.SessionID == "" {

@@ -313,7 +313,15 @@ func (c *conversation) UpdatePlan(plan *domain.ConversationPlan) {
 	c.mu.Lock()
 	turnID := c.activeTurn
 	c.mu.Unlock()
-	c.emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
+	c.emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: c.scopePlan(plan)})
+}
+
+// scopePlan tags a plan as session-wide when the agent keeps one list across turns.
+func (c *conversation) scopePlan(plan *domain.ConversationPlan) *domain.ConversationPlan {
+	if plan != nil {
+		plan.SessionScoped = c.sessionScopedPlan
+	}
+	return plan
 }
 
 func (c *conversation) ResolveInput(
@@ -692,7 +700,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.Plan != nil:
-		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: normalizePlan(update.Plan.Entries)})
+		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: c.scopePlan(normalizePlan(update.Plan.Entries))})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
 			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})

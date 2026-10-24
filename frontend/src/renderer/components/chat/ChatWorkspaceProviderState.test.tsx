@@ -122,6 +122,68 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — done")).toBeInTheDocument();
 	});
 
+	// An agent that keeps one task list for the whole conversation re-sends it every
+	// turn, so each turn carries the same plan. One checklist per turn would repeat it
+	// down the page, so it stays on the latest turn that has it.
+	describe("a plan the agent keeps for the whole conversation", () => {
+		const repeated = (sessionScoped: boolean): ConversationSnapshot => {
+			const plan = chatFixture.turns.find((turn) => turn.plan)?.plan;
+			if (!plan) throw new Error("fixture has no plan");
+			return {
+				...chatFixture,
+				turns: chatFixture.turns.map((turn) => ({ ...turn, plan: { ...plan, sessionScoped } })),
+			};
+		};
+
+		it("shows the checklist once, on the latest turn", () => {
+			render(<ChatWorkspace snapshot={repeated(true)} />);
+			expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		});
+
+		it("still shows each turn's own plan when the plan belongs to the turn", () => {
+			render(<ChatWorkspace snapshot={repeated(false)} />);
+			expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
+		});
+
+		// The agent clears its list by sending an empty one. That is the latest word on
+		// the list, so an earlier turn's checklist must not stay on screen as though it
+		// still stood.
+		it("shows no checklist once a later turn clears the list", () => {
+			const plan = chatFixture.turns.find((turn) => turn.plan)?.plan;
+			if (!plan) throw new Error("fixture has no plan");
+			const [first, ...later] = chatFixture.turns;
+			const cleared: ConversationSnapshot = {
+				...chatFixture,
+				turns: [
+					{ ...first!, plan: { ...plan, sessionScoped: true } },
+					...later.map((turn) => ({ ...turn, plan: { steps: [], sessionScoped: true } })),
+				],
+			};
+			// The daemon also writes the cleared plan as a row, with no steps in it.
+			const withClearedRow: ConversationSnapshot = {
+				...cleared,
+				items: [
+					...cleared.items,
+					{
+						kind: "activity",
+						id: "plan-cleared-row",
+						turnId: later[0]!.id,
+						sequence: 30,
+						revision: 0,
+						activityKind: "plan",
+						status: "completed",
+						summary: "",
+						detail: { event: "plan", steps: [] },
+						createdAt: new Date().toISOString(),
+					},
+				],
+				latestSequence: 30,
+			};
+			render(<ChatWorkspace snapshot={withClearedRow} />);
+			expect(screen.queryByRole("region", { name: "Agent plan" })).not.toBeInTheDocument();
+		});
+	});
+
 	// A plan whose turn AO never correlated — one from before this controller started.
 	it("still renders a plan row whose turn carries none", () => {
 		const orphan: ConversationSnapshot = {

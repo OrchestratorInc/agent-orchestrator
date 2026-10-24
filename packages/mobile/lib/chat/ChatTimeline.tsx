@@ -56,6 +56,7 @@ import type {
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
+	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
 	FileChange,
@@ -75,6 +76,7 @@ import {
 	startupPlacement,
 	streamingCursorMessageId,
 	summarizeActivities,
+	visibleTurnPlan,
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
@@ -362,7 +364,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
 	const WorkBody = editing ? View : FoldBody;
 	const BelowFold = editing ? View : FoldLayout;
-	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	const summary = group.turn ? <TurnSummary turn={group.turn} plan={visibleTurnPlan(snapshot, group.turn)} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
@@ -797,7 +799,7 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 	</Pressable>;
 }
 
-function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?: ConversationPlan; onRollback?(turnId: string): Promise<number> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [confirming, setConfirming] = useState(false);
@@ -807,7 +809,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
 	return (
 		<View style={styles.turnWrap}>
-			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
+			{plan ? <TurnPlan turn={turn} plan={plan} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
 			{canRollBack ? <View style={styles.turnLine}>
 				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
@@ -837,11 +839,11 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 	);
 }
 
-function TurnPlan({ turn }: { turn: ConversationTurn }) {
+function TurnPlan({ turn, plan }: { turn: ConversationTurn; plan: ConversationPlan }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [open, setOpen] = useState(turn.state === "running");
-	const done = turn.plan?.steps.filter((step) => step.status === "completed").length ?? 0;
+	const done = plan.steps.filter((step) => step.status === "completed").length;
 	return (
 		<View style={styles.planCard}>
 			<Pressable
@@ -853,12 +855,12 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 				<Feather name="list" size={12} color={t.textTertiary} />
 				<Text style={styles.planTitle}>Plan</Text>
 				{turn.state === "running" ? <Text style={styles.planLive}>STILL CHANGING</Text> : null}
-				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
+				<Text style={styles.planCount}>{done}/{plan.steps.length}</Text>
 				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
 			</Pressable>
 			{open ? <View style={styles.planBody}>
-				{turn.plan?.explanation ? <Text style={styles.detailCopy}>{turn.plan.explanation}</Text> : null}
-				{turn.plan?.steps.map((step, index) => <View key={index} accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
+				{plan.explanation ? <Text style={styles.detailCopy}>{plan.explanation}</Text> : null}
+				{plan.steps.map((step, index) => <View key={index} accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
 					<Feather name={step.status === "completed" ? "check-circle" : step.status === "in_progress" ? "circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} />
 					<Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text>
 					<Text style={styles.planStepState}>{step.status.replace("_", " ")}</Text>

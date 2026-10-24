@@ -5384,6 +5384,7 @@ export interface components {
         };
         ConversationPlanResponse: {
             explanation?: string;
+            sessionScoped?: boolean;
             steps: components["schemas"]["ConversationPlanStepResponse"][];
         };
         ConversationPlanStepResponse: {

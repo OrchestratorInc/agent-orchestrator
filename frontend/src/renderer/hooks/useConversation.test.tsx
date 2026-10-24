@@ -107,6 +107,7 @@ const WIRE = {
 			requestedAt: "2026-08-03T00:00:00Z",
 			plan: {
 				explanation: "why",
+				sessionScoped: true,
 				steps: [
 					{ text: "one", status: "completed" },
 					{ text: "two", status: "in_progress" },
@@ -819,6 +820,9 @@ describe("useConversation snapshot mapping", () => {
 			{ text: "one", status: "completed" },
 			{ text: "two", status: "in_progress" },
 		]);
+		// The surface decides whether to repeat a plan from this flag, so mapping the
+		// daemon's turn has to carry it through.
+		expect(snapshot.turns[0]!.plan?.sessionScoped).toBe(true);
 	});
 
 	it("maps retry lineage and durable prompt facts from the daemon", async () => {

@@ -5128,6 +5128,16 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 	groups.sort((a, b) => a.anchor - b.anchor);
 
+	// A session-scoped plan is one list the agent re-sends every turn. Drawing it on
+	// each turn would repeat the same checklist down the conversation, so it stays on
+	// the latest turn that has one. An empty list counts: the agent clears its list by
+	// sending one, and an earlier turn's checklist must not outlive that.
+	let latestSessionPlanTurnId: string | undefined;
+	for (const group of groups) {
+		const turn = group.turnId ? byTurn.get(group.turnId) : undefined;
+		if (turn?.plan?.sessionScoped) latestSessionPlanTurnId = turn.id;
+	}
+
 	for (const group of groups) {
 		if (!group.turnId) continue;
 		const turn = byTurn.get(group.turnId);
@@ -5136,7 +5146,10 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
-		group.plan = turn.plan?.steps.length ? turn.plan : undefined;
+		group.plan =
+			turn.plan?.steps.length && (!turn.plan.sessionScoped || turn.id === latestSessionPlanTurnId)
+				? turn.plan
+				: undefined;
 		group.live = turn.state === "running";
 		group.liveStartedAt = turn.startedAt ?? turn.requestedAt;
 		group.blocked = group.items.some(

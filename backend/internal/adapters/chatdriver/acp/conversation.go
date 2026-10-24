@@ -124,6 +124,8 @@ type conversation struct {
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
+	// sessionScopedPlan: see Config.SessionScopedPlan.
+	sessionScopedPlan bool
 	permissionMode    ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
