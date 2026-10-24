@@ -386,7 +386,7 @@ describe("editor handoff", () => {
 
 		expect(input.launch).toHaveBeenCalledWith(
 			"C:\\Windows\\System32\\cmd.exe",
-			["/d", "/s", "/v:off", "/c", `"start "" "C:\\Windows\\System32\\cmd.exe" /d /s /v:off /k ""C:\\bin\\nvim.exe" "."""`],
+			["/d", "/s", "/v:off", "/c", `"start "" "C:\\bin\\nvim.exe" ".""`],
 			workspacePath,
 		);
 	});
@@ -666,7 +666,7 @@ describe("shared terminal command", () => {
 		const { terminalCommand } = await import("./terminal-command");
 		expect(terminalCommand(["/bin/nvim", "/work tree"], "linux", { PATH: "/bin" }, (p) => p === "/bin/gnome-terminal"))
 			.toEqual({ command: "/bin/gnome-terminal", args: ["--", "/bin/nvim", "/work tree"] });
-		expect(terminalCommand(["C:\\bin\\nvim.exe", "."], "win32", {}, () => false))
-			.toEqual({ command: "cmd.exe", args: ["/d", "/s", "/v:off", "/c", '"start "" "cmd.exe" /d /s /v:off /k ""C:\\bin\\nvim.exe" "."""'] });
+		expect(terminalCommand(["C:\\a&b\\nvim.exe", "."], "win32", {}, () => false))
+			.toEqual({ command: "cmd.exe", args: ["/d", "/s", "/v:off", "/c", '"start "" "C:\\a&b\\nvim.exe" ".""'] });
 	});
 });

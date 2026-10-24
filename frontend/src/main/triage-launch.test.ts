@@ -78,7 +78,7 @@ describe("launchTriageInTerminal", () => {
 		const result = await launchTriageInTerminal(env);
 		expect(result).toMatchObject({ ok: false, error: "report.terminalFailed" });
 		const argv = vi.mocked(terminalCommand).mock.calls[0][0];
-		const commandText = platform === "win32" ? Buffer.from(argv[3], "base64").toString("utf16le") : JSON.stringify(vi.mocked(launchCommand).mock.calls[0][1]);
+		const commandText = platform === "win32" ? Buffer.from(argv[4], "base64").toString("utf16le") : JSON.stringify(vi.mocked(launchCommand).mock.calls[0][1]);
 		for (const value of ["GH_TOKEN", "secret123", "ANTHROPIC_API_KEY", "anthropic-test-secret", "OPENAI_API_KEY", "openai-test-secret", "PATH="]) {
 			expect(commandText).not.toContain(value);
 			expect(JSON.stringify(result)).not.toContain(value);
@@ -97,15 +97,15 @@ describe("launchTriageInTerminal", () => {
 		vi.mocked(launchCommand).mockRejectedValue(new Error("Terminal unavailable"));
 		const result = await launchTriageInTerminal({ AO_DATA_DIR: "C:\\Users\\%name%\\.ao" });
 		const argv = vi.mocked(terminalCommand).mock.calls[0][0];
-		expect(result).toEqual({ ok: false, error: "report.terminalFailed", command: Buffer.from(argv[3], "base64").toString("utf16le") });
+		expect(result).toEqual({ ok: false, error: "report.terminalFailed", command: Buffer.from(argv[4], "base64").toString("utf16le") });
 	});
 
 	it("encodes Windows paths before cmd expansion", async () => {
 		vi.stubGlobal("process", { ...process, platform: "win32" });
 		await launchTriageInTerminal({ AO_DATA_DIR: "C:\\Users\\%name%\\.ao" });
 		const argv = vi.mocked(terminalCommand).mock.calls[0][0];
-		expect(argv.slice(1, 3)).toEqual(["-NoProfile", "-EncodedCommand"]);
-		expect(Buffer.from(argv[3], "base64").toString("utf16le")).toContain("C:\\Users\\%name%\\.ao");
-		expect(Buffer.from(argv[3], "base64").toString("utf16le")).toContain("'triage'");
+		expect(argv.slice(1, 4)).toEqual(["-NoExit", "-NoProfile", "-EncodedCommand"]);
+		expect(Buffer.from(argv[4], "base64").toString("utf16le")).toContain("C:\\Users\\%name%\\.ao");
+		expect(Buffer.from(argv[4], "base64").toString("utf16le")).toContain("'triage'");
 	});
 });
