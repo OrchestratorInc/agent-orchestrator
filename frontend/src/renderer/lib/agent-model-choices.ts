@@ -1,3 +1,5 @@
+import { collapseModelVariants, listsModelVariants } from "./model-variants";
+
 export function isConcreteModelID(id: string): boolean {
 	return id !== "" && id.toLowerCase() !== "default";
 }
@@ -137,4 +139,15 @@ export function foldClaudeAliasDefault<T extends { id: string; label: string; is
 	const family = CLAUDE_FAMILIES.indexOf(alias.id);
 	const newest = splitClaudeModels(rest).current.find((model) => claudeFamilyVersion(model)?.family === family && claudeVariant(model) === "");
 	return newest ? rest.map((model) => (model === newest ? { ...model, isDefault: true } : model)) : models;
+}
+
+/** A recorded model id by its name in the agent's list, however that agent's chat spells the id. */
+export function recordedModelName(harness: string, model: string, models: Array<{ id: string; label: string }>): string {
+	const id = model.replace(/\[.*$/, "");
+	const label = models.find((entry) => entry.id === id)?.label
+		// Cursor's chat names a model once; its list has an entry per setting.
+		?? (listsModelVariants(harness) ? collapseModelVariants(models).find((family) => family.id === id)?.label : undefined)
+		// Claude Code's "opus" is the newest model of that family.
+		?? (harness === "claude-code" ? splitClaudeModels(models).current.find((entry) => entry.id.includes(`-${id}-`))?.label : undefined);
+	return agentModelDisplayLabel(harness, label ?? id);
 }

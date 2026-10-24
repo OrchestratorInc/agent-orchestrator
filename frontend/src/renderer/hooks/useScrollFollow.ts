@@ -34,7 +34,7 @@ type Flight = { from: number; to: number; aimedAt: number };
  * instant writes. Every position along a smooth scroll in flight counts as ours;
  * reader input stops it in place (`cancel` / `hold`). Reduced motion snaps.
  */
-export function useScrollFollow(getNode: () => HTMLElement | null) {
+export function useScrollFollow(getNode: () => HTMLElement | null, onWrite?: (top: number) => void) {
 	const reducedMotion = useReducedMotion();
 	const snap = useRef(false);
 	snap.current = CANNOT_ANIMATE || Boolean(reducedMotion);
@@ -48,13 +48,20 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	const lastAimAt = useRef(0);
 	const holdUntil = useRef(0);
 	const readerIntentFrom = useRef<number | null>(null);
+	const deferredFollow = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const endOf = (node: HTMLElement) => Math.max(0, node.scrollHeight - node.clientHeight);
-	const write = (node: HTMLElement, top: number) => {
-		if (Math.abs(node.scrollTop - top) <= SETTLE_PX) return;
+	const markWritten = useCallback((top: number) => {
+		if (performance.now() < holdUntil.current) readerIntentFrom.current = top;
+		lastWritten.current = top;
+		onWrite?.(top);
+	}, [onWrite]);
+	const writeOwned = useCallback((node: HTMLElement, top: number) => {
+		if (performance.now() < holdUntil.current || Math.abs(node.scrollTop - top) <= SETTLE_PX) return;
+		const previous = node.scrollTop;
 		node.scrollTop = top;
-		lastWritten.current = node.scrollTop;
-	};
+		if (node.scrollTop !== previous) markWritten(node.scrollTop);
+	}, [markWritten]);
 	const smoothTo = (node: HTMLElement, top: number) => {
 		const now = performance.now();
 		flight.current = { from: flight.current?.from ?? node.scrollTop, to: top, aimedAt: now };
@@ -68,7 +75,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		return flight.current != null;
 	};
 
-	const cancel = useCallback(() => {
+	const cancelFlight = useCallback(() => {
 		flight.current = null;
 		if (performance.now() - lastAimAt.current > FLIGHT_MAX_MS) return;
 		lastAimAt.current = 0;
@@ -81,6 +88,15 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		node.scrollTop = top;
 		lastWritten.current = node.scrollTop;
 	}, [getNode]);
+	const cancel = useCallback((clearHold = false) => {
+		if (deferredFollow.current !== null) clearTimeout(deferredFollow.current);
+		deferredFollow.current = null;
+		if (clearHold) {
+			holdUntil.current = 0;
+			readerIntentFrom.current = null;
+		}
+		cancelFlight();
+	}, [cancelFlight]);
 
 	/**
 	 * Stop following and stay still for `ms`, without deciding yet whether the reader
@@ -89,16 +105,16 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	 */
 	const hold = useCallback((ms: number, from?: number) => {
 		const continuingIntent = performance.now() < holdUntil.current && readerIntentFrom.current != null;
-		cancel();
-		if (!continuingIntent) readerIntentFrom.current = from ?? getNode()?.scrollTop ?? null;
+		const node = getNode();
+		const live = node?.scrollTop ?? null;
+		const pendingWrite = live !== null && live === lastWritten.current;
+		cancelFlight();
+		if (!continuingIntent) {
+			readerIntentFrom.current = pendingWrite || (node && node.scrollTop >= endOf(node) - SETTLE_PX)
+				? live : from ?? live;
+		}
 		holdUntil.current = performance.now() + ms;
-	}, [cancel, getNode]);
-
-	/** Record a write made outside this hook (e.g. virtualizer anchoring) as ours. */
-	const markWritten = useCallback((top: number) => {
-		readerIntentFrom.current = null;
-		lastWritten.current = top;
-	}, []);
+	}, [cancelFlight, getNode]);
 
 	/** True while a smooth scroll we started is still in flight. */
 	const isFlying = useCallback(() => flying(), []);
@@ -109,9 +125,10 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		if (
 			performance.now() < holdUntil.current &&
 			readerIntentFrom.current != null &&
-			top < readerIntentFrom.current - OWN_SCROLL_PX
+			top < readerIntentFrom.current - SETTLE_PX
 		) {
 			readerIntentFrom.current = null;
+			lastWritten.current = null;
 			return false;
 		}
 		const current = flying() ? flight.current : null;
@@ -120,22 +137,39 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 			const high = Math.max(current.from, current.to) + OWN_SCROLL_PX;
 			if (top >= low && top <= high) return true;
 		}
-		return lastWritten.current != null && Math.abs(top - lastWritten.current) < OWN_SCROLL_PX;
+		if (lastWritten.current != null && Math.abs(top - lastWritten.current) < OWN_SCROLL_PX) return true;
+		lastWritten.current = null;
+		return false;
 	}, []);
 
-	const followEnd = useCallback(() => {
+	const followEnd = useCallback((instant = false): void => {
 		const node = getNode();
-		if (!node || performance.now() < holdUntil.current) return;
-		if (snap.current) {
-			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
-			write(node, node.scrollHeight);
+		if (!node) return;
+		if (deferredFollow.current !== null) clearTimeout(deferredFollow.current);
+		deferredFollow.current = null;
+		const remaining = holdUntil.current - performance.now();
+		if (remaining > 0) {
+			deferredFollow.current = setTimeout(() => {
+				deferredFollow.current = null;
+				followEndRef.current(instant);
+			}, remaining);
 			return;
 		}
 		const end = endOf(node);
+		if (readerIntentFrom.current !== null && node.scrollTop < readerIntentFrom.current - SETTLE_PX && node.scrollTop < end - SETTLE_PX) {
+			lastWritten.current = null;
+			return;
+		}
+		readerIntentFrom.current = null;
+		if (instant || snap.current) {
+			// The browser clamps to the real maximum; writing scrollHeight is the plain snap.
+			writeOwned(node, node.scrollHeight);
+			return;
+		}
 		if (node.scrollTop > end) {
 			// Content shrank below the current position; land exactly, never animate back.
 			flight.current = null;
-			write(node, end);
+			writeOwned(node, end);
 			return;
 		}
 		if (flying()) {
@@ -145,25 +179,27 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		}
 		const gap = end - node.scrollTop;
 		if (gap <= SETTLE_PX) return;
-		if (gap <= FOLLOW_INSTANT_PX) write(node, end);
+		if (gap <= FOLLOW_INSTANT_PX) writeOwned(node, end);
 		else smoothTo(node, end);
-	}, [getNode]);
+	}, [getNode, writeOwned]);
 	const followEndRef = useRef(followEnd);
 	followEndRef.current = followEnd;
 
 	const glideToEnd = useCallback(() => {
 		const node = getNode();
 		if (!node) return;
+		if (deferredFollow.current !== null) clearTimeout(deferredFollow.current);
+		deferredFollow.current = null;
 		// A deliberate jump (send, Jump to latest) overrides any pending wheel hold.
 		holdUntil.current = 0;
 		readerIntentFrom.current = null;
 		if (snap.current) {
 			flight.current = null;
-			write(node, node.scrollHeight);
+			writeOwned(node, node.scrollHeight);
 			return;
 		}
 		smoothTo(node, endOf(node));
-	}, [getNode]);
+	}, [getNode, writeOwned]);
 
 	/**
 	 * Re-issue the smooth scroll in flight at the current end. Call after an instant
@@ -172,7 +208,7 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 	 */
 	const reaim = useCallback(() => {
 		const node = getNode();
-		if (node && flying() && !snap.current) smoothTo(node, endOf(node));
+		if (node && performance.now() >= holdUntil.current && flying() && !snap.current) smoothTo(node, endOf(node));
 	}, [getNode]);
 
 	/**
@@ -192,7 +228,8 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 
 	useEffect(() => () => {
 		flight.current = null;
+		if (deferredFollow.current !== null) clearTimeout(deferredFollow.current);
 	}, []);
 
-	return { glideToEnd, followEnd, cancel, hold, markWritten, isOwnScroll, isFlying, isHeld, reaim, endFlight };
+	return { glideToEnd, followEnd, cancel, hold, markWritten, writeOwned, isOwnScroll, isFlying, isHeld, reaim, endFlight };
 }

@@ -1097,6 +1097,18 @@ func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectI
 	return conversationToDomain(row), nil
 }
 
+// SessionForActivityProviderItem finds the session holding an action activity.
+func (s *Store) SessionForActivityProviderItem(ctx context.Context, providerItemID string) (domain.SessionID, bool, error) {
+	sessionID, err := s.qr.SelectSessionForActivityProviderItem(ctx, providerItemID)
+	if errors.Is(err, sql.ErrNoRows) || sessionID == nil {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return *sessionID, true, nil
+}
+
 // ConversationForSession looks up a session's conversation.
 func (s *Store) ConversationForSession(
 	ctx context.Context,
@@ -1672,6 +1684,11 @@ func finalizeCompletedTurnPlan(
 	var plan domain.ConversationPlan
 	if err := json.Unmarshal([]byte(turn.PlanJson), &plan); err != nil {
 		return fmt.Errorf("decode plan for completed turn %s: %w", turn.ID, err)
+	}
+	if plan.SpansTurns {
+		// The agent keeps this list across turns, so its open steps are still open
+		// work: the turn ending is not the list ending.
+		return nil
 	}
 	changed := false
 	for i := range plan.Steps {
@@ -2730,7 +2747,22 @@ func (s *Store) AppendAssistantDelta(
 		return nil
 
 	case errors.Is(err, sql.ErrNoRows):
-		turnID := s.turnIDFor(ctx, conversationID, providerTurnID)
+		var turnID sql.NullString
+		streaming := int64(1)
+		if providerTurnID != "" {
+			turn, turnErr := q.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
+				ConversationID: conversationID,
+				ProviderTurnID: providerTurnID,
+			})
+			if turnErr == nil {
+				turnID = sql.NullString{String: turn.ID, Valid: true}
+				if turn.State.Terminal() {
+					streaming = 0
+				}
+			} else if !errors.Is(turnErr, sql.ErrNoRows) {
+				return fmt.Errorf("lookup turn %s for assistant delta: %w", providerTurnID, turnErr)
+			}
+		}
 		return s.inTx(ctx, "insert assistant message", func(q *gen.Queries) error {
 			sequence, seqErr := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
 				UpdatedAt: now,
@@ -2747,7 +2779,7 @@ func (s *Store) AppendAssistantDelta(
 				Role:           domain.MessageRoleAssistant,
 				Origin:         domain.MessageOriginProvider,
 				Text:           delta,
-				Streaming:      1,
+				Streaming:      streaming,
 				ProviderItemID: providerItemID,
 				CreatedAt:      now,
 				UpdatedAt:      now,
@@ -2760,7 +2792,8 @@ func (s *Store) AppendAssistantDelta(
 }
 
 // SettleAssistantMessage replaces streamed text with the provider's settled text
-// and stops the streaming marker.
+// and stops the streaming marker. An empty settle means the provider settled
+// nothing, so it keeps the streamed text.
 func (s *Store) SettleAssistantMessage(
 	ctx context.Context,
 	conversationID, providerItemID, providerTurnID, text, messageID string,
@@ -2769,7 +2802,7 @@ func (s *Store) SettleAssistantMessage(
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
-	_, err := q.SelectConversationMessageByProviderItem(ctx,
+	existing, err := q.SelectConversationMessageByProviderItem(ctx,
 		gen.SelectConversationMessageByProviderItemParams{
 			ConversationID: conversationID,
 			ProviderItemID: providerItemID,
@@ -2803,6 +2836,9 @@ func (s *Store) SettleAssistantMessage(
 	if err != nil {
 		return fmt.Errorf("lookup message %s: %w", providerItemID, err)
 	}
+	if text == "" {
+		text = existing.Text
+	}
 
 	if err := q.SettleConversationMessage(ctx, gen.SettleConversationMessageParams{
 		Text:           text,
@@ -2815,7 +2851,35 @@ func (s *Store) SettleAssistantMessage(
 	return nil
 }
 
+// ActivityStatusByProviderItem reports the status of one provider item.
+// Missing rows return ok=false.
+func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	row, err := s.qr.SelectConversationActivityByProviderItem(ctx, gen.SelectConversationActivityByProviderItemParams{
+		ConversationID: conversationID,
+		ProviderItemID: providerItemID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return row.Status, true, nil
+}
+
+func aoActionStatusSettled(status domain.ActivityStatus) bool {
+	switch status {
+	case domain.ActivityStatusCompleted, domain.ActivityStatusFailed, domain.ActivityStatusCancelled, domain.ActivityStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // UpsertActivity records or updates a non-message timeline entry.
+// A running ao_action does not replace a completed, failed, cancelled, or
+// resolved row. The admission write and the terminal callback take this lock
+// separately, so the decision uses the row read in this call.
 func (s *Store) UpsertActivity(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -2828,12 +2892,17 @@ func (s *Store) UpsertActivity(
 	detail := string(activity.Detail)
 
 	if activity.ProviderItemID != "" {
-		_, err := q.SelectConversationActivityByProviderItem(ctx,
+		row, err := q.SelectConversationActivityByProviderItem(ctx,
 			gen.SelectConversationActivityByProviderItemParams{
 				ConversationID: conversationID,
 				ProviderItemID: activity.ProviderItemID,
 			})
 		if err == nil {
+			if activity.Kind == domain.ActivityKindAOAction &&
+				activity.Status == domain.ActivityStatusRunning &&
+				aoActionStatusSettled(row.Status) {
+				return nil
+			}
 			if settleErr := q.SettleConversationActivity(ctx,
 				gen.SettleConversationActivityParams{
 					Status:         activity.Status,

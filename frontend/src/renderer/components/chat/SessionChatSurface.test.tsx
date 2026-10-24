@@ -137,7 +137,7 @@ vi.mock("../../hooks/useConversation", () => ({
 		catalogObserverState.enabled.push(enabled);
 		return configState;
 	}),
-	useConversationModels: vi.fn(() => ({ models: [] })),
+	useConversationModels: vi.fn(() => ({ models: [], loaded: true })),
 	useConversationSkills: vi.fn(() => ({ skills: [] })),
 	useStageAttachments: () => undefined,
 	useWorkspaceFilePaths: () => ({ paths: workspacePathsState.paths, truncated: false }),
@@ -277,7 +277,7 @@ beforeEach(() => {
 	conversationCommandState.echoBeforeSend.mockReset();
 	conversationCommandState.dropEcho.mockReset();
 	catalogObserverState.enabled = [];
-	useUiStore.setState({ inspectorSessions: {}, developerMode: true });
+	useUiStore.setState({ inspectorSessions: {}, developerMode: false });
 });
 
 afterEach(() => {
@@ -320,7 +320,7 @@ describe("SessionChatSurface pending switch effort", () => {
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});
 
-	it("lets a pick lapse when Developer Mode is turned off", async () => {
+	it("keeps a pick when Developer Mode is toggled", async () => {
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		await act(async () => {
@@ -328,9 +328,9 @@ describe("SessionChatSurface pending switch effort", () => {
 		});
 		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
 		await act(async () => {
-			useUiStore.setState({ developerMode: false });
+			useUiStore.setState({ developerMode: true });
 		});
-		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
 	});
 
 	it("sends nothing with a switch until the agent's permission modes are known", async () => {
@@ -1334,5 +1334,34 @@ describe("side command routing", () => {
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: `/${command} question` }));
 		delete (conversationCommandState as { send?: unknown }).send;
+	});
+});
+
+describe("SessionChatSurface startup recovery", () => {
+	function conversationRefreshes(invalidate: { mock: { calls: unknown[][] } }) {
+		return invalidate.mock.calls.filter(([filters]) =>
+			JSON.stringify((filters as { queryKey?: unknown }).queryKey) === JSON.stringify(["conversation", session.id])).length;
+	}
+
+	it("refreshes the controller state when the daemon's recovery check settles", () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const tree = (statusReadiness: "checking" | "unavailable" | "ready") =>
+			<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness }} /></Wrapper>;
+		const view = render(tree("unavailable"));
+		view.rerender(tree("checking"));
+		expect(conversationRefreshes(invalidate)).toBe(0);
+		view.rerender(tree("ready"));
+		expect(conversationRefreshes(invalidate)).toBe(1);
+		view.rerender(tree("ready"));
+		expect(conversationRefreshes(invalidate)).toBe(1);
+	});
+
+	it("leaves a session that was ready from the start alone", () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
+		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
+		expect(conversationRefreshes(invalidate)).toBe(0);
 	});
 });

@@ -1249,7 +1249,7 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 			return Launch{Command: "fake"}, nil
 		},
 		SessionMeta: func(cfg LaunchConfig) map[string]any {
-			return map[string]any{"systemPrompt": map[string]any{"append": cfg.SystemPrompt}}
+			return map[string]any{"systemPrompt": map[string]any{"append": cfg.SystemPrompt}, "disableTools": cfg.DisableTools}
 		},
 		SessionMode: func(permission ports.PermissionMode) string {
 			if permission == ports.PermissionModeAcceptEdits {
@@ -1267,7 +1267,7 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 	driver.useTestProcess(fakeSpawn(agent))
 
 	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
-		WorkspacePath: t.TempDir(), SystemPrompt: "AO instructions",
+		WorkspacePath: t.TempDir(), SystemPrompt: "AO instructions", DisableTools: true,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1281,6 +1281,9 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 	agent.mu.Unlock()
 	if meta["systemPrompt"] == nil {
 		t.Fatal("session/new did not receive provider metadata")
+	}
+	if meta["disableTools"] != true {
+		t.Fatal("session/new did not receive the background tool restriction")
 	}
 
 	// Consume controller.ready from session setup.
@@ -1788,8 +1791,16 @@ func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, tex
 	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatalf("StartDeferredTurn: %v", err)
 	}
+	// The turn is released only after it completes, just before the driver
+	// announces it is ready; wait for that, as a caller sending the next turn
+	// must, or the next SendTurn can find the turn still in flight.
+	completed := false
 	for {
-		if event := nextEvent(t, conv.Events()); event.Kind == ports.ChatEventTurnCompleted {
+		event := nextEvent(t, conv.Events())
+		if event.Kind == ports.ChatEventTurnCompleted {
+			completed = true
+		}
+		if completed && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerReady {
 			break
 		}
 	}
@@ -2762,6 +2773,57 @@ func TestACPDriverPreservesNestedToolAndTerminalMetadata(t *testing.T) {
 	}
 	if detail["parentProviderItemId"] != "agent-tool" || detail["terminalId"] != "child-tool" || detail["output"] != "ok\n" {
 		t.Fatalf("tool detail = %#v", detail)
+	}
+}
+
+// Only a binding whose agent keeps one list for the session marks its plan as
+// spanning turns; every other ACP plan stays a plan for the turn it arrived in.
+func TestACPDriverMarksPlansThatSpanTurns(t *testing.T) {
+	for _, spans := range []bool{false, true} {
+		t.Run(fmt.Sprintf("PlansSpanTurns=%v", spans), func(t *testing.T) {
+			agent := &fakeAgent{}
+			driver := New(Config{
+				Harness:        domain.HarnessClaudeCode,
+				Capabilities:   ports.ChatCapabilities{ports.ChatCapabilityPlans: true},
+				Probe:          func(context.Context) error { return nil },
+				Launch:         func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				PlansSpanTurns: spans,
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer opened.Close()
+			_ = nextEvent(t, opened.Events())
+			conv := opened.(*conversation)
+			conv.mu.Lock()
+			conv.activeTurn = "turn-1"
+			conv.mu.Unlock()
+
+			if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+				SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+				Update: acpsdk.SessionUpdate{Plan: &acpsdk.SessionUpdatePlan{
+					SessionUpdate: "plan",
+					Entries: []acpsdk.PlanEntry{
+						{Content: "one", Status: acpsdk.PlanEntryStatusCompleted},
+						{Content: "two", Status: acpsdk.PlanEntryStatusPending},
+					},
+				}},
+			}); err != nil {
+				t.Fatalf("plan update: %v", err)
+			}
+			event := nextEvent(t, opened.Events())
+			if event.Kind != ports.ChatEventPlanUpdated || event.Plan == nil {
+				t.Fatalf("plan event = %#v", event)
+			}
+			if event.Plan.SpansTurns != spans {
+				t.Fatalf("plan SpansTurns = %v, want %v", event.Plan.SpansTurns, spans)
+			}
+			if len(event.Plan.Steps) != 2 || event.Plan.Steps[1].Status != domain.PlanStepPending {
+				t.Fatalf("plan steps = %#v", event.Plan.Steps)
+			}
+		})
 	}
 }
 

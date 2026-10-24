@@ -4,14 +4,16 @@ import { Timeline } from "./ChatWorkspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { chatFixtureLongHistory } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
+import { useUiStore } from "../../stores/ui-store";
 
 const anchors = vi.hoisted(() => [] as Array<{ before: number; after: number; offset: number }>);
+const virtualizerLab = vi.hoisted(() => ({ current: undefined as import("@tanstack/react-virtual").Virtualizer<HTMLDivElement, HTMLDivElement> | undefined }));
 vi.mock("@tanstack/react-virtual", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
 	return {
 		...actual,
-		useVirtualizer: (options: Parameters<typeof actual.useVirtualizer<HTMLDivElement, HTMLDivElement>>[0]) =>
-			actual.useVirtualizer({
+		useVirtualizer: (options: Parameters<typeof actual.useVirtualizer<HTMLDivElement, HTMLDivElement>>[0]) => {
+			const instance = actual.useVirtualizer({
 				...options,
 				scrollToFn: (offset, config, instance) => {
 					const before = instance.scrollElement?.scrollTop ?? 0;
@@ -19,7 +21,10 @@ vi.mock("@tanstack/react-virtual", async (importOriginal) => {
 					options.scrollToFn(offset, config, instance);
 					anchors.push({ before, after: instance.scrollElement?.scrollTop ?? 0, offset });
 				},
-			}),
+			});
+			virtualizerLab.current = instance;
+			return instance;
+		},
 	};
 });
 
@@ -84,6 +89,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	cleanup();
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 });
@@ -111,7 +117,175 @@ function resize(log: HTMLElement, growth = 200) {
 	expect(delivered).toBe(true);
 }
 
+function stubContentBounds() {
+	const bounds = vi.mocked(HTMLElement.prototype.getBoundingClientRect).getMockImplementation()!;
+	vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (this: HTMLElement) {
+		return this.classList.contains("relative") && this.style.height
+			? { ...bounds.call(this), top: 20 - top } as DOMRect : bounds.call(this);
+	});
+}
+
 describe.each([false, true])("shared Timeline scroll ownership (remoteHost=%s)", (remoteHost) => {
+	it("keeps a virtual minimap selection through the next streamed resize", () => {
+		stubContentBounds();
+		useUiStore.setState({ inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } } });
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		fireEvent.scroll(log);
+		now += 2000;
+		const markers = screen.getByRole("scrollbar").querySelectorAll("[data-chat-scroll-marker]");
+		expect(markers).toHaveLength(60);
+		fireEvent.pointerDown(markers[30]!, { pointerId: 1 });
+		const selected = top;
+		expect(selected).toBeLessThan(height - 800);
+		resize(log);
+		expect(top).toBe(selected);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
+	it("disables end anchoring inside the spacer before the unpin render commits", () => {
+		stubContentBounds();
+		height = 37400;
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		act(() => {
+			virtualizerLab.current!.resizeItem(59, 599);
+		});
+		top = height - 800;
+		fireEvent.scroll(log);
+		now += 2000;
+		act(() => {
+			top -= 100;
+			log.dispatchEvent(new Event("scroll", { bubbles: true }));
+			expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+			const selected = top;
+			virtualizerLab.current!.resizeItem(59, 900);
+			expect(top).toBe(selected);
+		});
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
+	it.each([1, 2])("keeps a %ipx upward gesture after a pending follow write", (step) => {
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		fireEvent.scroll(log);
+		now += 2000;
+		resize(log, 20);
+		fireEvent.wheel(log, { deltaY: -step });
+		top -= step;
+		const selected = top;
+		fireEvent.scroll(log);
+		now += 300;
+		resize(log);
+		expect(top).toBe(selected);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
+	it.each(["PageUp", "ArrowUp", "Home"])("keeps custom scrollbar %s before its scroll event", (key) => {
+		useUiStore.setState({ inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } } });
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		fireEvent.scroll(log);
+		now += 2000;
+		fireEvent.keyDown(screen.getByRole("scrollbar"), { key });
+		const selected = top;
+		resize(log);
+		expect(top).toBe(selected);
+		fireEvent.scroll(log);
+		now += 300;
+		resize(log);
+		expect(top).toBe(selected);
+	});
+
+	it("keeps a custom thumb drag before its scroll event and after pointer release", () => {
+		useUiStore.setState({ inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } } });
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		const track = screen.getByRole("scrollbar");
+		Object.defineProperty(track, "clientHeight", { configurable: true, value: 800 });
+		fireEvent.scroll(log);
+		now += 2000;
+		fireEvent(track, new MouseEvent("pointerdown", { bubbles: true, clientY: 790 }));
+		fireEvent(track, new MouseEvent("pointermove", { bubbles: true, clientY: 400 }));
+		const selected = top;
+		expect(selected).toBeLessThan(height - 800);
+		resize(log);
+		expect(top).toBe(selected);
+		fireEvent(track, new MouseEvent("pointerup", { bubbles: true }));
+		now += 300;
+		resize(log);
+		expect(top).toBe(selected);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
+	it.each(["wheel", "PageUp"])("blocks real resizeItem anchoring during a %s hold", (input) => {
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		fireEvent.scroll(log);
+		now += 2000;
+		if (input === "wheel") fireEvent.wheel(log, { deltaY: -120 });
+		else fireEvent.keyDown(log, { key: "PageUp" });
+		const selected = top;
+		const row = log.querySelector('[data-index="59"]')!;
+		anchors.length = 0;
+		height += 300;
+		act(() => {
+			for (const observer of observers) {
+				if (observer.targets.has(row)) observer.callback([{ target: row, borderBoxSize: [{ blockSize: 900, inlineSize: 768 }] } as unknown as ResizeObserverEntry], observer as unknown as ResizeObserver);
+			}
+		});
+		expect(anchors.length).toBeGreaterThan(0);
+		expect(top).toBe(selected);
+	});
+
+	it("does not unpin a nested wheel over a pending browser clamp", () => {
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		fireEvent.scroll(log);
+		now += 2000;
+		height -= 100;
+		top = height - 800;
+		fireEvent.wheel(log.querySelector("[data-index]")!, { deltaY: -120 });
+		fireEvent.scroll(log);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+		now += 300;
+		resize(log);
+		expect(top).toBe(height - 800);
+	});
+
+	it("does not unpin a nested wheel over a pending owned shrink adjustment", () => {
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		fireEvent.scroll(log);
+		now += 2000;
+		const row = log.querySelector('[data-index="59"]')!;
+		const previous = top;
+		act(() => {
+			for (const observer of observers) {
+				if (observer.targets.has(row)) observer.callback([{ target: row, borderBoxSize: [{ blockSize: 500, inlineSize: 768 }] } as unknown as ResizeObserverEntry], observer as unknown as ResizeObserver);
+			}
+			expect(top).toBeLessThan(previous);
+			fireEvent.wheel(row, { deltaY: -120 });
+			fireEvent.scroll(log);
+		});
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+	});
+
+	it("defers an initial snap until a nested gesture expires without another resize", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		render(timeline(chatFixtureLongHistory(60), remoteHost));
+		const log = screen.getByRole("log");
+		fireEvent.scroll(log);
+		fireEvent.touchMove(log);
+		const selected = top;
+		resize(log);
+		expect(top).toBe(selected);
+		now += 300;
+		act(() => vi.advanceTimersByTime(300));
+		expect(top).toBe(height - 800);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+	});
+
 	it.each([false, true])("keeps repeated upward input authoritative when the compositor moves before wheel delivery=%s", (compositorFirst) => {
 		render(timeline(chatFixtureLongHistory(60), remoteHost));
 		const log = screen.getByRole("log");

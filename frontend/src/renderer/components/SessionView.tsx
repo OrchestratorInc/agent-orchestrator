@@ -33,7 +33,7 @@ import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
 import { isArtifactPreviewUrl } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
-import { TerminalSessionMenu } from "./TerminalAgentControls";
+import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { ShellTopbar } from "./ShellTopbar";
@@ -1461,17 +1461,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A local terminal session's tab menu holds its agent and the switch to chat; Cloud cannot switch agent.
+	// A local session's tab menu holds the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	const sessionTabActions = !session || showChatSurface || session.cloud
+	const sessionTabActions = !session || session.cloud
 		? (session?.cloud ? interfaceUi.switchControl : null)
 		: (
-			<TerminalSessionMenu
+			<SessionTabMenu
 				key={uiSessionId}
 				session={session}
 				hostId={hostId}
 				blocked={agentWorking}
+				switchTarget={interfaceUi.target}
 				switchAction={interfaceUi.switchAction}
 				switchControl={interfaceUi.switchControl}
 			/>

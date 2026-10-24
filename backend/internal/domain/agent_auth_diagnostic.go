@@ -71,6 +71,9 @@ func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 	case "account_context":
 		d.Reason = "This result comes from the Codex account selected in AO, which may differ from the account in a separate terminal."
 		d.NextStep = "Compare the selected AO account with the native CLI account before signing in again."
+	case "saved_default_account":
+		d.Reason = "New sessions start on a saved account, so this result is that account's sign-in, not the CLI's own login."
+		d.NextStep = "If the account is signed out, sign it in again on the harness's Account tab, or make another account the default."
 	case "probe_timeout":
 		d.Reason = "The authentication check timed out; this does not prove you are signed out."
 		d.NextStep = "Check the CLI and network connection, then check again."

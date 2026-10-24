@@ -14,7 +14,10 @@ beforeEach(() => {
 	motion.reduced = true;
 	vi.spyOn(performance, "now").mockImplementation(() => now);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.restoreAllMocks();
+	vi.useRealTimers();
+});
 
 function viewport({ scrollHeight, clientHeight, scrollTop }: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
 	const node = document.createElement("div");
@@ -115,5 +118,65 @@ describe("useScrollFollow", () => {
 		result.current.markWritten(3000);
 
 		expect(result.current.isOwnScroll(3000)).toBe(true);
+	});
+
+	it.each([1, 2])("recognizes a %ipx upward step after an app write during a hold", (step) => {
+		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.hold(250);
+		node.scrollTop = 3000;
+		result.current.markWritten(3000);
+		expect(result.current.isOwnScroll(3000)).toBe(true);
+		node.scrollTop -= step;
+		expect(result.current.isOwnScroll(node.scrollTop)).toBe(false);
+	});
+
+	it("skips automatic owned writes during a hold and does not claim no-ops", () => {
+		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		const onWrite = vi.fn();
+		const { result } = renderHook(() => useScrollFollow(() => node, onWrite));
+		result.current.writeOwned(node, 3200);
+		expect(onWrite).not.toHaveBeenCalled();
+		expect(result.current.isOwnScroll(3200)).toBe(false);
+		result.current.hold(250);
+		result.current.writeOwned(node, 3500);
+		expect(node.scrollTop).toBe(3200);
+		expect(onWrite).not.toHaveBeenCalled();
+		now += 300;
+		result.current.writeOwned(node, 3500);
+		expect(node.scrollTop).toBe(3500);
+		expect(onWrite).toHaveBeenCalledExactlyOnceWith(3500);
+	});
+
+	it("extends a deferred snap with the hold and cancels it when the reader leaves", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.hold(250);
+		result.current.followEnd(true);
+		now += 200;
+		vi.advanceTimersByTime(200);
+		result.current.hold(250);
+		now += 50;
+		vi.advanceTimersByTime(50);
+		expect(node.scrollTop).toBe(3200);
+		result.current.cancel();
+		now += 300;
+		vi.advanceTimersByTime(300);
+		expect(node.scrollTop).toBe(3200);
+	});
+
+	it("does not replay a deferred snap before a queued reader scroll event", () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const node = viewport({ scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		const { result } = renderHook(() => useScrollFollow(() => node));
+		result.current.markWritten(3200);
+		result.current.hold(250);
+		result.current.followEnd(true);
+		node.scrollTop = 3199;
+		now += 300;
+		vi.advanceTimersByTime(300);
+		expect(node.scrollTop).toBe(3199);
+		expect(result.current.isOwnScroll(3199)).toBe(false);
 	});
 });

@@ -137,6 +137,11 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Settings is a modal that blocks pointer and focus outside it; its Harness
 	// page offers the same updates there.
 	if (settingsOpen || !readinessComplete || readiness.isError) return null;
+	// Only advertise updates AO can run without a login or manual maintenance.
+	// Wait for these checks so ineligible harnesses never flash in the stack. A
+	// failed background refetch keeps the cached data, so an update in flight
+	// or its failure stays visible.
+	if (!authPlans.data || !installers.data) return null;
 	// Let the first batch settle so a fast, seldom-used harness cannot jump
 	// ahead of the most-used one. Failed lookups don't block the other results.
 	if (AGENT_OPTIONS.some((id) => installed.has(id) && advisories.get(id)?.isPending)) return null;
@@ -154,6 +159,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const confirmed = installed.has(agentId) && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
 		const advisory = confirmed ?? failedUpdateAdvisory(agentId);
 		if (!advisory) return [];
+		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
+		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
+		if (!method?.available || !method.updateAvailable || needsLogin) return [];
 		const key = harnessUpdateNoticeKey(agentId, advisory.latestVersion!);
 		return dismissed.has(key) ? [] : [{ agentId, advisory, key }];
 	}).sort((left, right) => {
@@ -311,7 +319,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 					</div>
 					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 					{error && !busy ? <div className="mt-1 flex flex-col items-start gap-1">
-						<p role="alert" className="break-words text-caption text-error">{error}</p>
+						<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
 						<Button type="button" size="sm" variant="outline" className="h-6 px-2 text-[length:var(--font-size-caption)]" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 					</div> : null}
 					{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}

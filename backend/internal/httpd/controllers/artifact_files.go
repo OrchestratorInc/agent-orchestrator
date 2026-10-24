@@ -130,7 +130,7 @@ func writeArtifactFileNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteArtifactFile removes one listed file from the session's artifact
-// directory and returns the session with its refreshed artifact list.
+// directory along with its kept versions, and returns the session with its refreshed artifact list.
 func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodDelete, artifactFilesPath)
@@ -153,6 +153,12 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 		}
 		envelope.WriteError(w, r, fmt.Errorf("delete artifact file: %w", err))
 		return
+	}
+	if c.ArtifactVersions != nil {
+		if err := c.ArtifactVersions.DeleteVersions(r.Context(), sess.SessionRecord, clean); err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("delete artifact versions: %w", err))
+			return
+		}
 	}
 	updated, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {

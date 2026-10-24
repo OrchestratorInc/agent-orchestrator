@@ -36,10 +36,19 @@ var (
 	// ErrProviderConnectionInUse refuses deleting a provider connection that a
 	// sandbox not yet fully deleted still runs on. It is a conflict.
 	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
+	// ErrArtifactLimit means a commit would exceed a session's artifact file
+	// count or total size.
+	ErrArtifactLimit = errors.New("session artifact limit exceeded")
 	// ErrNotOrchestratorChild refuses an orchestrator acting on a session it
 	// did not spawn. It is forbidden, but names the reason so `ao kill` and
 	// `ao send` can say so instead of reporting an organization access error.
 	ErrNotOrchestratorChild = fmt.Errorf("not a session this orchestrator started: %w", ErrForbidden)
+	// ErrArtifactShareLimit means the user already holds their maximum number
+	// of active artifact share links.
+	ErrArtifactShareLimit = errors.New("artifact share limit reached")
+	// ErrArtifactShareNameChanged refuses replacing a link's file with one of
+	// another name: the name is part of the document a link belongs to.
+	ErrArtifactShareNameChanged = errors.New("artifact share file name changed")
 )
 
 type Store struct {

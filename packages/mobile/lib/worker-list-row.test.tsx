@@ -5,11 +5,13 @@ import { createContext, createElement, useContext, useImperativeHandle, Fragment
 
 const appContext = createContext({ currentHostId: "host-1", notificationsUnread: 0 });
 const counters = vi.hoisted(() => ({ renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
-const boardStore = vi.hoisted(() => ({ projects: [], allProjects: [], kill: vi.fn(), renameWorker: vi.fn(), setWorkerPinned: vi.fn(), restore: vi.fn(), resumeAgent: vi.fn() }));
+const boardStore = vi.hoisted(() => ({ projects: [], allProjects: [], connection: "open", hostStates: [] as { hostId: string; connection: string }[], kill: vi.fn(), renameWorker: vi.fn(), setWorkerPinned: vi.fn(), restore: vi.fn(), resumeAgent: vi.fn() }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
-vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }), useFocusEffect: (callback: () => void) => { counters.focus = callback; } }));
+// expo-router's useRouter returns one stable router object; mirror that.
+const router = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("expo-router", () => ({ useRouter: () => router, useFocusEffect: (callback: () => void) => { counters.focus = callback; } }));
 vi.mock("react-native", () => ({
 	Alert: { alert: vi.fn() }, AppState: { addEventListener: (_event: string, callback: (state: string) => void) => { counters.foreground = callback; return { remove: vi.fn() }; } }, RefreshControl: "RefreshControl",
 	Keyboard: { dismiss: vi.fn() },
@@ -81,13 +83,15 @@ const session: DashboardSession = {
 };
 
 describe("WorkerListRow", () => {
-	it("keeps the default scroll buffer and does not enable clipping", () => {
+	// FlatList's default window (21 viewports) kept ~200 rows mounted, so opening
+	// a long Archive built them all at once and stalled the board.
+	it("keeps a bounded scroll window and does not enable clipping", () => {
 		let renderer!: ReactTestRenderer;
 		act(() => { renderer = create(<WorkerBoardList sessions={[session]} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />); });
 		const list = renderer.root.findByType("virtual-list" as never);
-		expect(list.props.windowSize).toBeUndefined();
-		expect(list.props.maxToRenderPerBatch).toBeUndefined();
-		expect(list.props.initialNumToRender).toBeUndefined();
+		expect(list.props.windowSize).toBe(7);
+		expect(list.props.maxToRenderPerBatch).toBe(8);
+		expect(list.props.initialNumToRender).toBe(12);
 		expect(list.props.removeClippedSubviews).toBe(false);
 		act(() => renderer.unmount());
 	});
@@ -187,5 +191,138 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+});
+
+describe("archived workers", () => {
+	const live = { ...session, id: "live", hostId: "mac" };
+	const archivedA = { ...session, id: "old-a", hostId: "mac", hostName: "Mac", isTerminated: true, status: "terminated" };
+	const archivedB = { ...session, id: "old-b", hostId: "mac", hostName: "Mac", isTerminated: true, status: "terminated" };
+	const board = (sessions: DashboardSession[], query = "") => (
+		<WorkerBoardList sessions={sessions} query={query} initialArchiveOpen contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />
+	);
+	const restoreButtons = (renderer: ReactTestRenderer) =>
+		renderer.root.findAllByType("Pressable" as never).filter((node) => node.props.accessibilityLabel?.startsWith("Restore "));
+	const flush = async () => { await act(async () => { await Promise.resolve(); }); };
+
+	// Desktop's archive card has one action, Restore, and does not open the
+	// session. Matching it here is what keeps an open Archive cheap: no menu,
+	// swipe container or gesture handlers behind every archived row.
+	it("renders archived sessions read-only with Restore as their only action", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live, archivedA, archivedB])); });
+		const rows = renderer.root.findByType("virtual-list" as never).props.data as { kind: string; session?: DashboardSession }[];
+		expect(rows.filter((row) => row.kind === "archived").map((row) => row.session!.id)).toEqual(["old-a", "old-b"]);
+		expect(rows.filter((row) => row.kind === "session").map((row) => row.session!.id)).toEqual(["live"]);
+		expect(restoreButtons(renderer)).toHaveLength(2);
+		expect(renderer.root.findAll((node) => node.props.testID === "archived-machine-identity" && typeof node.type === "string")).toHaveLength(2);
+		act(() => renderer.unmount());
+	});
+
+	it("keeps an archived match read-only inside search results", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live, archivedA], "polish")); });
+		const rows = renderer.root.findByType("virtual-list" as never).props.data as { kind: string }[];
+		expect(rows.map((row) => row.kind)).toEqual(["header", "session", "archived"]);
+		act(() => renderer.unmount());
+	});
+
+	it("restores on its host and then opens the session", async () => {
+		router.push.mockClear();
+		boardStore.restore.mockReset().mockResolvedValue(undefined);
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([archivedA])); });
+		act(() => { restoreButtons(renderer)[0].props.onPress(); });
+		await flush();
+		expect(boardStore.restore).toHaveBeenCalledWith("old-a", "mac");
+		expect(router.push).toHaveBeenCalledWith({
+			pathname: "/session/[id]",
+			params: { id: "old-a", projectId: "project-1", hostId: "mac" },
+		});
+		act(() => renderer.unmount());
+	});
+
+	it("shows a failed restore under its own row and does not navigate", async () => {
+		router.push.mockClear();
+		boardStore.restore.mockReset().mockRejectedValue(new Error("Lab: restore failed on purpose."));
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([archivedA, archivedB])); });
+		act(() => { restoreButtons(renderer)[1].props.onPress(); });
+		await flush();
+		const alerts = renderer.root.findAll((node) => node.props.accessibilityRole === "alert" && typeof node.type === "string");
+		expect(alerts).toHaveLength(1);
+		expect(router.push).not.toHaveBeenCalled();
+		// The control is usable again for a retry.
+		expect(restoreButtons(renderer).every((button) => !button.props.disabled)).toBe(true);
+		act(() => renderer.unmount());
+	});
+
+	// Desktop disables Restore while the machine is disconnected: the request
+	// could not reach it, and the failure would only say so after a timeout.
+	it("disables Restore while the session's machine is offline", () => {
+		boardStore.restore.mockReset();
+		const other = { ...archivedB, hostId: "dev", hostName: "Dev" };
+		let renderer!: ReactTestRenderer;
+		const scoped = (hostStates: { hostId: string; connection: string }[]) => (
+			<appContext.Provider value={{ currentHostId: "host-1", notificationsUnread: 0, hostStates } as never}>{board([archivedA, other])}</appContext.Provider>
+		);
+		act(() => { renderer = create(scoped([{ hostId: "mac", connection: "closed" }, { hostId: "dev", connection: "open" }])); });
+		const [offline, online] = restoreButtons(renderer);
+		expect(offline.props.disabled).toBe(true);
+		expect(offline.props.accessibilityHint).toBe("Unavailable while this machine is offline.");
+		expect(online.props.disabled).toBe(false);
+		act(() => { offline.props.onPress(); });
+		expect(boardStore.restore).not.toHaveBeenCalled();
+		// Reconnecting brings it back.
+		act(() => { renderer.update(scoped([{ hostId: "mac", connection: "open" }, { hostId: "dev", connection: "open" }])); });
+		expect(restoreButtons(renderer).map((button) => button.props.disabled)).toEqual([false, false]);
+		act(() => renderer.unmount());
+	});
+
+	it("uses the board's own connection for a row without a host id", () => {
+		const scopedSession = { ...session, id: "scoped", isTerminated: true, status: "terminated" };
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<appContext.Provider value={{ currentHostId: "host-1", notificationsUnread: 0, connection: "connecting" } as never}>{board([scopedSession])}</appContext.Provider>,
+			);
+		});
+		expect(restoreButtons(renderer)[0].props.disabled).toBe(true);
+		act(() => renderer.unmount());
+	});
+
+	// Tabs keep visited screens mounted, so leaving the board for another tab or
+	// session blurs it without unmounting. A restore that finishes then must not
+	// pull the user back, and must not leave Restore disabled either.
+	it("does not open a restored session after the board loses focus", async () => {
+		router.push.mockClear();
+		let finish!: () => void;
+		boardStore.restore.mockReset().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([archivedA])); });
+		let blur!: () => void;
+		act(() => { blur = (counters.focus as () => () => void)(); });
+		act(() => { restoreButtons(renderer)[0].props.onPress(); });
+		act(() => blur());
+		await act(async () => { finish(); await Promise.resolve(); });
+		expect(boardStore.restore).toHaveBeenCalledTimes(1);
+		expect(router.push).not.toHaveBeenCalled();
+		expect(restoreButtons(renderer)[0].props.disabled).toBe(false);
+		act(() => renderer.unmount());
+	});
+
+	it("runs one restore at a time", async () => {
+		let finish!: () => void;
+		boardStore.restore.mockReset().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([archivedA, archivedB])); });
+		act(() => { restoreButtons(renderer)[0].props.onPress(); });
+		expect(restoreButtons(renderer).map((button) => button.props.disabled)).toEqual([true, true]);
+		expect(restoreButtons(renderer)[0].props.accessibilityState).toEqual({ disabled: true, busy: true });
+		act(() => { restoreButtons(renderer)[1].props.onPress(); });
+		expect(boardStore.restore).toHaveBeenCalledTimes(1);
+		await act(async () => { finish(); await Promise.resolve(); });
+		expect(restoreButtons(renderer).map((button) => button.props.disabled)).toEqual([false, false]);
+		act(() => renderer.unmount());
 	});
 });

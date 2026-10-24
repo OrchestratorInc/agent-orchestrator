@@ -7,7 +7,8 @@ as a person property at sign-in and subsequent signed-in launches, along with
 your AO Cloud user ID and GitHub username.
 Without an AO Cloud sign-in, no email address is sent. Some events include a
 GitHub project owner or an authenticated username, so they can identify an
-account. Other events use a random installation identifier to group activity.
+account. Desktop and daemon events include a random installation identifier
+to group activity even when the event uses an account ID as `distinct_id`.
 Telemetry is not wholly anonymous.
 
 Remote telemetry is enabled in production desktop and mobile releases. A
@@ -50,8 +51,10 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Desktop onboarding progress, such as viewing, completing, or leaving the
   welcome and GitHub sign-in steps, and a one-time install event on first run
 - The Orchestrator.inc version on every daemon event
-- A random installation identifier and one-way hashes of project or session
-  identifiers when an event needs them
+- A random `install_id` on every desktop and daemon event, the phone's own
+  stored `install_id` when available, and a `paired_install_id` on phone events
+  while its desktop identity is known,
+  and one-way hashes of project or session identifiers when an event needs them
 - Coarse mobile-app usage, such as pairing, reconnecting, completing onboarding,
   opening a notification, or using a core action
 - Coarse geographic location (country, and where available region and city),
@@ -157,13 +160,21 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
 
 - Orchestrator.inc generates a random installation identifier on first run. It is stored at
   `~/.ao/data/telemetry_install_id` (or under `AO_DATA_DIR`) and does not encode
-  a personal account. Because Orchestrator.inc uses it to group events, events from that
-  installation may be associated with the GitHub handle sent on a session-start
-  event.
-  Signing in to AO Cloud links that identifier to your account. Signing out, or
-  signing in as a different account, retires it and creates a new one, and
-  while you are signed in the background service reports under your AO Cloud
-  user ID, so one account's activity is never attributed to another.
+  a personal account. Desktop and daemon events include it as `install_id`, even
+  when the PostHog `distinct_id` changes at sign-in, sign-out, or reset. It
+  persists across those transitions and process restarts. A paired phone uses
+  its own `distinct_id` and installation identifier, and includes the desktop
+  identifier as `paired_install_id`
+  only after its authenticated identity request succeeds. Pairing changes clear
+  the old value until the new desktop responds. These properties allow events
+  from the same installation to be associated across accounts and with the
+  GitHub handle sent on a session-start event.
+  On upgrade from a build that used the desktop account as the phone's PostHog
+  identity, the phone resets that SDK identity once before sending new events.
+  Its stored phone installation identifier is retained.
+  While signed in, the daemon reports under the AO Cloud user ID. On sign-out
+  or account switch, its anonymous `distinct_id` changes to avoid attributing
+  new anonymous events to the previous person.
 - Project and session identifiers included in telemetry are one-way hashed.
   Hashing hides the plain text but still allows related events to be grouped.
 - Absolute local paths and local application URLs detected in desktop events
@@ -178,8 +189,9 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   GitHub username is first resolved (one update that sets the username and
   clears build details older versions stored on the profile) and when you sign
   in to AO Cloud (your email, AO Cloud user ID, and GitHub username). After an
-  AO Cloud sign-in, desktop, daemon, and a paired phone's events are linked to
-  that profile. Project-add events still carry the GitHub owner segment
+  AO Cloud sign-in, desktop and daemon events are linked to that profile. A
+  paired phone retains its own identity and reports the Cloud ID as an event
+  property. Project-add events still carry the GitHub owner segment
   described above, so this is not an anonymity guarantee.
 
 Separately from remote telemetry, the daemon can keep a local copy of
@@ -191,12 +203,14 @@ your machine.
 
 When you sign in to AO Cloud, the desktop app calls PostHog `identify` with your
 AO Cloud user ID as the identity and sets three person properties:
-`email`, `ao_cloud_user_id`, and `github_login`. The installation identifier is
-merged into that identity on first sign-in. Later signed-in daemon events use
-the AO Cloud user ID directly, and a paired phone identifies only that ID.
-Only the user ID and, once resolved, the GitHub username are added to events
-themselves (as `ao_cloud_user_id` and
-`github_actor`). The email is a person property only. It comes from the AO Cloud
+`email`, `ao_cloud_user_id`, and `github_login`. The initial anonymous
+`distinct_id` is merged into that identity on first sign-in. Later signed-in
+daemon events use the AO Cloud user ID directly. A paired phone keeps its own
+identity and carries the Cloud user ID only as an event property. Account fields
+on events are the user ID and, once resolved, the
+GitHub username (as `ao_cloud_user_id` and `github_actor`). The installation
+properties described above are also event fields. The email is a person
+property only. It comes from the AO Cloud
 account you signed in with and is never read from git config. The daemon and the
 mobile app never receive your email; they receive only the user ID. Signing out
 stops attributing new desktop events to you. Only the production WorkOS sign-in
@@ -242,6 +256,9 @@ sent to PostHog is not deleted.
 
 The **Share error events** control on the same page covers error diagnostics
 only: the daemon's Sentry capture of 5xx errors and panics. The
+daemon tags these error events with the same `install_id` when the installation
+identifier is available. If it cannot be read, consented error reporting
+continues without that tag. The tag does not include email or local paths. The
 environment-variable controls below also govern the desktop/daemon
 product-telemetry paths, for example in managed environments. Set all three variables in the environment used to launch Orchestrator.inc:
 

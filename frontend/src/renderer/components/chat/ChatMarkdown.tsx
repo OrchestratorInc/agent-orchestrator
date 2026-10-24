@@ -303,7 +303,7 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
+function MarkdownLink({ href, children, className }: { href?: string; children?: ReactNode; className?: string }) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -350,7 +350,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 			}}
 			target="_blank"
 			rel="noreferrer noopener"
-			className="text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"
+			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
 			<ChatImageLinkScope>
 				<InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
@@ -360,8 +360,8 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 }
 
 /** Render one safe in-app session or artifact link using the surrounding ChatLinkProvider. */
-export function SessionLabelLink({ href, children }: { href: string; children: ReactNode }) {
-	return <MarkdownLink href={href}>{children}</MarkdownLink>;
+export function SessionLabelLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
+	return <MarkdownLink href={href} className={className}>{children}</MarkdownLink>;
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
@@ -444,10 +444,15 @@ function MermaidFence({ code }: { code: string }) {
 		: diagram;
 }
 
-/** Inline code naming a listed session artifact, linked to that artifact. */
-function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
+/** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
+export function useChatLinkWorkspaces() {
 	const { sessionLinkHostId, sessionLinkSourceKind } = useContext(OpenChatLink);
-	const { workspaces } = useSessionLinkSource(sessionLinkHostId, sessionLinkSourceKind);
+	return useSessionLinkSource(sessionLinkHostId, sessionLinkSourceKind).workspaces;
+}
+
+/** Inline code naming a listed session artifact, linked to that artifact. */
+export function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
+	const workspaces = useChatLinkWorkspaces();
 	const href = artifactLinkForPath(text, workspaces);
 	return href ? <MarkdownLink href={href}>{children}</MarkdownLink> : <>{children}</>;
 }

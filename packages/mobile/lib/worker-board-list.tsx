@@ -1,5 +1,5 @@
 import { Feather } from "./icons";
-import { useFocusEffect } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
 import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
@@ -8,6 +8,7 @@ import {
 	groupSessions,
 	hasNewHost,
 	holdOrder,
+	isArchived,
 	shouldResnapshot,
 	snapshotOrder,
 	updatedSince,
@@ -15,6 +16,7 @@ import {
 	type OrderSnapshot,
 } from "./agentsView";
 import type { DashboardSession } from "./api";
+import { ArchivedWorkerRow } from "./archived-worker-row";
 import { haptics } from "./haptics";
 import { hostedProjectKey, hostedRowKey, hostedSessionKey, sessionHostId, sessionMachineIdentity } from "./hostedRows";
 import { useApp } from "./store";
@@ -58,7 +60,24 @@ const boardRowKey = (item: BoardRow) => item.key;
 export type BoardRow =
 	| { kind: "header"; key: string; label: string; open: boolean; collapsible: boolean }
 	| { kind: "archive"; key: string }
-	| { kind: "session"; key: string; session: DashboardSession };
+	| { kind: "session"; key: string; session: DashboardSession }
+	// Read-only with Restore, as on desktop. See ArchivedWorkerRow.
+	| { kind: "archived"; key: string; session: DashboardSession };
+
+const sessionRow = (session: DashboardSession): BoardRow =>
+	isArchived(session)
+		? { kind: "archived", key: hostedSessionKey(session), session }
+		: { kind: "session", key: hostedSessionKey(session), session };
+
+/**
+ * A screenful of rows either side of the viewport, rather than FlatList's ten.
+ *
+ * The default (21 viewports in total) kept roughly 200 rows mounted, which on a
+ * board with a long archive meant building and laying out every one of them the
+ * moment Archive opened. Seven still leaves three screens of runway each way for
+ * a fling, and the rows are cheap enough to fill it as the list moves.
+ */
+export const BOARD_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 8, windowSize: 7 } as const;
 
 /**
  * The Workers board's grouped list: Pinned, Needs you, Recent, and a
@@ -108,7 +127,8 @@ export function WorkerBoardList({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { projects, allProjects, currentHostId, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
+	const router = useRouter();
+	const { projects, allProjects, currentHostId, connection, hostStates, kill, renameWorker, setWorkerPinned, restore, resumeAgent } = useApp();
 	const [renamingWorkerId, setRenamingWorkerId] = useState<string>();
 	const [activeSwipeId, setActiveSwipeId] = useState<string>();
 	const activeSwipeRef = useRef<{ id: string; close(): void } | undefined>(undefined);
@@ -182,8 +202,13 @@ export function WorkerBoardList({
 		listRef?.current?.scrollToOffset({ offset: 0, animated: false });
 	}, [snapshot, listRef]);
 	// Opening the board, coming back to the app, or a different set of workers
-	// is looking again, so each re-sorts.
-	useFocusEffect(resort);
+	// is looking again, so each re-sorts. Leaving it counts too: tabs keep
+	// visited screens mounted, so unmounting alone does not say the user moved on.
+	const focusEpoch = useRef(0);
+	useFocusEffect(useCallback(() => {
+		resort();
+		return () => { focusEpoch.current += 1; };
+	}, [resort]));
 	useEffect(() => {
 		const sub = AppState.addEventListener("change", (state) => {
 			if (state === "active") resort();
@@ -229,18 +254,14 @@ export function WorkerBoardList({
 		() =>
 			listSections.flatMap((section): BoardRow[] => {
 				if (section.zone === "archive") {
-					return [
-						{ kind: "archive", key: "header:archive" } as const,
-						...section.data.map((session) => ({ kind: "session", key: hostedSessionKey(session), session }) as const),
-					];
+					return [{ kind: "archive", key: "header:archive" } as const, ...section.data.map(sessionRow)];
 				}
 				const collapsible = !ALWAYS_OPEN.has(section.zone);
 				const open = !collapsible || !collapsedSections[section.zone];
 				return [
 					{ kind: "header", key: `header:${section.zone}`, label: section.label, open, collapsible } as const,
-					...(open
-						? section.data.map((session) => ({ kind: "session", key: hostedSessionKey(session), session }) as const)
-						: []),
+					// Search mixes live and archived workers; each keeps its own row.
+					...(open ? section.data.map(sessionRow) : []),
 				];
 			}),
 		[collapsedSections, listSections],
@@ -304,6 +325,65 @@ export function WorkerBoardList({
 		);
 	}, [kill]);
 
+	// Desktop's archive: one restore at a time, the error under the card it
+	// belongs to, and a successful restore opens the session. A restore that
+	// finishes after the user has moved to another board must not navigate, nor
+	// one that finishes after they left this one for another tab or session:
+	// the board stays mounted then, so only the focus epoch says they went.
+	const [restoringKey, setRestoringKey] = useState<string>();
+	const [restoreErrors, setRestoreErrors] = useState<Record<string, string>>({});
+	const restoringRef = useRef<string | undefined>(undefined);
+	const restoreGeneration = useRef(0);
+	useEffect(() => {
+		restoreGeneration.current += 1;
+		restoringRef.current = undefined;
+		setRestoringKey(undefined);
+		setRestoreErrors({});
+	}, [identityKey]);
+	useEffect(() => () => { restoreGeneration.current += 1; }, []);
+	// Restore is a request to the session's own machine, so like desktop it is
+	// unavailable while that machine is unreachable. Keyed by the offline ids
+	// rather than hostStates, which is a new array on every poll.
+	const offlineKey = hostStates.filter((host) => host.connection !== "open").map((host) => host.hostId).join("\n");
+	const offlineHosts = useMemo(() => new Set(offlineKey ? offlineKey.split("\n") : []), [offlineKey]);
+	const machineOffline = useCallback((session: DashboardSession) => {
+		const hostId = sessionHostId(session);
+		// A row without a host id belongs to this board's own connection (HostScope
+		// already scopes that to the right machine).
+		return hostId ? offlineHosts.has(hostId) : connection !== "open";
+	}, [offlineHosts, connection]);
+	const restoreArchived = useCallback(async (session: DashboardSession) => {
+		if (restoringRef.current || machineOffline(session)) return;
+		const key = hostedSessionKey(session);
+		const generation = restoreGeneration.current;
+		const current = () => generation === restoreGeneration.current;
+		const focus = focusEpoch.current;
+		restoringRef.current = key;
+		setRestoringKey(key);
+		setRestoreErrors(({ [key]: _cleared, ...rest }) => rest);
+		haptics.tap();
+		try {
+			await restore(session.id, sessionHostId(session));
+			if (!current()) return;
+			haptics.success();
+			// The busy state below still clears; only the navigation is dropped.
+			if (focus !== focusEpoch.current) return;
+			router.push({
+				pathname: "/session/[id]",
+				params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? currentHostId },
+			});
+		} catch (cause) {
+			if (!current()) return;
+			haptics.error();
+			setRestoreErrors((errors) => ({ ...errors, [key]: userFacingError(cause, "Couldn't restore this session.") }));
+		} finally {
+			if (current()) {
+				restoringRef.current = undefined;
+				setRestoringKey(undefined);
+			}
+		}
+	}, [restore, router, currentHostId, machineOffline]);
+
 	// Recycled list cells must never carry animated offsets across reordering.
 	const toggleArchive = useCallback(() => setArchiveOpen((value) => !value), []);
 	const actions = useMemo(() => ({
@@ -317,12 +397,16 @@ export function WorkerBoardList({
 		if (item.kind === "archive") return <ArchiveHeader count={archived.length} open={archiveOpen} onToggle={toggleArchive} />;
 		if (item.kind === "header") return <ListSectionHeader label={item.label} open={item.open}
 			onToggle={item.collapsible ? () => toggleSection(item.key.replace("header:", "")) : undefined} />;
+		if (item.kind === "archived") return <ArchivedWorkerRow session={item.session} nowBucket={nowBucket}
+			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
+			restoring={restoringKey === item.key} restoreDisabled={restoringKey !== undefined}
+			offline={machineOffline(item.session)} restoreError={restoreErrors[item.key]} onRestore={restoreArchived} />;
 		return <BoundWorkerRow session={item.session} hostId={currentHostId} nowBucket={nowBucket}
 			projectName={showProject ? projectNameFor(item.session) : item.session.harness || "Agent"}
 			isRenaming={renamingWorkerId === item.key} activeSwipeId={activeSwipeId}
 			onSwipeOpen={openExclusiveSwipe} onSwipeClose={closeExclusiveSwipe} actions={actions} />;
 	}, [archived.length, archiveOpen, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, projectNameFor,
-		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions]);
+		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
 
 	return (
 		<View style={styles.listWrap}>
@@ -335,6 +419,7 @@ export function WorkerBoardList({
 					ref={listRef}
 					data={listData}
 					keyExtractor={boardRowKey}
+					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
 					contentContainerStyle={{ paddingBottom: contentBottomInset }}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}

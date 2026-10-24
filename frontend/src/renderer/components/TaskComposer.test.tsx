@@ -1762,7 +1762,7 @@ describe("TaskComposer", () => {
 			models: [{ id: "cached-model", label: "GPT Cached", isDefault: true }],
 			allowCustom: false, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z",
 		};
-		cacheAgentModels(cached, "codex", "proj-1");
+		cacheAgentModels(cached, "codex", "");
 		const updated = { ...cached, models: [{ id: "fresh-model", label: "GPT Fresh", isDefault: true }] };
 		let finishDB!: (value: { data: typeof cached }) => void;
 		const dbResponse = new Promise<{ data: typeof cached }>((resolve) => { finishDB = resolve; });
