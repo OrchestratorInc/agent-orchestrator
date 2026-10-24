@@ -84,6 +84,8 @@ type claudeLaunchAuthenticator interface {
 func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.ChatDriver {
 	return &checkpointDriver{plugin: plugin, ChatDriver: acpdriver.New(acpdriver.Config{
 		Harness: domain.HarnessClaudeCode,
+		// Claude keeps one task list for the whole session and re-sends it.
+		SessionScopedPlan: true,
 		// A live rejection is the ground truth that outranks any cached
 		// verdict, so drop the cache the moment one arrives. This is also the
 		// only auth correction that works for credential sources AO cannot

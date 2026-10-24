@@ -1779,6 +1779,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			plan: turn.plan
 				? {
 						explanation: turn.plan.explanation || undefined,
+						sessionScoped: turn.plan.sessionScoped || undefined,
 						steps: (turn.plan.steps ?? []).map(
 							(step): PlanStep => ({
 								text: step.text,

@@ -1685,6 +1685,11 @@ func finalizeCompletedTurnPlan(
 	if err := json.Unmarshal([]byte(turn.PlanJson), &plan); err != nil {
 		return fmt.Errorf("decode plan for completed turn %s: %w", turn.ID, err)
 	}
+	if plan.SessionScoped {
+		// The provider owns this list across turns and sends every change, so a
+		// turn ending says nothing about which steps are done.
+		return nil
+	}
 	changed := false
 	for i := range plan.Steps {
 		if plan.Steps[i].Status != domain.PlanStepCompleted {

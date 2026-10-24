@@ -100,6 +100,11 @@ export interface PlanStep {
 export interface ConversationPlan {
 	explanation?: string;
 	steps: PlanStep[];
+	/**
+	 * The agent keeps one list for the whole conversation and re-sends it every turn,
+	 * so each turn carries the same plan. Show it once, on the latest turn that has it.
+	 */
+	sessionScoped?: boolean;
 }
 
 export interface ConversationUsageLimit {

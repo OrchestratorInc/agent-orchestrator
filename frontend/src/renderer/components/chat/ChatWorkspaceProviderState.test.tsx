@@ -122,6 +122,30 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — done")).toBeInTheDocument();
 	});
 
+	// An agent that keeps one task list for the whole conversation re-sends it every
+	// turn, so each turn carries the same plan. One checklist per turn would repeat it
+	// down the page, so it stays on the latest turn that has it.
+	describe("a plan the agent keeps for the whole conversation", () => {
+		const repeated = (sessionScoped: boolean): ConversationSnapshot => {
+			const plan = chatFixture.turns.find((turn) => turn.plan)?.plan;
+			if (!plan) throw new Error("fixture has no plan");
+			return {
+				...chatFixture,
+				turns: chatFixture.turns.map((turn) => ({ ...turn, plan: { ...plan, sessionScoped } })),
+			};
+		};
+
+		it("shows the checklist once, on the latest turn", () => {
+			render(<ChatWorkspace snapshot={repeated(true)} />);
+			expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		});
+
+		it("still shows each turn's own plan when the plan belongs to the turn", () => {
+			render(<ChatWorkspace snapshot={repeated(false)} />);
+			expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
+		});
+	});
+
 	// A plan whose turn AO never correlated — one from before this controller started.
 	it("still renders a plan row whose turn carries none", () => {
 		const orphan: ConversationSnapshot = {

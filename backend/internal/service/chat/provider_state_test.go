@@ -284,6 +284,63 @@ func TestSuccessfulCompletionFinalizesPlanWhenProviderOmitsTerminalPlan(t *testi
 	}
 }
 
+// A session-scoped plan is the provider's own list for the whole conversation: it
+// re-sends it on every change with real statuses. A turn ending says nothing about
+// which of its steps are done, so AO must leave the statuses and the plan row as
+// the provider sent them instead of marking everything complete.
+func TestSuccessfulCompletionKeepsSessionScopedPlanStatuses(t *testing.T) {
+	h := newHarness(t)
+
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "do three things", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	plan := domain.ConversationPlan{SessionScoped: true, Steps: []domain.ConversationPlanStep{
+		{Text: "one", Status: domain.PlanStepCompleted},
+		{Text: "two", Status: domain.PlanStepInProgress},
+		{Text: "three", Status: domain.PlanStepPending},
+	}}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: "provider-turn-1",
+			Plan: &plan, Summary: "Plan 1/3: two"},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1",
+			ProviderItemID: "message-1", Text: "Done."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
+			TurnState: domain.TurnStateCompleted},
+	)
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+	})
+	turn := snapshot.Turns[0]
+	want := []domain.PlanStepStatus{domain.PlanStepCompleted, domain.PlanStepInProgress, domain.PlanStepPending}
+	if turn.Plan == nil || len(turn.Plan.Steps) != len(want) {
+		t.Fatalf("turn plan = %#v, want three steps", turn.Plan)
+	}
+	for i, step := range turn.Plan.Steps {
+		if step.Status != want[i] {
+			t.Errorf("turn plan step %d status = %q, want %q", i, step.Status, want[i])
+		}
+	}
+
+	activity := firstActivityOfKind(snapshot, domain.ActivityKindPlan)
+	if activity.Summary != "Plan 1/3: two" {
+		t.Errorf("plan activity summary = %q, want the provider's own count", activity.Summary)
+	}
+	var detail struct {
+		Steps []domain.ConversationPlanStep `json:"steps"`
+	}
+	if err := json.Unmarshal(activity.Detail, &detail); err != nil {
+		t.Fatalf("decode plan activity detail: %v", err)
+	}
+	for i, step := range detail.Steps {
+		if step.Status != want[i] {
+			t.Errorf("plan activity step %d status = %q, want %q", i, step.Status, want[i])
+		}
+	}
+}
+
 /* ---- model reroute ----------------------------------------------------- */
 
 // A reroute becomes conversation state AND a timeline row. The state says what is
