@@ -96,7 +96,9 @@ func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 func (c *Coordinator) run(ctx context.Context) {
 	for {
 		delay, err := c.RunDue(ctx)
-		if err != nil {
+		// Preserve a positive durable deadline from RunDue; only fall back when
+		// the cycle did not compute one (keeps deferred available_at accurate).
+		if err != nil && delay <= 0 {
 			delay = c.retryDelay
 		}
 		if delay < 0 {
@@ -120,41 +122,62 @@ func (c *Coordinator) run(ctx context.Context) {
 
 // RunDue performs bounded due delivery and returns the delay until the next
 // durable deadline. Tests call it directly with fake time.
+//
+// Claimed delivery failures defer the batch by retryDelay so other due batches
+// can run in the same cycle instead of head-of-line blocking.
 func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	if c == nil || c.store == nil || c.delivery == nil {
 		return -1, errors.New("report coordinator dependencies are required")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var lastErr error
 	for {
 		pending, err := c.store.ListPendingReportSchedule(ctx, 1)
 		if err != nil {
 			return c.retryDelay, err
 		}
 		if len(pending) == 0 {
-			return -1, nil
+			return -1, lastErr
 		}
 		now := c.now().UTC()
 		if pending[0].AvailableAt.After(now) {
-			return pending[0].AvailableAt.Sub(now), nil
+			return pending[0].AvailableAt.Sub(now), lastErr
 		}
-		if err := c.deliverProject(ctx, pending[0].ProjectID); err != nil {
-			return c.retryDelay, err
+		head := pending[0]
+		if err := c.deliverProject(ctx, head.ProjectID); err != nil {
+			lastErr = err
+			next, listErr := c.store.ListPendingReportSchedule(ctx, 1)
+			if listErr != nil {
+				return c.retryDelay, errors.Join(err, listErr)
+			}
+			if len(next) == 0 {
+				return -1, err
+			}
+			now = c.now().UTC()
+			if next[0].AvailableAt.After(now) {
+				return next[0].AvailableAt.Sub(now), err
+			}
+			if next[0].ProjectID == head.ProjectID && next[0].ID == head.ID {
+				return c.retryDelay, err
+			}
+			continue
 		}
+		lastErr = nil
 	}
 }
 
 func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.ProjectID) error {
-	target, ok, err := c.activeOrchestrator(ctx, projectID)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("project %s has no active orchestrator", projectID)
-	}
 	batch, err := c.claim(ctx, projectID)
 	if err != nil || len(batch.Reports) == 0 {
 		return err
+	}
+	target, ok, err := c.activeOrchestrator(ctx, projectID)
+	if err != nil {
+		return c.releaseWithBackoff(ctx, batch, err)
+	}
+	if !ok {
+		return c.releaseWithBackoff(ctx, batch, fmt.Errorf("project %s has no active orchestrator", projectID))
 	}
 	if batch.hasState(domain.ReportStuck) {
 		interrupted := false
@@ -162,12 +185,12 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		for _, worker := range batch.stuckWorkers() {
 			acquired, next, acquireErr := c.store.AcquireReportInterrupt(ctx, worker, c.now().UTC(), ReportInterruptWindow)
 			if acquireErr != nil {
-				return c.release(ctx, batch, acquireErr)
+				return c.releaseWithBackoff(ctx, batch, acquireErr)
 			}
 			if acquired {
 				interrupted = true
 				if interruptErr := c.delivery.Interrupt(ctx, target.ID); interruptErr != nil {
-					return c.release(ctx, batch, interruptErr)
+					return c.releaseWithBackoff(ctx, batch, interruptErr)
 				}
 			} else if nextInterrupt.IsZero() || next.Before(nextInterrupt) {
 				nextInterrupt = next
@@ -179,7 +202,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
-		return c.release(ctx, batch, err)
+		return c.releaseWithBackoff(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err
@@ -263,6 +286,18 @@ func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause er
 	_, releaseErr := c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
 	if releaseErr != nil {
 		return errors.Join(cause, releaseErr)
+	}
+	return cause
+}
+
+// releaseWithBackoff returns a claimed batch to pending and moves its deadline
+// later by retryDelay so a permanent delivery failure cannot monopolize the
+// global schedule (ReleaseReportBatch alone preserves the earlier available_at).
+func (c *Coordinator) releaseWithBackoff(ctx context.Context, batch PreparedBatch, cause error) error {
+	at := c.now().UTC().Add(c.retryDelay)
+	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, at, cause.Error())
+	if deferErr != nil {
+		return errors.Join(cause, deferErr)
 	}
 	return cause
 }

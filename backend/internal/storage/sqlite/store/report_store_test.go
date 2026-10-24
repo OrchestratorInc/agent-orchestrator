@@ -236,3 +236,38 @@ func TestReportStoreInterruptLimitSurvivesRestart(t *testing.T) {
 		t.Fatalf("boundary acquired = %v, err = %v", acquired, err)
 	}
 }
+
+func TestReportStoreDeferReportBatchMovesAvailableAtLater(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	earlier := now.Add(-10 * time.Minute)
+	if _, err := s.CreateReport(ctx, domain.ReportRecord{
+		ID: "old", SessionID: sess.ID, ProjectID: "ao", Message: "stuck",
+		CreatedAt: earlier, DeliveryState: domain.ReportPending, AvailableAt: earlier, RepeatCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimPendingReportBatch(ctx, "ao", "tok", now); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(5 * time.Second)
+	if _, err := s.DeferReportBatch(ctx, "ao", "tok", later, "session: semantic message acceptance unsupported"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetReport(ctx, "old")
+	if err != nil || !ok {
+		t.Fatalf("get: ok=%v err=%v", ok, err)
+	}
+	if !got.AvailableAt.Equal(later) {
+		t.Fatalf("available_at = %s, want deferred %s", got.AvailableAt, later)
+	}
+	if got.DeliveryState != domain.ReportPending || got.LastError == "" {
+		t.Fatalf("state=%s last_error=%q", got.DeliveryState, got.LastError)
+	}
+}
