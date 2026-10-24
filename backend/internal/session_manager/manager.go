@@ -1541,7 +1541,7 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 }
 
 // resolveTUIAgentConfig validates a terminal launch against the model
-// catalog. Claude Code requires it. The Codex CLI validates its own model and
+// catalog. Claude Code requires it when an effort is set. The Codex CLI validates its own model and
 // effort, so for Codex the catalog only refines the launch: when it is
 // unavailable, stale, lacks a custom model or lists other efforts, the session
 // launches with the unvalidated config, as it would without a catalog.
@@ -1586,7 +1586,14 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 		return resolved, nil
 	}
 	modelID := strings.TrimSpace(resolved.Model)
-	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
+	// The Claude CLI validates its own model, and a gateway or alias setup can
+	// run a model the provider's catalog never lists (ANTHROPIC_DEFAULT_*_MODEL,
+	// or a gateway with no usable /v1/models). So the catalog gates a Claude
+	// model only when an effort level must be checked against it. An effort
+	// inherited across a model change is best effort: it drops, as for other
+	// harnesses, instead of failing the launch.
+	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != "" &&
+		resolved.Effort != "" && !modelChangedWithoutExplicitEffort
 	if resolved.Effort == "" && !validateClaudeModel {
 		return resolved, nil
 	}
