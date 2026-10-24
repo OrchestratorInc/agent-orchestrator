@@ -93,6 +93,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
 		HistoryNotice:         claudeTranscriptNotice,
+		// claude-agent-acp keeps one TaskCreate/TaskUpdate list for the session
+		// and re-sends it at the start of every prompt while a task is unfinished.
+		PlansSpanTurns: true,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
 			ports.ChatCapabilityTools:        true,

@@ -1546,6 +1546,7 @@ func turnPlanPayload(plan *domain.ConversationPlan) *ConversationPlanResponse {
 	out := &ConversationPlanResponse{
 		Explanation: plan.Explanation,
 		Steps:       make([]ConversationPlanStepResponse, 0, len(plan.Steps)),
+		SpansTurns:  plan.SpansTurns,
 	}
 	for _, step := range plan.Steps {
 		out.Steps = append(out.Steps, ConversationPlanStepResponse{

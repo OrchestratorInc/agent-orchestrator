@@ -3036,6 +3036,9 @@ type ConversationPlanResponse struct {
 	// Explanation is the agent's note about the plan as a whole, when it gives one.
 	Explanation string                         `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStepResponse `json:"steps"`
+	// SpansTurns marks a list the agent keeps across turns. Later turns carry a
+	// copy of the same list, so a client shows it once, on the latest turn.
+	SpansTurns bool `json:"spansTurns,omitempty"`
 }
 
 // ConversationPlanStepResponse is one step of a plan.

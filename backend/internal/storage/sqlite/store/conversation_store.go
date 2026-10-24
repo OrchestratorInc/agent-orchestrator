@@ -1685,6 +1685,11 @@ func finalizeCompletedTurnPlan(
 	if err := json.Unmarshal([]byte(turn.PlanJson), &plan); err != nil {
 		return fmt.Errorf("decode plan for completed turn %s: %w", turn.ID, err)
 	}
+	if plan.SpansTurns {
+		// The agent keeps this list across turns, so its open steps are still open
+		// work: the turn ending is not the list ending.
+		return nil
+	}
 	changed := false
 	for i := range plan.Steps {
 		if plan.Steps[i].Status != domain.PlanStepCompleted {

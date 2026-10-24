@@ -2776,6 +2776,57 @@ func TestACPDriverPreservesNestedToolAndTerminalMetadata(t *testing.T) {
 	}
 }
 
+// Only a binding whose agent keeps one list for the session marks its plan as
+// spanning turns; every other ACP plan stays a plan for the turn it arrived in.
+func TestACPDriverMarksPlansThatSpanTurns(t *testing.T) {
+	for _, spans := range []bool{false, true} {
+		t.Run(fmt.Sprintf("PlansSpanTurns=%v", spans), func(t *testing.T) {
+			agent := &fakeAgent{}
+			driver := New(Config{
+				Harness:        domain.HarnessClaudeCode,
+				Capabilities:   ports.ChatCapabilities{ports.ChatCapabilityPlans: true},
+				Probe:          func(context.Context) error { return nil },
+				Launch:         func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				PlansSpanTurns: spans,
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer opened.Close()
+			_ = nextEvent(t, opened.Events())
+			conv := opened.(*conversation)
+			conv.mu.Lock()
+			conv.activeTurn = "turn-1"
+			conv.mu.Unlock()
+
+			if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+				SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+				Update: acpsdk.SessionUpdate{Plan: &acpsdk.SessionUpdatePlan{
+					SessionUpdate: "plan",
+					Entries: []acpsdk.PlanEntry{
+						{Content: "one", Status: acpsdk.PlanEntryStatusCompleted},
+						{Content: "two", Status: acpsdk.PlanEntryStatusPending},
+					},
+				}},
+			}); err != nil {
+				t.Fatalf("plan update: %v", err)
+			}
+			event := nextEvent(t, opened.Events())
+			if event.Kind != ports.ChatEventPlanUpdated || event.Plan == nil {
+				t.Fatalf("plan event = %#v", event)
+			}
+			if event.Plan.SpansTurns != spans {
+				t.Fatalf("plan SpansTurns = %v, want %v", event.Plan.SpansTurns, spans)
+			}
+			if len(event.Plan.Steps) != 2 || event.Plan.Steps[1].Status != domain.PlanStepPending {
+				t.Fatalf("plan steps = %#v", event.Plan.Steps)
+			}
+		})
+	}
+}
+
 func TestACPDriverNamespacesOpaqueItemIDsByProviderScope(t *testing.T) {
 	type observed struct {
 		messageID string

@@ -100,6 +100,8 @@ export interface PlanStep {
 export interface ConversationPlan {
 	explanation?: string;
 	steps: PlanStep[];
+	/** The agent keeps this list across turns (Claude's task list), so later turns carry copies of it. */
+	spansTurns?: boolean;
 }
 
 export interface ConversationUsageLimit {
