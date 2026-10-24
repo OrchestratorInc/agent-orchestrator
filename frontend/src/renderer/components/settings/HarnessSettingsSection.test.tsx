@@ -265,6 +265,34 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(page).findByText("Login status unavailable")).toBeInTheDocument();
 	});
 
+	it("opens login inside the Account tab without a modal or terminal", async () => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+			? { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }, { id: "api_key", label: "OpenAI API key", secret: true }] }] } } as never
+			: get(path, options));
+		renderSection();
+		await userEvent.click(await findListRow("codex"));
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		expect(await within(page).findByRole("region", { name: "Sign in to Codex" })).toBeVisible();
+		expect(screen.getByRole("tabpanel", { name: "Account" })).toContainElement(screen.getByRole("region", { name: "Sign in to Codex" }));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(screen.getByRole("radio", { name: "ChatGPT in browser" })).toBeChecked();
+		expect(screen.queryByTestId("inline-terminal-body")).toBeNull();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("region", { name: "Sign in to Codex" })).toBeNull();
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		await userEvent.click(within(page).getByRole("tab", { name: "Account" }));
+		expect(screen.queryByRole("region", { name: "Sign in to Codex" })).toBeNull();
+		expect(within(page).getByRole("button", { name: "Login" })).toBeEnabled();
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();

@@ -151,6 +151,18 @@ type StartAgentAuthResponse struct {
 	Terminal      ShellTerminalResponse `json:"terminal"`
 }
 
+// StartAgentUILoginRequest selects a fixed native login method. The optional
+// credential is passed to stdin and never returned in operation responses.
+type StartAgentUILoginRequest struct {
+	Method string `json:"method"`
+	Secret string `json:"secret,omitempty"`
+}
+
+// AgentUILoginIDParam scopes an in-memory login operation to one harness.
+type AgentUILoginIDParam struct {
+	OperationID string `path:"operationId"`
+}
+
 // CodexAccountIDParam documents a Codex account route identifier.
 type CodexAccountIDParam struct {
 	AccountID string `path:"accountId" description:"AO Codex account identifier."`
