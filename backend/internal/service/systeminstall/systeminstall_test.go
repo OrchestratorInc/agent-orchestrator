@@ -661,6 +661,8 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 	store := newInstallJobStoreFake()
 	s := newTestService("linux", "bash")
 	s.jobStore = store
+	succeeded := make(chan Target, 1)
+	s.SetOnSucceeded(func(target Target) { succeeded <- target })
 	captured := make(chan ports.InstallScriptCommand, 1)
 	s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
 		captured <- command
@@ -679,6 +681,16 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 		t.Fatalf("initial job = %+v", job)
 	}
 	waitForStatus(t, s, TargetCursor, StatusSucceeded)
+	// Status is published before terminal persistence; the success callback
+	// is the durable completion boundary for inspecting the full history.
+	select {
+	case target := <-succeeded:
+		if target != TargetCursor {
+			t.Fatalf("callback target = %q, want %q", target, TargetCursor)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for durable vendor-script success")
+	}
 	command := <-captured
 	if command.URL != "https://cursor.com/install" {
 		t.Fatalf("URL = %q", command.URL)

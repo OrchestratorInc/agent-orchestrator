@@ -61,7 +61,8 @@ type legacyModelInfo struct {
 }
 
 type legacyACPResponse struct {
-	err error
+	result json.RawMessage
+	err    error
 }
 
 func newLegacyACPTransport(stdin io.WriteCloser) (*legacyACPTransport, io.WriteCloser, io.Reader) {
@@ -126,7 +127,7 @@ func (t *legacyACPTransport) intercept(line []byte, notification func(string, js
 			if envelope.Error != nil {
 				responseErr = envelope.Error
 			}
-			pending <- legacyACPResponse{err: responseErr}
+			pending <- legacyACPResponse{result: envelope.Result, err: responseErr}
 		}
 		return true
 	}
@@ -158,6 +159,14 @@ func (t *legacyACPTransport) modelState() *legacySessionModelState {
 }
 
 func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID string) error {
+	_, err := t.request(ctx, "session/set_model", map[string]string{"sessionId": sessionID, "modelId": modelID})
+	return err
+}
+
+func (t *legacyACPTransport) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	requestID := fmt.Sprintf("ao-legacy-%d", t.nextID.Add(1))
 	response := make(chan legacyACPResponse, 1)
 	t.mu.Lock()
@@ -167,11 +176,8 @@ func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID st
 	request := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      requestID,
-		"method":  "session/set_model",
-		"params": map[string]string{
-			"sessionId": sessionID,
-			"modelId":   modelID,
-		},
+		"method":  method,
+		"params":  params,
 	}
 	encoded, err := json.Marshal(request)
 	if err == nil {
@@ -180,15 +186,15 @@ func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID st
 	}
 	if err != nil {
 		t.removePending(requestID)
-		return err
+		return nil, err
 	}
 
 	select {
 	case result := <-response:
-		return result.err
+		return result.result, result.err
 	case <-ctx.Done():
 		t.removePending(requestID)
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
 }
 

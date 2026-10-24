@@ -28,6 +28,22 @@ export function filterDisabledModels<T extends { id: string }>(
 }
 
 /**
+ * MiniMax's ACP model value ("m:<provider>:<model>:u" or "m:<provider>:<model>:v:<variant>",
+ * each part URI-encoded) as the "<provider>/<model>" catalog id Settings names. Any other
+ * value is already a catalog id.
+ */
+export function miniMaxChoiceModelID(value: string): string {
+	const parts = value.split(":");
+	const native = parts[0] === "m" && ((parts.length === 4 && parts[3] === "u") || (parts.length === 5 && parts[3] === "v"));
+	if (!native || !parts[1] || !parts[2]) return value;
+	try {
+		return `${decodeURIComponent(parts[1])}/${decodeURIComponent(parts[2])}`;
+	} catch {
+		return value;
+	}
+}
+
+/**
  * The catalog models a not-yet-running agent would offer: its credentialed providers' (as its
  * own session lists), minus those switched off in Settings. Offered whole if none match.
  */

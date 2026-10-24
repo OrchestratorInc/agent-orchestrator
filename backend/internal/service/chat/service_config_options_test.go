@@ -387,3 +387,32 @@ func TestPermissionConfigOptionsMapsAgyModesOntoApprovalTiers(t *testing.T) {
 		t.Fatal("mutated provider catalog")
 	}
 }
+
+// Selecting MiniMax's native Ask in an Auto session must save Ask, or the
+// next turn would reapply Auto from the stored approval mode.
+func TestPermissionConfigOptionsPersistsMiniMaxNativeApproval(t *testing.T) {
+	input := []ports.ChatConfigOption{{
+		ID:       "permissionMode",
+		Category: "_permission",
+		Current:  ports.ChatConfigOptionValue{Select: "default"},
+		Choices: []ports.ChatConfigOptionChoice{
+			{Value: "default", Name: "Ask"},
+			{Value: "auto", Name: "Auto"},
+			{Value: "bypassPermissions", Name: "Full access"},
+		},
+	}}
+	got := permissionConfigOptions(domain.HarnessMiniMaxCode, input)
+	want := []domain.PermissionMode{domain.PermissionModeDefault, domain.PermissionModeAuto, domain.PermissionModeBypassPermissions}
+	for i, choice := range got[0].Choices {
+		if choice.PermissionMode != want[i] {
+			t.Errorf("choice %q annotated %q, want %q", choice.Value, choice.PermissionMode, want[i])
+		}
+	}
+	settings, changed := settingsFromConfigOptions(domain.ConversationSettings{ApprovalMode: domain.PermissionModeAuto}, got)
+	if !changed || settings.ApprovalMode != domain.PermissionModeDefault {
+		t.Fatalf("settings = %+v (changed=%t), want native Ask saved as default", settings, changed)
+	}
+	if other := permissionConfigOptions(domain.HarnessClaudeCode, input); other[0].Choices[0].PermissionMode != "" {
+		t.Fatal("permissionMode annotation leaked to another harness")
+	}
+}
