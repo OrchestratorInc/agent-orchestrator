@@ -1756,7 +1756,10 @@ func (c *client) DialTerminalStream(
 	ctx context.Context,
 	terminalID string,
 ) (*websocket.Conn, error) {
-	streamURL := c.baseURL + "/worker/terminals/" + url.PathEscape(terminalID) + "/stream"
+	// The feature query tells the control plane this worker handles resize and
+	// repaint frames on the stream; an older control plane ignores it.
+	streamURL := c.baseURL + "/worker/terminals/" + url.PathEscape(terminalID) + "/stream?features=" +
+		url.QueryEscape(worker.TerminalStreamControlFeature)
 	if strings.HasPrefix(streamURL, "http") {
 		streamURL = "ws" + strings.TrimPrefix(streamURL, "http")
 	}
