@@ -471,15 +471,6 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		return RestoreResult{}, false, wrapSpawnStage(rec.ID, ErrSpawnSystemPrompt, err)
 	}
 	config := restoredAgentConfig(rec, project.Config)
-	// Codex retries the saved pair, including an empty provider-default model,
-	// rather than inheriting project defaults changed since creation.
-	if rec.Harness == domain.HarnessCodex || rec.Metadata.Model != "" {
-		config.Model = rec.Metadata.Model
-	}
-	config.Effort = rec.Metadata.Effort
-	if rec.Metadata.Permissions != "" {
-		config.Permissions = rec.Metadata.Permissions
-	}
 	cfg := ports.SpawnConfig{
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,

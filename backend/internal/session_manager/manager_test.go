@@ -4890,9 +4890,9 @@ func TestRestore_WorkspaceProjectRestoresChildrenAndRecordsInventory(t *testing.
 	}
 }
 
-func TestRestore_AppliesProjectAgentConfig(t *testing.T) {
+func TestRestore_AppliesProjectAgentMode(t *testing.T) {
 	st := newFakeStore()
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "restore-model"}}}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "changed-model", Effort: "low", Mode: "restore-mode"}}}
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
 	agent := &recordingAgent{}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
@@ -4901,8 +4901,8 @@ func TestRestore_AppliesProjectAgentConfig(t *testing.T) {
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
-	if agent.lastConfig.Model != "restore-model" {
-		t.Fatalf("restore config model = %q, want restore-model (config must carry across restore)", agent.lastConfig.Model)
+	if agent.lastConfig.Mode != "restore-mode" || agent.lastConfig.Model != "" || agent.lastConfig.Effort != "" {
+		t.Fatalf("restore config = %+v, want project mode with provider-default model and effort", agent.lastConfig)
 	}
 }
 
