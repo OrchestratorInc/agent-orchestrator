@@ -724,9 +724,9 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	} else if !providerHandleOwnedByActiveBranch {
 		providerBoundaryID = providerScopeID
 	} else if cfg.ProviderConversationID == "" && cfg.ProviderScopeID == "" &&
-		// A first controller's queued intake is not provider history, but a
-		// replacement orchestrator's inherited branch thread is.
-		(activeBranch.ProviderConversationID != "" || hadProviderHistory ||
+		// An inherited branch belongs to the previous orchestrator even if it
+		// never recorded a provider thread. This session's queued intake is new.
+		(activeBranch.SessionID != cfg.SessionID || activeBranch.ProviderConversationID != "" || hadProviderHistory ||
 			(!preserveUndispatchedQueue && conversation.LatestSequence > 0)) {
 		// This conversation already owns provider history, but the caller proved it
 		// cannot resume that provider thread. Reserve the next provider boundary

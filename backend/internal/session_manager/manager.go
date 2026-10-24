@@ -6470,9 +6470,9 @@ func safeRelPath(rel string) (string, error) {
 	return clean, nil
 }
 
-// scriptStepMinute is the unit of a Setup or Cleanup step's time limit; tests
+// scriptStepTimeoutUnit is the unit of a Setup or Cleanup step's time limit; tests
 // shorten it.
-var scriptStepMinute = time.Minute
+var scriptStepTimeoutUnit = time.Minute
 
 // scriptStepTimeout is the command a Setup or Cleanup step runs and its time
 // limit: the one its first line sets (domain.ScriptStepMinutes), else
@@ -6482,7 +6482,7 @@ func scriptStepTimeout(step string, fallbackMinutes int) (string, time.Duration)
 	if minutes == 0 {
 		minutes = fallbackMinutes
 	}
-	return command, time.Duration(minutes) * scriptStepMinute
+	return command, time.Duration(minutes) * scriptStepTimeoutUnit
 }
 
 // runPostCreate runs each post-create command in the workspace via the platform
@@ -6517,7 +6517,7 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 
 // stepMinutes says a step's time limit in minutes ("1 minute", "30 minutes").
 func stepMinutes(timeout time.Duration) string {
-	if minutes := int(timeout / scriptStepMinute); minutes != 1 {
+	if minutes := int(timeout / scriptStepTimeoutUnit); minutes != 1 {
 		return strconv.Itoa(minutes) + " minutes"
 	}
 	return "1 minute"
