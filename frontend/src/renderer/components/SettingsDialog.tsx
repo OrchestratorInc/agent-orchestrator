@@ -3,7 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { aoBridge } from "../lib/bridge";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -28,6 +28,7 @@ import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -402,6 +403,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
  */
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	useSettingsRowFocus(scrollerRef, page?.active ?? null);
 	if (!page) return null;
 	const layer = page.active;
 	return (
@@ -425,6 +428,7 @@ export function SettingsPane() {
 					aria-busy={!entry.isBodyReady}
 					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
+					ref={entry === layer ? scrollerRef : undefined}
 				>
 					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
 						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
@@ -585,4 +589,44 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 		</Dialog.Root>
 		</>
 	);
+}
+
+// A page's rows can arrive after it opens (accounts, devices, profiles load),
+// so the lookup retries for a few seconds before giving up quietly.
+const SETTINGS_FOCUS_RETRY_MS = 100;
+const SETTINGS_FOCUS_ATTEMPTS = 40;
+
+/**
+ * Scrolls to and briefly highlights the setting a global settings request names
+ * (`focusSetting`, its visible label), once the requested page is showing.
+ */
+function useSettingsRowFocus(scrollerRef: RefObject<HTMLDivElement | null>, layer: SettingsLayer | null) {
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const request = settingsModal?.scope === "global" && settingsModal.focusSetting ? settingsModal : null;
+	const layerRef = useRef(layer);
+	layerRef.current = layer;
+	useEffect(() => {
+		const label = request?.focusSetting;
+		if (!label) return;
+		let attempts = 0;
+		let timer: number | undefined;
+		let clearHighlight: (() => void) | undefined;
+		const tryFocus = () => {
+			const current = layerRef.current;
+			const activeSection = current?.navItems.find((item) => item.active)?.id;
+			const onRequestedPage = current?.isBodyReady && (!request.section || activeSection === request.section);
+			const target = onRequestedPage && scrollerRef.current ? findSettingsTarget(scrollerRef.current, label) : null;
+			if (target) {
+				clearHighlight = highlightSettingsTarget(target);
+				timer = window.setTimeout(() => clearHighlight?.(), SETTINGS_FOCUS_HIGHLIGHT_MS);
+				return;
+			}
+			if (++attempts < SETTINGS_FOCUS_ATTEMPTS) timer = window.setTimeout(tryFocus, SETTINGS_FOCUS_RETRY_MS);
+		};
+		timer = window.setTimeout(tryFocus, 0);
+		return () => {
+			window.clearTimeout(timer);
+			clearHighlight?.();
+		};
+	}, [request, scrollerRef]);
 }

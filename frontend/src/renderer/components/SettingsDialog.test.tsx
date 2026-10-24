@@ -74,7 +74,10 @@ vi.mock("./ProjectSettingsForm", () => ({
 
 vi.mock("./GlobalSettingsForm", () => ({
 	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
-		<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
+		<>
+			<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
+			{section === "general" ? <div className="settings-row-bar" data-testid="copy-on-select-row"><span>Copy on select</span></div> : null}
+		</>
 	),
 }));
 
@@ -264,6 +267,23 @@ describe("SettingsDialog", () => {
 			"/api/v1/agents/codex/accounts/ensure",
 			{ body: { accountIds: [], includeUsage: true, forceAuthentication: true, forceDeviceReconciliation: true } },
 		));
+	});
+
+	it("scrolls to and briefly highlights the setting a deep link names", async () => {
+		const original = Element.prototype.scrollIntoView;
+		const scrollIntoView = vi.fn();
+		Element.prototype.scrollIntoView = scrollIntoView;
+		try {
+			useUiStore.getState().openGlobalSettings("general", { focusSetting: "Copy on select" });
+			renderSettingsDialog();
+
+			const row = await screen.findByTestId("copy-on-select-row");
+			await vi.waitFor(() => expect(row).toHaveClass("settings-focus-target"));
+			expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+			await vi.waitFor(() => expect(row).not.toHaveClass("settings-focus-target"), { timeout: 3_000 });
+		} finally {
+			Element.prototype.scrollIntoView = original;
+		}
 	});
 
 	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {

@@ -17,6 +17,7 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useChatPermissionModes } from "../../hooks/useChatPermissionModes";
+import { useChatMessageFocus } from "../../hooks/useChatMessageFocus";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import {
 	clearConversationProviderCatalogs,
@@ -392,6 +393,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
+	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), setAnnotationNavigationRequest);
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {

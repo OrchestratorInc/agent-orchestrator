@@ -95,10 +95,13 @@ type ConversationsController struct {
 	Svc ConversationService
 	// Renders serves agent HTML renders. Nil answers the render route 501.
 	Renders *attachmentstore.Store
+	// Search serves chat search. Nil answers the search route 501.
+	Search ConversationSearch
 }
 
 // Register mounts the conversation routes under a session.
 func (c *ConversationsController) Register(r chi.Router) {
+	r.Get("/conversations/search", c.searchConversations)
 	r.Patch("/sessions/{sessionId}/conversation/side-chats/{sideId}/label", c.renameSideChat)
 	r.Post("/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", c.cancelSideQuestion)
 	r.Post("/sessions/{sessionId}/conversation/side-chats", c.createSideChat)

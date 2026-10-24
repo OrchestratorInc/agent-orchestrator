@@ -1022,6 +1022,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
+	// A palette hit in this session's reviewer chat opens that chat; its
+	// transcript then scrolls to the message (useChatMessageFocus).
+	const focusReviewId = useUiStore((state) => {
+		const request = state.chatMessageFocusRequest;
+		return request?.reviewId && request.sessionId === uiSessionId ? request.reviewId : undefined;
+	});
+	useEffect(() => {
+		if (focusReviewId) selectReviewerChat(focusReviewId);
+	}, [focusReviewId, selectReviewerChat]);
 	const openCenterFile = useCallback(
 		(path: string, options?: FileOpenOptions) => {
 			const filePath = path;
@@ -1608,7 +1617,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => {
 		if (!workspaceFileOpenRequest || !session) return;
 		if (sessionUiKey(workspaceFileOpenRequest.sessionId, workspaceFileOpenRequest.hostId) !== uiSessionId) return;
-		const { nonce, path, source } = workspaceFileOpenRequest;
+		const { line, nonce, path, source } = workspaceFileOpenRequest;
 		if (source === "artifact") {
 			// Same routing as the Summary panel's artifact rows: HTML opens in
 			// the Browser panel, everything else in the Artifacts view.
@@ -1619,7 +1628,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			prepareFilesInspector();
 			openCenterFile(path, { mode: "file" });
 		} else {
-			handleOpenFile(path);
+			handleOpenFile(path, line);
 		}
 		clearWorkspaceFileOpenRequest(nonce);
 	}, [

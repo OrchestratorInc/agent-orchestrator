@@ -2482,6 +2482,45 @@ paths:
       summary: Check whether the desktop browser runtime is connected for a session
       tags:
       - browser
+  /api/v1/conversations/search:
+    get:
+      operationId: searchConversations
+      parameters:
+      - description: Words to find in chat messages, matched by word form.
+        in: query
+        name: query
+        required: true
+        schema:
+          description: Words to find in chat messages, matched by word form.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSearchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Search visible chat messages across conversations
+      tags:
+      - conversations
   /api/v1/cues/{cueId}:
     delete:
       operationId: deleteCue
@@ -11658,6 +11697,59 @@ paths:
       summary: Search visible workspace file paths
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/search/content:
+    get:
+      operationId: searchSessionWorkspaceContent
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Words to find in file contents, case-insensitive and in any order.
+        in: query
+        name: query
+        required: true
+        schema:
+          description: Words to find in file contents, case-insensitive and in any
+            order.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceContentSearchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Search the contents of visible workspace files
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/tree:
     get:
       operationId: listSessionWorkspaceTree
@@ -15743,6 +15835,38 @@ components:
       required:
       - uri
       - name
+      type: object
+    ConversationSearchHitResponse:
+      properties:
+        messageId:
+          type: string
+        projectId:
+          type: string
+        reviewId:
+          type: string
+        sessionId:
+          type: string
+        text:
+          description: A passage of the message, with each match wrapped in U+0002
+            and U+0003.
+          type: string
+        title:
+          type: string
+      required:
+      - messageId
+      - sessionId
+      - projectId
+      - title
+      - text
+      type: object
+    ConversationSearchResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/ConversationSearchHitResponse'
+          type: array
+      required:
+      - results
       type: object
     ConversationSkillResponse:
       properties:
@@ -21291,6 +21415,29 @@ components:
       - author
       - timestamp
       - files
+      type: object
+    WorkspaceContentSearchHitResponse:
+      properties:
+        line:
+          type: integer
+        path:
+          type: string
+        text:
+          description: The line, with each match wrapped in U+0002 and U+0003.
+          type: string
+      required:
+      - path
+      - line
+      - text
+      type: object
+    WorkspaceContentSearchResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/WorkspaceContentSearchHitResponse'
+          type: array
+      required:
+      - results
       type: object
     WorkspaceDiffDeferredResponse:
       properties:
