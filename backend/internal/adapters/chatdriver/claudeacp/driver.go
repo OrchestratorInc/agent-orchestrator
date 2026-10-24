@@ -93,6 +93,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
 		HistoryNotice:         claudeTranscriptNotice,
+		// claude-agent-acp keeps one TaskCreate/TaskUpdate list for the session
+		// and re-sends it at the start of every prompt while a task is unfinished.
+		PlansSpanTurns: true,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
 			ports.ChatCapabilityTools:        true,
@@ -366,7 +369,7 @@ func validateClaudeACPExecutable(binary, goos string) error {
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	meta := map[string]any{}
 	standing := strings.TrimSpace(cfg.SystemPrompt)
-	if claudeTodoToolsEnabled(cfg.Env) {
+	if !cfg.DisableTools && claudeTodoToolsEnabled(cfg.Env) {
 		if standing != "" {
 			standing += "\n\n"
 		}
@@ -380,8 +383,17 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 		}
 	}
 	// Also per session, so a choice made after the adapter started still applies.
+	options := map[string]any{}
 	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
-		meta["claudeCode"] = map[string]any{"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}}}
+		options["env"] = map[string]string{claudeAutoCompactWindowEnv: window}
+	}
+	if cfg.DisableTools {
+		options["tools"] = []string{}
+		options["strictMcpConfig"] = true
+		options["disallowedTools"] = []string{"mcp__*"}
+	}
+	if len(options) > 0 {
+		meta["claudeCode"] = map[string]any{"options": options}
 	}
 	if len(meta) == 0 {
 		return nil

@@ -532,10 +532,13 @@ var (
 )
 
 // WorkspaceTaskNamer renames a launched task's temporary branch. The checkout
-// never moves, so the returned info differs only in branch names. On error the
-// original branches are kept.
+// never moves, so the returned info differs only in branch names, and on error
+// it still describes the branches Git holds, which may differ per repository.
+// RevertTaskBranch exactly undoes a rename the caller could not record, with
+// the same result contract.
 type WorkspaceTaskNamer interface {
 	RenameTaskBranch(ctx context.Context, info WorkspaceProjectInfo, branch string) (WorkspaceProjectInfo, error)
+	RevertTaskBranch(ctx context.Context, renamed, original WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
 }
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.

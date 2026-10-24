@@ -74,7 +74,7 @@ describe("browser runtime link", () => {
 		const handle = connectBrowserRuntime({ host: address.address, port: address.port }, { execute });
 		handles.push(handle);
 		await vi.waitFor(() => expect(handle.state.connected).toBe(true));
-		await vi.waitFor(() => expect(messages).toContainEqual({ type: "hello", version: 2 }));
+		await vi.waitFor(() => expect(messages).toContainEqual({ type: "hello", version: 3 }));
 
 		serverSocket!.write(
 			`${JSON.stringify({ type: "command", requestId: "r1", sessionId: "s1", action: "snapshot", args: {} })}\n`,
@@ -144,6 +144,29 @@ describe("browser runtime link", () => {
 		await until(() => !handle.state.connecting, "the failed redial");
 
 		expect(states).toEqual([CONNECTING, CONNECTED, CONNECTING, DISCONNECTED]);
+	});
+
+	it("answers broker pings out of band", async () => {
+		let serverSocket: net.Socket | null = null;
+		let inbound = "";
+		const messages: unknown[] = [];
+		const server = net.createServer((socket) => {
+			serverSocket = socket;
+			ackHello(socket);
+			socket.on("data", (chunk) => {
+				inbound += chunk.toString("utf8");
+				const lines = inbound.split("\n");
+				inbound = lines.pop() ?? "";
+				for (const line of lines) if (line) messages.push(JSON.parse(line));
+			});
+		});
+		const address = await listen(server);
+		const handle = connectBrowserRuntime(address, { execute: async () => ({}) });
+		handles.push(handle);
+		await vi.waitFor(() => expect(handle.state.connected).toBe(true));
+
+		serverSocket!.write(`${JSON.stringify({ type: "ping" })}\n`);
+		await vi.waitFor(() => expect(messages).toContainEqual({ type: "pong" }));
 	});
 
 	it("returns structured command errors", async () => {

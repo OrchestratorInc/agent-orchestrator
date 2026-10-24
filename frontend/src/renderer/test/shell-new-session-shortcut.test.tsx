@@ -12,6 +12,7 @@ const shellMocks = vi.hoisted(() => {
 	const state = {
 		newSessionListener: undefined as (() => void) | undefined,
 		keyboardShortcutsListener: undefined as (() => void) | undefined,
+		quitConfirmListener: undefined as ((request: { keepsRunning: boolean }) => void) | undefined,
 		newShellTerminalListener: undefined as (() => void) | undefined,
 		openSettingsListener: undefined as (() => void) | undefined,
 		previousSessionListener: undefined as (() => void) | undefined,
@@ -62,6 +63,11 @@ const shellMocks = vi.hoisted(() => {
 			state.keyboardShortcutsListener = listener;
 			return vi.fn();
 		}),
+		onQuitConfirmRequest: vi.fn((listener: (request: { keepsRunning: boolean }) => void) => {
+			state.quitConfirmListener = listener;
+			return vi.fn();
+		}),
+		resolveQuitConfirm: vi.fn(),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
@@ -148,6 +154,8 @@ vi.mock("../lib/bridge", () => ({
 			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
+			onQuitConfirmRequest: shellMocks.onQuitConfirmRequest,
+			resolveQuitConfirm: shellMocks.resolveQuitConfirm,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
@@ -409,11 +417,13 @@ beforeEach(() => {
 	shellMocks.router.history.canGoBack.mockReset().mockReturnValue(true);
 	shellMocks.router.history.back.mockClear();
 	shellMocks.router.history.forward.mockClear();
-	useSidebarOrderStore.setState({ projectOrder: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	shellMocks.getPathForFile.mockClear();
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;
 	shellMocks.state.keyboardShortcutsListener = undefined;
+	shellMocks.state.quitConfirmListener = undefined;
+	shellMocks.resolveQuitConfirm.mockClear();
 	shellMocks.state.openSettingsListener = undefined;
 	shellMocks.state.previousSessionListener = undefined;
 	shellMocks.state.nextSessionListener = undefined;
@@ -708,6 +718,19 @@ describe("shell workspace startup", () => {
 			.mockResolvedValueOnce({ data: { session: { id: "orch-new", projectId: "proj-new", kind: "orchestrator", mode: "chat", provisionState: "provisioning" } } });
 	};
 
+	it.each([
+		{ savedOrder: ["proj-2", "proj-1"] },
+		{ savedOrder: ["proj-2", "proj-1", "proj-new"] },
+	])("saves a newly created project first ahead of saved order $savedOrder", async ({ savedOrder }) => {
+		spawnNewProject();
+		useSidebarOrderStore.getState().setProjectOrder(savedOrder);
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["proj-new", "proj-2", "proj-1"]);
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["proj-new", "proj-2", "proj-1"]);
+	});
+
 	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
 		spawnNewProject();
 		shellMocks.state.routeParams = { projectId: "proj-new" };
@@ -995,6 +1018,46 @@ describe("shell keyboard-shortcuts help subscription", () => {
 		act(() => listener());
 
 		expect(screen.getByTestId("keyboard-shortcuts")).toBeInTheDocument();
+	});
+});
+
+describe("shell quit confirm subscription", () => {
+	it("shows the quit confirm over the startup loader and resolves it either way", async () => {
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
+
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(true);
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+	});
+
+	it("opens the Quit AO? dialog on request and reports the answer to the main process", async () => {
+		await renderShell();
+
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener({ keepsRunning: true }));
+		expect(
+			await screen.findByText("AO will keep running in the background. You can reopen it from the menu bar."),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledExactlyOnceWith(true);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
+
+		act(() => listener({ keepsRunning: false }));
+		expect(await screen.findByText("Are you sure you want to quit AO?")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
 	});
 });
 

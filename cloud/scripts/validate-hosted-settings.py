@@ -50,6 +50,9 @@ def main() -> None:
     offering.add_argument("--paywalled-features", default="")
     offering.add_argument("--idle-pause-threshold", default="")
     offering.add_argument("--freestyle-idle-pause-threshold", default="")
+    offering.add_argument("--artifacts", default="0")
+    offering.add_argument("--artifact-bucket", default="")
+    offering.add_argument("--artifact-region", default="")
     offering.add_argument("--coder-readable-names", default="")
     offering.add_argument("--coder-worker-working-folder", default="")
     args = parser.parse_args()
@@ -79,6 +82,9 @@ def main() -> None:
             coder_readable_names=args.coder_readable_names,
             coder_worker_working_folder=args.coder_worker_working_folder,
             staging_providers=staging_providers,
+            artifacts=args.artifacts,
+            artifact_bucket=args.artifact_bucket,
+            artifact_region=args.artifact_region,
         )
         return
 

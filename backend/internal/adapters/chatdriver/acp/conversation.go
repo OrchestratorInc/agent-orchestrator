@@ -151,6 +151,8 @@ type conversation struct {
 	historyUserChunkIsMessage bool
 	// historyReconciler: see Config.HistoryReconciler.
 	historyReconciler func([]ports.ChatEvent) []ports.ChatEvent
+	// plansSpanTurns: see Config.PlansSpanTurns.
+	plansSpanTurns bool
 	// preamble is standing context attached to the first prompt that actually
 	// reaches the provider. It is the delivery channel for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta but do execute

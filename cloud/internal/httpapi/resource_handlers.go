@@ -104,6 +104,9 @@ type createSessionRequest struct {
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
+	// RequestedOutput asks for a specific deliverable: "artifact" asks the
+	// agent for a file instead of a pull request. Requires cloud artifacts.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
 	// InterfaceMode is the interface the session starts in: "chat" or "tui".
 	// Omitted resolves it from DefaultInterfaceMode, else the terminal; Chat
 	// needs a harness with a Chat controller (domain.ChatHarnesses).
@@ -170,9 +173,24 @@ type sessionResponse struct {
 	// WorkerEpoch advances on every fresh worker connection (resume, restore,
 	// re-provision). Clients key their terminal on it so a resumed session
 	// re-attaches to the live agent instead of the dead epoch's terminal.
-	WorkerEpoch int64     `json:"workerEpoch,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	WorkerEpoch int64 `json:"workerEpoch,omitempty"`
+	// RequestedOutput is the deliverable the session was created for.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
+	OutputType string `json:"outputType"`
+	// ArtifactCount is the number of the session's committed artifact files,
+	// on the session read and list routes and the worker children listing
+	// while cloud artifacts are on.
+	ArtifactCount *int `json:"artifactCount,omitempty"`
+	// ArtifactsUpdatedAt is when the newest of those files was committed;
+	// it changes whenever a commit changes the files, and only then.
+	ArtifactsUpdatedAt *time.Time `json:"artifactsUpdatedAt,omitempty"`
+	// ArtifactFiles lists the session's committed artifact files on the
+	// session read route and the worker children listing while cloud
+	// artifacts are on.
+	ArtifactFiles []sessionArtifactResponse `json:"artifactFiles,omitempty"`
+	CreatedAt     time.Time                 `json:"createdAt"`
+	UpdatedAt     time.Time                 `json:"updatedAt"`
 }
 
 type pageInfo struct {
@@ -206,6 +224,71 @@ type sessionPRFactsResponse struct {
 type sessionChildResponse struct {
 	sessionResponse
 	PRs []sessionPRFactsResponse `json:"prs"`
+	// ArtifactFiles names at most maxChildArtifactFiles of the child's
+	// committed artifact files, the most recently changed first, so a page of
+	// children fits the ao CLI's response limit; artifactCount has them all.
+	ArtifactFiles []childArtifactFileResponse `json:"artifactFiles,omitempty"`
+	// ArtifactFilesTruncated is set when the child has more files than listed.
+	ArtifactFilesTruncated bool `json:"artifactFilesTruncated,omitempty"`
+}
+
+// maxChildArtifactFiles and maxChildArtifactFileBytes bound the artifact
+// files listed per child: by count, and by their JSON encoding, which escapes
+// characters such as & to six bytes. With the worker children page of 100, the
+// listed files of a page stay within about 1.6 MiB however their paths are
+// written, inside the ao CLI's 2 MiB response limit. The longest path encodes
+// to well under the byte budget, so a child with files always lists one.
+const (
+	maxChildArtifactFiles     = 10
+	maxChildArtifactFileBytes = 16 << 10
+)
+
+// childArtifactFileResponse is one artifact file in a worker children listing.
+type childArtifactFileResponse struct {
+	Path      string    `json:"path"`
+	Kind      string    `json:"kind"`
+	Size      int64     `json:"size"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// setChildArtifactFiles sets the child's artifact count and newest commit
+// time, and lists its most recently changed files up to maxChildArtifactFiles.
+func (r *sessionChildResponse) setChildArtifactFiles(files []domain.SessionArtifact) {
+	r.setArtifactFiles(files)
+	r.sessionResponse.ArtifactFiles = nil
+	newest := slices.Clone(files)
+	slices.SortStableFunc(newest, func(a, b domain.SessionArtifact) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
+	r.ArtifactFiles = make([]childArtifactFileResponse, 0, min(len(newest), maxChildArtifactFiles))
+	encoded := 0
+	for _, file := range newest {
+		entry := childArtifactFileResponse{Path: file.Path, Kind: file.Kind, Size: file.Size, UpdatedAt: file.UpdatedAt.UTC()}
+		// json.Marshal escapes as writeJSON's encoder does; +1 for the comma.
+		size := 1
+		if raw, err := json.Marshal(entry); err == nil {
+			size += len(raw)
+		}
+		if len(r.ArtifactFiles) == maxChildArtifactFiles || (len(r.ArtifactFiles) > 0 && encoded+size > maxChildArtifactFileBytes) {
+			r.ArtifactFilesTruncated = true
+			break
+		}
+		r.ArtifactFiles = append(r.ArtifactFiles, entry)
+		encoded += size
+	}
+}
+
+// setArtifactFiles sets the session's committed artifact files, their count,
+// and the newest commit time.
+func (r *sessionResponse) setArtifactFiles(files []domain.SessionArtifact) {
+	count := len(files)
+	r.ArtifactCount = &count
+	r.ArtifactFiles = toSessionArtifactResponses(files)
+	for _, file := range files {
+		if updatedAt := file.UpdatedAt.UTC(); r.ArtifactsUpdatedAt == nil || updatedAt.After(*r.ArtifactsUpdatedAt) {
+			r.ArtifactsUpdatedAt = &updatedAt
+		}
+	}
 }
 
 func toSessionChildResponse(
@@ -533,6 +616,13 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.RequestedOutput = strings.TrimSpace(request.RequestedOutput)
+	if !domain.ValidRequestedOutput(request.RequestedOutput) ||
+		(request.RequestedOutput != "" && !s.artifactsEnabled()) {
+		writeError(w, r, http.StatusUnprocessableEntity, "invalid_requested_output",
+			"requestedOutput must be omitted or \"artifact\", and \"artifact\" requires cloud artifacts.")
+		return
+	}
 	request.InterfaceMode = strings.TrimSpace(request.InterfaceMode)
 	request.DefaultInterfaceMode = strings.TrimSpace(request.DefaultInterfaceMode)
 	if request.Mode == "" {
@@ -728,6 +818,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			Release:             s.release,
 			ParentSessionID:     parentSessionID,
 			CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
+			RequestedOutput:     request.RequestedOutput,
 		},
 	)
 	if err != nil {
@@ -805,10 +896,23 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	artifactCounts, err := s.sessionArtifactCounts(r.Context(), orgID, sessionIDs)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	items := make([]sessionResponse, 0, len(sessions))
 	for _, session := range sessions {
 		response := toSessionResponse(session, prFacts[session.ID])
 		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
+		if artifactCounts != nil {
+			summary := artifactCounts[session.ID]
+			response.ArtifactCount = &summary.Count
+			if summary.Count > 0 {
+				updatedAt := summary.UpdatedAt.UTC()
+				response.ArtifactsUpdatedAt = &updatedAt
+			}
+		}
 		items = append(items, response)
 	}
 	page := pageInfo{HasMore: hasMore}
@@ -974,8 +1078,16 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	artifactFiles, err := s.sessionArtifactFiles(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	response := toSessionResponse(session, prFacts[sessionID])
 	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	if artifactFiles != nil {
+		response.setArtifactFiles(artifactFiles[sessionID])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": response})
 }
 
@@ -1405,10 +1517,21 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		AutoInjectReview:   session.AutoInjectReview,
 		TerminateOnPRMerge: session.TerminateOnPRMerge,
 		WorkerEpoch:        session.WorkerEpoch,
+		RequestedOutput:    session.RequestedOutput,
+		OutputType:         sessionOutputType(session, prs),
 		CreatedAt:          session.CreatedAt,
 		UpdatedAt:          session.UpdatedAt,
 		PRs:                []sessionPRFactsResponse{},
 	}
+}
+
+// sessionOutputType is the session's stored output type, counting a pull
+// request observed since the last artifact commit.
+func sessionOutputType(session domain.Session, prs []contract.PRFacts) string {
+	stored := session.OutputType
+	hasPR := len(prs) > 0 || stored == domain.SessionOutputPR || stored == domain.SessionOutputPRAndArtifact
+	hasArtifact := stored == domain.SessionOutputArtifact || stored == domain.SessionOutputPRAndArtifact
+	return domain.DeriveSessionOutputType(hasPR, hasArtifact)
 }
 
 func toSessionPRFactsResponses(prs []domain.PullRequest, facts []contract.PRFacts) []sessionPRFactsResponse {

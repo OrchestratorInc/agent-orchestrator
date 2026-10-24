@@ -545,7 +545,7 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	it("invalidates only the changed model-catalog scope for catalog CDC", () => {
+	it("refreshes the agent's device-wide catalog views for catalog CDC naming a project", () => {
 		vi.useFakeTimers();
 		try {
 			const queryClient = fakeQueryClient();
@@ -558,7 +558,7 @@ describe("createEventTransport", () => {
 				createdAt: "2026-09-07T08:00:00Z",
 			}));
 			vi.advanceTimersByTime(200);
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "codex", "proj-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "codex"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 		} finally {
 			vi.useRealTimers();

@@ -27,6 +27,7 @@ import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	Bot,
 	ArrowRight,
 	Brain,
 	ChevronDown,
@@ -67,6 +68,7 @@ const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
 	mcp_tool: Plug,
 	auto_review: ShieldCheck,
 	user_input: Keyboard,
+	ao_action: Bot,
 };
 import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
@@ -89,6 +91,7 @@ import {
 	exploredFileCount,
 	isNonzeroCommandExit,
 } from "./activity-command";
+import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import {
@@ -613,7 +616,7 @@ export function ResponseSpinner() {
 	);
 }
 
-function formatTime(iso: string): string {
+export function formatTime(iso: string): string {
 	const parsed = new Date(iso);
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
@@ -973,7 +976,12 @@ export function AssistantMessage({
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	const showActions = !live && !renderingStreaming && (showCopy || Boolean(onRollback));
+	// Copy is ready the moment the text has fully arrived: it copies the stored markdown,
+	// so it need not wait for the typewriter to catch up or for the turn to settle.
+	// Rollback acts on the turn, so it waits for both.
+	const copyReady = showCopy && !message.streaming;
+	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
+	const showActions = copyReady || rollbackReady;
 	return (
 		<div
 			className="group/message relative"
@@ -988,7 +996,7 @@ export function AssistantMessage({
 				// fragment the provider emitted while working. Copy, rollback, and
 				// duration stay visible; only the wall-clock time reveals on hover.
 				<div className="mt-1 flex h-7 items-center gap-0.5">
-					{showCopy ? (
+					{copyReady ? (
 						<div className="-ml-1.5 size-7 shrink-0">
 							{/* The stored markdown, not a re-serialization of what was rendered:
 							   pasting it into an editor has to give back what the agent wrote. */}
@@ -1000,7 +1008,7 @@ export function AssistantMessage({
 							/>
 						</div>
 					) : null}
-					{onRollback ? (
+					{rollbackReady ? (
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<button
@@ -1140,7 +1148,8 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 		activity.activityKind === "command" ||
 		activity.activityKind === "file_change" ||
 		activity.activityKind === "mcp_tool" ||
-		activity.activityKind === "auto_review";
+		activity.activityKind === "auto_review" ||
+		activity.activityKind === "ao_action";
 	// AO records pages as system rows; a page named by any other row (a cloud
 	// session's, say) is not one this daemon serves.
 	const renderRef = activity.activityKind === "system" ? readRenderRef(activity.detail) : undefined;
@@ -1151,6 +1160,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "auto_review") content = <AutoReviewRow activity={activity} />;
 	else if (activity.activityKind === "reasoning") content = <ReasoningBlock activity={activity} />;
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
+	else if (activity.activityKind === "ao_action") content = <AOActionRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
@@ -1201,6 +1211,69 @@ export function ActivityTransition({
 		>
 			{children}
 		</MotionElement>
+	);
+}
+
+function AOActionRow({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const descriptor = describeConversationActivity(activity);
+	const lines = actionDetailLines(activity);
+	const [override, setOverride] = useState<boolean | null>(null);
+	const reducedMotion = useReducedMotion();
+	const label = descriptor?.label ?? activity.summary;
+	const href = descriptor?.href;
+	const hasBody = lines.length > 0 || Boolean(href);
+	const open = override ?? false;
+	return (
+		<div className="flex min-w-0 max-w-full flex-col">
+			<button
+				type="button"
+				onClick={() => setOverride(!open)}
+				disabled={!hasBody}
+				aria-expanded={hasBody ? open : undefined}
+				aria-label={descriptor?.ariaLabel ?? label}
+				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
+			>
+				<Bot aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
+				<span className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground">{label}</span>
+				{descriptor?.state === "failed" ? (
+					<span className="text-xs text-destructive">{t("chat.action.status.failed")}</span>
+				) : null}
+				{descriptor?.state === "cancelled" ? (
+					<span className="text-xs text-muted-foreground/70">{t("chat.action.status.cancelled")}</span>
+				) : null}
+				{descriptor?.state === "running" ? (
+					<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60" />
+				) : null}
+				{hasBody ? (
+					<ChevronRight
+						aria-hidden="true"
+						className={cn(
+							"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground",
+							open && "rotate-90",
+						)}
+					/>
+				) : null}
+			</button>
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						<div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
+							{lines.map((line, index) => <span key={index}>{line}</span>)}
+							{href && descriptor?.linkLabelKey ? (
+								<SessionLabelLink href={href}>{t(descriptor.linkLabelKey)}</SessionLabelLink>
+							) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
 	);
 }
 
@@ -2613,7 +2686,7 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] border border-accent-dim bg-raised px-3 py-2.5 text-foreground">
+				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
 					{body ? (
 						<p>
 							<ProseWithInlineImages
@@ -2643,13 +2716,13 @@ export function SteerMessage({
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered into the running turn
+				Steered
 			</span>
 		</div>
 	);
 }
 
-function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
+export function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
 	const escaped = senderSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const prefix = new RegExp(`^\\[from (?:worker\\s+)?${escaped}(?:\\s+"[^"]*")?\\]\\s*`);
 	return text.replace(prefix, "");

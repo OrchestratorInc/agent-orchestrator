@@ -89,6 +89,23 @@ func TestCreateSessionKeepsRequestedBranch(t *testing.T) {
 	}
 }
 
+// The branch override and the requested output are separate bind parameters
+// of the session insert; each lands in its own column.
+func TestCreateSessionKeepsBranchAndRequestedOutputApart(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	session, err := store.CreateSession(context.Background(), domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+		"create-output-"+uuid.NewString(), 10, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Output test",
+			Prompt: "hello", Provider: "docker", Branch: "feature/report", RequestedOutput: domain.RequestedOutputArtifact,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Branch != "feature/report" || session.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("branch = %q, requested output = %q", session.Branch, session.RequestedOutput)
+	}
+}
+
 // A requested branch is one live session's at a time, and never an additional
 // repository's base branch; a terminated session releases its branch, and a
 // session whose branch was taken over while it was deleted is not restored.
@@ -253,13 +270,14 @@ func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 }
 
 func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
-	const scanSessionDestinations = 37
+	const scanSessionDestinations = 39
 	if got := strings.Count(sessionInsertReturning, ",") + 1; got != scanSessionDestinations {
 		t.Fatalf("session insert RETURNING fields = %d, want %d", got, scanSessionDestinations)
 	}
 	for _, field := range []string{
 		"reviewer_harness", "auto_review_enabled", "auto_inject_ci",
 		"auto_inject_review", "terminate_on_pr_merge",
+		"requested_output", "output_type",
 	} {
 		if !strings.Contains(sessionInsertReturning, field) {
 			t.Fatalf("session insert RETURNING is missing %s", field)
