@@ -485,6 +485,9 @@ func New(options Options) *Server {
 	// Public HTTPS bounce page for the desktop sign-in flow: WorkOS redirects the
 	// browser here, and it hands the OAuth result off to the ao-app:// deep link.
 	router.Get("/app/auth/return", server.appAuthReturn)
+	// Public page a shared session's link opens: it hands the share, carried
+	// in the URL fragment, to the ao-app://share deep link.
+	router.Get("/app/share", server.appShareLink)
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)

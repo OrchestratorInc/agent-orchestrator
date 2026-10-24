@@ -1,8 +1,9 @@
 // Share links for cloud sessions. The control plane mints a token per link and
-// never stores it, so the link is the only copy. The desktop opens
-// ao-app://share/<orgId>/<token>; a pasted web link of the same shape
-// (https://<host>/share/<orgId>/<token>, as the control plane builds it) opens
-// the same share.
+// never stores it, so the link is the only copy. A shared link is a web page
+// on the control plane, https://<cp>/app/share#<orgId>/<token>, that opens the
+// desktop app through ao-app://share/<orgId>/<token>; the share rides in the
+// fragment, which the browser never sends to the server. Pasting either form,
+// or an older https://<host>/share/<orgId>/<token> link, opens the same share.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -11,9 +12,9 @@ export interface ShareLinkTarget {
 	token: string;
 }
 
-/** The link the desktop opens for a share. */
-export function shareLinkUrl(orgId: string, token: string): string {
-	return `ao-app://share/${encodeURIComponent(orgId)}/${encodeURIComponent(token)}`;
+/** The link a person shares: a page on the control plane that opens the app. */
+export function shareLinkUrl(controlPlaneUrl: string, orgId: string, token: string): string {
+	return `${controlPlaneUrl.replace(/\/+$/, "")}/app/share#${encodeURIComponent(orgId)}/${encodeURIComponent(token)}`;
 }
 
 /** The share a pasted or opened link names, or undefined when it names none. */
@@ -31,8 +32,14 @@ export function parseShareLink(text: string): ShareLinkTarget | undefined {
 		segments = url.pathname.split("/").filter(Boolean);
 	} else if (url.protocol === "https:" || url.protocol === "http:") {
 		const parts = url.pathname.split("/").filter(Boolean);
-		if (parts[0] !== "share") return undefined;
-		segments = parts.slice(1);
+		if (parts.length === 2 && parts[0] === "app" && parts[1] === "share") {
+			// https://<cp>/app/share#<org>/<token>
+			segments = url.hash.replace(/^#/, "").split("/").filter(Boolean);
+		} else if (parts[0] === "share") {
+			segments = parts.slice(1);
+		} else {
+			return undefined;
+		}
 	} else {
 		return undefined;
 	}
