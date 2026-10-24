@@ -9,7 +9,6 @@
 </p>
 
 [![GitHub stars](https://img.shields.io/github/stars/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/stargazers)
-![Top 6k repositories](https://img.shields.io/badge/Top%206k%20repositories-181717?style=flat&logo=github&logoColor=white)
 [![GitHub release](https://img.shields.io/github/v/release/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)
 [![GitHub downloads](https://img.shields.io/github/downloads/OrchestratorInc/agent-orchestrator/total?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-0B1A33?style=flat)](LICENSE)
@@ -18,27 +17,11 @@
 
 <br />
 
-[![Download Orchestrator.inc](https://img.shields.io/badge/Download%20Orchestrator.inc-1A9BF0?style=for-the-badge)](https://orchestrator.inc/download/)
-&nbsp;
-[![Visit the website](https://img.shields.io/badge/Visit%20the%20website-0B1A33?style=for-the-badge)](https://orchestrator.inc)
-&nbsp;
-[![Read the docs](https://img.shields.io/badge/Read%20the%20docs-0B1A33?style=for-the-badge)](https://docs.orchestrator.inc)
+[**Get Orchestrator.inc**](https://orchestrator.inc) &nbsp;&bull;&nbsp; [Documentation](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [Contributing](CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
-<sub>
-  <a href="https://orchestrator.inc">Website</a> &nbsp;·&nbsp;
-  <a href="#install">Install</a> &nbsp;·&nbsp;
-  <a href="#features">Features</a> &nbsp;·&nbsp;
-  <a href="#supported-agents">Supported agents</a> &nbsp;·&nbsp;
-  <a href="https://github.com/OrchestratorInc/agent-orchestrator/releases">Releases</a> &nbsp;·&nbsp;
-  <a href="#contributing">Contributing</a> &nbsp;·&nbsp;
-  <a href="https://discord.com/invite/UZv7JjxbwG">Discord</a>
-</sub>
+**English** · [简体中文](translations/README.zh-CN.md) · [日本語](translations/README.ja.md) · [한국어](translations/README.ko.md) · [Español](translations/README.es.md) · [Français](translations/README.fr.md) · [Deutsch](translations/README.de.md) · [Português (Brasil)](translations/README.pt-BR.md)
+
 <br />
-<sub>
-  <b>English</b> · <a href="translations/README.zh-CN.md">简体中文</a> · <a href="translations/README.ja.md">日本語</a> · <a href="translations/README.ko.md">한국어</a> · <a href="translations/README.es.md">Español</a> · <a href="translations/README.fr.md">Français</a> · <a href="translations/README.de.md">Deutsch</a> · <a href="translations/README.pt-BR.md">Português (Brasil)</a>
-</sub>
-
-<br /><br />
 
 <img src="docs/assets/readme/hero.png" alt="Orchestrator.inc Kanban showing worker sessions grouped by live status" width="100%" />
 
@@ -48,63 +31,31 @@
 
 ## Why Orchestrator.inc
 
-One coding agent can handle a task. Running several across a project is a different job: splitting the work, giving each agent the right context, keeping branches from colliding, and following every change through CI, review, and merge.
-
-**Orchestrator.inc is a local desktop workspace built for that job.** Every task gets its own agent, branch, and worktree. A project-level orchestrator plans and delegates, a live board shows what needs you, and CI failures and review comments flow back to the agent that wrote the code. Your agents and code stay on your machine.
+One coding agent can handle a task. Running several means splitting the work, keeping branches from colliding, and following every change through CI, review, and merge. Orchestrator.inc is a local desktop workspace for that: every task gets its own agent, branch, and worktree, and your code stays on your machine.
 
 ## Features
 
-### Describe the outcome, the orchestrator runs the fleet
+### The orchestrator runs the fleet
 
-Every project gets a main agent. Tell it what you want built and it plans the work, starts a worker for each piece in its own worktree, and comes back only when something needs you.
+Tell a project's main agent what you want built. It plans the work, starts a worker for each piece in its own worktree, and comes back only when something needs you.
 
 <img src="docs/assets/readme/site/orchestrator.jpg" alt="The orchestrator splitting a billing feature into three workers, each in its own worktree with a different coding agent" width="100%" />
 
-<br />
+### One board for every session
 
-### The whole fleet, at a glance
-
-**Every session sorted by what it needs from you.** Sessions place themselves from live facts: what the agent is doing, its pull request, CI, and reviews. You open what needs you and leave the rest alone.
+Sessions sort themselves into lanes from the agent, its PR, CI, and reviews, so whatever needs you is on top.
 
 <img src="docs/assets/readme/site/board.jpg" alt="The Kanban board with Working, Needs you, In review, and Ready to merge lanes" width="100%" />
 
-<table>
-  <tr>
-    <td width="33%" valign="top"><b>Placed by facts</b><br /><sub>Lanes come from the agent, its PR, CI, and reviews, not a status someone has to remember to update.</sub></td>
-    <td width="33%" valign="top"><b>One card per session</b><br /><sub>Task, agent, branch, and pull request together. Open it for the chat, terminal, changed files, and preview.</sub></td>
-    <td width="33%" valign="top"><b>Needs you, first</b><br /><sub>Questions, failed checks, and requested changes land in one lane, so nothing waits on you unseen.</sub></td>
-  </tr>
-</table>
-
-<br />
-
 ### CI fails, the right agent fixes it
 
-**Review comments go back to the session that wrote the code.** Orchestrator.inc watches every pull request it opens. Failed checks, review comments, and merge conflicts go to the worker that owns the branch, with what it needs to fix them, until the PR is approved.
+Failed checks, review comments, and merge conflicts go back to the worker that owns the branch until the PR is approved. A reviewer agent can read every PR before a person does.
 
 <img src="docs/assets/readme/site/feedback.jpg" alt="A pull request timeline where a failed check and a review comment are routed back to Claude Code, which pushes a fix" width="100%" />
 
-<table>
-  <tr>
-    <td width="33%" valign="top"><b>Failed checks</b><br /><sub>The failing check, its name, and a link to the log go straight to the agent that owns the branch.</sub></td>
-    <td width="33%" valign="top"><b>Review comments</b><br /><sub>Comments from people and from reviewer agents return to the same session, thread by thread.</sub></td>
-    <td width="33%" valign="top"><b>Agent reviews</b><br /><sub>Have a reviewer agent read every PR before a person does, and send its findings back in one click.</sub></td>
-  </tr>
-</table>
-
-<br />
-
 ### Use the agent you already trust
 
-**Coding agents in chat or in their own terminal.** Pick the agent and model for each task. Work with it in structured chat, or open its native terminal UI. The task, branch, and feedback stay attached either way.
-
-<table>
-  <tr>
-    <td width="33%" valign="top"><b>Structured chat</b><br /><sub>Plans, commands, and file edits in one readable timeline, with approvals right where you need them.</sub></td>
-    <td width="33%" valign="top"><b>Native terminal UI</b><br /><sub>Open the agent's own TUI in the same worktree, or move a session between chat and terminal.</sub></td>
-    <td width="33%" valign="top"><b>A browser it can drive</b><br /><sub>Every worker gets its own browser to preview its app, and the agent can click through it to check its work.</sub></td>
-  </tr>
-</table>
+Pick the agent and model per task, then work in structured chat or the agent's own terminal UI. Each worker also gets a browser to preview and test its app.
 
 #### Supported agents
 
@@ -175,27 +126,15 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
 
 <br />
 
-### Your fleet goes where you go
+### Your fleet from your phone
 
-**Answer an agent from your phone, the code stays on your machine.** Pair the mobile app with your desktop over your network or Tailscale. Get a notification when an agent needs you, reply in chat, or open its terminal.
+Pair the mobile app with your desktop over LAN or Tailscale. Get notified when an agent needs you, then reply, start a task, or open its terminal.
 
 <img src="docs/assets/readme/site/mobile.jpg" alt="The mobile app showing an agent asking which mail provider to use and the reply sent from the phone" width="100%" />
 
-<table>
-  <tr>
-    <td width="33%" valign="top"><b>Notified when it matters</b><br /><sub>An alert when an agent asks a question, a pull request is ready, or a check fails.</sub></td>
-    <td width="33%" valign="top"><b>Reply from anywhere</b><br /><sub>Answer in chat, approve a plan, or start a new task without opening your laptop.</sub></td>
-    <td width="33%" valign="top"><b>Runs on your desktop</b><br /><sub>Agents and code stay on your machine. The phone connects to it directly, over LAN or Tailscale.</sub></td>
-  </tr>
-</table>
-
 ## Install
 
-**[Download Orchestrator.inc from orchestrator.inc/download →](https://orchestrator.inc/download/)**
-
-Orchestrator.inc checks for updates automatically once installed.
-
-You can also download a build directly from [GitHub Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest):
+Download from [orchestrator.inc/download](https://orchestrator.inc/download/) or [GitHub Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest). The app updates itself.
 
 | Platform | Download |
 | :-- | :-- |
@@ -207,8 +146,6 @@ You can also download a build directly from [GitHub Releases](https://github.com
 | **Linux** (Fedora/RHEL) | [`agent-orchestrator-linux-x64.rpm`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm) |
 
 Open Orchestrator.inc and point it at the repository you want it to manage. The desktop app runs the daemon for you, so no CLI is required. See the [installation guide](https://docs.orchestrator.inc/installation) for agent CLI setup and troubleshooting.
-
-macOS builds are signed and notarized by Apple. If you run into any trouble installing, please [open an issue](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml).
 
 ## Documentation
 
@@ -224,32 +161,19 @@ macOS builds are signed and notarized by Apple. If you run into any trouble inst
 
 ## Contributing
 
-Contributions are welcome across code, docs, triage, examples, and tests.
-
-```bash
-git clone https://github.com/OrchestratorInc/agent-orchestrator.git
-cd agent-orchestrator
-```
-
 Start with the [development guide](docs/development.md) for prerequisites, local setup, and test commands. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and use [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) for bugs and feature requests.
 
 ### Report a bug
 
-[Open a bug report](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml) from your own GitHub account. A few sentences in your own words about what you did and what went wrong are enough. Add what you expected, reproduction steps, your Orchestrator.inc version and OS, or a screenshot if you have them; these are helpful, not prerequisites.
+[Open a bug report](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml) from your own GitHub account. A few sentences on what you did and what went wrong are enough; version, OS, and repro steps help if you have them.
 
-A local coding agent can help you clarify the report and gather evidence using the [bug-triage skill](.agents/skills/bug-triage/SKILL.md). Keep the issue body focused on your observations, with agent-collected logs, database excerpts, and investigation notes in separate attachments. Review any draft before submitting it under your own account. Please don't ask a bot to file issues on your behalf; reporter attribution matters.
+A local coding agent can help gather evidence with the [bug-triage skill](.agents/skills/bug-triage/SKILL.md); keep its logs and notes in attachments, and review the draft before submitting it yourself. Please don't have a bot file issues for you.
 
 For help describing a problem, join the [bug-triaging channel on Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). See [contribution guidance](CONTRIBUTING.md#bugs-and-features) for more detail.
 
 ## Community
 
-<table>
-  <tr>
-    <td width="33%" valign="top"><a href="https://discord.com/invite/UZv7JjxbwG"><b>Discord</b></a><br /><sub>Help and contributor discussion</sub></td>
-    <td width="33%" valign="top"><a href="https://x.com/useOrchestrator"><b>@useOrchestrator</b></a><br /><sub>Product updates on X</sub></td>
-    <td width="33%" valign="top"><a href="https://github.com/OrchestratorInc/agent-orchestrator/issues"><b>GitHub Issues</b></a><br /><sub>Bugs, feature requests, and conversations</sub></td>
-  </tr>
-</table>
+Join [Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor discussion, follow [@useOrchestrator](https://x.com/useOrchestrator) for updates, or start a conversation in [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues).
 
 ## Star history
 
@@ -262,17 +186,8 @@ For help describing a problem, join the [bug-triaging channel on Discord](https:
 
 ## Product telemetry
 
-Product telemetry is designed to exclude your code, prompts, agent conversations, and credentials.\
-Orchestrator.inc collects limited usage and reliability telemetry to improve the product. It includes an installation ID and your GitHub username; if you sign in to AO Cloud it also includes your AO Cloud user ID and the email address of that account, set once as a PostHog person property (never read from git config). Turn it all off in Settings > General > Privacy > Share usage analytics, which covers the desktop, the daemon, and a paired phone. [Learn exactly what we collect and how to opt out](docs/telemetry.md).
+Orchestrator.inc collects limited usage and reliability telemetry, never your code, prompts, agent conversations, or credentials. It includes an installation ID and your GitHub username; if you sign in to AO Cloud it also includes your AO Cloud user ID and the email address of that account, set once as a PostHog person property (never read from git config). Turn it all off in Settings > General > Privacy > Share usage analytics, which covers the desktop, the daemon, and a paired phone. [Learn exactly what we collect and how to opt out](docs/telemetry.md).
 
 ## License
 
 Orchestrator.inc is available under the [Apache License 2.0](LICENSE).
-
-<br />
-
-<div align="center">
-  <img src="frontend/assets/ao-mascot.png" alt="" width="72" />
-  <br />
-  <sub>Built for teams who ship with coding agents. &nbsp;·&nbsp; <a href="#readme">Back to top ↑</a></sub>
-</div>
