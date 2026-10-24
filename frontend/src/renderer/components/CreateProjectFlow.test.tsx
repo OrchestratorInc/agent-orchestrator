@@ -1880,7 +1880,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		await user.click(screen.getByRole("button", { name: "Clone to the cloud" }));
 		expect(screen.getByText(/sign in to AO Cloud to create a cloud project/i)).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Sign in to AO Cloud" }));
+		await user.click(screen.getByRole("button", { name: "Sign in to cloud" }));
 		expect(cloudMocks.signIn).toHaveBeenCalledOnce();
 	});
 

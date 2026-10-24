@@ -656,7 +656,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		const signInControls = screen.getAllByLabelText("Sign in to AO Cloud");
+		const signInControls = screen.getAllByLabelText("Sign in to cloud");
 		expect(signInControls).toHaveLength(2);
 		const activeControl = signInControls.find((control) => control.tabIndex === 0);
 		expect(activeControl).toBeDefined();
@@ -689,7 +689,7 @@ describe("Sidebar", () => {
 		useUiStore.setState({ developerMode: true });
 		renderSidebar();
 
-		expect(screen.getAllByLabelText("Sign in to AO Cloud")).toHaveLength(2);
+		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
 	});
 
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
