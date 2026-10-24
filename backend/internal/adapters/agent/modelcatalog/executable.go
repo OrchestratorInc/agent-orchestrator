@@ -21,7 +21,12 @@ const (
 
 type discoveryInspection struct {
 	active    map[string]bool
-	completed map[string]bool
+	completed map[string]discoveryInspectionResult
+}
+
+type discoveryInspectionResult struct {
+	verified bool
+	native   bool
 }
 
 // Agent installers can replace another tool's wrapper while retaining its name.
@@ -42,7 +47,7 @@ func verifyDiscoveryExecutable(ctx context.Context, agentID, binaryPath string) 
 	}
 	// Inspection follows symlinks internally. Keep the selected launcher path
 	// for execution so aliases retain argv[0] and package entry-point semantics.
-	inspection := &discoveryInspection{active: map[string]bool{}, completed: map[string]bool{}}
+	inspection := &discoveryInspection{active: map[string]bool{}, completed: map[string]discoveryInspectionResult{}}
 	verified, err := inspectDiscoveryExecutable(ctx, agentID, resolved, inspection)
 	if err != nil {
 		return "", fmt.Errorf("%s model discovery: refusing executable %q: %w; repair or reinstall the intended agent's launcher", agentID, resolved, err)
@@ -118,6 +123,9 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	if agentID == "opencode-v2" {
+		agentID = "opencode"
+	}
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return false, err
@@ -126,22 +134,26 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		return false, fmt.Errorf("launcher chain is cyclic or too deep")
 	}
 	if result, ok := inspection.completed[canonical]; ok {
-		return result, nil
+		return result.verified || (result.native && discoveryExecutableOwner(path) == agentID), nil
 	}
 	if len(inspection.active)+len(inspection.completed) >= discoveryLauncherFileLimit {
 		return false, fmt.Errorf("launcher exceeds total file inspection limit (%d)", discoveryLauncherFileLimit)
 	}
 	inspection.active[canonical] = true
+	native := false
 	defer func() {
 		delete(inspection.active, canonical)
 		if err == nil {
-			inspection.completed[canonical] = verified
+			result := discoveryInspectionResult{verified: verified, native: native}
+			if native {
+				// Cache canonical identity only. Alias evidence belongs to this
+				// invocation, not every other link to the same manager binary.
+				result.verified = discoveryExecutableOwner(canonical) == agentID
+			}
+			inspection.completed[canonical] = result
 		}
 	}()
 	owner := discoveryExecutableOwner(canonical)
-	if agentID == "opencode-v2" {
-		agentID = "opencode"
-	}
 	if owner != "" && owner != agentID {
 		return false, fmt.Errorf("launcher targets %s instead of %s", owner, agentID)
 	}
@@ -169,11 +181,14 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 	if err != nil {
 		return false, err
 	}
-	// Native executables are opaque here. Their resolved name must identify the
-	// agent; wrapper names alone are insufficient until their targets are read.
+	// Native executables are opaque. Version managers can expose an agent-named
+	// symlink to a shared native shim, so retain the selected entry point as
+	// routing evidence. Known foreign canonical owners were rejected above;
+	// script launchers still require inspection and never use this fallback.
 	launcher := ext == ".cmd" || ext == ".bat" || ext == ".ps1"
 	if !launcher && (bytes.HasPrefix(body, []byte("MZ")) || bytes.HasPrefix(body, []byte("\x7fELF")) || bytes.ContainsRune(body, '\x00')) {
-		return verified, nil
+		native = true
+		return verified || discoveryExecutableOwner(path) == agentID, nil
 	}
 	if len(body) > discoveryLauncherReadLimit {
 		return false, fmt.Errorf("launcher exceeds inspection limit")
