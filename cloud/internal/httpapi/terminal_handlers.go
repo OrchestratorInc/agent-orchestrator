@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -55,6 +56,10 @@ const (
 	// terminalClientRepaintInterval bounds repaints a client asks for after
 	// its screen reflowed, so a panel being toggled cannot flood the program.
 	terminalClientRepaintInterval = time.Second
+	// terminalSlowWrite is how long one output write to a client may take
+	// before it is logged, at most every terminalSlowWriteLogInterval.
+	terminalSlowWrite            = 2 * time.Second
+	terminalSlowWriteLogInterval = 10 * time.Second
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")
@@ -251,13 +256,14 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		readResult <- s.readTerminalInput(ctx, connection, terminal, &writeMu)
 	}()
+	progress := &terminalWriteProgress{}
 	writeResult := make(chan error, 1)
 	go func() {
-		writeResult <- s.writeTerminalOutput(ctx, connection, terminal, after, structured, &writeMu)
+		writeResult <- s.writeTerminalOutputProgress(ctx, connection, terminal, after, structured, &writeMu, progress)
 	}()
 	pingResult := make(chan error, 1)
 	go func() {
-		pingResult <- keepTerminalAlive(ctx, connection)
+		pingResult <- keepTerminalAlive(ctx, connection, progress)
 	}()
 
 	// closeSource records which stream ended the socket. A browser terminal that
@@ -308,10 +314,16 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 // start, and the cycle repeated (a reconnect storm that garbles the terminal).
 // Tolerate a few consecutive misses so a transient write-stall does not kill a
 // live connection; a genuinely dead socket still closes after a few intervals.
-func keepTerminalAlive(ctx context.Context, connection *websocket.Conn) error {
+//
+// A program flooding its terminal keeps that mutex busy for as long as the
+// flood lasts, so every ping misses even though the client is reading. A miss
+// therefore only counts when no output write completed since the previous
+// ping: completed writes prove the client is alive, while a dead client
+// blocks the writer too and is still closed after terminalPingMaxFailures.
+func keepTerminalAlive(ctx context.Context, connection *websocket.Conn, progress *terminalWriteProgress) error {
 	ticker := time.NewTicker(terminalPingInterval)
 	defer ticker.Stop()
-	consecutiveFailures := 0
+	liveness := terminalLiveness{progress: progress}
 	for {
 		select {
 		case <-ctx.Done():
@@ -320,19 +332,55 @@ func keepTerminalAlive(ctx context.Context, connection *websocket.Conn) error {
 			pingCtx, cancel := context.WithTimeout(ctx, terminalPingTimeout)
 			err := connection.Ping(pingCtx)
 			cancel()
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				consecutiveFailures++
-				if consecutiveFailures >= terminalPingMaxFailures {
-					return err
-				}
-				continue
+			if err != nil && ctx.Err() != nil {
+				return ctx.Err()
 			}
-			consecutiveFailures = 0
+			if liveness.dead(err == nil) {
+				return err
+			}
 		}
 	}
+}
+
+// terminalWriteProgress counts output writes a client has accepted, so the
+// keepalive can tell a busy socket from a dead one.
+type terminalWriteProgress struct {
+	writes atomic.Int64
+}
+
+func (p *terminalWriteProgress) wrote() {
+	if p != nil {
+		p.writes.Add(1)
+	}
+}
+
+func (p *terminalWriteProgress) count() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.writes.Load()
+}
+
+// terminalLiveness decides, one ping at a time, when a client is dead.
+type terminalLiveness struct {
+	progress *terminalWriteProgress
+	seen     int64
+	misses   int
+}
+
+// dead records one ping result and reports whether the socket should close:
+// terminalPingMaxFailures consecutive misses with no output write completing
+// in between.
+func (l *terminalLiveness) dead(answered bool) bool {
+	writes := l.progress.count()
+	progressed := writes != l.seen
+	l.seen = writes
+	if answered || progressed {
+		l.misses = 0
+		return false
+	}
+	l.misses++
+	return l.misses >= terminalPingMaxFailures
 }
 
 func (s *Server) refreshTerminalInteraction(ctx context.Context, terminal domain.TerminalSession) {
@@ -589,6 +637,33 @@ func (s *Server) writeTerminalOutput(
 	structured bool,
 	writeMu *sync.Mutex,
 ) error {
+	return s.writeTerminalOutputProgress(ctx, connection, terminal, after, structured, writeMu, nil)
+}
+
+// writeTerminalOutputProgress is writeTerminalOutput that counts each output
+// write the client accepted in progress (which may be nil).
+func (s *Server) writeTerminalOutputProgress(
+	ctx context.Context,
+	connection *websocket.Conn,
+	terminal domain.TerminalSession,
+	after int64,
+	structured bool,
+	writeMu *sync.Mutex,
+	progress *terminalWriteProgress,
+) error {
+	var slowWriteLoggedAt time.Time
+	// wrote records an output write the client accepted, and logs (at most
+	// every terminalSlowWriteLogInterval) one that took terminalSlowWrite or
+	// longer: a client or network that stops reading is otherwise invisible.
+	wrote := func(started time.Time, sequence int64) {
+		progress.wrote()
+		if took := time.Since(started); took >= terminalSlowWrite && s.logger != nil &&
+			time.Since(slowWriteLoggedAt) >= terminalSlowWriteLogInterval {
+			slowWriteLoggedAt = time.Now()
+			s.logger.Info("terminal client write slow",
+				"terminal_id", terminal.ID, "sequence", sequence, "took_ms", took.Milliseconds())
+		}
+	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	startupDeadline := time.NewTimer(terminalReadyTimeout)
@@ -671,6 +746,7 @@ func (s *Server) writeTerminalOutput(
 					skipped = true
 				}
 				var err error
+				started := time.Now()
 				writeMu.Lock()
 				if structured {
 					err = writeTerminalMessage(ctx, connection, terminalServerMessage{
@@ -688,6 +764,7 @@ func (s *Server) writeTerminalOutput(
 				if err != nil {
 					return err
 				}
+				wrote(started, frame.Sequence)
 				after = frame.Sequence
 				gapSince = time.Time{}
 				gapChecked = false
@@ -748,11 +825,18 @@ func (s *Server) writeTerminalOutput(
 					pollDurable = true
 					continue
 				}
+				if s.logger != nil {
+					s.logger.Info("terminal live output skipped a gap",
+						"terminal_id", terminal.ID, "after", after, "sequence", frame.sequence,
+						"mirrored", mirrored, "mirror_known", known,
+						"waited_ms", time.Since(gapSince).Milliseconds())
+				}
 				skipped = true
 				pollDurable = true
 			}
 			gapSince = time.Time{}
 			gapChecked = false
+			started := time.Now()
 			writeMu.Lock()
 			var writeErr error
 			if structured {
@@ -767,6 +851,7 @@ func (s *Server) writeTerminalOutput(
 			if writeErr != nil {
 				return writeErr
 			}
+			wrote(started, frame.sequence)
 			after = frame.sequence
 			if s.logger != nil {
 				s.logger.Debug("terminal relay output delivered",

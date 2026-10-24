@@ -558,3 +558,33 @@ func TestTerminalResizeRepaintFlagRequestsOneRepaint(t *testing.T) {
 		t.Fatalf("repaints = %d, want 1 (the second within the interval is dropped)", repaints)
 	}
 }
+
+// A program flooding its terminal keeps the socket's write lock busy, so the
+// keepalive's pings miss while the client is reading every frame. Misses only
+// close the socket when no output write completed between them.
+func TestTerminalLivenessCountsOnlyMissesWithoutProgress(t *testing.T) {
+	progress := &terminalWriteProgress{}
+	busy := terminalLiveness{progress: progress}
+	for ping := 0; ping < 10; ping++ {
+		progress.wrote()
+		if busy.dead(false) {
+			t.Fatalf("ping %d: a client accepting output was declared dead", ping)
+		}
+	}
+	dead := terminalLiveness{progress: progress}
+	dead.dead(false) // takes the current write count as its baseline
+	for ping := 1; ping < terminalPingMaxFailures; ping++ {
+		if dead.dead(false) {
+			t.Fatalf("closed after %d misses, want %d", ping, terminalPingMaxFailures)
+		}
+	}
+	if !dead.dead(false) {
+		t.Fatalf("a client with no pongs and no progress stayed open after %d misses", terminalPingMaxFailures)
+	}
+	answered := terminalLiveness{}
+	for ping := 0; ping < 10; ping++ {
+		if answered.dead(ping%2 == 0) {
+			t.Fatal("alternating answered pings closed the socket")
+		}
+	}
+}
