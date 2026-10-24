@@ -299,7 +299,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false }: { row
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
 						<ArtifactActionsMenu
 							artifact={row}
-							session={{ id: row.sessionId }}
+							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
 							showDeleteButton
 							pinned={pinned}
@@ -343,7 +343,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false }: { row
 			<div className="absolute right-2 top-2 flex items-center gap-1">
 				<ArtifactActionsMenu
 					artifact={row}
-					session={{ id: row.sessionId }}
+					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly
 					showDeleteButton
 					pinned={pinned}

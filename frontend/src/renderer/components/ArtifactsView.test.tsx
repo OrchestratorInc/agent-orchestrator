@@ -15,14 +15,23 @@ const mocks = vi.hoisted(() => ({
 	post: vi.fn(),
 	get: vi.fn(),
 	capture: vi.fn(),
+	deleteCloudArtifact: vi.fn(),
 	hideShellTopbar: true,
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
+	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryKeyForHost: () => ["workspaces"],
 	useWorkspaceQuery: () => ({ data: mocks.workspaces, isLoading: false, error: null }),
+}));
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: { deleteSessionArtifact: mocks.deleteCloudArtifact } }),
+}));
+vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useCloudArtifacts")>(),
+	useCloudArtifactAccess: (session: Pick<WorkspaceSession, "cloud">) => ({ data: session.cloud ? "https://cp.test/artifact-files/token/" : undefined }),
 }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
@@ -129,6 +138,7 @@ describe("ArtifactsView", () => {
 		mocks.post.mockReset();
 		mocks.get.mockReset();
 		mocks.capture.mockReset();
+		mocks.deleteCloudArtifact.mockReset().mockResolvedValue(undefined);
 		useUiStore.setState({ settingsModal: null });
 		useUiStore.getState().clearGlobalToast();
 	});
@@ -217,6 +227,21 @@ describe("ArtifactsView", () => {
 		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
 		expect(screen.getByRole("heading", { level: 2, name: "agent-orchestrator" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "agent-orchestrator" })).not.toBeInTheDocument();
+	});
+
+	it("keeps gallery cloud actions on the cloud session instead of local file actions", async () => {
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: "More actions: notes.md" }));
+		expect(screen.queryByRole("menuitem", { name: /^Show in / })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Download" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Delete artifact" }));
+		const dialog = screen.getByRole("dialog");
+		expect(dialog).toHaveTextContent("from the session's cloud storage and from its sandbox");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
+		await waitFor(() => expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "notes.md"));
 	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {

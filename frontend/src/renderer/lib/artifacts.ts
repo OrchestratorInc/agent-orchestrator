@@ -5,6 +5,7 @@ import {
 	workerSessions,
 	type ArtifactKind,
 	type WorkspaceSummary,
+	type WorkspaceSession,
 } from "../types/workspace";
 import { isArchivedSession } from "./standalone-archive";
 
@@ -19,6 +20,7 @@ export type ArtifactRow = {
 	updatedAt: string;
 	sessionId: string;
 	sessionTitle: string;
+	cloud?: WorkspaceSession["cloud"];
 	/** Undefined for a Scratchpad session. */
 	projectId?: string;
 	/** The writing session's agent is working, so the file may still change. */
@@ -63,6 +65,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 					updatedAt: artifact.updatedAt,
 					sessionId: session.id,
 					sessionTitle: session.title,
+					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
 					generating: isAgentActivityWorking(session.activity),
 				})),

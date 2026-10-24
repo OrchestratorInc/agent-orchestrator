@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, Copy, Ellipsis, FolderOpen, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import { ChevronDown, Copy, Download, Ellipsis, FolderOpen, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
-import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
-import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
+import { CLOUD_TEXT_ARTIFACT, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { artifactKey } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
@@ -34,6 +36,7 @@ function terminalName(): string {
  */
 export function ArtifactActionsMenu({
 	artifact,
+	downloadUrl,
 	hostId,
 	session,
 	iconOnly = false,
@@ -42,7 +45,9 @@ export function ArtifactActionsMenu({
 	onTogglePin,
 	className,
 }: {
-	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl">;
+	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl" | "updatedAt">;
+	/** Current cloud access URL when the viewer already resolved it. */
+	downloadUrl?: string;
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
 	iconOnly?: boolean;
@@ -58,13 +63,20 @@ export function ArtifactActionsMenu({
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	// The artifact directory is on this machine only for a local session.
 	const local = !hostId && !session.cloud;
+	const { client: cloudClient } = useCloudCp(Boolean(session.cloud));
+	const access = useCloudArtifactAccess(session, Boolean(session.cloud) && !downloadUrl);
+	const cloudFileUrl = session.cloud
+		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
+		: undefined;
 	// The deleted file leaves the session's artifact list on the next read.
 	const remove = useMutation({
-		mutationFn: () => deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
+		mutationFn: () => session.cloud
+			? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path)
+			: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
 		onSuccess: async () => {
 			setConfirmingDelete(false);
-			if (local) useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path }));
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+			if (!hostId) useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path }));
+			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
 		},
 	});
 	const markdown = /\.(md|markdown)$/i.test(artifact.path);
@@ -80,12 +92,25 @@ export function ArtifactActionsMenu({
 		open.reset();
 		setCopyError("");
 		try {
-			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl, t("files.error.loadArtifact")));
+			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl ?? cloudFileUrl, t("files.error.loadArtifact"), Boolean(session.cloud)));
 			await aoBridge.clipboard.writeText(detail.content);
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
 	};
+	const download = async () => {
+		open.reset();
+		setCopyError("");
+		try {
+			if (!cloudFileUrl) throw new Error(t("artifacts.accessError"));
+			const bytes = await aoBridge.cloudArtifact.fetch(cloudFileUrl);
+			await aoBridge.chatImage.save({ name: artifact.name, bytes });
+		} catch (error) {
+			setCopyError(error instanceof Error ? error.message : String(error));
+		}
+	};
+	const copyable = !fileMediaKind(artifact.path) && (!session.cloud || CLOUD_TEXT_ARTIFACT.test(artifact.path));
+
 	const error = open.error?.message || copyError;
 	const resetOpen = open.reset;
 	useEffect(() => {
@@ -140,7 +165,7 @@ export function ArtifactActionsMenu({
 					<TooltipContent side="bottom">{t(pinned ? "artifacts.unpin" : "artifacts.pin")}</TooltipContent>
 				</Tooltip>
 			) : null}
-			{showDeleteButton && !session.cloud ? (
+			{showDeleteButton ? (
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
@@ -181,31 +206,32 @@ export function ArtifactActionsMenu({
 							<DropdownMenuSeparator />
 						</>
 					) : null}
-					{!fileMediaKind(artifact.path) ? (
+					{copyable ? (
 						<DropdownMenuItem onSelect={() => void copy()}>
 							<Copy aria-hidden="true" />
 							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
 						</DropdownMenuItem>
 					) : null}
-					{/* Cloud sessions keep their artifacts behind the cloud control plane. */}
-					{session.cloud ? null : (
-						<>
-							<DropdownMenuSeparator />
-							<DropdownMenuItem
-								className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-								onSelect={confirmDelete}
-							>
-								<Trash2 aria-hidden="true" />
-								{t("artifacts.delete")}
-							</DropdownMenuItem>
-						</>
-					)}
+					{session.cloud ? (
+						<DropdownMenuItem onSelect={() => void download()}>
+							<Download aria-hidden="true" />
+							{t("artifacts.download")}
+						</DropdownMenuItem>
+					) : null}
+					<DropdownMenuSeparator />
+					<DropdownMenuItem
+						className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
+						onSelect={confirmDelete}
+					>
+						<Trash2 aria-hidden="true" />
+						{t("artifacts.delete")}
+					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}
-				description={t("artifacts.deleteDescription", { name: artifact.name })}
+				description={t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}
 				destructive
 				error={remove.error?.message ?? null}
 				onConfirm={() => remove.mutate()}
@@ -226,4 +252,3 @@ export function ArtifactActionsMenu({
 		</>
 	);
 }
-
