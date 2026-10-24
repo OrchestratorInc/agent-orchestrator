@@ -2,11 +2,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	TaskComposerView,
 	type TaskComposerAgentControl,
-	type TaskComposerEffortControl,
 	type TaskComposerModelCatalog,
-	type TaskComposerModelControl,
 } from "@aoagents/product-ui";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import type { components } from "../../api/schema";
@@ -29,7 +27,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
+import { isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
 import { fallbackEffort } from "../lib/effort";
@@ -50,10 +48,9 @@ import {
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
-import { NativeModePicker } from "./NativeModePicker";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
-import { AgentModelCombobox } from "./settings/AgentModelCombobox";
-import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
+import { type EffortAvailability } from "./settings/EffortPicker";
+import { COMPOSER_MENU_WIDTH, TaskEffortPicker, TaskModelPicker } from "./TaskModelControls";
 import { useModelTuning } from "./settings/ModelTuningControls";
 import {
 	readTaskComposerPreferences,
@@ -849,35 +846,6 @@ export function TaskComposer({
 	);
 }
 
-// The agent, model and effort menus share one compact width.
-const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
-
-function TaskEffortPicker({
-	disabled,
-	label,
-	onChange,
-	options,
-	value,
-	defaultEffort,
-	availability,
-	footer,
-}: TaskComposerEffortControl & { defaultEffort?: string; availability: EffortAvailability; footer?: ReactNode }) {
-	return (
-		<EffortPicker
-			label={label}
-			disabled={disabled}
-			value={value.toLowerCase() === "default" ? "" : value}
-			choices={options.map((option) => ({ value: option }))}
-			defaultEffort={defaultEffort}
-			availability={availability}
-			onChange={onChange}
-			triggerClassName="composer-chip composer-toolbar-option w-fit"
-			menuClassName={COMPOSER_MENU_WIDTH}
-			footer={footer}
-		/>
-	);
-}
-
 // Both local and cloud list only harnesses that can run, plus a way to manage
 // them: local logins, or cloud connections for cloud projects.
 function DesktopAgentControl({ hostId, manageView, ...control }: TaskComposerAgentControl & { hostId?: string; manageView: "local" | "cloud" }) {
@@ -891,81 +859,6 @@ function DesktopAgentControl({ hostId, manageView, ...control }: TaskComposerAge
 			variant="chip"
 			triggerClassName="composer-toolbar-option w-fit"
 			contentClassName={COMPOSER_MENU_WIDTH}
-		/>
-	);
-}
-
-function TaskModelPicker({
-	agentId,
-	agentLabel,
-	catalog,
-	disabled,
-	value,
-	mode,
-	onModelChange,
-	onModeChange,
-	onRefresh,
-	showFollowAgentAction,
-}: TaskComposerModelControl & { onRefresh: () => Promise<void>; showFollowAgentAction: boolean }) {
-	const { t } = useTranslation();
-
-	// Keep the no-agent placeholder until there is an agent to configure.
-	if (agentId === "") {
-		return (
-			<span
-				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
-				aria-disabled="true"
-				aria-label={t("newTask.model")}
-			>
-				<span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span>
-			</span>
-		);
-	}
-
-	if (catalog?.selectionMode === "mode") {
-		return (
-			<NativeModePicker
-				models={catalog.models ?? []}
-				mode={mode}
-				onModeChange={onModeChange}
-				disabled={disabled}
-				showFollowAgentAction={showFollowAgentAction}
-				triggerClassName="composer-chip composer-toolbar-option w-fit"
-				menuClassName={COMPOSER_MENU_WIDTH}
-			/>
-		);
-	}
-
-	const displayModels = (catalog?.models ?? []).map((item) => {
-		if (item.id === "auto") return { ...item, label: t("settings.models.autoRouteLabel") };
-		return { ...item, label: agentModelDisplayLabel(agentId, item.label) };
-	});
-	const selectCatalogModel = (nextModel: string) => {
-		onModelChange(nextModel);
-	};
-
-	return (
-		<AgentModelCombobox
-			key={agentId}
-			aria-label={t("newTask.model")}
-			value={value}
-			models={displayModels}
-			allowCustom={false}
-			customModelEntry={catalog?.customModelEntry === "configured" ? "configured" : "none"}
-			agentLabel={agentLabel}
-			onRefresh={onRefresh}
-			refreshing={catalog?.refreshState === "queued" || catalog?.refreshState === "refreshing"}
-			refreshError={catalog?.refreshError}
-			retryAt={catalog?.retryAt}
-			disabled={disabled || agentId === ""}
-			agentId={agentId}
-			onChange={selectCatalogModel}
-			compact
-			recentScope={agentId}
-			triggerClassName="composer-chip composer-toolbar-option w-fit"
-			menuAlign="start"
-			menuClassName={COMPOSER_MENU_WIDTH}
-			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
 		/>
 	);
 }
