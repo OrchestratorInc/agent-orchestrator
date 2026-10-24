@@ -20,6 +20,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  launcher-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check launcher-related paths
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+          if git diff --quiet "$BASE_SHA" HEAD -- \
+            backend/internal/adapters/agent/binaryutil/ \
+            backend/internal/adapters/agent/modelcatalog/ \
+            backend/internal/adapters/agent/cursor/ \
+            backend/internal/adapters/agent/claudecode/ \
+            backend/internal/service/systeminstall/ \
+            backend/go.mod backend/go.sum .github/workflows/go.yml; then
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          else
+            result=$?
+            if [ "$result" -ne 1 ]; then
+              exit "$result"
+            fi
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          fi
+
   backend-core:
     runs-on: ubuntu-latest
     strategy:
@@ -143,7 +179,7 @@ jobs:
   # Keep the existing required check as the gate for every backend race test.
   build-test:
     if: always()
-    needs: [backend-core, chat-race, session-store-race, sqlite-race]
+    needs: [backend-core, chat-race, session-store-race, sqlite-race, launcher-changes, launcher-identity]
     runs-on: ubuntu-latest
     steps:
       - name: Check backend results
@@ -152,6 +188,74 @@ jobs:
           test '${{ needs.chat-race.result }}' = success
           test '${{ needs.session-store-race.result }}' = success
           test '${{ needs.sqlite-race.result }}' = success
+          test '${{ needs.launcher-changes.result }}' = success
+          if [ '${{ needs.launcher-changes.outputs.run }}' = true ]; then
+            test '${{ needs.launcher-identity.result }}' = success
+          else
+            test '${{ needs.launcher-identity.result }}' = skipped
+          fi
+
+  launcher-identity:
+    name: launcher-identity (${{ matrix.os }})
+    needs: launcher-changes
+    if: needs.launcher-changes.outputs.run == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install real agent packages into isolated prefixes
+        shell: pwsh
+        run: |
+          $lab = Join-Path $env:RUNNER_TEMP 'ao-launcher-identity'
+          $env:BUN_INSTALL = Join-Path $lab 'bun'
+          $env:BUN_INSTALL_CACHE_DIR = Join-Path $lab 'bun-cache'
+          npm install --global --prefix "$lab/npm" --ignore-scripts --no-audit --no-fund @kilocode/cli@7.8.17 @mimo-ai/cli@0.1.15 @factory/cli@0.249.0 @oh-my-pi/pi-coding-agent@18.12.6
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun add --global --ignore-scripts @oh-my-pi/pi-coding-agent@18.12.6
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "AO_TEST_NPM_PREFIX=$lab/npm" >> $env:GITHUB_ENV
+          "AO_TEST_BUN_ROOT=$lab/bun" >> $env:GITHUB_ENV
+      - name: Install pinned native POSIX version managers
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          managers="$RUNNER_TEMP/ao-launcher-identity/managers"
+          mkdir -p "$managers/asdf/bin"
+          GOBIN="$managers/asdf/bin" go install github.com/asdf-vm/asdf/cmd/asdf@v0.16.0
+          git clone --quiet https://github.com/pyenv/pyenv.git "$managers/pyenv"
+          git -C "$managers/pyenv" checkout --quiet --detach 0effba62c4bbf8f8ca2ad8f0eabbfd8221cc7bc6
+          git clone --quiet https://github.com/nodenv/nodenv.git "$managers/nodenv"
+          git -C "$managers/nodenv" checkout --quiet --detach 093570626794abb172ad3a3a897efb4fca3f5b93
+          echo "AO_TEST_MANAGERS_ROOT=$managers" >> "$GITHUB_ENV"
+      - name: Test real package layouts and generated manager shims
+        working-directory: backend
+        run: go test -race -count=1 -timeout=10m -v -run '^TestDiscoveryExecutable' ./internal/adapters/agent/binaryutil/
+      - name: Test update version-probe rejection and model/auth boundaries
+        working-directory: backend
+        shell: pwsh
+        run: |
+          go test -race -count=1 -run '^TestVerifier' ./internal/service/systeminstall/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race -count=1 -run '^TestDiscovery|^TestKiroDiscovery' ./internal/adapters/agent/modelcatalog/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race -count=1 -run '^TestCursorCLIAuth|^TestCursorAuthRejects' ./internal/adapters/agent/cursor/
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -race -count=1 -run '^TestClaudeAuthCommandRejectsRedirect$' ./internal/adapters/agent/claudecode/
 
   # The suite above only ever runs on Linux, so the packages whose behaviour is
   # genuinely platform-specific have never been exercised on Windows: worktree

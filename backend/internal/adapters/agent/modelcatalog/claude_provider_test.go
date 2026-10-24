@@ -22,7 +22,7 @@ func claudeRequest(t *testing.T) ports.AgentModelDiscoveryRequest {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	t.Setenv("ANTHROPIC_MODEL", "")
 	return ports.AgentModelDiscoveryRequest{
-		AgentID: "claude-code", WorkingDir: t.TempDir(), Env: map[string]string{},
+		AgentID: "claude-code", Binary: writeDiscoveryLauncher(t, t.TempDir(), "claude.exe", "MZ fixture"), WorkingDir: t.TempDir(), Env: map[string]string{},
 	}
 }
 

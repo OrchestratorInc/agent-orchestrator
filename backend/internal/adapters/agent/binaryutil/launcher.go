@@ -1,0 +1,410 @@
+package binaryutil
+
+import (
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+type discoveryInvocation struct {
+	target     string
+	explicit   bool
+	arguments  []string
+	dependency bool
+	refusal    string
+}
+
+// Quotes keep spaces and shell operators inside an argument. Unquoted shell
+// operators start another command, including commands inside conditional blocks.
+var discoveryLauncherTokens = regexp.MustCompile(`(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s"';&|()])+|[;&|()]`)
+
+var discoveryLauncherAssignment = regexp.MustCompile(`^(?:export\s+)?([a-zA-Z_][a-zA-Z0-9_]*)=(.*)$`)
+var discoveryLauncherVariable = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*|@)\}|\$([a-zA-Z_][a-zA-Z0-9_]*|@)|%[a-zA-Z_][a-zA-Z0-9_]*%`)
+
+func discoveryExpandLauncherTarget(target string, variables map[string]string) (string, error) {
+	var expanded strings.Builder
+	start := 0
+	for _, match := range discoveryLauncherVariable.FindAllStringIndex(target, -1) {
+		reference := target[match[0]:match[1]]
+		name := strings.Trim(strings.TrimPrefix(reference, "$"), "{}%")
+		value, ok := variables[name]
+		if !ok && strings.HasPrefix(reference, "%") {
+			value, ok = variables[strings.ToUpper(name)]
+		}
+		if !ok {
+			value = reference
+		}
+		if expanded.Len()+match[0]-start+len(value) > discoveryLauncherReadLimit {
+			return "", fmt.Errorf("launcher variable expansion exceeds inspection limit")
+		}
+		expanded.WriteString(target[start:match[0]])
+		expanded.WriteString(value)
+		start = match[1]
+	}
+	if expanded.Len()+len(target)-start > discoveryLauncherReadLimit {
+		return "", fmt.Errorf("launcher variable expansion exceeds inspection limit")
+	}
+	expanded.WriteString(target[start:])
+	return expanded.String(), nil
+}
+
+func discoveryLauncherInvocations(line string, batch bool) []discoveryInvocation {
+	return discoveryLauncherInvocationsAtDepth(line, batch, 0)
+}
+
+func discoveryLauncherInvocationsAtDepth(line string, batch bool, depth int) []discoveryInvocation {
+	if depth >= 8 {
+		return []discoveryInvocation{{target: "uninspectable nested shell command", explicit: true}}
+	}
+	tokens := discoveryLauncherTokens.FindAllString(line, -1)
+	var invocations []discoveryInvocation
+	start := 0
+	explicit := false
+	for i := 0; i <= len(tokens); i++ {
+		if i < len(tokens) && (len(tokens[i]) != 1 || !strings.ContainsAny(tokens[i], ";&|()")) {
+			continue
+		}
+		invocations = append(invocations, discoveryLauncherSegment(tokens[start:i], batch, explicit, depth)...)
+		explicit = i < len(tokens) && tokens[i] == "&" && (i == 0 || tokens[i-1] == "|")
+		start = i + 1
+	}
+	return invocations
+}
+
+func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) []discoveryInvocation {
+	var invocations []discoveryInvocation
+	for i := 0; i < len(tokens); {
+		target := strings.TrimPrefix(strings.Trim(tokens[i], `"'`), "@")
+		if strings.HasPrefix(target, "#") {
+			break
+		}
+		if assignment := strings.IndexByte(target, '='); assignment > 0 && !strings.ContainsAny(target[:assignment], `/\`) {
+			i++ // Environment assignment preceding a POSIX command.
+			continue
+		}
+		commandName := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
+		if commandName == "sh" || commandName == "bash" || commandName == "sh.exe" || commandName == "bash.exe" {
+			return append(invocations, discoveryShellInvocations(tokens[i+1:], depth)...)
+		}
+		if !batch && (commandName == "command" || commandName == "nohup" || commandName == "time") {
+			next, query, err := discoveryCommandPrefix(commandName, tokens, i+1)
+			if err != "" {
+				return append(invocations, discoveryInvocation{refusal: err})
+			}
+			if query {
+				return invocations
+			}
+			i, explicit = next, true
+			continue
+		}
+		if discoveryPowerShell(commandName) {
+			if _, ok := discoveryPowerShellFile(tokens[i+1:]); !ok {
+				return append(invocations, discoveryInvocation{refusal: "cannot inspect PowerShell command mode; use an explicit -File launcher"})
+			}
+			return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
+		}
+		if commandName == "cmd" || commandName == "cmd.exe" || strings.EqualFold(target, "%COMSPEC%") {
+			for j := i + 1; j < len(tokens) && strings.HasPrefix(tokens[j], "/"); j++ {
+				if !strings.EqualFold(tokens[j], "/c") && !strings.EqualFold(tokens[j], "/k") {
+					continue
+				}
+				payload := strings.Join(tokens[j+1:], " ")
+				if j+2 == len(tokens) && strings.HasPrefix(payload, `"`) && strings.HasSuffix(payload, `"`) {
+					inner := strings.TrimSuffix(strings.TrimPrefix(payload, `"`), `"`)
+					// A quoted executable path keeps its quotes; a quoted command
+					// string must be inspected for commands and operators within it.
+					switch strings.ToLower(filepath.Ext(inner)) {
+					case ".exe", ".com", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs", ".py", ".sh":
+					default:
+						payload = inner
+					}
+				}
+				commands := discoveryLauncherInvocationsAtDepth(payload, batch, depth+1)
+				for k := range commands {
+					// CMD builtins do not resolve through PATH. External delegates
+					// must retain the same inspection requirement as CALL/exec.
+					switch strings.ToLower(commands[k].target) {
+					case "assoc", "break", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move", "path", "pause", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift", "time", "title", "type", "ver", "verify", "vol":
+					default:
+						commands[k].explicit = true
+					}
+				}
+				return append(invocations, commands...)
+			}
+		}
+		switch strings.ToLower(target) {
+		case "exec":
+			explicit = true
+			i++
+			for i < len(tokens) && strings.HasPrefix(tokens[i], "-") {
+				option := tokens[i]
+				i++
+				if option == "-a" && i < len(tokens) {
+					i++ // argv[0], not the command.
+				}
+				if option == "--" {
+					break
+				}
+			}
+		case "call":
+			i++
+			if batch && i < len(tokens) && strings.HasPrefix(tokens[i], ":") {
+				return invocations // Local batch subroutine; its body is scanned separately.
+			}
+			explicit = true
+		case ".", "source":
+			explicit = true
+			i++ // Loading a profile is not an extensionless executable redirect.
+		case "then", "else", "do", "!":
+			i++
+		case "--":
+			i++
+		case "env", "npx", "pnpx":
+			explicit = true
+			i++
+			for i < len(tokens) && strings.HasPrefix(tokens[i], "-") {
+				option := tokens[i]
+				i++
+				if pkg, ok := strings.CutPrefix(option, "--package="); ok {
+					invocations = append(invocations, discoveryInvocation{target: strings.Trim(pkg, `"'`), dependency: true})
+				}
+				if (option == "-u" || option == "--unset" || option == "-p" || option == "--package") && i < len(tokens) {
+					// Package names can themselves identify a foreign agent.
+					if option == "-p" || option == "--package" {
+						invocations = append(invocations, discoveryInvocation{target: strings.Trim(tokens[i], `"'`), dependency: true})
+					}
+					i++
+				}
+			}
+		case "npm", "pnpm", "bun":
+			if i+1 < len(tokens) && (tokens[i+1] == "exec" || tokens[i+1] == "dlx" || tokens[i+1] == "x") {
+				explicit = true
+				i += 2
+			} else {
+				return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
+			}
+		case "start":
+			explicit = true
+			i++
+			if i < len(tokens) && strings.HasPrefix(tokens[i], `"`) {
+				i++ // Windows START's optional quoted window title.
+			}
+			for i < len(tokens) && strings.HasPrefix(tokens[i], "/") {
+				i++
+			}
+		case "if", "elif":
+			i++
+			if !batch {
+				continue // A POSIX condition can itself execute an agent.
+			}
+			if i < len(tokens) && strings.EqualFold(tokens[i], "/i") {
+				i++
+			}
+			if i < len(tokens) && strings.EqualFold(tokens[i], "not") {
+				i++
+			}
+			if i >= len(tokens) {
+				return invocations // A condition may precede a parenthesized block.
+			}
+			switch strings.ToLower(tokens[i]) {
+			case "[", "[[", "test", "true", "false":
+				return invocations // POSIX tests do not provide routing evidence.
+			case "exist", "defined", "errorlevel", "cmdextversion":
+				i += 2 // These test an operand, not an executable.
+			default:
+				if strings.Contains(tokens[i], "==") {
+					i++
+				} else if i+2 < len(tokens) && discoveryBatchComparison(tokens[i+1]) {
+					i += 3
+				} else {
+					return append(invocations, discoveryInvocation{refusal: "cannot inspect batch IF condition"})
+				}
+			}
+		default:
+			return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
+		}
+	}
+	return invocations
+}
+
+func discoveryBatchComparison(token string) bool {
+	switch strings.ToLower(token) {
+	case "==", "equ", "neq", "lss", "leq", "gtr", "geq":
+		return true
+	}
+	return false
+}
+
+// Prefixes execute the following command; lookup/help flags do not execute it.
+func discoveryCommandPrefix(name string, tokens []string, next int) (int, bool, string) {
+	for next < len(tokens) && strings.HasPrefix(tokens[next], "-") {
+		option := tokens[next]
+		next++
+		if option == "--" {
+			break
+		}
+		if (name == "command" && (option == "-v" || option == "-V")) ||
+			(name != "command" && (option == "--help" || option == "--version")) {
+			return next, true, ""
+		}
+		if name == "command" && option == "-p" {
+			continue
+		}
+		if name == "time" {
+			switch option {
+			case "-p", "-v", "-a", "-q", "--portability", "--verbose", "--append", "--quiet":
+				continue
+			case "-f", "-o", "--format", "--output":
+				next++
+				continue
+			}
+			if strings.HasPrefix(option, "--format=") || strings.HasPrefix(option, "--output=") {
+				continue
+			}
+		}
+		return next, false, "cannot inspect command prefix option " + option
+	}
+	return next, false, ""
+}
+
+func discoveryShellInvocations(arguments []string, depth int) []discoveryInvocation {
+	refuse := []discoveryInvocation{{refusal: "cannot inspect shell command mode; use a literal command or script path"}}
+	for i := 0; i < len(arguments); i++ {
+		option := arguments[i]
+		if option == "--noprofile" || option == "--norc" {
+			continue
+		}
+		if strings.HasPrefix(option, "-") && option != "-" {
+			if strings.Trim(option[1:], "celuxv") != "" {
+				return refuse
+			}
+			if !strings.Contains(option, "c") {
+				continue
+			}
+			if i+1 >= len(arguments) {
+				return refuse
+			}
+			payload := arguments[i+1]
+			if len(payload) >= 2 && (payload[0] == '\'' || payload[0] == '"') && payload[len(payload)-1] == payload[0] {
+				payload = payload[1 : len(payload)-1]
+			}
+			if strings.Contains(payload, "$(") || strings.Contains(payload, "`") {
+				return refuse
+			}
+			commands := discoveryLauncherInvocationsAtDepth(payload, false, depth+1)
+			for k := range commands {
+				if strings.ContainsAny(commands[k].target, "$`") {
+					return refuse
+				}
+				switch commands[k].target {
+				case ":", "true", "false", "echo", "printf", "exit", "cd", "pwd", "read", "set", "export", "unset", "shift", "break", "continue", "return", "test", "[", "[[", "fi", "done", "esac":
+				default:
+					commands[k].explicit = true
+				}
+			}
+			return commands // Remaining shell arguments are $0/$1, not commands.
+		}
+		if option == "-" {
+			return refuse // Script supplied on stdin cannot be inspected.
+		}
+		return []discoveryInvocation{{target: strings.Trim(option, `"'`), explicit: true, arguments: arguments[i+1:]}}
+	}
+	return refuse
+}
+
+func discoveryRuntimeTarget(target string) bool {
+	// Standard shims delegate through variables or a Node interpreter. Their
+	// literal application paths and other command segments are still inspected.
+	if strings.ContainsAny(target, "$%") {
+		return true
+	}
+	name := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
+	return name == "node" || name == "node.exe" || name == "bun" || name == "bun.exe"
+}
+
+// Only an interpreter's program argument is executable ownership evidence.
+// Paths printed by echo, tested by IF, assigned by SET, or embedded in eval
+// strings must not vouch for an otherwise unidentified launcher.
+type discoveryApplication struct {
+	target string
+	main   bool
+}
+
+func discoveryPowerShell(name string) bool {
+	return name == "powershell" || name == "powershell.exe" || name == "pwsh" || name == "pwsh.exe"
+}
+
+// Accept only file mode and known startup options. Command/EncodedCommand and
+// their abbreviations, implicit commands and unknown modes must not disappear
+// from inspection while the outer agent-named wrapper vouches for them.
+func discoveryPowerShellFile(arguments []string) (string, bool) {
+	for i := 0; i < len(arguments); i++ {
+		switch strings.ToLower(strings.Trim(arguments[i], `"'`)) {
+		case "-file", "-f":
+			if i+1 < len(arguments) {
+				file := strings.Trim(arguments[i+1], `"'`)
+				return file, file != "" && file != "-" && !strings.HasPrefix(file, "-")
+			}
+			return "", false
+		case "-noprofile", "-nologo", "-noninteractive", "-noexit", "-sta", "-mta":
+		case "-executionpolicy", "-windowstyle", "-inputformat", "-outputformat":
+			i++ // These startup options consume one value before file mode.
+		default:
+			return "", false
+		}
+	}
+	return "", false
+}
+
+func discoveryInterpreterApplications(target string, arguments []string) []discoveryApplication {
+	name := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
+	if discoveryPowerShell(name) {
+		if file, ok := discoveryPowerShellFile(arguments); ok {
+			return []discoveryApplication{{target: file, main: true}}
+		}
+		return nil
+	}
+	if !discoveryRuntimeTarget(target) && name != "python" && name != "python3" && name != "python.exe" && name != "python3.exe" {
+		return nil
+	}
+	var applications []discoveryApplication
+	for i := 0; i < len(arguments); i++ {
+		argument := strings.Trim(arguments[i], `"'`)
+		if strings.HasPrefix(argument, "-") {
+			if strings.HasPrefix(argument, "--eval=") || strings.HasPrefix(argument, "--print=") {
+				return applications
+			}
+			if len(argument) > 2 && (strings.HasPrefix(argument, "-e") || strings.HasPrefix(argument, "-p") || strings.HasPrefix(argument, "-c") || strings.HasPrefix(argument, "-m")) {
+				return applications
+			}
+			switch argument {
+			case "-e", "--eval", "-p", "--print", "-c", "-m":
+				return applications
+			case "-r", "--require", "--loader", "--import":
+				i++
+				if i < len(arguments) {
+					applications = append(applications, discoveryApplication{target: strings.Trim(arguments[i], `"'`)})
+				}
+			default:
+				for _, prefix := range []string{"--require=", "--loader=", "--import="} {
+					if value, ok := strings.CutPrefix(argument, prefix); ok {
+						applications = append(applications, discoveryApplication{target: strings.Trim(value, `"'`)})
+					}
+				}
+			}
+			continue
+		}
+		switch strings.ToLower(filepath.Ext(argument)) {
+		case ".js", ".mjs", ".cjs", ".py", ".ps1":
+			return append(applications, discoveryApplication{target: argument, main: true})
+		default:
+			// npm also publishes extensionless Node/Bun bin applications.
+			if strings.Contains(strings.ReplaceAll(argument, `\`, "/"), "/node_modules/") {
+				return append(applications, discoveryApplication{target: argument, main: true})
+			}
+			return applications // The first positional argument is the program, not later CLI data.
+		}
+	}
+	return applications
+}

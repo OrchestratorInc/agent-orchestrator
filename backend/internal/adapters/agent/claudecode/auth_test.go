@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -796,5 +797,21 @@ func TestProviderModelsDoesNotClaimConfiguredFoundryDeployments(t *testing.T) {
 	})
 	if err == nil || len(models) != 0 {
 		t.Fatalf("models/error = %+v/%v, want unsupported Foundry discovery", models, err)
+	}
+}
+
+func TestClaudeAuthCommandRejectsRedirect(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "login-started")
+	binary := filepath.Join(root, "claude.cmd")
+	if err := os.WriteFile(binary, []byte("@echo login > \""+marker+"\"\n@call autohand %*\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err := claudeAuthCommand(context.Background(), binary, root, nil)
+	if err == nil || !strings.Contains(err.Error(), "autohand") {
+		t.Fatalf("CLI auth probe = %v, want redirect refusal", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("launcher executed: %v", err)
 	}
 }
