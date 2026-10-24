@@ -27,6 +27,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} を起動しています. メッセージは順番に送信されます",
+	"chat.shared.checkingAccess": "このセッションでできることを確認しています…",
 	"chat.shared.viewOnly": "このセッションは閲覧のみで、エージェントに書き込めません",
 	"chat.shared.lockedBy": "{{name}} がエージェントに書き込み中です",
 	"chat.shared.someone": "誰か",

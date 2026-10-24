@@ -1423,7 +1423,7 @@ describe("Sidebar", () => {
 
 	it("lists a shared project's orchestrator for its guest and offers none of the owner's actions", async () => {
 		const orchestrator: WorkspaceSession = { ...session, id: "shared-orc", workspaceId: "proj-1", kind: "orchestrator", title: "Orchestrator" };
-		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: { role: "editor", byName: "Alice" }, sessions: [orchestrator] };
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: { byName: "Alice" }, sessions: [orchestrator] };
 		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
 		await userEvent.click(await screen.findByText("Orchestrator"));
 		expect(navigateMock).toHaveBeenCalledWith({
@@ -1436,7 +1436,7 @@ describe("Sidebar", () => {
 	});
 
 	it("never offers a guest to start an orchestrator in a shared project", () => {
-		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: { role: "editor" }, sessions: [session] };
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [session] };
 		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
 		expect(screen.queryByRole("button", { name: "Spawn Project One orchestrator" })).toBeNull();
 		expect(screen.getByText("fix login")).toBeTruthy();

@@ -687,9 +687,11 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 			}
 			return Promise.all([...byProject.values()].map(async (item) => {
 				const { sessions } = await client.listSharedProjectSessions(item.project.orgId, item.project.id);
+				const workspace = toCloudWorkspace(item.project, sessions, item.project.orgId);
 				return {
-					...toCloudWorkspace(item.project, sessions, item.project.orgId),
-					shared: { role: item.grant.role, byName: item.sharedByName || undefined },
+					...workspace,
+					sessions: workspace.sessions.map((session) => session.cloud ? { ...session, cloud: { ...session.cloud, shared: true } } : session),
+					shared: { byName: item.sharedByName || undefined },
 				};
 			}));
 		},

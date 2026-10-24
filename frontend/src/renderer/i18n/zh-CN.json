@@ -27,6 +27,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 正在启动. 消息将按顺序发送",
+	"chat.shared.checkingAccess": "正在确认你在此会话中的权限…",
 	"chat.shared.viewOnly": "你可以查看此会话，但不能向智能体发送内容",
 	"chat.shared.lockedBy": "{{name}} 正在向智能体输入",
 	"chat.shared.someone": "有人",

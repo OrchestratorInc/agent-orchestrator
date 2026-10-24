@@ -27,6 +27,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 시작 중. 메시지는 순서대로 전송됩니다",
+	"chat.shared.checkingAccess": "이 세션에서 할 수 있는 작업을 확인하는 중…",
 	"chat.shared.viewOnly": "이 세션을 볼 수 있지만 에이전트에게 쓸 수는 없습니다",
 	"chat.shared.lockedBy": "{{name}} 님이 에이전트에게 쓰는 중입니다",
 	"chat.shared.someone": "누군가",

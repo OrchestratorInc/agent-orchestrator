@@ -27,6 +27,7 @@
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} démarre. Les messages sont envoyés dans l’ordre",
+	"chat.shared.checkingAccess": "Vérification de ce que cette session vous permet de faire…",
 	"chat.shared.viewOnly": "Vous pouvez voir cette session, mais pas écrire à l'agent",
 	"chat.shared.lockedBy": "{{name}} écrit à l'agent",
 	"chat.shared.someone": "Quelqu'un",

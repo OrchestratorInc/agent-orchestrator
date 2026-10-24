@@ -817,7 +817,10 @@ export function CloudSessionChatSurface({
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id] });
 	const myRole = live?.viewers.find((viewer) => viewer.userId === me)?.role;
-	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId: me, live, canWrite: myRole !== "viewer" });
+	// A guest's grant is per session, so their chat box opens only once the
+	// server has said which role this session gives them.
+	const readOnly = myRole === "viewer" || (myRole === undefined && cloud?.shared === true);
+	const lease = useComposerLease({ client, orgId: cloud?.orgId, sessionId: session.id, userId: me, live, canWrite: !readOnly });
 	const leaseRef = useRef(lease);
 	leaseRef.current = lease;
 	const send = useMutation({
@@ -1003,8 +1006,8 @@ export function CloudSessionChatSurface({
 			}
 			headerActions={headerActions}
 			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
-			composerLockedPlaceholder={myRole === "viewer"
-				? appI18n.t("chat.shared.viewOnly")
+			composerLockedPlaceholder={readOnly
+				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				: lease.locked
 					? (lease.holder
 						? appI18n.t("chat.shared.lockedBy", { name: lease.holder.name || appI18n.t("chat.shared.someone") })
