@@ -35,7 +35,8 @@ type discoveryInspectionResult struct {
 // Agent installers can replace another tool's wrapper while retaining its name.
 // Inspect launchers without running even --version: a redirected probe can open
 // an interactive login before printing anything. This is a local routing check,
-// not an attestation of arbitrary executable contents.
+// not an attestation of arbitrary executable contents or a full shell evaluator.
+// Opaque native copies/renames cannot be authenticated by their launch paths.
 func VerifyExecutable(ctx context.Context, agentID, binaryPath string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -254,6 +255,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		return managerErr == nil, managerErr
 	}
 	variables := map[string]string{}
+	batch := (ext == ".cmd" || ext == ".bat") && !bytes.HasPrefix(body, []byte("#!"))
 	variableBytes := 0
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "@"))
@@ -261,7 +263,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 			continue
 		}
 		assignmentLine := line
-		batchSet := (ext == ".cmd" || ext == ".bat") && strings.HasPrefix(strings.ToUpper(line), "SET ")
+		batchSet := batch && strings.HasPrefix(strings.ToUpper(line), "SET ")
 		if batchSet {
 			assignmentLine = strings.Trim(strings.TrimSpace(line[4:]), `"`)
 		}
@@ -296,7 +298,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		var references []string
 		explicitTargets := map[string]bool{}
 		ownershipTargets := map[string]bool{}
-		for _, invocation := range discoveryLauncherInvocations(line, ext == ".cmd" || ext == ".bat") {
+		for _, invocation := range discoveryLauncherInvocations(line, batch) {
 			if invocation.refusal != "" {
 				return false, fmt.Errorf("%s", invocation.refusal)
 			}
