@@ -52,7 +52,7 @@ import {
 	useShellTerminals,
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
-import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, isRetryableResumeError, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
@@ -492,10 +492,26 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const resumeStatus = useSessionInterfaceTransitionStatus(canResumeAgent(session) ? session?.id : undefined, hostId);
 	const canResume = canResumeAgent(session, resumeStatus.transition) && !resumeStatus.isLoading && !resumeStatus.statusError;
 	const openedSession = useRef({ key: uiSessionId, checked: false });
+	const resumeMounted = useRef(false);
+	const resumeEligibility = useRef({ uiSessionId, canResume, daemonReady: daemonStatus.state === "ready" });
+	resumeEligibility.current = { uiSessionId, canResume, daemonReady: daemonStatus.state === "ready" };
+	useEffect(() => {
+		resumeMounted.current = true;
+		return () => { resumeMounted.current = false; };
+	}, []);
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", "local", sessionId],
-		mutationFn: resumeAgentOnOpen,
-		onSettled: async (_data, _error, id) => {
+		mutationFn: async ({ id, opening }: { id: string; opening: { key: string; checked: boolean } }) => {
+			const current = resumeEligibility.current;
+			// A delayed retry must not wake a session after navigation, termination,
+			// a successful manual resume, or an interface/agent switch.
+			if (!resumeMounted.current || openedSession.current !== opening || current.uiSessionId !== opening.key ||
+				!current.canResume || !current.daemonReady) return;
+			await resumeAgentOnOpen(id);
+		},
+		retry: (failureCount, error) => failureCount < 2 && isRetryableResumeError(error),
+		retryDelay: (failureCount) => failureCount === 0 ? 2000 : 5000,
+		onSettled: async (_data, _error, { id }) => {
 			await Promise.all([
 				refreshWorkspaces(),
 				queryClient.invalidateQueries({ queryKey: conversationQueryKey(id) }),
@@ -508,7 +524,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// is set, only the in-flight mutation keeps it true — switching back to an
 	// already-resumed session no longer flashes "Resuming agent…" while the
 	// workspace query catches up with the new activity state.
-	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
+	const quietResume = (autoResume.variables?.id === sessionId && autoResume.isPending) ||
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && openedSession.current.key === uiSessionId && !openedSession.current.checked);
 	const resumeOnOpen = autoResume.mutate;
@@ -521,10 +537,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return;
 		}
 		if (!canResume) return;
-		// One attempt per route opening; a failed resume or a later agent exit
-		// stays stopped rather than entering an automatic restart loop.
+		// One bounded recovery per route opening. Only transient failures retry;
+		// a later agent exit never enters an automatic restart loop.
 		openedSession.current.checked = true;
-		resumeOnOpen(session.id);
+		resumeOnOpen({ id: session.id, opening: openedSession.current });
 	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
@@ -1901,7 +1917,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="session-detail">
-			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables === sessionId && autoResume.isError ? (
+			{!hostId && !session?.cloud && session?.mode !== "chat" && sessionAgentExited(session) && autoResume.variables?.id === sessionId && autoResume.isError ? (
 				<p className="px-4 py-2 text-xs text-error" role="alert">
 					{apiErrorMessage(autoResume.error)}
 				</p>
@@ -2000,7 +2016,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									workspaceFileActive={Boolean(fileTabs.activePath)}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
-									controllerResumeError={!hostId && autoResume.variables === sessionId && autoResume.isError
+								controllerResumeError={!hostId && autoResume.variables?.id === sessionId && autoResume.isError
 										? apiErrorMessage(autoResume.error) : undefined}
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									accountMoving={Boolean(interfaceUi.accountMoveTarget)}

@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sessionInterfaceTransition } from "../test/interface-transition-fixtures";
 import type { WorkspaceSession } from "../types/workspace";
-import { canResumeAgent } from "./useCanResumeAgent";
+import { canResumeAgent, isRetryableResumeError, resumeAgentOnOpen } from "./useCanResumeAgent";
+
+const post = vi.hoisted(() => vi.fn());
+vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ POST: post }) }));
 
 const exitedSession: WorkspaceSession = {
 	id: "session-1",
@@ -24,5 +27,42 @@ describe("canResumeAgent", () => {
 
 	it("allows resume after an interface transition completes", () => {
 		expect(canResumeAgent(exitedSession, sessionInterfaceTransition(exitedSession.id, "completed"))).toBe(true);
+	});
+});
+
+describe("resumeAgentOnOpen", () => {
+	it("retains the transient error code and request ID for recovery", async () => {
+		post.mockResolvedValueOnce({
+			error: { code: "SERVICE_UNAVAILABLE", message: "Please retry", requestId: "resume-123" },
+			response: new Response(null, { status: 503 }),
+		});
+		const error = await resumeAgentOnOpen("transient").catch((error: unknown) => error);
+		expect(error).toMatchObject({ message: "Please retry", code: "SERVICE_UNAVAILABLE", requestId: "resume-123" });
+		expect(isRetryableResumeError(error)).toBe(true);
+	});
+
+	it("treats a bodyless gateway timeout as a failed, retryable resume", async () => {
+		post.mockResolvedValueOnce({ response: new Response(null, { status: 504 }) });
+		const error = await resumeAgentOnOpen("gateway-timeout").catch((error: unknown) => error);
+		expect(error).toBeInstanceOf(Error);
+		expect(isRetryableResumeError(error)).toBe(true);
+	});
+
+	it.each(["CHAT_AUTH_REQUIRED", "CHAT_DRIVER_INCOMPATIBLE", "CHAT_RECOVERY_INCONCLUSIVE", "AGENT_RESUME_IN_PROGRESS"])(
+		"does not retry %s", async (code) => {
+			post.mockResolvedValueOnce({ error: { code, message: "User action required" }, response: new Response(null, { status: 409 }) });
+			const error = await resumeAgentOnOpen(code).catch((error: unknown) => error);
+			expect(isRetryableResumeError(error)).toBe(false);
+		},
+	);
+
+	it("shares a resume request between hover, opening, and manual recovery", async () => {
+		let finish!: (value: unknown) => void;
+		post.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+		const first = resumeAgentOnOpen("shared");
+		const second = resumeAgentOnOpen("shared");
+		expect(second).toBe(first);
+		finish({ data: {}, response: new Response() });
+		await first;
 	});
 });

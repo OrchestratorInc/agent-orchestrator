@@ -657,6 +657,9 @@ func initializeConnection(ctx context.Context, connection *conn) error {
 		"clientInfo":   map[string]any{"name": clientName, "title": clientTitle, "version": clientVersion},
 		"capabilities": map[string]any{"experimentalApi": true, "optOutNotificationMethods": nil},
 	}, nil); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		return fmt.Errorf("%w: initialize: %w", ports.ErrChatDriverIncompatible, err)
 	}
 	if err := connection.notify("initialized", nil); err != nil {
