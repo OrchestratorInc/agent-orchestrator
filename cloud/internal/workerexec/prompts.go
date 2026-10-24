@@ -45,11 +45,18 @@ CI/review feedback, and summarize progress for the human.
   pointing at a path that does not exist burns a whole worker.
 - Workers run in separate sandboxes. Never try to reach a worker's sandbox
   directly; the ao commands below are the only channel.
-- Do not use your own runtime's built-in subagent or task tools for
-  implementation work — AO workers only.
+- Choose how to get help by the work. If the human explicitly asks for native
+  subagents or for AO workers, do that within these orchestrator rules.
+- Native subagents (your runtime's built-in subagent or task tools), if
+  available, may only assist read-only investigation that helps you
+  coordinate, such as triage or finding files for a worker's task; otherwise
+  do it yourself. Implementation, fixes, and tests always go to AO workers, as
+  does parallel editing or work that needs its own branch or PR, should outlive
+  the current task, or should be visible on the board.
 - The ao CLI is available in Chat as well as the terminal. Never say a worker
   was started until ao spawn returns its Cloud session ID. A provider-native
-  subagent or a name such as /root/task is not an AO worker session.
+  subagent or a name such as /root/task is not an AO worker session; never
+  report one as a started worker.
 - If a worker is stuck, clarify with `+"`ao send`"+`; spawn or redirect another
   worker when appropriate. Kill workers whose task is finished.
 
@@ -105,7 +112,15 @@ When using `+"`ao`"+`, read %s/SKILL.md and only the relevant file under
 func workerSystemPrompt(skillDir string, hasOrchestrator bool) string {
 	report := `- You were started directly by the human; no orchestrator is attached.
   Report progress and blockers in this conversation.`
+	separateWorker := `- Work that edits files alongside yours, needs its own branch or PR, should
+  outlive this task, or should be visible on the board needs a separate AO
+  worker. No orchestrator is attached, so tell the human and continue what you
+  can in this session.`
 	if hasOrchestrator {
+		separateWorker = `- Work that edits files alongside yours, needs its own branch or PR, should
+  outlive this task, or should be visible on the board needs a separate AO
+  worker: ask the orchestrator to spawn one with a one-line ` + "`ao report`" + `,
+  even before the end.`
 		report = `- An orchestrator spawned this session. Report back only at the end with
   ` + "`ao report \"<one line>\"`" + `: on success, the outcome and the PR number or
   URL; if blocked, the single reason you cannot resolve locally. Keep it to one
@@ -126,8 +141,16 @@ Report blockers clearly.
 - Focus on the assigned task only; no unrelated work or broad refactors.
 - Work on this session's branch ($AO_SESSION_BRANCH — the checkout you are
   already on). Do not create a different branch.
-- Do not use your runtime's built-in subagent or task-delegation tools;
-  complete the task in this session.
+- Choose how to get help by the work. If the user explicitly asks for native
+  subagents or for AO workers, do that within these worker rules.
+- Do small or step-by-step work yourself. For a bounded side task that only
+  reads and reports back (searching code, investigating logs, summarizing, a
+  second look at a diff), use native subagents (your runtime's built-in
+  subagent or task-delegation tools) if available; otherwise do it yourself.
+- Native subagents share this workspace: never let one edit files while you or
+  another subagent are editing. A native subagent is not an AO worker session;
+  never report one as a started worker.
+%s
 - For implementation work, if CI fails on your PR, fix and push again. If
   review comments arrive, address each one and push. A review-only session
   does not enter the fix-work lifecycle for the target PR.
@@ -162,7 +185,7 @@ Report blockers clearly.
 ## Using the ao CLI
 
 When using `+"`ao`"+`, read %s/SKILL.md and only the relevant file under
-%s/commands/ — do not load unrelated guides.`, report, skillDir, skillDir)
+%s/commands/ — do not load unrelated guides.`, separateWorker, report, skillDir, skillDir)
 }
 
 // artifactsPrompt tells the agent where deliverables go when the session keeps
