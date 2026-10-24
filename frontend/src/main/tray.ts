@@ -28,16 +28,17 @@ function format(template: string, vars: Record<string, string | number>): string
 	return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => String(vars[key] ?? match));
 }
 
-function trayIconPath(): string | undefined {
+function trayIconPath(name = "trayIconTemplate.png"): string | undefined {
 	const candidate = app.isPackaged
-		? path.join(process.resourcesPath, "trayIconTemplate.png")
-		: path.join(__dirname, "../../assets/trayIconTemplate.png");
+		? path.join(process.resourcesPath, name)
+		: path.join(__dirname, "../../assets", name);
 	return existsSync(candidate) ? candidate : undefined;
 }
 
 export type TrayController = {
 	setState(state: TrayAttentionState): void;
 	setLocale(locale: AppLocale): void;
+	setAwakeState(active: boolean | null): void;
 	clear(): void;
 	dispose(): void;
 };
@@ -55,9 +56,15 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 	const icon = nativeImage.createFromPath(iconPath);
 	if (icon.isEmpty()) return null;
 	icon.setTemplateImage(true);
+	const awakeIconPath = trayIconPath("trayAwakeIconTemplate.png");
+	const loadedAwakeIcon = awakeIconPath ? nativeImage.createFromPath(awakeIconPath) : icon;
+	const awakeIcon = loadedAwakeIcon.isEmpty() ? icon : loadedAwakeIcon;
+	awakeIcon.setTemplateImage(true);
 
 	const tray = new Tray(icon);
 	let sessions: TraySessionEntry[] = [];
+	let awake: boolean | null = false;
+	let lastAwake = false;
 	let catalog = catalogFor(options.locale);
 
 	const t = (key: MessageKey, vars?: Record<string, string | number>): string => {
@@ -80,10 +87,16 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 
 	const render = () => {
 		const count = sessions.length;
-		tray.setTitle(count > 0 ? String(count) : "");
-		tray.setToolTip(count > 0 ? tPlural("tray.attentionTooltip", count) : "Agent Orchestrator");
+		// A compact drawn cup stays legible without relying on font glyph sizing.
+		tray.setImage(lastAwake ? awakeIcon : icon);
+		tray.setTitle([lastAwake && awake === null ? "?" : "", count > 0 ? String(count) : ""].filter(Boolean).join(" "));
+		const awakeLabel = awake === true ? t("tray.awakeActive") : awake === null && lastAwake ? t("tray.awakeUnknown") : "";
+		tray.setToolTip([count > 0 ? tPlural("tray.attentionTooltip", count) : "Agent Orchestrator", awakeLabel].filter(Boolean).join(" — "));
 
 		const items: MenuItemConstructorOptions[] = [];
+		if (awakeLabel) {
+			items.push({ label: awakeLabel, enabled: false }, { type: "separator" });
+		}
 		if (count === 0) {
 			items.push({ label: t("tray.empty"), enabled: false });
 		} else {
@@ -122,6 +135,12 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 		},
 		setLocale(locale) {
 			catalog = catalogFor(locale);
+			render();
+		},
+		setAwakeState(active) {
+			if (awake === active) return;
+			awake = active;
+			if (active !== null) lastAwake = active;
 			render();
 		},
 		clear() {

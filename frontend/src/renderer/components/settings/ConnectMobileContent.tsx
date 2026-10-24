@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Check, Coffee, Copy, Info, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useStayAwake } from "../../hooks/useStayAwake";
@@ -289,7 +289,7 @@ function readLastKeepAwake(): KeepAwakeStatus | null {
 		if (!raw) return null;
 		const saved = JSON.parse(raw) as Partial<KeepAwakeStatus> | null;
 		if (typeof saved?.supported !== "boolean" || typeof saved.enabled !== "boolean") return null;
-		return { supported: saved.supported, enabled: saved.enabled, active: false, hasBattery: saved.hasBattery === true };
+		return { supported: saved.supported, enabled: saved.enabled, active: false, hasBattery: saved.hasBattery === true, lidClosed: saved.lidClosed === true, lidSupported: saved.lidSupported === true };
 	} catch {
 		return null;
 	}
@@ -301,7 +301,7 @@ function rememberKeepAwake(keepAwake: KeepAwakeStatus | undefined) {
 		else
 			window.localStorage?.setItem(
 				KEEP_AWAKE_STORAGE_KEY,
-				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery }),
+				JSON.stringify({ supported: keepAwake.supported, enabled: keepAwake.enabled, hasBattery: keepAwake.hasBattery, lidClosed: keepAwake.lidClosed, lidSupported: keepAwake.lidSupported }),
 			);
 	} catch {
 		// Storage can be unavailable; the row then waits for the status.
@@ -421,7 +421,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	// Share wake ownership with the sidebar; mobile also opts into lid-closed wake.
 	const stayAwake = useStayAwake(active);
 
 
@@ -780,20 +780,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 			</PairingLayout>
 
-			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
-			    whether or not the bridge is on: the choice is remembered and takes
-			    effect whenever the mobile connection is. */}
+			{/* macOS wake ownership is independent of the mobile connection. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
 					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
 					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						stayAwake.set(next, true);
-					}}
-					onLidChange={(next) => {
-						clearActionErrors();
-						stayAwake.setLid(next);
+						if (next) stayAwake.setLid(true);
+						else stayAwake.set(false, true);
 					}}
 				/>
 			)}
@@ -817,83 +812,66 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	);
 }
 
-/** Keep this Mac awake, and (when the daemon reports it) keep it awake with the
- *  lid closed. Disabled while it shows a remembered state rather than the
- *  daemon's, so it cannot be toggled on a guess; the lid row appears only for a
- *  live status, since the remembered one does not carry the lid fields. */
+/** One mobile wake switch includes closed-lid mode on supported Macs.
+ * Remembered status stays disabled until the daemon confirms it. */
 function KeepAwakeRow({
 	keepAwake,
 	disabled = false,
 	onCheckedChange,
-	onLidChange,
 }: {
 	keepAwake: KeepAwakeStatus;
 	disabled?: boolean;
 	onCheckedChange?: (next: boolean) => void;
-	onLidChange?: (next: boolean) => void;
 }) {
 	const { t } = useTranslation();
+	const lidUnavailable = !keepAwake.lidSupported && !keepAwake.lidClosed;
 	const lidNeedsAttention =
+		lidUnavailable ||
 		(keepAwake.enabled && keepAwake.lidClosed) ||
 		keepAwake.lidReason === "recovery_failed" ||
 		keepAwake.lidReason === "lease_failed" ||
 		keepAwake.lidReason === "helper_upgrade_required";
+	const status = keepAwake.lidActive && keepAwake.enabled
+		? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
+		: keepAwake.lidReason || lidUnavailable
+			? t(`mobile.keepAwake.lidReason.${keepAwake.lidReason ?? "unsupported"}`, "Closed-lid keep awake is unavailable. Update or restart the AO desktop app to retry.")
+			: t("mobile.keepAwake.lidIdle", "Closed-lid wake is starting.");
 	return (
-		<>
-			<SettingsRow
-				data-testid="mobile-keep-awake"
-				icon={Coffee}
-				label={t("mobile.keepAwake.label")}
-				description={
-					<>
-						{t("mobile.keepAwake.help")}
-						{keepAwake.hasBattery && (!keepAwake.lidClosed || !keepAwake.lidSupported || !keepAwake.enabled) && (
-							<span data-testid="mobile-keep-awake-laptop"> {t("mobile.keepAwake.laptopNote")}</span>
-						)}
-					</>
-				}
-			>
-				<Switch
-					aria-label={t("mobile.keepAwake.label")}
-					checked={keepAwake.enabled}
-					disabled={disabled}
-					onCheckedChange={onCheckedChange}
-				/>
-			</SettingsRow>
-			{onLidChange && (keepAwake.lidSupported || keepAwake.lidClosed) && (
-				<SettingsRow
-					data-testid="mobile-lid-awake"
-					label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-					description={
-						<>
-							{t(
-								"mobile.keepAwake.lidHelp",
-								"Works while mobile access is on, even when your phone disconnects. Uses more battery; keep the Mac on a ventilated surface. Stops below 10% battery or at critical heat.",
-							)}
-							{lidNeedsAttention && (
-								<span className="mt-1 block" role="status">
-									{keepAwake.lidActive && keepAwake.enabled
-										? t("mobile.keepAwake.lidActive", "Closed-lid keep awake is armed.")
-										: keepAwake.lidReason
-											? t(
-													`mobile.keepAwake.lidReason.${keepAwake.lidReason}`,
-													"Closed-lid keep awake is unavailable. Turn the option off and on to retry.",
-												)
-											: t("mobile.keepAwake.lidIdle", "Starts when mobile access is on.")}
-								</span>
-							)}
-						</>
-					}
-				>
-					<Switch
-						aria-label={t("mobile.keepAwake.lidLabel", "Keep awake with lid closed")}
-						checked={keepAwake.enabled && (keepAwake.lidClosed ?? false)}
-						disabled={disabled}
-						onCheckedChange={onLidChange}
-					/>
-				</SettingsRow>
-			)}
-		</>
+		<SettingsRow
+			data-testid="mobile-keep-awake"
+			icon={Coffee}
+			label={t("mobile.keepAwake.label")}
+			description={
+				<>
+					{t("mobile.keepAwake.combinedHelp")}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								aria-label={t("mobile.keepAwake.details")}
+								className="ml-1 inline-flex align-middle text-settings-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							>
+								<Info className="size-3.5" aria-hidden="true" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-72">
+							{t("mobile.keepAwake.lidHelp")}
+							{keepAwake.lidReason === "isolated_data_dir" && <p className="mt-1">{t("mobile.keepAwake.lidReason.isolated_data_dir")}</p>}
+						</TooltipContent>
+					</Tooltip>
+					{lidNeedsAttention && keepAwake.lidReason !== "isolated_data_dir" && (
+						<span className="mt-1 block" role="status">{status}</span>
+					)}
+				</>
+			}
+		>
+			<Switch
+				aria-label={t("mobile.keepAwake.label")}
+				checked={keepAwake.enabled && keepAwake.lidClosed === true}
+				disabled={disabled || lidUnavailable}
+				onCheckedChange={onCheckedChange}
+			/>
+		</SettingsRow>
 	);
 }
 

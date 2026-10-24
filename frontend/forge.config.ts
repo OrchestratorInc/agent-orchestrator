@@ -73,6 +73,9 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"assets/icon.ico",
 		"assets/trayIconTemplate.png",
 		"assets/trayIconTemplate@2x.png",
+		"assets/trayAwakeIconTemplate.png",
+		"assets/trayAwakeIconTemplate@2x.png",
+		"assets/trayAwakeIcon.LICENSE",
 		"app-update.yml",
 	];
 }
