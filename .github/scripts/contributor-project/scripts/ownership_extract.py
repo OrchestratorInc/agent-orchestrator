@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read recent public merged PRs. Delete ownership-cache/ to refresh evidence."""
+"""Refresh merged-PR evidence, reusing history outside a seven-day overlap."""
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -11,6 +11,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORY_DAYS = 540  # Six 90-day half-lives; older churn has less than 1/64 weight.
+REFRESH_DAYS = 7
+FULL_REFRESH_DAYS = 30
+REPO = "OrchestratorInc/agent-orchestrator"
 PAGE = "pageInfo { hasNextPage endCursor }"
 FILES = "files(first:100,after:$cursor) { nodes { path additions deletions } " + PAGE + " }"
 REVIEWS = "reviews(first:100,after:$cursor,states:[APPROVED,COMMENTED]) { nodes { author { login __typename } } " + PAGE + " }"
@@ -134,17 +137,52 @@ def pull_requests(cache, start, end):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument("--full-refresh", action="store_true", help="rebuild all evidence instead of reusing history")
+    args = parser.parse_args()
     started = time.monotonic()
     cache = ROOT / "research/ownership-cache"
     as_of = datetime.now(timezone.utc).replace(microsecond=0)
     start = as_of - timedelta(days=HISTORY_DAYS)
-    prs, fetched, bot_prs, bots = pull_requests(cache, start, as_of)
+    output = ROOT / "research/ownership-raw.json"
+    previous = None
+    if output.exists() and not args.full_refresh:
+        try:
+            candidate = json.loads(output.read_text())
+            old_meta = candidate["meta"]
+            captured = datetime.fromisoformat(old_meta["generated_at"])
+            old_start = datetime.fromisoformat(old_meta["history_start"])
+            full_refresh = datetime.fromisoformat(old_meta["full_refresh_at"])
+            if (old_meta.get("repo") == REPO and old_meta.get("evidence_version") == 1
+                    and old_start <= start and full_refresh <= captured <= as_of
+                    and as_of - full_refresh < timedelta(days=FULL_REFRESH_DAYS)):
+                if not isinstance(candidate["prs"], list):
+                    raise ValueError("cached PRs must be an array")
+                numbers = [p["number"] for p in candidate["prs"]]
+                if len(set(numbers)) != len(numbers):
+                    raise ValueError("duplicate cached PRs")
+                previous = candidate
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"::warning::Owner evidence cache is invalid; rebuilding history: {exc}", flush=True)
+    refresh_start = max(start, datetime.fromisoformat(previous["meta"]["generated_at"]) - timedelta(days=REFRESH_DAYS)) if previous else start
+    prs, fetched, bot_prs, bots = pull_requests(cache, refresh_start, as_of)
+    retained = {}
+    if previous:
+        bots |= set(previous["meta"].get("excluded_bot_logins", []))
+        retained = {p["number"]: p for p in previous["prs"]
+                    if datetime.fromisoformat(p["merged_at"].replace("Z", "+00:00")) >= start}
+    reused = len(retained)
+    retained.update({p["number"]: p for p in prs})
+    prs = [{**p, "reviewers": [r for r in p["reviewers"] if not is_bot(r, bots)]}
+           for p in retained.values() if not is_bot(p["author"], bots)]
+    prs.sort(key=lambda p: p["number"])
     meta = {"generated_at": as_of.isoformat(), "history_start": start.isoformat(), "history_days": HISTORY_DAYS,
             "pr_count": len(prs), "pr_fetched_count": fetched, "skipped": {"bot_prs": bot_prs},
+            "repo": REPO, "evidence_version": 1, "refresh_start": refresh_start.isoformat(),
+            "reused_pr_count": reused,
+            "full_refresh_at": previous["meta"]["full_refresh_at"] if previous else as_of.isoformat(),
             "excluded_bot_logins": sorted(bots),
             "review_states": ["APPROVED", "COMMENTED"], "runtime_seconds": round(time.monotonic() - started, 2)}
-    save(ROOT / "research/ownership-raw.json", {"meta": meta, "prs": prs})
+    save(output, {"meta": meta, "prs": prs})
     print(json.dumps(meta, indent=2), flush=True)
 
 

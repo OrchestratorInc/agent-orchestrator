@@ -134,3 +134,63 @@ class ExtractionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IncrementalExtractionTests(unittest.TestCase):
+    now = datetime(2026, 10, 25, tzinfo=timezone.utc)
+
+    def pr(self, number, age, reviewers=()):
+        return {"number": number, "merged_at": (self.now - timedelta(days=age)).isoformat(),
+                "author": "alice", "reviewers": list(reviewers), "files": [{"path": "src/a.py", "churn": 1}]}
+
+    def cached(self):
+        return {"meta": {"repo": ownership.REPO, "evidence_version": 1,
+                         "generated_at": (self.now - timedelta(days=1)).isoformat(),
+                         "history_start": (self.now - timedelta(days=541)).isoformat(),
+                         "full_refresh_at": (self.now - timedelta(days=20)).isoformat(),
+                         "excluded_bot_logins": ["known-bot"]},
+                "prs": [self.pr(1, 100), self.pr(2, 2), self.pr(3, 541)]}
+
+    def run_main(self, root, fresh, flags=()):
+        with patch.object(ownership, "ROOT", root), patch.object(sys, "argv", ["ownership_extract.py", *flags]), \
+                patch.object(ownership, "datetime", wraps=datetime) as clock, \
+                patch.object(ownership, "pull_requests", return_value=(fresh, len(fresh), 0, set())) as fetch, \
+                contextlib.redirect_stdout(io.StringIO()):
+            clock.now.return_value = self.now
+            ownership.main()
+        return json.loads((root / "research/ownership-raw.json").read_text()), fetch
+
+    def test_reuses_old_evidence_refreshes_overlap_and_prunes_expired_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ownership.save(root / "research/ownership-raw.json", self.cached())
+            raw, fetch = self.run_main(root, [self.pr(2, 2, ["bob", "known-bot"]), self.pr(4, 0)])
+            self.assertEqual([p["number"] for p in raw["prs"]], [1, 2, 4])
+            self.assertEqual(raw["prs"][1]["reviewers"], ["bob"])
+            self.assertEqual(fetch.call_args.args[1], self.now - timedelta(days=8))
+            self.assertEqual(raw["meta"]["reused_pr_count"], 2)
+            self.assertEqual(raw["meta"]["full_refresh_at"], self.cached()["meta"]["full_refresh_at"])
+
+    def test_forced_monthly_and_invalid_cache_rebuild_full_window(self):
+        expired = self.cached()
+        expired["meta"]["full_refresh_at"] = (self.now - timedelta(days=31)).isoformat()
+        for cache, flags in [(self.cached(), ["--full-refresh"]), (expired, []), ({"meta": {}}, [])]:
+            with self.subTest(flags=flags, cache=cache["meta"]), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                ownership.save(root / "research/ownership-raw.json", cache)
+                raw, fetch = self.run_main(root, [self.pr(4, 0)], flags)
+                self.assertEqual(fetch.call_args.args[1], self.now - timedelta(days=540))
+                self.assertEqual([p["number"] for p in raw["prs"]], [4])
+                self.assertEqual(raw["meta"]["full_refresh_at"], self.now.isoformat())
+
+    def test_failed_refresh_preserves_previous_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "research/ownership-raw.json"
+            ownership.save(path, self.cached())
+            before = path.read_bytes()
+            with patch.object(ownership, "ROOT", root), patch.object(sys, "argv", ["ownership_extract.py"]), \
+                    patch.object(ownership, "pull_requests", side_effect=RuntimeError("GitHub unavailable")), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "unavailable"):
+                ownership.main()
+            self.assertEqual(path.read_bytes(), before)
