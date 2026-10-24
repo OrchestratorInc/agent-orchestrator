@@ -47,7 +47,14 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
-	useWorkspaceQuery: workspaceQueryMock,
+	useWorkspaceQuery: () => {
+		const query = workspaceQueryMock();
+		return {
+			isSnapshotSuccess: query.isSuccess ?? true,
+			isSnapshotError: query.isError ?? false,
+			...query,
+		};
+	},
 	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
@@ -118,6 +125,7 @@ import { useUiStore } from "../stores/ui-store";
 import { SessionsBoard } from "./SessionsBoard";
 import { latestSessionArtifacts, toBoardSessionPresentation } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
+import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 
 function renderBoard(projectId?: string) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -131,6 +139,25 @@ function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 			<TooltipProvider>
 				<SessionsBoard projectId={projectId} />
 			</TooltipProvider>
+		</QueryClientProvider>,
+	);
+}
+
+function renderBoardWithShell(queryClient: QueryClient, projectId?: string, shellOverrides: Partial<ShellContextValue> = {}) {
+	queryClient.setQueryData(["system-requirements", "http://127.0.0.1:3001"], {
+		ready: true,
+		requirements: [],
+	});
+	const shell = {
+		daemonStatus: { state: "ready" },
+		workspaceStartupState: "ready",
+		...shellOverrides,
+	} as ShellContextValue;
+	return render(
+		<QueryClientProvider client={queryClient}>
+			<ShellProvider value={shell}>
+				<TooltipProvider><SessionsBoard projectId={projectId} /></TooltipProvider>
+			</ShellProvider>
 		</QueryClientProvider>,
 	);
 }
@@ -155,6 +182,146 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("never renders worker columns for a resolved route with no matching workspace", () => {
+		workspaceQueryMock.mockReturnValue({ data: [], isSuccess: true, isSnapshotSuccess: true, isSnapshotError: false });
+		renderBoard("deleted-or-signed-out");
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("not found");
+	});
+
+	it("shows an in-panel pending status without a shell startup overlay", () => {
+		workspaceQueryMock.mockReturnValue({ data: undefined, isSuccess: false, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoard("local-pending");
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+	});
+
+	it("shows pending status when a daemon code suppresses the full-window startup screen", () => {
+		workspaceQueryMock.mockReturnValue({ data: undefined, isSuccess: false, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoardWithShell(new QueryClient(), "p1", { daemonStatus: { state: "starting", code: "recovering" } } as unknown as Partial<ShellContextValue>);
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.getByRole("status", { name: "Loading…" })).toHaveAttribute("aria-busy", "true");
+	});
+
+	it("does not guess local header styling while the routed project is unresolved", () => {
+		boardActionsInPanelMock.mockReturnValue(true);
+		workspaceQueryMock.mockReturnValue({ data: [], isSuccess: true, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoard("p1");
+		expect(screen.getByRole("button", { name: appI18n.t("shell.spawnOrchestrator") })).toHaveClass("topbar-control--secondary");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--secondary");
+	});
+
+	it("keeps in-panel header actions quiet before the Cloud snapshot is ready", () => {
+		boardActionsInPanelMock.mockReturnValue(true);
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", kind: "cloud", name: "Cloud", path: "", sessions: [] }], isSuccess: true, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoard("p1");
+		expect(screen.getByRole("button", { name: appI18n.t("shell.spawnOrchestrator") })).toHaveClass("topbar-control--secondary");
+	});
+
+	it("keeps Cloud-only pending content blank without covering navigation until the snapshot is ready", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [],
+			isSuccess: true,
+			isError: false,
+			isSnapshotSuccess: false,
+			isSnapshotError: false,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = renderBoardWithShell(queryClient, "p1");
+
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }],
+			isSuccess: true,
+			isError: false,
+			isSnapshotSuccess: true,
+			isSnapshotError: false,
+		});
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<ShellProvider value={{ daemonStatus: { state: "ready" }, workspaceStartupState: "ready" } as ShellContextValue}>
+					<TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider>
+				</ShellProvider>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.getByTestId("project-board-empty")).toBeInTheDocument();
+	});
+
+	it("does not report a missing Cloud orchestrator before the first session snapshot arrives", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }],
+			isSuccess: true, isError: false, isSnapshotSuccess: false, isSnapshotError: false,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+
+		expect(screen.queryByText("No orchestrator is running for this project.")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
+	});
+
+	it.each([
+		{ daemonStatus: { state: "starting" } },
+		{ workspaceStartupState: "loading" },
+	] as Partial<ShellContextValue>[])("retains the daemon startup screen for %j while Cloud is pending", (shellOverrides) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [], isSuccess: true, isError: false, isSnapshotSuccess: false, isSnapshotError: false,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1", shellOverrides);
+
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+	});
+
+	it("retains the daemon startup screen while the local workspace query is pending", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: undefined, isSuccess: false, isError: false, isSnapshotSuccess: false, isSnapshotError: false,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+	});
+
+	it("shows the empty state immediately for an existing cached Cloud snapshot", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }],
+			isSuccess: true,
+			isError: false,
+			isSnapshotSuccess: true,
+			isSnapshotError: false,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+
+		expect(screen.getByTestId("project-board-empty")).toBeInTheDocument();
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+	});
+
+	it("shows an accessible initial Cloud error with an explicit snapshot retry and no worker columns", async () => {
+		const refetchSnapshot = vi.fn();
+		workspaceQueryMock.mockReturnValue({
+			data: [],
+			isSuccess: true,
+			isError: false,
+			isSnapshotSuccess: false,
+			isSnapshotError: true,
+			refetchSnapshot,
+		});
+		renderBoardWithShell(new QueryClient({ defaultOptions: { queries: { retry: false } } }), "p1");
+
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not load sessions.");
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(refetchSnapshot).toHaveBeenCalledTimes(1);
+	});
+
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);
