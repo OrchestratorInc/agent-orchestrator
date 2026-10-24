@@ -205,7 +205,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   and for account management that is not wired in this process, so those
   conditions do not reconnect in a loop. A failed project add emits
   `ao.renderer.project_add_failed` with `error_code`. A failed project clone
-  emits `ao.renderer.project_clone_failed` with `error_code`.
+  emits `ao.renderer.project_clone_failed` with `error_code`. The code is the
+  daemon's API error code, or `DAEMON_NOT_READY`, `REQUEST_FAILED` or
+  `NO_PROJECT` when the request never reached a usable response. A clone the
+  user cancels emits nothing.
 - An updater failure streak emits one `ao.renderer.update_failed` until a
   successful download of that target, or a successful check for a check-phase
   streak, clears it. Retries in the streak do not emit again. Each install
