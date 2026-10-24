@@ -99,6 +99,7 @@ import {
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
+import { requestDesktopShutdown } from "./main/desktop-shutdown";
 import { createQuitConfirmController } from "./main/quit-confirm";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
@@ -2504,27 +2505,24 @@ function killDaemon(child: ChildProcess): void {
 }
 
 async function shutdownDaemonForDesktopQuit(): Promise<void> {
-	if (keepDaemonAlive(process.env)) return;
-	const status = daemonStatus;
-	if (status.state !== "ready" || !status.port) return;
-	const handshakePath = runFilePath();
-	if (!handshakePath) throw new Error("Daemon ownership record is unavailable");
-	const info = parseRunFile(await readFile(handshakePath, "utf8"));
-	if (!info || info.pid !== status.pid || info.port !== status.port) {
-		throw new Error("Daemon ownership changed before desktop quit");
-	}
-	if (!shouldLinkOnAttach(info.owner)) return;
-	if (!info.appRunId) throw new Error("Daemon app ownership is unavailable");
-	const response = await fetch(`http://127.0.0.1:${info.port}/shutdown`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			stopAgents: !preserveAgentsOnQuit && !isUpdateRestartRequested(),
-			appRunId: info.appRunId,
+	const accepted = await requestDesktopShutdown({
+		keepAlive: keepDaemonAlive(process.env),
+		appRunId,
+		status: daemonStatus,
+		preserveAgents: () => preserveAgentsOnQuit || isUpdateRestartRequested(),
+		readRunInfo: async () => {
+			const handshakePath = runFilePath();
+			if (!handshakePath) throw new Error("Daemon ownership record is unavailable");
+			return parseRunFile(await readFile(handshakePath, "utf8"));
+		},
+		requestShutdown: (port, body) => fetch(`http://127.0.0.1:${port}/shutdown`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(3000),
 		}),
-		signal: AbortSignal.timeout(3000),
 	});
-	if (!response.ok) throw new Error(`Agent shutdown returned HTTP ${response.status}`);
+	if (!accepted) return;
 	desktopAgentShutdownAccepted = true;
 	if (daemonProcess) daemonStoppingProcess = daemonProcess;
 }
