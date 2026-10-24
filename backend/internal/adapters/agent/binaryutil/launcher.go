@@ -12,6 +12,7 @@ type discoveryInvocation struct {
 	explicit   bool
 	arguments  []string
 	dependency bool
+	refusal    string
 }
 
 // Quotes keep spaces and shell operators inside an argument. Unquoted shell
@@ -83,6 +84,12 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 			continue
 		}
 		commandName := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
+		if discoveryPowerShell(commandName) {
+			if _, ok := discoveryPowerShellFile(tokens[i+1:]); !ok {
+				return append(invocations, discoveryInvocation{refusal: "cannot inspect PowerShell command mode; use an explicit -File launcher"})
+			}
+			return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
+		}
 		if commandName == "cmd" || commandName == "cmd.exe" || strings.EqualFold(target, "%COMSPEC%") {
 			for j := i + 1; j < len(tokens) && strings.HasPrefix(tokens[j], "/"); j++ {
 				if !strings.EqualFold(tokens[j], "/c") && !strings.EqualFold(tokens[j], "/k") {
@@ -207,16 +214,37 @@ type discoveryApplication struct {
 	main   bool
 }
 
+func discoveryPowerShell(name string) bool {
+	return name == "powershell" || name == "powershell.exe" || name == "pwsh" || name == "pwsh.exe"
+}
+
+// Accept only file mode and known startup options. Command/EncodedCommand and
+// their abbreviations, implicit commands and unknown modes must not disappear
+// from inspection while the outer agent-named wrapper vouches for them.
+func discoveryPowerShellFile(arguments []string) (string, bool) {
+	for i := 0; i < len(arguments); i++ {
+		switch strings.ToLower(strings.Trim(arguments[i], `"'`)) {
+		case "-file", "-f":
+			if i+1 < len(arguments) {
+				file := strings.Trim(arguments[i+1], `"'`)
+				return file, file != "" && file != "-" && !strings.HasPrefix(file, "-")
+			}
+			return "", false
+		case "-noprofile", "-nologo", "-noninteractive", "-noexit", "-sta", "-mta":
+		case "-executionpolicy", "-windowstyle", "-inputformat", "-outputformat":
+			i++ // These startup options consume one value before file mode.
+		default:
+			return "", false
+		}
+	}
+	return "", false
+}
+
 func discoveryInterpreterApplications(target string, arguments []string) []discoveryApplication {
 	name := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
-	if name == "powershell" || name == "powershell.exe" || name == "pwsh" || name == "pwsh.exe" {
-		for i := 0; i+1 < len(arguments); i++ {
-			if strings.EqualFold(arguments[i], "-Command") || strings.EqualFold(arguments[i], "-EncodedCommand") {
-				return nil
-			}
-			if strings.EqualFold(arguments[i], "-File") {
-				return []discoveryApplication{{target: strings.Trim(arguments[i+1], `"'`), main: true}}
-			}
+	if discoveryPowerShell(name) {
+		if file, ok := discoveryPowerShellFile(arguments); ok {
+			return []discoveryApplication{{target: file, main: true}}
 		}
 		return nil
 	}

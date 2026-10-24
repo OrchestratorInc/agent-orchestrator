@@ -22,6 +22,46 @@ func writeDiscoveryLauncher(t *testing.T, root, name, body string) string {
 	return path
 }
 
+func TestDiscoveryExecutableRejectsPowerShellCommandModes(t *testing.T) {
+	for _, shell := range []string{"powershell.exe", "powershell", "pwsh.exe", `"C:/Program Files/PowerShell/7/pwsh.exe"`} {
+		for _, args := range []string{
+			"-Command autohand", `-Command "autohand"`, "-c autohand", "-Co autohand",
+			"-EncodedCommand YQB1AHQAbwBoAGEAbgBkAA==", "-enc YQB1AHQAbwBoAGEAbgBkAA==",
+			"-e YQB1AHQAbwBoAGEAbgBkAA==", "-CommandWithArgs autohand",
+			"-NoProfile -NonInteractive -Command autohand", "autohand",
+			"-Command", "-File -", "-Unknown autohand",
+		} {
+			t.Run(shell+"/"+args, func(t *testing.T) {
+				launcher := writeDiscoveryLauncher(t, t.TempDir(), "grok.cmd", "@"+shell+" "+args+"\n")
+				if _, err := VerifyExecutable(t.Context(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "PowerShell command mode") {
+					t.Fatalf("verification = %v, want uninspectable PowerShell mode refused", err)
+				}
+			})
+		}
+	}
+}
+
+func TestDiscoveryExecutableInspectsPowerShellFileMode(t *testing.T) {
+	for _, options := range []string{"-File", "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File", "-NoLogo -WindowStyle Hidden -f"} {
+		t.Run(options, func(t *testing.T) {
+			root := t.TempDir()
+			writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+			script := writeDiscoveryLauncher(t, root, "grok.ps1", "& \"$PSScriptRoot/grok.exe\" @args\n")
+			// Arguments after the file belong to the script, not PowerShell.
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@pwsh.exe "+options+" \"%~dp0grok.ps1\" -Command data\n")
+			if selected, err := VerifyExecutable(t.Context(), "grok", launcher); err != nil || selected != launcher {
+				t.Fatalf("valid file launcher = %q, %v", selected, err)
+			}
+			if err := os.WriteFile(script, []byte("& autohand @args\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := VerifyExecutable(t.Context(), "grok", launcher); err == nil || !strings.Contains(err.Error(), "autohand") {
+				t.Fatalf("redirected file launcher = %v, want Autohand refused", err)
+			}
+		})
+	}
+}
+
 func TestDiscoveryExecutableLimitsTotalFiles(t *testing.T) {
 	for _, files := range []int{discoveryLauncherFileLimit, discoveryLauncherFileLimit + 1} {
 		t.Run(fmt.Sprint(files), func(t *testing.T) {
