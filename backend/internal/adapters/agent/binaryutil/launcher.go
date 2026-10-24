@@ -183,10 +183,50 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) 
 				return invocations // POSIX condition; subsequent segments/body are inspected.
 			}
 		default:
+			if program, arguments, ok := discoveryVersionManagerProgram(commandName, tokens[i+1:]); ok {
+				// The manager resolves the program among its installed tool
+				// versions, so only the program name is routing evidence; the
+				// manager's own dispatcher is not an agent launcher.
+				return append(invocations, discoveryInvocation{target: program, arguments: arguments})
+			}
 			return append(invocations, discoveryInvocation{target: target, explicit: explicit, arguments: tokens[i+1:]})
 		}
 	}
 	return invocations
+}
+
+var discoveryVersionManagers = map[string]bool{
+	"asdf": true, "mise": true, "rtx": true, "pyenv": true, "nodenv": true,
+	"rbenv": true, "goenv": true, "jenv": true, "plenv": true, "phpenv": true,
+}
+
+// Version-manager shims run `<manager> exec <program> "$@"` (or mise's
+// `x -- <program>`). It returns the dispatched program and its arguments.
+func discoveryVersionManagerProgram(commandName string, arguments []string) (string, []string, bool) {
+	manager := strings.TrimSuffix(commandName, ".exe")
+	if !discoveryVersionManagers[manager] || len(arguments) < 2 {
+		return "", nil, false
+	}
+	if subcommand := strings.Trim(arguments[0], `"'`); subcommand != "exec" && subcommand != "x" {
+		return "", nil, false
+	}
+	rest := arguments[1:]
+	if manager == "mise" || manager == "rtx" {
+		// mise accepts tool specs before `--`: `mise x node@22 -- <program>`.
+		for i, argument := range rest {
+			if argument == "--" {
+				rest = rest[i+1:]
+				break
+			}
+		}
+	}
+	for len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
+		rest = rest[1:]
+	}
+	if len(rest) == 0 {
+		return "", nil, false
+	}
+	return strings.Trim(rest[0], `"'`), rest[1:], true
 }
 
 func discoveryRuntimeTarget(target string) bool {
