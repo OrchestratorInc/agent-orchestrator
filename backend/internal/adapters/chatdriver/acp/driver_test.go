@@ -4152,6 +4152,48 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}
 }
 
+// Discovery must read the legacy `models` session/new field. Hermes sends no
+// configOptions and lists its whole catalog under `models`, so the composer's
+// picker offered only the configured model before launch (review comment
+// 4365736482 on PR #6635).
+func TestDiscoverConfigOptionsReadsLegacyModels(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "auto:anthropic/claude-opus-4.6",
+		availableModels: []legacyModelInfo{
+			{ModelID: "auto:anthropic/claude-opus-4.6", Name: "Claude Opus 4.6 (auto)"},
+			{ModelID: "openrouter:anthropic/claude-opus-4.6", Name: "Claude Opus 4.6 (OpenRouter)"},
+		},
+	}
+	driver := New(Config{
+		Harness: domain.HarnessHermes,
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			return Launch{Command: "hermes", Args: []string{"acp"}}, nil
+		},
+	}, slog.New(slog.DiscardHandler))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	got, err := driver.discoverConfigOptions(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model *ports.ChatConfigOption
+	for i := range got {
+		if got[i].ID == "model" {
+			model = &got[i]
+		}
+	}
+	if model == nil {
+		t.Fatalf("options = %#v, want the legacy model catalog", got)
+	}
+	if model.Current.Select != "auto:anthropic/claude-opus-4.6" || len(model.Choices) != 2 {
+		t.Fatalf("model option = %#v, want both advertised models with the current one selected", model)
+	}
+	if model.Choices[0].Value != "auto:anthropic/claude-opus-4.6" ||
+		model.Choices[1].Value != "openrouter:anthropic/claude-opus-4.6" {
+		t.Fatalf("model choices = %#v, want the advertised ids", model.Choices)
+	}
+}
+
 func booleanConfigOption(id, name string, current bool) acpsdk.SessionConfigOption {
 	return acpsdk.SessionConfigOption{Boolean: &acpsdk.SessionConfigOptionBoolean{
 		Id: acpsdk.SessionConfigId(id), Name: name, CurrentValue: current, Type: "boolean",

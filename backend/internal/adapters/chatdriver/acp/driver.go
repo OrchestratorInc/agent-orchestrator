@@ -241,7 +241,10 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	if err != nil {
 		return nil, normalizeACPError("ACP session/new", err)
 	}
-	return normalizeConfigOptions(resp.ConfigOptions), nil
+	// Normalize exactly like the live session path: agents that list models
+	// only in the legacy `models` response field (Hermes) or modes only in
+	// `modes` must surface those in discovery, not just in a launched session.
+	return normalizeSessionOptions(resp.ConfigOptions, conv.legacyWire.modelState(), resp.Modes), nil
 }
 
 // Harness identifies the AO harness this ACP transport adapts.
