@@ -120,7 +120,26 @@ describe("Workers dock stability", () => {
 		act(() => renderer.update(<FleetScreen />));
 		const renamed = renderer.root.findByType("WorkerDock" as never).props.environments;
 		expect(renamed).not.toBe(before);
-		expect(renamed.map((environment: { name: string }) => environment.name)).toEqual(["Mac", "Gaming PC"]);
+		// Machines are listed by name, so the rename also moves it first.
+		expect(renamed.map((environment: { name: string }) => environment.name)).toEqual(["Gaming PC", "Mac"]);
+	});
+});
+
+describe("Workers environment chips", () => {
+	it("shows the machine chips only once two machines are paired", () => {
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findAllByProps({ testID: "worker-environment-strip" })).toHaveLength(1);
+
+		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
+		act(() => renderer.update(<FleetScreen />));
+		expect(renderer.root.findAllByProps({ testID: "worker-environment-strip" })).toHaveLength(0);
+	});
+
+	it("lists the machine chips by name", () => {
+		fixtures.hostStates = [snapshot({ hostId: "z", name: "Zeta" }), snapshot({ hostId: "a", name: "alpha" })];
+		act(() => { renderer = create(<FleetScreen />); });
+		const chips = renderer.root.findAll((node) => (node.type as unknown) === "Pressable" && /^worker-environment-chip-(?!all$)/.test(node.props.testID ?? ""));
+		expect(chips.map((chip) => chip.props.testID)).toEqual(["worker-environment-chip-a", "worker-environment-chip-z"]);
 	});
 });
 

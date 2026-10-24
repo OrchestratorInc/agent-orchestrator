@@ -1,10 +1,11 @@
-import { Pressable, ScrollView, StyleSheet, Text } from "react-native";
+import { useCallback, useEffect, useRef } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { haptics } from "./haptics";
 import { MachineGlyph } from "./MachineIdentity";
 import { machineAppearance, sharedMachineSymbols } from "./machineAppearance";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { ALL_WORKER_ENVIRONMENTS, type WorkerEnvironment } from "./worker-controls";
+import { ALL_WORKER_ENVIRONMENTS, chipRevealOffset, type WorkerEnvironment } from "./worker-controls";
 import { iconSize, press, radius, space, type } from "./tokens";
 
 const CHIP_HEIGHT = 32;
@@ -16,6 +17,7 @@ const CHIP_HIT_SLOP = { top: 6, bottom: 6, left: 2, right: 2 };
  * one icon chip per paired machine. The selected chip takes the solid accent
  * fill; idle chips rest on the elevated surface. When two machines share an
  * icon, their chips also carry the name, since the icon alone can't tell them apart.
+ * The row scrolls to the selected chip, including a choice made in the filter sheet.
  */
 export function WorkerEnvironmentFilter({
 	environments,
@@ -30,6 +32,27 @@ export function WorkerEnvironmentFilter({
 	const styles = useThemedStyles(makeStyles);
 	const allSelected = selectedEnvironmentId === ALL_WORKER_ENVIRONMENTS;
 	const shared = sharedMachineSymbols(environments);
+	const scrollRef = useRef<ScrollView>(null);
+	const chipLayouts = useRef(new Map<string, { x: number; width: number }>());
+	const scrollOffset = useRef(0);
+	const viewportWidth = useRef(0);
+	const selectedRef = useRef(selectedEnvironmentId);
+	selectedRef.current = selectedEnvironmentId;
+
+	const reveal = useCallback((environmentId: string) => {
+		const chip = chipLayouts.current.get(environmentId);
+		if (!chip || viewportWidth.current === 0) return;
+		const target = chipRevealOffset(chip, { offset: scrollOffset.current, width: viewportWidth.current, inset: space.lg });
+		if (target !== null) scrollRef.current?.scrollTo({ x: target, animated: true });
+	}, []);
+	useEffect(() => reveal(selectedEnvironmentId), [reveal, selectedEnvironmentId]);
+	// A chip measured after the selection changed (first render, a name that
+	// grew) still has to come into view.
+	const onChipLayout = (environmentId: string) => (event: LayoutChangeEvent) => {
+		const { x, width } = event.nativeEvent.layout;
+		chipLayouts.current.set(environmentId, { x, width });
+		if (environmentId === selectedRef.current) reveal(environmentId);
+	};
 	const select = (environmentId: string) => {
 		if (environmentId === selectedEnvironmentId) return;
 		haptics.tap();
@@ -38,6 +61,13 @@ export function WorkerEnvironmentFilter({
 	return (
 		<ScrollView
 			horizontal
+			ref={scrollRef}
+			onLayout={(event: LayoutChangeEvent) => {
+				viewportWidth.current = event.nativeEvent.layout.width;
+				reveal(selectedRef.current);
+			}}
+			onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => { scrollOffset.current = event.nativeEvent.contentOffset.x; }}
+			scrollEventThrottle={16}
 			showsHorizontalScrollIndicator={false}
 			contentContainerStyle={styles.row}
 			style={styles.strip}
@@ -47,6 +77,7 @@ export function WorkerEnvironmentFilter({
 				accessibilityRole="button"
 				accessibilityState={{ selected: allSelected }}
 				hitSlop={CHIP_HIT_SLOP}
+				onLayout={onChipLayout(ALL_WORKER_ENVIRONMENTS)}
 				onPress={() => select(ALL_WORKER_ENVIRONMENTS)}
 				style={({ pressed }) => [styles.chip, styles.labelChip, allSelected && styles.selected, pressed && styles.pressed]}
 				testID="worker-environment-chip-all"
@@ -64,6 +95,7 @@ export function WorkerEnvironmentFilter({
 						accessibilityRole="button"
 						accessibilityState={{ selected }}
 						hitSlop={CHIP_HIT_SLOP}
+						onLayout={onChipLayout(environment.id)}
 						// Tapping the selected machine again returns to every environment.
 						onPress={() => select(selected ? ALL_WORKER_ENVIRONMENTS : environment.id)}
 						style={({ pressed }) => [styles.chip, labelled ? styles.namedChip : styles.iconChip, selected && styles.selected, pressed && styles.pressed]}

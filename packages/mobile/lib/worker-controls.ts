@@ -88,3 +88,26 @@ export function workerEnvironmentOptions(
 		...environments.map((environment) => ({ id: environment.id, label: environment.name, ...(environment.appearance ? { appearance: environment.appearance } : {}) })),
 	];
 }
+
+/** Machines in name order, so the filter keeps its order across launches and polls. */
+export function sortWorkerEnvironments<T extends WorkerEnvironment>(environments: readonly T[]): T[] {
+	return [...environments].sort((a, b) =>
+		a.name.toLocaleLowerCase().localeCompare(b.name.toLocaleLowerCase()) || a.id.localeCompare(b.id),
+	);
+}
+
+/** One machine leaves nothing to filter, so the chip row only appears from two. */
+export function showsEnvironmentFilter(environments: readonly WorkerEnvironment[]): boolean {
+	return environments.length > 1;
+}
+
+/**
+ * Where a horizontal chip row must scroll so a chip is fully visible with `inset`
+ * of breathing room, or null when it already is.
+ */
+export function chipRevealOffset(chip: { x: number; width: number }, view: { offset: number; width: number; inset: number }): number | null {
+	if (chip.x - view.inset < view.offset) return Math.max(0, chip.x - view.inset);
+	const end = chip.x + chip.width + view.inset;
+	if (end > view.offset + view.width) return end - view.width;
+	return null;
+}
