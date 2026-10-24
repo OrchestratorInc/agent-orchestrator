@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { HomePage } from "../components/HomePage";
 import { MigrationPopup } from "../components/MigrationPopup";
@@ -6,6 +7,7 @@ import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { hasCompletedOnboarding, markOnboardingComplete } from "../lib/onboarding-finish";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 
 export const Route = createFileRoute("/_shell/")({
 	component: ShellIndex,
@@ -15,6 +17,19 @@ function ShellIndex() {
 	const navigate = useNavigate();
 	const workspaceQuery = useWorkspaceQuery();
 	const settingsModal = useUiStore((state) => state.settingsModal);
+	const hasWorkspace = workspaceQuery.data?.some((workspace) => workspace.kind !== "scratch") ?? false;
+	const needsProfileCheck = !usesPreviewWorkspaceData && !settingsModal && !hasCompletedOnboarding() && workspaceQuery.isSuccess && !hasWorkspace;
+	const existingProfile = useQuery({
+		queryKey: ["onboarding-existing-profile"],
+		enabled: needsProfileCheck,
+		retry: false,
+		queryFn: async () => {
+			// These are local profile reads, independent of cloud project loading
+			// or whether a saved remote host is currently online.
+			const [account, remotes] = await Promise.all([aoBridge.cloud.getSession(), aoBridge.remotes.list()]);
+			return account !== null || remotes.length > 0;
+		},
+	});
 
 	// First run goes to the flow. Nothing else about the home route belongs to
 	// onboarding, so the rest of this file stays as main has it.
@@ -27,13 +42,19 @@ function ShellIndex() {
 		// projects but no flag. Wait for the list: sending someone back through
 		// setup because their profile predates the flag is not a first run.
 		if (!workspaceQuery.isSuccess) return;
-		const workspaces = workspaceQuery.data ?? [];
-		if (workspaces.some((workspace) => workspace.kind !== "scratch")) {
+		if (hasWorkspace) {
+			markOnboardingComplete();
+			return;
+		}
+		// An empty local list is not evidence of first run for cloud-only or
+		// remote-only profiles. Inconclusive reads must not force setup again.
+		if (!existingProfile.isSuccess || existingProfile.isFetching) return;
+		if (existingProfile.data) {
 			markOnboardingComplete();
 			return;
 		}
 		void navigate({ to: "/onboarding", replace: true });
-	}, [navigate, settingsModal, workspaceQuery.data, workspaceQuery.isSuccess]);
+	}, [navigate, settingsModal, hasWorkspace, workspaceQuery.isSuccess, existingProfile.data, existingProfile.isFetching, existingProfile.isSuccess]);
 
 	return (
 		<>
