@@ -54,21 +54,32 @@ function appendPage(stream: Stream, rows: DashboardSession[], nextCursor: string
 }
 
 /**
- * Page one again, after the archive changed under a loaded stream: a session
- * was archived (it is new at the top) or restored (it is gone). Rows already
- * loaded past page one stay, and so does the cursor, which is a position.
+ * Page one again, after the archive changed under a loaded stream.
+ *
+ * Rows loaded past page one are only kept when nothing can have left the
+ * archive: a session restored or deleted on another device never shows up
+ * here again, so a kept copy of it would stay forever. So:
+ * - a first page with no cursor is the whole archive, and replaces everything;
+ * - a smaller count, or more rows than the count, means something left: the
+ *   rows past page one go, and paging resumes from the new first page;
+ * - otherwise only additions happened (they land in page one), and the rows
+ *   past it stay, so the list does not collapse under someone scrolling it.
  */
 function refreshFirstPage(stream: Stream, rows: DashboardSession[], nextCursor: string | null, count: number): Stream {
 	if (!stream.loaded) return { ...appendPage(stream, rows, nextCursor), seenCount: count };
+	if (nextCursor === null) return { ...stream, rows, cursor: null, done: true, loading: false, seenCount: count };
 	const last = rows[rows.length - 1];
 	const firstPageIds = new Set(rows.map((row) => row.id));
 	const kept = last ? stream.rows.filter((row) => !firstPageIds.has(row.id) && compareArchived(row, last) > 0) : [];
-	const morePast = !stream.done || kept.length > 0;
+	if (count < stream.seenCount || rows.length + kept.length > count) {
+		return { ...stream, rows, cursor: nextCursor, done: false, loading: false, seenCount: count };
+	}
 	return {
 		...stream,
 		rows: [...rows, ...kept],
 		cursor: stream.done ? (kept.length > 0 ? null : nextCursor) : stream.cursor ?? nextCursor,
-		done: morePast ? stream.done : nextCursor === null,
+		// Finished only if the kept rows still reach the archive's end.
+		done: stream.done && kept.length > 0,
 		loading: false,
 		seenCount: count,
 	};

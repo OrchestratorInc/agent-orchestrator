@@ -431,6 +431,53 @@ describe("a machine that pages its archive", () => {
 		act(() => renderer.unmount());
 	});
 
+	// Sessions deleted on desktop never come back as live rows, so only the
+	// archive's own refresh can drop them from pages kept from before.
+	const numbered = (from: number, count: number) => Array.from({ length: count }, (_, index) => {
+		const n = from + index;
+		return { ...session, id: `old-${String(n).padStart(4, "0")}`, isTerminated: true, status: "terminated", updatedAt: new Date(Date.parse("2026-10-01T00:00:00Z") - n * 60_000).toISOString() };
+	});
+	it("drops a session deleted on desktop when the refreshed first page is the whole archive", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(51))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-49" });
+		act(() => { list(renderer).props.onEndReached(); });
+		await answer({ sessions: numbered(50, 1), nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(51);
+		// The oldest is deleted on desktop; the poll reports 50.
+		act(() => { renderer.update(board([live], source(50))); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: null })]);
+		await answer({ sessions: numbered(0, 50), nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(50);
+		expect(archivedIds(renderer)).not.toContain("old-0050");
+		act(() => renderer.unmount());
+	});
+
+	it("reloads pages below the first when the archive shrank, instead of keeping stale rows", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(120))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-49" });
+		act(() => { list(renderer).props.onEndReached(); });
+		await answer({ sessions: numbered(50, 50), nextCursor: "after-99" });
+		act(() => { list(renderer).props.onEndReached(); });
+		await answer({ sessions: numbered(100, 20), nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(120);
+		// old-0075 is deleted on desktop: the count drops to 119.
+		act(() => { renderer.update(board([live], source(119))); });
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-49" });
+		expect(archivedIds(renderer)).toHaveLength(50);
+		expect(rows(renderer).at(-1)?.kind).toBe("archive-status");
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-49" })]);
+		await answer({ sessions: [...numbered(50, 25), ...numbered(76, 25)], nextCursor: "after-100" });
+		expect(archivedIds(renderer)).not.toContain("old-0075");
+		act(() => renderer.unmount());
+	});
+
 	it("drops a restored session from the archive as soon as it is live again", async () => {
 		archivePages.requests.length = 0;
 		let renderer!: ReactTestRenderer;
