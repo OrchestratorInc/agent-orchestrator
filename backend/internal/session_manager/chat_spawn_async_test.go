@@ -259,21 +259,24 @@ func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
 	testResumeFailedAsyncChatSpawn(t, domain.KindWorker)
 }
 
-func TestResumeFailedAsyncChatSpawnPreservesSelectedEffort(t *testing.T) {
+func TestResumeFailedAsyncChatSpawnPreservesResolvedEffort(t *testing.T) {
 	for _, selection := range []struct {
-		name   string
-		effort string
+		name          string
+		effort        string
+		projectEffort string
+		wantEffort    string
 	}{
-		{name: "high", effort: "high"},
-		{name: "extra_high", effort: "xhigh"},
-		{name: "unspecified"},
+		{name: "high", effort: "high", wantEffort: "high"},
+		{name: "extra_high", effort: "xhigh", wantEffort: "xhigh"},
+		{name: "omitted_without_project_default"},
+		{name: "omitted_with_project_default", projectEffort: "medium", wantEffort: "medium"},
 	} {
 		for _, projectDefault := range []struct {
 			name   string
-			effort string
+			change bool
 		}{
 			{name: "unchanged_defaults"},
-			{name: "changed_defaults", effort: "low"},
+			{name: "changed_defaults", change: true},
 		} {
 			t.Run(selection.name+"/"+projectDefault.name, func(t *testing.T) {
 				launcher := &recordingLauncher{}
@@ -286,6 +289,9 @@ func TestResumeFailedAsyncChatSpawnPreservesSelectedEffort(t *testing.T) {
 				deferred := deferredBackground(m)
 				ws := m.workspace.(*fakeWorkspace)
 				ws.createErr = errors.New("temporary git failure")
+				project := st.projects[string(chatTestProject)]
+				project.Config.AgentConfig.Effort = selection.projectEffort
+				st.projects[string(chatTestProject)] = project
 				cfg := asyncChatSpawnConfig("do the thing")
 				cfg.AgentConfig = ports.AgentConfig{Model: "gpt-test", Effort: selection.effort}
 				cfg.EffortOverride = selection.effort != ""
@@ -298,13 +304,14 @@ func TestResumeFailedAsyncChatSpawnPreservesSelectedEffort(t *testing.T) {
 				if failed.ProvisionState != domain.SessionProvisionFailed {
 					t.Fatalf("initial provision state = %q, want failed", failed.ProvisionState)
 				}
-				if failed.Metadata.Effort != selection.effort {
-					t.Fatalf("saved effort = %q, want %q", failed.Metadata.Effort, selection.effort)
+				if failed.Metadata.Effort != selection.wantEffort {
+					t.Fatalf("saved effort = %q, want %q", failed.Metadata.Effort, selection.wantEffort)
 				}
 
-				project := st.projects[string(chatTestProject)]
-				project.Config.AgentConfig.Effort = projectDefault.effort
-				st.projects[string(chatTestProject)] = project
+				if projectDefault.change {
+					project.Config.AgentConfig.Effort = "low"
+					st.projects[string(chatTestProject)] = project
+				}
 				ws.createErr = nil
 				retried, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
 				if err != nil {
@@ -317,12 +324,12 @@ func TestResumeFailedAsyncChatSpawnPreservesSelectedEffort(t *testing.T) {
 				if len(launcher.started) != 1 {
 					t.Fatalf("controllers started = %d, want 1", len(launcher.started))
 				}
-				if got := launcher.started[0]; got.Model != "gpt-test" || got.Effort != selection.effort {
-					t.Fatalf("retried model/effort = %q/%q, want gpt-test/%q", got.Model, got.Effort, selection.effort)
+				if got := launcher.started[0]; got.Model != "gpt-test" || got.Effort != selection.wantEffort {
+					t.Fatalf("retried model/effort = %q/%q, want gpt-test/%q", got.Model, got.Effort, selection.wantEffort)
 				}
 				ready := st.sessions[rec.ID]
-				if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Effort != selection.effort {
-					t.Fatalf("retry state/effort = %q/%q, want ready/%q", ready.ProvisionState, ready.Metadata.Effort, selection.effort)
+				if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Effort != selection.wantEffort {
+					t.Fatalf("retry state/effort = %q/%q, want ready/%q", ready.ProvisionState, ready.Metadata.Effort, selection.wantEffort)
 				}
 				if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
 					t.Fatalf("prompts queued = %d, queues drained = %d, want 1 each", len(launcher.queued), len(launcher.drained))
