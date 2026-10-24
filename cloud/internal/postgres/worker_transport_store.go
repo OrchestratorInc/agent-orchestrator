@@ -47,6 +47,15 @@ func isWorkspaceWriteKind(kind string) bool {
 	return kind == "workspace.write" || kind == "workspace.review.write"
 }
 
+// isWorkspaceOperateKind reports whether a request kind changes the session,
+// so a viewer may not make it: the file writes, and "workspace.checkout",
+// the Retry that checks the workspace out again and reruns its Setup scripts.
+// A read-only session's owner still retries, so read-only mode gates only the
+// writes.
+func isWorkspaceOperateKind(kind string) bool {
+	return isWorkspaceWriteKind(kind) || kind == "workspace.checkout"
+}
+
 func (s *Store) CreateWorkspaceRequest(
 	ctx context.Context,
 	principal domain.Principal,
@@ -56,7 +65,7 @@ func (s *Store) CreateWorkspaceRequest(
 ) (domain.WorkerRequest, error) {
 	var request domain.WorkerRequest
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
-		if access.Role == "viewer" && isWorkspaceWriteKind(kind) {
+		if access.Role == "viewer" && isWorkspaceOperateKind(kind) {
 			return ErrForbidden
 		}
 		var err error
