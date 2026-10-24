@@ -20,7 +20,9 @@ cleanup() {
   rm -rf "$fixture_dir"
 }
 trap cleanup EXIT
-AO_GITHUB_FIXTURE_FILE="$fixture_dir/url" go -C "$repo_root/backend" test ./e2e -run '^TestGitHubDeviceBrowserFixture$' -count=1 -v -timeout=12m > "$fixture_dir/daemon.log" 2>&1 &
+# The production daemon trusts app://renderer only. Grant this browser test's
+# exact loopback origin to its disposable daemon, including a custom test port.
+AO_ALLOWED_ORIGINS="http://127.0.0.1:${AO_E2E_PORT:-5173}" AO_GITHUB_FIXTURE_FILE="$fixture_dir/url" go -C "$repo_root/backend" test ./e2e -run '^TestGitHubDeviceBrowserFixture$' -count=1 -v -timeout=12m > "$fixture_dir/daemon.log" 2>&1 &
 fixture_pid=$!
 for ((attempt=0; attempt<120; attempt++)); do
   [[ -s "$fixture_dir/url" ]] && break
