@@ -194,3 +194,21 @@ class IncrementalExtractionTests(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "unavailable"):
                 ownership.main()
             self.assertEqual(path.read_bytes(), before)
+
+    def test_failed_cold_build_pins_windows_and_resumes_completed_pages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(ownership, "ROOT", root), patch.object(sys, "argv", ["ownership_extract.py"]), \
+                    patch.object(ownership, "datetime", wraps=datetime) as clock, \
+                    patch.object(ownership, "pull_requests", side_effect=RuntimeError("timeout")), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, "timeout"):
+                clock.now.return_value = self.now
+                ownership.main()
+            progress = root / "research/ownership-progress.json"
+            self.assertEqual(json.loads(progress.read_text())["as_of"], self.now.isoformat())
+            original_now = self.now
+            with patch.object(self, "now", self.now + timedelta(days=1)):
+                raw, fetch = self.run_main(root, [])
+            self.assertEqual(fetch.call_args.args[2], original_now)
+            self.assertEqual(raw["meta"]["generated_at"], original_now.isoformat())
+            self.assertFalse(progress.exists())

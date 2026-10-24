@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import time
 
@@ -142,6 +143,15 @@ def main():
     started = time.monotonic()
     cache = ROOT / "research/ownership-cache"
     as_of = datetime.now(timezone.utc).replace(microsecond=0)
+    progress = ROOT / "research/ownership-progress.json"
+    if progress.exists():
+        try:
+            saved = json.loads(progress.read_text())
+            pinned = datetime.fromisoformat(saved["as_of"])
+            if saved.get("repo") == REPO and as_of - timedelta(days=30) <= pinned <= as_of:
+                as_of = pinned
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     start = as_of - timedelta(days=HISTORY_DAYS)
     output = ROOT / "research/ownership-raw.json"
     previous = None
@@ -164,6 +174,9 @@ def main():
         except (OSError, ValueError, KeyError, TypeError) as exc:
             print(f"::warning::Owner evidence cache is invalid; rebuilding history: {exc}", flush=True)
     refresh_start = max(start, datetime.fromisoformat(previous["meta"]["generated_at"]) - timedelta(days=REFRESH_DAYS)) if previous else start
+    # Pin request windows across runner timeouts, so successful API pages can be
+    # restored and reused until this extraction is complete.
+    save(progress, {"repo": REPO, "as_of": as_of.isoformat()})
     prs, fetched, bot_prs, bots = pull_requests(cache, refresh_start, as_of)
     retained = {}
     if previous:
@@ -183,6 +196,8 @@ def main():
             "excluded_bot_logins": sorted(bots),
             "review_states": ["APPROVED", "COMMENTED"], "runtime_seconds": round(time.monotonic() - started, 2)}
     save(output, {"meta": meta, "prs": prs})
+    progress.unlink(missing_ok=True)
+    shutil.rmtree(cache, ignore_errors=True)
     print(json.dumps(meta, indent=2), flush=True)
 
 

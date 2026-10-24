@@ -1000,39 +1000,57 @@ class ProjectSyncTests(unittest.TestCase):
         self.assertEqual(len(result), 100)
         self.assertTrue(all("sort=created&direction=asc" in call.args[0][0] for call in api.call_args_list))
 
-    def test_failed_owner_build_preserves_cached_owners_or_leaves_blank(self):
+    def test_owner_build_is_independent_and_only_successful_outputs_are_cached(self):
         workflow = (ROOT.parents[1] / "workflows/contributor-project.yml").read_text()
-        step = workflow.split("      - name: Rebuild owners once per UTC day\n", 1)[1].split("\n      - name:", 1)[0]
-        self.assertIn("continue-on-error: true", step)
-        self.assertIn("if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.owners.outputs.cache-hit != 'true'", step)
-        self.assertIn("GH_TOKEN: ${{ github.token }}", step)
-        warning_step = workflow.split("      - name: Warn when owner build fails\n", 1)[1].split("\n      - name:", 1)[0]
-        self.assertIn("if: always() && steps.owner-build.outcome == 'failure'", warning_step)
-        warning = subprocess.run(["bash", "-e", "-c", warning_step.split("        run: ", 1)[1]],
-                                 capture_output=True, text=True, check=True)
-        self.assertIn("::warning::Owner build failed", warning.stdout)
-        save_step = workflow.split("      - name: Save today's successful owner build\n", 1)[1].split("\n      - name:", 1)[0]
+        owners_job = workflow.split("  owners:\n", 1)[1].split("  sync:\n", 1)[0]
+        sync_job = workflow.split("  sync:\n", 1)[1]
+        self.assertIn("group: ao-contributor-owners", owners_job)
+        self.assertIn("group: ao-contributor-project", sync_job)
+        self.assertNotIn("needs:", sync_job)
+        self.assertNotRegex(workflow, r"(?m)^  issues:")
+        self.assertIn("cron: '*/15 * * * *'", workflow)
+        self.assertIn("if: steps.extract.outcome == 'success'", owners_job)
+        self.assertIn("steps.extract.outcome == 'failure'", owners_job)
+        save_step = owners_job.split("      - name: Save today's successful owner build\n", 1)[1]
         self.assertIn("steps.owner-build.outcome == 'success'", save_step)
         self.assertNotIn("steps.owner-build.conclusion", save_step)
-        command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        evidence_step = owners_job.split("      - name: Save refreshed PR evidence\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("steps.extract.outcome == 'failure'", evidence_step)
+        for path in ("ownership-raw.json", "ownership-progress.json", "ownership-cache"):
+            self.assertIn(path, evidence_step)
+        self.assertIn("hashFiles(", save_step)
+
+    def test_failed_owner_build_preserves_cached_owners_or_leaves_blank(self):
         for cached in (True, False):
             with self.subTest(cached=cached), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                (root / "scripts").mkdir()
-                (root / "scripts/ownership_extract.py").write_text("raise SystemExit(1)\n")
-                (root / "scripts/build_owners.py").write_text("raise AssertionError('must not build after failed extraction')\n")
-                output = root / "research/owners/area-owners.json"
+                output = Path(directory) / "area-owners.json"
                 if cached:
-                    output.parent.mkdir(parents=True)
                     output.write_text(json.dumps(owners()))
-                result = subprocess.run(["bash", "-e", "-c", command], cwd=root, capture_output=True, text=True)
-                self.assertNotEqual(result.returncode, 0)
                 args = sync_project.make_parser().parse_args(["--owners-file", str(output),
                     "--project-url", "https://github.com/users/Rishet11/projects/1"])
                 with patch.object(sync_project, "load_mapping", return_value=mapping()), patch.object(sync_project, "fetch_open_issues", return_value=[issue(1)]), patch.object(sync_project, "fetch_project", return_value=project()), patch.object(sync_project.sys, "stderr", io.StringIO()):
                     result = sync_project.run(args)
                 self.assertEqual(result["counts"]["items_to_add"], 1)
                 self.assertEqual(any(op.get("field") == "Suggested owner" for op in result["operations"]), cached)
+
+    def test_workflow_surfaces_deferred_sync_but_preserves_other_failures(self):
+        import os
+        workflow = (ROOT.parents[1] / "workflows/contributor-project.yml").read_text()
+        step = workflow.split("      - name: Sync issues and bot suggestions\n", 1)[1]
+        command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        for code in (0, 3, 2):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "scripts").mkdir()
+                (root / "research").mkdir()
+                (root / "scripts/sync_project.py").write_text("import json\nprint(json.dumps({'applied': {'complete': " + str(code == 0) + "}}))\nraise SystemExit(" + str(code) + ")\n")
+                summary = root / "summary.md"
+                result = subprocess.run(["bash", "-e", "-c", command], cwd=root, env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary), "PROJECT_URL": "fixture"}, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0 if code in (0, 3) else code)
+                if code in (0, 3):
+                    self.assertIn('"complete": ' + str(code == 0).lower(), summary.read_text())
+                if code == 3:
+                    self.assertIn("::warning::Project sync is incomplete", result.stdout)
 
     def test_owner_age_warning_uses_generated_at_with_seven_day_boundary(self):
         now = datetime(2026, 10, 24, tzinfo=timezone.utc)
