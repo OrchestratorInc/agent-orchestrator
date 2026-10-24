@@ -206,9 +206,38 @@ func TestDiscoveryExecutableAllowsPackageSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	verified, err := verifyDiscoveryExecutable(context.Background(), "pi", link)
-	if err != nil || verified != target {
-		t.Fatalf("package symlink verification = %q, %v, want %q", verified, err, target)
+	if err != nil || verified != link {
+		t.Fatalf("package symlink verification = %q, %v, want launcher %q", verified, err, link)
 	}
+}
+
+func TestDiscoveryPreservesSymlinkInvocationName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI is a POSIX shell script")
+	}
+	root := t.TempDir()
+	target := writeDiscoveryLauncher(t, root, "opencode", "#!/bin/sh\nprintf 'anthropic/%s\\n' \"${0##*/}\"\n")
+	link := filepath.Join(root, "opencode2")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	verified, err := verifyDiscoveryExecutable(context.Background(), "opencode-v2", "opencode2")
+	if err != nil || verified != link {
+		t.Fatalf("verification = %q, %v, want PATH launcher %q", verified, err, link)
+	}
+	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "opencode-v2", Binary: "opencode2", WorkingDir: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range catalog.Models {
+		if model.ID == "anthropic/opencode2" {
+			return
+		}
+	}
+	t.Fatalf("discovery did not preserve symlink invocation name: %#v", catalog.Models)
 }
 
 func TestDiscoveryUsesVerifiedExecutable(t *testing.T) {
