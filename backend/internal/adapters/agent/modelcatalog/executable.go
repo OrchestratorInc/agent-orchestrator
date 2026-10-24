@@ -208,7 +208,13 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		if command := discoveryLauncherCommand.FindStringSubmatch(line); len(command) > 2 {
 			invokedTarget = strings.Trim(command[2], `"'`)
 			explicitInvocation = command[1] != ""
-			references = append(references, invokedTarget)
+			// Batch CALL :label invokes a subroutine in this same file, not
+			// another executable. Its body is still inspected line by line.
+			batch := ext == ".cmd" || ext == ".bat"
+			localLabel := batch && strings.EqualFold(strings.TrimSpace(command[1]), "call") && strings.HasPrefix(invokedTarget, ":")
+			if !localLabel {
+				references = append(references, invokedTarget)
+			}
 		}
 		lineReferences := make(map[string]bool, len(references))
 		for _, reference := range references {
