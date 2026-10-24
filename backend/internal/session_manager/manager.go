@@ -127,6 +127,11 @@ var (
 	// agent hook callback, so the native startup sequence (including pre-session
 	// approval dialogs) may still be consuming pane input.
 	ErrStartupPending = errors.New("session: agent startup not ready for input")
+	// ErrComposerBusy means a TUI session's composer holds an unsent human draft,
+	// so delivering now would concatenate with the operator's half-typed text and
+	// submit both as one prompt (#5711). The API maps it to a retryable 409; the
+	// caller retries once the operator submits or discards their draft.
+	ErrComposerBusy = errors.New("session: composer has an unsent draft")
 	// ErrDeliveryUnconfirmed means the prompt was written to the pane, but the
 	// harness never confirmed that the agent became active before the
 	// confirmation budget was exhausted (e.g. trailing Enter absorbed or dropped).
@@ -261,6 +266,23 @@ type TerminalInputGate interface {
 	// barrier to avoid trusting an idle hook which predates already-buffered PTY
 	// input.
 	BeginInputDrain(terminalID string) (lastInputAt time.Time, release func())
+}
+
+// TerminalInputObserver is an optional TerminalInputGate capability: it reports
+// the newest accepted keystroke without closing input. Keystrokes arriving while
+// a drain is held are dropped, not buffered, so a read must never open a drain.
+type TerminalInputObserver interface {
+	LastInputAt(terminalID string) time.Time
+}
+
+// TerminalInputFencer is an optional TerminalInputGate capability: it holds one
+// terminal's write fence so a keystroke cannot interleave with an AO write,
+// without dropping it (the keystroke blocks until release, unlike a drain). The
+// composer guard holds it across the final draft proof and the paste so a human
+// keystroke cannot land between them (#5711). lastInputAt is the newest
+// keystroke accepted before the fence closed, read under it.
+type TerminalInputFencer interface {
+	HoldInput(terminalID string) (lastInputAt time.Time, release func())
 }
 
 // ReviewerTerminator tears down a worker's reviewer pane when the worker leaves
@@ -617,20 +639,51 @@ func (m *Manager) SetPersistentHostReconcileDone(done <-chan struct{}) {
 }
 
 func (m *Manager) beginTerminalInputDrain(rec domain.SessionRecord) (lastInputAt time.Time, release func()) {
-	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
-		return time.Time{}, nil
-	}
-	handle := runtimeHandle(rec.Metadata)
-	if handle.ID == "" {
-		return time.Time{}, nil
-	}
-	m.terminalInputGateMu.Lock()
-	gate := m.terminalInputGate
-	m.terminalInputGateMu.Unlock()
+	gate, terminalID := m.terminalInputGateFor(rec)
 	if gate == nil {
 		return time.Time{}, nil
 	}
-	return gate.BeginInputDrain(handle.ID)
+	return gate.BeginInputDrain(terminalID)
+}
+
+// terminalInputGateFor returns the input gate and terminal id for a TUI
+// session's terminal; gate is nil when the session has none.
+func (m *Manager) terminalInputGateFor(rec domain.SessionRecord) (gate TerminalInputGate, terminalID string) {
+	handle := runtimeHandle(rec.Metadata)
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handle.ID == "" {
+		return nil, ""
+	}
+	m.terminalInputGateMu.Lock()
+	gate = m.terminalInputGate
+	m.terminalInputGateMu.Unlock()
+	return gate, handle.ID
+}
+
+// lastTerminalInputAt reports the newest keystroke AO accepted for a TUI
+// session's terminal, read-only. It is zero when nothing was typed through AO
+// or the gate cannot be read without closing input.
+func (m *Manager) lastTerminalInputAt(rec domain.SessionRecord) time.Time {
+	gate, terminalID := m.terminalInputGateFor(rec)
+	observer, ok := gate.(TerminalInputObserver)
+	if !ok {
+		return time.Time{}
+	}
+	return observer.LastInputAt(terminalID)
+}
+
+// fenceTerminalInput holds a TUI session's terminal write fence so a human
+// keystroke cannot interleave with the pane write the caller is about to make;
+// keystrokes block (not dropped) until release. lastInputAt is the newest
+// keystroke accepted before the fence closed. release is nil when there is
+// nothing to fence (non-TUI, no handle, no gate, or a gate without the fencer
+// capability), in which case the caller proceeds unsynchronized exactly as before.
+func (m *Manager) fenceTerminalInput(rec domain.SessionRecord) (lastInputAt time.Time, release func()) {
+	gate, terminalID := m.terminalInputGateFor(rec)
+	fencer, ok := gate.(TerminalInputFencer)
+	if !ok {
+		return time.Time{}, nil
+	}
+	return fencer.HoldInput(terminalID)
 }
 
 // beginShellTerminalTeardown starts the shell-terminal gate for id ahead of
@@ -5010,11 +5063,27 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	} else if internalReportDelivery {
 		evidence.coordinationID = coordinationID
 	}
-	outcome, err := m.messenger.DeliverWithPostWrite(ctx, id, message, afterWrite)
+	// A non-empty send must not land in a composer that holds an unsent human
+	// draft (#5711), whether it is an ao send or a worker report: a refused report
+	// is deferred and retried by report.Coordinator (ErrOrchestratorBusy), so
+	// draft protection does not lose it. Only an empty message is left unchecked —
+	// it is the deliberate Enter that submits an existing draft. The check runs
+	// under the guard's held input lease, immediately before the write.
+	var composerBusy func(context.Context, domain.SessionRecord) (bool, func())
+	if strings.TrimSpace(message) != "" {
+		composerBusy = m.composerBusyCheck()
+	}
+	// Keystrokes accepted after this instant were typed while or after this send
+	// wrote; confirmActive must not press Enter on them. Wall time, like the
+	// terminal gate's lastInputAt.
+	inputBaseline := time.Now()
+	outcome, err := m.messenger.DeliverWithComposerCheck(ctx, id, message, composerBusy, afterWrite)
 	if err != nil {
 		return fmt.Errorf("send %s: %w", id, err)
 	}
 	switch outcome {
+	case sessionguard.SuppressedComposerBusy:
+		return fmt.Errorf("send %s: %w", id, ErrComposerBusy)
 	case sessionguard.SuppressedNotFound:
 		return fmt.Errorf("send %s: %w", id, ErrNotFound)
 	case sessionguard.SuppressedTerminated:
@@ -5058,7 +5127,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return nil
 	}
 	if m.harnessNudgeSafe(rec.Harness) {
-		if err := m.confirmActive(ctx, m.messenger, id, evidence); err != nil {
+		if err := m.confirmActive(ctx, m.messenger, id, evidence, inputBaseline); err != nil {
 			return fmt.Errorf("send %s: %w", id, err)
 		}
 	}
@@ -5189,9 +5258,28 @@ func (e deliveryEvidence) accepted(rec domain.SessionRecord) bool {
 	return false
 }
 
-func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence) error {
+// confirmActive fences each retry's input timestamp check through its Enter
+// write. Typing since inputBaseline suppresses the retry, so AO cannot submit
+// the operator's new draft while trying to confirm its own prompt.
+func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time) error {
 	return m.confirmActiveWithNudge(ctx, id, evidence, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
-		return guard.Deliver(nudgeCtx, id, "")
+		accepted := false
+		outcome, err := guard.DeliverWithComposerCheck(nudgeCtx, id, "", func(_ context.Context, rec domain.SessionRecord) (bool, func()) {
+			lastInputAt, release := m.fenceTerminalInput(rec)
+			if release == nil {
+				lastInputAt = m.lastTerminalInputAt(rec)
+			}
+			accepted = evidence.accepted(rec)
+			return lastInputAt.After(inputBaseline), release
+		}, nil)
+		if err == nil && outcome == sessionguard.SuppressedComposerBusy {
+			if accepted {
+				return sessionguard.SuppressedBusy, nil
+			}
+			m.logger.Info("send: operator typed since delivery; skipping Enter nudge", "sessionID", id)
+			return sessionguard.SuppressedComposerBusy, ErrDeliveryUnconfirmed
+		}
+		return outcome, err
 	})
 }
 
