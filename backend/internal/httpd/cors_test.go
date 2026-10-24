@@ -250,6 +250,33 @@ func TestCORSPreflightHeaders(t *testing.T) {
 	}
 }
 
+func TestUILoginRequiresConfiguredRendererOrigin(t *testing.T) {
+	for _, path := range []string{
+		"/api/v1/agents/codex/auth/operations",
+		"/api/v1/agents/codex/auth/operations/login-1",
+		"/api/v1/agents/claude-code/auth/operations",
+		"/api/v1/agents/claude-code/auth/operations/login-1",
+	} {
+		for _, origin := range []string{"app://renderer", "http://localhost:5173", "http://localhost", "http://ao-preview.hostile.localhost:5181", "null", ""} {
+			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+				r := httptest.NewRequest(method, path, nil)
+				if origin != "" {
+					r.Header.Set("Origin", origin)
+				}
+				w := httptest.NewRecorder()
+				codexAccountOriginMiddleware([]string{"app://renderer", "http://localhost:5173"})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })).ServeHTTP(w, r)
+				want := http.StatusForbidden
+				if origin == "" || origin == "app://renderer" || origin == "http://localhost:5173" {
+					want = http.StatusNoContent
+				}
+				if w.Code != want {
+					t.Fatalf("%s %s origin=%q: status=%d want=%d", method, path, origin, w.Code, want)
+				}
+			}
+		}
+	}
+}
+
 func TestRenderDocumentNavigationBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, origin string

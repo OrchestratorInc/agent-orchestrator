@@ -739,6 +739,7 @@ func Run(buildVersion string) error {
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
+	defer agentAuthSvc.Close()
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
