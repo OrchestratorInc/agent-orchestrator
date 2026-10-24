@@ -233,7 +233,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		return verified || discoveryExecutableOwner(path) == agentID, nil
 	}
 	if len(body) > discoveryLauncherReadLimit {
-		return false, fmt.Errorf("launcher exceeds inspection limit")
+		return false, fmt.Errorf("cannot verify launcher identity: text exceeds inspection limit (%d bytes)", discoveryLauncherReadLimit)
 	}
 	if bytes.HasPrefix(body, []byte{0xff, 0xfe}) || bytes.HasPrefix(body, []byte{0xfe, 0xff}) {
 		var order binary.ByteOrder = binary.LittleEndian
