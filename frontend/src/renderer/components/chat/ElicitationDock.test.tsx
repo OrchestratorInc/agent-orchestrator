@@ -20,6 +20,11 @@ function activity(detail: ConversationActivity["detail"]): ConversationActivity 
 	};
 }
 
+/** The marker claude-agent-acp puts on the Other field it adds after each question. */
+function otherAnswerFor(questionId: string) {
+	return { _askUserQuestionCustomAnswer: { questionId, isCustomAnswer: true } };
+}
+
 describe("ElicitationDock", () => {
 	const claudeQuestions = {
 		type: "object" as const,
@@ -33,7 +38,7 @@ describe("ElicitationDock", () => {
 					{ const: "Bridge", title: "Bridge" },
 				],
 			},
-			question_0_custom: { type: "string", title: "Other approach" },
+			question_0_custom: { type: "string", title: "Other approach", _meta: otherAnswerFor("question_0") },
 			question_1: {
 				type: "string",
 				title: "Language",
@@ -42,7 +47,7 @@ describe("ElicitationDock", () => {
 					{ const: "TypeScript", title: "TypeScript" },
 				],
 			},
-			question_1_custom: { type: "string", title: "Other language" },
+			question_1_custom: { type: "string", title: "Other language", _meta: otherAnswerFor("question_1") },
 		},
 	};
 
@@ -144,13 +149,11 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		await user.click(screen.getByRole("radio", { name: /Native/ }));
 		await user.type(screen.getByLabelText("Other approach"), "Hybrid");
 		await user.click(screen.getByRole("button", { name: "Next" }));
 		expect(screen.getByRole("group", { name: /Language/ })).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Back" }));
-		expect(screen.getByRole("radio", { name: /Native/ })).toBeChecked();
 		expect(screen.getByLabelText("Other approach")).toHaveValue("Hybrid");
 	});
 
@@ -168,16 +171,13 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
+		// Each question is answered once: by a choice or by its Other field.
 		await user.click(screen.getByRole("radio", { name: /Native/ }));
-		await user.type(screen.getByLabelText("Other approach"), "Hybrid");
 		await user.click(screen.getByRole("button", { name: "Next" }));
-		await user.click(screen.getByRole("radio", { name: "Go" }));
 		await user.type(screen.getByLabelText("Other language"), "Rust");
 		await user.click(screen.getByRole("button", { name: "Continue" }));
 		expect(onResolve).toHaveBeenCalledWith("request-1", "accept", {
 			question_0: "Native",
-			question_0_custom: "Hybrid",
-			question_1: "Go",
 			question_1_custom: "Rust",
 		});
 	});
@@ -203,6 +203,38 @@ describe("ElicitationDock", () => {
 		expect(screen.getByLabelText("Team")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Continue" })).toBeInTheDocument();
+	});
+
+	it("keeps a generic form's name_custom field independent of name", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ElicitationDock
+				activity={activity({
+					inputMode: "form",
+					schema: {
+						type: "object",
+						required: ["name"],
+						properties: {
+							name: { type: "string", title: "Name" },
+							name_custom: { type: "string", title: "Alias" },
+						},
+					},
+				})}
+				onResolve={onResolve}
+			/>,
+		);
+
+		// Without the adapter's marker, name_custom never stands in for name.
+		await user.type(screen.getByLabelText("Alias"), "Al");
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(screen.getByText("This field is required.")).toBeInTheDocument();
+		expect(onResolve).not.toHaveBeenCalled();
+
+		await user.type(screen.getByLabelText(/^Name/), "Alice");
+		await user.type(screen.getByLabelText("Alias"), "ias");
+		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(onResolve).toHaveBeenCalledWith("request-1", "accept", { name: "Alice", name_custom: "Alias" });
 	});
 
 	it("keeps required fields actionable instead of sending an invalid form", async () => {
@@ -256,7 +288,7 @@ describe("ElicitationDock", () => {
 		expect(document.getElementById(describedBy)).toHaveTextContent("This field is required.");
 	});
 
-	it("names the Other row with a visible label rather than a placeholder", () => {
+	it("shows the Other row as a single field named by its placeholder", () => {
 		render(
 			<ElicitationDock
 				activity={activity({ inputMode: "form", schema: claudeQuestions })}
@@ -264,10 +296,80 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		// DESIGN.md §9: a placeholder is an example, never the only name a field has.
+		// The hidden label keeps the accessible name; the placeholder is what shows.
 		const other = screen.getByLabelText("Other approach");
-		expect(other).not.toHaveAttribute("placeholder");
-		expect(screen.getByText("Other approach")).toBeVisible();
+		expect(other).toHaveAttribute("placeholder", "Other approach…");
+	});
+
+	it("picks a choice with its number key and jumps to Other with 0", async () => {
+		const user = userEvent.setup();
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		screen.getAllByRole("radio")[0]?.focus();
+		await user.keyboard("2");
+		expect(screen.getAllByRole("radio")[1]).toBeChecked();
+		await user.keyboard("0");
+		expect(screen.getByLabelText("Other approach")).toHaveFocus();
+	});
+
+	it("sends with Enter on a choice and clears Other when a choice is picked", async () => {
+		const user = userEvent.setup();
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		await user.type(screen.getByLabelText("Other approach"), "Something custom");
+		screen.getAllByRole("radio")[0]?.focus();
+		await user.keyboard("1");
+		expect(screen.getByLabelText("Other approach")).toHaveValue("");
+		await user.keyboard("{Enter}");
+		expect(screen.getByLabelText("Other language")).toBeInTheDocument();
+	});
+
+	it("answers every question from the keyboard alone", async () => {
+		const user = userEvent.setup();
+		const onResolve = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={onResolve}
+			/>,
+		);
+
+		// Focus is placed once; Enter swaps the question under it, and the next
+		// number key still has to land in the card.
+		screen.getAllByRole("radio")[0]?.focus();
+		await user.keyboard("1{Enter}");
+		expect(screen.getByRole("radio", { name: /Go/ })).toHaveFocus();
+		await user.keyboard("2{Enter}");
+		expect(onResolve).toHaveBeenCalledWith("request-1", "accept", {
+			question_0: "Native",
+			question_1: "TypeScript",
+		});
+	});
+
+	it("keeps focus in the card when Back leaves the first question", async () => {
+		const user = userEvent.setup();
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		screen.getAllByRole("radio")[0]?.focus();
+		await user.keyboard("1{Enter}");
+		screen.getByRole("button", { name: "Back" }).focus();
+		await user.keyboard("{Enter}");
+		expect(screen.getByRole("radio", { name: /Native/ })).toHaveFocus();
 	});
 
 	it("opens an external URL only after the user explicitly consents", async () => {
