@@ -215,3 +215,16 @@ func TestBestSnippetMarksMatchedWords(t *testing.T) {
 		t.Fatalf("clipped = %q %v", clipped.Text, clipped.Highlights)
 	}
 }
+
+func TestSnippetHighlightsSurviveCaseFoldingThatChangesLength(t *testing.T) {
+	// "İ" lowercases to a shorter byte sequence, so offsets into a
+	// lowercased copy of the line would not fit the original.
+	s := bestSnippet("visit İstanbul and Ankara", map[string]int{"istanbul": 1, "ankara": 1}, 1)
+	var got []string
+	for _, h := range s.Highlights {
+		got = append(got, s.Text[h[0]:h[1]])
+	}
+	if !reflect.DeepEqual(got, []string{"İstanbul", "Ankara"}) {
+		t.Fatalf("highlighted %q in %q", got, s.Text)
+	}
+}

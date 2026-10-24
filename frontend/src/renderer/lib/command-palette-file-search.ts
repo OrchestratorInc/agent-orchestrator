@@ -7,6 +7,9 @@ import type { WorkspaceFileSearchItem, WorkspaceFileSearchTarget } from "./comma
 
 export const COMMAND_PALETTE_FILE_SEARCH_LIMIT = 20;
 
+/** How often the palette asks again while the session's first file index builds. */
+export const INDEXING_REFETCH_MS = 1_000;
+
 type SearchResponse = components["schemas"]["SearchResponse"];
 export type PaletteSearchFileName = components["schemas"]["SearchFileNameHit"];
 export type PaletteSearchContentHit = components["schemas"]["SearchFileContentHit"];
@@ -44,6 +47,7 @@ type CommandPaletteFileSearchQueryOptions = {
 	queryKey: readonly unknown[];
 	queryFn: (context?: { signal?: AbortSignal }) => Promise<CommandPaletteFileSearchResponse>;
 	retry?: (failureCount: number, error: Error) => boolean;
+	refetchInterval?: (query: { state: { data?: CommandPaletteFileSearchResponse } }) => number | false;
 };
 
 function normalizeCloudResponse(response: {
@@ -106,6 +110,8 @@ export function commandPaletteFileSearchQueryOptions(
 			if (!data) throw new Error(args.errorMessage);
 			return fromSearchResponse(data);
 		},
+		// Content results appear when the first index finishes, not on the next keystroke.
+		refetchInterval: (query) => (query.state.data?.files === "building" ? INDEXING_REFETCH_MS : false),
 	};
 }
 

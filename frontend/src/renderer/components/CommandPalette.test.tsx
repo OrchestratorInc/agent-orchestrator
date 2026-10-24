@@ -508,6 +508,22 @@ describe("CommandPalette search results", () => {
 		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({ sessionId: "w-fix", messageId: "m1" });
 	});
 
+	it("opens a reviewer chat hit in the reviewed session and names the review", async () => {
+		ctx.params = {};
+		useUiStore.setState({ chatMessageFocusRequest: null });
+		getMock.mockResolvedValue({ data: paletteSearchData({ messages: [{ ...chatHit, reviewId: "review-1" }] }) });
+		renderPalette();
+		await typeInPalette("login flaky ci");
+		const row = await screen.findByText("Login flake chat", {}, { timeout: 2_000 });
+		expect(row.closest("[cmdk-item]")?.textContent).toContain("Reviewer");
+		fireEvent.click(row);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "w-fix" },
+		});
+		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({ sessionId: "w-fix", messageId: "m1", reviewId: "review-1" });
+	});
+
 	it("labels a forked-away chat message and opens its chat without scrolling to it", async () => {
 		ctx.params = {};
 		useUiStore.setState({ chatMessageFocusRequest: null });
@@ -557,6 +573,18 @@ describe("CommandPalette search results", () => {
 		renderPalette();
 		await typeInPalette("anything");
 		expect(await screen.findByText("Indexing files…", {}, { timeout: 2_000 })).toBeInTheDocument();
+	});
+
+	it("asks again while the file index builds, and shows content once it is ready", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockResolvedValueOnce({ data: paletteSearchData({ files: "building" }) });
+		getMock.mockResolvedValue({ data: paletteSearchData({
+			fileContent: [{ path: "src/flaky.ts", score: 6, decisive: false, snippet: { text: "retry the flaky login", line: 42, highlights: [] } }],
+		}) });
+		renderPalette();
+		await typeInPalette("flaky login");
+		expect(await screen.findByText("flaky.ts:42", {}, { timeout: 4_000 })).toBeInTheDocument();
+		expect(screen.queryByText("Indexing files…")).toBeNull();
 	});
 });
 

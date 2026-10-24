@@ -64,7 +64,7 @@ type fileIndex struct {
 	paths         []string
 	root          string // worktree root from the last reconcile
 	built         bool
-	reconciling   bool
+	working       bool // a background reconcile is queued or running
 	lastReconcile time.Time
 	users         int // guarded by fileIndexes.mu
 }
@@ -110,14 +110,45 @@ func indexableText(data []byte) bool {
 	return len(data)/lines <= maxAvgLineBytes
 }
 
-// safeJoin resolves a workspace-relative path, refusing anything that could
-// leave the root.
-func safeJoin(root, rel string) (string, bool) {
+// workspaceFiles opens workspace-relative paths, never leaving the root. Git
+// lists no files beneath a symlinked folder, so a folder on the way that is
+// not a real directory (a symlink or junction swapped in after checkout)
+// could lead outside the worktree: such paths are refused, as are files that
+// are symlinks themselves. Each folder is checked once.
+type workspaceFiles struct {
+	root string
+	dirs map[string]bool // relative folder -> inside the root
+}
+
+func newWorkspaceFiles(root string) *workspaceFiles {
+	return &workspaceFiles{root: root, dirs: map[string]bool{".": true}}
+}
+
+// open returns the regular file at rel, or ok false.
+func (w *workspaceFiles) open(rel string) (string, os.FileInfo, bool) {
 	local := filepath.FromSlash(rel)
-	if !filepath.IsLocal(local) {
-		return "", false
+	if !filepath.IsLocal(local) || !w.dirInside(filepath.Dir(local)) {
+		return "", nil, false
 	}
-	return filepath.Join(root, local), true
+	full := filepath.Join(w.root, local)
+	info, err := os.Lstat(full)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", nil, false
+	}
+	return full, info, true
+}
+
+func (w *workspaceFiles) dirInside(dir string) bool {
+	if ok, seen := w.dirs[dir]; seen {
+		return ok
+	}
+	ok := w.dirInside(filepath.Dir(dir))
+	if ok {
+		info, err := os.Lstat(filepath.Join(w.root, dir))
+		ok = err == nil && info.IsDir()
+	}
+	w.dirs[dir] = ok
+	return ok
 }
 
 // reconcile brings the index in line with ws: unchanged files (same size and
@@ -129,21 +160,19 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 		return nil // another reconcile is already doing this work
 	}
 	defer fi.reconcileMu.Unlock()
-	fi.mu.Lock()
-	fi.reconciling = true
+	fi.mu.RLock()
 	manifest := maps.Clone(fi.manifest)
-	fi.mu.Unlock()
-	defer func() {
-		fi.mu.Lock()
-		fi.reconciling = false
-		fi.mu.Unlock()
-	}()
+	fi.mu.RUnlock()
+	if testHookReconcile != nil {
+		testHookReconcile()
+	}
 
 	paths := ws.Paths
 	if len(paths) > maxIndexFiles {
 		paths = paths[:maxIndexFiles]
 	}
 	wanted := make(map[string]struct{}, len(paths))
+	files := newWorkspaceFiles(ws.Root)
 	batch := fi.disk.bleve.NewBatch()
 	pending, sinceSave := 0, 0
 	flush := func(force bool) error {
@@ -169,14 +198,14 @@ func (fi *fileIndex) reconcile(ctx context.Context, ws Workspace, now func() tim
 			_ = flush(true)
 			return err
 		}
-		full, ok := safeJoin(ws.Root, rel)
-		if !ok {
+		if !filepath.IsLocal(filepath.FromSlash(rel)) {
 			continue
 		}
 		wanted[rel] = struct{}{}
-		info, err := os.Lstat(full)
-		if err != nil || !info.Mode().IsRegular() {
-			// Gone, a directory or a symlink: listed by name, never read.
+		full, info, ok := files.open(rel)
+		if !ok {
+			// Gone, a directory, a symlink or behind a symlinked folder:
+			// listed by name, never read.
 			if old, had := manifest[rel]; had {
 				for _, start := range old.Chunks {
 					batch.Delete(docID(rel, start))
@@ -275,26 +304,43 @@ func (fi *fileIndex) publish(manifest map[string]fileEntry, complete bool) error
 }
 
 type fileIndexState struct {
-	built, reconciling bool
-	lastReconcile      time.Time
+	built         bool
+	lastReconcile time.Time
 }
 
 func (fi *fileIndex) state() fileIndexState {
 	fi.mu.RLock()
 	defer fi.mu.RUnlock()
-	return fileIndexState{built: fi.built, reconciling: fi.reconciling, lastReconcile: fi.lastReconcile}
+	return fileIndexState{built: fi.built, lastReconcile: fi.lastReconcile}
 }
 
+// claimWork reserves fi for one background reconcile; false when one is
+// already queued or running.
+func (fi *fileIndex) claimWork() bool {
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	if fi.working {
+		return false
+	}
+	fi.working = true
+	return true
+}
+
+func (fi *fileIndex) finishWork() {
+	fi.mu.Lock()
+	fi.working = false
+	fi.mu.Unlock()
+}
+
+// testHookReconcile, when set, runs as each reconcile starts (tests only).
+var testHookReconcile func()
+
 // readChunk returns the current text of the chunk starting at line start.
-func readChunk(root, rel string, start int, cache map[string][]string) (string, bool) {
+func readChunk(files *workspaceFiles, rel string, start int, cache map[string][]string) (string, bool) {
 	lines, ok := cache[rel]
 	if !ok {
-		full, safe := safeJoin(root, rel)
-		if !safe {
-			return "", false
-		}
-		info, err := os.Lstat(full)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > maxIndexBytes {
+		full, info, safe := files.open(rel)
+		if !safe || info.Size() > maxIndexBytes {
 			cache[rel] = nil
 			return "", false
 		}

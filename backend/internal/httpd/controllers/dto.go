@@ -3858,6 +3858,7 @@ type SearchMessageHit struct {
 	MessageID         string           `json:"messageId"`
 	SessionID         domain.SessionID `json:"sessionId,omitempty"`
 	ProjectID         domain.ProjectID `json:"projectId,omitempty"`
+	ReviewID          string           `json:"reviewId,omitempty" description:"Set for a reviewer chat message: the review whose chat, inside sessionId's view, holds it."`
 	ConversationTitle string           `json:"conversationTitle"`
 	Snippet           SearchSnippet    `json:"snippet"`
 	Score             float64          `json:"score"`

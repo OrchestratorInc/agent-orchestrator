@@ -336,7 +336,6 @@ func bestSnippet(text string, hits map[string]int, firstLine int) Snippet {
 
 func highlightRanges(line string, hits map[string]int) [][2]int {
 	var out [][2]int
-	lower := strings.ToLower(line)
 	i := 0
 	for i < len(line) {
 		j := i
@@ -344,7 +343,9 @@ func highlightRanges(line string, hits map[string]int) [][2]int {
 			j++
 		}
 		if j > i {
-			if hits[lower[i:j]] > 0 {
+			// Lowercase the word alone: folding can change byte lengths
+			// ("İ"), so offsets must stay in the original line.
+			if hits[strings.ToLower(line[i:j])] > 0 {
 				out = append(out, [2]int{i, j})
 			}
 			i = j

@@ -18712,6 +18712,10 @@ components:
           type: boolean
         projectId:
           type: string
+        reviewId:
+          description: 'Set for a reviewer chat message: the review whose chat, inside
+            sessionId''s view, holds it.'
+          type: string
         score:
           format: double
           type: number

@@ -59,7 +59,7 @@ func TestSearchControllerPassesRequestAndShapesResponse(t *testing.T) {
 		FileNames: []searchsvc.FileNameHit{{Path: "src/palette.ts", Score: 9, ExactName: true}},
 		FileContent: []searchsvc.ContentHit{{Path: "src/palette.ts", Score: 5, Decisive: true,
 			Snippet: searchsvc.Snippet{Text: "close the palette", Line: 12, Highlights: [][2]int{{10, 17}}}}},
-		Messages: []searchsvc.MessageHit{{MessageID: "m1", SessionID: "s1", ConversationTitle: "Palette", Score: 4, OlderVersion: true,
+		Messages: []searchsvc.MessageHit{{MessageID: "m1", SessionID: "s1", ReviewID: "r1", ConversationTitle: "Palette", Score: 4, OlderVersion: true,
 			// "é" is two bytes but one UTF-16 unit; "😀" is four bytes and two units.
 			Snippet: searchsvc.Snippet{Text: "é😀 palette", Highlights: [][2]int{{7, 14}}}}},
 		Files: searchsvc.IndexReady,
@@ -79,7 +79,7 @@ func TestSearchControllerPassesRequestAndShapesResponse(t *testing.T) {
 		t.Fatalf("content hit = %+v", c)
 	}
 	m := body.Messages[0]
-	if m.MessageID != "m1" || m.SessionID != "s1" || !m.OlderVersion {
+	if m.MessageID != "m1" || m.SessionID != "s1" || m.ReviewID != "r1" || !m.OlderVersion {
 		t.Fatalf("message hit = %+v", m)
 	}
 	if h := m.Snippet.Highlights[0]; h != (SearchHighlight{Start: 4, End: 11}) {

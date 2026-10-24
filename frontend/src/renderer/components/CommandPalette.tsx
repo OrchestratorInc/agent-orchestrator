@@ -604,7 +604,7 @@ export function CommandPalette() {
 							? fileSessionRoute({ projectId, sessionId: action.sessionId, hostId: action.hostId })
 							: sessionRoute(projectId, action.sessionId));
 						if (action.messageId) {
-							useUiStore.getState().requestChatMessageFocus(action.sessionId, action.messageId, action.text, action.hostId);
+							useUiStore.getState().requestChatMessageFocus(action.sessionId, action.messageId, action.text, action.hostId, action.reviewId);
 						}
 					} else if (action.projectId) {
 						navigateToTarget({ to: "/projects/$projectId", params: { projectId: action.projectId } });

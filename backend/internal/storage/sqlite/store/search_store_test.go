@@ -126,3 +126,36 @@ func TestSearchVisibleMessageIDsHidesMessagesPastTheEditFork(t *testing.T) {
 		t.Fatalf("visible after edit = %v, want the forked-away prompt hidden", visible)
 	}
 }
+
+func TestSearchMessagesByIDPointsReviewerMessagesAtTheirReview(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "reviewed")
+	session, err := s.CreateSession(ctx, sampleRecord("reviewed"))
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	review := domain.Review{ID: "review-1", SessionID: session.ID, ProjectID: session.ProjectID, Harness: domain.ReviewerCodex,
+		InterfaceMode: domain.ReviewerInterfaceChat, ControllerGeneration: "review-generation", CreatedAt: testNow, UpdatedAt: testNow}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatalf("UpsertReview: %v", err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "conversation-review", review.ID, session.ProjectID, session.ID, testNow)
+	if err != nil {
+		t.Fatalf("CreateReviewConversation: %v", err)
+	}
+	created, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "review-generation", domain.ConversationMessage{
+		ID: "review-message", Origin: domain.MessageOriginHuman, Text: "check the retry loop", ClientMessageID: "client-review",
+	}, "review-turn", testNow)
+	if err != nil || !created {
+		t.Fatalf("AppendReviewUserMessage: created=%v err=%v", created, err)
+	}
+
+	got, err := s.SearchMessagesByID(ctx, []string{"review-message"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("SearchMessagesByID = %+v err=%v", got, err)
+	}
+	if got[0].ReviewID != review.ID || got[0].SessionID != session.ID {
+		t.Fatalf("reviewer message = %+v, want review %s on session %s", got[0], review.ID, session.ID)
+	}
+}

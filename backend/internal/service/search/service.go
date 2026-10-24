@@ -197,9 +197,12 @@ type ContentHit struct {
 
 // MessageHit is a chat message.
 type MessageHit struct {
-	MessageID         string
-	SessionID         domain.SessionID
-	ProjectID         domain.ProjectID
+	MessageID string
+	SessionID domain.SessionID
+	ProjectID domain.ProjectID
+	// ReviewID names the reviewer chat the message is in, shown inside the
+	// reviewed SessionID's view.
+	ReviewID          string
 	ConversationTitle string
 	CreatedAt         time.Time
 	Snippet           Snippet
@@ -313,58 +316,63 @@ func (s *Service) Search(ctx context.Context, req Request) (Response, error) {
 func (s *Service) freshen(ctx context.Context, fi *fileIndex, ws Workspace, session domain.SessionID) IndexState {
 	st := fi.state()
 	if !st.built {
-		if !st.reconciling {
-			s.startBuild(fi, ws, session)
-		}
+		s.launch(fi, ws, session, true)
 		return IndexBuilding
 	}
-	if s.deps.Now().Sub(st.lastReconcile) >= fileStaleAfter && !st.reconciling {
-		done := make(chan struct{})
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			defer close(done)
-			if err := fi.reconcile(s.ctx, ws, s.deps.Now); err != nil && s.ctx.Err() == nil {
-				s.deps.Logger.Warn("search: refresh file index failed", "session", session, "err", err)
+	if s.deps.Now().Sub(st.lastReconcile) >= fileStaleAfter {
+		if done := s.launch(fi, ws, session, false); done != nil {
+			select {
+			case <-done:
+			case <-time.After(freshnessBudget):
+			case <-ctx.Done():
 			}
-		}()
-		select {
-		case <-done:
-		case <-time.After(freshnessBudget):
-		case <-ctx.Done():
 		}
 	}
 	return IndexReady
 }
 
-func (s *Service) startBuild(fi *fileIndex, ws Workspace, session domain.SessionID) {
-	// Pin the index open for the build's lifetime.
+// launch reconciles fi in the background unless that is already queued or
+// running. The returned channel closes when the work is done; it is nil when
+// nothing was started.
+// The work pins the index itself, so it stays open after the search that
+// asked for it returns. A first build waits for the shared build slot.
+func (s *Service) launch(fi *fileIndex, ws Workspace, session domain.SessionID, first bool) <-chan struct{} {
+	if !fi.claimWork() {
+		return nil
+	}
 	pinned, release, err := s.files.acquire(string(session))
 	if err != nil || pinned != fi {
 		if release != nil {
 			release()
 		}
-		return
+		fi.finishWork()
+		return nil
 	}
+	done := make(chan struct{})
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer close(done)
 		defer release()
-		select {
-		case s.buildSlots <- struct{}{}:
-		case <-s.ctx.Done():
-			return
-		}
-		defer func() { <-s.buildSlots }()
-		start := s.deps.Now()
-		if err := fi.reconcile(s.ctx, ws, s.deps.Now); err != nil {
-			if s.ctx.Err() == nil {
-				s.deps.Logger.Warn("search: build file index failed", "session", session, "err", err)
+		defer fi.finishWork()
+		if first {
+			select {
+			case s.buildSlots <- struct{}{}:
+			case <-s.ctx.Done():
+				return
 			}
-			return
+			defer func() { <-s.buildSlots }()
 		}
-		s.deps.Logger.Info("search: file index built", "session", session, "files", len(ws.Paths), "took", s.deps.Now().Sub(start).Round(time.Millisecond))
+		start := s.deps.Now()
+		err := fi.reconcile(s.ctx, ws, s.deps.Now)
+		switch {
+		case err != nil && s.ctx.Err() == nil:
+			s.deps.Logger.Warn("search: index files failed", "session", session, "first", first, "err", err)
+		case err == nil && first:
+			s.deps.Logger.Info("search: file index built", "session", session, "files", len(ws.Paths), "took", s.deps.Now().Sub(start).Round(time.Millisecond))
+		}
 	}()
+	return done
 }
 
 const (
@@ -425,10 +433,11 @@ func (s *Service) searchFileContent(ctx context.Context, fi *fileIndex, ws Works
 		return nil, err
 	}
 	cache := make(map[string][]string)
+	files := newWorkspaceFiles(ws.Root)
 	bestByPath := make(map[string]ContentHit)
 	for _, h := range hits {
 		rel, start := splitDocID(h.id)
-		text, ok := readChunk(ws.Root, rel, start, cache)
+		text, ok := readChunk(files, rel, start, cache)
 		if !ok {
 			continue
 		}
@@ -542,6 +551,7 @@ func (s *Service) searchMessages(ctx context.Context, q parsedQuery, ts []queryT
 			MessageID:         msg.ID,
 			SessionID:         msg.SessionID,
 			ProjectID:         msg.ProjectID,
+			ReviewID:          msg.ReviewID,
 			ConversationTitle: msg.ConversationTitle,
 			CreatedAt:         msg.CreatedAt,
 			Snippet:           bestSnippet(msg.Text, f.hits, 0),

@@ -91,6 +91,7 @@ func searchResponse(res searchsvc.Response) SearchResponse {
 			MessageID:         h.MessageID,
 			SessionID:         h.SessionID,
 			ProjectID:         h.ProjectID,
+			ReviewID:          h.ReviewID,
 			ConversationTitle: h.ConversationTitle,
 			Snippet:           searchSnippet(h.Snippet),
 			Score:             h.Score,

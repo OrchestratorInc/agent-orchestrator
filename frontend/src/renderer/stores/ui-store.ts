@@ -127,6 +127,8 @@ export type ChatMessageFocusRequest = {
 	messageId: string;
 	/** The matched text, used to mark the passage inside the message. */
 	text: string;
+	/** Set when the message is in the session's reviewer chat for this review. */
+	reviewId?: string;
 	nonce: number;
 };
 
@@ -252,7 +254,7 @@ export type UiState = {
 	requestNewTask: (projectId: string, hostId?: string) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
-	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, hostId?: string) => void;
+	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, hostId?: string, reviewId?: string) => void;
 	clearChatMessageFocusRequest: (nonce: number) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
@@ -696,13 +698,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 		set((state) => state.workspaceFileOpenRequest?.nonce === nonce
 			? { workspaceFileOpenRequest: null }
 			: state),
-	requestChatMessageFocus: (sessionId, messageId, text, hostId) =>
+	requestChatMessageFocus: (sessionId, messageId, text, hostId, reviewId) =>
 		set((state) => ({
 			chatMessageFocusRequest: {
 				sessionId,
 				messageId,
 				text,
 				...(hostId ? { hostId } : {}),
+				...(reviewId ? { reviewId } : {}),
 				nonce: (state.chatMessageFocusRequest?.nonce ?? 0) + 1,
 			},
 		})),

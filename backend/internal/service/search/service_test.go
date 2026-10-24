@@ -457,16 +457,47 @@ func TestIndexDirNameIsPathSafe(t *testing.T) {
 	}
 }
 
-func TestSafeJoinRefusesEscapes(t *testing.T) {
-	root := t.TempDir()
-	if _, ok := safeJoin(root, "../etc/passwd"); ok {
-		t.Fatal("parent escape allowed")
+// listedWorkspace lists exactly the paths it is given, as git ls-files does
+// for a tracked folder that was later swapped for a symlink.
+type listedWorkspace struct {
+	root  string
+	paths []string
+}
+
+func (l listedWorkspace) SearchWorkspace(context.Context, domain.SessionID) (Workspace, error) {
+	return Workspace{Root: l.root, Paths: l.paths}, nil
+}
+
+func TestSearchNeverReadsThroughSymlinkedFolders(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	writeFile(t, root, "inside/ok.txt", "quokkaline inside the workspace\n")
+	writeFile(t, outside, "secret.txt", "quokkaline outside the workspace\n")
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, ok := safeJoin(root, "/etc/passwd"); ok {
-		t.Fatal("absolute path allowed")
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(root, "inside", "leaf.txt")); err != nil {
+		t.Fatal(err)
 	}
-	if p, ok := safeJoin(root, "a/b.go"); !ok || p != filepath.Join(root, "a", "b.go") {
-		t.Fatalf("safeJoin(a/b.go) = %q %v", p, ok)
+	ws := listedWorkspace{root: root, paths: []string{"inside/leaf.txt", "inside/ok.txt", "linked/secret.txt"}}
+	s := newTestService(t, ws, nil, &clock{t: time.Unix(1_800_000_000, 0)})
+	resp := searchReady(t, s, "quokkaline")
+	if got := contentPaths(resp); len(got) != 1 || got[0] != "inside/ok.txt" {
+		t.Fatalf("content hits = %v, want only inside/ok.txt", got)
+	}
+	for _, h := range resp.FileContent {
+		if strings.Contains(h.Snippet.Text, "outside") {
+			t.Fatalf("read outside the workspace: %+v", h)
+		}
+	}
+
+	files := newWorkspaceFiles(root)
+	for _, rel := range []string{"../etc/passwd", "/etc/passwd", "linked/secret.txt", "inside/leaf.txt", "inside"} {
+		if _, _, ok := files.open(rel); ok {
+			t.Errorf("open(%q) allowed", rel)
+		}
+	}
+	if full, _, ok := files.open("inside/ok.txt"); !ok || full != filepath.Join(root, "inside", "ok.txt") {
+		t.Fatalf("open(inside/ok.txt) = %q %v", full, ok)
 	}
 }
 
@@ -498,4 +529,62 @@ func TestChatPhraseFindsMessageAmongManySharingItsWords(t *testing.T) {
 	if ids := messageIDs(resp); len(ids) == 0 || ids[0] != "target" {
 		t.Fatalf("phrase search = %v, want target first", ids)
 	}
+}
+
+// pins reports how many holders keep a session's file index open.
+func pins(s *Service, session string) int {
+	s.files.mu.Lock()
+	defer s.files.mu.Unlock()
+	if fi := s.files.open[session]; fi != nil {
+		return fi.users
+	}
+	return 0
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestQueuedFirstBuildIsNotQueuedTwice(t *testing.T) {
+	s := newTestService(t, &fakeWorkspace{root: seedRepo(t)}, nil, &clock{t: time.Unix(1_800_000_000, 0)})
+	s.buildSlots <- struct{}{} // another session's build holds the slot
+	for range 3 {
+		if _, err := s.Search(context.Background(), Request{Query: "palette", SessionID: "sess-1", Kinds: allKinds}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := pins(s, "sess-1"); got != 1 {
+		t.Fatalf("queued builds holding the index = %d, want 1", got)
+	}
+	<-s.buildSlots
+	searchReady(t, s, "palette")
+}
+
+func TestRefreshKeepsItsIndexOpenAfterTheSearchReturns(t *testing.T) {
+	c := &clock{t: time.Unix(1_800_000_000, 0)}
+	s := newTestService(t, &fakeWorkspace{root: seedRepo(t)}, nil, c)
+	searchReady(t, s, "palette")
+
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	testHookReconcile = func() { <-gate }
+	// Runs before the service closes, so a failure here cannot hang Close.
+	t.Cleanup(func() { release(); testHookReconcile = nil })
+	c.advance(fileStaleAfter + time.Second)
+	// The refresh outlives the search's freshness budget.
+	if _, err := s.Search(context.Background(), Request{Query: "palette", SessionID: "sess-1", Kinds: allKinds}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pins(s, "sess-1"); got != 1 {
+		t.Fatalf("pins while the refresh runs = %d, want 1 (its own)", got)
+	}
+	release()
+	waitFor(t, "the refresh to release its pin", func() bool { return pins(s, "sess-1") == 0 })
 }

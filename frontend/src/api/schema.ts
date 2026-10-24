@@ -6545,6 +6545,8 @@ export interface components {
             /** @description The message left the visible transcript: an edit forked past it or its turn was rolled back. */
             olderVersion: boolean;
             projectId?: string;
+            /** @description Set for a reviewer chat message: the review whose chat, inside sessionId's view, holds it. */
+            reviewId?: string;
             /** Format: double */
             score: number;
             sessionId?: string;

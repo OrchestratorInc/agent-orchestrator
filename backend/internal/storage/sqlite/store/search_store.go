@@ -60,7 +60,10 @@ func (s *Store) SearchMessagesByID(ctx context.Context, ids []string) ([]domain.
 			msg.SessionID = *row.SessionID
 		case row.CurrentSessionID != nil:
 			msg.SessionID = *row.CurrentSessionID
+		case row.ReviewSessionID != "":
+			msg.SessionID = row.ReviewSessionID
 		}
+		msg.ReviewID = row.ReviewID.String
 		if row.ProjectID != nil {
 			msg.ProjectID = *row.ProjectID
 		}

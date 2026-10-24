@@ -60,7 +60,7 @@ export type CommandAction =
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
 	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
-	| { kind: "open-chat-message"; sessionId?: string; projectId?: string; hostId?: string; messageId?: string; text: string }
+	| { kind: "open-chat-message"; sessionId?: string; projectId?: string; hostId?: string; reviewId?: string; messageId?: string; text: string }
 	| { kind: "open-settings-section"; section: GlobalSettingsSection; /** Visible label of the row to land on. */ focus?: string }
 	| { kind: "run-shortcut"; shortcut: AppShortcutId }
 	| { kind: "resume-session"; projectId: string; sessionId: string }
@@ -313,7 +313,7 @@ export function buildSearchResultCommands(
 			id: `message:${host}:${hit.messageId}`,
 			group: "messages",
 			title,
-			subtitle: hit.olderVersion ? t("command.olderVersion") : undefined,
+			subtitle: hit.olderVersion ? t("command.olderVersion") : hit.reviewId ? t("terminal.reviewer") : undefined,
 			serverScore: hit.score,
 			decisive: hit.decisive,
 			snippet: { text: hit.snippet.text, highlights: hit.snippet.highlights },
@@ -322,6 +322,7 @@ export function buildSearchResultCommands(
 				...(hit.sessionId ? { sessionId: hit.sessionId } : {}),
 				...(hit.projectId ? { projectId: hit.projectId } : {}),
 				...(target?.hostId ? { hostId: target.hostId } : {}),
+				...(hit.reviewId ? { reviewId: hit.reviewId } : {}),
 				// A message an edit forked away is not in the transcript to scroll to.
 				...(hit.olderVersion ? {} : { messageId: hit.messageId }),
 				text: renderedSnippetText(hit.snippet.text),

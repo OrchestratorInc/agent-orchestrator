@@ -19,9 +19,11 @@ LIMIT sqlc.arg(page_size);
 -- name: ListConversationMessagesForSearchByIDs :many
 SELECT m.id, m.conversation_id, m.text, m.streaming, m.created_at,
        c.session_id, c.current_session_id, c.project_id,
+       c.review_id, COALESCE(r.session_id, '') AS review_session_id,
        c.applied_title, c.provider_title
 FROM conversation_messages AS m
 JOIN conversations AS c ON c.id = m.conversation_id
+LEFT JOIN review AS r ON r.id = c.review_id
 WHERE m.id IN (sqlc.slice('ids'));
 
 -- name: ListVisibleConversationMessageIDs :many
