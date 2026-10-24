@@ -638,6 +638,12 @@ export async function showCloudSignInFailure(error: unknown): Promise<void> {
 }
 
 export function registerCloudProtocol(): void {
+  // macOS ignores the path/args below and binds the scheme to the running
+  // bundle. For a dev build that is the stock node_modules Electron.app, which
+  // would steal ao-app:// from the installed app and open a blank Electron
+  // window on every deep link. Dev builds sign in via the loopback redirect,
+  // so they never need the scheme.
+  if (process.platform === "darwin" && !app.isPackaged) return;
   if (process.defaultApp && process.argv.length >= 2) {
     app.setAsDefaultProtocolClient("ao-app", process.execPath, [
       path.resolve(process.argv[1]),
