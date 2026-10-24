@@ -28,6 +28,16 @@ func Execute() error {
 
 func executeWithDeps(deps Deps, args []string) error {
 	deps = deps.withDefaults()
+	// A configured self-hosted agent browser has its own command interface, so
+	// `ao browser` must reach it before Cobra parses desktop-only commands
+	// (AO also pins its own executable first on session PATHs, so a shell
+	// alias or wrapper cannot intercept it there).
+	if remote, rest, err := remoteBrowserForward(os.Getenv, args); remote != nil || err != nil {
+		if err != nil {
+			return err
+		}
+		return runRemoteBrowserCommand(context.Background(), deps, *remote, rest)
+	}
 	cmd := NewRootCommand(deps)
 	cmd.SetArgs(args)
 	err := cmd.Execute()
