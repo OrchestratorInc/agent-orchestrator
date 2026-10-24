@@ -531,6 +531,17 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		created = append(created, run)
 		reviews = replaceReviewLatestRun(reviews, reviewState.PRURL, reviewState.TargetSHA, run)
 	}
+	if len(created) > 0 || len(restarted) > 0 {
+		if reviewRow.IsArchived {
+			// A pass starting on an archived row revives it: the reviewer is
+			// live again for this pass; sweep retirement applies only after it
+			// ends. A no-op trigger never reopens a retired reviewer.
+			reviewRow.IsArchived = false
+			if err := e.store.UpsertReview(ctx, reviewRow); err != nil {
+				return TriggerResult{}, err
+			}
+		}
+	}
 	if len(created) == 0 && len(restarted) == 0 {
 		if modeChanging && mode == "" {
 			if err := e.stopReviewChatWork(ctx, reviewRow); err != nil {
@@ -1514,10 +1525,6 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 	if err != nil {
 		return SessionReviews{}, err
 	}
-	active := []domain.ReviewerSurface{}
-	if reviewerRowActive(reviewRow, runs) {
-		active = append(active, reviewerSurface(reviewRow))
-	}
 	for i := range reviewRows {
 		other := reviewRows[i]
 		if other.ID == reviewRow.ID {
@@ -1532,6 +1539,58 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 			if err != nil {
 				return SessionReviews{}, err
 			}
+		}
+	}
+	// A pass-only override reviewer retires once its runs are terminal: the
+	// --agent flag documents "for this pass only", so a temporary reviewer must
+	// not linger in the pane forever (#6862). The session's selected reviewer
+	// and any reviewer with a running pass always stay. A live idle pane is
+	// destroyed with the row: retiring the record alone would orphan the
+	// reviewer process.
+	for i := range reviewRows {
+		row := reviewRows[i]
+		if row.IsArchived || row.Harness == selectedHarness {
+			continue
+		}
+		running := false
+		for _, run := range runs {
+			if run.ReviewID == row.ID && run.Status == domain.ReviewRunRunning {
+				running = true
+				break
+			}
+		}
+		if running {
+			continue
+		}
+		if row.ReviewerHandleID != "" {
+			// Best-effort: List must not fail because a dying pane refused to
+			// die; the archived row below keeps it out of every surface anyway.
+			_ = e.launcher.Destroy(ctx, row.ReviewerHandleID)
+		}
+		retired := row
+		retired.IsArchived = true
+		retired.ReviewerHandleID = ""
+		retired.ReviewerLaunchID = ""
+		retired.ControllerGeneration = ""
+		retired.ReviewerActivityState = domain.ActivityExited
+		if _, err := e.store.RestoreReviewLaunchState(ctx, retired, e.clock()); err != nil {
+			return SessionReviews{}, err
+		}
+		if row.ID == reviewRow.ID {
+			reviewRow = retired
+		} else {
+			reviewRows[i] = retired
+		}
+	}
+	// Built after the sweep so a reviewer retired above is never listed active.
+	active := []domain.ReviewerSurface{}
+	if reviewerRowActive(reviewRow, runs) {
+		active = append(active, reviewerSurface(reviewRow))
+	}
+	for i := range reviewRows {
+		other := reviewRows[i]
+		if other.ID == reviewRow.ID {
+			continue
 		}
 		if reviewerRowActive(other, runs) {
 			active = append(active, reviewerSurface(other))
