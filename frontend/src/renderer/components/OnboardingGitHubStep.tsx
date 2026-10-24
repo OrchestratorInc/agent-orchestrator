@@ -21,13 +21,13 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 	const installFailed = setup.job?.status === "failed" || setup.job?.status === "unsupported" || setup.job?.status === "interrupted";
 	// The job's own error is a raw process result such as "exit status 1", which
 	// tells a first-time user nothing, so a failed install gets a plain sentence.
-	const installDetail = setup.installError ?? (installFailed ? t("onboarding.githubInstallFailed") : undefined);
+	const installDetail = setup.installError ?? (installFailed ? t(setup.updateRequired ? "onboarding.githubUpdateFailed" : "onboarding.githubInstallFailed") : undefined);
 	// Linux cannot install gh for the user and says so with an unsupported job
 	// plus the command that would work. Retrying only repeats that answer, so the
 	// step has to hand the command over.
 	const manualCommand = setup.job?.status === "unsupported" ? setup.job.command : undefined;
 
-	if (!setup.gh) {
+	if (!setup.gh || setup.checkingVersion) {
 		return (
 			<p className="px-1 text-caption text-muted-foreground" role="status">
 				{t("onboarding.checkingAvailability")}
@@ -64,11 +64,11 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 				<DeviceCodePanel code={login.userCode ?? ""} url={login.verificationUrl ?? DEFAULT_VERIFICATION_URL} onCancel={setup.cancelSignIn} />
 			) : (
 				<SetupList>
-					{setup.cliMissing && !setup.signInActive ? (
+					{(setup.cliMissing || setup.updateRequired) && !setup.signInActive ? (
 						<SetupRow
 							icon={<GitHubMarkIcon aria-hidden="true" />}
-							label={installFailed ? t("onboarding.tryAgain") : t("startup.installGh")}
-							description={t("onboarding.githubInstallDetail")}
+							label={setup.updateRequired ? t("onboarding.githubUpdate") : installFailed ? t("onboarding.tryAgain") : t("startup.installGh")}
+							description={setup.updateRequired ? t("onboarding.githubUpdateDetail", { version: setup.installedVersion }) : t("onboarding.githubInstallDetail")}
 							variant="action"
 							disabled={setup.installing}
 							onClick={() => void setup.install()}
@@ -96,6 +96,9 @@ export function OnboardingGitHubStep({ setup }: { setup: ReturnType<typeof useGi
 				</p>
 			) : null}
 			{manualCommand ? <ManualCommand command={manualCommand} t={t} /> : null}
+			{setup.updateRequired && installFailed ? (
+				<Button type="button" variant="ghost" onClick={() => void aoBridge.app.openExternal("https://cli.github.com/")}>{t("onboarding.githubDownload")}</Button>
+			) : null}
 			{signInFailed ? (
 				<p className="px-4 pt-2 text-caption leading-snug text-destructive" role="alert">
 					{login.error || t("onboarding.githubSignInFailed")}

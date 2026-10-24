@@ -7454,6 +7454,10 @@ export interface components {
             required: boolean;
             /** @description Whether this requirement is currently met. */
             satisfied: boolean;
+            /** @description Whether the detected GitHub CLI is older than the supported minimum of 2.4.0. */
+            updateRequired?: boolean;
+            /** @description Detected GitHub CLI version, when available from the advisory authentication probe. */
+            version?: string;
         };
         SystemRequirementsResponse: {
             /** @description True iff every requirement with Required=true is satisfied. Requirements with Required=false (e.g. gh) are advisory and never block readiness. */

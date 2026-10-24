@@ -21049,6 +21049,14 @@ components:
         satisfied:
           description: Whether this requirement is currently met.
           type: boolean
+        updateRequired:
+          description: Whether the detected GitHub CLI is older than the supported
+            minimum of 2.4.0.
+          type: boolean
+        version:
+          description: Detected GitHub CLI version, when available from the advisory
+            authentication probe.
+          type: string
       required:
       - id
       - label

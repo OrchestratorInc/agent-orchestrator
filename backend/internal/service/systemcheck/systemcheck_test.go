@@ -23,13 +23,16 @@ type fakeHarnessCatalog struct {
 }
 
 type fakeCommandRunner struct {
-	err     error
-	errors  []error
-	stdout  string
-	outputs []string
-	argv    []string
-	argvLog [][]string
-	run     func(context.Context) error
+	version      string
+	versionErr   error
+	versionCalls int
+	err          error
+	errors       []error
+	stdout       string
+	outputs      []string
+	argv         []string
+	argvLog      [][]string
+	run          func(context.Context) error
 }
 
 type fakeGitHubAuthTerminalOpener struct {
@@ -42,6 +45,11 @@ func (f *fakeGitHubAuthTerminalOpener) OpenCommandTerminal(_ context.Context, in
 }
 
 func (f *fakeCommandRunner) Run(ctx context.Context, argv []string, stdout, _ io.Writer) error {
+	if len(argv) == 2 && argv[1] == "--version" {
+		f.versionCalls++
+		_, _ = io.WriteString(stdout, f.version)
+		return f.versionErr
+	}
 	if f.run != nil {
 		_, _ = io.WriteString(stdout, f.stdout)
 		return f.run(ctx)
@@ -139,7 +147,7 @@ func TestCheckStartup_SkipsAgentInventory(t *testing.T) {
 	if catalog.binaryCalls != 1 {
 		t.Fatalf("FindInstalledBinary calls = %d, want 1", catalog.binaryCalls)
 	}
-	if runner.argv != nil {
+	if runner.argv != nil || runner.versionCalls != 0 {
 		t.Fatalf("startup auth probe argv = %#v, want no command", runner.argv)
 	}
 	if len(report.Requirements) != 4 {

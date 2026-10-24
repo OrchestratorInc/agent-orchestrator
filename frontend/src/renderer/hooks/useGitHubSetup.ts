@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useInstallRunner } from "../components/InstallDependencyDialog";
 import { aoBridge } from "../lib/bridge";
@@ -18,6 +18,8 @@ const STEP_POLL_INTERVAL_MS = 2_500;
  */
 export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 	const { t } = useTranslation();
+	const [verificationError, setVerificationError] = useState<string | null>(null);
+	const [verifyingInstall, setVerifyingInstall] = useState(false);
 	const gate = useSystemRequirementsGate();
 	const { login, start, cancel } = useGitHubDeviceLogin();
 	const signInActive = start.isPending || login.state === "starting" || login.state === "awaiting_approval";
@@ -33,8 +35,18 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 	// it uses that runner rather than a second POST-and-poll of its own.
 	const installRunner = useInstallRunner(
 		() => {
-			void requirementsRef.current();
-			startRef.current();
+			setVerifyingInstall(true);
+			void Promise.all([requirementsRef.current(), authRef.current()]).then(([requirements, authentication]) => {
+				if (!requirements.data?.requirements.some((item) => item.id === GH_INSTALL_TARGET && item.satisfied) || !authentication.data?.version || authentication.isError) {
+					setVerificationError(t("onboarding.githubUpdateUnverified"));
+					return;
+				}
+				if (authentication.data.updateRequired) {
+					setVerificationError(t("onboarding.githubUpdateStillOld", { version: authentication.data.version }));
+					return;
+				}
+				if (!authentication.data.satisfied) startRef.current();
+			}).catch(() => setVerificationError(t("onboarding.githubUpdateUnverified"))).finally(() => setVerifyingInstall(false));
 		},
 		t("onboarding.installStartFailed"),
 	);
@@ -43,7 +55,8 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 	// The CLI half matters while gh is missing (an install can land at any time)
 	// and the auth half while GitHub is still signed out.
 	const cliMissing = gh?.satisfied === false;
-	const authSatisfied = Boolean(auth.data?.satisfied);
+	const updateRequired = Boolean(auth.data?.updateRequired);
+	const authSatisfied = Boolean(auth.data?.satisfied) && !updateRequired;
 	// "Not yet confirmed" is not the same as "needs nothing": a probe that ran
 	// before the daemon was reachable leaves gh unknown, and that has to keep
 	// polling or the page sits on its checking state forever.
@@ -87,11 +100,14 @@ export function useGitHubSetup({ poll = false }: { poll?: boolean } = {}) {
 
 	return {
 		authSatisfied,
+		checkingVersion: auth.isPending,
+		updateRequired,
+		installedVersion: auth.data?.version,
 		cliMissing,
 		gh,
-		install: () => installRunner.start(GH_INSTALL_TARGET),
-		installError: installRunner.startError ?? null,
-		installing: installRunner.running,
+		install: () => { setVerificationError(null); return installRunner.start(GH_INSTALL_TARGET); },
+		installError: installRunner.startError ?? verificationError,
+		installing: installRunner.running || verifyingInstall,
 		job: installRunner.jobFor(GH_INSTALL_TARGET),
 		login,
 		requirementsQuery: gate.query,

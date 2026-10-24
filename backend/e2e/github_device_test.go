@@ -97,12 +97,13 @@ func TestGitHubDeviceLoginCLICompatibility(t *testing.T) {
 }
 
 type githubDeviceFixture struct {
-	daemon    *daemon
-	configDir string
-	outcome   atomic.Value
-	rejected  atomic.Bool
-	codeDelay atomic.Int64
-	starts    atomic.Int64
+	daemon          *daemon
+	configDir       string
+	versionOverride string
+	outcome         atomic.Value
+	rejected        atomic.Bool
+	codeDelay       atomic.Int64
+	starts          atomic.Int64
 }
 
 func (f *githubDeviceFixture) request(t *testing.T, method string) systemcheck.GitHubDeviceLogin {
@@ -137,6 +138,7 @@ func newGitHubDeviceFixture(t *testing.T, binary string) *githubDeviceFixture {
 	buildDaemon(t)
 	root := t.TempDir()
 	f := &githubDeviceFixture{configDir: filepath.Join(root, "gh-config")}
+	f.versionOverride = filepath.Join(root, "gh-version")
 	f.outcome.Store("pending")
 	if err := os.Mkdir(f.configDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -223,12 +225,19 @@ func newGitHubDeviceFixture(t *testing.T, binary string) *githubDeviceFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\n"
+	quotedVersion := "'" + strings.ReplaceAll(f.versionOverride, "'", "'\\''") + "'"
+	script := "#!/bin/sh\nif [ \"$1\" = --version ] && [ -f " + quotedVersion + " ]; then cat " + quotedVersion + "; exit 0; fi\n"
 	if strings.Contains(string(help), "--insecure-storage") {
 		script += "if [ \"$1\" = auth ] && [ \"$2\" = login ]; then exec " + quoted + " \"$@\" --insecure-storage; fi\n"
 	}
 	script += "exec " + quoted + " \"$@\"\n"
 	if err := os.WriteFile(filepath.Join(binDir, "gh"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The connected UI can request an update on macOS. Never let that fixture
+	// invoke the host's real Homebrew or change its installed GitHub CLI.
+	brew := "#!/bin/sh\nif [ \"$1\" = upgrade ]; then rm -f " + quotedVersion + "; fi\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "brew"), []byte(brew), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"} {
@@ -299,12 +308,19 @@ func TestGitHubDeviceBrowserFixture(t *testing.T) {
 			return
 		}
 		switch strings.TrimPrefix(r.URL.Path, "/") {
+		case "old-cli":
+			if err := os.WriteFile(f.versionOverride, []byte("gh version 2.3.0 (fixture)\n"), 0600); err != nil {
+				t.Error(err)
+			}
 		case "approve", "deny", "expire":
 			f.outcome.Store(strings.TrimPrefix(r.URL.Path, "/"))
 		case "revoke":
 			f.rejected.Store(true)
 		case "reset", "delay":
 			f.request(t, "DELETE")
+			if err := os.Remove(f.versionOverride); err != nil && !os.IsNotExist(err) {
+				t.Error(err)
+			}
 			f.outcome.Store("pending")
 			f.rejected.Store(false)
 			f.codeDelay.Store(0)

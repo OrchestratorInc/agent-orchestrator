@@ -25,11 +25,13 @@ import (
 
 // Requirement is one named startup gate check.
 type Requirement struct {
-	ID        string `json:"id" enum:"git,tmux,harness,gh,github-auth" description:"Stable requirement identifier."`
-	Label     string `json:"label" description:"Human-readable requirement name."`
-	Satisfied bool   `json:"satisfied" description:"Whether this requirement is currently met."`
-	Required  bool   `json:"required" description:"Whether this requirement blocks the overall Ready state."`
-	Detail    string `json:"detail,omitempty" description:"Extra context: the resolved path when satisfied, or why it is not."`
+	ID             string `json:"id" enum:"git,tmux,harness,gh,github-auth" description:"Stable requirement identifier."`
+	Label          string `json:"label" description:"Human-readable requirement name."`
+	Satisfied      bool   `json:"satisfied" description:"Whether this requirement is currently met."`
+	Required       bool   `json:"required" description:"Whether this requirement blocks the overall Ready state."`
+	Detail         string `json:"detail,omitempty" description:"Extra context: the resolved path when satisfied, or why it is not."`
+	Version        string `json:"version,omitempty" description:"Detected GitHub CLI version, when available from the advisory authentication probe."`
+	UpdateRequired bool   `json:"updateRequired,omitempty" description:"Whether the detected GitHub CLI is older than the supported minimum of 2.4.0."`
 }
 
 // Report is a requirements result suitable for either the lightweight startup
@@ -116,7 +118,13 @@ func (s *Service) CheckGitHubAuth(ctx context.Context) (Requirement, error) {
 	if err := ctx.Err(); err != nil {
 		return Requirement{}, err
 	}
-	return s.checkGitHubAuth(ctx), nil
+	version, updateRequired := s.githubCLIVersion(ctx)
+	if updateRequired {
+		return Requirement{ID: "github-auth", Label: "GitHub access", Version: version, UpdateRequired: true, Detail: "Update GitHub CLI to version 2.4.0 or newer before signing in."}, nil
+	}
+	requirement := s.checkGitHubAuth(ctx)
+	requirement.Version = version
+	return requirement, nil
 }
 
 // OpenGitHubAuthTerminal starts the fixed GitHub CLI login flow. Executable

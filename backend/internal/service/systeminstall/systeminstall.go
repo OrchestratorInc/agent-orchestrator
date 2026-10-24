@@ -689,7 +689,7 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.run(s.backgroundContext, plan.Command, job)
+		s.run(s.backgroundContext, plan, job)
 	}()
 
 	return *job, nil
@@ -1176,30 +1176,39 @@ func (s *Service) Close(ctx context.Context) error {
 	}
 }
 
-// run executes argv in the background and records the outcome onto job. job
+// run executes a plan in the background and records the outcome onto job. job
 // is only ever mutated here and read back through a copy under s.mu, so
 // concurrent Start/Status calls never race with this goroutine's writes.
 // The run is bounded by installTimeout so a stalled installer eventually
 // surfaces as a failure instead of pinning the target in StatusRunning.
-func (s *Service) run(parent context.Context, argv []string, job *Job) {
+func (s *Service) run(parent context.Context, plan Plan, job *Job) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 
 	out := &capturedOutput{max: maxOutputBytes}
+	runCommand := func(argv []string) error {
+		if s.installCommands != nil {
+			return s.installCommands.RunInstall(ctx, ports.InstallCommand{
+				Argv: argv,
+				Env: []string{
+					"CI=1",
+					"NONINTERACTIVE=1",
+					"HOMEBREW_NO_AUTO_UPDATE=1",
+					"NPM_CONFIG_AUDIT=false",
+					"NPM_CONFIG_FUND=false",
+				},
+			}, out, out)
+		}
+		return s.commands.Run(ctx, argv, out, out)
+	}
+	for _, argv := range plan.Prepare {
+		if err := runCommand(argv); err != nil && ctx.Err() == nil {
+			_, _ = fmt.Fprintf(out, "\n%s failed (%v); continuing.\n", strings.Join(argv, " "), err)
+		}
+	}
 	var runErr error
-	if s.installCommands != nil {
-		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{
-			Argv: argv,
-			Env: []string{
-				"CI=1",
-				"NONINTERACTIVE=1",
-				"HOMEBREW_NO_AUTO_UPDATE=1",
-				"NPM_CONFIG_AUDIT=false",
-				"NPM_CONFIG_FUND=false",
-			},
-		}, out, out)
-	} else {
-		runErr = s.commands.Run(ctx, argv, out, out)
+	if ctx.Err() == nil {
+		runErr = runCommand(plan.Command)
 	}
 	now := time.Now()
 
@@ -1674,13 +1683,14 @@ func (s *Service) planTmux() Plan {
 }
 
 func (s *Service) planGH() Plan {
+	var plan Plan
 	switch s.goos {
 	case "windows":
-		return s.planWinget(TargetGH, "GitHub.cli")
+		plan = s.planWinget(TargetGH, "GitHub.cli")
 	case "darwin":
-		return s.planBrew(TargetGH, "gh")
+		plan = s.planBrew(TargetGH, "gh")
 	case "linux":
-		return s.planLinuxPackage(TargetGH, func(mgr string) string {
+		plan = s.planLinuxPackage(TargetGH, func(mgr string) string {
 			if mgr == "pacman" {
 				return "github-cli"
 			}
@@ -1689,6 +1699,28 @@ func (s *Service) planGH() Plan {
 	default:
 		return Plan{Target: TargetGH, Unsupported: true, Reason: "gh installation is not supported on this platform."}
 	}
+	path, err := s.executables.LookPath("gh")
+	if err != nil || path == "" || len(plan.Command) < 2 {
+		return plan
+	}
+	// The same reviewed action installs a missing CLI or updates an existing
+	// one. Refresh Homebrew metadata before requesting its latest release.
+	switch plan.Command[0] {
+	case "brew":
+		plan.Prepare = [][]string{{"brew", "update"}}
+		plan.Command[1] = "upgrade"
+	case "winget":
+		plan.Command[1] = "upgrade"
+		plan.Command = append(plan.Command, "--source", "winget", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
+	case "apt-get":
+		plan.Prepare = [][]string{{"sudo", "apt-get", "update"}}
+		plan.Command = []string{"apt-get", "install", "--only-upgrade", "-y", "gh"}
+	case "dnf", "apk":
+		plan.Command[1] = "upgrade"
+	case "zypper":
+		plan.Command[1] = "update"
+	}
+	return plan
 }
 
 // planCloudflared mirrors planGH: Cloudflare publishes cloudflared through
