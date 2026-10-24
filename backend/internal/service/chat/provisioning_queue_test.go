@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -664,7 +665,13 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 		t.Fatalf("seeded branch = %+v, err=%v; want predecessor-thread", inherited, err)
 	}
 
-	svc := provisioningService(t, st)
+	conv := newFakeConversation()
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("first-start"),
+	})
 	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "opening brief", Origin: domain.MessageOriginHuman}); err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +684,16 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 			if boundary == nil {
 				return chatsvc.ControllerCommit{}, nil
 			}
-			if err := st.CreateAndActivateConversationBranch(ctx, id, *boundary, result.ControllerGeneration, now); err != nil {
+			// The spawn path publishes the boundary with the session owner.
+			rec, _, err := st.GetSession(ctx, id)
+			if err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			rec.ProvisionState = domain.SessionProvisionReady
+			rec.Metadata.ProviderConversationID = result.ProviderConversationID
+			rec.Metadata.ControllerGeneration = result.ControllerGeneration
+			rec.UpdatedAt = now
+			if err := st.CommitChatSpawn(ctx, rec, *boundary); err != nil {
 				return chatsvc.ControllerCommit{}, err
 			}
 			committed := result.Conversation
@@ -687,7 +703,6 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
 	if boundary == nil {
 		t.Fatal("fresh provider thread was attached to the predecessor's branch without a new boundary")
 	}
@@ -706,6 +721,82 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 	}
 	if len(snapshot.Turns) != 1 || snapshot.Turns[0].State != domain.TurnStateRunning {
 		t.Fatalf("opening brief after start = %+v, want one running turn", snapshot.Turns)
+	}
+	conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1", ProviderItemID: "live-answer", Text: "On it."},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted},
+	)
+	waitForTurnState(t, svc, id, domain.TurnStateCompleted)
+	if err := svc.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// After a restart the provider replays the same exchange under turn ids
+	// it reconstructs, as ACP does, so only the text can correlate it.
+	replay := &nativeHistoryConversation{fakeConversation: newFakeConversation(), events: []ports.ChatEvent{
+		{Kind: ports.ChatEventTurnStarted, ProviderEventID: "replay-start", ProviderTurnID: "replayed-turn"},
+		{Kind: ports.ChatEventUserMessageCompleted, ProviderEventID: "replay-user", ProviderTurnID: "replayed-turn", ProviderItemID: "replay-user-item", Text: "opening brief"},
+		{Kind: ports.ChatEventMessageCompleted, ProviderEventID: "replay-answer", ProviderTurnID: "replayed-turn", ProviderItemID: "replay-answer-item", Text: "On it."},
+		{Kind: ports.ChatEventTurnCompleted, ProviderEventID: "replay-complete", ProviderTurnID: "replayed-turn", TurnState: domain.TurnStateCompleted},
+	}}
+	restarted := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: replay}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("restart"),
+	})
+	if _, err := restarted.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryImport,
+	}); err != nil {
+		t.Fatalf("resume after restart: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Stop(context.Background(), id) })
+	if replay.historyReads() == 0 {
+		t.Fatal("resume did not replay native history")
+	}
+	resumed, err := restarted.Snapshot(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompts := 0
+	for _, message := range resumed.Messages {
+		if message.Text == "opening brief" {
+			prompts++
+		}
+	}
+	if prompts != 1 || len(resumed.Turns) != 1 || resumed.Turns[0].State != domain.TurnStateCompleted {
+		t.Fatalf("after restart: %d opening prompts, turns %+v; want one prompt on one completed turn", prompts, resumed.Turns)
+	}
+}
+
+func sequentialIDs(prefix string) func() string {
+	var mu sync.Mutex
+	next := 0
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		next++
+		return fmt.Sprintf("%s-%d", prefix, next)
+	}
+}
+
+func waitForTurnState(t *testing.T, svc *chatsvc.Service, id domain.SessionID, want domain.TurnState) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, err := svc.Snapshot(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.Turns) == 1 && snapshot.Turns[0].State == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("turns = %+v, want one %s turn", snapshot.Turns, want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
