@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -142,6 +143,40 @@ func TestReviewSubmitBatchReadsReviewsFromStdin(t *testing.T) {
 	}
 	if req.RunID != "" || req.Verdict != "" {
 		t.Fatalf("batch request should not also set legacy fields: %+v", req)
+	}
+}
+
+// The staged results file is the body channel for queued reviews (#6021):
+// content that shell quoting would mangle — apostrophes, double quotes,
+// unicode, newlines — must round-trip through the file untouched.
+func TestReviewSubmitBatchReadsReviewsFile(t *testing.T) {
+	cfg := setReviewEnv(t)
+	srv, capture := reviewServer(t, http.StatusOK, `{"reviews":[{"id":"run-1","verdict":"changes_requested"}]}`)
+	writeRunFileFor(t, cfg, srv)
+
+	const nastyBody = "it's \"required\" — реплика 'в кавычках' ‣ ünïcode\nsecond line\n"
+	resultsFile := filepath.Join(t.TempDir(), "ao-review-results.json")
+	payload := `{"reviews":[{"runId":"run-1","verdict":"changes_requested","githubReviewId":"101","body":` + strconv.Quote(nastyBody) + `}]}`
+	if err := os.WriteFile(resultsFile, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errOut, err := executeCLI(t, aliveDeps(), "review", "submit", "mer-1", "--reviews", resultsFile)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(capture.body, `"reviews"`) {
+		t.Fatalf("request should carry the batch field: %s", capture.body)
+	}
+	var req submitReviewRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(req.Reviews) != 1 || req.Reviews[0].RunID != "run-1" || req.Reviews[0].GithubReviewID != "101" {
+		t.Fatalf("request = %+v", req)
+	}
+	if req.Reviews[0].Body != nastyBody {
+		t.Fatalf("body did not round-trip: %q", req.Reviews[0].Body)
 	}
 }
 
