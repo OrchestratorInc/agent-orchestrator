@@ -398,6 +398,7 @@ it("shows the creation order before the new project snapshot arrives and preserv
 	const alpha = { ...workspace, id: "alpha", name: "Alpha", sessions: [] };
 	const beta = { ...workspace, id: "beta", name: "Beta", sessions: [] };
 	const newest = { ...workspace, id: "zulu", name: "Zulu", sessions: [] };
+	const olderCloud = { ...workspace, id: "older-cloud", name: "Older cloud", kind: "cloud" as const, sessions: [] };
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const noop = vi.fn().mockResolvedValue(undefined);
 	const tree = (workspaces: WorkspaceSummary[]) => (
@@ -408,14 +409,14 @@ it("shows the creation order before the new project snapshot arrives and preserv
 	window.localStorage.setItem("ao.sidebar.project-order", JSON.stringify(["beta", "alpha", "zulu"]));
 	useSidebarOrderStore.getState().setProjectOrder(["beta", "alpha", "zulu"]);
 	const view = render(tree([alpha, beta]));
-	act(() => useSidebarOrderStore.getState().setProjectOrder(["zulu", "beta", "alpha"]));
-	view.rerender(tree([alpha, beta, newest]));
+	act(() => useSidebarOrderStore.getState().moveProjectToTop("zulu"));
+	view.rerender(tree([alpha, beta, olderCloud, newest]));
 	const ids = () => Array.from(document.querySelectorAll("[data-project-drop-target][data-project-id]"), (row) => row.getAttribute("data-project-id"));
-	expect(ids()).toEqual(["zulu", "beta", "alpha"]);
+	expect(ids()).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
 	view.rerender(tree([]));
-	view.rerender(tree([alpha, beta, newest]));
-	expect(ids()).toEqual(["zulu", "beta", "alpha"]);
-	expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["zulu", "beta", "alpha"]);
+	view.rerender(tree([alpha, beta, olderCloud, newest]));
+	expect(ids()).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
+	expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
 });
 
 it.each(["invalid JSON", '{"unexpected":true}', '[4,null]'])("ignores invalid saved project order: %s", (saved) => {
@@ -499,7 +500,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
-	useSidebarOrderStore.setState({ projectOrder: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();

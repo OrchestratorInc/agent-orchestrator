@@ -409,7 +409,7 @@ beforeEach(() => {
 	shellMocks.router.history.canGoBack.mockReset().mockReturnValue(true);
 	shellMocks.router.history.back.mockClear();
 	shellMocks.router.history.forward.mockClear();
-	useSidebarOrderStore.setState({ projectOrder: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	shellMocks.getPathForFile.mockClear();
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;

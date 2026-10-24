@@ -767,15 +767,14 @@ export function Sidebar({
 	});
 
 	const projectOrder = useSidebarOrderStore((state) => state.projectOrder);
+	const pendingCreatedProjectIds = useSidebarOrderStore((state) => state.pendingCreatedProjectIds);
 	const setProjectOrder = useSidebarOrderStore((state) => state.setProjectOrder);
-	useEffect(() => {
+	useLayoutEffect(() => {
 		// Preserve absent IDs in place: creation can publish its order before the
-		// query snapshot arrives, and startup can briefly expose an empty list.
-		const { projectOrder, setProjectOrder } = useSidebarOrderStore.getState();
-		const knownIds = new Set(projectOrder);
-		const newIds = workspaces.map((workspace) => workspace.id).filter((id) => !knownIds.has(id));
-		if (newIds.length > 0) setProjectOrder([...newIds, ...projectOrder]);
-	}, [workspaces]);
+		// query snapshot arrives. Reconcile before paint so a late snapshot cannot
+		// briefly show older, newly discovered projects above that creation.
+		useSidebarOrderStore.getState().reconcileProjectOrder(workspaces.map((workspace) => workspace.id));
+	}, [workspaces, pendingCreatedProjectIds]);
 	const orderedWorkspaces = useMemo(
 		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"),
 		[projectOrder, workspaces],
