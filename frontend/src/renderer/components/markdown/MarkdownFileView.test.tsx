@@ -72,6 +72,7 @@ describe("MarkdownFileView", () => {
 	it("resolves relative images through the workspace blob route without double encoding", () => {
 		render(view("![Flow diagram](./assets/flow%20chart.png)", "docs/README.md"));
 
+		expect(screen.getByRole("img", { name: "Flow diagram" })).toHaveAttribute("crossorigin", "anonymous");
 		const src = screen.getByRole("img", { name: "Flow diagram" }).getAttribute("src");
 		const url = new URL(src!);
 		expect(url.searchParams.get("path")).toBe("docs/assets/flow chart.png");

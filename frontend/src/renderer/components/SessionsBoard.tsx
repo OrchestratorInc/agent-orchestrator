@@ -92,7 +92,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// in review -> ready. The middle two are one review-feedback loop, split by
 	// whose turn it is.
 	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
-	const localWorkspaceQuery = useWorkspaceQuery({ projectId });
+	const localWorkspaceQuery = useWorkspaceQuery({ projectId, enabled: !hostId });
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
 	// Evaluated at render so platform mocks in tests can flip the in-panel chrome.
 	const boardActionsInPanel = usesBoardActionsInPanel();
@@ -217,7 +217,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
-			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
+			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty || !hostId && (!localWorkspaceQuery.isSnapshotSuccess || !workspace)} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
 			{boardOwnsNotificationCenter ? (
 				<>
 					<NotificationCenter />
@@ -277,7 +277,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
 			    board so lane height (and Needs You scrollbars) stay stable. */}
-			<div className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}>
+			<div
+				className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}
+				style={hasArchive ? { clipPath: "inset(0 0 var(--sessions-archive-height, 58px) 0)" } : undefined}
+			>
 				{projectId && (hostId || localWorkspaceQuery.isSnapshotSuccess) && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
@@ -317,7 +320,16 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 							<TopbarButton onClick={() => void localWorkspaceQuery.refetchSnapshot()}>{t("cloud.startupError.retry")}</TopbarButton>
 						) : null}
 					</div>
-				) : !hostId && !localWorkspaceQuery.isSnapshotSuccess ? null : hostId && !workspace ? null : showWelcome ? (
+				) : !hostId && !localWorkspaceQuery.isSnapshotSuccess ? (
+					!showStartup ? <div className="flex h-full items-center justify-center text-xs text-passive" role="status" aria-busy="true" aria-label={t("common.loading")}>
+						<span className="size-4 animate-spin rounded-full border-2 border-current border-r-transparent" aria-hidden="true" />
+					</div> : null
+				) : projectId && !workspace ? (
+					!hostId ? <div className="flex flex-col items-center gap-3 py-10 text-xs text-passive">
+						<p role="alert">{t("session.notFound")}</p>
+						<TopbarButton onClick={() => void localWorkspaceQuery.refetchSnapshot()}>{t("cloud.startupError.retry")}</TopbarButton>
+					</div> : null
+				) : showWelcome ? (
 				<BoardWelcome />
 				) : showProjectEmpty ? (
 					<ProjectBoardEmpty actions={<ProjectBoardActions actions={projectActions} placement="empty" />} />

@@ -88,6 +88,8 @@ func officialSourceFor(target Target, goos, goarch string) (officialSource, bool
 		return officialSource{kind: officialGitHub, ref: "autohandai/code-cli"}, true
 	case TargetOMP:
 		return officialSource{kind: officialGitHub, ref: "can1357/oh-my-pi"}, true
+	case TargetHermes:
+		return officialSource{kind: officialGitHub, ref: "NousResearch/hermes-agent"}, true
 	case TargetAider:
 		// Aider's installer runs `uv tool install aider-chat@latest`.
 		return officialSource{kind: officialPyPI, ref: "aider-chat"}, true

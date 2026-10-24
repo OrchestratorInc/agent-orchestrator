@@ -26,7 +26,7 @@ vi.mock("../../hooks/useAgentModelsQuery", () => ({
 	}),
 }));
 
-function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false) {
+function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-code", extra: Partial<PickerSource> = {}, loading = false, loadingModels = false, savedModel?: string) {
 	const onPendingChange = vi.fn();
 	const current: PickerSource = {
 		models: [{ id: "opus", label: "Opus" }, { id: "sonnet", label: "Sonnet" }],
@@ -46,6 +46,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 				terminal={terminal}
 				loading={loading}
 				loadingModels={loadingModels}
+				savedModel={savedModel}
 				agentSwitch={{ projectId: "p", pending, onPendingChange }}
 			/>
 		</QueryClientProvider>,
@@ -55,7 +56,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 
 describe("AgentModelPicker", () => {
 	beforeEach(() => {
-		useUiStore.setState({ developerMode: true });
+		useUiStore.setState({ developerMode: false });
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
 		window.localStorage.clear();
 	});
@@ -99,6 +100,30 @@ describe("AgentModelPicker", () => {
 	it("names no model while the agent starts again", () => {
 		open(undefined, false, "claude-code", {}, false, true);
 		expect(screen.getByRole("button", { name: /Agent, model and reasoning effort/ })).toHaveTextContent("Loading models…");
+	});
+
+	it("names the saved model instead of loading when the agent's list knows it", async () => {
+		open(undefined, false, "codex", { modelLabel: "Codex" }, false, true, "gpt-x");
+		const trigger = screen.getByRole("button", { name: /Agent, model and reasoning effort/ });
+		expect(await screen.findByText("GPT X")).toBeInTheDocument();
+		expect(trigger).not.toHaveTextContent("Loading models…");
+	});
+
+	it("names the agent's default model while loading a chat that saved none", async () => {
+		open(undefined, false, "codex", { modelLabel: "Codex" }, false, true);
+		expect(await screen.findByText("GPT X")).toBeInTheDocument();
+	});
+
+	it("lists the agent's models while it starts, checked on the saved one, until it reports its own", async () => {
+		const user = userEvent.setup();
+		const { current } = open(undefined, false, "codex", { models: [], modelId: undefined, modelLabel: "Codex" }, false, true, "gpt-x");
+		await screen.findByText("GPT X");
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		await user.click(screen.getByRole("menuitem", { name: /Model/ }));
+		const row = await screen.findByRole("menuitemradio", { name: /GPT X/ });
+		expect(row).toHaveAttribute("aria-checked", "true");
+		expect(row).toHaveAttribute("aria-disabled", "true");
+		expect(current.onPickModel).not.toHaveBeenCalled();
 	});
 
 	it("stars a row when its model was starred under another id", async () => {
@@ -206,12 +231,11 @@ describe("AgentModelPicker", () => {
 		expect(onPendingChange).not.toHaveBeenCalled();
 	});
 
-	it("offers no other agent outside Developer Mode", async () => {
-		useUiStore.setState({ developerMode: false });
+	it("offers other agents with Developer Mode off", async () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.queryByRole("menuitem", { name: /Agent.*Claude Code/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Agent.*Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /Model.*Opus/ })).toBeInTheDocument();
 	});
 });

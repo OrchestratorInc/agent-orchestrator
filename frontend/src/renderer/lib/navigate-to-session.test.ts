@@ -11,6 +11,10 @@ describe("sessionNavigateTarget", () => {
 			to: "/host/$hostId/project/$projectId/session/$sessionId",
 			params: { hostId: "machine-a", projectId: "project-1", sessionId: "session-1" },
 		});
+		expect(sessionNavigateTarget("__standalone__", "standalone-1")).toEqual({
+			to: "/sessions/$sessionId",
+			params: { sessionId: "standalone-1" },
+		});
 	});
 });
 

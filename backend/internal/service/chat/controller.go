@@ -308,6 +308,11 @@ type Controller struct {
 	// older notification write from landing after an authoritative replacement.
 	mcpPersistMu sync.Mutex
 
+	// flushRequests asks the projector to write the deltas it is batching; it
+	// closes the sent channel once that write has finished, whether or not it
+	// succeeded.
+	flushRequests chan chan struct{}
+
 	stopped  chan struct{}
 	once     sync.Once
 	closeErr error
@@ -395,6 +400,7 @@ func newController(
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
 		mcpServerSeenRevision:  map[string]uint64{},
+		flushRequests:          make(chan chan struct{}),
 		stopped:                make(chan struct{}),
 	}
 	if conversation.ThreadState != nil {
@@ -454,7 +460,7 @@ func (c *Controller) restoreLiveTurnOwnership(turns []domain.ConversationTurn) s
 // been imported. Keeping construction and consumption separate prevents a resume
 // notification from racing ahead of the older turns it follows.
 func (c *Controller) start() {
-	go c.project()
+	go c.project(deltaFlushInterval)
 	if c.harness != domain.HarnessCodex {
 		go c.readRateLimits()
 	}
@@ -2435,6 +2441,9 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
+	// Commit the current batch before Stop settles the turn. The store keeps any
+	// later deltas settled while retaining text that arrives during cancellation.
+	c.flushDeltas(ctx)
 	// Stop's linearization point is the dispatch lock. A Send that acquired the
 	// lock first is existing work Stop should cancel; a Send that arrives after
 	// this point waits and is therefore post-Stop work that must survive.
@@ -2771,7 +2780,7 @@ func (c *Controller) Wait() { <-c.stopped }
 // project consumes the driver's normalized events and writes them down. It runs
 // until this controller's stream closes. That can mean provider termination or a
 // deliberate detach from a provider that remains alive in a persistent host.
-func (c *Controller) project() {
+func (c *Controller) project(flushInterval time.Duration) {
 	defer close(c.stopped)
 
 	// Detached from any request context: this outlives the call that started the
@@ -2779,72 +2788,10 @@ func (c *Controller) project() {
 	ctx := context.WithoutCancel(context.Background())
 	acknowledger, persistent := c.conv.(ports.ChatProviderEventAcknowledger)
 
-	for event := range c.conv.Events() {
-		if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped &&
-			errors.Is(event.Err, ports.ErrChatRecoveryInconclusive) {
-			// A lost attachment is not proof the persistent provider stopped. Keep
-			// its turn/request correlation and queued intake for a replacement.
-			c.mu.Lock()
-			preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
-			c.transportInterrupted = !c.explicitClose && persistentProvider && preserver.PreservesProviderOnClose()
-			c.preserveProviderOnStop = true
-			c.state = ports.ChatControllerStopped
-			suppressStoppedActivity := c.suppressStoppedActivity
-			c.mu.Unlock()
-			if !suppressStoppedActivity {
-				c.reportActivity(ctx, domain.ActivityExited, "chat.controller.disconnected", c.now())
-			}
-			continue
-		}
-		c.mu.Lock()
-		preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
-		c.mu.Unlock()
-		if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
-			continue
-		}
-		// A lifecycle event and a concurrent Send must agree on whether the root
-		// conversation is busy. Holding the same lock Send/dispatch use closes the
-		// window between the durable projection and the in-memory ownership update.
-		lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventCompacted
-		if lifecycle {
-			c.sendMu.Lock()
-		}
-		projected, primaryTurn, err := c.projectEvent(ctx, event)
-		// A terminal receipt compacts the entire prompt, so it cannot pass a
-		// failed earlier projection. Retry transient store errors in order; if
-		// still failing, detach and leave the journal for a replacement controller.
-		for attempt := 0; err != nil && persistent && attempt < 3; attempt++ {
-			time.Sleep(20 * time.Millisecond)
-			projected, primaryTurn, err = c.projectEvent(ctx, event)
-		}
-		if err == nil && persistent && event.ProviderEventID != "" {
-			err = acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID)
-		}
-		if err != nil && persistent {
-			c.log.Error("persistent chat projection stopped; provider retained for replay",
-				"session", c.sessionID, "kind", event.Kind, "error", err)
-			c.mu.Lock()
-			c.preserveProviderOnStop = true
-			c.state = ports.ChatControllerStopped
-			c.mu.Unlock()
-			if lifecycle {
-				c.sendMu.Unlock()
-			}
-			c.once.Do(func() { c.closeErr = c.conv.Close() })
-			return
-		}
-		if err != nil {
-			// A projection failure must not kill the provider stream. The store
-			// rolls the archive back with its projection, so durable state remains
-			// internally consistent and a later provider replay may retry it.
-			c.log.Error("failed to project chat event",
-				"session", c.sessionID, "kind", event.Kind, "error", err)
-		} else if projected {
-			c.afterProject(ctx, event, primaryTurn)
-		}
-		if lifecycle {
-			c.sendMu.Unlock()
-		}
+	if !pumpProviderEvents(c.conv.Events(), c.flushRequests, flushInterval, func(unit []ports.ChatEvent) bool {
+		return c.projectUnit(ctx, unit, acknowledger, persistent)
+	}) {
+		return
 	}
 
 	c.mu.Lock()
@@ -2882,6 +2829,93 @@ func (c *Controller) project() {
 	}
 }
 
+// projectUnit commits one unit from the event pump: a single event, or a run of
+// deltas for one provider item. It reports false when consumption must stop
+// because a persistent provider's projection failed.
+func (c *Controller) projectUnit(
+	ctx context.Context,
+	unit []ports.ChatEvent,
+	acknowledger ports.ChatProviderEventAcknowledger,
+	persistent bool,
+) bool {
+	event := unit[0]
+	if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped &&
+		errors.Is(event.Err, ports.ErrChatRecoveryInconclusive) {
+		// A lost attachment is not proof the persistent provider stopped. Keep
+		// its turn/request correlation and queued intake for a replacement.
+		c.mu.Lock()
+		preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
+		c.transportInterrupted = !c.explicitClose && persistentProvider && preserver.PreservesProviderOnClose()
+		c.preserveProviderOnStop = true
+		c.state = ports.ChatControllerStopped
+		suppressStoppedActivity := c.suppressStoppedActivity
+		c.mu.Unlock()
+		if !suppressStoppedActivity {
+			c.reportActivity(ctx, domain.ActivityExited, "chat.controller.disconnected", c.now())
+		}
+		return true
+	}
+	c.mu.Lock()
+	preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
+	c.mu.Unlock()
+	if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
+		return true
+	}
+	// A lifecycle event and a concurrent Send must agree on whether the root
+	// conversation is busy. Holding the same lock Send/dispatch use closes the
+	// window between the durable projection and the in-memory ownership update.
+	lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventCompacted
+	if lifecycle {
+		c.sendMu.Lock()
+	}
+	project := func() (bool, bool, error) {
+		if coalescible(event) {
+			projected, err := c.projectDeltas(ctx, unit)
+			return projected, false, err
+		}
+		return c.projectEvent(ctx, event)
+	}
+	projected, primaryTurn, err := project()
+	// A terminal receipt compacts the entire prompt, so it cannot pass a
+	// failed earlier projection. Retry transient store errors in order; if
+	// still failing, detach and leave the journal for a replacement controller.
+	for attempt := 0; err != nil && persistent && attempt < 3; attempt++ {
+		time.Sleep(20 * time.Millisecond)
+		projected, primaryTurn, err = project()
+	}
+	for _, committed := range unit {
+		if err == nil && persistent && committed.ProviderEventID != "" {
+			err = acknowledger.AcknowledgeProviderEvent(ctx, committed.ProviderEventID)
+		}
+	}
+	if err != nil && persistent {
+		c.log.Error("persistent chat projection stopped; provider retained for replay",
+			"session", c.sessionID, "kind", event.Kind, "error", err)
+		c.mu.Lock()
+		c.preserveProviderOnStop = true
+		c.state = ports.ChatControllerStopped
+		c.mu.Unlock()
+		if lifecycle {
+			c.sendMu.Unlock()
+		}
+		c.once.Do(func() { c.closeErr = c.conv.Close() })
+		return false
+	}
+	if err != nil {
+		// A projection failure must not kill the provider stream. The store
+		// rolls the archive back with its projection, so durable state remains
+		// internally consistent and a later provider replay may retry it.
+		c.log.Error("failed to project chat event",
+			"session", c.sessionID, "kind", event.Kind, "error", err)
+	} else if projected {
+		c.afterProject(ctx, event, primaryTurn)
+	}
+	if lifecycle {
+		c.sendMu.Unlock()
+	}
+	return true
+}
+
 func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
 	if c.reviewID != "" {
 		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
@@ -2894,6 +2928,17 @@ func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Ti
 // projectEvent archives one normalized provider event and applies its durable
 // projection in the same SQLite transaction.
 func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (bool, bool, error) {
+	projected, err := c.archive(ctx, event, func(txCtx context.Context) error { return c.apply(txCtx, event) })
+	if err != nil || !projected {
+		return projected, false, err
+	}
+	return true, c.applyCommittedTurnLifecycle(event), nil
+}
+
+// archive records event in the provider archive and runs project in the same
+// transaction. It reports false without projecting when the controller
+// generation is stale or the event's native identity is already archived.
+func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project func(context.Context) error) (bool, error) {
 	record := map[string]any{
 		"kind":                   event.Kind,
 		"providerEventId":        event.ProviderEventID,
@@ -2943,21 +2988,14 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	}
 	payload, err := json.Marshal(record)
 	if err != nil {
-		return false, false, fmt.Errorf("encode provider event archive: %w", err)
+		return false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	project := func(txCtx context.Context) error { return c.apply(txCtx, event) }
-	var projected bool
 	if c.reviewID != "" {
-		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
+		return c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
 			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
-	} else {
-		projected, err = c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
-			c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
 	}
-	if err != nil || !projected {
-		return projected, false, err
-	}
-	return true, c.applyCommittedTurnLifecycle(event), nil
+	return c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
+		c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
 }
 
 // applyCommittedTurnLifecycle updates the controller's volatile ownership only

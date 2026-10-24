@@ -182,6 +182,43 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("never renders worker columns for a resolved route with no matching workspace", () => {
+		workspaceQueryMock.mockReturnValue({ data: [], isSuccess: true, isSnapshotSuccess: true, isSnapshotError: false });
+		renderBoard("deleted-or-signed-out");
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("not found");
+	});
+
+	it("shows an in-panel pending status without a shell startup overlay", () => {
+		workspaceQueryMock.mockReturnValue({ data: undefined, isSuccess: false, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoard("local-pending");
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
+		expect(screen.queryByTestId("board-column")).not.toBeInTheDocument();
+	});
+
+	it("shows pending status when a daemon code suppresses the full-window startup screen", () => {
+		workspaceQueryMock.mockReturnValue({ data: undefined, isSuccess: false, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoardWithShell(new QueryClient(), "p1", { daemonStatus: { state: "starting", code: "recovering" } } as unknown as Partial<ShellContextValue>);
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.getByRole("status", { name: "Loading…" })).toHaveAttribute("aria-busy", "true");
+	});
+
+	it("does not guess local header styling while the routed project is unresolved", () => {
+		boardActionsInPanelMock.mockReturnValue(true);
+		workspaceQueryMock.mockReturnValue({ data: [], isSuccess: true, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoard("p1");
+		expect(screen.getByRole("button", { name: appI18n.t("shell.spawnOrchestrator") })).toHaveClass("topbar-control--secondary");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--secondary");
+	});
+
+	it("keeps in-panel header actions quiet before the Cloud snapshot is ready", () => {
+		boardActionsInPanelMock.mockReturnValue(true);
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", kind: "cloud", name: "Cloud", path: "", sessions: [] }], isSuccess: true, isSnapshotSuccess: false, isSnapshotError: false });
+		renderBoard("p1");
+		expect(screen.getByRole("button", { name: appI18n.t("shell.spawnOrchestrator") })).toHaveClass("topbar-control--secondary");
+	});
+
 	it("keeps Cloud-only pending content blank without covering navigation until the snapshot is ready", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [],

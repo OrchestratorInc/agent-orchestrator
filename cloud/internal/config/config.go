@@ -114,6 +114,17 @@ type Config struct {
 	// directly from the worker stream, before the same frame is mirrored to
 	// durable replay storage.
 	TerminalRelayEnabled bool
+	// ArtifactsEnabled stores cloud session artifact files in a versioned S3
+	// bucket (AO_CLOUD_ARTIFACTS). Off by default; when on it applies to every
+	// organization.
+	ArtifactsEnabled bool
+	// ArtifactBucket and ArtifactRegion locate that bucket
+	// (AO_CLOUD_ARTIFACT_BUCKET, AO_CLOUD_ARTIFACT_REGION).
+	ArtifactBucket string
+	ArtifactRegion string
+	// ArtifactEndpoint is an S3-compatible endpoint such as local MinIO
+	// (AO_CLOUD_ARTIFACT_ENDPOINT). Empty uses AWS S3.
+	ArtifactEndpoint string
 	// CoderReadableWorkspaceNames gives new Coder sessions the readable
 	// <prefix>-o-<id> / <prefix>-w-<word>-<id> workspace names
 	// (AO_CLOUD_CODER_READABLE_NAMES). Off, new sessions keep the
@@ -129,6 +140,16 @@ type Config struct {
 	// folder is honored either way; a release that predates it ignores it, so
 	// turn it on only once the rollback target honors it.
 	CoderWorkerWorkingFolder bool
+	// ArtifactSharesEnabled serves public links to single files users publish
+	// from local sessions (AO_CLOUD_ARTIFACT_SHARES). Development only; it
+	// needs ArtifactsEnabled.
+	ArtifactSharesEnabled bool
+	// ArtifactShareOrigin is the origin every link is a subdomain of
+	// (AO_CLOUD_ARTIFACT_SHARE_ORIGIN), such as http://share.localhost:8080.
+	ArtifactShareOrigin string
+	// ArtifactShareLimit is how many active links a user may hold
+	// (AO_CLOUD_ARTIFACT_SHARE_LIMIT, default 3).
+	ArtifactShareLimit int
 
 	NodeOpsBaseURL       string
 	NodeOpsAPIKey        string
@@ -317,9 +338,17 @@ func Load() (Config, error) {
 		AllowAnonymousCheckout: boolEnv("AO_CLOUD_ALLOW_ANONYMOUS_GITHUB_CHECKOUT", false),
 		TerminalStreamEnabled:  boolEnv("AO_CLOUD_TERMINAL_STREAM", false),
 		TerminalRelayEnabled:   boolEnv("AO_CLOUD_TERMINAL_RELAY", false),
+		ArtifactsEnabled:       boolEnv("AO_CLOUD_ARTIFACTS", false),
+		ArtifactBucket:         strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_BUCKET")),
+		ArtifactRegion:         strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_REGION")),
+		ArtifactEndpoint:       strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_ENDPOINT")), "/"),
 
 		CoderReadableWorkspaceNames: coderReadableNames,
 		CoderWorkerWorkingFolder:    coderWorkerWorkingFolder,
+		ArtifactSharesEnabled:       boolEnv("AO_CLOUD_ARTIFACT_SHARES", false),
+		ArtifactShareOrigin: strings.TrimRight(
+			strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_SHARE_ORIGIN")), "/",
+		),
 		SandboxProvider: strings.ToLower(
 			envOrDefault("AO_CLOUD_SANDBOX_PROVIDER", defaultSandboxProvider(hosted)),
 		),
@@ -658,6 +687,25 @@ func Load() (Config, error) {
 	if cfg.TerminalRelayEnabled && !cfg.TerminalStreamEnabled {
 		return Config{}, errors.New("AO_CLOUD_TERMINAL_RELAY requires AO_CLOUD_TERMINAL_STREAM")
 	}
+	if raw := strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACTS")); raw != "" {
+		if _, err := strconv.ParseBool(raw); err != nil {
+			return Config{}, errors.New("AO_CLOUD_ARTIFACTS must be 0 or 1")
+		}
+	}
+	if err := cfg.validateArtifacts(); err != nil {
+		return Config{}, err
+	}
+	cfg.ArtifactShareLimit = 3
+	if value := strings.TrimSpace(os.Getenv("AO_CLOUD_ARTIFACT_SHARE_LIMIT")); value != "" {
+		limit, err := strconv.Atoi(value)
+		if err != nil || limit < 1 {
+			return Config{}, errors.New("AO_CLOUD_ARTIFACT_SHARE_LIMIT must be a positive integer")
+		}
+		cfg.ArtifactShareLimit = limit
+	}
+	if err := cfg.validateArtifactShares(); err != nil {
+		return Config{}, err
+	}
 	if cfg.IdlePauseThreshold != 0 && cfg.IdlePauseThreshold < time.Minute {
 		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_THRESHOLD must be 0 (disabled) or at least 1m")
 	}
@@ -777,6 +825,52 @@ func Load() (Config, error) {
 		return Config{}, errors.New("repository broker configuration is required in staging")
 	}
 	return cfg, nil
+}
+
+// validateArtifacts checks the artifact bucket settings when AO_CLOUD_ARTIFACTS
+// is on. Access links are signed with a key derived from
+// AO_CLOUD_PROVIDER_SECRET_KEY, so that key is required too.
+func (c Config) validateArtifacts() error {
+	if !c.ArtifactsEnabled {
+		return nil
+	}
+	if c.ArtifactBucket == "" || c.ArtifactRegion == "" {
+		return errors.New("AO_CLOUD_ARTIFACTS requires AO_CLOUD_ARTIFACT_BUCKET and AO_CLOUD_ARTIFACT_REGION")
+	}
+	if len(c.ProviderSecretKey) != 32 {
+		return errors.New("AO_CLOUD_ARTIFACTS requires AO_CLOUD_PROVIDER_SECRET_KEY")
+	}
+	if c.ArtifactEndpoint != "" {
+		endpoint, err := url.Parse(c.ArtifactEndpoint)
+		if err != nil || endpoint.Host == "" || endpoint.User != nil ||
+			(endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+			return errors.New("AO_CLOUD_ARTIFACT_ENDPOINT must be an absolute http or https URL")
+		}
+		if c.Hosted() && endpoint.Scheme != "https" {
+			return errors.New("AO_CLOUD_ARTIFACT_ENDPOINT must use HTTPS in hosted environments")
+		}
+	}
+	return nil
+}
+
+// validateArtifactShares checks the share link settings when
+// AO_CLOUD_ARTIFACT_SHARES is on. Share links are development-only for now.
+func (c Config) validateArtifactShares() error {
+	if !c.ArtifactSharesEnabled {
+		return nil
+	}
+	if c.Hosted() {
+		return errors.New("AO_CLOUD_ARTIFACT_SHARES is development-only and cannot be enabled in hosted environments")
+	}
+	if !c.ArtifactsEnabled {
+		return errors.New("AO_CLOUD_ARTIFACT_SHARES requires AO_CLOUD_ARTIFACTS")
+	}
+	origin, err := url.Parse(c.ArtifactShareOrigin)
+	if err != nil || origin.Hostname() == "" || origin.User != nil || origin.Path != "" ||
+		origin.RawQuery != "" || (origin.Scheme != "http" && origin.Scheme != "https") {
+		return errors.New("AO_CLOUD_ARTIFACT_SHARES requires AO_CLOUD_ARTIFACT_SHARE_ORIGIN, an http or https origin such as http://share.localhost:8080")
+	}
+	return nil
 }
 
 // BillingEnabled reports whether Stripe billing is configured and enforced.

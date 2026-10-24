@@ -1324,6 +1324,32 @@ func (s *Store) ClaimGitHubWebhook(
 	return delivery, err
 }
 
+// PruneGitHubWebhooks deletes up to limit finished deliveries received before
+// before, oldest first, and reports how many it removed. Finished rows are only
+// kept for redelivery dedup and RecentOpenedPullRequestWebhooks' look-back, so
+// the queue table no longer grows without bound.
+func (s *Store) PruneGitHubWebhooks(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	command, err := s.pool.Exec(
+		ctx,
+		`DELETE FROM ao_github_webhook_deliveries
+		WHERE github_delivery_id IN (
+			SELECT github_delivery_id FROM ao_github_webhook_deliveries
+			WHERE status IN ('processed', 'failed') AND received_at < $1
+			ORDER BY received_at
+			LIMIT $2
+		)`,
+		before,
+		limit,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return command.RowsAffected(), nil
+}
+
 func (s *Store) CompleteGitHubWebhook(ctx context.Context, deliveryID, owner string) error {
 	command, err := s.pool.Exec(
 		ctx,
