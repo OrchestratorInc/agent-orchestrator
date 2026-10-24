@@ -249,6 +249,9 @@ func TestVerifierRejectsRedirectedVersionProbe(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "autohand") {
 				t.Fatalf("Verify = %v, want refusal", err)
 			}
+			if prefix := string(target) + " executable verification: refusing executable "; !strings.HasPrefix(err.Error(), prefix) {
+				t.Fatalf("diagnostic = %q, want single verifier prefix %q", err, prefix)
+			}
 			if result.ResolvedPath != binary {
 				t.Fatalf("diagnostic path = %q, want %q", result.ResolvedPath, binary)
 			}

@@ -81,7 +81,7 @@ func (v *Verifier) Verify(ctx context.Context, target Target) (VerifyResult, err
 	}
 	verifiedPath, err := binaryutil.VerifyExecutable(probeCtx, string(target), path)
 	if err != nil {
-		return VerifyResult{ResolvedPath: path}, fmt.Errorf("verify installed %s executable: %w", target, err)
+		return VerifyResult{ResolvedPath: path}, err
 	}
 	path = verifiedPath
 	out := &capturedOutput{max: maxOutputBytes}
