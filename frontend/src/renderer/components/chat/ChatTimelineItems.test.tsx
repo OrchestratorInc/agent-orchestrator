@@ -1,11 +1,11 @@
-import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ActivityRow, AssistantMessage, ChatHostId, HumanMessage, ProviderSwitchMarker, TurnOutcome } from "./ChatTimelineItems";
+import { ActivityRow, AssistantMessage, ChatHostId, ConversationScope, HumanMessage, ProviderSwitchMarker, TurnOutcome } from "./ChatTimelineItems";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
-import type { ConversationMessage } from "../../types/conversation";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
@@ -521,5 +521,108 @@ describe("ProviderSwitchMarker", () => {
 			</QueryClientProvider>,
 		);
 		expect(screen.getByText("GPT Six")).toBeInTheDocument();
+	});
+});
+
+describe("ReasoningBlock live transparency", () => {
+	const conversationId = "conv-1";
+
+	function reasoningActivity(
+		overrides: Partial<ConversationActivity> = {},
+	): ConversationActivity {
+		return {
+			kind: "activity",
+			id: "thought-1",
+			sequence: 1,
+			revision: 3,
+			createdAt: "2026-10-21T00:00:00Z",
+			activityKind: "reasoning",
+			status: "running",
+			summary: "Reasoning",
+			detail: { text: "reading the diff first" },
+			...overrides,
+		};
+	}
+
+	function renderReasoning(activity: ConversationActivity, scope?: string) {
+		const result = render(
+			<ConversationScope conversationId={scope}>
+				<ActivityRow activity={activity} />
+			</ConversationScope>,
+		);
+		return { ...result, scoped: within(result.container) };
+	}
+
+	beforeEach(() => {
+		window.localStorage.clear();
+	});
+
+	it("renders a thinking block expanded by default with its live text visible", () => {
+		renderReasoning(
+			reasoningActivity({ status: "completed", detail: { text: "settled summary" } }),
+			conversationId,
+		);
+		expect(screen.getByText("settled summary")).toBeInTheDocument();
+		expect(screen.getByText("Thought")).toBeInTheDocument();
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("names a streaming block Thinking and keeps its spinner visible", () => {
+		renderReasoning(reasoningActivity(), conversationId);
+		expect(screen.getByText("Thinking")).toBeInTheDocument();
+		expect(screen.getByLabelText("still thinking")).toBeInTheDocument();
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("collapses on click, keeping the header and spinner while still streaming", () => {
+		renderReasoning(reasoningActivity(), conversationId);
+		act(() => screen.getByRole("button").click());
+		expect(screen.queryByText("reading the diff first")).toBeNull();
+		expect(screen.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByText("Thinking")).toBeInTheDocument();
+		expect(screen.getByLabelText("still thinking")).toBeInTheDocument();
+	});
+
+	it("remembers the collapse per conversation for later thinking blocks", () => {
+		renderReasoning(
+			reasoningActivity({ status: "completed" }),
+			conversationId,
+		);
+		act(() => screen.getByRole("button").click());
+		expect(
+			window.localStorage.getItem(`ao.chat.reasoning-collapsed.${conversationId}`),
+		).toBe("1");
+
+		// A later thinking block in the same conversation starts hidden.
+		const second = renderReasoning(
+			reasoningActivity({ id: "thought-2", sequence: 2, status: "completed" }),
+			conversationId,
+		);
+		expect(second.scoped.queryByText("reading the diff first")).toBeNull();
+		expect(second.scoped.getByRole("button")).toHaveAttribute("aria-expanded", "false");
+
+		// Re-expanding clears the preference.
+		act(() => second.scoped.getByRole("button").click());
+		expect(second.scoped.getByText("reading the diff first")).toBeInTheDocument();
+		expect(
+			window.localStorage.getItem(`ao.chat.reasoning-collapsed.${conversationId}`),
+		).toBeNull();
+	});
+
+	it("keeps conversations independent: another conversation stays expanded", () => {
+		renderReasoning(reasoningActivity({ status: "completed" }), conversationId);
+		act(() => screen.getByRole("button").click());
+
+		const other = renderReasoning(reasoningActivity({ status: "completed" }), "conv-2");
+		expect(other.scoped.getByText("reading the diff first")).toBeInTheDocument();
+		expect(other.scoped.getByRole("button")).toHaveAttribute("aria-expanded", "true");
+	});
+
+	it("falls back to in-memory state outside a conversation scope", () => {
+		renderReasoning(reasoningActivity({ status: "completed" }));
+		act(() => screen.getByRole("button").click());
+		expect(screen.queryByText("reading the diff first")).toBeNull();
+		// Nothing was persisted, because there is no conversation to key it on.
+		expect(window.localStorage.length).toBe(0);
 	});
 });
