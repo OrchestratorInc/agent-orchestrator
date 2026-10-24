@@ -17,7 +17,9 @@ func (s *Store) CreateReport(ctx context.Context, rec domain.ReportRecord) (doma
 	if err := rec.Validate(); err != nil {
 		return domain.ReportRecord{}, err
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.ReportRecord{}, err
+	}
 	defer s.writeMu.Unlock()
 	var row gen.Report
 	err := s.inTx(ctx, "create report", func(q *gen.Queries) error {
@@ -109,7 +111,9 @@ func (s *Store) ClaimPendingReportBatch(ctx context.Context, projectID domain.Pr
 	if projectID == "" || token == "" || at.IsZero() {
 		return nil, domain.ErrInvalidReport
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer s.writeMu.Unlock()
 	var rows []gen.Report
 	err := s.inTx(ctx, "claim project report batch", func(q *gen.Queries) error {
@@ -145,7 +149,9 @@ func (s *Store) AcknowledgeReportBatch(ctx context.Context, projectID domain.Pro
 	if projectID == "" || token == "" || at.IsZero() {
 		return 0, domain.ErrInvalidReport
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.AcknowledgeReportBatch(ctx, gen.AcknowledgeReportBatchParams{
 		ProjectID: string(projectID), ClaimToken: token, AcknowledgedAt: nullTime(at),
@@ -162,7 +168,9 @@ func (s *Store) ReleaseReportBatch(ctx context.Context, projectID domain.Project
 	if projectID == "" || token == "" || at.IsZero() {
 		return 0, domain.ErrInvalidReport
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.ReleaseReportBatch(ctx, gen.ReleaseReportBatchParams{
 		ProjectID: string(projectID), ClaimToken: token, AvailableAt: at, LastError: lastError,
@@ -180,7 +188,9 @@ func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID
 	if projectID == "" || token == "" || at.IsZero() {
 		return 0, domain.ErrInvalidReport
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.DeferReportBatch(ctx, gen.DeferReportBatchParams{
 		ProjectID: string(projectID), ClaimToken: token, AvailableAt: at, LastError: lastError,
@@ -196,7 +206,9 @@ func (s *Store) AcquireReportInterrupt(ctx context.Context, sessionID domain.Ses
 	if sessionID == "" || at.IsZero() || window <= 0 {
 		return false, time.Time{}, domain.ErrInvalidReport
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, time.Time{}, err
+	}
 	defer s.writeMu.Unlock()
 	acquired := false
 	next := at
@@ -252,7 +264,9 @@ func (s *Store) updateReportClaim(ctx context.Context, id, token string, at time
 	if id == "" || token == "" || at.IsZero() {
 		return domain.ReportRecord{}, false, domain.ErrInvalidReport
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.ReportRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := update()
 	if errors.Is(err, sql.ErrNoRows) {
@@ -267,7 +281,9 @@ func (s *Store) updateReportClaim(ctx context.Context, id, token string, at time
 
 // RequeueClaimedReports atomically recovers claims owned by a prior daemon process.
 func (s *Store) RequeueClaimedReports(ctx context.Context) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	count, err := s.qw.RequeueClaimedReports(ctx)
 	if err != nil {

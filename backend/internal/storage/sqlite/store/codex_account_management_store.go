@@ -18,7 +18,9 @@ func (s *Store) CreateCodexAccountSwitch(ctx context.Context, rec domain.CodexAc
 	if rec.SourceKind == "" {
 		rec.SourceKind = domain.CodexAccountSwitchSourceManaged
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.CodexAccountSwitch{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	var n int64
 	err := s.inTx(ctx, "create Codex account switch", func(q *gen.Queries) error {
@@ -92,7 +94,9 @@ func (s *Store) GetActiveCodexAccountSwitch(ctx context.Context) (domain.CodexAc
 
 // UpdateCodexAccountSwitch applies a compare-and-swap phase transition.
 func (s *Store) UpdateCodexAccountSwitch(ctx context.Context, rec domain.CodexAccountSwitch, expected domain.CodexAccountSwitchPhase) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateCodexAccountSwitchPhase(ctx, gen.UpdateCodexAccountSwitchPhaseParams{
 		NextPhase: string(rec.Phase), FailureCode: rec.FailureCode,

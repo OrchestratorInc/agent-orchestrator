@@ -22,7 +22,9 @@ func (s *Store) CreateNotification(ctx context.Context, rec domain.NotificationR
 	if err := rec.Validate(); err != nil {
 		return domain.NotificationRecord{}, false, err
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.NotificationRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	if existing, ok, err := s.getNotificationByDedupe(ctx, rec); err != nil {
 		return domain.NotificationRecord{}, false, err
@@ -134,7 +136,9 @@ func (s *Store) ResolveSessionNotifications(
 	typ domain.NotificationType,
 	at time.Time,
 ) ([]domain.NotificationRecord, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer s.writeMu.Unlock()
 	var rows []gen.Notification
 	err := s.inTx(ctx, "resolve session notifications", func(q *gen.Queries) error {
@@ -167,7 +171,9 @@ func (s *Store) ResolvePRNotifications(
 	typ domain.NotificationType,
 	at time.Time,
 ) ([]domain.NotificationRecord, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer s.writeMu.Unlock()
 	var rows []gen.Notification
 	err := s.inTx(ctx, "resolve pr notifications", func(q *gen.Queries) error {
@@ -238,7 +244,9 @@ func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time
 		}
 	}
 
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer s.writeMu.Unlock()
 	var resolved []domain.NotificationRecord
 	err = s.inTx(ctx, "reconcile resolved notifications", func(q *gen.Queries) error {
@@ -280,7 +288,9 @@ func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time
 // first page — the client never held a cursor for it, and terminal types are
 // not reachable through the unresolved list.
 func (s *Store) MarkNotificationsRead(ctx context.Context, ids []string) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	var updated int64
 	for _, id := range ids {
@@ -297,7 +307,9 @@ func (s *Store) MarkNotificationsRead(ctx context.Context, ids []string) (int64,
 
 // MarkNotificationRead marks one unread notification read.
 func (s *Store) MarkNotificationRead(ctx context.Context, id string) (domain.NotificationRecord, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.NotificationRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := s.qw.MarkNotificationRead(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -311,7 +323,9 @@ func (s *Store) MarkNotificationRead(ctx context.Context, id string) (domain.Not
 
 // MarkAllNotificationsRead marks every unread notification read.
 func (s *Store) MarkAllNotificationsRead(ctx context.Context) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	count, err := s.qw.MarkAllNotificationsRead(ctx)
 	if err != nil {
@@ -323,7 +337,9 @@ func (s *Store) MarkAllNotificationsRead(ctx context.Context) (int64, error) {
 // ClearAllNotifications hides every visible notification while retaining open
 // rows for dedupe until their underlying condition resolves.
 func (s *Store) ClearAllNotifications(ctx context.Context) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	var count int64
 	err := s.inTx(ctx, "clear all notifications", func(q *gen.Queries) error {
@@ -344,7 +360,9 @@ func (s *Store) ClearAllNotifications(ctx context.Context) (int64, error) {
 // DeleteNotification hides one visible notification and returns its original
 // row while retaining open dedupe state until the underlying condition resolves.
 func (s *Store) DeleteNotification(ctx context.Context, id string) (domain.NotificationRecord, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.NotificationRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := s.qw.GetNotificationForDismissal(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {

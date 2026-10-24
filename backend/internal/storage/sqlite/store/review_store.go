@@ -15,7 +15,9 @@ import (
 // UpsertReview inserts the per-worker, per-harness review row, or reuses the
 // existing one by refreshing its handle/native-session state.
 func (s *Store) UpsertReview(ctx context.Context, r domain.Review) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if r.InterfaceMode == "" {
 		existing, err := s.qw.GetReviewBySessionAndHarness(ctx, gen.GetReviewBySessionAndHarnessParams{SessionID: r.SessionID, Harness: r.Harness})
@@ -50,7 +52,9 @@ func (s *Store) UpsertReview(ctx context.Context, r domain.Review) error {
 
 // SetReviewInterfaceMode persists the surface before its controller starts.
 func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode domain.ReviewerInterfaceMode, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.SetReviewInterfaceMode(ctx, gen.SetReviewInterfaceModeParams{
 		InterfaceMode: string(mode),
@@ -66,7 +70,9 @@ func (s *Store) SetReviewInterfaceMode(ctx context.Context, id string, mode doma
 // RestoreReviewLaunchState puts the previous reviewer back after a replacement
 // launch fails, including the identifiers cleared while changing surfaces.
 func (s *Store) RestoreReviewLaunchState(ctx context.Context, review domain.Review, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.RestoreReviewLaunchState(ctx, gen.RestoreReviewLaunchStateParams{
 		PRURL: review.PRURL, InterfaceMode: string(review.InterfaceMode), ReviewerHandleID: review.ReviewerHandleID,
@@ -150,7 +156,9 @@ func (s *Store) ListLiveReviewerHandles(ctx context.Context) ([]domain.ReviewerH
 
 // ClaimReviewChatController records ownership of a reviewer chat controller.
 func (s *Store) ClaimReviewChatController(ctx context.Context, id, providerID, generation string, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.ClaimReviewChatController(ctx, gen.ClaimReviewChatControllerParams{ProviderConversationID: providerID, ControllerGeneration: generation, UpdatedAt: now, ID: id})
 	return n > 0, err
@@ -158,7 +166,9 @@ func (s *Store) ClaimReviewChatController(ctx context.Context, id, providerID, g
 
 // RecordReviewChatControllerError records the most recent controller failure.
 func (s *Store) RecordReviewChatControllerError(ctx context.Context, id, message string, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.RecordReviewChatControllerError(ctx, gen.RecordReviewChatControllerErrorParams{ControllerError: message, UpdatedAt: now, ID: id})
 	return n > 0, err
@@ -180,7 +190,9 @@ func (s *Store) ListRecoverableChatReviews(ctx context.Context) ([]domain.Review
 // ClearReviewerHandle removes all persisted terminal handles for a worker
 // after a hard reviewer pane teardown.
 func (s *Store) ClearReviewerHandle(ctx context.Context, id domain.SessionID) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.ClearReviewerHandle(ctx, id)
 }
@@ -188,7 +200,9 @@ func (s *Store) ClearReviewerHandle(ctx context.Context, id domain.SessionID) er
 // ClearReviewerHandleByHarness removes only the runtime handle for one
 // reviewer harness, preserving its native agent session id for later restore.
 func (s *Store) ClearReviewerHandleByHarness(ctx context.Context, id domain.SessionID, harness domain.ReviewerHarness) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.ClearReviewerHandleByHarness(ctx, gen.ClearReviewerHandleByHarnessParams{SessionID: id, Harness: harness})
 }
@@ -196,7 +210,9 @@ func (s *Store) ClearReviewerHandleByHarness(ctx context.Context, id domain.Sess
 // UpdateReviewAgentSessionID records engine-owned reviewer native session
 // metadata without applying the reviewer-hook launch generation fence.
 func (s *Store) UpdateReviewAgentSessionID(ctx context.Context, id, agentSessionID string) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateReviewAgentSessionID(ctx, gen.UpdateReviewAgentSessionIDParams{
 		AgentSessionID: agentSessionID,
@@ -211,7 +227,9 @@ func (s *Store) UpdateReviewAgentSessionID(ctx context.Context, id, agentSession
 // UpdateReviewActivity records the native reviewer conversation id and/or
 // reviewer activity reported by the reviewer harness hooks.
 func (s *Store) UpdateReviewActivity(ctx context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateReviewActivity(ctx, gen.UpdateReviewActivityParams{
 		Column1:               agentSessionID,
@@ -233,7 +251,9 @@ func (s *Store) UpdateReviewActivity(ctx context.Context, id string, state domai
 // (session_id, pr_url, target_sha) index (migration 0020) is surfaced as the sentinel
 // domain.ErrDuplicateReviewRun so the engine can fall back to the existing run.
 func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if r.TriggerSource == "" {
 		r.TriggerSource = domain.ReviewTriggerManual
@@ -263,7 +283,9 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 // UpdateReviewRunResult sets the status/verdict/body and the GitHub review id of
 // a running review pass.
 func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateReviewRunResult(ctx, gen.UpdateReviewRunResultParams{
 		Status:           status,
@@ -282,7 +304,9 @@ func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status dom
 // SupersedeStaleRunningReviewRuns marks older running unverdicted passes for a
 // worker failed before starting a review for a newer commit.
 func (s *Store) SupersedeStaleRunningReviewRuns(ctx context.Context, sessionID domain.SessionID, prURL, targetSHA, body string) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.SupersedeStaleRunningReviewRuns(ctx, gen.SupersedeStaleRunningReviewRunsParams{
 		Body:      body,
@@ -295,7 +319,9 @@ func (s *Store) SupersedeStaleRunningReviewRuns(ctx context.Context, sessionID d
 // CancelRunningReviewRunsBySession marks all currently running review passes
 // for a worker cancelled.
 func (s *Store) CancelRunningReviewRunsBySession(ctx context.Context, sessionID domain.SessionID, body string) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.CancelRunningReviewRunsBySession(ctx, gen.CancelRunningReviewRunsBySessionParams{
 		Body:      body,
@@ -306,7 +332,9 @@ func (s *Store) CancelRunningReviewRunsBySession(ctx context.Context, sessionID 
 // CancelRunningReviewRunsBySessionAndHarness marks currently running review
 // passes for a single reviewer harness as cancelled.
 func (s *Store) CancelRunningReviewRunsBySessionAndHarness(ctx context.Context, sessionID domain.SessionID, harness domain.ReviewerHarness, body string) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.CancelRunningReviewRunsBySessionAndHarness(ctx, gen.CancelRunningReviewRunsBySessionAndHarnessParams{
 		Body:      body,
@@ -569,7 +597,9 @@ func (s *Store) ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []
 
 // ArchiveReviewsBySession retires surfaces after their controllers are settled.
 func (s *Store) ArchiveReviewsBySession(ctx context.Context, workerID domain.SessionID, now time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.qw.ArchiveReviewsBySession(ctx, gen.ArchiveReviewsBySessionParams{SessionID: workerID, UpdatedAt: now})
 }

@@ -13,7 +13,9 @@ import (
 
 // CreateAutomation persists a validated automation definition.
 func (s *Store) CreateAutomation(ctx context.Context, rec domain.Automation) (domain.Automation, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.Automation{}, err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.InsertAutomation(ctx, automationToInsert(rec)); err != nil {
 		return domain.Automation{}, fmt.Errorf("insert automation %s: %w", rec.ID, err)
@@ -88,7 +90,9 @@ func (s *Store) ListLatestAutomationRuns(ctx context.Context, ids []domain.Autom
 
 // UpdateAutomation persists a complete validated mutable definition.
 func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.UpdateAutomation(ctx, gen.UpdateAutomationParams{
 		DisplayName: rec.DisplayName,
@@ -112,7 +116,9 @@ func (s *Store) UpdateAutomation(ctx context.Context, rec domain.Automation) (bo
 // DeleteAutomation removes a definition. Database foreign keys cascade its
 // run history and clear origin links on surviving sessions.
 func (s *Store) DeleteAutomation(ctx context.Context, id domain.AutomationID) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.DeleteAutomation(ctx, id)
 	if err != nil {
@@ -146,7 +152,9 @@ func (s *Store) MaterializeAutomationRuns(
 	nextRunAt time.Time,
 	updatedAt time.Time,
 ) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	applied := false
 	err := s.inTx(ctx, "materialize automation runs", func(q *gen.Queries) error {
@@ -178,7 +186,9 @@ func (s *Store) MaterializeAutomationRuns(
 // The transaction and active-sibling predicate are the durable non-overlap
 // boundary for one automation definition.
 func (s *Store) ClaimNextAutomationRun(ctx context.Context, now, leaseExpiresAt time.Time) (domain.AutomationRun, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.AutomationRun{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	var claimed domain.AutomationRun
 	found := false
@@ -249,7 +259,9 @@ func automationFromGen(row gen.Automation) domain.Automation {
 // CreateAutomationRun inserts one logical occurrence. When the occurrence was
 // already materialized it returns the existing row with created=false.
 func (s *Store) CreateAutomationRun(ctx context.Context, rec domain.AutomationRun) (domain.AutomationRun, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.AutomationRun{}, false, err
+	}
 	defer s.writeMu.Unlock()
 
 	rows, err := s.qw.InsertAutomationRun(ctx, automationRunToInsert(rec))
@@ -300,7 +312,9 @@ func automationRunsFromGen(rows []gen.AutomationRun) []domain.AutomationRun {
 
 // MarkAutomationRunRunning links the unique spawned session.
 func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.AutomationRunID, sessionID domain.SessionID, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.MarkAutomationRunRunning(ctx, gen.MarkAutomationRunRunningParams{
 		SessionID: &sessionID, StartedAt: timePtrToNullTime(&now), UpdatedAt: now, ID: id,
@@ -313,7 +327,9 @@ func (s *Store) MarkAutomationRunRunning(ctx context.Context, id domain.Automati
 
 // CompleteAutomationRun projects durable session termination into run history.
 func (s *Store) CompleteAutomationRun(ctx context.Context, id domain.AutomationRunID, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.CompleteAutomationRun(ctx, gen.CompleteAutomationRunParams{FinishedAt: timePtrToNullTime(&now), UpdatedAt: now, ID: id})
 	if err != nil {
@@ -324,7 +340,9 @@ func (s *Store) CompleteAutomationRun(ctx context.Context, id domain.AutomationR
 
 // FailAutomationRun terminally records a bounded permanent dispatch error.
 func (s *Store) FailAutomationRun(ctx context.Context, id domain.AutomationRunID, message string, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.FailAutomationRun(ctx, gen.FailAutomationRunParams{
 		FinishedAt: timePtrToNullTime(&now), ErrorMessage: nullableString(message), UpdatedAt: now, ID: id,
@@ -337,7 +355,9 @@ func (s *Store) FailAutomationRun(ctx context.Context, id domain.AutomationRunID
 
 // ReleaseAutomationRun returns a transiently failed claim to pending.
 func (s *Store) ReleaseAutomationRun(ctx context.Context, id domain.AutomationRunID, message string, now time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.ReleaseAutomationRun(ctx, gen.ReleaseAutomationRunParams{ErrorMessage: nullableString(message), UpdatedAt: now, ID: id})
 	if err != nil {

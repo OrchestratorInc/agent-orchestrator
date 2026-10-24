@@ -17,7 +17,9 @@ func (s *Store) UpsertAgentInstallJob(ctx context.Context, job ports.AgentInstal
 	if job.FinishedAt != nil {
 		finishedAt = sql.NullTime{Time: job.FinishedAt.UTC(), Valid: true}
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.UpsertAgentInstallJob(ctx, gen.UpsertAgentInstallJobParams{
 		Target: job.Target, Status: job.Status, Method: job.Method, Command: job.Command,
@@ -56,7 +58,9 @@ func (s *Store) ListAgentInstallJobs(ctx context.Context) ([]ports.AgentInstallJ
 
 // InterruptActiveAgentInstallJobs marks work abandoned by a daemon restart as interrupted.
 func (s *Store) InterruptActiveAgentInstallJobs(ctx context.Context, interruptedAt time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.InterruptActiveAgentInstallJobs(ctx, gen.InterruptActiveAgentInstallJobsParams{
 		FinishedAt: sql.NullTime{Time: interruptedAt.UTC(), Valid: true},
