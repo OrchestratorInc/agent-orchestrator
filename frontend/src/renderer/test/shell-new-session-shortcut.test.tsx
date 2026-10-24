@@ -1009,6 +1009,25 @@ describe("shell keyboard-shortcuts help subscription", () => {
 });
 
 describe("shell quit confirm subscription", () => {
+	it("shows the quit confirm over the startup loader and resolves it either way", async () => {
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
+
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(true);
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+	});
+
 	it("opens the Quit AO? dialog on request and reports the answer to the main process", async () => {
 		await renderShell();
 

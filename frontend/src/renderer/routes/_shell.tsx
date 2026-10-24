@@ -1353,7 +1353,19 @@ function ShellLayout() {
 	// Rendering the sidebar with an empty query while the home outlet shows its
 	// loader creates a visible two-stage launch and can make the home page flash
 	// before the project list arrives.
-	if (isStartupLoading) return <DaemonStartupLoader />;
+	// ⌘Q can arrive at any time, including during startup or a daemon
+	// reconnect, so the quit confirm renders outside the readiness gate.
+	const quitConfirmDialog = (
+		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
+	);
+	if (isStartupLoading) {
+		return (
+			<>
+				<DaemonStartupLoader />
+				{quitConfirmDialog}
+			</>
+		);
+	}
 
 	return (
 		<ShellProvider
@@ -1384,7 +1396,7 @@ function ShellLayout() {
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
-				<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
+				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
 					onOpenChange={setIsKeyboardShortcutsOpen}
