@@ -40,6 +40,8 @@ export function ReadOnlyFileView({
 	onRevealLineConsumed,
 	revealLine,
 	scope = "combined",
+	source = { kind: "workspace" },
+	commitSha,
 	sessionId,
 	hostId,
 	imageUrl,
@@ -53,6 +55,8 @@ export function ReadOnlyFileView({
 	onRevealLineConsumed?: (requestKey: number) => void;
 	revealLine?: { line: number; requestKey: number };
 	scope?: WorkspaceDiffScope;
+	source?: import("../hooks/useSessionWorkspaceFiles").FilesSource;
+	commitSha?: string;
 	sessionId: string;
 	hostId?: string;
 	/** Where to load an image file from, when not the workspace blob route (an artifact's raw URL). */
@@ -94,7 +98,7 @@ export function ReadOnlyFileView({
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer; in edit mode a selection belongs to the editor.
 	const askInChat = useAskInChat(sessionId, hostId);
-	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.(codeReference(detail.path, selection, false)), askInChat !== undefined && !editing);
+	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.({ ...codeReference(detail.path, selection, false), side: side === "before" ? "old" : "file", endSide: side === "before" ? "old" : "file", source: source?.kind === "snapshot" ? undefined : source, commitSha, scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false, askInChat !== undefined && source?.kind !== "snapshot" && !editing);
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (

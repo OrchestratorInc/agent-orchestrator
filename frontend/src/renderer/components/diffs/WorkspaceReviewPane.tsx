@@ -346,8 +346,8 @@ export function WorkspaceReviewPane({
 		// Pierre portals the custom header into this host's light DOM; the selected
 		// code is in its shadow root. Search this host to keep the file lookup local.
 		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
-		if (file) askInChat?.(codeReference(file.path, selection, true));
-	}, askInChat !== undefined);
+		return file ? askInChat?.({ ...codeReference(file.path, selection, true), source: { kind: "workspace" }, scope, commitSha: target.sha, previousPath: file.previousPath, fileFingerprint: file.fileFingerprint, workspaceVersion }) ?? false : false;
+	}, askInChat !== undefined && target.source?.kind !== "snapshot");
 
 	const loadDiffFiles = useCallback(
 		async (metadata: FileDiffMetadata, signal?: AbortSignal) => {

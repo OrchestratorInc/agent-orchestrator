@@ -2245,7 +2245,7 @@
 	"files.fileFeedbackTarget": "{{file}} · archivo completo",
 	"files.selectionFeedbackTarget": "{{file}} · texto seleccionado",
 	"files.lineFeedbackTarget": "{{file}} · línea {{side}} {{line}}",
-	"files.askInChat": "Preguntar en el chat",
+	"files.askInChat": "Añadir al chat",
 	"files.feedbackLabel": "Comentarios para {{target}}",
 	"files.feedbackPlaceholder": "Describe lo que el agente debe cambiar...",
 	"files.feedbackShortcut": "⌘/Ctrl + Enter para enviar",
@@ -3478,5 +3478,18 @@
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
-	"files.previousVersionAt": "Previous version at {{revision}}"
+	"files.previousVersionAt": "Previous version at {{revision}}",
+	"chat.capturedSelectionTruncated": "Captured selection truncated",
+	"chat.draft.annotationLimit": "You can attach up to eight annotations. Remove one before adding another.",
+	"chat.draft.fileReferencesUnsupported": "This chat does not support file annotations. Reconnect to an updated daemon or remove the file annotations.",
+	"chat.draft.fileReferencesSideUnsupported": "File annotations cannot be sent to a side chat yet. Remove them or send this message in the main chat.",
+	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
+	"chat.fileAnnotationShowMore": "Mostrar más",
+	"chat.fileAnnotationShowLess": "Mostrar menos",
+	"files.addToChatRejected": "No se añadió la selección. Espera a que termine el envío o revisa el borrador e inténtalo de nuevo.",
+	"chat.fileAnnotationChanged": "Source changed.",
+	"chat.fileAnnotationUnavailable": "Source unavailable.",
+	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
+	"chat.fileAnnotationInvalid": "No se pudo validar la selección. Elimínala y vuelve a añadirla.",
+	"chat.fileAnnotationCheckFailed": "No se pudo comprobar el origen. Inténtalo más tarde."
 }

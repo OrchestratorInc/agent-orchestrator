@@ -1,3 +1,5 @@
+import { FileAnnotationContext } from "./FileAnnotationPreview";
+import type { ChatFileReference } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
@@ -426,11 +428,13 @@ export interface ChatWorkspaceProps {
 	/** The surface's onSend forwards transcript excerpts. Without it, "Add to
 	 * chat" is hidden so a selection cannot be cleared from the draft unsent. */
 	excerptsEnabled?: boolean;
+	fileReferencesEnabled?: boolean;
 	onSend?: (
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		excerpts?: ChatDraftExcerptReference[],
+		fileReferences?: ChatFileReference[],
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -706,6 +710,7 @@ function ChatWorkspaceContent({
 	loadingOlder,
 	onLoadOlder,
 	excerptsEnabled = false,
+	fileReferencesEnabled = false,
 	onSend,
 	onDecide,
 	onResolveInput,
@@ -1091,7 +1096,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1138,7 +1143,7 @@ function ChatWorkspaceContent({
 				}
 				return;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1651,6 +1656,7 @@ function ChatWorkspaceContent({
 	}, [conversationEmpty]);
 
 	return (
+ <FileAnnotationContext.Provider value={{ sessionId: snapshot.sessionId, hostId: activeRemoteHostId }}>
 		<section
 			ref={surfaceRef}
 			onKeyDown={handleChatKeyDown}
@@ -1895,6 +1901,7 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
@@ -2028,6 +2035,7 @@ function ChatWorkspaceContent({
 				}}
 			/>
 		</section>
+ </FileAnnotationContext.Provider>
 	);
 }
 
@@ -2813,7 +2821,9 @@ export function Timeline({
 				item.revision === selectionAction.excerpt.revision &&
 				item.text === selectionAction.excerpt.text,
 		);
-		const next = duplicate ? current : [...current, selectionAction.excerpt].slice(-8);
+		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) { setDraftPersistenceError("chat.draft.annotationLimit"); return; }
+  const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
+  const next = duplicate ? current : [...current, { ...selectionAction.excerpt, order }];
 		const result = writeChatExcerptReferences(draftScope, next);
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
 		setSelectionAction(null);
@@ -3347,13 +3357,14 @@ export function Timeline({
 				origin: "human",
 				text: echo.text,
 				continuation: echo.continuation,
-				content: echo.excerpts?.map((excerpt) => ({
+				content: [...(echo.excerpts?.map((excerpt) => ({
+					annotationId: excerpt.id, annotationOrder: excerpt.order,
 					type: "excerpt",
 					text: excerpt.text,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
 					sourceRevision: excerpt.revision,
-				})),
+				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
 				streaming: false,
 				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,

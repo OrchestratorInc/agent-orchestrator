@@ -2209,7 +2209,7 @@
 	"files.fileFeedbackTarget": "{{file}} · gesamte Datei",
 	"files.selectionFeedbackTarget": "{{file}} · ausgewählter Text",
 	"files.lineFeedbackTarget": "{{file}} · {{side}}-Zeile {{line}}",
-	"files.askInChat": "Im Chat fragen",
+	"files.askInChat": "Zum Chat hinzufügen",
 	"files.feedbackLabel": "Feedback für {{target}}",
 	"files.feedbackPlaceholder": "Beschreiben Sie, was der Agent ändern soll...",
 	"files.feedbackShortcut": "⌘/Ctrl + Enter zum Senden",
@@ -3418,5 +3418,18 @@
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
-	"files.previousVersionAt": "Previous version at {{revision}}"
+	"files.previousVersionAt": "Previous version at {{revision}}",
+	"chat.capturedSelectionTruncated": "Captured selection truncated",
+	"chat.draft.annotationLimit": "You can attach up to eight annotations. Remove one before adding another.",
+	"chat.draft.fileReferencesUnsupported": "This chat does not support file annotations. Reconnect to an updated daemon or remove the file annotations.",
+	"chat.draft.fileReferencesSideUnsupported": "File annotations cannot be sent to a side chat yet. Remove them or send this message in the main chat.",
+	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
+	"chat.fileAnnotationShowMore": "Mehr anzeigen",
+	"chat.fileAnnotationShowLess": "Weniger anzeigen",
+	"files.addToChatRejected": "Auswahl nicht hinzugefügt. Warte, bis das Senden abgeschlossen ist, oder prüfe den Entwurf und versuche es erneut.",
+	"chat.fileAnnotationChanged": "Source changed.",
+	"chat.fileAnnotationUnavailable": "Source unavailable.",
+	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",
+	"chat.fileAnnotationInvalid": "Die Auswahl konnte nicht validiert werden. Entferne sie und füge sie erneut hinzu.",
+	"chat.fileAnnotationCheckFailed": "Die Quellenprüfung ist fehlgeschlagen. Versuche es später erneut."
 }

@@ -1,7 +1,8 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { FileCodeReference } from "../../shared/file-annotations";
-import { subscribeChatComposerReferences, subscribeChatReveal, useAskInChat } from "./chat-context-bus";
+import { sendReferenceToChat, subscribeChatComposerReferences, subscribeChatReveal, useAskInChat } from "./chat-context-bus";
+import { captureFileReference } from "../../shared/chat-file-reference";
 import { sessionUiKey } from "./hosts";
 
 const range: FileCodeReference = {
@@ -16,6 +17,15 @@ const range: FileCodeReference = {
 };
 
 describe("useAskInChat", () => {
+	it("does not acknowledge or reveal a refused reference", () => {
+		const reveal = vi.fn();
+		const unreveal = subscribeChatReveal("refused-session", reveal);
+		const unsubscribe = subscribeChatComposerReferences("refused-session", () => false);
+		expect(sendReferenceToChat("refused-session", captureFileReference(range, "refused-session"))).toBe(false);
+		expect(reveal).not.toHaveBeenCalled();
+		unsubscribe();
+		unreveal();
+	});
 	it("is offered only while the session has a Chat composer, and hands it the reference", () => {
 		const { result } = renderHook(() => useAskInChat("sess-chat"));
 		expect(result.current).toBeUndefined();
@@ -33,8 +43,7 @@ describe("useAskInChat", () => {
 		expect(revealed).toHaveBeenCalledTimes(1);
 		expect(received).toHaveBeenCalledWith(expect.objectContaining({
 			path: "src/retry.ts",
-			display: "retry.ts#L3-L4",
-			wire: expect.stringContaining("[src/retry.ts#L3-L4]"),
+			sessionId: "sess-chat", lines: range.lines, truncated: false,
 		}));
 
 		act(() => unsubscribe());
@@ -51,7 +60,7 @@ describe("useAskInChat", () => {
 		});
 		expect(result.current).toBeDefined();
 		act(() => result.current?.(range));
-		expect(received).toHaveBeenCalledWith(expect.objectContaining({ display: "retry.ts#L3-L4" }));
+		expect(received).toHaveBeenCalledWith(expect.objectContaining({ path: "src/retry.ts", sessionId: "sess-remote", hostId: "box-2" }));
 		act(() => unsubscribe());
 	});
 });

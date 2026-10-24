@@ -919,6 +919,7 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 	// Excerpt verification is owned by AO, independently of provider capabilities.
 	// Older daemons ignore this request field, so clients must negotiate support.
 	response.SupportsExcerpts = true
+	response.SupportsFileReferences = true
 	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
@@ -947,6 +948,12 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", invalid.code, invalid.message, nil)
 		return
 	}
+	for _, ref := range req.FileReferences {
+		if ref.SessionID != chi.URLParam(r, "sessionId") {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_FILE_REFERENCE_INVALID", "file reference belongs to another session", nil)
+			return
+		}
+	}
 	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), message)
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -958,7 +965,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 // chatUserMessage validates a send request and turns it into the message the
 // agent receives.
 func chatUserMessage(req SendConversationMessageRequest) (ports.ChatUserMessage, *attachmentError) {
-	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 {
+	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 && len(req.FileReferences) == 0 {
 		// There is no keystroke concept in Chat mode: an empty body is a client
 		// bug, not a way to nudge the agent.
 		return ports.ChatUserMessage{}, &attachmentError{code: "CHAT_MESSAGE_EMPTY", message: "message text is required"}
@@ -979,7 +986,7 @@ func chatUserMessage(req SendConversationMessageRequest) (ports.ChatUserMessage,
 	for _, excerpt := range req.Excerpts {
 		excerpts = append(excerpts, ports.ChatExcerptReference{
 			ConversationID: excerpt.ConversationID, MessageID: excerpt.MessageID,
-			Revision: excerpt.Revision, Text: excerpt.Text,
+			Revision: excerpt.Revision, Text: excerpt.Text, ID: excerpt.ID, Order: excerpt.Order,
 		})
 	}
 	return ports.ChatUserMessage{
@@ -1005,6 +1012,10 @@ func sendConversationMessageResponse(turn domain.ConversationTurn) SendConversat
 }
 
 func conversationContent(req SendConversationMessageRequest) ([]ports.ChatContent, *attachmentError) {
+	if len(req.Excerpts)+len(req.FileReferences) > 8 {
+		return nil, &attachmentError{"CHAT_ANNOTATION_LIMIT", "At most eight annotations may be attached"}
+	}
+
 	spawnInputs := make([]AttachmentInput, 0, len(req.Attachments))
 	for _, attachment := range req.Attachments {
 		spawnInputs = append(spawnInputs, AttachmentInput{
@@ -1038,6 +1049,13 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 			Type: kind, URI: resource.URI, Name: resource.Name,
 			MIMEType: resource.MIMEType, Text: text,
 		})
+	}
+	for _, input := range req.FileReferences {
+		ref := ports.ChatFileReference(input)
+		if err := chatsvc.ValidateFileReference(ref); err != nil {
+			return nil, &attachmentError{"CHAT_FILE_REFERENCE_INVALID", err.Error()}
+		}
+		content = append(content, ports.ChatContent{Type: "file_reference", FileReference: &ref})
 	}
 	return content, nil
 }
@@ -1457,6 +1475,13 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 			name = block.Type
 		}
 		summary := ConversationContentSummaryResponse{Type: block.Type, MIMEType: block.MIMEType, Name: name}
+		if block.Type == "file_reference" && block.FileReference != nil {
+			ref := ConversationFileReferenceRequest(*block.FileReference)
+			summary.FileReference = &ref
+			summary.Name = ref.Path
+			summary.AnnotationID = ref.ID
+			summary.AnnotationOrder = ref.Order
+		}
 		if block.Type == "excerpt" {
 			// Excerpts written by current versions carry verified structured
 			// context. Older durable messages only have the excerpt resource URI
@@ -1464,6 +1489,8 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 			// internal URI in the public content summary.
 			summary.Name = "Chat excerpt"
 			if block.Excerpt != nil {
+				summary.AnnotationID = block.Excerpt.Reference.ID
+				summary.AnnotationOrder = block.Excerpt.Reference.Order
 				summary.Text = block.Excerpt.SelectedText
 				summary.SourceConversationID = block.Excerpt.Reference.ConversationID
 				summary.SourceMessageID = block.Excerpt.Reference.MessageID

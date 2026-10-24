@@ -161,7 +161,7 @@ export function AoDiffFile({
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer.
 	const askInChat = useAskInChat(sessionId, hostId);
-	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.(codeReference(detail.path, selection, true)), askInChat !== undefined);
+	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.({ ...codeReference(detail.path, selection, true), source: source?.kind === "snapshot" ? undefined : source, commitSha, scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false, askInChat !== undefined && source.kind !== "snapshot");
 
 	if (!metadata) return <>{fallback}</>;
 

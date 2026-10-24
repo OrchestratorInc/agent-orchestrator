@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1701,6 +1702,13 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 			if !capabilities.Has(ports.ChatCapabilityImages) {
 				return nil, fmt.Errorf("%w: image attachments are unsupported", ErrRetryUnsupported)
 			}
+		case "file_reference":
+			if item.FileReference == nil {
+				return nil, fmt.Errorf("%w: missing file reference", ErrRetryContentInvalid)
+			}
+			if err := ValidateFileReference(*item.FileReference); err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrRetryContentInvalid, err)
+			}
 		case "excerpt":
 			if item.Excerpt == nil {
 				return nil, fmt.Errorf("%w: chat excerpts require verified context", ErrRetryContentInvalid)
@@ -1931,11 +1939,43 @@ func (c *Controller) dispatch(
 // The durable message still retains the structured blocks for retry and
 // transcript provenance.
 func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
+	// Hydration appends chat excerpts after file blocks. Restore the attachment
+	// order without moving any non-annotation content or mutating durable data.
+	ordered := append([]ports.ChatContent(nil), msg.Content...)
+	var annotations []ports.ChatContent
+	var annotationSlots []int
+	annotationOrder := func(item ports.ChatContent) int64 {
+		if item.Type == "file_reference" && item.FileReference != nil {
+			return item.FileReference.Order
+		}
+		if item.Type == "excerpt" && item.Excerpt != nil {
+			return item.Excerpt.Reference.Order
+		}
+		return 0
+	}
+	for i, item := range ordered {
+		if (item.Type == "file_reference" && item.FileReference != nil) || (item.Type == "excerpt" && item.Excerpt != nil) {
+			annotations = append(annotations, item)
+			annotationSlots = append(annotationSlots, i)
+		}
+	}
+	sort.SliceStable(annotations, func(i, j int) bool {
+		a := annotationOrder(annotations[i])
+		b := annotationOrder(annotations[j])
+		return a < b
+	})
+	for i, slot := range annotationSlots {
+		ordered[slot] = annotations[i]
+	}
 	content := make([]ports.ChatContent, 0, len(msg.Content))
 	var fallback strings.Builder
-	for _, item := range msg.Content {
+	for _, item := range ordered {
 		if item.Internal && item.Type == "text" {
 			fallback.WriteString("\n\n" + item.Text)
+			continue
+		}
+		if item.Type == "file_reference" && item.FileReference != nil {
+			fallback.WriteString("\n\n" + fileReferenceText(*item.FileReference))
 			continue
 		}
 		if item.Type != "excerpt" || item.Excerpt == nil {

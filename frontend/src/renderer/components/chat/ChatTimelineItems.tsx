@@ -704,7 +704,7 @@ export function HumanMessage({
 	const visibleMessageText = humanVisibleText(message.text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
-		(content) => content.type === "excerpt" && Boolean(content.text),
+		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
 	);
 	return (
 		<div
@@ -750,6 +750,7 @@ export function HumanMessage({
 					{excerptReferences.length > 0 ? (
 						<ChatAnnotationSummary
 							annotations={excerptReferences.map((excerpt) => ({
+								fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
 								text: excerpt.text ?? "",
 								conversationId: excerpt.sourceConversationId,
  messageId: excerpt.sourceMessageId,
