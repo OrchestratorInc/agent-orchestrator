@@ -47,6 +47,7 @@ import {
 	measureElement,
 	observeElementRect,
 	useVirtualizer,
+	type Virtualizer,
 } from "@tanstack/react-virtual";
 import { cn } from "../../lib/utils";
 import { sessionBranchPresentation } from "../../lib/session-branch";
@@ -2617,28 +2618,31 @@ export function Timeline({
 		startScrollTop: number;
 	} | null>(null);
 	const pinnedRef = useRef(true);
+	const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null);
 	const [pinned, setPinned] = useState(true);
 	const getScroller = useCallback(() => scroller.current, []);
+	const lastScrollTop = useRef(0);
+	const onScrollWrite = useCallback((top: number) => { lastScrollTop.current = top; }, []);
 	const {
 		glideToEnd,
 		followEnd,
 		cancel: cancelScrollFollow,
 		hold: holdScrollFollow,
-		markWritten,
+		writeOwned,
 		isOwnScroll,
 		isFlying,
 		reaim,
 		endFlight,
-	} = useScrollFollow(getScroller);
+	} = useScrollFollow(getScroller, onScrollWrite);
 	// Set when the reader sends or jumps to the latest: the next layout glides there
 	// instead of snapping. Opening a chat never animates, so the first layout snaps.
 	const glideRequested = useRef(false);
 	const initialLayoutDone = useRef(false);
 	const initialLayoutAt = useRef(0);
-	const lastScrollTop = useRef(0);
 	const skipRelatchFollow = useRef(false);
 	const setPinnedNow = useCallback((next: boolean) => {
 		pinnedRef.current = next;
+		if (virtualizerRef.current) virtualizerRef.current.options.scrollEndThreshold = next ? 1 : -1;
 		setPinned(next);
 	}, []);
 	// The reader took over (scrolled up, opened a disclosure): stop following.
@@ -3032,10 +3036,6 @@ export function Timeline({
 				.map((turn) => [turn.id, turn]),
 		);
 	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
-
-	useEffect(() => {
-		pinnedRef.current = pinned;
-	}, [pinned]);
 
 	useEffect(() => {
 		const restored = draftPersistenceAvailable ? readChatSessionDraft(draftScope) : undefined;
@@ -3482,9 +3482,7 @@ export function Timeline({
 				reaim();
 				return;
 			}
-			instance.scrollElement.scrollTop = offset + adjustments;
-			// Anchoring writes are ours; they must never read as the reader leaving the end.
-			markWritten(instance.scrollElement.scrollTop);
+			writeOwned(instance.scrollElement, offset + adjustments);
 		},
 		rangeExtractor: (range) => {
 			const indexes = defaultRangeExtractor(range);
@@ -3495,6 +3493,7 @@ export function Timeline({
 			return indexes.sort((a, b) => a - b);
 		},
 	});
+	virtualizerRef.current = virtualizer;
 	virtualizer.shouldAdjustScrollPositionOnItemSizeChange = virtualized ? undefined : () => false;
 	const virtualRows = virtualizer.getVirtualItems();
 	const virtualHeight = virtualizer.getTotalSize();
@@ -3686,14 +3685,9 @@ export function Timeline({
 	// Opening a chat lands at the end instantly. Long histories measure their rows
 	// over the first frames (and may arrive in more than one snapshot), so keep
 	// snapping briefly after the first real layout instead of animating across them.
-	const followOrSnapToEnd = useCallback((node: HTMLElement) => {
-		if (!initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS) {
-			node.scrollTop = node.scrollHeight;
-			markWritten(node.scrollTop);
-			return;
-		}
-		followEnd();
-	}, [followEnd, markWritten]);
+	const followOrSnapToEnd = useCallback(() => {
+		followEnd(!initialLayoutDone.current || performance.now() - initialLayoutAt.current < INITIAL_SNAP_MS);
+	}, [followEnd]);
 
 	const syncScrollLayout = useCallback(() => {
 		anchorGeometry.current = null;
@@ -3706,7 +3700,7 @@ export function Timeline({
 				glideRequested.current = false;
 				glideToEnd();
 			} else {
-				followOrSnapToEnd(node);
+				followOrSnapToEnd();
 			}
 		}
 		if (groupCountRef.current > 0 && !initialLayoutDone.current) {
@@ -3724,7 +3718,7 @@ export function Timeline({
 		anchorGeometry.current = null;
 		syncPromptSpacer();
 		const node = scroller.current;
-		if (node) followOrSnapToEnd(node);
+		if (node) followOrSnapToEnd();
 		updateScrollbar();
 	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar]);
 
@@ -3787,7 +3781,7 @@ export function Timeline({
 		const node = scroller.current;
 		if (!node) return;
 		const top = node.scrollTop;
-		const movedUp = top < lastScrollTop.current - 1;
+		const movedUp = top < lastScrollTop.current - 0.5;
 		lastScrollTop.current = top;
 		const distance = node.scrollHeight - top - node.clientHeight;
 		// Classified by where the scroll landed, not when: our own glide, follow and
@@ -3797,7 +3791,7 @@ export function Timeline({
 		// to the end after content shrank is not the reader leaving.
 		if (isOwnScroll(top)) {
 			// Ours: no change.
-		} else if (distance >= 64 || (movedUp && distance > 2)) {
+		} else if (distance >= 64 || (movedUp && distance > 0.5)) {
 			if (pinnedRef.current) releaseFollow();
 		} else if (!pinnedRef.current && !movedUp) {
 			// The reader is already here: the follow layout this re-pin triggers must not
@@ -3809,11 +3803,10 @@ export function Timeline({
 	}
 
 	function onViewportWheel(event: ReactWheelEvent<HTMLDivElement>) {
-		// Wheel intent arrives before the scroll it causes. Hold the follow so a
-		// concurrent stream commit cannot pull the reader back, and let the scroll
-		// itself decide: a wheel consumed by a nested scroller (a code block) never
-		// moves the log, so it must not unpin it.
-		if (event.deltaY < 0) holdScrollFollow(READER_INTENT_HOLD_MS);
+		// Hold the follow so a concurrent stream commit cannot pull the reader back.
+		// Let the scroll itself decide: a wheel consumed by a nested scroller (a code
+		// block) never moves the log, so it must not unpin it.
+		if (event.deltaY < 0) holdScrollFollow(READER_INTENT_HOLD_MS, lastScrollTop.current);
 	}
 
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -3834,7 +3827,7 @@ export function Timeline({
 	}
 
 	function setScrollFromTrack(clientY: number) {
-		cancelScrollFollow();
+		holdScrollFollow(READER_INTENT_HOLD_MS);
 		const node = scroller.current;
 		const track = scrollTrack.current;
 		if (!node || !track) return;
@@ -3842,17 +3835,18 @@ export function Timeline({
 		const travel = Math.max(1, track.clientHeight - scrollbar.height);
 		const top = Math.min(travel, Math.max(0, clientY - rect.top - scrollbar.height / 2));
 		node.scrollTop = (top / travel) * Math.max(0, node.scrollHeight - node.clientHeight);
-		updateScrollbar();
+		onScroll();
 	}
 
 	function onScrollbarPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const track = scrollTrack.current;
 		const node = scroller.current;
 		if (!track || !node) return;
 		const marker = (event.target as HTMLElement).closest<HTMLElement>("[data-chat-scroll-marker]");
 		if (marker?.dataset.scrollTarget) {
+			cancelScrollFollow(true);
+			releaseFollow();
 			const group = navigableGroups[Number(marker.dataset.markerIndex)];
 			if (virtualized && group) {
 				virtualizer.scrollToIndex(groups.findIndex((candidate) => candidate.key === group.key), { align: "center" });
@@ -3892,10 +3886,11 @@ export function Timeline({
 			return;
 		}
 		if (active.pointerId !== event.pointerId) return;
+		holdScrollFollow(READER_INTENT_HOLD_MS);
 		const travel = Math.max(1, track.clientHeight - scrollbar.height);
 		const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
 		node.scrollTop = active.startScrollTop + ((event.clientY - active.startY) / travel) * maxScroll;
-		updateScrollbar();
+		onScroll();
 	}
 
 	function stopScrollbarDrag(event: ReactPointerEvent<HTMLDivElement>) {
@@ -3907,17 +3902,16 @@ export function Timeline({
 	}
 
 	function onScrollbarWheel(event: ReactWheelEvent<HTMLDivElement>) {
-		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
 		event.preventDefault();
+		holdScrollFollow(READER_INTENT_HOLD_MS);
 		node.scrollTop += event.deltaY;
 		onScroll();
 	}
 
 	function onScrollbarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-		cancelScrollFollow();
 		if (!minimapEnabled || inspectorOpenRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
@@ -3933,8 +3927,9 @@ export function Timeline({
 		};
 		if (!(event.key in next)) return;
 		event.preventDefault();
+		holdScrollFollow(READER_INTENT_HOLD_MS);
 		node.scrollTop = Math.min(maxScroll, Math.max(0, next[event.key]!));
-		updateScrollbar();
+		onScroll();
 	}
 
 	if (timelineItems.length === 0 && !messageEdit && !turn && !showStartup) {
