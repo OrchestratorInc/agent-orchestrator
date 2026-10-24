@@ -15,7 +15,6 @@ vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: accou
 vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
 import { baseUrlForHost, connectedHosts } from "../lib/host-clients";
-import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostsRefresh, useRemoteHosts } from "./useRemoteHosts";
 
 beforeEach(() => {
