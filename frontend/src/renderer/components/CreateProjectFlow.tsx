@@ -36,6 +36,7 @@ import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../l
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -1709,6 +1710,7 @@ function CloudProjectCard({
 					displayName: selectedRepo.name,
 					config,
 				});
+			useSidebarOrderStore.getState().moveProjectToTop(project.id);
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 			onCreated(project.id);
 		} catch (err) {

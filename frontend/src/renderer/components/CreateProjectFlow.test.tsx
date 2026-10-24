@@ -5,6 +5,7 @@ import { useState, type ComponentProps, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { useUiStore } from "../stores/ui-store";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { ShellProvider, type ShellContextValue } from "../lib/shell-context";
 import { TooltipProvider } from "./ui/tooltip";
 import { CloudCpError } from "../lib/cloud-cp";
@@ -356,6 +357,7 @@ function projectValidation(
 }
 
 beforeEach(() => {
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	bridgeMocks.checkAncestorRepo.mockReset().mockResolvedValue(undefined);
 	bridgeMocks.checkGitRepository.mockReset().mockResolvedValue(true);
 	bridgeMocks.checkGitHubRepositoryAvailability.mockReset().mockResolvedValue({ available: true });
@@ -1923,6 +1925,7 @@ describe("CreateProjectFlow project import validation", () => {
 	});
 
 	it("creates a project from a connected GitHub App repository", async () => {
+		useSidebarOrderStore.getState().setProjectOrder(["existing-b", "existing-a", "cp-app-1"]);
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.listGitHubInstallations.mockResolvedValue({
@@ -1996,6 +1999,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(cloudMocks.validateSavedRepositoryAccess).not.toHaveBeenCalled();
 		// Like a local project, the new cloud project opens onto its board.
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-app-1"));
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["cp-app-1", "existing-b", "existing-a"]);
 	});
 
 	it("opens the existing project when the repository already has one, with no conflict error", async () => {
@@ -2968,6 +2972,7 @@ describe("CreateProjectFlow project import validation", () => {
 	});
 
 	it("creates a project without a repository, with no GitHub connection needed", async () => {
+		useSidebarOrderStore.getState().setProjectOrder(["existing-b", "existing-a"]);
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.sessionStatus = "authenticated";
 		cloudMocks.coderAvailable = true;
@@ -2999,6 +3004,7 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(body.config).not.toHaveProperty("repos");
 		expect(cloudMocks.createGitHubProject).not.toHaveBeenCalled();
 		await waitFor(() => expect(openProject).toHaveBeenCalledWith("cp-standalone"));
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["cp-standalone", "existing-b", "existing-a"]);
 	});
 
 	it("does not offer additional coder session repositories in the Coder dev-kit rows", async () => {
