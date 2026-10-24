@@ -1,6 +1,10 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
+// Platform detection can prefer Chromium's client hints over navigator.platform.
+// Use a macOS user agent so transparency is enabled on Linux CI too.
+test.use({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36" });
+
 // Check actual paint with production components/CSS. A transparent sticky
 // header or archive can still pass visibility and geometry assertions.
 async function expectSurfaceTransparency(target: Locator, transparent: boolean) {
