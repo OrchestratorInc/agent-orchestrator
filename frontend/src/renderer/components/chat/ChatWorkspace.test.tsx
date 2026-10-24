@@ -561,6 +561,27 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 	});
 
+	it("loads older history as the reader scrolls up within a screen of the top", () => {
+		const onLoadOlder = vi.fn();
+		const snapshot = chatFixtureLongHistory(8);
+		const view = render(<ChatWorkspace snapshot={snapshot} hasOlder onLoadOlder={onLoadOlder} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+		log.scrollTop = 1500;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).not.toHaveBeenCalled();
+
+		log.scrollTop = 600;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+		view.rerender(<ChatWorkspace snapshot={snapshot} hasOlder loadingOlder onLoadOlder={onLoadOlder} />);
+		log.scrollTop = 300;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
+	});
+
 	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
 		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
 		const log = screen.getByRole("log");

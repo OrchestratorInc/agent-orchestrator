@@ -726,6 +726,85 @@ func TestConversationSnapshotPagesCombinedTimelineBySequence(t *testing.T) {
 	}
 }
 
+// seedToolTurn records a dispatched turn: its prompt, a run of tool calls, then
+// the agent's reply.
+func seedToolTurn(t *testing.T, s *sqlite.Store, conversationID string, session domain.SessionID, turnID string, tools int, at time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	providerTurn := "provider-" + turnID
+	created, err := s.AppendUserMessage(ctx, conversationID, session, "gen-1", domain.ConversationMessage{
+		ID: turnID + "-prompt", Text: turnID + " prompt", Origin: domain.MessageOriginAutomation,
+	}, turnID, at)
+	if err != nil || !created {
+		t.Fatalf("append prompt for %s: created=%v err=%v", turnID, created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, turnID, providerTurn, at); err != nil {
+		t.Fatalf("bind %s: %v", turnID, err)
+	}
+	for i := 0; i < tools; i++ {
+		if err := s.UpsertActivity(ctx, conversationID, providerTurn, domain.ConversationActivity{
+			ID: fmt.Sprintf("%s-tool-%d", turnID, i), Kind: domain.ActivityKindCommand,
+			Status: domain.ActivityStatusCompleted, Summary: "go test", ProviderItemID: fmt.Sprintf("%s-exec-%d", turnID, i),
+		}, at); err != nil {
+			t.Fatalf("tool %d for %s: %v", i, turnID, err)
+		}
+	}
+	if err := s.AppendAssistantDelta(ctx, conversationID, turnID+"-reply", providerTurn, turnID+" reply", turnID+"-reply", at); err != nil {
+		t.Fatalf("reply for %s: %v", turnID, err)
+	}
+	if err := s.SettleTurn(ctx, conversationID, providerTurn, domain.TurnStateCompleted, "", at); err != nil {
+		t.Fatalf("settle %s: %v", turnID, err)
+	}
+}
+
+// A worker started by one orchestrator prompt and running hundreds of tools is a
+// single turn. Its prompt belongs on the first page, not behind "Load earlier".
+func TestConversationSnapshotPageDoesNotCountToolActivity(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	seedToolTurn(t, s, conversation, session, "turn-worker", store.DefaultConversationPageSize+50, histClock)
+
+	page, err := s.LoadConversationSnapshotPage(context.Background(), conversation, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(page.Messages); !reflect.DeepEqual(got, []string{"turn-worker prompt", "turn-worker reply"}) {
+		t.Fatalf("messages = %v, want the prompt and the reply", got)
+	}
+	if len(page.Activities) != store.DefaultConversationPageSize+50 || page.HasMoreBefore {
+		t.Fatalf("activities=%d hasMore=%v, want every tool call and no older page", len(page.Activities), page.HasMoreBefore)
+	}
+}
+
+// A page ends between two turns: a turn that does not fit moves whole to the
+// older page instead of losing its prompt to it.
+func TestConversationSnapshotPageCutsBetweenTurns(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for i, turnID := range []string{"turn-1", "turn-2", "turn-3"} {
+		seedToolTurn(t, s, conversation, session, turnID, 2, histClock.Add(time.Duration(i)*time.Second))
+	}
+
+	// Three messages reach into turn-2, so the page stops at turn-3's prompt.
+	newest, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(newest.Messages); !reflect.DeepEqual(got, []string{"turn-3 prompt", "turn-3 reply"}) {
+		t.Fatalf("newest messages = %v", got)
+	}
+	if len(newest.Activities) != 2 || !newest.HasMoreBefore || !reflect.DeepEqual(turnIDs(newest.Turns), []string{"turn-3"}) {
+		t.Fatalf("newest activities=%d hasMore=%v turns=%v", len(newest.Activities), newest.HasMoreBefore, turnIDs(newest.Turns))
+	}
+
+	older, err := s.LoadConversationSnapshotPage(ctx, conversation, newest.OldestSequence, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(older.Messages); !reflect.DeepEqual(got, []string{"turn-2 prompt", "turn-2 reply"}) || !older.HasMoreBefore {
+		t.Fatalf("older messages = %v hasMore=%v", got, older.HasMoreBefore)
+	}
+}
+
 func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
@@ -759,25 +838,26 @@ func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 		}
 	}
 
-	page, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
+	// A one-message page leaves the human prompt on the older page.
+	page, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Messages) != 0 || len(page.Activities) != store.DefaultConversationPageSize || !page.HasMoreBefore {
-		t.Fatalf("default page: messages=%d activities=%d hasMore=%v", len(page.Messages), len(page.Activities), page.HasMoreBefore)
+	if got := texts(page.Messages); len(got) != 1 || len(page.Activities) != store.DefaultConversationPageSize || !page.HasMoreBefore {
+		t.Fatalf("bounded page: messages=%v activities=%d hasMore=%v", got, len(page.Activities), page.HasMoreBefore)
 	}
 	whole, err := s.LoadConversationSnapshot(ctx, conversation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	older, err := s.LoadConversationSnapshotPage(ctx, conversation, page.OldestSequence, 0)
+	older, err := s.LoadConversationSnapshotPage(ctx, conversation, page.OldestSequence, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(whole.Messages) != 2 || len(older.Messages) != 2 {
-		t.Fatalf("durable prompts: unbounded=%d older-page=%d", len(whole.Messages), len(older.Messages))
+	if len(whole.Messages) != 2 || len(older.Messages) != 1 || older.Messages[0].Origin != domain.MessageOriginHuman {
+		t.Fatalf("durable prompts: unbounded=%d older-page=%v", len(whole.Messages), older.Messages)
 	}
-	for name, snapshot := range map[string]store.ConversationSnapshot{"default page": page, "unbounded": whole, "older page": older} {
+	for name, snapshot := range map[string]store.ConversationSnapshot{"bounded page": page, "unbounded": whole} {
 		if len(snapshot.Turns) != 2 {
 			t.Fatalf("%s turns=%d, want both failed turns", name, len(snapshot.Turns))
 		}
