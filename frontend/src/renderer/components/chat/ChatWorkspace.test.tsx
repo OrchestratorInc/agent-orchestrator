@@ -561,6 +561,29 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
 	});
 
+	// Folding a panel at the end (a finished plan) releases the follow, but the reader
+	// is still at the bottom: a jump would go nowhere, and no scroll down exists that
+	// could retire it, so it must not appear until there is something below.
+	it("offers no jump when a fold at the end releases the follow, until the reader scrolls away", () => {
+		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+
+		const fold = document.createElement("button");
+		fold.setAttribute("aria-expanded", "true");
+		log.firstElementChild!.appendChild(fold);
+		fireEvent.pointerDown(fold);
+		// The panel folds: the content shrinks and the scroll clamps to the new end.
+		stubGeometry(log, { scrollHeight: 3900, clientHeight: 800, scrollTop: 3100 });
+		fireEvent.scroll(log);
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+
+		log.scrollTop = 1000;
+		fireEvent.scroll(log);
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+	});
+
 	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
 		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
 		const log = screen.getByRole("log");
@@ -993,7 +1016,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByTestId("live-turn-status")).not.toBeInTheDocument();
 		// One Working row for the turn, owned by the turn group, never one per message.
 		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
-		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 		expect(screen.getAllByTestId("response-spinner")).toHaveLength(1);
 
 		const stop = screen.getByRole("button", { name: "Stop turn" });
@@ -1012,7 +1035,7 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 		expect(screen.getByTestId("response-spinner")).toBeInTheDocument();
 	});
 
@@ -1074,9 +1097,49 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 		const worked = screen.getByRole("button", { name: /Worked for/ });
 		expect(screen.getByText("The implementation is correct.")).toBeVisible();
+		// The fold names the time, so the answer's own row does not repeat it.
+		expect(document.querySelector("[data-turn-duration]")).toBeNull();
 
 		await user.click(worked);
 		expect(screen.getByText("I found the relevant component.")).toBeVisible();
+	});
+
+	it("puts the turn's duration on the action row when there is no work to fold", () => {
+		const turnId = "turn-straight-to-answer";
+		const snapshot: ConversationSnapshot = {
+			...chatFixtureEmpty,
+			latestSequence: 2,
+			turns: [
+				{
+					id: turnId,
+					state: "completed",
+					requestedAt: "2026-08-11T10:01:00Z",
+					startedAt: "2026-08-11T10:01:01Z",
+					completedAt: "2026-08-11T10:02:05Z",
+				},
+			],
+			items: [
+				{
+					kind: "message", id: "prompt", turnId, sequence: 1, revision: 0,
+					role: "user", origin: "human", text: "hi",
+					streaming: false, createdAt: "2026-08-11T10:01:00Z",
+				},
+				{
+					kind: "message", id: "answer", turnId, sequence: 2, revision: 0,
+					role: "assistant", origin: "provider", text: "Hi! What would you like to work on?",
+					streaming: false, createdAt: "2026-08-11T10:02:05Z",
+				},
+			],
+		};
+
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		// Nothing to fold, so no "Worked for": the time leads the answer's action row instead.
+		expect(screen.queryByRole("button", { name: /Worked for/ })).not.toBeInTheDocument();
+		const duration = screen.getByText("1m");
+		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
+		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
+		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("keeps only the run the agent is working in open while the turn runs", () => {
@@ -1161,18 +1224,22 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={snapshot} />);
 
 		// Read the transcript in document order: the work before the steer settles into
-		// its own Worked row, and the steer opens a fresh Working row for the reply.
+		// its own Worked row, and the steer opens a fresh live turn for the reply.
 		const text = screen.getByRole("log").textContent ?? "";
 		const positions = [
 			"Run the unit tests",
 			"Worked for",
 			"Starting with the test suite.",
 			"Only the unit ones, please",
-			"Working for",
 			"Switching to the unit tests.",
 		].map((fragment) => text.indexOf(fragment));
 		expect(positions.every((position) => position >= 0)).toBe(true);
 		expect(positions).toEqual([...positions].sort((a, b) => a - b));
+		// The live row closes the turn, under everything the agent has written so far.
+		const live = screen.getByTestId("live-working-label");
+		expect(
+			screen.getByText("Switching to the unit tests.").compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 	});
 
 	it("keeps a steer visible outside the folded work once the turn settles", async () => {
@@ -1219,7 +1286,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Only the unit ones, please")).toBeVisible();
 	});
 
-	it("replaces the generic working label with Claude's live retry count and backoff", () => {
+	it("names Claude's live retry in the live row, with its backoff beneath", () => {
 		const snapshot = structuredClone(chatFixture);
 		snapshot.items = snapshot.items.filter(
 			(item) =>
@@ -1249,11 +1316,12 @@ describe("ChatWorkspace timeline", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} onInterrupt={vi.fn()} />);
 
-		const status = screen.getByTestId("live-turn-status");
-		expect(status).toHaveTextContent("Reconnecting to Claude, attempt 2 of 10.");
-		expect(status).toHaveTextContent("The API request failed. Trying again in 4s.");
-		expect(status).not.toHaveTextContent("Working for");
-		expect(screen.queryByTestId("live-working-label")).not.toBeInTheDocument();
+		const status = screen.getByTestId("live-working-label");
+		expect(status).toHaveTextContent("Reconnecting… 2/10");
+		expect(status).not.toHaveTextContent("Reconnecting to Claude");
+		expect(screen.getByTestId("live-turn-status")).toHaveTextContent("The API request failed. Trying again in 4s.");
+		// The retry replaces the step label, not the timer.
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 	});
 
 	it("interrupts the active turn when Escape is pressed", () => {
@@ -1566,7 +1634,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByText("Do you want to run this command?")).toBeInTheDocument();
 		expect(screen.queryByText("Waiting for your decision")).not.toBeInTheDocument();
 		expect(screen.getAllByTestId("live-working-label")).toHaveLength(1);
-		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for /);
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
 		const approval = screen.getByRole("group", {
 			name: "Approval request approval-1",
 		});
@@ -2007,7 +2075,8 @@ describe("ChatWorkspace timeline", () => {
 
 		const startup = screen.getByTestId("session-startup");
 		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Setting up session$/);
-		expect(screen.getByTestId("live-working-label").previousElementSibling?.querySelector("svg")).toBeInTheDocument();
+		const workingMark = screen.getByTestId("live-working-label").previousElementSibling as HTMLElement;
+		expect(within(workingMark).getByTestId("response-spinner")).toBeInTheDocument();
 		// It takes the Working row's slot inside the brief's turn, so the handoff moves nothing.
 		expect(startup.closest("[data-chat-scroll-anchor]")).toContainElement(screen.getByText("Fix clicking attachments"));
 		const steps = within(startup).getAllByRole("listitem");
@@ -2023,7 +2092,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
 		expect(screen.getByText("Codex is starting. Messages send in order")).toBeInTheDocument();
-		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
+		expect(screen.queryByTestId("live-working-timer")).not.toBeInTheDocument();
 		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
@@ -2052,7 +2121,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByTestId("session-startup")).toBeInTheDocument();
 		const label = screen.getByTestId("live-working-label");
-		const spinner = label.previousElementSibling?.querySelector("svg");
+		const spinner = label.previousElementSibling?.querySelector("canvas, svg");
 		view.rerender(
 			<ChatWorkspace
 				snapshot={startingSnapshot("queued")}
@@ -2061,7 +2130,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.getByTestId("live-working-label")).toBe(label);
 		expect(label).toHaveTextContent(/^Setting up session$/);
-		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+		expect(label.previousElementSibling?.querySelector("canvas, svg")).toBe(spinner);
 
 		view.rerender(
 			<ChatWorkspace
@@ -2070,9 +2139,9 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 		expect(screen.getByTestId("live-working-label")).toBe(label);
-		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+		expect(label.previousElementSibling?.querySelector("canvas, svg")).toBe(spinner);
 		await waitFor(() => expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument());
-		expect(screen.getByText(/^Working for /)).toBeInTheDocument();
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -2082,7 +2151,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
-		expect(label.previousElementSibling?.querySelector("svg")).toBe(spinner);
+		expect(label.previousElementSibling?.querySelector("canvas, svg")).toBe(spinner);
 	});
 
 	it("keeps follow-up messages queued when the opening brief starts running", () => {
@@ -2690,6 +2759,34 @@ describe("ChatWorkspace timeline", () => {
 		} finally {
 			window.ResizeObserver = originalObserver;
 		}
+	});
+
+	// A nudge up near the end is a pause, not a departure: the follow comes back on
+	// its own once the reader has been still for a moment while the turn is live.
+	it("resumes following after a short pause when the reader only nudged up a little", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		log.scrollTop = 3200 - 150;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+		expect(log.scrollTop).toBeGreaterThanOrEqual(3200);
+	});
+
+	it("stays put when the reader scrolled well above the end", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		log.scrollTop = 3200 - 600;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(2600);
 	});
 
 	it("does not follow a streaming resize of the latest row while the reader is unpinned", async () => {
