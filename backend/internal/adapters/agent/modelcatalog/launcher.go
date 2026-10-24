@@ -44,6 +44,13 @@ func discoveryExpandLauncherTarget(target string, variables map[string]string) (
 }
 
 func discoveryLauncherInvocations(line string, batch bool) []discoveryInvocation {
+	return discoveryLauncherInvocationsAtDepth(line, batch, 0)
+}
+
+func discoveryLauncherInvocationsAtDepth(line string, batch bool, depth int) []discoveryInvocation {
+	if depth >= 8 {
+		return []discoveryInvocation{{target: "uninspectable nested shell command", explicit: true}}
+	}
 	tokens := discoveryLauncherTokens.FindAllString(line, -1)
 	var invocations []discoveryInvocation
 	start := 0
@@ -52,14 +59,14 @@ func discoveryLauncherInvocations(line string, batch bool) []discoveryInvocation
 		if i < len(tokens) && (len(tokens[i]) != 1 || !strings.ContainsAny(tokens[i], ";&|()")) {
 			continue
 		}
-		invocations = append(invocations, discoveryLauncherSegment(tokens[start:i], batch, explicit)...)
+		invocations = append(invocations, discoveryLauncherSegment(tokens[start:i], batch, explicit, depth)...)
 		explicit = i < len(tokens) && tokens[i] == "&" && (i == 0 || tokens[i-1] == "|")
 		start = i + 1
 	}
 	return invocations
 }
 
-func discoveryLauncherSegment(tokens []string, batch, explicit bool) []discoveryInvocation {
+func discoveryLauncherSegment(tokens []string, batch, explicit bool, depth int) []discoveryInvocation {
 	var invocations []discoveryInvocation
 	for i := 0; i < len(tokens); {
 		target := strings.TrimPrefix(strings.Trim(tokens[i], `"'`), "@")
@@ -69,6 +76,36 @@ func discoveryLauncherSegment(tokens []string, batch, explicit bool) []discovery
 		if assignment := strings.IndexByte(target, '='); assignment > 0 && !strings.ContainsAny(target[:assignment], `/\`) {
 			i++ // Environment assignment preceding a POSIX command.
 			continue
+		}
+		commandName := strings.ToLower(filepath.Base(filepath.FromSlash(strings.ReplaceAll(target, `\`, "/"))))
+		if commandName == "cmd" || commandName == "cmd.exe" || strings.EqualFold(target, "%COMSPEC%") {
+			for j := i + 1; j < len(tokens) && strings.HasPrefix(tokens[j], "/"); j++ {
+				if !strings.EqualFold(tokens[j], "/c") && !strings.EqualFold(tokens[j], "/k") {
+					continue
+				}
+				payload := strings.Join(tokens[j+1:], " ")
+				if j+2 == len(tokens) && strings.HasPrefix(payload, `"`) && strings.HasSuffix(payload, `"`) {
+					inner := strings.TrimSuffix(strings.TrimPrefix(payload, `"`), `"`)
+					// A quoted executable path keeps its quotes; a quoted command
+					// string must be inspected for commands and operators within it.
+					switch strings.ToLower(filepath.Ext(inner)) {
+					case ".exe", ".com", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs", ".py", ".sh":
+					default:
+						payload = inner
+					}
+				}
+				commands := discoveryLauncherInvocationsAtDepth(payload, batch, depth+1)
+				for k := range commands {
+					// CMD builtins do not resolve through PATH. External delegates
+					// must retain the same inspection requirement as CALL/exec.
+					switch strings.ToLower(commands[k].target) {
+					case "assoc", "break", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move", "path", "pause", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift", "time", "title", "type", "ver", "verify", "vol":
+					default:
+						commands[k].explicit = true
+					}
+				}
+				return append(invocations, commands...)
+			}
 		}
 		switch strings.ToLower(target) {
 		case "exec":
