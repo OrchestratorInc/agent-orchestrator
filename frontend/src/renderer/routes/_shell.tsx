@@ -60,6 +60,7 @@ import { applyWindowTranslucency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
+import { useQuitConfirmation } from "../hooks/useQuitConfirmation";
 import { runOnboardingFinish } from "../lib/onboarding-finish";
 import { cn } from "../lib/utils";
 import {
@@ -1315,21 +1316,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// The command palette runs the help shortcut through the app shortcut bus.
 	useAppShortcut("keyboard-shortcuts", () => setIsKeyboardShortcutsOpen((open) => !open));
 
-	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
-	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
-	const [quitKeepsRunning, setQuitKeepsRunning] = useState(false);
-	useEffect(
-		() =>
-			aoBridge.app.onQuitConfirmRequest(({ keepsRunning }) => {
-				setQuitKeepsRunning(keepsRunning);
-				setIsQuitConfirmOpen(true);
-			}),
-		[],
-	);
-	const resolveQuitConfirm = useCallback((confirmed: boolean) => {
-		setIsQuitConfirmOpen(false);
-		aoBridge.app.resolveQuitConfirm(confirmed);
-	}, []);
+	const quitConfirmation = useQuitConfirmation();
 
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
@@ -1491,7 +1478,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// ⌘Q can arrive at any time, including during startup or a daemon
 	// reconnect, so the quit confirm renders outside the readiness gate.
 	const quitConfirmDialog = (
-		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
+		<QuitConfirmDialog {...quitConfirmation} />
 	);
 	if (onboardingFinishRequest) {
 		return (

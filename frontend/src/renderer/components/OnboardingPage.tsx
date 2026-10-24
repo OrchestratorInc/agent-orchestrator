@@ -8,6 +8,8 @@ import aoLogo from "../../../assets/ao-logo.svg";
 import visibilityBackground from "../../landing/public/optimized/feature.webp";
 import { FleetBoardDemo, type FleetBoardAssets } from "./onboarding/previews/fleet-board-demo";
 import { OnboardingProjectSetup } from "./OnboardingProjectSetup";
+import { QuitConfirmDialog } from "./QuitConfirmDialog";
+import { useQuitConfirmation } from "../hooks/useQuitConfirmation";
 import { OnboardingGitHubStep } from "./OnboardingGitHubStep";
 import { AuthTerminalPanel } from "./AuthTerminalPanel";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
@@ -104,6 +106,7 @@ function agentIcon(agentId: string) {
 
 export function OnboardingPage() {
 	const navigate = useNavigate();
+	const quitConfirmation = useQuitConfirmation();
 	const { t } = useTranslation();
 	const requestOnboardingFinish = useUiStore((state) => state.requestOnboardingFinish);
 	const onboardingFinishRequest = useUiStore((state) => state.onboardingFinishRequest);
@@ -309,6 +312,7 @@ export function OnboardingPage() {
 
 	return (
 		<main className="relative h-[100dvh] min-h-[640px] w-screen overflow-hidden bg-background text-foreground">
+			<QuitConfirmDialog {...quitConfirmation} />
 			<div className="fixed inset-x-0 top-0 z-titlebar h-8" style={{ WebkitAppRegion: "drag" } as React.CSSProperties} />
 
 			<div className="mx-auto grid h-full w-full max-w-[1240px] grid-rows-[80px_minmax(0,1fr)_104px] px-8 max-[1040px]:px-6">
