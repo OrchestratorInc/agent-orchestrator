@@ -88,6 +88,9 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
+	if strings.TrimSpace(os.Getenv("AO_AGENT_LOGIN_ID")) != "" {
+		return runAgentLogin()
+	}
 	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/")
 	sessionID := strings.TrimSpace(os.Getenv("AO_CLOUD_SESSION_ID"))
 	bootstrapToken := strings.TrimSpace(os.Getenv("AO_WORKER_BOOTSTRAP_TOKEN"))

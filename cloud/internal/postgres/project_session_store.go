@@ -750,7 +750,11 @@ func createSessionTx(
 	).Scan(&activeSandboxes); err != nil {
 		return domain.Session{}, err
 	}
-	if maxActiveSandboxes < 1 || activeSandboxes >= maxActiveSandboxes {
+	authReservations, err := agentLoginReservationsTx(ctx, tx, orgID)
+	if err != nil {
+		return domain.Session{}, err
+	}
+	if maxActiveSandboxes < 1 || activeSandboxes+authReservations >= maxActiveSandboxes {
 		return domain.Session{}, ErrSandboxQuotaExceeded
 	}
 	// The plan's slots and usage limits, checked under the same organization

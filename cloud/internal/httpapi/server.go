@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/agentconnect"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -235,6 +236,7 @@ type Server struct {
 	handler             http.Handler
 	activity            *activity.Recorder
 	supportToken        string
+	agentLogins         *agentconnect.Service
 }
 
 type Options struct {
@@ -295,6 +297,8 @@ type Options struct {
 	// SupportToken enables the operator support lookup route
 	// (AO_CLOUD_SUPPORT_TOKEN); empty leaves the route unregistered.
 	SupportToken string
+	// AgentLogins runs opt-in, isolated native coding-agent authorization jobs.
+	AgentLogins *agentconnect.Service
 }
 
 // ProjectSnapshotter looks up and builds a project's prepared snapshot.
@@ -402,6 +406,7 @@ func New(options Options) *Server {
 		notificationWaiters:       newNotificationWaiters(),
 		activity:                  options.Activity,
 		supportToken:              options.SupportToken,
+		agentLogins:               options.AgentLogins,
 	}
 	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
 	for _, build := range options.WorkerBuilds {
@@ -471,6 +476,15 @@ func New(options Options) *Server {
 		router.Post("/auth/local/login", server.loginLocal)
 		router.With(server.authenticate).Post("/auth/local/logout", server.logoutLocal)
 		router.With(server.authenticate).Get("/me", server.me)
+		router.With(server.authenticate).Get("/me/agent-logins/capabilities", server.agentLoginCapabilities)
+		router.With(server.authenticate).Post("/me/agent-logins", server.startAgentLogin)
+		router.With(server.authenticate).Get("/me/agent-logins/{id}", server.getAgentLogin)
+		router.With(server.authenticate).Post("/me/agent-logins/{id}/code", server.submitAgentLoginCode)
+		router.With(server.authenticate).Delete("/me/agent-logins/{id}", server.cancelAgentLogin)
+		// These routes authenticate only an attempt-scoped bearer inside their
+		// handlers. An AO account token or ordinary worker token grants no access.
+		router.Get("/agent-logins/{id}/runner", server.pollAgentLoginRunner)
+		router.Post("/agent-logins/{id}/runner", server.reportAgentLoginRunner)
 		router.With(server.authenticate).Get("/me/preferences", server.getUserPreferences)
 		router.With(server.authenticate).Put("/me/preferences", server.putUserPreferences)
 		router.With(server.authenticate).Get("/me/hosts", server.listRemoteHosts)

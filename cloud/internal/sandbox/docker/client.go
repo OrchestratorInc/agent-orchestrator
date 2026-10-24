@@ -409,6 +409,43 @@ func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
 	return err
 }
 
+// DeleteWorkspaceBySession recovers a workspace whose container was never
+// created or was already removed before its volume deletion failed.
+func (c *Client) DeleteWorkspaceBySession(ctx context.Context, sessionID string) (bool, error) {
+	if err := validateIdentity("session id", sessionID); err != nil {
+		return false, err
+	}
+	name := workspaceName(c.namespace, sessionID)
+	path := "/volumes/" + url.PathEscape(name)
+	var volume volumeView
+	if err := c.do(ctx, http.MethodGet, path, nil, &volume); err != nil {
+		if errors.Is(err, sandbox.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := c.validateOwnership(volume.Labels, "workspace"); err != nil {
+		return false, err
+	}
+	if volume.Name != name || volume.Labels[labelWorkspace] != name || volume.Labels[labelSessionID] != sessionID {
+		return false, errors.New("docker: refusing workspace with mismatched session identity")
+	}
+	if err := validateIdentity("workspace organization id", volume.Labels[labelOrgID]); err != nil {
+		return false, err
+	}
+	// No force flag: Docker must refuse a volume that is still mounted by a
+	// live container. Only the exact owned name derived above can be removed.
+	if err := c.do(ctx, http.MethodDelete, path, nil, nil); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
+		return false, err
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &volume); errors.Is(err, sandbox.ErrNotFound) {
+		return true, nil
+	} else if err != nil {
+		return false, err
+	}
+	return false, errors.New("docker: workspace deletion is not yet confirmed")
+}
+
 // Recreate replaces only compute. The deterministic workspace volume remains
 // intact and the replacement starts with the fresh bootstrap token in spec.
 func (c *Client) Recreate(

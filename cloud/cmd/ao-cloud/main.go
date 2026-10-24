@@ -582,6 +582,14 @@ func run(logger *slog.Logger) error {
 		go (&billing.Enforcer{Store: store, Logger: logger, Activity: activityRecorder}).Run(ctx)
 		logger.Info("Stripe billing enabled", "plans", len(cfg.StripePriceIDs))
 	}
+	agentLogins, err := newNativeAgentLogins(cfg, store, providerCipher, apiWorkerBinary)
+	if err != nil {
+		return err
+	}
+	apiOptions.AgentLogins = agentLogins
+	if agentLogins != nil {
+		go agentLogins.Run(ctx)
+	}
 	api := httpapi.New(apiOptions)
 	go notificationProcessor.Run(ctx)
 	feedbackDispatcher := cifeedback.New(store, cifeedback.Config{Logger: logger})

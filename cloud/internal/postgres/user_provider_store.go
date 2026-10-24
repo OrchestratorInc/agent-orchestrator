@@ -109,7 +109,20 @@ func (s *Store) DeleteUserProviderConnection(
 	principal domain.Principal,
 	provider, label string,
 ) error {
-	return s.withUser(ctx, principal.UserID, func(tx pgx.Tx) error {
+	missing := false
+	err := s.withUser(ctx, principal.UserID, func(tx pgx.Tx) error {
+		// A disconnect supersedes pending browser login even if there is no
+		// saved connection yet, so a late callback cannot undo the user's intent.
+		if label == "default" && (provider == "claude-code" || provider == "codex") {
+			if err := lockAgentLogin(ctx, tx, principal.UserID, provider); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE ao_agent_login_attempts SET status='cancelled',
+				input_ciphertext=NULL,input_nonce=NULL,authorization_url='',user_code='',requires_code=false,updated_at=now()
+				WHERE user_id=$1 AND harness=$2 AND status IN ('starting','waiting','connecting')`, principal.UserID, provider); err != nil {
+				return err
+			}
+		}
 		tag, err := tx.Exec(
 			ctx,
 			`DELETE FROM ao_user_provider_connections
@@ -122,10 +135,17 @@ func (s *Store) DeleteUserProviderConnection(
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return ErrNotFound
+			missing = true
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	if missing {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UserAgentCredentialAvailable reports whether the given principal has a

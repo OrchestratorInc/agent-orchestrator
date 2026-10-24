@@ -80,6 +80,9 @@ type Config struct {
 	// PublicURL is the origin a sandbox worker dials back to. A worker opens
 	// no inbound port, so this is the only way it can reach the control plane.
 	PublicURL string
+	// NativeAgentLoginEnabled permits short-lived isolated login jobs. Off by
+	// default so deployments without the new runner keep their existing flow.
+	NativeAgentLoginEnabled bool
 	// WorkerSigningKey signs the short-lived worker tokens.
 	WorkerSigningKey string
 	// WorkerBinaryPath is the ao-worker executable uploaded into sandboxes.
@@ -338,12 +341,13 @@ func Load() (Config, error) {
 		),
 		SupportToken: strings.TrimSpace(os.Getenv("AO_CLOUD_SUPPORT_TOKEN")),
 
-		PublicURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/"),
-		WorkerSigningKey:       strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_SIGNING_KEY")),
-		WorkerBinaryPath:       strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_BINARY_PATH")),
-		WorkerHelperBinaryPath: strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_HELPER_BINARY_PATH")),
-		MaxSandboxesPerOrg:     intEnvOrDefault("AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG", 1000),
-		ReconcileInterval:      durationEnv("AO_CLOUD_SANDBOX_RECONCILE_INTERVAL", 2*time.Second),
+		PublicURL:               strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/"),
+		NativeAgentLoginEnabled: boolEnv("AO_CLOUD_NATIVE_AGENT_LOGIN_ENABLED", false),
+		WorkerSigningKey:        strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_SIGNING_KEY")),
+		WorkerBinaryPath:        strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_BINARY_PATH")),
+		WorkerHelperBinaryPath:  strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_HELPER_BINARY_PATH")),
+		MaxSandboxesPerOrg:      intEnvOrDefault("AO_CLOUD_MAX_ACTIVE_SANDBOXES_PER_ORG", 1000),
+		ReconcileInterval:       durationEnv("AO_CLOUD_SANDBOX_RECONCILE_INTERVAL", 2*time.Second),
 		// Cold coder/Azure VMs routinely need >3 min to first-heartbeat (VM boot +
 		// snap/lxd, a fresh durable-disk mkfs, harness warming), which tripped the
 		// old 3m budget and triggered a needless worker reinstall mid-startup. This

@@ -882,8 +882,15 @@ func (p billingPolicy) checkPlanTx(
 	if err != nil {
 		return err
 	}
+	authReservations := 0
+	if mode == admitCreate || mode == admitWake {
+		authReservations, err = agentLoginReservationsTx(ctx, tx, billing.OrgID)
+		if err != nil {
+			return err
+		}
+	}
 	if mode == admitCreate {
-		total := usage.ActiveOrchestrators + usage.ActiveWorkers
+		total := usage.ActiveOrchestrators + usage.ActiveWorkers + authReservations
 		if total >= limits.MaxActiveSandboxes {
 			return &PlanLimitError{Code: LimitTotalSessions, Plan: limits.Plan, Limit: limits.MaxActiveSandboxes, Used: total}
 		}
@@ -897,9 +904,9 @@ func (p billingPolicy) checkPlanTx(
 		} else {
 			// Without reserved orchestrator slots an orchestrator shares the
 			// running pool with workers.
-			used, limit := usage.RunningWorkers, limits.WorkerSlots()
+			used, limit := usage.RunningWorkers+authReservations, limits.WorkerSlots()
 			if kind == "orchestrator" {
-				used, limit = usage.RunningWorkers+usage.RunningOrchestrators, limits.RunningSlots()
+				used, limit = usage.RunningWorkers+usage.RunningOrchestrators+authReservations, limits.RunningSlots()
 			}
 			if used >= limit {
 				return &PlanLimitError{Code: LimitWorkerSlots, Plan: limits.Plan, Limit: limit, Used: used}
