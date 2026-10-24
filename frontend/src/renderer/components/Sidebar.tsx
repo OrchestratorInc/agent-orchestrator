@@ -479,8 +479,6 @@ function readExpandedProjectIds(): ReadonlySet<string> {
 }
 
 type SidebarProps = {
-	/** Hide the sidebar's right edge stroke on the welcome board inset chrome. */
-	hideEdgeBorder?: boolean;
 	underTopbar?: boolean;
 	/** Chrome height to clear when underTopbar is set. Defaults to --size-toolbar. */
 	topbarOffset?: "toolbar" | "titlebar" | "trafficLights" | "session";
@@ -595,7 +593,6 @@ export {
 // Built on shadcn's sidebar primitives (components/ui/sidebar): the provider in
 // _shell owns the persistent open state. Collapsed sidebars move fully off-canvas.
 export function Sidebar({
-	hideEdgeBorder = false,
 	underTopbar = true,
 	topbarOffset = "toolbar",
 	workspaceError,
@@ -943,11 +940,9 @@ export function Sidebar({
 			data-topbar-offset={underTopbar ? topbarOffset : undefined}
 			className={cn(
 				"sidebar-focusless",
-				// The container keeps a 1px right border, so its content box is 1px
-				// narrower on the right. Pad the left by the same 1px so row gutters
-				// match on both sides.
-				"pl-px",
-				hideEdgeBorder ? "border-transparent" : "border-r-0 group-data-[side=left]:border-r-0",
+				// Keep the transparent 1px border on every route so navigation
+				// cannot change the content width. Match it with the left gutter.
+				"pl-px border-transparent",
 				// Prefer top/bottom over h-svh/inset-y so titlebar offset (`top-(--sidebar-chrome-offset)`)
 				// clears chrome without fighting a second height constraint.
 				!underTopbar
