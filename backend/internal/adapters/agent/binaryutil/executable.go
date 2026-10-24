@@ -297,6 +297,9 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		explicitTargets := map[string]bool{}
 		ownershipTargets := map[string]bool{}
 		for _, invocation := range discoveryLauncherInvocations(line, ext == ".cmd" || ext == ".bat") {
+			if invocation.refusal != "" {
+				return false, fmt.Errorf("%s", invocation.refusal)
+			}
 			target, expandErr := discoveryExpandLauncherTarget(invocation.target, variables)
 			if expandErr != nil {
 				return false, expandErr
