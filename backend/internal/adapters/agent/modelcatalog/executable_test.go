@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -155,6 +156,43 @@ func TestDiscoveryExecutableRejectsAmbiguousAliasAndCycles(t *testing.T) {
 	writeDiscoveryLauncher(t, root, "bridge.cmd", "@call \"%~dp0grok.cmd\" %*\n")
 	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", cycle); err == nil || !strings.Contains(err.Error(), "cyclic") {
 		t.Fatalf("cyclic launcher accepted: %v", err)
+	}
+}
+
+func TestDiscoveryExecutableLimitsTotalFiles(t *testing.T) {
+	for _, files := range []int{discoveryLauncherFileLimit, discoveryLauncherFileLimit + 1} {
+		t.Run(fmt.Sprint(files), func(t *testing.T) {
+			root := t.TempDir()
+			var body strings.Builder
+			for i := 1; i < files; i++ {
+				name := fmt.Sprintf("bridge-%d.cmd", i)
+				writeDiscoveryLauncher(t, root, name, "@echo off\n")
+				fmt.Fprintf(&body, "@call \"%%~dp0%s\" %%*\n", name)
+			}
+			launcher := writeDiscoveryLauncher(t, root, "grok.cmd", body.String())
+			_, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher)
+			if files <= discoveryLauncherFileLimit {
+				if err != nil {
+					t.Fatalf("launcher within file budget rejected: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "total file inspection limit") {
+				t.Fatalf("verification = %v, want total file limit rejection", err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryExecutableReusesSharedTargets(t *testing.T) {
+	root := t.TempDir()
+	// A quoted command matches both reference extractors; repeated lines and
+	// branches must also reuse completed results rather than reread each file.
+	shared := strings.Repeat("\"%~dp0grok.exe\" %*\n", discoveryLauncherFileLimit+1)
+	writeDiscoveryLauncher(t, root, "grok.exe", "MZ fixture")
+	writeDiscoveryLauncher(t, root, "left.cmd", shared)
+	writeDiscoveryLauncher(t, root, "right.cmd", shared)
+	launcher := writeDiscoveryLauncher(t, root, "grok.cmd", "@call \"%~dp0left.cmd\" %*\n@call \"%~dp0right.cmd\" %*\n")
+	if _, err := verifyDiscoveryExecutable(context.Background(), "grok", launcher); err != nil {
+		t.Fatalf("repeated shared targets rejected: %v", err)
 	}
 }
 
