@@ -27,6 +27,9 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 	const popover = dark ? mixColor(p.panel, p.element, 0.6) : mixColor(p.panel, "#ffffff", 0.6);
 	const fade = (amount: number) => mixColor(p.bg, p.text, amount);
 	const bright = (color: string) => mixColor(color, dark ? "#ffffff" : p.text, 0.22);
+	// Warm status ramp, evenly spaced so the four stay tellable apart:
+	// exited (red) → needs-you → in-review → validating (yellow).
+	const needsYou = mixColor(p.orange, p.yellow, 0.25);
 	const inReview = mixColor(p.orange, p.yellow, 0.5);
 
 	return {
@@ -70,7 +73,7 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 		"--color-text-markdown-link-hover": bright(p.accent),
 
 		"--color-status-working": p.blue,
-		"--color-status-needs-you": p.orange,
+		"--color-status-needs-you": needsYou,
 		"--color-status-validating": p.yellow,
 		"--color-status-in-review": inReview,
 		"--color-status-ready": p.green,
