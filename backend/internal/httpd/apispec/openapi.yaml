@@ -57,6 +57,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -70,6 +76,138 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Open the fixed native authentication flow for one agent
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations:
+    post:
+      operationId: startAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartAgentUILoginRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start a fixed native login in the background without exposing a terminal
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}:
+    delete:
+      operationId: cancelAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Cancel a background login and wait for its native process to stop
+      tags:
+      - agents
+    get:
+      operationId: getAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read recognized login prompts and background process state
       tags:
       - agents
   /api/v1/agents/{agent}/chat/prewarm:
@@ -252,6 +390,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "500":
           content:
             application/json:
@@ -12998,6 +13142,10 @@ components:
           type: string
         logoutCommand:
           type: string
+        methods:
+          items:
+            $ref: '#/components/schemas/AgentLoginMethod'
+          type: array
         reason:
           type: string
       required:
@@ -13216,6 +13364,49 @@ components:
           type: array
       required:
       - agents
+      type: object
+    AgentLoginMethod:
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        secret:
+          type: boolean
+      required:
+      - id
+      - label
+      - secret
+      type: object
+    AgentLoginSnapshot:
+      properties:
+        agentId:
+          type: string
+        deviceCode:
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        loginUrl:
+          type: string
+        method:
+          type: string
+        status:
+          enum:
+          - running
+          - succeeded
+          - failed
+          - cancelled
+          - timed_out
+          type: string
+      required:
+      - id
+      - agentId
+      - method
+      - status
+      - expiresAt
       type: object
     AgentModelInfo:
       properties:
@@ -20425,6 +20616,15 @@ components:
           - reinstall
           - update
           type: string
+      type: object
+    StartAgentUILoginRequest:
+      properties:
+        method:
+          type: string
+        secret:
+          type: string
+      required:
+      - method
       type: object
     StartAwakeRequest:
       properties:

@@ -81,7 +81,7 @@ func codexAccountOriginMiddleware(allowedOrigins []string) func(http.Handler) ht
 				w.Header().Add("Vary", "Origin")
 				if _, ok := allowed[origin]; !ok {
 					envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
-						"Origin is not allowed to access Codex account management", nil)
+						"Origin is not allowed to access agent credential management", nil)
 					return
 				}
 			}
@@ -109,6 +109,8 @@ func isCodexAccountPath(path string) bool {
 		"/api/v1/agents/codex/accounts",
 		"/api/v1/agents/codex/account-switches",
 		"/api/v1/agents/accounts",
+		"/api/v1/agents/codex/auth/operations",
+		"/api/v1/agents/claude-code/auth/operations",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
