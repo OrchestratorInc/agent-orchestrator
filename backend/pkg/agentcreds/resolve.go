@@ -191,7 +191,7 @@ func resolveFirstParty(ctx context.Context, opts ResolveOptions) (Credential, bo
 	if stored, source, ok := loadOAuth(ctx, opts); ok {
 		return Credential{
 			Kind: stored.kind, Secret: stored.token, Source: source, Provider: ProviderFirstParty,
-			ExpiresAt: stored.expiresAt, Renewable: stored.renewable,
+			ExpiresAt: stored.expiresAt, Renewable: stored.renewable, RefreshExpiresAt: stored.refreshExpiresAt,
 		}, true
 	}
 	return Credential{}, false
@@ -201,10 +201,11 @@ func resolveFirstParty(ctx context.Context, opts ResolveOptions) (Credential, bo
 // token plus the expiry metadata stored next to it. The refresh token itself
 // is never retained; only its presence is recorded.
 type storedOAuth struct {
-	token     string
-	kind      Kind
-	expiresAt time.Time
-	renewable bool
+	token            string
+	kind             Kind
+	expiresAt        time.Time
+	refreshExpiresAt time.Time
+	renewable        bool
 }
 
 // loadOAuth is the entire platform surface of this package.
@@ -254,9 +255,10 @@ func readCredentialsFile(ctx context.Context, opts ResolveOptions) (stored store
 // one Claude Code will renew on its own.
 func oauthTokenFromCredentialsJSON(data []byte) (storedOAuth, bool) {
 	type oauthFields struct {
-		AccessToken  string  `json:"accessToken"`
-		RefreshToken string  `json:"refreshToken"`
-		ExpiresAt    float64 `json:"expiresAt"`
+		AccessToken           string  `json:"accessToken"`
+		RefreshToken          string  `json:"refreshToken"`
+		ExpiresAt             float64 `json:"expiresAt"`
+		RefreshTokenExpiresAt float64 `json:"refreshTokenExpiresAt"`
 	}
 	var payload struct {
 		ClaudeAiOauth oauthFields `json:"claudeAiOauth"`
@@ -273,6 +275,9 @@ func oauthTokenFromCredentialsJSON(data []byte) (storedOAuth, bool) {
 		stored := storedOAuth{token: token, kind: KindOAuthToken}
 		if candidate.ExpiresAt > 0 {
 			stored.expiresAt = time.UnixMilli(int64(candidate.ExpiresAt)).UTC()
+		}
+		if candidate.RefreshTokenExpiresAt > 0 {
+			stored.refreshExpiresAt = time.UnixMilli(int64(candidate.RefreshTokenExpiresAt)).UTC()
 		}
 		stored.renewable = strings.TrimSpace(candidate.RefreshToken) != ""
 		return stored, true
