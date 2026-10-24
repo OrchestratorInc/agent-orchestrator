@@ -3,6 +3,7 @@ import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import {
 	prBrowserUrl,
+	prCanMerge,
 	prCardPresentation,
 	prDiffSummary,
 	prStatusRows,
@@ -316,6 +317,84 @@ describe("prCardPresentation", () => {
 
 		expect(presentation.readiness?.label).toBe("Checking merge readiness");
 		expect(presentation.readiness?.detail).toBe("Waiting for the latest checks and review state.");
+	});
+
+	// #7044: a commit with no checks at all is a settled answer. The panel used
+	// to treat it like "not observed yet" and wait on checks that never arrive.
+	describe("a PR whose commit has no checks", () => {
+		const noChecks = (overrides: Partial<SessionPRSummary> = {}) =>
+			summary({ ci: { autoInjectCI: true, state: "none", failingChecks: [] }, ...overrides });
+
+		it("resolves to mergeable when the provider says it is mergeable", () => {
+			const presentation = prCardPresentation(noChecks());
+
+			expect(presentation.readiness).toMatchObject({ label: "Mergeable", tone: "success" });
+			expect(presentation.readiness?.detail).toBe(
+				"No merge conflict, no checks are configured, and the review requirement is satisfied.",
+			);
+			expect(presentation.readiness?.label).not.toBe("Checking merge readiness");
+			expect(presentation.primary).toMatchObject({ key: "merge", label: "Ready to merge" });
+			expect(presentation.statusRows?.find((row) => row.key === "ci")).toMatchObject({
+				label: "No checks configured",
+				tone: "passive",
+				breathe: false,
+			});
+		});
+
+		it("is mergeable with no review requirement too", () => {
+			const presentation = prCardPresentation(
+				noChecks({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] } }),
+			);
+
+			expect(presentation.readiness).toMatchObject({ label: "Mergeable", tone: "success" });
+		});
+
+		it("stays blocked when the provider blocks it, and says why instead of waiting", () => {
+			const presentation = prCardPresentation(
+				noChecks({ mergeability: { state: "blocked", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } }),
+			);
+
+			expect(presentation.readiness?.label).toBe("Not mergeable yet");
+			expect(presentation.readiness?.tone).toBe("error");
+		});
+
+		it("still waits while the provider has not computed the merge state", () => {
+			const presentation = prCardPresentation(
+				noChecks({ mergeability: { state: "unknown", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } }),
+			);
+
+			expect(presentation.readiness?.label).toBe("Checking merge readiness");
+		});
+
+		it("does not offer a merge when a review is still required", () => {
+			const presentation = prCardPresentation(
+				noChecks({ review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] } }),
+			);
+
+			expect(presentation.readiness?.label).toBe("Not mergeable yet");
+		});
+
+		it("can merge exactly when it is mergeable", () => {
+			expect(prCanMerge(noChecks())).toBe(true);
+			expect(prCanMerge(noChecks({ mergeability: { state: "blocked", reasons: [], prUrl: "x" } }))).toBe(false);
+			expect(prCanMerge(noChecks({ mergeability: { state: "unknown", reasons: [], prUrl: "x" } }))).toBe(false);
+			expect(prCanMerge(noChecks({ state: "closed" }))).toBe(false);
+		});
+
+		it("is described as no checks in the summary parts", () => {
+			const ci = prSummaryParts(noChecks()).find((part) => part.key === "ci");
+
+			expect(ci).toMatchObject({ status: "No checks", tone: "passive" });
+		});
+	});
+
+	it("keeps waiting for checks that have not been observed yet", () => {
+		const presentation = prCardPresentation(
+			summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [] } }),
+		);
+
+		expect(presentation.readiness?.label).toBe("Checking merge readiness");
+		expect(presentation.primary).toMatchObject({ key: "ci", label: "Checking merge readiness" });
 	});
 
 	it("prioritizes failing checks over lower-priority review and merge facts", () => {
