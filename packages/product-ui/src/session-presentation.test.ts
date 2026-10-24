@@ -7,6 +7,7 @@ import {
 	getSessionStatusView,
 	getSessionTimelinePillView,
 	getKanbanColumnView,
+	sessionStatusTooltip,
 	toKanbanColumn,
 	isAgentActivityWorking,
 	isSessionIdle,
@@ -140,6 +141,25 @@ describe("session presentation", () => {
 		expect(isAgentActivityWorking(undefined)).toBe(false);
 		expect(isSessionIdle({ status: "idle" })).toBe(true);
 		expect(isSessionIdle({ status: "working" })).toBe(false);
+	});
+
+	it("glues the tone label with the live activity label for hover text", () => {
+		expect(sessionStatusTooltip("In review", { state: "active", lastActivityAt: "" })).toBe("In review · Working");
+		expect(sessionStatusTooltip("Needs you", { state: "waiting_input", lastActivityAt: "" })).toBe(
+			"Needs you · Input Needed",
+		);
+	});
+
+	it("keeps the tone label alone when activity is unknown, absent, or repeats it", () => {
+		expect(sessionStatusTooltip("Working", { state: "active", lastActivityAt: "" })).toBe("Working");
+		expect(sessionStatusTooltip("Needs you")).toBe("Needs you");
+		expect(sessionStatusTooltip("Needs you", { state: "unknown", lastActivityAt: "" })).toBe("Needs you");
+	});
+
+	it("accepts injected labels for the hover text", () => {
+		expect(
+			sessionStatusTooltip("translated:zone.pending", { state: "active", lastActivityAt: "" }, (key) => `t:${key}`),
+		).toBe("translated:zone.pending · t:activity.active");
 	});
 
 	it("centralizes timeline status treatment", () => {

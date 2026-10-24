@@ -573,19 +573,22 @@ function useSelection() {
 function SessionStatusDot({ session }: { session: WorkspaceSession }) {
 	const dot = getSessionStatusDotView(session);
 	return (
-		<span
-			aria-hidden="true"
-			className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5"
-		>
-			<span
-				className={cn(
-					"size-2 rounded-full",
-					dot.className,
-					dot.breathe && "animate-status-pulse",
-				)}
-				data-session-status={session.status}
-			/>
-		</span>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<span className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5">
+					<span
+						aria-hidden="true"
+						className={cn(
+							"size-2 rounded-full",
+							dot.className,
+							dot.breathe && "animate-status-pulse",
+						)}
+						data-session-status={session.status}
+					/>
+				</span>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{dot.title}</TooltipContent>
+		</Tooltip>
 	);
 }
 
@@ -595,15 +598,22 @@ function SessionStatusDot({ session }: { session: WorkspaceSession }) {
 function OrchestratorStatusDot({ session }: { session: WorkspaceSession }) {
 	const dot = getOrchestratorStatusDotView(session);
 	return (
-		<span
-			aria-hidden="true"
-			className={cn(
-				"size-2 shrink-0 rounded-full",
-				dot.className,
-				dot.breathe && "animate-status-pulse",
-			)}
-			data-session-status={session.status}
-		/>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<span className="relative z-[1] inline-flex shrink-0 items-center justify-center px-1.5">
+					<span
+						aria-hidden="true"
+						className={cn(
+							"size-2 shrink-0 rounded-full",
+							dot.className,
+							dot.breathe && "animate-status-pulse",
+						)}
+						data-session-status={session.status}
+					/>
+				</span>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{dot.title}</TooltipContent>
+		</Tooltip>
 	);
 }
 

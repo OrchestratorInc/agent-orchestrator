@@ -11,6 +11,7 @@ import {
 	getSessionTimelinePillView as getPortableSessionTimelinePillView,
 	isAgentActivityWorking,
 	isSessionIdle,
+	sessionStatusTooltip,
 	type AgentActivityView,
 	type AttentionZone,
 	type AttentionZoneView,
@@ -60,6 +61,8 @@ export function getAttentionZoneViewForZone(
 export type SessionStatusDotView = {
 	className: string;
 	breathe: boolean;
+	/** Localized hover text: what the tone means, plus the agent's live activity. */
+	title: string;
 };
 
 // The session dot carries two independent signals. Colour comes from the board
@@ -92,10 +95,17 @@ export function getSessionStatusDotView(
 				: toneStatus === "idle" || toneStatus === "merged"
 					? getSessionStatusView(toneStatus, t).dotClassName
 					: getAttentionZoneView(toneStatus, t).dotClassName;
+	// The tooltip names the same branch that picked the colour, so the text
+	// always explains the tone actually painted.
+	const toneLabel =
+		toneStatus === "exited" || toneStatus === "idle" || toneStatus === "merged"
+			? getSessionStatusView(toneStatus, t).label
+			: getAttentionZoneView(toneStatus, t).label;
 
 	return {
 		className,
 		breathe: working,
+		title: sessionStatusTooltip(toneLabel, session.activity, translator(t)),
 	};
 }
 
@@ -123,10 +133,20 @@ export function getOrchestratorStatusDotView(
 ): SessionStatusDotView {
 	const state = session.activity?.state;
 	if (state === "waiting_input" || state === "blocked") {
-		return { className: getAttentionZoneView("needs_input", t).dotClassName, breathe: false };
+		return {
+			className: getAttentionZoneView("needs_input", t).dotClassName,
+			breathe: false,
+			title: sessionStatusTooltip(getAttentionZoneView("needs_input", t).label, session.activity, translator(t)),
+		};
 	}
 	if (session.isTerminated || state === "exited") {
-		return { className: getSessionStatusView("exited", t).dotClassName, breathe: false };
+		// Bare label: the session is over, so any stale "active" activity must
+		// not glue a "· Working" onto a dead session's tooltip.
+		return {
+			className: getSessionStatusView("exited", t).dotClassName,
+			breathe: false,
+			title: getSessionStatusView("exited", t).label,
+		};
 	}
 	return getSessionStatusDotView(session, t);
 }

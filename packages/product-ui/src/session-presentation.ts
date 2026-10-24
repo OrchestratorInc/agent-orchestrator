@@ -481,6 +481,22 @@ export function getAttentionZoneViewForZone(
 	return { ...view, label: translate(labelKey) };
 }
 
+/**
+ * Hover text for a status tone: what the colour means (a zone or status label
+ * the caller already resolved) plus what the agent is doing right now, glued
+ * from existing localized labels -- no new taxonomy. The activity half is
+ * dropped when the agent state is unknown or repeats the tone label.
+ */
+export function sessionStatusTooltip(
+	toneLabel: string,
+	activity?: SessionActivity | null,
+	translate: ProductUITranslator = defaultProductUITranslator,
+): string {
+	if (!activity || activity.state === "unknown") return toneLabel;
+	const activityLabel = getAgentActivityView(activity, translate).label;
+	return activityLabel === toneLabel ? toneLabel : `${toneLabel} · ${activityLabel}`;
+}
+
 export type SessionTimelinePillStatus = Extract<
 	SessionStatus,
 	"no_signal" | "ci_failed" | "changes_requested" | "commented"

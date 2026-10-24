@@ -21,9 +21,11 @@ import {
 import {
 	attentionZone,
 	defaultProductUITranslator,
+	getAttentionZoneViewForZone,
 	getDisplayStatusLabel,
 	getKanbanColumnView,
 	getSessionStatusView,
+	sessionStatusTooltip,
 	toKanbanColumn,
 	type KanbanColumnView,
 	type ProductUITranslator,
@@ -287,6 +289,18 @@ export function SessionCardView({
 				? translateStatus("session.statusUnavailable")
 				: (statusPresentation?.label ??
 					(session.displayStatus ? getDisplayStatusLabel(session.displayStatus, translate) : badge.label));
+	// Hover text for the status line: what the card's zone colour means plus the
+	// agent's live activity. Dropped when a custom presentation overrides the
+	// label or the glue would just repeat the visible text. The working zone's
+	// label would call an idle card "Working", so idle/merged/exited resolve to
+	// their status labels first — same branch as getSessionStatusDotView.
+	const toneLabel =
+		session.status === "idle" || session.status === "merged" || session.status === "exited"
+			? badge.label
+			: getAttentionZoneViewForZone(attentionZone(session.status), translateStatus).label;
+	const statusTooltip = statusPresentation
+		? undefined
+		: sessionStatusTooltip(toneLabel, session.activity, translateStatus);
 	// Additive summary footer, not a replacement for renderedStatusLabel: it
 	// only appears once the daemon confirms the session is actually finished
 	// ("terminated", or "merged" with isTerminated true -- a live session can
@@ -397,6 +411,7 @@ export function SessionCardView({
 						)}
 						data-kanban-column={statusPresentation ? undefined : column.column}
 						data-testid="session-status"
+						title={statusTooltip === renderedStatusLabel ? undefined : statusTooltip}
 					>
 						{showStatusLoader ? <LoaderCircleIcon aria-hidden="true" className="mr-1 size-icon-2xs animate-spin" /> : null}
 						<span className="min-w-0 truncate">{renderedStatusLabel}</span>

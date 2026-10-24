@@ -11,6 +11,7 @@ import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 /**
  * The Workers section of a cloud orchestrator's Summary tab: every session the
@@ -84,11 +85,18 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 				onClick={onOpen}
 				type="button"
 			>
-				<span
-					aria-hidden="true"
-					className={cn("size-2 shrink-0 rounded-full", dot.className, dot.breathe && "animate-status-pulse")}
-					data-session-status={child.status}
-				/>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<span className="inline-flex shrink-0 items-center justify-center">
+							<span
+								aria-hidden="true"
+								className={cn("size-2 shrink-0 rounded-full", dot.className, dot.breathe && "animate-status-pulse")}
+								data-session-status={child.status}
+							/>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{dot.title}</TooltipContent>
+				</Tooltip>
 				<AgentAvatar className="size-4 shrink-0" decorative provider={child.provider} />
 				<span className="min-w-0 flex-1 truncate text-sm">{child.title}</span>
 				<span className="shrink-0 text-xs text-settings-muted">{statusLabel}</span>

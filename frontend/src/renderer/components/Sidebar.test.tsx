@@ -1332,7 +1332,7 @@ describe("Sidebar", () => {
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [orchestrator] }] });
 
 		const label = document.querySelector<HTMLElement>("[data-project-label]");
-		const dot = label?.previousElementSibling as HTMLElement | null;
+		const dot = label?.previousElementSibling?.querySelector<HTMLElement>("[data-session-status]") ?? null;
 		expect(dot).toHaveAttribute("data-session-status");
 		expect(dot).toHaveClass("bg-status-needs-you");
 		expect(dot).not.toHaveClass("animate-status-pulse");
@@ -1353,7 +1353,7 @@ describe("Sidebar", () => {
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [orchestrator] }] });
 
 		const label = document.querySelector<HTMLElement>("[data-project-label]");
-		const dot = label?.previousElementSibling as HTMLElement | null;
+		const dot = label?.previousElementSibling?.querySelector<HTMLElement>("[data-session-status]") ?? null;
 		expect(dot).toHaveAttribute("data-session-status");
 		expect(dot).toHaveClass("bg-status-exited");
 	});

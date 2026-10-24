@@ -4,6 +4,7 @@ import {
 	getAgentActivityView,
 	getAttentionZoneView,
 	getSessionStatusDotView,
+	getOrchestratorStatusDotView,
 	getSessionStatusView,
 	getSessionTimelinePillView,
 	isAgentActivityWorking,
@@ -110,23 +111,60 @@ describe("session presentation", () => {
 	});
 
 	it.each([
-		["idle", "bg-status-idle"],
-		["working", "bg-status-working"],
-		["needs_input", "bg-status-needs-you"],
-		["exited", "bg-passive"],
-		["no_signal", "bg-status-needs-you"],
-		["ci_failed", "bg-status-needs-you"],
-		["changes_requested", "bg-status-needs-you"],
-		["unknown", "bg-status-needs-you"],
-		["draft", "bg-status-in-review"],
-		["pr_open", "bg-status-in-review"],
-		["review_pending", "bg-status-in-review"],
-		["approved", "bg-status-ready"],
-		["mergeable", "bg-status-ready"],
-		["merged", "bg-status-merged"],
-		["terminated", "bg-status-terminated"],
-	] as const)("paints the %s session dot with its board-section tone", (status, dotClassName) => {
-		expect(getSessionStatusDotView(sessionWith({ status }))).toMatchObject({ className: dotClassName });
+		["idle", "bg-status-idle", "Idle"],
+		["working", "bg-status-working", "Working"],
+		["needs_input", "bg-status-needs-you", "Needs you"],
+		["exited", "bg-passive", "Exited"],
+		["no_signal", "bg-status-needs-you", "Needs you"],
+		["ci_failed", "bg-status-needs-you", "Needs you"],
+		["changes_requested", "bg-status-needs-you", "Needs you"],
+		["unknown", "bg-status-needs-you", "Needs you"],
+		["draft", "bg-status-in-review", "In review"],
+		["pr_open", "bg-status-in-review", "In review"],
+		["review_pending", "bg-status-in-review", "In review"],
+		["approved", "bg-status-ready", "Ready to merge"],
+		["mergeable", "bg-status-ready", "Ready to merge"],
+		["merged", "bg-status-merged", "Merged"],
+		["terminated", "bg-status-terminated", "Terminated"],
+	] as const)("paints the %s session dot with its board-section tone", (status, dotClassName, title) => {
+		expect(getSessionStatusDotView(sessionWith({ status }))).toEqual({
+			className: dotClassName,
+			breathe: false,
+			title,
+		});
+	});
+
+	it.each([
+		["needs_input", "waiting_input", "Needs you · Input Needed"],
+		["changes_requested", "active", "Needs you · Working"],
+		["pr_open", "active", "In review · Working"],
+		["working", "active", "Working"],
+	] as const)("glues the zone with live activity into the %s dot tooltip", (status, activity, title) => {
+		expect(
+			getSessionStatusDotView(sessionWith({ status, activity: { state: activity, lastActivityAt: "" } })).title,
+		).toBe(title);
+	});
+
+	it.each([
+		[{ state: "waiting_input" as const }, "bg-status-needs-you", "Needs you · Input Needed"],
+		[{ state: "blocked" as const }, "bg-status-needs-you", "Needs you · Awaiting Decision"],
+	])("tooltips the orchestrator dot for %s activity without absorbing the working tone", (activity, className, title) => {
+		expect(
+			getOrchestratorStatusDotView(
+				sessionWith({ status: "working", activity: { ...activity, lastActivityAt: "" } }),
+			),
+		).toEqual({ className, breathe: false, title });
+	});
+
+	it("tooltips a terminated orchestrator dot as exited", () => {
+		expect(
+			getOrchestratorStatusDotView(sessionWith({ status: "working", isTerminated: true })),
+		).toEqual({ className: "bg-status-exited", breathe: false, title: "Exited" });
+		expect(
+			getOrchestratorStatusDotView(
+				sessionWith({ status: "working", isTerminated: true, activity: { state: "active", lastActivityAt: "" } }),
+			).title,
+		).toBe("Exited");
 	});
 
 	it("prefers SCM state over runtime status for the dot tone", () => {
@@ -138,7 +176,11 @@ describe("session presentation", () => {
 			activity: { state: "active", lastActivityAt: "" },
 		});
 
-		expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: true });
+		expect(getSessionStatusDotView(merged)).toEqual({
+			className: "bg-status-merged",
+			breathe: true,
+			title: "Merged · Working",
+		});
 	});
 
 	it("keeps board-section color while raw working activity starts the motion", () => {
@@ -146,12 +188,12 @@ describe("session presentation", () => {
 
 		expect(
 			getSessionStatusDotView(sessionWith({ status: "idle", scmStatus, activity: { state: "idle", lastActivityAt: "" } })),
-		).toEqual({ className: "bg-status-ready", breathe: false });
+		).toEqual({ className: "bg-status-ready", breathe: false, title: "Ready to merge · Idle" });
 		expect(
 			getSessionStatusDotView(
 				sessionWith({ status: "working", scmStatus, activity: { state: "active", lastActivityAt: "" } }),
 			),
-		).toEqual({ className: "bg-status-ready", breathe: true });
+		).toEqual({ className: "bg-status-ready", breathe: true, title: "Ready to merge · Working" });
 	});
 
 	it("uses a blinking blue dot when an idle-section session starts working", () => {
@@ -159,7 +201,7 @@ describe("session presentation", () => {
 			getSessionStatusDotView(
 				sessionWith({ status: "idle", activity: { state: "active", lastActivityAt: "" } }),
 			),
-		).toEqual({ className: "bg-status-working", breathe: true });
+		).toEqual({ className: "bg-status-working", breathe: true, title: "Working" });
 	});
 
 	it("paints a closed-without-merge session red", () => {
@@ -167,7 +209,7 @@ describe("session presentation", () => {
 			getSessionStatusDotView(
 				sessionWith({ status: "idle", displayStatus: "Closed without merge" }),
 			),
-		).toEqual({ className: "bg-status-exited", breathe: false });
+		).toEqual({ className: "bg-status-exited", breathe: false, title: "Exited" });
 	});
 
 	it("keeps activity indicator color independent from PR and CI presentation", () => {

@@ -90,6 +90,36 @@ describe("SessionsBoardView", () => {
 		expect(screen.getByText(statusReadiness === "checking" ? "Checking…" : "Unable to verify")).toBeInTheDocument();
 	});
 
+	it("tooltips the status line with the zone and the live activity", () => {
+		render(<SessionCardView externalLink={ExternalLink}
+			labels={{ formatTime: () => "now", intakeIssue: (id) => id, pr: progressLabels, updatedAt: (at) => at }}
+			renderAvatar={() => null}
+			session={{
+				...baseSession,
+				activity: { state: "active", lastActivityAt: "2026-08-09T10:00:00Z" },
+				displayStatus: "Review pending",
+				kanbanColumn: "needs_review",
+				status: "pr_open",
+			}} />);
+		expect(screen.getByTestId("session-status")).toHaveAttribute("title", "In review · Working");
+	});
+
+	it("drops the status tooltip when it would repeat the visible label", () => {
+		render(<SessionCardView externalLink={ExternalLink}
+			labels={{ formatTime: () => "now", intakeIssue: (id) => id, pr: progressLabels, updatedAt: (at) => at }}
+			renderAvatar={() => null}
+			session={{ ...baseSession, status: "working", displayStatus: "Working" }} />);
+		expect(screen.getByTestId("session-status")).not.toHaveAttribute("title");
+	});
+
+	it("does not call an idle card Working in the status tooltip", () => {
+		render(<SessionCardView externalLink={ExternalLink}
+			labels={{ formatTime: () => "now", intakeIssue: (id) => id, pr: progressLabels, updatedAt: (at) => at }}
+			renderAvatar={() => null}
+			session={{ ...baseSession, status: "idle", activity: { state: "idle", lastActivityAt: "2026-08-09T10:00:00Z" } }} />);
+		expect(screen.getByTestId("session-status")).not.toHaveAttribute("title");
+	});
+
 	it("renders one lane per Kanban column, newest first, with one scroller each", () => {
 		const sessions: BoardSessionPresentation[] = [
 			baseSession,
