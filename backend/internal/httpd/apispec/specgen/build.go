@@ -94,6 +94,8 @@ func Build() ([]byte, error) {
 			"Target-isolated desktop browser runtime (loopback only)"),
 		*(&openapi31.Tag{Name: "fs"}).WithDescription(
 			"Read-only filesystem browsing for remote clients"),
+		*(&openapi31.Tag{Name: "search"}).WithDescription(
+			"Command-palette search over workspace files and chat messages"),
 		*(&openapi31.Tag{Name: "system"}).WithDescription(
 			"Local machine readiness checks the desktop app runs before showing the board"),
 		*(&openapi31.Tag{Name: "link-preview"}).WithDescription(
@@ -334,6 +336,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersProjectOrDegraded":                        "ProjectOrDegraded",
 	"ControllersListSessionsQuery":                        "ListSessionsQuery",
 	"ControllersListDirsQuery":                            "ListDirsQuery",
+	"ControllersSearchQuery":                              "SearchQuery",
+	"ControllersSearchResponse":                           "SearchResponse",
+	"ControllersSearchSnippet":                            "SearchSnippet",
+	"ControllersSearchHighlight":                          "SearchHighlight",
+	"ControllersSearchFileNameHit":                        "SearchFileNameHit",
+	"ControllersSearchFileContentHit":                     "SearchFileContentHit",
+	"ControllersSearchMessageHit":                         "SearchMessageHit",
 	"ControllersListDirsResponse":                         "ListDirsResponse",
 	"ControllersFSEntry":                                  "FSEntry",
 	"ControllersCleanupSessionsQuery":                     "CleanupSessionsQuery",
@@ -738,6 +747,7 @@ func operations() []operation {
 	ops = append(ops, pushOperations()...)
 	ops = append(ops, importOperations()...)
 	ops = append(ops, fsOperations()...)
+	ops = append(ops, searchOperations()...)
 	ops = append(ops, devOperations()...)
 	ops = append(ops, mobileOperations()...)
 	ops = append(ops, awakeOperations()...)
@@ -2315,6 +2325,23 @@ func importOperations() []operation {
 
 // fsOperations declares the read-only filesystem-browsing operations. Must stay
 // 1:1 with the routes FSController.Register mounts (enforced by the parity test).
+func searchOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/search", id: "search", tag: "search",
+			summary:    "Search workspace files by name and content, and chat messages",
+			pathParams: []any{controllers.SearchQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SearchResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
+}
+
 func fsOperations() []operation {
 	return []operation{
 		{

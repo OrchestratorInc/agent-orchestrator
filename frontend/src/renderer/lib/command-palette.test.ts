@@ -9,6 +9,7 @@ import {
 	displayGroups,
 	findSession,
 	visibleForQuery,
+	buildSearchResultCommands,
 	MAX_ATTENTION_SEARCH_RESULTS,
 	MAX_ITEMS_PER_GROUP,
 	MAX_SEARCH_RESULTS,
@@ -743,5 +744,38 @@ describe("pending branch presentation", () => {
 		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
 		// A start that failed after launch has its worktree.
 		expect(sessionBranchPresentation({ ...launched, provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }] })).toEqual({ branch: "ao/mer-7/root", naming: false });
+	});
+});
+
+describe("buildSearchResultCommands", () => {
+	const target = { projectId: "proj", sessionId: "sess", hostId: "host-a" };
+
+	it("maps daemon hits to rows that keep the daemon's score", () => {
+		const items = buildSearchResultCommands("tokens.css", target, {
+			fileNames: [{ path: "src/styles/tokens.css", score: 9, exactName: true }],
+			fileContent: [{ path: "src/app.ts", score: 4, decisive: true, snippet: { text: "const x = 1", line: 7, highlights: [{ start: 6, end: 7 }] } }],
+			messages: [{ messageId: "m1", conversationTitle: "", sessionId: "sess", snippet: { text: "hello", highlights: [] }, score: 3, decisive: false, olderVersion: true }],
+		});
+		const [name, content, message] = items;
+		expect(name).toMatchObject({ group: "files", title: "tokens.css", serverScore: 9, decisive: true,
+			action: { kind: "open-workspace-file", path: "src/styles/tokens.css" } });
+		expect(content).toMatchObject({ group: "content", title: "app.ts:7", subtitle: "src", serverScore: 4, decisive: true,
+			snippet: { text: "const x = 1", code: true }, action: { kind: "open-workspace-file", path: "src/app.ts", line: 7 } });
+		expect(message).toMatchObject({ group: "messages", title: "Chat", subtitle: "Earlier version",
+			action: { kind: "open-chat-message", sessionId: "sess", hostId: "host-a", text: "hello" } });
+		expect(message?.action && "messageId" in message.action ? message.action.messageId : undefined).toBeUndefined();
+	});
+
+	it("treats a file name as decisive only when typed with its extension", () => {
+		const [bare] = buildSearchResultCommands("tokens", target, { fileNames: [{ path: "tokens.css", score: 9, exactName: true }] });
+		expect(bare?.decisive).toBe(false);
+	});
+
+	it("drops file rows without a session target but keeps chat rows", () => {
+		const items = buildSearchResultCommands("x", undefined, {
+			fileNames: [{ path: "a.ts", score: 1, exactName: false }],
+			messages: [{ messageId: "m1", conversationTitle: "T", snippet: { text: "x", highlights: [] }, score: 1, decisive: false, olderVersion: false }],
+		});
+		expect(items.map((item) => item.group)).toEqual(["messages"]);
 	});
 });

@@ -71,6 +71,7 @@ import (
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
+	searchsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/search"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
@@ -532,6 +533,20 @@ func Run(buildVersion string) error {
 		return fmt.Errorf("wire session service: %w", err)
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
+	// Palette search is derived data under <dataDir>/search. A failure to open
+	// it leaves the route answering 501 rather than blocking the daemon.
+	var paletteSearch controllers.SearchService
+	if searchSvc, searchErr := searchsvc.New(searchsvc.Deps{DataDir: cfg.DataDir, Workspaces: sessionSvc, Messages: store, Logger: log}); searchErr != nil {
+		log.Warn("palette search unavailable", "err", searchErr)
+	} else {
+		searchSvc.Start()
+		defer func() {
+			if err := searchSvc.Close(); err != nil {
+				log.Error("palette search shutdown", "err", err)
+			}
+		}()
+		paletteSearch = searchSvc
+	}
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
 		Store: store, Runtime: runtimeAdapter, Reviewers: store, CacheTTL: 2 * time.Second,
 		ChatHostPID: func(id domain.SessionID) (int, bool) {
@@ -995,6 +1010,7 @@ func Run(buildVersion string) error {
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
+		Search:             paletteSearch,
 		Settings:           settingsSvc,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,

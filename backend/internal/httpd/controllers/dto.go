@@ -3815,3 +3815,62 @@ type SwitchSessionAgentAccountRequest struct {
 	// account's limit. Otherwise the move waits for the turn to finish.
 	StopTurn bool `json:"stopTurn,omitempty"`
 }
+
+// SearchQuery is the query string accepted by GET /api/v1/search.
+type SearchQuery struct {
+	Q         string `query:"q" required:"true" maxLength:"512" description:"What the user typed: a name, an identifier, a copied phrase or a plain-English question. Quote text to require it verbatim."`
+	SessionID string `query:"sessionId,omitempty" description:"Session whose workspace files are searched. Without it, only chats are searched."`
+	Kinds     string `query:"kinds,omitempty" description:"Comma-separated subset of fileNames, fileContent and messages. Defaults to all three."`
+}
+
+// SearchResponse is the body of GET /api/v1/search, at most 20 hits per
+// group. Scores share one scale across groups, so a client can merge groups
+// and rank them against its own name matches.
+type SearchResponse struct {
+	FileNames   []SearchFileNameHit    `json:"fileNames"`
+	FileContent []SearchFileContentHit `json:"fileContent"`
+	Messages    []SearchMessageHit     `json:"messages"`
+	Files       string                 `json:"files" enum:"ready,building,unavailable" description:"Readiness of the session's file index; building while its first index runs."`
+}
+
+// SearchSnippet is one line of a hit with the matched words marked.
+type SearchSnippet struct {
+	Text       string            `json:"text"`
+	Line       int               `json:"line,omitempty" description:"1-based line in the file; absent for chat messages."`
+	Highlights []SearchHighlight `json:"highlights"`
+}
+
+// SearchHighlight is a half-open range of Text in UTF-16 code units
+// (JavaScript string indices).
+type SearchHighlight struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// SearchFileNameHit is a workspace file whose path matches as a name.
+type SearchFileNameHit struct {
+	Path      string  `json:"path" description:"Workspace-relative path."`
+	Score     float64 `json:"score"`
+	ExactName bool    `json:"exactName" description:"The query is the file's name, e.g. tokens.css."`
+}
+
+// SearchFileContentHit is a passage inside a workspace file.
+type SearchFileContentHit struct {
+	Path     string        `json:"path" description:"Workspace-relative path."`
+	Snippet  SearchSnippet `json:"snippet"`
+	Score    float64       `json:"score"`
+	Decisive bool          `json:"decisive" description:"Evidence strong enough to outrank a matching name: a code-like or quoted query, or an exact phrase of three or more words."`
+}
+
+// SearchMessageHit is a chat message.
+type SearchMessageHit struct {
+	MessageID         string           `json:"messageId"`
+	SessionID         domain.SessionID `json:"sessionId,omitempty"`
+	ProjectID         domain.ProjectID `json:"projectId,omitempty"`
+	ReviewID          string           `json:"reviewId,omitempty" description:"Set for a reviewer chat message: the review whose chat, inside sessionId's view, holds it."`
+	ConversationTitle string           `json:"conversationTitle"`
+	Snippet           SearchSnippet    `json:"snippet"`
+	Score             float64          `json:"score"`
+	Decisive          bool             `json:"decisive"`
+	OlderVersion      bool             `json:"olderVersion" description:"The message left the visible transcript: an edit forked past it or its turn was rolled back."`
+}

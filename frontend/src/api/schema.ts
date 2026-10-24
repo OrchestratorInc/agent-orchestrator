@@ -2080,6 +2080,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search workspace files by name and content, and chat messages */
+        get: operations["search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -6499,6 +6516,57 @@ export interface components {
             name: string;
             /** @description The file, relative to the session's artifact directory. */
             path: string;
+        };
+        SearchFileContentHit: {
+            /** @description Evidence strong enough to outrank a matching name: a code-like or quoted query, or an exact phrase of three or more words. */
+            decisive: boolean;
+            /** @description Workspace-relative path. */
+            path: string;
+            /** Format: double */
+            score: number;
+            snippet: components["schemas"]["SearchSnippet"];
+        };
+        SearchFileNameHit: {
+            /** @description The query is the file's name, e.g. tokens.css. */
+            exactName: boolean;
+            /** @description Workspace-relative path. */
+            path: string;
+            /** Format: double */
+            score: number;
+        };
+        SearchHighlight: {
+            end: number;
+            start: number;
+        };
+        SearchMessageHit: {
+            conversationTitle: string;
+            decisive: boolean;
+            messageId: string;
+            /** @description The message left the visible transcript: an edit forked past it or its turn was rolled back. */
+            olderVersion: boolean;
+            projectId?: string;
+            /** @description Set for a reviewer chat message: the review whose chat, inside sessionId's view, holds it. */
+            reviewId?: string;
+            /** Format: double */
+            score: number;
+            sessionId?: string;
+            snippet: components["schemas"]["SearchSnippet"];
+        };
+        SearchResponse: {
+            fileContent: components["schemas"]["SearchFileContentHit"][];
+            fileNames: components["schemas"]["SearchFileNameHit"][];
+            /**
+             * @description Readiness of the session's file index; building while its first index runs.
+             * @enum {string}
+             */
+            files: "ready" | "building" | "unavailable";
+            messages: components["schemas"]["SearchMessageHit"][];
+        };
+        SearchSnippet: {
+            highlights: components["schemas"]["SearchHighlight"][];
+            /** @description 1-based line in the file; absent for chat messages. */
+            line?: number;
+            text: string;
         };
         SendConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
@@ -14717,6 +14785,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetReviewActivityResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    search: {
+        parameters: {
+            query: {
+                /** @description What the user typed: a name, an identifier, a copied phrase or a plain-English question. Quote text to require it verbatim. */
+                q: string;
+                /** @description Session whose workspace files are searched. Without it, only chats are searched. */
+                sessionId?: string;
+                /** @description Comma-separated subset of fileNames, fileContent and messages. Defaults to all three. */
+                kinds?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchResponse"];
                 };
             };
             /** @description Bad Request */
