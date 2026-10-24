@@ -161,6 +161,48 @@ describe("initTelemetry recovery", () => {
 		}
 	});
 
+	it("does not export updater failures counted while opted out", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { applyAnalyticsOptOut } = await import("./telemetry");
+		const failure = { phase: "check", error_category: "network" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			await applyAnalyticsOptOut(true);
+			posthogStub.capture.mockImplementation(() => undefined);
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			posthogStub.capture.mockImplementation(() => ({}));
+			await applyAnalyticsOptOut(false);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			posthogStub.capture.mockClear();
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			expect(posthogStub.capture.mock.calls.map(([event]) => event)).toEqual(["ao.renderer.update_failed"]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not restore updater counts when an opt-out lands while a daily count is sending", async () => {
+		const captureRendererEvent = await initializedUpdateCapture();
+		const { applyAnalyticsOptOut } = await import("./telemetry");
+		const failure = { phase: "check", error_category: "network" };
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-20T12:00:00.000Z"));
+		try {
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(true);
+			vi.setSystemTime(new Date("2026-10-21T00:05:00.000Z"));
+			posthogStub.capture.mockImplementationOnce(() => {
+				void applyAnalyticsOptOut(true);
+				return undefined;
+			});
+			expect(await captureRendererEvent("ao.renderer.update_failed", failure)).toBe(false);
+			expect(localStorage.getItem("ao.telemetry.updateFailures.v1")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("allows retry after PostHog rejects or throws while capturing an update failure", async () => {
 		const captureRendererEvent = await initializedUpdateCapture();
 		const rejected = { phase: "download", error_category: "network", to_version: "2.0.0" };

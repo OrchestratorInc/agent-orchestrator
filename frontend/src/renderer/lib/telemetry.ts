@@ -359,6 +359,13 @@ export function clearCloudUser(): void {
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	if (optedOut) {
+		// Updater failures counted before the opt-out must not be exported
+		// after a later opt-in, so the streak and pending daily counts go too.
+		try {
+			telemetryStorage()?.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
+		} catch {
+			// Storage is best-effort; capture is already gated on the flag.
+		}
 		if (posthogReady) {
 			posthog.opt_out_capturing();
 			posthog.reset();
@@ -1254,6 +1261,9 @@ export function clearRendererTelemetryQueues(): void {}
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
 export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
+	// An opted-out renderer must not touch rate-limit slots or the persisted
+	// updater counts, which would otherwise be exported after an opt-in.
+	if (analyticsOptedOut) return false;
 	// Checked before the reservations so a silenced stream does not consume a
 	// rate-limit slot on its way to being discarded, matching the daemon, where
 	// the denylist sits outermost.
@@ -1265,7 +1275,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	} else if (event !== "ao.renderer.update_failed" && !reserveCapture(event)) {
 		return false;
 	}
-	if (!(await initTelemetry())) return false;
+	if (!(await initTelemetry()) || analyticsOptedOut) return false;
 	const storage = telemetryStorage();
 	let releaseUpdateFailureClaim: (() => void) | undefined;
 	if (event === "ao.renderer.update_failed") {
@@ -1273,7 +1283,10 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 		if (storage) {
 			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
 			if (!decision.emit) return false;
-			releaseUpdateFailureClaim = decision.rollback;
+			// A rollback after an opt-out would restore the counts the opt-out discarded.
+			releaseUpdateFailureClaim = () => {
+				if (!analyticsOptedOut) decision.rollback();
+			};
 			const dailyName = "ao.renderer.update_failures_daily";
 			for (const daily of decision.dailies ?? []) {
 				if (isDeniedEvent(dailyName)) continue;
