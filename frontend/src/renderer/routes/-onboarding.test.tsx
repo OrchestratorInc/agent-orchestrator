@@ -97,7 +97,7 @@ describe("onboarding route", () => {
 			if (!requestQuit) throw new Error("quit listener missing from onboarding");
 			act(() => requestQuit?.({ keepsRunning: true }));
 			expect(await screen.findByRole("dialog", { name: "Quit AO?" })).toBeVisible();
-			await userEvent.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+			await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 			expect(resolve).toHaveBeenLastCalledWith(false);
 		} finally {
 			subscribe.mockRestore();
