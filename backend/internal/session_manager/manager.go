@@ -2438,9 +2438,12 @@ func effectiveAgentConfig(harness domain.AgentHarness, kind domain.SessionKind, 
 
 func restoredAgentConfig(rec domain.SessionRecord, cfg domain.ProjectConfig) ports.AgentConfig {
 	merged := effectiveAgentConfig(rec.Harness, rec.Kind, cfg)
-	if rec.Harness == domain.HarnessClaudeCode {
-		merged.Model = rec.Metadata.Model
-		merged.Effort = rec.Metadata.Effort
+	// Model and effort are durable session choices for every harness. Empty
+	// values mean provider defaults, not today's project or role defaults.
+	merged.Model = rec.Metadata.Model
+	merged.Effort = rec.Metadata.Effort
+	if rec.Metadata.Permissions != "" {
+		merged.Permissions = rec.Metadata.Permissions
 	}
 	return merged
 }
@@ -3622,23 +3625,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		return RestoreResult{}, fmt.Errorf("%s %s: system prompt file: %w", operation, rec.ID, err)
 	}
 
-	// Restore resolves the project model while retaining this session's pinned
-	// permission policy independently of future project defaults.
 	agentConfig := restoredAgentConfig(rec, project.Config)
-	// A non-empty model picked in ChatUI is a durable session-level choice and
-	// must win over the project default for every harness on a TUI rebuild.
-	if model := strings.TrimSpace(rec.Metadata.Model); model != "" {
-		agentConfig.Model = model
-	}
-	// A per-spawn or ChatUI-selected reasoning effort is the same kind of
-	// durable session-level choice: it must survive the rebuild for every
-	// effort-capable harness, not only Claude Code.
-	if effort := strings.TrimSpace(rec.Metadata.Effort); effort != "" {
-		agentConfig.Effort = effort
-	}
-	if rec.Metadata.Permissions != "" {
-		agentConfig.Permissions = rec.Metadata.Permissions
-	}
 	var env map[string]string
 	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, mergeEnv(project.Config.Env, agentConfig.Env))
 	if err != nil {
