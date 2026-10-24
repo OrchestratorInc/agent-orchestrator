@@ -100,6 +100,7 @@ type Service struct {
 
 // Deps contains optional durable dependencies for the agent catalog service.
 type Deps struct {
+	DataDir                string
 	Cache                  ports.AgentModelCatalogCache
 	Discoverer             ports.AgentModelDiscoverer
 	ModelDiscoveryDir      string
@@ -146,6 +147,7 @@ func NewWithDeps(deps Deps) *Service {
 	}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: agents, Factory: agentregistry.Harnessed, Context: deps.Context, Logger: deps.Logger,
+		DataDir:             deps.DataDir,
 		AuthenticationCheck: svc.authenticationWithAccount,
 		// A catalog built while the agent was signed out carries that failure
 		// (a rejected-credential warning or bare fallback aliases). A detected

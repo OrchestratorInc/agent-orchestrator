@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -247,6 +248,39 @@ func TestStartOpensCodexLoginMethodMenu(t *testing.T) {
 	want := []string{"/Applications/AO.app/Contents/MacOS/ao", "codex-login", "--executable", "/managed/bin/codex", "--use-default-credential-store"}
 	if got := opener.input.Argv; !reflect.DeepEqual(got, want) {
 		t.Fatalf("terminal argv = %#v, want trusted Codex login menu", got)
+	}
+}
+
+func TestStartPinsClaudeDataDirectoryAcrossAuthWorkspaceChange(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("AO_DATA_DIR", "data")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opener := &recordingTerminalOpener{}
+	svc := NewWithAgentResolver(foundExecutable("claude"), nil, opener, cfg.DataDir)
+	svc.selfExecutable = func() (string, error) { return "/managed/bin/ao", nil }
+	if _, err := svc.Start(context.Background(), "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if got := opener.input.Env["AO_DATA_DIR"]; got != cfg.DataDir || !filepath.IsAbs(got) {
+		t.Fatalf("launcher data directory = %q, want absolute %q", got, cfg.DataDir)
+	}
+	// Reproduce the launcher's cwd and inherited environment without starting
+	// a process. The login command uses config.Load to find its token file.
+	authWorkspace := filepath.Join(cfg.DataDir, "auth-workspace", "shellterm-test")
+	if err := os.MkdirAll(authWorkspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(authWorkspace)
+	t.Setenv("AO_DATA_DIR", opener.input.Env["AO_DATA_DIR"])
+	launcherConfig, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launcherConfig.DataDir != cfg.DataDir {
+		t.Fatalf("launcher resolved %q, want daemon root %q", launcherConfig.DataDir, cfg.DataDir)
 	}
 }
 
