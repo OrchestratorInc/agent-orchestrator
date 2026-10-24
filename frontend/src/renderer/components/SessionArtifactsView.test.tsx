@@ -3,6 +3,7 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { aoBridge } from "../lib/bridge";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { SessionArtifactsView } from "./SessionArtifactsView";
@@ -227,6 +228,7 @@ describe("SessionArtifactsView for a cloud session", () => {
 
 	it("deletes a cloud file from cloud storage and the sandbox after confirming", async () => {
 		deleteCloudArtifactMock.mockReset().mockResolvedValue(undefined);
+		useArtifactsViewStore.setState({ pinnedArtifactIds: [JSON.stringify(["cloud-1", "docs/notes.md"])] });
 		renderView(<SessionArtifactsView session={cloudSession()} />);
 		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
@@ -237,6 +239,7 @@ describe("SessionArtifactsView for a cloud session", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
 
 		await vi.waitFor(() => expect(deleteCloudArtifactMock).toHaveBeenCalledWith("org-1", "cloud-1", "docs/notes.md"));
+		await vi.waitFor(() => expect(useArtifactsViewStore.getState().pinnedArtifactIds).toEqual([]));
 		expect(deleteArtifactMock).not.toHaveBeenCalled();
 	});
 });

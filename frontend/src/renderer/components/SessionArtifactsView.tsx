@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronLeft, Copy, Download, FileText, FolderOpen, Globe, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
+import { ChevronLeft, FileText, FolderOpen, Globe, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
@@ -10,21 +10,17 @@ import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
 import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
-import { CLOUD_TEXT_ARTIFACT, CloudArtifactAccessError, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
-import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { aoBridge } from "../lib/bridge";
+import { CloudArtifactAccessError, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { formatTimeTerse } from "../lib/format-time";
-import { fileMediaKind } from "../lib/file-media";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
+import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { FileAnnotationComposer, PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
@@ -86,144 +82,6 @@ function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 					<TooltipContent side="bottom">{label}</TooltipContent>
 				</Tooltip>
 			))}
-		</>
-	);
-}
-
-/**
- * The open artifact's name, as a menu: show it in the file manager or a
- * terminal (local sessions only), copy its contents, or delete it.
- */
-function ArtifactMenu({ artifact, downloadUrl, hostId, session }: {
-	artifact: SessionArtifact;
-	/** A cloud file's URL under the session's current access link, for Download. */
-	downloadUrl?: string;
-	hostId?: string;
-	session: WorkspaceSession;
-}) {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const open = useOpenSessionArtifacts();
-	const [copyError, setCopyError] = useState("");
-	const [confirmingDelete, setConfirmingDelete] = useState(false);
-	// The artifact directory is on this machine only for a local session.
-	const local = !hostId && !session.cloud;
-	const { client: cloudClient } = useCloudCp(Boolean(session.cloud));
-	// The deleted file leaves the session's artifact list on the next read. A
-	// cloud file is deleted from cloud storage and from the session's sandbox.
-	const remove = useMutation({
-		mutationFn: () =>
-			session.cloud
-				? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path)
-				: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
-		onSuccess: async () => {
-			setConfirmingDelete(false);
-			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
-		},
-	});
-	const markdown = /\.(md|markdown)$/i.test(artifact.path);
-	const reveal = (targetId: OpenArtifactsTargetId) => {
-		setCopyError("");
-		open.mutate({ sessionId: session.id, targetId, path: artifact.path });
-	};
-	const copy = async () => {
-		open.reset();
-		setCopyError("");
-		try {
-			const detail = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl, t("files.error.loadArtifact"), Boolean(session.cloud)));
-			await aoBridge.clipboard.writeText(detail.content);
-		} catch (error) {
-			setCopyError(error instanceof Error ? error.message : String(error));
-		}
-	};
-	const download = async () => {
-		open.reset();
-		setCopyError("");
-		try {
-			if (!downloadUrl) throw new Error(t("artifacts.accessError"));
-			const bytes = await aoBridge.cloudArtifact.fetch(downloadUrl);
-			await aoBridge.chatImage.save({ name: artifact.name, bytes });
-		} catch (error) {
-			setCopyError(error instanceof Error ? error.message : String(error));
-		}
-	};
-	const error = open.error?.message || copyError;
-	const resetOpen = open.reset;
-	useEffect(() => {
-		if (!error) return;
-		const timer = setTimeout(() => {
-			resetOpen();
-			setCopyError("");
-		}, ERROR_CLEAR_MS);
-		return () => clearTimeout(timer);
-	}, [error, resetOpen]);
-	// A cloud file that is not text is read for its headers only, so it has no
-	// contents to copy; it can still be downloaded.
-	const copyable = !fileMediaKind(artifact.path) && (!session.cloud || CLOUD_TEXT_ARTIFACT.test(artifact.path));
-	return (
-		<>
-			<DropdownMenu>
-				<DropdownMenuTrigger asChild>
-					<Button className="min-w-0 gap-1 px-1.5 font-normal" size="sm" title={artifact.path} type="button" variant="ghost">
-						<span className="truncate">{artifact.name}</span>
-						<ChevronDown aria-hidden="true" className="size-icon-xs shrink-0 text-muted-foreground" />
-					</Button>
-				</DropdownMenuTrigger>
-				<DropdownMenuContent align="start" className="min-w-44" data-browser-native-overlay="true">
-					{local ? (
-						<>
-							<DropdownMenuItem onSelect={() => reveal("file-manager")}>
-								<FolderOpen aria-hidden="true" />
-								{t("artifacts.showIn", { name: fileManagerName() })}
-							</DropdownMenuItem>
-							<DropdownMenuItem onSelect={() => reveal("terminal")}>
-								<SquareTerminal aria-hidden="true" />
-								{t("artifacts.showIn", { name: terminalName() })}
-							</DropdownMenuItem>
-							<DropdownMenuSeparator />
-						</>
-					) : null}
-					{copyable ? (
-						<DropdownMenuItem onSelect={() => void copy()}>
-							<Copy aria-hidden="true" />
-							{t(markdown ? "artifacts.copyMarkdown" : "artifacts.copyContents")}
-						</DropdownMenuItem>
-					) : null}
-					{session.cloud ? (
-						<DropdownMenuItem onSelect={() => void download()}>
-							<Download aria-hidden="true" />
-							{t("artifacts.download")}
-						</DropdownMenuItem>
-					) : null}
-					<DropdownMenuSeparator />
-					<DropdownMenuItem
-						className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-						onSelect={() => {
-							remove.reset();
-							setConfirmingDelete(true);
-						}}
-					>
-						<Trash2 aria-hidden="true" />
-						{t("artifacts.delete")}
-					</DropdownMenuItem>
-				</DropdownMenuContent>
-			</DropdownMenu>
-			<ConfirmDialog
-				busy={remove.isPending}
-				confirmLabel={t("artifacts.delete")}
-				description={t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}
-				destructive
-				error={remove.error?.message ?? null}
-				onConfirm={() => remove.mutate()}
-				onOpenChange={setConfirmingDelete}
-				open={confirmingDelete}
-				title={t("artifacts.deleteTitle")}
-			/>
-			{error ? (
-				<span className="min-w-0 truncate text-caption text-destructive" role="alert" title={error}>
-					{error}
-				</span>
-			) : null}
 		</>
 	);
 }
@@ -550,7 +408,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactMenu artifact={selected} downloadUrl={listed?.rawUrl} hostId={hostId} key={selected.path} session={session} />
+					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} hostId={hostId} key={selected.path} session={session} />
 					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
 					{session.cloud || selectedFile.data?.binary ? null : (
 						<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
