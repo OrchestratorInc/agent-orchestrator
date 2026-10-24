@@ -118,3 +118,28 @@ func TestConfiguredPATHWindowsUsesExactProtectedSpelling(t *testing.T) {
 		t.Fatalf("case-insensitive configured PATH = %q, want project", got)
 	}
 }
+
+func TestPinnedPATHInstallsGHWithoutChangingInstall(t *testing.T) {
+	dir, data := t.TempDir(), t.TempDir()
+	name := "ao"
+	ghName := "gh"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+		ghName += ".exe"
+	}
+	exe := filepath.Join(dir, name)
+	if err := os.WriteFile(exe, []byte("AO"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, err := PinnedPATH(func() (string, error) { return exe, nil }, os.Getenv, map[string]string{"PATH": dir}, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned := strings.Split(path, string(os.PathListSeparator))[0]
+	if _, err := os.Stat(filepath.Join(pinned, ghName)); err != nil {
+		t.Fatalf("missing gh wrapper: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ghName)); !os.IsNotExist(err) {
+		t.Fatalf("install modified: %v", err)
+	}
+}

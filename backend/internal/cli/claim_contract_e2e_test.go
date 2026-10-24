@@ -51,7 +51,7 @@ func (claimContractSCM) FetchReviewThreads(context.Context, ports.SCMPRRef) (por
 	return ports.SCMReviewObservation{}, nil
 }
 
-// This guards the complete metadata-only claim contract for both CLI forms:
+// This guards the complete metadata-only claim contract for both CLI forms and the wrapper:
 // the production service's BranchChanged=false must survive controller
 // serialization and CLI decoding, while the command leaves the real workspace
 // branch and HEAD alone.
@@ -59,8 +59,10 @@ func TestE2E_ClaimPRMetadataOnlyContract(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		spawn bool
+		proxy bool
 	}{
 		{name: "session claim-pr"},
+		{name: "gh wrapper", proxy: true},
 		{name: "spawn --claim-pr", spawn: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -158,12 +160,27 @@ func TestE2E_ClaimPRMetadataOnlyContract(t *testing.T) {
 				args = []string{"spawn", "--project", "demo", "--agent", "codex", "--name", "worker", "--skip-agent-check", "--claim-pr", "https://github.com/acme/repo/pull/7"}
 			}
 			root.SetArgs(args)
-			if err := root.Execute(); err != nil {
+			if tc.proxy {
+				t.Setenv("AO_SESSION_ID", string(session.ID))
+				t.Setenv("AO_REVIEW_SESSION_ID", "")
+				c := commandContext{deps: Deps{Out: &out, Err: &out, HTTPClient: &http.Client{Transport: transport}, ProcessAlive: func(int) bool { return true }}.withDefaults()}
+				c.deps.RunInteractiveCommand = func(_ context.Context, _ string, _ []string, _ io.Reader, stdout, _ io.Writer) error {
+					_, err := io.WriteString(stdout, "https://github.com/acme/repo/pull/7\n")
+					return err
+				}
+				if code := c.runGH(context.Background(), "gh", []string{"pr", "create"}); code != 0 {
+					t.Fatalf("exit=%d", code)
+				}
+			} else if err := root.Execute(); err != nil {
 				t.Fatalf("execute: %v\noutput: %s", err, out.String())
 			}
 
-			if want := "  checkout: not performed; workspace unchanged\n"; !strings.Contains(out.String(), want) {
+			if want := "  checkout: not performed; workspace unchanged\n"; !tc.proxy && !strings.Contains(out.String(), want) {
 				t.Fatalf("output = %q, want %q", out.String(), want)
+			}
+			prs, err := store.ListPRsBySession(ctx, session.ID)
+			if err != nil || len(prs) != 1 || prs[0].URL != "https://github.com/acme/repo/pull/7" {
+				t.Fatalf("attached PRs=%+v err=%v", prs, err)
 			}
 			var response map[string]json.RawMessage
 			if err := json.Unmarshal(responseBody, &response); err != nil {
