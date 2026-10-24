@@ -2711,6 +2711,57 @@ func TestValidateInputResponseRejectsValuesOutsideTheProviderSchema(t *testing.T
 	}
 }
 
+func TestValidateInputResponseAcceptsAMarkedOtherAnswerForARequiredQuestion(t *testing.T) {
+	question := map[string]any{"type": "string", "oneOf": []any{
+		map[string]any{"const": "Native"}, map[string]any{"const": "Bridge"},
+	}}
+	// The field shape claude-agent-acp's askUserQuestionsToCreateRequest sends.
+	other := map[string]any{"type": "string", "title": "Other", "_meta": map[string]any{
+		askUserQuestionCustomAnswerMetaKey: map[string]any{"questionId": "question_0", "isCustomAnswer": true},
+	}}
+	request := ports.ChatInputRequest{Mode: "form", Schema: map[string]any{
+		"required":   []any{"question_0"},
+		"properties": map[string]any{"question_0": question, "question_0_custom": other},
+	}}
+	for name, content := range map[string]map[string]any{
+		"choice":       {"question_0": "Native"},
+		"other answer": {"question_0_custom": "Hybrid"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateInputResponse(request, ports.ChatInputResponse{Action: "accept", Content: content}); err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+		})
+	}
+	if err := validateInputResponse(request, ports.ChatInputResponse{
+		Action: "accept", Content: map[string]any{"question_0_custom": "  "},
+	}); !errors.Is(err, ports.ErrChatDecisionNotOffered) {
+		t.Fatalf("blank other answer: error = %v, want ErrChatDecisionNotOffered", err)
+	}
+}
+
+func TestValidateInputResponseKeepsUnmarkedCustomFieldsIndependent(t *testing.T) {
+	// A generic MCP form may have a "name_custom" (or even "question_0_custom")
+	// field of its own; without the marker it never answers the required field.
+	for _, field := range []string{"name", "question_0"} {
+		t.Run(field, func(t *testing.T) {
+			request := ports.ChatInputRequest{Mode: "form", Schema: map[string]any{
+				"required": []any{field},
+				"properties": map[string]any{
+					field:             map[string]any{"type": "string"},
+					field + "_custom": map[string]any{"type": "string"},
+				},
+			}}
+			err := validateInputResponse(request, ports.ChatInputResponse{
+				Action: "accept", Content: map[string]any{field + "_custom": "Alias"},
+			})
+			if !errors.Is(err, ports.ErrChatDecisionNotOffered) {
+				t.Fatalf("error = %v, want ErrChatDecisionNotOffered", err)
+			}
+		})
+	}
+}
+
 func TestACPDriverPreservesNestedToolAndTerminalMetadata(t *testing.T) {
 	agent := &fakeAgent{}
 	driver := New(Config{

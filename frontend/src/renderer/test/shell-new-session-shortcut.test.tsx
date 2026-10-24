@@ -417,7 +417,7 @@ beforeEach(() => {
 	shellMocks.router.history.canGoBack.mockReset().mockReturnValue(true);
 	shellMocks.router.history.back.mockClear();
 	shellMocks.router.history.forward.mockClear();
-	useSidebarOrderStore.setState({ projectOrder: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	shellMocks.getPathForFile.mockClear();
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;
@@ -717,6 +717,19 @@ describe("shell workspace startup", () => {
 			.mockResolvedValueOnce({ data: { project: { id: "proj-new", name: "New", kind: "single_repo", path: "/repo/new" } } })
 			.mockResolvedValueOnce({ data: { session: { id: "orch-new", projectId: "proj-new", kind: "orchestrator", mode: "chat", provisionState: "provisioning" } } });
 	};
+
+	it.each([
+		{ savedOrder: ["proj-2", "proj-1"] },
+		{ savedOrder: ["proj-2", "proj-1", "proj-new"] },
+	])("saves a newly created project first ahead of saved order $savedOrder", async ({ savedOrder }) => {
+		spawnNewProject();
+		useSidebarOrderStore.getState().setProjectOrder(savedOrder);
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["proj-new", "proj-2", "proj-1"]);
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["proj-new", "proj-2", "proj-1"]);
+	});
 
 	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
 		spawnNewProject();

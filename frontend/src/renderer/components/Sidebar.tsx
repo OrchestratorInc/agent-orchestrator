@@ -467,7 +467,6 @@ function AnimatedSectionBody({ open, children, className }: { open: boolean; chi
 	);
 }
 const expandedProjectsStorageKey = "ao.sidebar.expanded-projects";
-const projectOrderStorageKey = "ao.sidebar.project-order";
 
 function readExpandedProjectIds(): ReadonlySet<string> {
 	if (typeof window === "undefined" || !window.localStorage) return new Set();
@@ -773,29 +772,19 @@ export function Sidebar({
 		onExpand: () => setOpen(true),
 	});
 
-	const [projectOrder, setProjectOrder] = useState<string[]>(() => {
-		try {
-			const saved: unknown = JSON.parse(window.localStorage.getItem(projectOrderStorageKey) ?? "null");
-			if (Array.isArray(saved)) return [...new Set(saved.filter((id): id is string => typeof id === "string"))];
-		} catch {}
-		return workspaces.map((workspace) => workspace.id);
-	});
-	useEffect(() => {
-		try {
-			window.localStorage.setItem(projectOrderStorageKey, JSON.stringify(projectOrder));
-		} catch {}
-		useSidebarOrderStore.getState().setProjectOrder(projectOrder);
-	}, [projectOrder]);
+	const projectOrder = useSidebarOrderStore((state) => state.projectOrder);
+	const pendingCreatedProjectIds = useSidebarOrderStore((state) => state.pendingCreatedProjectIds);
+	const setProjectOrder = useSidebarOrderStore((state) => state.setProjectOrder);
+	useLayoutEffect(() => {
+		// Preserve absent IDs in place: creation can publish its order before the
+		// query snapshot arrives. Reconcile before paint so a late snapshot cannot
+		// briefly show older, newly discovered projects above that creation.
+		useSidebarOrderStore.getState().reconcileProjectOrder(workspaces.map((workspace) => workspace.id));
+	}, [workspaces, pendingCreatedProjectIds]);
 	const orderedWorkspaces = useMemo(
 		() => applyOrder(workspaces, (workspace) => workspace.id, projectOrder, "start"),
 		[projectOrder, workspaces],
 	);
-	// Keep saved IDs through the initial empty query and alphabetical refreshes.
-	const visibleProjectIds = orderedWorkspaces.map((workspace) => workspace.id);
-	const nextProjectOrder = [...visibleProjectIds, ...projectOrder.filter((id) => !visibleProjectIds.includes(id))];
-	if (nextProjectOrder.length !== projectOrder.length || nextProjectOrder.some((id, index) => id !== projectOrder[index])) {
-		setProjectOrder(nextProjectOrder);
-	}
 
 	// The ad hoc group is a bucket for projectless sessions, not a project: it
 	// gets its own Scratchpad section below the project list rather than a
@@ -898,7 +887,7 @@ export function Sidebar({
 		const next = reorderAtProjectBoundary(projectIds, activeId, target.overId, target.placement);
 		if (next) setProjectOrder(next);
 		handleProjectDragEnd();
-	}, [handleProjectDragEnd, projectIds]);
+	}, [handleProjectDragEnd, projectIds, setProjectOrder]);
 
 	const pinnedSessions = useMemo(
 		() => [...workspaces, ...remoteWorkspaces]

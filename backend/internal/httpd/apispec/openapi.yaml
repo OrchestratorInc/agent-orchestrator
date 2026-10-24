@@ -5327,6 +5327,35 @@ paths:
           type:
           - "null"
           - boolean
+      - description: Session kind filter. worker keeps every session that is not an
+          orchestrator.
+        in: query
+        name: kind
+        schema:
+          description: Session kind filter. worker keeps every session that is not
+            an orchestrator.
+          enum:
+          - worker
+          - orchestrator
+          type: string
+      - description: Page size. When set, sessions are ordered pinned first, then
+          most recently updated, and nextCursor resumes the list. When omitted, every
+          match is returned.
+        in: query
+        name: limit
+        schema:
+          description: Page size. When set, sessions are ordered pinned first, then
+            most recently updated, and nextCursor resumes the list. When omitted,
+            every match is returned.
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: Opaque cursor returned by the previous page. Requires limit.
+        in: query
+        name: cursor
+        schema:
+          description: Opaque cursor returned by the previous page. Requires limit.
+          type: string
       responses:
         "200":
           content:
@@ -17239,6 +17268,10 @@ components:
       type: object
     ListSessionsResponse:
       properties:
+        archived:
+          $ref: '#/components/schemas/SessionArchiveSummary'
+        nextCursor:
+          type: string
         sessions:
           items:
             $ref: '#/components/schemas/ControllersSessionView'
@@ -18644,6 +18677,20 @@ components:
           type: string
         codex:
           type: string
+      type: object
+    SessionArchiveSummary:
+      properties:
+        byProject:
+          additionalProperties:
+            type: integer
+          type:
+          - object
+          - "null"
+        total:
+          type: integer
+      required:
+      - total
+      - byProject
       type: object
     SessionArtifact:
       properties:

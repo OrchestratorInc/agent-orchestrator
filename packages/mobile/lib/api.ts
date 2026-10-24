@@ -1,3 +1,4 @@
+import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
@@ -113,6 +114,10 @@ export type DashboardSession = {
 	provisionSteps?: SessionProvisionStep[];
 	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
 	branchNaming?: boolean;
+	/** worker or orchestrator. Absent from rows built before the daemon named kinds. */
+	kind?: string;
+	/** When the stored row last changed. The archive is ordered by it, as on desktop. */
+	updatedAt?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
 	/** Automatically review each new pull-request head. */
@@ -176,7 +181,49 @@ export type SessionsResponse = {
 	// as an empty list: the board judges a saved project filter against this, so
 	// folding a failure into [] told it every project was gone (#5058 review).
 	projects: ProjectInfo[] | null;
+	/**
+	 * The archive's size, when the daemon pages it: `sessions` then holds live
+	 * workers only and archived ones are fetched with getArchivedSessions. Null on
+	 * (or absent on) a daemon that predates paging, whose `sessions` still carries
+	 * the archive.
+	 */
+	archive?: ArchiveSummary | null;
 };
+
+
+export type { ArchiveSummary } from "./archive/archiveSummary";
+
+/** One page of a machine's archive, in the daemon's order (pinned, then most recently updated). */
+export type ArchivePage = { sessions: DashboardSession[]; nextCursor: string | null };
+
+/** Archived workers fetched per page when Archive is opened. */
+export const ARCHIVE_PAGE_SIZE = 50;
+
+// Machines whose daemon answered the live-only poll without an archive summary.
+// They predate paging, so they are polled for the full list as before. Checked
+// again now and then, so a daemon upgraded under a running app is picked up.
+const legacyArchiveHosts = new Map<string, number>();
+const LEGACY_ARCHIVE_RECHECK_MS = 15 * 60_000;
+
+/** Forget which machines answered like an older daemon. For tests. */
+export function resetArchivePagingProbes(): void {
+	legacyArchiveHosts.clear();
+}
+
+function archiveHostKey(cfg: ServerConfig): string {
+	return cfg.hostId ?? `${cfg.host}:${cfg.httpPort}`;
+}
+
+function wireArchiveSummary(raw: unknown): ArchiveSummary | null {
+	if (!raw || typeof raw !== "object") return null;
+	const { total, byProject } = raw as { total?: unknown; byProject?: unknown };
+	if (typeof total !== "number") return null;
+	const counts: Record<string, number> = {};
+	if (byProject && typeof byProject === "object") {
+		for (const [project, count] of Object.entries(byProject)) if (typeof count === "number") counts[project] = count;
+	}
+	return { total, byProject: counts };
+}
 
 // ---- Wire types (this repo's Go daemon, /api/v1/*) --------------------------
 //
@@ -322,6 +369,8 @@ function mapSession(s: WireSession): DashboardSession {
 		branchNaming: !!s.branchNaming,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
+		kind: s.kind || undefined,
+		updatedAt: s.updatedAt || undefined,
 		autoReviewEnabled: !!s.autoReviewEnabled,
 		autoInjectReview: s.autoInjectReview ?? true,
 		autoInjectCI: s.autoInjectCI ?? true,
@@ -503,7 +552,30 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 	// ticks and make the user's next action, typically scanning a fresh pairing
 	// code, fail with 429 before the new password was ever checked. Probing first
 	// caps a bad-credential tick at a single failed attempt.
-	const sessRes = await req(cfg, `${API}/sessions`, init);
+	//
+	// The poll asks for live workers only, with the archive's size: the archive is
+	// most of a long-running machine's sessions, and over a tunnel the poll runs
+	// every two seconds. A daemon that predates paging leaves the summary out;
+	// that machine is then polled for everything, as before.
+	const hostKey = archiveHostKey(cfg);
+	const legacySince = legacyArchiveHosts.get(hostKey);
+	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
+	let sessRes = await req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init);
+	let sessData = await sessRes.json();
+	let archive = tryPaged ? wireArchiveSummary(sessData?.archived) : null;
+	if (tryPaged) {
+		if (archive) legacyArchiveHosts.delete(hostKey);
+		else {
+			legacyArchiveHosts.set(hostKey, Date.now());
+			// A daemon older still ignores `active` and has already sent everything,
+			// archived rows included; only one that filtered must be asked again.
+			const ignoredFilter = Array.isArray(sessData?.sessions) && sessData.sessions.some((s: WireSession) => s.isTerminated);
+			if (!ignoredFilter) {
+				sessRes = await req(cfg, `${API}/sessions`, init);
+				sessData = await sessRes.json();
+			}
+		}
+	}
 	// A failed /projects is reported as null rather than [] so a caller can tell
 	// "this daemon has no projects" from "we could not ask". It stays caught: an
 	// older daemon, or one blip on that one route, must not knock the board
@@ -512,7 +584,6 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 		req(cfg, `${API}/orchestrators`, init),
 		getProjects(cfg, init).catch(() => null),
 	]);
-	const sessData = await sessRes.json();
 	const orchData = await orchRes.json();
 	const nameOf = new Map((projects ?? []).map((p) => [p.id, p.name]));
 
@@ -540,7 +611,31 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);
 
-	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects };
+	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive };
+}
+
+/**
+ * One page of a machine's archived workers. Only for a daemon whose poll
+ * reported an archive summary (see getSessions); an older one carries its
+ * archive in the poll itself.
+ */
+export async function getArchivedSessions(
+	cfg: ServerConfig,
+	options: { cursor?: string | null; projectId?: string; limit?: number } = {},
+	init?: Pick<RequestInit, "signal">,
+): Promise<ArchivePage> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", limit: String(options.limit ?? ARCHIVE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		// The daemon has already filtered these; kept defensively so a row that is
+		// live by the time it lands can never be drawn as archived.
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+	};
 }
 
 // ---- Preview (in-app browser) ----------------------------------------------

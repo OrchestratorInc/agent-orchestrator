@@ -5972,6 +5972,8 @@ export interface components {
             sessionId: string;
         };
         ListSessionsResponse: {
+            archived?: components["schemas"]["SessionArchiveSummary"];
+            nextCursor?: string;
             sessions: components["schemas"]["ControllersSessionView"][];
         };
         ListShellTerminalsResponse: {
@@ -6535,6 +6537,12 @@ export interface components {
         SessionAgentAccountsResponse: {
             claude?: string;
             codex?: string;
+        };
+        SessionArchiveSummary: {
+            byProject: {
+                [key: string]: number;
+            } | null;
+            total: number;
         };
         SessionArtifact: {
             inlineUrl?: string;
@@ -14707,6 +14715,12 @@ export interface operations {
                 orchestratorOnly?: null | boolean;
                 /** @description When true, return only fresh non-terminated sessions. */
                 fresh?: null | boolean;
+                /** @description Session kind filter. worker keeps every session that is not an orchestrator. */
+                kind?: "worker" | "orchestrator";
+                /** @description Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned. */
+                limit?: number;
+                /** @description Opaque cursor returned by the previous page. Requires limit. */
+                cursor?: string;
             };
             header?: never;
             path?: never;
