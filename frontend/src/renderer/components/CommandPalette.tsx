@@ -46,6 +46,7 @@ import { useAppShortcut } from "../hooks/useAppShortcut";
 import { Button } from "./ui/button";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { TaskComposer } from "./TaskComposer";
+import { requestOpenShareLink } from "./OpenShareLinkDialog";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList } from "./ui/command";
 
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
@@ -66,6 +67,7 @@ export function CommandPalette() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const cloud = useCloudCp();
+	const cloudReady = cloud.ready;
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
@@ -225,8 +227,9 @@ export function CommandPalette() {
 				currentHostId: params.hostId,
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
+				cloudReady,
 			}, t),
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -532,6 +535,10 @@ export function CommandPalette() {
 					case "copy-branch":
 						await aoBridge.clipboard.writeText(action.branch);
 						closePalette();
+						break;
+					case "open-shared-link":
+						closePalette();
+						requestOpenShareLink();
 						break;
 				case "open-pr":
 					await aoBridge.app.openExternal(action.url);

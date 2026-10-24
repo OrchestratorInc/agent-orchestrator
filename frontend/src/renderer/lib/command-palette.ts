@@ -60,7 +60,8 @@ export type CommandAction =
 	| { kind: "open-pr"; url: string }
 	| { kind: "copy-pr-url"; url: string }
 	| { kind: "trigger-review"; sessionId: string }
-	| { kind: "toggle-theme" };
+	| { kind: "toggle-theme" }
+	| { kind: "open-shared-link" };
 
 export type CommandItem = {
 	id: string;
@@ -89,6 +90,8 @@ export type CommandPaletteContext = {
 	 * rather than rendered with a guessed enabled state.
 	 */
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
+	/** Signed in to Cloud, so a shared session's link can be opened. */
+	cloudReady?: boolean;
 };
 
 export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "projects", "sessions", "prs", "global"];
@@ -497,6 +500,15 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		keywords: ["dark", "light", "appearance"],
 		action: { kind: "toggle-theme" },
 	});
+	if (ctx.cloudReady) {
+		items.push({
+			id: "global-open-shared-link",
+			group: "global",
+			title: t("command.openSharedLink"),
+			keywords: ["share", "shared", "link", "invite", "cloud"],
+			action: { kind: "open-shared-link" },
+		});
+	}
 
 	return items;
 }

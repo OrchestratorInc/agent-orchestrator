@@ -56,6 +56,12 @@ import type {
 	CloudCpSendMessageRequest,
 	CloudCpSendMessageResponse,
 	CloudCpSteerTurnResponse,
+	CloudCpComposerAnswer,
+	CloudCpSessionChatSettings,
+	CloudCpCreateShareLinkRequest,
+	CloudCpShareLink,
+	CloudCpSharedProject,
+	CloudCpSession,
 	CloudCpSessionChildrenResponse,
 	CloudCpHarnessInspectResponse,
 	CloudCpHarnessStatus,
@@ -398,6 +404,28 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSteerTurnResponse>;
 	decideChatApproval(orgId: string, sessionId: string, requestId: string, decisionId: string, options?: CloudCpRequestOptions): Promise<{ ok: boolean }>;
+	/** Takes a shared session's composer lease, or renews it when already held. */
+	acquireComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Extends a held grant; `typing` reports a keystroke since the last renewal. */
+	renewComposer(orgId: string, sessionId: string, epoch: number, typing: boolean, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	releaseComposer(orgId: string, sessionId: string, epoch: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Gets in line for the composer lease. */
+	requestComposerTurn(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	leaveComposerQueue(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Takes the lease from its holder (session creator, org owners and admins). */
+	takeOverComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	/** Sets the model and settings the session's turns run with (its owner only). */
+	setSessionChatSettings(orgId: string, sessionId: string, settings: CloudCpSessionChatSettings, options?: CloudCpRequestOptions): Promise<{ chatSettings: CloudCpSessionChatSettings }>;
+	/** Shares the holder's draft and caret live with the session; counts as a keystroke. */
+	publishComposerDraft(orgId: string, sessionId: string, epoch: number, text: string, cursor: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
+	createShareLink(orgId: string, projectId: string, body: CloudCpCreateShareLinkRequest, options?: CloudCpRequestOptions): Promise<{ link: CloudCpShareLink }>;
+	listShareLinks(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ links: CloudCpShareLink[] }>;
+	revokeShareLink(orgId: string, projectId: string, linkId: string, options?: CloudCpRequestOptions): Promise<void>;
+	/** Turns a share link's token into the caller's own access grant. */
+	redeemShareLink(orgId: string, token: string, options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject }>;
+	listSharedProjects(options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject[] }>;
+	/** The sessions of a project shared with the caller that their grant reaches. */
+	listSharedProjectSessions(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSession[] }>;
 	listChatEvents(
 		orgId: string,
 		sessionId: string,
@@ -898,6 +926,34 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/approvals/${seg(requestId)}/decide`, {
 				body: { decisionId }, signal: o?.signal,
 			}),
+		acquireComposer: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/acquire`, { signal: o?.signal }),
+		renewComposer: (orgId, sessionId, epoch, typing, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/renew`, { body: { epoch, typing }, signal: o?.signal }),
+		releaseComposer: (orgId, sessionId, epoch, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/release`, { body: { epoch }, signal: o?.signal }),
+		requestComposerTurn: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/queue`, { signal: o?.signal }),
+		leaveComposerQueue: (orgId, sessionId, o) =>
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/queue`, { signal: o?.signal }),
+		takeOverComposer: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/takeover`, { signal: o?.signal }),
+		setSessionChatSettings: (orgId, sessionId, settings, o) =>
+			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-settings`, { body: settings, signal: o?.signal }),
+		publishComposerDraft: (orgId, sessionId, epoch, text, cursor, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/draft`, { body: { epoch, text, cursor }, signal: o?.signal }),
+		createShareLink: (orgId, projectId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares`, { body, signal: o?.signal }),
+		listShareLinks: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares`, { signal: o?.signal }),
+		revokeShareLink: (orgId, projectId, linkId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/${seg(linkId)}/revoke`, { signal: o?.signal }),
+		redeemShareLink: (orgId, token, o) =>
+			requestJson("POST", "/share-links/redeem", { body: { orgId, token }, signal: o?.signal }),
+		listSharedProjects: (o) =>
+			requestJson("GET", "/shared/projects", { signal: o?.signal }),
+		listSharedProjectSessions: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/shared/projects/${seg(projectId)}/sessions`, { signal: o?.signal }),
 		listChatEvents: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-events`, {
 				query: { after: query?.after, limit: query?.limit, types: query?.types?.length ? query.types.join(",") : undefined },

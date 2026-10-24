@@ -137,6 +137,7 @@ import {
 	getCloudSession,
 	installCloudIPC,
 	registerCloudProtocol,
+	resolveCloudAuthDir,
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
@@ -3232,11 +3233,10 @@ ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 });
 
 // Cloud auth IPC — cloud:getSession, cloud:signIn, cloud:signOut.
-// Data dir resolves to ~/.ao (prod) or ~/.ao/dev (dev) matching daemon conventions.
+// Data dir resolves to AO_DATA_DIR when set, else ~/.ao (prod) or ~/.ao/dev
+// (dev), so instances with their own data dir keep their own sign-in.
 function cloudDataDir(): string {
-	return isDev
-		? path.join(os.homedir(), ".ao", DEV_STATE_SUBDIR)
-		: path.join(os.homedir(), ".ao");
+	return resolveCloudAuthDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, !isDev);
 }
 
 // Cloud sessions' agent browsers, served to the Browser panel's agent tabs.
@@ -3273,8 +3273,34 @@ function focusCloudWindow(): void {
 	window.focus();
 }
 
+// A shared session's link (ao-app://share/<orgId>/<token>) the renderer has
+// not taken yet: one that arrived before the window was ready waits here.
+let pendingShareLink: string | undefined;
+
+ipcMain.handle("cloud:takePendingShareLink", () => {
+	const link = pendingShareLink;
+	pendingShareLink = undefined;
+	return link ?? null;
+});
+
+function isShareDeepLink(raw: string): boolean {
+	try {
+		const url = new URL(raw);
+		return url.protocol === "ao-app:" && url.hostname === "share";
+	} catch {
+		return false;
+	}
+}
+
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	focusCloudWindow();
+	// A shared cloud session: the renderer redeems it and opens the session.
+	if (isShareDeepLink(url)) {
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openShareLink", url);
+		else pendingShareLink = url;
+		return;
+	}
 	// Stripe Checkout and the Customer Portal return here (via the control
 	// plane's /billing/return page): open Settings on Billing, which re-reads
 	// the plan when it mounts.

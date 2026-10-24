@@ -894,7 +894,7 @@ func createSessionTx(
 	}
 	if input.Prompt != "" {
 		event, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
+			ctx, tx, orgID, session.ID, actorUserID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
 		)
 		if err != nil {
 			return domain.Session{}, err

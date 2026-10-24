@@ -92,6 +92,12 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, r, http.StatusConflict, "SESSION_TERMINATED", "This session was deleted. Restore it to continue.")
 	case errors.Is(err, postgres.ErrConflict):
 		writeError(w, r, http.StatusConflict, "conflict", "The resource conflicts with an existing record.")
+	case errors.Is(err, postgres.ErrComposerLocked):
+		writeError(w, r, http.StatusConflict, "COMPOSER_LOCKED",
+			"Someone else is writing to the agent right now. Request a turn to go next.")
+	case errors.Is(err, postgres.ErrComposerLeaseLost):
+		writeError(w, r, http.StatusConflict, "COMPOSER_LEASE_LOST",
+			"Your turn to write to the agent ended. Request a turn to write again.")
 	case errors.Is(err, postgres.ErrTurnFinished):
 		writeError(w, r, http.StatusConflict, "TURN_FINISHED", "The turn is already finished.")
 	case errors.Is(err, postgres.ErrStaleTurn):
