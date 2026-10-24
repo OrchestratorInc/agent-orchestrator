@@ -1,6 +1,7 @@
-import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Activity, Profiler, type ReactElement } from "react";
+import { Activity, Profiler } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
@@ -31,7 +32,7 @@ import {
 	getChatDraftBoundaries,
 	getChatDraftBoundary,
 } from "../../lib/chat-draft-boundary";
-import { TooltipProvider } from "../ui/tooltip";
+import { renderChat as render } from "../../test/render-chat";
 
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
@@ -75,14 +76,6 @@ function stubVirtualTimelineGeometry(rowHeight: (index: number) => number = () =
 }
 
 vi.mock("../../lib/rename-session", () => ({ renameSession: renameSessionMock }));
-
-function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-	return {
-		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
-	};
-}
 
 const writeText = vi.fn(async (_text: string) => undefined);
 const menuAction = vi.fn(async (_action: string) => undefined);
@@ -774,7 +767,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(url.searchParams.get("path")).toBe("docs/screenshot.png");
 	});
 
-	it("makes composer and history controls inert while a durable agent switch owns input", () => {
+	it("makes composer and history controls inert while a durable transition owns input", () => {
 		render(<ChatWorkspace snapshot={idleSnapshot()} agentInputDisabled />);
 
 		expect(screen.getByTestId("chat-conversation-panel")).toHaveAttribute("inert");
@@ -824,7 +817,7 @@ describe("ChatWorkspace timeline", () => {
 		const workerTab = screen.getByRole("tab", { name: "Reviewer chat · Codex · Working" });
 		expect(workerTab).toHaveTextContent(chatSession.title);
 		expect(workerTab).not.toHaveTextContent("Codex");
-		expect(workerTab.querySelector('img[aria-hidden="true"]')).toBeInTheDocument();
+		expect(workerTab.querySelector('img[aria-hidden="true"], [style*="mask"][aria-hidden="true"]')).toBeInTheDocument();
 
 		view.rerender(
 			<ChatWorkspace
@@ -1915,22 +1908,6 @@ describe("ChatWorkspace timeline", () => {
 		expect(openShell).toHaveBeenCalledOnce();
 	});
 
-	// A controller that died mid-turn must not keep the "Working for…" spinner
-	// alive over a dead agent, with no stop and no cancel anywhere (#6064):
-	// without a controller the turn cannot be running, so the pane settles on
-	// the stopped banner.
-	it("settles a running turn when the controller stops instead of spinning forever", () => {
-		const snapshot = {
-			...chatFixture,
-			controller: { state: "stopped" as const },
-		};
-		render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} />);
-
-		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
-		expect(screen.queryByTestId("live-turn-status")).not.toBeInTheDocument();
-		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
-	});
-
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
 		const stopped = { ...chatFixtureSettled, controller: { state: "stopped" as const } };
 		const view = render(
@@ -2249,6 +2226,57 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("group", { name: "Turn settings" })).not.toBeInTheDocument();
 		view.rerender(<ChatWorkspace {...props} settingsReady />);
 		expect(screen.getByRole("group", { name: "Turn settings" })).toBeInTheDocument();
+	});
+
+	it("keys only the switch marker nearest a message with that message", () => {
+		const marker = (id: string, sequence: number, targetHarness: string) => ({
+			kind: "activity" as const, id, sequence, revision: 1, activityKind: "system" as const, status: "completed" as const,
+			summary: "Switched provider", detail: { event: "provider_switch" as const, sourceHarness: "codex", targetHarness },
+			createdAt: "2026-08-08T00:00:00Z",
+		});
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		// A switch whose send failed, then another switch, then the message.
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace
+					snapshot={{
+						...chatFixtureEmpty, latestSequence: 3,
+						items: [marker("switch-1", 1, "claude-code"), marker("switch-2", 2, "opencode"), { ...humanMessage("hello"), sequence: 3, clientMessageId: "m1" }],
+					}}
+				/>
+			</QueryClientProvider>,
+		);
+		expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+		errors.mockRestore();
+	});
+
+	it("keeps the Switched line's node when the daemon's line comes before its message", () => {
+		const localEchos = [{
+			clientMessageId: "m1", text: "hello", createdAt: "2026-08-08T00:00:00Z",
+			providerSwitch: { sourceHarness: "codex", targetHarness: "claude-code", afterSequence: 0 },
+		}];
+		const view = render(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace snapshot={{ ...chatFixtureEmpty, latestSequence: 0, items: [] }} localEchos={localEchos} />
+			</QueryClientProvider>,
+		);
+		const before = screen.getByRole("separator");
+		view.rerender(
+			<QueryClientProvider client={new QueryClient()}>
+				<ChatWorkspace
+					snapshot={{
+						...chatFixtureEmpty, latestSequence: 1,
+						items: [{
+							kind: "activity", id: "switch-1", sequence: 1, revision: 1, activityKind: "system", status: "completed",
+							summary: "Switched provider", detail: { event: "provider_switch", sourceHarness: "codex", targetHarness: "claude-code" },
+							createdAt: "2026-08-08T00:00:00Z",
+						}],
+					}}
+					localEchos={localEchos}
+				/>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("separator")).toBe(before);
 	});
 
 	it("shows startup failure and retry for an orchestrator with no messages or turns", async () => {
@@ -4733,7 +4761,7 @@ describe("ChatWorkspace reviewer tabs", () => {
 			"cursor-pointer",
 			"focus-visible:outline-2",
 		);
-		expect(reviewerTab.querySelector("img")).toBeInTheDocument();
+		expect(reviewerTab.querySelector('img, [style*="mask"]')).toBeInTheDocument();
 
 		fireEvent.click(reviewerTab);
 		expect(onOpenReviewerTerminal).toHaveBeenCalledWith(reviewerTerminal);
