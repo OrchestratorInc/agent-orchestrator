@@ -14,7 +14,15 @@ import (
 	"unicode/utf16"
 )
 
-const discoveryLauncherReadLimit = 64 << 10
+const (
+	discoveryLauncherReadLimit = 64 << 10
+	discoveryLauncherFileLimit = 32
+)
+
+type discoveryInspection struct {
+	active    map[string]bool
+	completed map[string]bool
+}
 
 // Agent installers can replace another tool's wrapper while retaining its name.
 // Inspect launchers without running even --version: a redirected probe can open
@@ -34,7 +42,8 @@ func verifyDiscoveryExecutable(ctx context.Context, agentID, binaryPath string) 
 	}
 	// Inspection follows symlinks internally. Keep the selected launcher path
 	// for execution so aliases retain argv[0] and package entry-point semantics.
-	verified, err := inspectDiscoveryExecutable(ctx, agentID, resolved, map[string]bool{})
+	inspection := &discoveryInspection{active: map[string]bool{}, completed: map[string]bool{}}
+	verified, err := inspectDiscoveryExecutable(ctx, agentID, resolved, inspection)
 	if err != nil {
 		return "", fmt.Errorf("%s model discovery: refusing executable %q: %w; repair or reinstall the intended agent's launcher", agentID, resolved, err)
 	}
@@ -109,7 +118,7 @@ var discoveryLauncherReference = regexp.MustCompile(`(?i)"[^"\r\n]+\.(?:exe|com|
 // targets so extensionless commands and paths containing spaces are checked too.
 var discoveryLauncherCommand = regexp.MustCompile(`(?i)^((?:exec|call)\s+|&\s*|\.\s+)?("[^"\r\n]+"|'[^'\r\n]+'|[^\s"'<>|&;]+)`)
 
-func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen map[string]bool) (bool, error) {
+func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspection *discoveryInspection) (verified bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -117,11 +126,22 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 	if err != nil {
 		return false, err
 	}
-	if seen[canonical] || len(seen) >= 8 {
+	if inspection.active[canonical] || len(inspection.active) >= 8 {
 		return false, fmt.Errorf("launcher chain is cyclic or too deep")
 	}
-	seen[canonical] = true
-	defer delete(seen, canonical)
+	if result, ok := inspection.completed[canonical]; ok {
+		return result, nil
+	}
+	if len(inspection.active)+len(inspection.completed) >= discoveryLauncherFileLimit {
+		return false, fmt.Errorf("launcher exceeds total file inspection limit (%d)", discoveryLauncherFileLimit)
+	}
+	inspection.active[canonical] = true
+	defer func() {
+		delete(inspection.active, canonical)
+		if err == nil {
+			inspection.completed[canonical] = verified
+		}
+	}()
 	owner := discoveryExecutableOwner(canonical)
 	if agentID == "opencode-v2" {
 		agentID = "opencode"
@@ -129,7 +149,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 	if owner != "" && owner != agentID {
 		return false, fmt.Errorf("launcher targets %s instead of %s", owner, agentID)
 	}
-	verified := owner == agentID
+	verified = owner == agentID
 	file, err := os.Open(canonical)
 	if err != nil {
 		return false, err
@@ -190,8 +210,13 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 			explicitInvocation = command[1] != ""
 			references = append(references, invokedTarget)
 		}
+		lineReferences := make(map[string]bool, len(references))
 		for _, reference := range references {
 			reference = strings.Trim(reference, `"'`)
+			if lineReferences[reference] {
+				continue
+			}
+			lineReferences[reference] = true
 			targetOwner := discoveryExecutableOwner(reference)
 			if targetOwner != "" && targetOwner != agentID {
 				return false, fmt.Errorf("launcher redirects to %s instead of %s", targetOwner, agentID)
@@ -216,7 +241,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, seen 
 				}
 				continue
 			}
-			targetVerified, inspectErr := inspectDiscoveryExecutable(ctx, agentID, target, seen)
+			targetVerified, inspectErr := inspectDiscoveryExecutable(ctx, agentID, target, inspection)
 			if inspectErr != nil {
 				return false, inspectErr
 			}
