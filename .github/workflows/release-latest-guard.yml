@@ -14,7 +14,7 @@ jobs:
     # Stable /releases/latest only exists on the canonical repo. Forks copy
     # this workflow (including the hourly schedule) but have no desktop
     # release, so the check fails red every hour.
-    if: github.repository == 'Untrivial-ai/agent-orchestrator'
+    if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -64,7 +64,7 @@ jobs:
     # frontend/package.json's version feeds CFBundleShortVersionString and the
     # in-app Settings -> Updates display, so main must not fall behind the
     # latest stable tag (see #4467).
-    if: github.repository == 'Untrivial-ai/agent-orchestrator'
+    if: ${{ !github.event.repository.fork }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
