@@ -66,6 +66,9 @@ func TestDiscoveryExecutableRejectsForeignAgent(t *testing.T) {
 		{"cmd shell foreign command", "grok", "grok.cmd", "cmd /c autohand %*\n"},
 		{"cmd keep-open foreign command", "grok", "grok.ps1", "cmd /k \"autohand %*\"\n"},
 		{"cmd quoted chained foreign command", "grok", "grok.cmd", "cmd /c \"echo ready && autohand\"\n"},
+		{"UTF8 BOM PowerShell redirect", "grok", "grok.ps1", "\ufeff& autohand @args\n"},
+		{"UTF8 BOM npx redirect", "grok", "grok.ps1", "\ufeffnpx autohand @args\n"},
+		{"UTF8 BOM cmd redirect", "grok", "grok.ps1", "\ufeffcmd /c autohand\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)
@@ -108,6 +111,8 @@ func TestDiscoveryExecutableAllowsAgentOwnedLaunchers(t *testing.T) {
 		{"cmd shell options", "grok", "grok.cmd", "cmd /d /s /k \"%~dp0grok.exe\" %*\n"},
 		{"cmd executable path", "grok", "grok.cmd", "\"C:/Windows/System32/cmd.exe\" /c \"%~dp0grok.exe\" %*\n"},
 		{"cmd builtin before agent", "grok", "grok.cmd", "cmd /c \"echo ready && grok\"\n"},
+		{"UTF8 BOM PowerShell launcher", "grok", "grok.ps1", "\ufeff& \"$PSScriptRoot/grok.exe\" @args\n"},
+		{"UTF8 BOM shared PowerShell alias", "grok", "agent.ps1", "\ufeff& grok @args\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeDiscoveryLauncher(t, t.TempDir(), tc.filename, tc.body)

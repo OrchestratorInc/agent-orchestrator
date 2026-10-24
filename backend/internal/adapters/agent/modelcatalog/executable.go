@@ -204,6 +204,7 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		}
 		body = []byte(string(utf16.Decode(units)))
 	}
+	body = bytes.TrimPrefix(body, []byte{0xef, 0xbb, 0xbf})
 	if bytes.ContainsRune(body, '\x00') {
 		return false, fmt.Errorf("launcher is not inspectable text")
 	}
