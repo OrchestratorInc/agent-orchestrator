@@ -693,6 +693,63 @@ INSERT INTO model_usage_events (
 	}
 }
 
+// Break caught: a stored service tier dropped on insert, missing from the
+// backfill candidate (so a priority event is priced at standard), or a backfill
+// estimate made at one tier landing on a row that has since recorded another.
+func TestUsageServiceTierPersistsAndGuardsBackfill(t *testing.T) {
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessCodex)
+	now := time.Unix(1700000000, 0).UTC()
+	source := seedUsageSource(t, s, sess, now)
+	event := domain.ModelUsageEvent{
+		ProviderID:        domain.UsageProviderOpenAI,
+		BillingProviderID: "openai", BillingProviderSource: domain.UsageBillingProviderObserved,
+		ModelID:         "gpt-test",
+		MeasurementKind: domain.UsageMeasurementNativeReported,
+		Tokens:          canonicalUsageTokens(3, 1, 2, 2),
+		ServiceTier:     "priority",
+		Costs:           domain.UsageEventCosts{PricingVersion: "old"},
+		SourceEventKey:  "event-priority",
+	}
+	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}))
+
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
+	mustNoError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+	var stored string
+	mustNoError(t, raw.QueryRow(`SELECT service_tier FROM model_usage_events WHERE source_event_key = 'event-priority'`).Scan(&stored))
+	if stored != "priority" {
+		t.Fatalf("stored service tier = %q, want priority", stored)
+	}
+
+	candidates, err := s.ListUsageCostCandidates(ctx, "openai", "active", 0)
+	mustNoError(t, err)
+	if len(candidates) != 1 || candidates[0].ServiceTier != "priority" {
+		t.Fatalf("candidates = %+v, want one priority candidate", candidates)
+	}
+	total := int64(42)
+	stale := candidates[0]
+	stale.ServiceTier = ""
+	applied, err := s.ApplyUsageCostUpdates(ctx, []domain.UsageCostUpdate{{
+		Candidate: stale, Costs: domain.UsageEventCosts{EstimatedCostNanos: &total, PricingVersion: "active"},
+	}}, now)
+	mustNoError(t, err)
+	if applied != 0 {
+		t.Fatalf("update with a different tier applied %d rows, want 0", applied)
+	}
+	applied, err = s.ApplyUsageCostUpdates(ctx, []domain.UsageCostUpdate{{
+		Candidate: candidates[0], Costs: domain.UsageEventCosts{EstimatedCostNanos: &total, PricingVersion: "active"},
+	}}, now)
+	mustNoError(t, err)
+	if applied != 1 {
+		t.Fatalf("update at the stored tier applied %d rows, want 1", applied)
+	}
+}
+
 // Break caught: per-row enrichment transactions would emit duplicate CDC
 // invalidations for one binding, while a partial transaction could expose only
 // some estimates from one bounded batch.

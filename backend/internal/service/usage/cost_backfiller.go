@@ -242,6 +242,7 @@ func (b *CostBackfiller) process(ctx context.Context, job costBackfillJob) error
 					MeasurementKind:   candidate.MeasurementKind,
 					Tokens:            candidate.Tokens,
 					ProviderUsageJSON: candidate.ProviderUsageJSON,
+					ServiceTier:       candidate.ServiceTier,
 					SourceEventKey:    candidate.SourceEventKey,
 				}
 				estimate, estimateErr := job.snapshot.Estimate(event)
