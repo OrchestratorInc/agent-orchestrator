@@ -101,7 +101,8 @@ func TestConfigureRejectsPromptExceedingEnvBound(t *testing.T) {
 	}
 }
 
-func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
+func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
+	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
 		t.Fatalf("empty settings options = %#v, want nil", got)
 	}
 	if got := sessionOptions(ports.ChatTurnSettings{Model: "  "}); got != nil {
