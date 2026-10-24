@@ -206,6 +206,7 @@ var shippedMigrations = map[int64]string{
 	202: "0202_allow_memcode_harness.sql",
 	// 0203 was an unmerged Hermes candidate; retain its reservation.
 	206: "0206_awake.sql",
+	207: "0207_normalize_registered_at.sql",
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
 	212: "0212_session_runtime_released.sql",
