@@ -32,9 +32,7 @@ export function terminalCommand(
 	if (platform === "win32") {
 		// The launcher runs with null stdio, so a direct cmd.exe would get no
 		// console. start opens a new console window with real input and output.
-		const shell = env.ComSpec || env.COMSPEC || "cmd.exe";
-		const inner = `${windowsCommandArg(shell)} /d /s /v:off /k "${argv.map(windowsCommandArg).join(" ")}"`;
-		return { command: shell, args: ["/d", "/s", "/v:off", "/c", `"start "" ${inner}"`] };
+		return { command: env.ComSpec || env.COMSPEC || "cmd.exe", args: ["/d", "/s", "/v:off", "/c", `"start "" ${argv.map(windowsCommandArg).join(" ")}"`] };
 	}
 	for (const launcher of LINUX_TERMINAL_LAUNCHERS) {
 		for (const dir of [...(env.PATH || "").split(path.posix.delimiter).filter(Boolean), "/usr/local/bin", "/usr/bin"]) {
