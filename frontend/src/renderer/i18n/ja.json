@@ -3532,5 +3532,6 @@
 	"chat.shared.terminalRefused": "ほかの人がエージェントに書き込み中です。入力するにはチャットで順番を待ってください。",
 	"chat.shared.draftOf": "{{name}} の下書き",
 	"shareLink.expired": "このリンクは期限切れか取り消されています。新しいリンクを依頼してください。",
-	"shareLink.notForYou": "このリンクはほかの人向けです。送信者にあなたのアカウントと共有するよう依頼してください。"
+	"shareLink.notForYou": "このリンクはほかの人向けです。送信者にあなたのアカウントと共有するよう依頼してください。",
+	"chat.shared.checkingAccess": "このセッションでできることを確認しています…"
 }

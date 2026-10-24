@@ -3597,5 +3597,6 @@
 	"chat.shared.terminalRefused": "Otra persona está escribiendo al agente. Pide turno en el chat para escribir.",
 	"chat.shared.draftOf": "Borrador de {{name}}",
 	"shareLink.expired": "Este enlace caducó o se revocó. Pide uno nuevo.",
-	"shareLink.notForYou": "Este enlace es para otras personas. Pide a quien lo envió que lo comparta con tu cuenta."
+	"shareLink.notForYou": "Este enlace es para otras personas. Pide a quien lo envió que lo comparta con tu cuenta.",
+	"chat.shared.checkingAccess": "Comprobando qué puedes hacer en esta sesión…"
 }

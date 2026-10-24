@@ -3532,5 +3532,6 @@
 	"chat.shared.terminalRefused": "Jemand anderes schreibt gerade an den Agenten. Fordere im Chat eine Runde an, um zu tippen.",
 	"chat.shared.draftOf": "Entwurf von {{name}}",
 	"shareLink.expired": "Dieser Link ist abgelaufen oder wurde widerrufen. Bitte um einen neuen.",
-	"shareLink.notForYou": "Dieser Link ist für andere Personen. Bitte den Absender, ihn für dein Konto freizugeben."
+	"shareLink.notForYou": "Dieser Link ist für andere Personen. Bitte den Absender, ihn für dein Konto freizugeben.",
+	"chat.shared.checkingAccess": "Es wird geprüft, was du in dieser Sitzung tun darfst…"
 }

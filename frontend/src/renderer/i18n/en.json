@@ -3513,5 +3513,6 @@
 	"chat.shared.terminalRefused": "Someone else is writing to the agent. Request a turn in Chat to type.",
 	"chat.shared.draftOf": "{{name}}'s draft",
 	"shareLink.expired": "This link has expired or was revoked. Ask for a new one.",
-	"shareLink.notForYou": "This link is for other people. Ask its sender to share it with your account."
+	"shareLink.notForYou": "This link is for other people. Ask its sender to share it with your account.",
+	"chat.shared.checkingAccess": "Checking what this session lets you do…"
 }

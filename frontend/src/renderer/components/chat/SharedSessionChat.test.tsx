@@ -191,6 +191,24 @@ describe("shared session chat", () => {
 		renderSurface();
 		await waitFor(() => expect(lastProps()?.composerLockedPlaceholder).toBe("You can view this session but not write to the agent"));
 	});
+
+	it("keeps a guest's chat box locked until the server says what this session lets them do", async () => {
+		const guestSession = { ...session, cloud: { ...session.cloud, shared: true } };
+		mocks.live = undefined;
+		const { rerender } = renderSurface(guestSession);
+		await waitFor(() => expect(lastProps()?.composerLockedPlaceholder).toBe("Checking what this session lets you do…"));
+		mocks.live = liveState({}, [{ ...me, role: "editor" }, alice]);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={guestSession} /></QueryClientProvider>);
+		await waitFor(() => expect(lastProps()?.composerLockedPlaceholder).toBeUndefined());
+	});
+
+	it("leaves the person's own session open before its live state arrives", async () => {
+		mocks.live = undefined;
+		renderSurface();
+		await waitFor(() => expect(lastProps()).toBeDefined());
+		expect(lastProps()?.composerLockedPlaceholder).toBeUndefined();
+	});
 });
 
 function lease(overrides: Partial<ComposerLeaseState> = {}): ComposerLeaseState {

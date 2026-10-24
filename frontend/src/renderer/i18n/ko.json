@@ -3532,5 +3532,6 @@
 	"chat.shared.terminalRefused": "다른 사람이 에이전트에게 쓰는 중입니다. 입력하려면 채팅에서 차례를 요청하세요.",
 	"chat.shared.draftOf": "{{name}} 님의 초안",
 	"shareLink.expired": "이 링크는 만료되었거나 취소되었습니다. 새 링크를 요청하세요.",
-	"shareLink.notForYou": "이 링크는 다른 사람용입니다. 보낸 사람에게 내 계정으로 공유해 달라고 요청하세요."
+	"shareLink.notForYou": "이 링크는 다른 사람용입니다. 보낸 사람에게 내 계정으로 공유해 달라고 요청하세요.",
+	"chat.shared.checkingAccess": "이 세션에서 할 수 있는 작업을 확인하는 중…"
 }
