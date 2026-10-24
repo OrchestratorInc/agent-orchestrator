@@ -86,11 +86,15 @@ var discoveryExecutableOwners = map[string]string{
 func discoveryExecutableOwner(path string) string {
 	path = strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
 	path = strings.ReplaceAll(path, "%~dp0", "/")
+	packageOwner := discoveryPackageOwner(path)
 	name := path[strings.LastIndex(path, "/")+1:]
 	for _, ext := range []string{".exe", ".com", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs", ".py"} {
 		name = strings.TrimSuffix(name, ext)
 	}
 	if owner := discoveryExecutableOwners[name]; owner != "" {
+		if name == "pi-coding-agent" && packageOwner == "omp" {
+			return packageOwner
+		}
 		return owner
 	}
 	if match := discoveryVersionedExecutable.FindStringSubmatch(name); len(match) > 1 {
@@ -101,13 +105,8 @@ func discoveryExecutableOwner(path string) string {
 	if name == "cmd" && !strings.HasSuffix(path, ".exe") {
 		return "command-code"
 	}
-	// npm wrappers launch cli.js/index.js inside an agent-owned package.
-	if index := strings.LastIndex(path, "/node_modules/"); index >= 0 {
-		for _, part := range strings.Split(path[index+len("/node_modules/"):], "/") {
-			if owner := discoveryExecutableOwners[strings.TrimPrefix(part, "@")]; owner != "" {
-				return owner
-			}
-		}
+	if packageOwner != "" {
+		return packageOwner
 	}
 	// Cursor's native installer retains an agent.ps1 entry point beside its
 	// cursor-agent launcher. Inspect it below even when its directory identifies
@@ -117,6 +116,39 @@ func discoveryExecutableOwner(path string) string {
 			if part == "cursor-agent" {
 				return "cursor"
 			}
+		}
+	}
+	return ""
+}
+
+func discoveryPackageOwner(path string) string {
+	path = strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
+	index := strings.LastIndex(path, "/node_modules/")
+	if index < 0 {
+		return ""
+	}
+	parts := strings.Split(path[index+len("/node_modules/"):], "/")
+	if strings.HasPrefix(parts[0], "@") && len(parts) > 1 {
+		// Scope is identity: OMP and Pi publish the same unscoped package name.
+		switch parts[0] + "/" + parts[1] {
+		case "@oh-my-pi/pi-coding-agent":
+			return "omp"
+		case "@mariozechner/pi-coding-agent":
+			return "pi"
+		case "@kilocode/cli":
+			return "kilocode"
+		case "@mimo-ai/cli":
+			return "mimo-code"
+		case "@factory/cli":
+			return "droid"
+		}
+		parts = parts[:2]
+	} else {
+		parts = parts[:1]
+	}
+	for _, part := range parts {
+		if owner := discoveryExecutableOwners[strings.TrimPrefix(part, "@")]; owner != "" {
+			return owner
 		}
 	}
 	return ""
@@ -186,6 +218,11 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 	if err != nil {
 		return false, err
 	}
+	// Extensionless npm bin entries are JavaScript applications too. Parsing
+	// their // comments and implementation as shell commands invents redirects.
+	if discoveryPackageOwner(canonical) == agentID && discoveryNodeShebang(body) {
+		return true, nil
+	}
 	// Native executables are opaque. Version managers can expose an agent-named
 	// symlink to a shared native shim, so retain the selected entry point as
 	// routing evidence. Known foreign canonical owners were rejected above;
@@ -212,6 +249,9 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 	body = bytes.TrimPrefix(body, []byte{0xef, 0xbb, 0xbf})
 	if bytes.ContainsRune(body, '\x00') {
 		return false, fmt.Errorf("launcher is not inspectable text")
+	}
+	if handled, managerErr := inspectDiscoveryManagerShim(ctx, agentID, path, body, inspection); handled {
+		return managerErr == nil, managerErr
 	}
 	variables := map[string]string{}
 	variableBytes := 0
@@ -317,6 +357,19 @@ func inspectDiscoveryExecutable(ctx context.Context, agentID, path string, inspe
 		}
 	}
 	return verified, nil
+}
+
+func discoveryNodeShebang(body []byte) bool {
+	line, _, _ := strings.Cut(string(body), "\n")
+	fields := strings.Fields(strings.TrimPrefix(strings.TrimSpace(line), "#!"))
+	if !bytes.HasPrefix(body, []byte("#!")) || len(fields) == 0 {
+		return false
+	}
+	program := fields[0]
+	if filepath.Base(program) == "env" && len(fields) > 1 {
+		program = fields[1]
+	}
+	return program == "node" || program == "bun" || filepath.Base(program) == "node" || filepath.Base(program) == "bun"
 }
 
 func discoveryLauncherTarget(launcher, reference string) string {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -57,20 +59,21 @@ func (r *recordingCommandRunner) Run(ctx context.Context, argv []string, stdout,
 
 func TestVerifierUsesAdapterResolvedBinaryWithoutAuthProbe(t *testing.T) {
 	t.Parallel()
+	binary := verifierBinaryFixture(t, "codex")
 	var authCalls atomic.Int32
 	runner := &recordingCommandRunner{}
 	verifier := NewVerifier(verifierResolver{
-		domain.HarnessCodex: verifierAgent{path: "/custom/bin/codex", authCalls: &authCalls},
+		domain.HarnessCodex: verifierAgent{path: binary, authCalls: &authCalls},
 	}, runner)
 
 	result, err := verifier.Verify(context.Background(), TargetCodex)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if result.ResolvedPath != "/custom/bin/codex" || result.Output != "codex-cli 1.2.3\n" {
+	if result.ResolvedPath != binary || result.Output != "codex-cli 1.2.3\n" {
 		t.Fatalf("result = %+v", result)
 	}
-	if !reflect.DeepEqual(runner.argv, []string{"/custom/bin/codex", "--version"}) {
+	if !reflect.DeepEqual(runner.argv, []string{binary, "--version"}) {
 		t.Fatalf("argv = %v, want exact resolved binary version probe", runner.argv)
 	}
 	if authCalls.Load() != 0 {
@@ -98,6 +101,7 @@ func TestVerifierRejectsMissingAdapterOrBinaryResolver(t *testing.T) {
 
 func TestVerifierBoundsVersionProbe(t *testing.T) {
 	t.Parallel()
+	binary := verifierBinaryFixture(t, "codex")
 	runner := &recordingCommandRunner{run: func(ctx context.Context, _ []string, _, _ io.Writer) error {
 		<-ctx.Done()
 		// The host runner kills the probe's process group at the deadline, so
@@ -105,7 +109,7 @@ func TestVerifierBoundsVersionProbe(t *testing.T) {
 		return errors.New("signal: killed")
 	}}
 	verifier := NewVerifier(verifierResolver{
-		domain.HarnessCodex: verifierAgent{path: "/custom/bin/codex", authCalls: &atomic.Int32{}},
+		domain.HarnessCodex: verifierAgent{path: binary, authCalls: &atomic.Int32{}},
 	}, runner)
 	verifier.timeout = 20 * time.Millisecond
 
@@ -151,11 +155,12 @@ func TestVerifierReportsIdentityResolutionTimeout(t *testing.T) {
 
 func TestVerifierKeepsNonTimeoutProbeFailure(t *testing.T) {
 	t.Parallel()
+	binary := verifierBinaryFixture(t, "codex")
 	runner := &recordingCommandRunner{run: func(context.Context, []string, io.Writer, io.Writer) error {
 		return errors.New("exit status 1")
 	}}
 	verifier := NewVerifier(verifierResolver{
-		domain.HarnessCodex: verifierAgent{path: "/custom/bin/codex", authCalls: &atomic.Int32{}},
+		domain.HarnessCodex: verifierAgent{path: binary, authCalls: &atomic.Int32{}},
 	}, runner)
 
 	_, err := verifier.Verify(context.Background(), TargetCodex)
@@ -169,6 +174,7 @@ func TestVerifierKeepsNonTimeoutProbeFailure(t *testing.T) {
 // let that first post-install verification succeed instead of killing it.
 func TestVerifierDefaultTimeoutAllowsSlowFirstLaunch(t *testing.T) {
 	t.Parallel()
+	binary := verifierBinaryFixture(t, "cursor-agent")
 	synctest.Test(t, func(t *testing.T) {
 		runner := &recordingCommandRunner{run: func(ctx context.Context, _ []string, stdout, _ io.Writer) error {
 			select {
@@ -180,15 +186,74 @@ func TestVerifierDefaultTimeoutAllowsSlowFirstLaunch(t *testing.T) {
 			}
 		}}
 		verifier := NewVerifier(verifierResolver{
-			domain.HarnessCursor: verifierAgent{path: "/home/test/.local/bin/cursor-agent", authCalls: &atomic.Int32{}},
+			domain.HarnessCursor: verifierAgent{path: binary, authCalls: &atomic.Int32{}},
 		}, runner)
 
 		result, err := verifier.Verify(t.Context(), TargetCursor)
 		if err != nil {
 			t.Fatalf("Verify: %v", err)
 		}
-		if result.ResolvedPath != "/home/test/.local/bin/cursor-agent" || result.Output != "2026.10.01-e373342\n" {
+		if result.ResolvedPath != binary || result.Output != "2026.10.01-e373342\n" {
 			t.Fatalf("result = %+v", result)
 		}
 	})
+}
+
+func verifierBinaryFixture(t *testing.T, name string) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), name+".exe")
+	if err := os.WriteFile(binary, []byte("MZ native fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return binary
+}
+
+func TestVerifierRejectsRedirectedVersionProbe(t *testing.T) {
+	for _, target := range []Target{TargetCursor, TargetCodex, TargetClaudeCode, TargetGrok} {
+		t.Run(string(target), func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), "agent.cmd")
+			if err := os.WriteFile(binary, []byte("@call autohand %*\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			runner := &recordingCommandRunner{}
+			verifier := NewVerifier(verifierResolver{domain.AgentHarness(target): verifierAgent{path: binary}}, runner)
+			result, err := verifier.Verify(t.Context(), target)
+			if err == nil || !strings.Contains(err.Error(), "autohand") {
+				t.Fatalf("Verify = %v, want refusal", err)
+			}
+			if result.ResolvedPath != binary {
+				t.Fatalf("diagnostic path = %q, want %q", result.ResolvedPath, binary)
+			}
+			if runner.argv != nil {
+				t.Fatalf("unsafe version command ran: %v", runner.argv)
+			}
+		})
+	}
+}
+
+func TestVerifierRechecksCachedPathBeforeEveryVersionProbe(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "cursor-agent.cmd")
+	native := filepath.Join(root, "cursor-agent.exe")
+	if err := os.WriteFile(native, []byte("MZ native fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("@\"%~dp0cursor-agent.exe\" %*\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingCommandRunner{}
+	verifier := NewVerifier(verifierResolver{domain.HarnessCursor: verifierAgent{path: binary}}, runner)
+	if _, err := verifier.Verify(t.Context(), TargetCursor); err != nil {
+		t.Fatal(err)
+	}
+	runner.argv = nil
+	if err := os.WriteFile(binary, []byte("@call autohand %*\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.Verify(t.Context(), TargetCursor); err == nil || !strings.Contains(err.Error(), "autohand") {
+		t.Fatalf("replaced cached launcher = %v", err)
+	}
+	if runner.argv != nil {
+		t.Fatal("version probe ran after launcher replacement")
+	}
 }
