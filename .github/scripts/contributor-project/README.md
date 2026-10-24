@@ -6,8 +6,8 @@ assignments or a promise of capacity.
 
 ## How the Project is fed
 
-The workflow runs hourly at minute 17, on opened, closed and reopened issues,
-and manually. It uses trusted default-branch code and skips sync until
+The workflow runs every 15 minutes and manually. Issue events are reconciled
+on the next scheduled run, rather than starting a full scan for every event. It uses trusted default-branch code and skips sync until
 `AO_CONTRIBUTOR_PROJECT_URL` is set. Pull requests run offline Python tests.
 
 Sync adds missing open issues, creates missing fields and area options, and
@@ -27,34 +27,45 @@ merged PRs in the past 90 days. `data/core-overrides.json` adds or excludes
 logins from that list; exclusion wins. Generated core and owner files stay in
 ignored `research/owners/`.
 
-CI caches one successful owner build per UTC day. A date-keyed cache restores
-the latest owners on later runs. Only scheduled and manual runs rebuild owners;
-issue-event runs restore the cache without rebuilding. A failed build emits an
-Actions warning and keeps restored owners, or leaves owners blank if none exist.
-Sync also warns when the owners file's `generated_at` is more than seven days
-old or invalid. Only `steps.owner-build.outcome == 'success'` saves today's cache,
-so failures retry on the next scheduled or manual run. The cache uses a `v2`
-prefix to bypass any failed attempts saved by the old workflow.
-Daily extraction reads public merged PRs, changed paths and reviews. The owner
-build reads blame from committed `data/blame-lines.json`. Both steps work with a
-shallow checkout. Extraction uses the workflow's `GITHUB_TOKEN`.
-Owner builds have a 15-minute timeout; failure still allows sync to continue.
+Owner builds and Project sync run as independent jobs with separate concurrency
+groups. A slow sync cannot displace a queued owner refresh. Both jobs use trusted
+default-branch code. Sync can use yesterday's owners while today's build runs.
+CI caches one successful owner build per UTC day, keyed by its scripts and data.
+Only successful builds save owner output. Failed builds retain restored owners;
+sync warns if their timestamp is invalid or older than seven days.
 
-`Sync record` stores the last area and owner text written by the bot as JSON.
-Sync can change a suggestion only when it is blank or equals its recorded bot
-value. Nonblank values without a record, and values changed by a human, stay.
-Before each suggestion write, sync rechecks the field, record and archive state,
-including items returned by an add when the item list lagged. Field and record
-writes are separate API calls, with the field written first. A crash before
-the record write leaves a nonblank value without a matching record. Sync treats
-it as human-set, so it needs manual clearing before the bot can manage it again.
-Writing the record first would also leave interrupted refreshes looking like
-human edits because the old field would differ from the new record.
+Merged-PR evidence is cached separately. Daily extraction reuses history outside
+a seven-day overlap, refreshes that overlap, and removes evidence older than 540
+days. A full refresh runs at least every 30 days, or with `--full-refresh`.
+Extraction pins its capture time and saves successful API pages across failed or
+timed-out attempts. The next owner job resumes the same requests instead of
+restarting the cold build. Evidence is saved even if extraction fails; owner
+output is saved only if the build succeeds. After extraction completes, temporary
+API pages and the progress marker are removed. Cached evidence contains public
+PR data, not credentials. Extraction uses the workflow's `GITHUB_TOKEN` and has
+a 15-minute timeout per attempt.
+
+Sync reserves enough writes to finish an item before starting it. Defaults are
+100 mutations per run and at least one second between mutations. Four scheduled
+runs allow at most 400 writes per hour; manual runs add to that total and may
+still be deferred by GitHub. A backfill continues over multiple runs, with each
+completed item already carrying its suggestions. Read requests are not included
+in the write budget. Human-edited fields are rechecked before writing.
+
+`Sync record` contains the last bot-written values and temporary `pending:`
+entries. Before changing suggestions, sync writes their targets as durable
+intent, then changes the fields, then finalizes the record. An interrupted run
+recognizes both the previous bot values and its pending targets. On the next run
+it adopts confirmed target values, clears pending entries, and resumes remaining
+work. Values changed to something else by a human are preserved. Area and owner
+intents share one record write per item, avoiding a record write for every field.
+The API has no transaction spanning these calls, so concurrent human edits can
+still race with the final writes.
 
 Closed issues in this repository are archived using the issue state returned
 in Project content. Before archiving, the bot writes `"bot_archived": "true"`
-in the item's `Sync record`, keeping its recorded suggestions. Every run,
-including hourly runs, unarchives OPEN issues with that mark and then clears
+in the item's `Sync record`, keeping its recorded suggestions. Every run
+unarchives OPEN issues with that mark and then clears
 the mark. Recovery does not depend on a queued `reopened` event surviving.
 If a run stops after recording intent or after unarchiving, the next run can
 finish recovery. Open issues archived by a human without that mark stay archived.
@@ -62,6 +73,18 @@ Archives made by older bot versions without the mark also stay archived.
 Archive writes recheck issue state, repository, archive state and record.
 Rechecks and writes are separate API calls, so concurrent human edits can race.
 Other repositories, PRs, assignees, labels, status and area evidence are left alone.
+
+Normal scans fetch active items and archived open items, skipping closed archives.
+The separate capacity count includes all items. At 40,000 total items, sync warns
+that the board needs rotation; GitHub allows 50,000 including archives. Sync refuses
+new additions when that capacity is reached. It never deletes archive history.
+
+Before the old board reaches capacity, create a private successor Project. Copy
+active issues and any human-set fields to it before enabling writes. Verify a dry
+run preserves those values, then switch `AO_CONTRIBUTOR_PROJECT_URL` to the new
+Project. Close the old Project and retain it as the historical archive. Existing
+nonblank fields without a Sync record are preserved, so copied human values are
+not adopted by the bot. Rotation is an explicit administrator operation.
 
 ## Setup and checks
 
@@ -103,10 +126,11 @@ agreement. This measurement uses 482 live title/body pairs and three routing
 reasons. Eight routes have no available text and count as unrouted in path-only
 coverage. Coverage among the 485 routes with text is 22.9%.
 
-To rebuild owners locally, delete `research/ownership-cache/` to refresh PR data,
-then run `python3 scripts/ownership_extract.py` and
+To rebuild owners locally, run `python3 scripts/ownership_extract.py` and
 `python3 scripts/build_owners.py`. Raw evidence and caches stay in ignored
-`research/`. Extraction fetches PRs merged in the past 540 days, six 90-day
+`research/`. Use `python3 scripts/ownership_extract.py --full-refresh` to force
+a full history refresh; retain the progress file and API cache to resume a
+failed attempt. Extraction fetches PRs merged in the past 540 days, six 90-day
 half-lives. A PR older than that window would carry less than 1/64 of its
 original churn weight. This keeps the full 90 days needed for core selection
 and recent PR/review metrics. Merge-date searches split into smaller windows
@@ -145,6 +169,12 @@ capture at `30723c0be55edde1a012a4cd3d25039c43002e26` and keeps that capture's
 build time. The daily extractor does not collect blame. Review and commit
 snapshot updates with map changes; add new areas to the snapshot before building.
 
-Rate limits retry once after `Retry-After`, or 60 seconds if absent. Transient
-failures retry once after 5 seconds. Persistent rate limits during apply return
-a partial summary; the next run resumes. Other persistent errors fail the run.
+Rate limits retry after `Retry-After`, the primary limit's reset time, or 60
+seconds if neither is available. A delay longer than 60 seconds defers work to a
+later run rather than sleeping through the job timeout. Transient failures retry
+once after five seconds. An exhausted write budget or persistent rate limit emits
+an explicit `complete: false` result with the reason and remaining item count,
+and exits 3. Completed runs exit 0; other errors retain their nonzero exit status.
+The workflow posts the JSON result to its job summary and annotates deferred work
+as a warning. It treats exit 3 as expected scheduled continuation; other failures
+still fail the job.

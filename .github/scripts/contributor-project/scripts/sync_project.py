@@ -575,7 +575,12 @@ def _retry_transient(reason: str) -> None:
 def _api_request(arguments: list[str], request: str | None = None) -> Any:
     # Rate limits and transient failures each get one retry of their own.
     rate_limit_retried = transient_retried = False
+    attempted = False
+    mutation = request is not None and json.loads(request).get("query", "").lstrip().startswith("mutation")
     while True:
+        if attempted and mutation and WRITE_BUDGET.get() is not None:
+            WRITE_BUDGET.get().consume()
+        attempted = True
         try:
             result = subprocess.run(["gh", "api", "--include", *arguments], input=request,
                                     capture_output=True, text=True, timeout=150, check=False)

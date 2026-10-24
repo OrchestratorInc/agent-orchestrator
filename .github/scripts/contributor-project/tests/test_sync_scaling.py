@@ -164,6 +164,18 @@ class SyncScalingTests(unittest.TestCase):
                 sync._graphql_payload("query { viewer { login } }", {})
         sleep.assert_not_called()
 
+    def test_mutation_retries_also_consume_the_write_budget(self):
+        from test_project_sync import response
+        budget = sync.WriteBudget(10)
+        token = sync.WRITE_BUDGET.set(budget)
+        try:
+            with patch.object(sync.subprocess, "run", side_effect=[response({"message": "busy"}, 503), response({"data": {"ok": True}})]), \
+                    patch.object(sync.time, "sleep"), patch.object(sync.sys, "stderr", io.StringIO()):
+                self.assertEqual(sync._graphql_payload("mutation { test }", {}), {"ok": True})
+            self.assertEqual(budget.used, 2)
+        finally:
+            sync.WRITE_BUDGET.reset(token)
+
 
 class ArchiveScanTests(unittest.TestCase):
     def test_reads_active_items_and_only_open_archives_with_global_capacity_count(self):
