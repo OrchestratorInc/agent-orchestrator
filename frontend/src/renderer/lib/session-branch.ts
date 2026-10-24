@@ -11,7 +11,9 @@ export function sessionBranchPresentation(session?: WorkspaceSession): { branch?
 			|| (!session.provisionSteps?.length && (session.provisionState === "provisioning" || session.provisionState === "failed")));
 	const pendingName = Boolean(session?.branchNaming && !session.isTerminated && session.provisionState !== "failed");
 	return {
-		branch: unfinished || pendingName ? undefined : session?.branch,
+		// The checked-out branch, once observed, over the branch the session
+		// started on: agents move to their own and stacked branches.
+		branch: unfinished || pendingName ? undefined : session?.branchState?.branch || session?.branch,
 		naming: pendingName || Boolean(unfinished && session?.provisionState !== "failed" && !session?.isTerminated
 			&& (session?.provisionState === "provisioning"
 				|| (session?.activity?.state !== "exited" && session?.statusReadiness !== "unavailable"))),

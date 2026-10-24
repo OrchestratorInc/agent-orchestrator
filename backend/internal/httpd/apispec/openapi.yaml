@@ -18676,6 +18676,8 @@ components:
       type: object
     SessionBranchState:
       properties:
+        branch:
+          type: string
         commits:
           type: integer
         remoteBranch:
