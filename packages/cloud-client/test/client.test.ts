@@ -6,14 +6,137 @@ import {
   createWorkerClient,
   type AgentProfile,
   type ClientEvent,
+  type CloudNotification,
+  type CloudNotificationEvent,
   type CurrentAccount,
   type CreateSessionInput,
   type StartSessionInterfaceTransitionInput,
   type PullRequestSummary,
+  type NotificationPage,
+  type NotificationEventPage,
   type SessionReviewState,
 } from "../src/index.js";
 
 describe("CloudClient", () => {
+  describe("notifications", () => {
+    const notification: CloudNotification = {
+      id: "notification-1",
+      orgId: "org/1",
+      recipientUserId: "user-1",
+      projectId: "project-1",
+      sessionId: "session-1",
+      source: "cloud",
+      type: "needs_input",
+      title: "Agent needs input",
+      body: "Choose the next step.",
+      status: "unread",
+      metadata: {},
+      createdAt: "2026-10-15T00:00:00Z",
+      updatedAt: "2026-10-15T00:00:00Z",
+    };
+    const event: CloudNotificationEvent = {
+      sequence: 42,
+      orgId: "org/1",
+      recipientUserId: "user-1",
+      kind: "notification_created",
+      eventId: "event-1",
+      notification,
+      createdAt: "2026-10-15T00:00:00Z",
+    };
+
+    it("requests a filtered inbox page with the server count and sequence", async () => {
+      const page: NotificationPage = { items: [notification], page: { hasMore: false, nextCursor: "final/cursor+" }, unreadCount: 7, latestSequence: 45 };
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(page));
+      const client = createCloudClient({ baseUrl: "https://cloud.test/", getAccessToken: () => "token", fetch: fetchMock });
+      const controller = new AbortController();
+
+      await expect(client.listNotifications("org/1", { status: "unread", limit: 25, cursor: "older/cursor+", signal: controller.signal })).resolves.toEqual(page);
+
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/notifications?status=unread&limit=25&cursor=older%2Fcursor%2B");
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "GET", signal: controller.signal });
+      expect(requestHeaders(fetchMock, 0).get("Authorization")).toBe("Bearer token");
+      expect(requestHeaders(fetchMock, 0).get("Accept")).toBe("application/json");
+    });
+
+    it("normalizes a null inbox without inventing pagination or unread totals", async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ items: null, page: { hasMore: false }, unreadCount: 0, latestSequence: 0 }));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+
+      await expect(client.listNotifications("org-1")).resolves.toEqual({ items: [], page: { hasMore: false }, unreadCount: 0, latestSequence: 0 });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org-1/notifications");
+    });
+
+    it("requests durable notification events after an exclusive sequence", async () => {
+      const page: NotificationEventPage = { items: [event], hasMore: true };
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(page));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+      const controller = new AbortController();
+
+      await expect(client.listNotificationEvents("org/1", { after: 41, signal: controller.signal })).resolves.toEqual(page);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/notification-events?after=41");
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "GET", signal: controller.signal });
+      expect(requestHeaders(fetchMock, 0).get("Accept")).toBe("application/json");
+    });
+
+    it("normalizes null event items and leaves an omitted sequence to the server", async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ items: null, hasMore: false }));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+
+      await expect(client.listNotificationEvents("org-1")).resolves.toEqual({ items: [], hasMore: false });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org-1/notification-events");
+    });
+
+    it("marks exactly one notification read and returns the server update count", async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ updated: 1 }));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+      const controller = new AbortController();
+
+      await expect(client.markNotificationRead("org/1", "notification/1", { signal: controller.signal })).resolves.toEqual({ updated: 1 });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/notifications/notification%2F1");
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "PATCH", body: '{"status":"read"}', signal: controller.signal });
+      expect(requestHeaders(fetchMock, 0).get("Content-Type")).toBe("application/json");
+    });
+
+    it("marks the inbox read with a bodyless request even when nothing changes", async () => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ updated: 0 }));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+      const controller = new AbortController();
+
+      await expect(client.markAllNotificationsRead("org/1", { signal: controller.signal })).resolves.toEqual({ updated: 0 });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/notifications/read-all");
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", signal: controller.signal });
+      expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
+      expect(requestHeaders(fetchMock, 0).has("Content-Type")).toBe(false);
+    });
+
+    const operations = [
+      ["list", (client: ReturnType<typeof createCloudClient>, signal?: AbortSignal) => client.listNotifications("org-1", { signal })],
+      ["events", (client: ReturnType<typeof createCloudClient>, signal?: AbortSignal) => client.listNotificationEvents("org-1", { signal })],
+      ["read one", (client: ReturnType<typeof createCloudClient>, signal?: AbortSignal) => client.markNotificationRead("org-1", "notification-1", { signal })],
+      ["read all", (client: ReturnType<typeof createCloudClient>, signal?: AbortSignal) => client.markAllNotificationsRead("org-1", { signal })],
+    ] as const;
+
+    it.each(operations)("preserves error envelopes for %s", async (_name, request) => {
+      const envelope = { error: "Not Found", code: "not_found", message: "The notification was not found.", requestId: "notification-request-1" };
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: async () => jsonResponse(envelope, 404) });
+
+      await expect(request(client)).rejects.toMatchObject({ name: "CloudApiError", status: 404, envelope, requestId: "notification-request-1" });
+    });
+
+    it.each(operations)("cancels %s before acquiring a token", async (_name, request) => {
+      const controller = new AbortController();
+      const cancelled = new Error("Account changed.");
+      controller.abort(cancelled);
+      const getAccessToken = vi.fn(() => "token");
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({}));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken, fetch: fetchMock });
+
+      await expect(request(client, controller.signal)).rejects.toBe(cancelled);
+      expect(getAccessToken).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("bounds fetch and preserves caller cancellation and idempotency headers", async () => {
     vi.useFakeTimers();
     try {
@@ -112,6 +235,30 @@ describe("CloudClient", () => {
     );
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
   });
+
+  describe("workspace checkout recovery", () => {
+    it.each([true, false])("requests workspace checkout and preserves requested=%s", async (requested) => {
+      const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ requested }));
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: fetchMock });
+      const controller = new AbortController();
+
+      await expect(client.requestWorkspaceCheckout("org/1", "session/1", { signal: controller.signal })).resolves.toEqual({ requested });
+
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://cloud.test/api/cloud/v1/orgs/org%2F1/sessions/session%2F1/workspace/checkout");
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: "{}", signal: controller.signal });
+      expect(requestHeaders(fetchMock, 0).get("Authorization")).toBe("Bearer token");
+      expect(requestHeaders(fetchMock, 0).get("Content-Type")).toBe("application/json");
+      expectTypeOf<Awaited<ReturnType<typeof client.requestWorkspaceCheckout>>>().toEqualTypeOf<{ requested: boolean }>();
+    });
+
+    it("preserves checkout failure details and the server request reference", async () => {
+      const envelope = { error: "Conflict", code: "WORKER_NOT_CONNECTED", message: "The worker is not connected.", requestId: "checkout-reference" };
+      const client = createCloudClient({ baseUrl: "https://cloud.test", getAccessToken: () => "token", fetch: async () => jsonResponse(envelope, 409) });
+
+      await expect(client.requestWorkspaceCheckout("org-1", "session-1")).rejects.toMatchObject({ name: "CloudApiError", status: 409, code: "WORKER_NOT_CONNECTED", envelope, requestId: "checkout-reference" });
+    });
+  });
+
   it("saves a GitHub token and validates repository write access for project creation", async () => {
     const requests: Array<{ url: string; method?: string; body?: string }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

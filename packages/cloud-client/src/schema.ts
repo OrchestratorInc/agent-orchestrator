@@ -55,6 +55,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/agent-logins/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Native login is opt-in. An empty harness list leaves existing connections and API-key setup available. */
+        get: operations["getAgentLoginCapabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-logins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Start or recover a personal isolated native login attempt. Never starts a project worker. */
+        post: operations["startAgentLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-logins/{loginId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        get: operations["getAgentLogin"];
+        put?: never;
+        post?: never;
+        /** @description Cancel only the login attempt and its temporary compute, never a user's session or current agent connection. */
+        delete: operations["cancelAgentLogin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-logins/{loginId}/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["submitAgentLoginCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/providers": {
         parameters: {
             query?: never;
@@ -389,7 +460,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Wake every paused sandbox in the organization.
+         * Wake the authenticated user's paused sandboxes in the organization.
          * @description Ask the reconciler to resume the user's idle-paused sandboxes.
          */
         post: operations["wakePausedSessions"];
@@ -548,6 +619,66 @@ export interface paths {
             cookie?: never;
         };
         get: operations["listSessionPullRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests/{number}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["mergePullRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-browser/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Probe browser state without starting Chromium. Unavailable relay returns 409 with Retry-After. */
+        get: operations["getAgentBrowserStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-browser/ws/cdp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Native viewer WebSocket authenticated by Authorization bearer header. */
+        get: operations["connectAgentBrowser"];
         put?: never;
         post?: never;
         delete?: never;
@@ -864,6 +995,124 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/checkout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request checkout and Setup recovery from the connected worker.
+         * @description The worker acknowledges this request immediately and retries workspace
+         *     startup only if checkout has not already completed. A successful request
+         *     does not mean that checkout or Setup has finished.
+         *
+         */
+        post: operations["requestWorkspaceCheckout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/review": {
+        parameters: {
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Provider-neutral workspace inventory and categorized changes relative to the session's compare base. The files inventory includes unchanged files; sections and summary describe the changes. The main repository's response may also list the session's additional repository checkouts. */
+        get: operations["getWorkspaceReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/review/file": {
+        parameters: {
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Read a workspace file and its bounded unified diff for the selected comparison scope. */
+        get: operations["getWorkspaceReviewFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/tree": {
+        parameters: {
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description List one directory level of Git-tracked and untracked, non-ignored workspace files. */
+        get: operations["getWorkspaceReviewTree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/search": {
+        parameters: {
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Search workspace file paths and text content, excluding binary files. */
+        get: operations["searchWorkspaceReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/files": {
         parameters: {
             query?: {
@@ -1123,6 +1372,26 @@ export interface paths {
         put?: never;
         /** @description The template's parameters with the given draft values applied. A template using Coder's dynamic parameters can declare a parameter only for certain values of another (for example a custom repository URL once "Other" is selected); evaluating with the draft values lists it, and each parameter carries Coder's diagnostics for its value. A template on Coder's classic parameter flow, or a Coder without dynamic parameters, answers with the same static parameters as the GET. 403 provider_forbidden for organizations without Coder; 404 coder_template_not_found for an unknown template; 422 validation_error for invalid values; 502 coder_unavailable when Coder cannot be read. */
         post: operations["evaluateCoderTemplateParameters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/agent-logins/{loginId}/runner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Internal login-only runner poll. Atomically consumes any encrypted one-time provider code. User and worker bearers are not accepted. Responses use Cache-Control no-store. */
+        get: operations["pollAgentLoginRunner"];
+        put?: never;
+        /** @description Report bounded provider instructions or a completed native credential. Completion validates and encrypts the credential, then atomically promotes it only while this attempt remains active and current. No project or worker access is granted. */
+        post: operations["reportAgentLoginRunner"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2552,7 +2821,7 @@ export interface components {
             text: string;
             model?: string;
             /** @enum {string} */
-            reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
             mode?: components["schemas"]["SessionMode"];
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
@@ -2569,6 +2838,9 @@ export interface components {
             defaultEffort?: string;
         };
         ChatModelsResponse: {
+            modes?: string[];
+            model?: string;
+            reasoningEffort?: string;
             models: components["schemas"]["ChatModel"][];
         };
         SendMessageInput: {
@@ -2914,7 +3186,7 @@ export interface components {
             deniedCommands: string[];
             /** @description Initial reasoning effort; empty uses the harness default. */
             reasoningEffort?: string;
-            /** @description Explicit sandbox provider override. If omitted, the control plane resolves the user's preference or deployment default. */
+            /** @description Requested sandbox provider. An auto-linked worker inherits its active orchestrator's provider; otherwise a project's configured provider takes precedence over this value. If neither selects a provider and this field is omitted, the organization's default is used. */
             provider?: string;
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
@@ -2988,6 +3260,8 @@ export interface components {
         };
         PullRequestReviewCommentLink: {
             url?: string;
+            reviewId?: string;
+            body?: string;
             file?: string;
             line?: number;
             autoInjectReview: boolean;
@@ -3013,6 +3287,7 @@ export interface components {
             decision: components["schemas"]["ReviewDecision"];
             hasUnresolvedHumanComments: boolean;
             unresolvedBy: components["schemas"]["PullRequestUnresolvedReviewer"][];
+            resolvedBy?: components["schemas"]["PullRequestUnresolvedReviewer"][];
             reviews: components["schemas"]["PullRequestSubmittedReview"][];
         };
         PullRequestConflictFile: {
@@ -3078,6 +3353,7 @@ export interface components {
         AOReviewState: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
         AOReviewRun: {
             id: string;
+            reviewerTerminalId?: string;
             reviewId: string;
             sessionId: string;
             batchId: string;
@@ -3114,6 +3390,30 @@ export interface components {
             availableReviewerHarnesses: components["schemas"]["CloudReviewerHarness"][];
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
+        };
+        MergePullRequestInput: {
+            prUrl: string;
+            expectedHeadSha: string;
+        };
+        MergePullRequestResponse: {
+            /** @enum {string} */
+            status: "merge_accepted";
+        };
+        AgentBrowserStats: {
+            running?: boolean;
+            tabs?: ({
+                id?: string;
+                title?: string;
+                url?: string;
+            } & {
+                [key: string]: unknown;
+            })[];
+            owner?: string;
+            viewers?: {
+                [key: string]: unknown;
+            }[];
+        } & {
+            [key: string]: unknown;
         };
         UserMessageEvent: {
             sessionId: string;
@@ -3319,7 +3619,19 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ChatActivityEvent"] | components["schemas"]["TurnCapabilitiesEvent"] | components["schemas"]["ApprovalRequestedEvent"] | components["schemas"]["ApprovalDecidedEvent"] | components["schemas"]["ScriptStepEvent"];
+        /** @description The project's Setup outcome, outside any agent turn, in session replay history. */
+        WorkspaceSetupEvent: {
+            /** Format: uuid */
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "workspace.setup";
+            payload: components["schemas"]["WorkerSetupPayload"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ChatActivityEvent"] | components["schemas"]["TurnCapabilitiesEvent"] | components["schemas"]["ApprovalRequestedEvent"] | components["schemas"]["ApprovalDecidedEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["WorkspaceSetupEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -3338,6 +3650,113 @@ export interface components {
             /** @description Lifetime in seconds. */
             expiresIn: number;
             scopes: components["schemas"]["TerminalScope"][];
+        };
+        WorkspaceCheckoutResponse: {
+            requested: boolean;
+        };
+        /**
+         * @default combined
+         * @enum {string}
+         */
+        WorkspaceReviewScope: "combined" | "committed" | "staged" | "unstaged" | "untracked";
+        /** @enum {string} */
+        WorkspaceReviewStatus: "unmodified" | "modified" | "added" | "deleted" | "renamed" | "copied" | "untracked";
+        WorkspaceReviewFileSummary: {
+            path: string;
+            previousPath?: string;
+            status: components["schemas"]["WorkspaceReviewStatus"];
+            additions: number;
+            deletions: number;
+            /** Format: int64 */
+            size: number;
+            binary: boolean;
+            editable: boolean;
+            fileFingerprint: string;
+        };
+        WorkspaceReviewResponse: {
+            workspaceVersion: string;
+            compareBaseSha?: string;
+            compareBaseRef?: string;
+            /** @enum {string} */
+            compareMode?: "base" | "head_fallback";
+            /** @description The complete Git-visible inventory, including unchanged files. */
+            files: components["schemas"]["WorkspaceReviewFileSummary"][];
+            truncated: boolean;
+            sections: {
+                staged: components["schemas"]["WorkspaceReviewFileSummary"][];
+                unstaged: components["schemas"]["WorkspaceReviewFileSummary"][];
+                untracked: components["schemas"]["WorkspaceReviewFileSummary"][];
+                committed: components["schemas"]["WorkspaceReviewFileSummary"][];
+            };
+            commits: {
+                sha: string;
+                subject: string;
+                author: string;
+                /** Format: date-time */
+                timestamp: string;
+                files: components["schemas"]["WorkspaceReviewFileSummary"][];
+            }[];
+            summary: {
+                files: number;
+                additions: number;
+                deletions: number;
+            };
+            ahead?: number;
+            behind?: number;
+            /** @description The session's checkouts; carried by the main repository's review. */
+            repositories?: components["schemas"]["WorkspaceRepository"][];
+        };
+        WorkspaceReviewFileResponse: {
+            path: string;
+            previousPath?: string;
+            status: components["schemas"]["WorkspaceReviewStatus"];
+            additions: number;
+            deletions: number;
+            /** Format: int64 */
+            size: number;
+            binary: boolean;
+            editable: boolean;
+            fileFingerprint: string;
+            deleted: boolean;
+            imageMediaType?: string;
+            content: string;
+            contentTruncated: boolean;
+            diff: string;
+            diffTruncated: boolean;
+            compareBaseSha?: string;
+            compareBaseRef?: string;
+            /** @enum {string} */
+            compareMode?: "base" | "head_fallback";
+            workspaceVersion: string;
+            historical?: boolean;
+        };
+        WorkspaceReviewTreeResponse: {
+            path: string;
+            entries: {
+                name: string;
+                path: string;
+                /** @enum {string} */
+                type: "file" | "dir";
+                status?: components["schemas"]["WorkspaceReviewStatus"];
+                hasChanges?: boolean;
+                /** Format: int64 */
+                size?: number;
+                binary?: boolean;
+            }[];
+            truncated: boolean;
+        };
+        WorkspaceReviewSearchResponse: {
+            query: string;
+            results: {
+                path: string;
+                status: components["schemas"]["WorkspaceReviewStatus"];
+                /** Format: int64 */
+                size: number;
+                binary: boolean;
+                fileFingerprint: string;
+            }[];
+            nextCursor?: string;
+            truncated: boolean;
         };
         WorkspaceEntry: {
             name: string;
@@ -3425,6 +3844,54 @@ export interface components {
             durableRoot?: string;
             endpointServiceName?: string;
             region?: string;
+        };
+        AgentLogin: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            harness: "claude-code" | "codex";
+            /** @enum {string} */
+            status: "starting" | "waiting" | "connecting" | "connected" | "failed" | "cancelled" | "expired";
+            /** Format: date-time */
+            expiresAt: string;
+            /** Format: uri */
+            authorizationUrl?: string;
+            userCode?: string;
+            requiresCode?: boolean;
+            message?: string;
+        };
+        AgentLoginRunnerState: {
+            /** @enum {string} */
+            harness: "claude-code" | "codex";
+            /** @enum {string} */
+            status: "starting" | "waiting" | "connecting" | "connected" | "failed" | "cancelled" | "expired";
+            /** Format: date-time */
+            expiresAt: string;
+            /** @description One-time input consumed by this poll; must never be logged or persisted by the runner. */
+            code?: string;
+        };
+        AgentLoginRunnerUpdate: {
+            /** @enum {string} */
+            status: "waiting" | "connecting" | "connected" | "failed";
+            /** Format: uri */
+            authorizationUrl?: string;
+            userCode?: string;
+            requiresCode?: boolean;
+            /** @enum {string} */
+            credentialType?: "oauth_token" | "auth_json";
+            secret?: string;
+        };
+        AgentLoginResponse: {
+            login: components["schemas"]["AgentLogin"];
+        };
+        AgentLoginCapabilities: {
+            harnesses: ("claude-code" | "codex")[];
+        };
+        StartAgentLoginInput: {
+            /** Format: uuid */
+            orgId: string;
+            /** @enum {string} */
+            harness: "claude-code" | "codex";
         };
         PutAgentProviderConnectionInput: {
             /** @enum {string} */
@@ -3648,6 +4115,130 @@ export interface operations {
                     "application/json": {
                         organization: components["schemas"]["OrganizationMembership"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAgentLoginCapabilities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Native agents supported by this deployment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginCapabilities"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startAgentLogin: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartAgentLoginInput"];
+            };
+        };
+        responses: {
+            /** @description Login accepted or recovered. All login responses use Cache-Control no-store. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAgentLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's login status, never credentials or a pasted authorization code. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelAgentLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Login cancelled or already terminal. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    submitAgentLoginCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description One-time code accepted for the waiting native CLI. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -4588,6 +5179,81 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    mergePullRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergePullRequestInput"];
+            };
+        };
+        responses: {
+            /** @description Squash merge accepted; observe subsequent PR state to confirm completion. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergePullRequestResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAgentBrowserStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Browser stats; running false means no browser has started. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentBrowserStats"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    connectAgentBrowser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket viewer protocol upgrade accepted. */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSessionReviewState: {
         parameters: {
             query?: never;
@@ -5007,6 +5673,8 @@ export interface operations {
             content: {
                 "application/json": {
                     kind: components["schemas"]["TerminalKind"];
+                    /** @description Dedicated terminal identity, including a returned reviewer handle. */
+                    terminalId?: string;
                 };
             };
         };
@@ -5029,6 +5697,7 @@ export interface operations {
                 ticket: string;
                 after?: number;
                 kind: components["schemas"]["TerminalKind"];
+                terminalId?: string;
             };
             header?: never;
             path?: never;
@@ -5042,6 +5711,148 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    requestWorkspaceCheckout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Whether the worker accepted the workspace checkout request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceCheckoutResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getWorkspaceReview: {
+        parameters: {
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workspace review snapshot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceReviewResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getWorkspaceReviewFile: {
+        parameters: {
+            query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+                path: string;
+                scope?: components["schemas"]["WorkspaceReviewScope"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file contents, comparison metadata, and unified diff. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceReviewFileResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getWorkspaceReviewTree: {
+        parameters: {
+            query?: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+                path?: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One directory's files and subdirectories. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceReviewTreeResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    searchWorkspaceReview: {
+        parameters: {
+            query: {
+                /** @description Which of the session's repository checkouts the request is about, by folder name or GitHub owner/name (see listWorkspaceRepositories). Absent means the main repository. Ignored when checking out a branch. */
+                repository?: components["parameters"]["WorkspaceRepository"];
+                query: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A bounded page of matching workspace files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceReviewSearchResponse"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -5504,6 +6315,54 @@ export interface operations {
                         parameters: components["schemas"]["CoderTemplateParameter"][];
                     };
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pollAgentLoginRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attempt state for this runner only. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginRunnerState"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    reportAgentLoginRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                loginId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentLoginRunnerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Runner update accepted. No credential is returned. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };

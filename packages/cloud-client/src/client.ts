@@ -1,5 +1,15 @@
 import type {
+  AgentLogin,
+  AgentLoginCapabilities,
+  StartAgentLoginInput,
   AgentProfile,
+  AgentBrowserStats,
+  CloudReviewerHarness,
+  HarnessInspectResponse,
+  HarnessStatus,
+  UpdateSessionPreferencesInput,
+  MergePullRequestInput,
+  MergePullRequestResponse,
   ClientEvent,
   ClientEventPage,
   ChatMessageInput,
@@ -28,6 +38,8 @@ import type {
   GitHubUserAuthorizationStart,
   GitHubUserConnection,
   IdempotentRequestOptions,
+  NotificationPage,
+  NotificationEventPage,
   OrganizationMembership,
   PaginationOptions,
   Project,
@@ -74,9 +86,15 @@ import type {
   WakePausedSessionsResponse,
   WorkspaceDiff,
   WorkspaceDiffFileDetail,
+  WorkspaceCheckoutResponse,
   WorkspaceEntryPage,
   WorkspaceFile,
   WorkspaceFileWriteInput,
+  WorkspaceReviewFileResponse,
+  WorkspaceReviewResponse,
+  WorkspaceReviewScope,
+  WorkspaceReviewSearchResponse,
+  WorkspaceReviewTreeResponse,
 } from "./types.js";
 
 type MaybePromise<T> = T | Promise<T>;
@@ -100,6 +118,7 @@ interface JSONRequestOptions extends RequestOptions {
   body?: unknown;
   idempotencyKey?: string;
   cache?: RequestCache;
+  redirect?: RequestRedirect;
 }
 
 export class CloudRequestTimeoutError extends Error {
@@ -562,6 +581,47 @@ export class CloudClient {
     );
   }
 
+  triggerSessionReviews(orgId: string, sessionId: string, options: RequestOptions = {}): Promise<SessionReviewState> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/reviews/trigger`), { method: "POST", signal: options.signal });
+  }
+
+  cancelSessionReviews(orgId: string, sessionId: string, options: RequestOptions = {}): Promise<SessionReviewState> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/reviews/cancel`), { method: "POST", signal: options.signal });
+  }
+
+  updateSessionPreferences(orgId: string, sessionId: string, input: UpdateSessionPreferencesInput, options: RequestOptions = {}): Promise<{ session: Session }> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/preferences`), { method: "PATCH", body: input, signal: options.signal });
+  }
+
+  inspectSessionReviewerHarnesses(orgId: string, sessionId: string, options: RequestOptions = {}): Promise<HarnessInspectResponse> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/reviewer-harnesses`), options);
+  }
+
+  installSessionReviewerHarness(orgId: string, sessionId: string, harness: CloudReviewerHarness, options: RequestOptions = {}): Promise<HarnessStatus> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/reviewer-harnesses/${encodeURIComponent(harness)}/install`), { method: "POST", signal: options.signal });
+  }
+
+  mergePullRequest(orgId: string, sessionId: string, number: number, input: MergePullRequestInput, options: RequestOptions = {}): Promise<MergePullRequestResponse> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/pull-requests/${encodeURIComponent(String(number))}/merge`), { method: "POST", body: input, signal: options.signal });
+  }
+
+  getAgentBrowserStats(orgId: string, sessionId: string, options: RequestOptions = {}): Promise<AgentBrowserStats> {
+    return this.request(this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/agent-browser/stats`), options);
+  }
+
+  async getAgentBrowserSocketRequest(orgId: string, sessionId: string, options: RequestOptions = {}): Promise<{ url: string; headers: { Authorization: string } }> {
+    const base = new URL(this.baseUrl);
+    const loopback = base.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]", "10.0.2.2"].includes(base.hostname);
+    if (base.username || base.password || (base.protocol !== "https:" && !loopback)) throw new TypeError("Cloud browser requires HTTPS.");
+    const check = () => { if (options.signal?.aborted) throw options.signal.reason ?? Object.assign(new Error("Request cancelled."), { name: "AbortError" }); };
+    check();
+    const token = (await this.getAccessToken())?.trim();
+    check();
+    if (!token) throw new CloudApiError(401, { error: "Unauthorized", code: "AUTH_REQUIRED", message: "A Cloud API access token is required.", requestId: "" });
+    const socketBase = this.baseUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
+    return { url: `${socketBase}${this.orgPath(orgId, `/sessions/${encodeURIComponent(sessionId)}/agent-browser/ws/cdp`)}`, headers: { Authorization: `Bearer ${token}` } };
+  }
+
   sendMessage(
     orgId: string,
     sessionId: string,
@@ -672,6 +732,54 @@ export class CloudClient {
     );
   }
 
+  async listNotifications(
+    orgId: string,
+    options: PaginationOptions & { status?: "all" | "unread" | "read" } = {},
+  ): Promise<NotificationPage> {
+    const page = await this.request<NotificationPage>(
+      this.withQuery(this.orgPath(orgId, "/notifications"), {
+        status: options.status,
+        limit: options.limit,
+        cursor: options.cursor,
+      }),
+      { signal: options.signal },
+    );
+    return { ...page, items: page.items ?? [] };
+  }
+
+  async listNotificationEvents(
+    orgId: string,
+    options: RequestOptions & { after?: number } = {},
+  ): Promise<NotificationEventPage> {
+    const page = await this.request<NotificationEventPage>(
+      this.withQuery(this.orgPath(orgId, "/notification-events"), {
+        after: options.after,
+      }),
+      { signal: options.signal },
+    );
+    return { ...page, items: page.items ?? [] };
+  }
+
+  markNotificationRead(
+    orgId: string,
+    notificationId: string,
+    options: RequestOptions = {},
+  ): Promise<{ updated: number }> {
+    return this.request(
+      this.orgPath(orgId, `/notifications/${encodeURIComponent(notificationId)}`),
+      { method: "PATCH", body: { status: "read" }, signal: options.signal },
+    );
+  }
+
+  markAllNotificationsRead(
+    orgId: string,
+    options: RequestOptions = {},
+  ): Promise<{ updated: number }> {
+    return this.request(this.orgPath(orgId, "/notifications/read-all"), {
+      method: "POST", signal: options.signal,
+    });
+  }
+
   replayEvents(
     orgId: string,
     sessionId: string,
@@ -768,27 +876,93 @@ export class CloudClient {
     orgId: string,
     sessionId: string,
     kind: TerminalKind = "workspace",
-    options: RequestOptions = {},
+    options: RequestOptions & { terminalId?: string } = {},
   ): Promise<TerminalTicket> {
     return this.request(
       this.orgPath(
         orgId,
         `/sessions/${encodeURIComponent(sessionId)}/terminal-ticket`,
       ),
-      { method: "POST", body: { kind }, signal: options.signal },
+      { method: "POST", body: { kind, ...(options.terminalId ? { terminalId: options.terminalId } : {}) }, signal: options.signal },
     );
   }
 
   terminalUrl(
     ticket: string,
-    options: { after?: number; kind?: TerminalKind } = {},
+    options: { after?: number; kind?: TerminalKind; terminalId?: string } = {},
   ): string {
-    const url = new URL(`${this.baseUrl}/api/cloud/v1/terminal`);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    const socketBase = this.baseUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
+    const url = new URL(`${socketBase}/api/cloud/v1/terminal`);
     url.searchParams.set("ticket", ticket);
     url.searchParams.set("after", String(options.after ?? 0));
     url.searchParams.set("kind", options.kind ?? "workspace");
+    if (options.terminalId) url.searchParams.set("terminalId", options.terminalId);
     return url.toString();
+  }
+
+  requestWorkspaceCheckout(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<WorkspaceCheckoutResponse> {
+    return this.request(
+      this.orgPath(
+        orgId,
+        `/sessions/${encodeURIComponent(sessionId)}/workspace/checkout`,
+      ),
+      { method: "POST", body: {}, signal: options.signal },
+    );
+  }
+
+  getWorkspaceReview(
+    orgId: string,
+    sessionId: string,
+    options: RequestOptions & { repository?: string } = {},
+  ): Promise<WorkspaceReviewResponse> {
+    const endpoint = this.orgPath(
+      orgId,
+      `/sessions/${encodeURIComponent(sessionId)}/workspace/review`,
+    );
+    return this.request(this.withQuery(endpoint, { repository: options.repository }), { signal: options.signal });
+  }
+
+  getWorkspaceReviewFile(
+    orgId: string,
+    sessionId: string,
+    query: { path: string; scope?: WorkspaceReviewScope; repository?: string },
+    options: RequestOptions = {},
+  ): Promise<WorkspaceReviewFileResponse> {
+    const endpoint = this.orgPath(
+      orgId,
+      `/sessions/${encodeURIComponent(sessionId)}/workspace/review/file`,
+    );
+    return this.request(this.withQuery(endpoint, { path: query.path, scope: query.scope, repository: query.repository }), options);
+  }
+
+  getWorkspaceReviewTree(
+    orgId: string,
+    sessionId: string,
+    query: { path?: string; repository?: string } = {},
+    options: RequestOptions = {},
+  ): Promise<WorkspaceReviewTreeResponse> {
+    const endpoint = this.orgPath(
+      orgId,
+      `/sessions/${encodeURIComponent(sessionId)}/workspace/tree`,
+    );
+    return this.request(this.withQuery(endpoint, { path: query.path, repository: query.repository }), options);
+  }
+
+  searchWorkspaceReview(
+    orgId: string,
+    sessionId: string,
+    query: { query: string; limit?: number; cursor?: string; repository?: string },
+    options: RequestOptions = {},
+  ): Promise<WorkspaceReviewSearchResponse> {
+    const endpoint = this.orgPath(
+      orgId,
+      `/sessions/${encodeURIComponent(sessionId)}/workspace/search`,
+    );
+    return this.request(this.withQuery(endpoint, { query: query.query, cursor: query.cursor, limit: query.limit, repository: query.repository }), options);
   }
 
   listWorkspaceFiles(
@@ -883,6 +1057,43 @@ export class CloudClient {
       providerConnections: RedactedProviderConnection[];
     }>("/api/cloud/v1/me/providers", options);
     return response.providerConnections;
+  }
+
+  getAgentLoginCapabilities(options: RequestOptions = {}): Promise<AgentLoginCapabilities> {
+    return this.sensitiveRequest("/api/cloud/v1/me/agent-logins/capabilities", options);
+  }
+
+  startAgentLogin(input: StartAgentLoginInput, idempotencyKey: string, options: RequestOptions = {}): Promise<{ login: AgentLogin }> {
+    return this.sensitiveRequest("/api/cloud/v1/me/agent-logins", { ...options, method: "POST", body: input, idempotencyKey });
+  }
+
+  getAgentLogin(id: string, options: RequestOptions = {}): Promise<{ login: AgentLogin }> {
+    return this.sensitiveRequest(`/api/cloud/v1/me/agent-logins/${encodeURIComponent(id)}`, options);
+  }
+
+  submitAgentLoginCode(id: string, input: { code: string }, options: RequestOptions = {}): Promise<{ login: AgentLogin }> {
+    return this.sensitiveRequest(`/api/cloud/v1/me/agent-logins/${encodeURIComponent(id)}/code`, { ...options, method: "POST", body: input });
+  }
+
+  cancelAgentLogin(id: string, options: RequestOptions = {}): Promise<void> {
+    return this.sensitiveRequest(`/api/cloud/v1/me/agent-logins/${encodeURIComponent(id)}`, { ...options, method: "DELETE" });
+  }
+
+  putUserAgentConnection(agent: "claude-code" | "codex" | "cursor" | "opencode", input: PutAgentProviderConnectionInput, options: RequestOptions = {}): Promise<{ providerConnection: RedactedProviderConnection }> {
+    return this.sensitiveRequest(`/api/cloud/v1/me/providers/${encodeURIComponent(agent)}`, { ...options, method: "PUT", body: input });
+  }
+
+  deleteUserAgentConnection(agent: "claude-code" | "codex" | "cursor" | "opencode", options: RequestOptions = {}): Promise<void> {
+    return this.sensitiveRequest(`/api/cloud/v1/me/providers/${encodeURIComponent(agent)}`, { ...options, method: "DELETE" });
+  }
+
+  private async sensitiveRequest<T>(path: string, options: JSONRequestOptions): Promise<T> {
+    const base = new URL(this.baseUrl);
+    const loopback = base.protocol === "http:" && (base.hostname === "localhost" || base.hostname === "127.0.0.1" || base.hostname === "[::1]");
+    if (base.username || base.password || (base.protocol !== "https:" && !loopback)) {
+      throw new TypeError("Cloud agent connections require HTTPS.");
+    }
+    return this.request(path, { ...options, cache: "no-store", redirect: "error" });
   }
 
   putGitHubPAT(
@@ -1006,6 +1217,8 @@ export class CloudClient {
       body:
         options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: options.signal,
+      ...(options.cache !== undefined ? { cache: options.cache } : {}),
+      ...(options.redirect !== undefined ? { redirect: options.redirect } : {}),
     });
     await this.throwIfError(response);
     if (response.status === 204) return undefined as T;

@@ -100,6 +100,105 @@ paths:
                     $ref: "#/components/schemas/OrganizationMembership"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-logins/capabilities:
+    get:
+      operationId: getAgentLoginCapabilities
+      tags: [Providers]
+      description: Native login is opt-in. An empty harness list leaves existing connections and API-key setup available.
+      responses:
+        "200":
+          description: Native agents supported by this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLoginCapabilities"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-logins:
+    post:
+      operationId: startAgentLogin
+      tags: [Providers]
+      description: Start or recover a personal isolated native login attempt. Never starts a project worker.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartAgentLoginInput"
+      responses:
+        "201":
+          description: Login accepted or recovered. All login responses use Cache-Control no-store.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLoginResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-logins/{loginId}:
+    parameters:
+      - name: loginId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getAgentLogin
+      tags: [Providers]
+      responses:
+        "200":
+          description: The caller's login status, never credentials or a pasted authorization code.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLoginResponse"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: cancelAgentLogin
+      tags: [Providers]
+      description: Cancel only the login attempt and its temporary compute, never a user's session or current agent connection.
+      responses:
+        "204":
+          description: Login cancelled or already terminal.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-logins/{loginId}/code:
+    parameters:
+      - name: loginId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: submitAgentLoginCode
+      tags: [Providers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  minLength: 1
+                  maxLength: 4096
+                  writeOnly: true
+      responses:
+        "200":
+          description: One-time code accepted for the waiting native CLI.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLoginResponse"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/providers:
     get:
       operationId: listUserProviderConnections
@@ -583,7 +682,7 @@ paths:
     post:
       operationId: wakePausedSessions
       tags: [Sessions]
-      summary: Wake every paused sandbox in the organization.
+      summary: Wake the authenticated user's paused sandboxes in the organization.
       description: Ask the reconciler to resume the user's idle-paused sandboxes.
       responses:
         "202":
@@ -796,6 +895,62 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SessionPullRequests"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests/{number}/merge:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: number
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      operationId: mergePullRequest
+      tags: [Pull Requests]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MergePullRequestInput"
+      responses:
+        "202":
+          description: Squash merge accepted; observe subsequent PR state to confirm completion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MergePullRequestResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-browser/stats:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getAgentBrowserStats
+      tags: [Sessions]
+      description: Probe browser state without starting Chromium. Unavailable relay returns 409 with Retry-After.
+      responses:
+        "200":
+          description: Browser stats; running false means no browser has started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentBrowserStats"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-browser/ws/cdp:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: connectAgentBrowser
+      tags: [Sessions]
+      description: Native viewer WebSocket authenticated by Authorization bearer header.
+      responses:
+        "101":
+          description: WebSocket viewer protocol upgrade accepted.
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews:
@@ -1118,6 +1273,9 @@ paths:
               properties:
                 kind:
                   $ref: "#/components/schemas/TerminalKind"
+                terminalId:
+                  type: string
+                  description: Dedicated terminal identity, including a returned reviewer handle.
       responses:
         "201":
           description: Short-lived, single-use terminal access ticket.
@@ -1152,9 +1310,155 @@ paths:
           required: true
           schema:
             $ref: "#/components/schemas/TerminalKind"
+        - name: terminalId
+          in: query
+          schema:
+            type: string
       responses:
         "101":
           description: WebSocket protocol upgrade accepted.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/checkout:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: requestWorkspaceCheckout
+      tags: [Workspace]
+      summary: Request checkout and Setup recovery from the connected worker.
+      description: |
+        The worker acknowledges this request immediately and retries workspace
+        startup only if checkout has not already completed. A successful request
+        does not mean that checkout or Setup has finished.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: Whether the worker accepted the workspace checkout request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceCheckoutResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/review:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
+    get:
+      operationId: getWorkspaceReview
+      tags: [Workspace]
+      description: >-
+        Provider-neutral workspace inventory and categorized changes relative
+        to the session's compare base. The files inventory includes unchanged
+        files; sections and summary describe the changes. The main repository's
+        response may also list the session's additional repository checkouts.
+      responses:
+        "200":
+          description: The workspace review snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceReviewResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/review/file:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
+    get:
+      operationId: getWorkspaceReviewFile
+      tags: [Workspace]
+      description: Read a workspace file and its bounded unified diff for the selected comparison scope.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 4096
+        - name: scope
+          in: query
+          schema:
+            $ref: "#/components/schemas/WorkspaceReviewScope"
+      responses:
+        "200":
+          description: The file contents, comparison metadata, and unified diff.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceReviewFileResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/tree:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
+    get:
+      operationId: getWorkspaceReviewTree
+      tags: [Workspace]
+      description: List one directory level of Git-tracked and untracked, non-ignored workspace files.
+      parameters:
+        - name: path
+          in: query
+          schema:
+            type: string
+            maxLength: 4096
+            default: ""
+      responses:
+        "200":
+          description: One directory's files and subdirectories.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceReviewTreeResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/search:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/WorkspaceRepository"
+    get:
+      operationId: searchWorkspaceReview
+      tags: [Workspace]
+      description: Search workspace file paths and text content, excluding binary files.
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 4096
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            maxLength: 1024
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: A bounded page of matching workspace files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkspaceReviewSearchResponse"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/files:
@@ -1556,6 +1860,46 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/CoderTemplateParameter"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/agent-logins/{loginId}/runner:
+    parameters:
+      - name: loginId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: pollAgentLoginRunner
+      tags: [Providers]
+      security:
+        - agentLoginAttemptAuth: []
+      description: Internal login-only runner poll. Atomically consumes any encrypted one-time provider code. User and worker bearers are not accepted. Responses use Cache-Control no-store.
+      responses:
+        "200":
+          description: Attempt state for this runner only.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentLoginRunnerState"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: reportAgentLoginRunner
+      tags: [Providers]
+      security:
+        - agentLoginAttemptAuth: []
+      description: Report bounded provider instructions or a completed native credential. Completion validates and encrypts the credential, then atomically promotes it only while this attempt remains active and current. No project or worker access is granted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentLoginRunnerUpdate"
+      responses:
+        "204":
+          description: Runner update accepted. No credential is returned.
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/bootstrap:
@@ -2415,6 +2759,10 @@ paths:
           $ref: "#/components/responses/Error"
 components:
   securitySchemes:
+    agentLoginAttemptAuth:
+      type: http
+      scheme: bearer
+      description: Opaque, short-lived native-login attempt bearer. Valid only for one attempt's runner endpoint; never a user or worker credential.
     bearerAuth:
       type: http
       scheme: bearer
@@ -4598,7 +4946,7 @@ components:
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
         reasoningEffort:
           type: string
-          enum: [none, minimal, low, medium, high, xhigh, max, ultra]
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
         mode:
           $ref: "#/components/schemas/SessionMode"
         approvalMode:
@@ -4637,6 +4985,14 @@ components:
       additionalProperties: false
       required: [models]
       properties:
+        modes:
+          type: array
+          items:
+            type: string
+        model:
+          type: string
+        reasoningEffort:
+          type: string
         models:
           type: array
           items:
@@ -5366,7 +5722,11 @@ components:
           description: Initial reasoning effort; empty uses the harness default.
         provider:
           type: string
-          description: Explicit sandbox provider override. If omitted, the control plane resolves the user's preference or deployment default.
+          description: >-
+            Requested sandbox provider. An auto-linked worker inherits its active
+            orchestrator's provider; otherwise a project's configured provider
+            takes precedence over this value. If neither selects a provider and
+            this field is omitted, the organization's default is used.
         sandboxProviderConnectionId:
           type: string
           format: uuid
@@ -5541,6 +5901,10 @@ components:
       properties:
         url:
           type: string
+        reviewId:
+          type: string
+        body:
+          type: string
         file:
           type: string
         line:
@@ -5596,6 +5960,10 @@ components:
         hasUnresolvedHumanComments:
           type: boolean
         unresolvedBy:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestUnresolvedReviewer"
+        resolvedBy:
           type: array
           items:
             $ref: "#/components/schemas/PullRequestUnresolvedReviewer"
@@ -5772,6 +6140,8 @@ components:
       properties:
         id:
           type: string
+        reviewerTerminalId:
+          type: string
         reviewId:
           type: string
         sessionId:
@@ -5849,6 +6219,39 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AOReviewRun"
+    MergePullRequestInput:
+      type: object
+      additionalProperties: false
+      required: [prUrl, expectedHeadSha]
+      properties:
+        prUrl: { type: string }
+        expectedHeadSha: { type: string }
+    MergePullRequestResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [merge_accepted] }
+    AgentBrowserStats:
+      type: object
+      additionalProperties: true
+      properties:
+        running: { type: boolean }
+        tabs:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              id: { type: string }
+              title: { type: string }
+              url: { type: string }
+        owner: { type: string }
+        viewers:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
     UserMessageEvent:
       type: object
       additionalProperties: false
@@ -6243,6 +6646,28 @@ components:
         createdAt:
           type: string
           format: date-time
+    WorkspaceSetupEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: The project's Setup outcome, outside any agent turn, in session replay history.
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9007199254740991
+        type:
+          type: string
+          const: workspace.setup
+        payload:
+          $ref: "#/components/schemas/WorkerSetupPayload"
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -6258,6 +6683,7 @@ components:
         - $ref: "#/components/schemas/ApprovalRequestedEvent"
         - $ref: "#/components/schemas/ApprovalDecidedEvent"
         - $ref: "#/components/schemas/ScriptStepEvent"
+        - $ref: "#/components/schemas/WorkspaceSetupEvent"
     ClientEventPage:
       type: object
       additionalProperties: false
@@ -6296,6 +6722,247 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TerminalScope"
+    WorkspaceCheckoutResponse:
+      type: object
+      additionalProperties: false
+      required: [requested]
+      properties:
+        requested:
+          type: boolean
+    WorkspaceReviewScope:
+      type: string
+      enum: [combined, committed, staged, unstaged, untracked]
+      default: combined
+    WorkspaceReviewStatus:
+      type: string
+      enum: [unmodified, modified, added, deleted, renamed, copied, untracked]
+    WorkspaceReviewFileSummary:
+      type: object
+      additionalProperties: false
+      required: [path, status, additions, deletions, size, binary, editable, fileFingerprint]
+      properties:
+        path:
+          type: string
+        previousPath:
+          type: string
+        status:
+          $ref: "#/components/schemas/WorkspaceReviewStatus"
+        additions:
+          type: integer
+          minimum: 0
+        deletions:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        binary:
+          type: boolean
+        editable:
+          type: boolean
+        fileFingerprint:
+          type: string
+    WorkspaceReviewResponse:
+      type: object
+      additionalProperties: false
+      required: [workspaceVersion, files, truncated, sections, commits, summary]
+      properties:
+        workspaceVersion:
+          type: string
+        compareBaseSha:
+          type: string
+        compareBaseRef:
+          type: string
+        compareMode:
+          type: string
+          enum: [base, head_fallback]
+        files:
+          type: array
+          description: The complete Git-visible inventory, including unchanged files.
+          items:
+            $ref: "#/components/schemas/WorkspaceReviewFileSummary"
+        truncated:
+          type: boolean
+        sections:
+          type: object
+          additionalProperties: false
+          required: [staged, unstaged, untracked, committed]
+          properties:
+            staged:
+              type: array
+              items:
+                $ref: "#/components/schemas/WorkspaceReviewFileSummary"
+            unstaged:
+              type: array
+              items:
+                $ref: "#/components/schemas/WorkspaceReviewFileSummary"
+            untracked:
+              type: array
+              items:
+                $ref: "#/components/schemas/WorkspaceReviewFileSummary"
+            committed:
+              type: array
+              items:
+                $ref: "#/components/schemas/WorkspaceReviewFileSummary"
+        commits:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [sha, subject, author, timestamp, files]
+            properties:
+              sha:
+                type: string
+              subject:
+                type: string
+              author:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+              files:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkspaceReviewFileSummary"
+        summary:
+          type: object
+          additionalProperties: false
+          required: [files, additions, deletions]
+          properties:
+            files:
+              type: integer
+              minimum: 0
+            additions:
+              type: integer
+              minimum: 0
+            deletions:
+              type: integer
+              minimum: 0
+        ahead:
+          type: integer
+          minimum: 0
+        behind:
+          type: integer
+          minimum: 0
+        repositories:
+          type: array
+          description: The session's checkouts; carried by the main repository's review.
+          items:
+            $ref: "#/components/schemas/WorkspaceRepository"
+    WorkspaceReviewFileResponse:
+      type: object
+      additionalProperties: false
+      required: [path, status, additions, deletions, size, binary, editable, fileFingerprint, deleted, content, contentTruncated, diff, diffTruncated, workspaceVersion]
+      properties:
+        path:
+          type: string
+        previousPath:
+          type: string
+        status:
+          $ref: "#/components/schemas/WorkspaceReviewStatus"
+        additions:
+          type: integer
+          minimum: 0
+        deletions:
+          type: integer
+          minimum: 0
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        binary:
+          type: boolean
+        editable:
+          type: boolean
+        fileFingerprint:
+          type: string
+        deleted:
+          type: boolean
+        imageMediaType:
+          type: string
+        content:
+          type: string
+        contentTruncated:
+          type: boolean
+        diff:
+          type: string
+        diffTruncated:
+          type: boolean
+        compareBaseSha:
+          type: string
+        compareBaseRef:
+          type: string
+        compareMode:
+          type: string
+          enum: [base, head_fallback]
+        workspaceVersion:
+          type: string
+        historical:
+          type: boolean
+    WorkspaceReviewTreeResponse:
+      type: object
+      additionalProperties: false
+      required: [path, entries, truncated]
+      properties:
+        path:
+          type: string
+        entries:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, path, type]
+            properties:
+              name:
+                type: string
+              path:
+                type: string
+              type:
+                type: string
+                enum: [file, dir]
+              status:
+                $ref: "#/components/schemas/WorkspaceReviewStatus"
+              hasChanges:
+                type: boolean
+              size:
+                type: integer
+                format: int64
+                minimum: 0
+              binary:
+                type: boolean
+        truncated:
+          type: boolean
+    WorkspaceReviewSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [query, results, truncated]
+      properties:
+        query:
+          type: string
+        results:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [path, status, size, binary, fileFingerprint]
+            properties:
+              path:
+                type: string
+              status:
+                $ref: "#/components/schemas/WorkspaceReviewStatus"
+              size:
+                type: integer
+                format: int64
+                minimum: 0
+              binary:
+                type: boolean
+              fileFingerprint:
+                type: string
+        nextCursor:
+          type: string
+        truncated:
+          type: boolean
     WorkspaceEntry:
       type: object
       additionalProperties: false
@@ -6479,6 +7146,102 @@ components:
           type: string
         region:
           type: string
+    AgentLogin:
+      type: object
+      additionalProperties: false
+      required: [id, harness, status, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        harness:
+          type: string
+          enum: [claude-code, codex]
+        status:
+          type: string
+          enum: [starting, waiting, connecting, connected, failed, cancelled, expired]
+        expiresAt:
+          type: string
+          format: date-time
+        authorizationUrl:
+          type: string
+          format: uri
+        userCode:
+          type: string
+        requiresCode:
+          type: boolean
+        message:
+          type: string
+    AgentLoginRunnerState:
+      type: object
+      additionalProperties: false
+      required: [harness, status, expiresAt]
+      properties:
+        harness:
+          type: string
+          enum: [claude-code, codex]
+        status:
+          type: string
+          enum: [starting, waiting, connecting, connected, failed, cancelled, expired]
+        expiresAt:
+          type: string
+          format: date-time
+        code:
+          type: string
+          maxLength: 4096
+          description: One-time input consumed by this poll; must never be logged or persisted by the runner.
+    AgentLoginRunnerUpdate:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [waiting, connecting, connected, failed]
+        authorizationUrl:
+          type: string
+          format: uri
+          maxLength: 8192
+        userCode:
+          type: string
+          maxLength: 16
+        requiresCode:
+          type: boolean
+        credentialType:
+          type: string
+          enum: [oauth_token, auth_json]
+        secret:
+          type: string
+          maxLength: 65536
+          writeOnly: true
+    AgentLoginResponse:
+      type: object
+      additionalProperties: false
+      required: [login]
+      properties:
+        login:
+          $ref: "#/components/schemas/AgentLogin"
+    AgentLoginCapabilities:
+      type: object
+      additionalProperties: false
+      required: [harnesses]
+      properties:
+        harnesses:
+          type: array
+          items:
+            type: string
+            enum: [claude-code, codex]
+    StartAgentLoginInput:
+      type: object
+      additionalProperties: false
+      required: [orgId, harness]
+      properties:
+        orgId:
+          type: string
+          format: uuid
+        harness:
+          type: string
+          enum: [claude-code, codex]
     PutAgentProviderConnectionInput:
       type: object
       additionalProperties: false
