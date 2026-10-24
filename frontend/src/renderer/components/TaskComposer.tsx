@@ -185,9 +185,9 @@ export function TaskComposer({
 	}).current;
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
-			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
+				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
 				// The task starts in the interface the composer resolved (its choice,
@@ -268,6 +268,7 @@ export function TaskComposer({
 
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
+			try {
 			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -290,6 +291,10 @@ export function TaskComposer({
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
 			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
 			return data.session.id;
+			} catch (err) {
+				void captureRendererEvent("ao.renderer.task_create_failed", { scope: "standalone" });
+				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
+			}
 		},
 		[hostId, t],
 	);

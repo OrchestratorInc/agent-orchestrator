@@ -859,6 +859,9 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.settings_save_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
+			if ((event === "ao.renderer.task_create_failed" || event === "ao.renderer.task_create_succeeded") && properties?.scope === "standalone") {
+				safe.scope = "standalone";
+			}
 			break;
 		}
 		case "ao.renderer.cloud_orchestrator_spawn_succeeded":

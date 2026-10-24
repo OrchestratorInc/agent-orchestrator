@@ -565,6 +565,9 @@ describe("telemetry sanitizers", () => {
 			});
 			expect(Object.keys(props)).toEqual(["project_id_hash"]);
 		}
+		expect(await sanitizeRendererProperties("ao.renderer.task_create_failed", { scope: "standalone", title: "raw" })).toEqual({
+			scope: "standalone",
+		});
 	});
 
 	it("keeps only the scope enum on artifact_create events", async () => {
