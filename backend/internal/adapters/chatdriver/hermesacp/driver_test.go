@@ -114,6 +114,28 @@ func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
 	}
 }
 
+// An explicit reasoning effort must fail the turn instead of riding it as a
+// silent no-op: Hermes' session advertises only `model` and `mode`, so AO
+// cannot deliver the choice, and the shared port reserves
+// ErrChatCapabilityUnavailable for exactly this refusal (review comment
+// 4365736480 on PR #6635).
+func TestValidateTurnSettingsRejectsExplicitEffort(t *testing.T) {
+	if err := validateTurnSettings("", ports.ChatTurnSettings{}); err != nil {
+		t.Fatalf("empty settings error = %v, want nil", err)
+	}
+	if err := validateTurnSettings("", ports.ChatTurnSettings{
+		Model: "anthropic/claude-opus-4.6", Approval: ports.PermissionModeDefault,
+	}); err != nil {
+		t.Fatalf("model+approval error = %v, want nil", err)
+	}
+	for _, effort := range []string{"high", "  low  "} {
+		err := validateTurnSettings("", ports.ChatTurnSettings{Effort: effort})
+		if !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
+			t.Fatalf("effort %q error = %v, want ErrChatCapabilityUnavailable", effort, err)
+		}
+	}
+}
+
 func allowOption(id string, kind acpsdk.PermissionOptionKind) acpsdk.PermissionOption {
 	optionID := acpsdk.PermissionOptionId(id)
 	return acpsdk.PermissionOption{OptionId: optionID, Name: id, Kind: kind}
