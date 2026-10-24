@@ -100,9 +100,11 @@ export async function launchTriageInTerminal(
 		const args = ["triage"];
 		// Terminal command text is visible and may enter shell history. Only state
 		// paths belong here; the terminal's shell supplies credentials and PATH.
+		// Pass them even at their defaults so the shell's own exports cannot
+		// point triage at another instance.
 		const env: Record<string, string> = {};
-		if (stateEnv.AO_DATA_DIR && stateEnv.AO_DATA_DIR !== path.join(os.homedir(), ".ao", "data")) env.AO_DATA_DIR = stateEnv.AO_DATA_DIR;
-		if (stateEnv.AO_RUN_FILE && stateEnv.AO_RUN_FILE !== path.join(os.homedir(), ".ao", "running.json")) env.AO_RUN_FILE = stateEnv.AO_RUN_FILE;
+		if (stateEnv.AO_DATA_DIR) env.AO_DATA_DIR = stateEnv.AO_DATA_DIR;
+		if (stateEnv.AO_RUN_FILE) env.AO_RUN_FILE = stateEnv.AO_RUN_FILE;
 		const overrides = Object.entries(env);
 		let argv: string[];
 		if (process.platform === "win32") {

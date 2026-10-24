@@ -46,12 +46,18 @@ describe("launchTriageInTerminal", () => {
 		expect(terminalCommand).toHaveBeenCalledWith(["/usr/bin/env", "AO_DATA_DIR=/data", "AO_RUN_FILE=/run.json", "/bundled resources/daemon/ao", "triage"], "darwin", env, expect.any(Function));
 	});
 
-	it.each([{}, { AO_DATA_DIR: "", AO_RUN_FILE: "" }, {
-		AO_DATA_DIR: path.join(os.homedir(), ".ao", "data"), AO_RUN_FILE: path.join(os.homedir(), ".ao", "running.json"),
-	}])("omits state overrides at their defaults: %j", async (env) => {
+	it.each([{}, { AO_DATA_DIR: "", AO_RUN_FILE: "" }])("omits unset state overrides: %j", async (env) => {
 		vi.mocked(terminalCommand).mockReturnValue(undefined);
 		expect(await launchTriageInTerminal(env)).toEqual({ ok: false, error: "report.terminalFailed", command: "'/bundled resources/daemon/ao' 'triage'" });
 		expect(terminalCommand).toHaveBeenCalledWith(["/bundled resources/daemon/ao", "triage"], "darwin", env, expect.any(Function));
+	});
+
+	it("keeps default state paths so shell exports cannot override them", async () => {
+		const dataDir = path.join(os.homedir(), ".ao", "data");
+		const runFile = path.join(os.homedir(), ".ao", "running.json");
+		const env = { AO_DATA_DIR: dataDir, AO_RUN_FILE: runFile };
+		expect(await launchTriageInTerminal(env)).toEqual({ ok: true });
+		expect(terminalCommand).toHaveBeenCalledWith(["/usr/bin/env", `AO_DATA_DIR=${dataDir}`, `AO_RUN_FILE=${runFile}`, "/bundled resources/daemon/ao", "triage"], "darwin", env, expect.any(Function));
 	});
 
 	it("returns a copyable command with state overrides when no terminal exists", async () => {
