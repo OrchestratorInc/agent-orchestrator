@@ -4807,6 +4807,15 @@ components:
             type: string
         defaultEffort:
           type: string
+        approvalModes:
+          description: >-
+            Approval modes a turn on this model can run, as its provider offers
+            them. Absent when the worker does not know; a client then offers
+            every mode the session allows.
+          type: array
+          items:
+            type: string
+            enum: [default, accept-edits, auto, bypass-permissions]
     ChatModelsResponse:
       type: object
       additionalProperties: false

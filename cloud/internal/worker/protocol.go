@@ -294,6 +294,12 @@ type ChatModel struct {
 	Default       bool     `json:"default"`
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// ApprovalModes are the approval modes ("default", "accept-edits", "auto",
+	// "bypass-permissions") a turn on this model can run, as its provider
+	// offers them for the model. Absent means unknown (an older worker, or a
+	// provider that did not say): a client then offers every mode the session
+	// allows, and the worker still steps down from one the model lacks.
+	ApprovalModes []string `json:"approvalModes,omitempty"`
 }
 
 type ChatModelsResponse struct {

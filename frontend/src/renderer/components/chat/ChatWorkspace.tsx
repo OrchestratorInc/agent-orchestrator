@@ -156,7 +156,7 @@ import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
-import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
+import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { UsageLimitNotice } from "./UsageLimitNotice";
@@ -487,6 +487,8 @@ export interface ChatWorkspaceProps {
 	onRememberPermissions?: (mode: ApprovalMode | null) => Promise<unknown> | void;
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
+	/** Approval modes the session allows that the selected model cannot run. */
+	approvalModeLimits?: ApprovalModeLimits;
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
 	rememberedPermissionMode?: ApprovalMode;
@@ -727,6 +729,7 @@ function ChatWorkspaceContent({
 	onRememberPermissions,
 	showApprovalMode,
 	approvalModes,
+	approvalModeLimits,
 	rememberPermissionsPending,
 	rememberPermissionsError,
 	rememberedPermissionMode,
@@ -1422,6 +1425,7 @@ function ChatWorkspaceContent({
 					harness={snapshot.harness}
 					showApprovalMode={showApprovalMode ?? !session?.cloud}
 					approvalModes={approvalModes}
+					approvalModeLimits={approvalModeLimits}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
@@ -1463,6 +1467,7 @@ function ChatWorkspaceContent({
 			rememberedPermissionMode,
 			showApprovalMode,
 			approvalModes,
+			approvalModeLimits,
 			session?.cloud,
 			snapshot.controller.state,
 			snapshot.items.length,
