@@ -24,13 +24,26 @@ var hermesFailedTurnNotices = []string{
 // filtered in place. Hermes' replay differs from its live stream in ways the
 // generic reconciliation cannot absorb: the failed-turn boundary rows above
 // come back as ordinary agent text on turns that never had a reply, which
-// would duplicate a reply into the stored interrupted turn. Reply text is also
-// persisted stripped while AO stored the live untrimmed text; that side is
-// handled by the whitespace-tolerant fingerprints in the chat service, since
-// the stripped text cannot be restored here.
+// would duplicate a reply into the stored interrupted turn. The chat service
+// rebuilds a reply from the replay's message.delta chunks (AppendAssistantDelta),
+// so dropping only the item's completed event still lets the notice text
+// reassemble from its deltas — every event carrying a notice item's provider
+// item id must go. Reply text is also persisted stripped while AO stored the
+// live untrimmed text; that side is handled by the whitespace-tolerant
+// fingerprints in the chat service, since the stripped text cannot be restored
+// here.
 func reconcileReplay(events []ports.ChatEvent) []ports.ChatEvent {
+	noticeItems := make(map[string]bool)
+	for _, event := range events {
+		if event.Kind == ports.ChatEventMessageCompleted && isFailedTurnNotice(event.Text) && event.ProviderItemID != "" {
+			noticeItems[event.ProviderItemID] = true
+		}
+	}
 	reconciled := events[:0]
 	for _, event := range events {
+		if noticeItems[event.ProviderItemID] {
+			continue
+		}
 		if event.Kind == ports.ChatEventMessageCompleted && isFailedTurnNotice(event.Text) {
 			continue
 		}

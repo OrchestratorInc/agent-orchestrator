@@ -260,7 +260,6 @@ func TestHermesACPTransportReplayAfterHostDeathDoesNotDuplicateTurns(t *testing.
 	// host kill or a user interrupt leaves it in Hermes' transcript.
 	ref := startTurn("Do turn two.")
 	deadline := time.After(30 * time.Second)
-	interrupted := false
 events:
 	for {
 		select {
@@ -278,15 +277,11 @@ events:
 					ctx, event.ProviderEventID); err != nil {
 					t.Fatal(err)
 				}
-				interrupted = true
 				break events
 			}
 		case <-deadline:
 			t.Fatal("timed out waiting for the interrupted turn to settle")
 		}
-	}
-	if !interrupted {
-		t.Fatal("second turn did not settle interrupted")
 	}
 	providerID := conversation.ProviderConversationID()
 	if err := conversation.(ports.ChatProviderTerminator).Terminate(); err != nil {
@@ -307,7 +302,7 @@ events:
 		t.Fatalf("ReadHistory: %v", err)
 	}
 
-	var userTexts, replies, turnStates []string
+	var userTexts, replies, turnStates, deltas []string
 	for _, event := range history {
 		switch event.Kind {
 		case ports.ChatEventUserMessageCompleted:
@@ -316,7 +311,16 @@ events:
 			replies = append(replies, event.Text)
 		case ports.ChatEventTurnCompleted:
 			turnStates = append(turnStates, string(event.TurnState))
+		case ports.ChatEventMessageDelta:
+			deltas = append(deltas, event.Delta)
 		}
+	}
+	// The chat service rebuilds a reply from the replay's message.delta chunks,
+	// so the boundary notice must not survive in any delta chunk either —
+	// dropping only the item's completed event still reassembles the text.
+	wantDeltas := []string{"Answer one."}
+	if len(deltas) != len(wantDeltas) || deltas[0] != wantDeltas[0] {
+		t.Fatalf("replayed deltas = %q, want exactly %q with no boundary-notice chunks", deltas, wantDeltas)
 	}
 	wantUsers := []string{"What is X?", "Do turn two."}
 	if len(userTexts) != len(wantUsers) {
@@ -591,13 +595,17 @@ func (a *fakeHermesAgent) livePrompt(ctx context.Context, params acpsdk.PromptRe
 // hermesReplayUpdates mirrors acp_adapter/server.py _history_replay_updates:
 // persisted text comes back as id-less user/agent chunks, flattened with a
 // string strip, and an interrupted turn carries the Hermes-authored boundary
-// row (agent/turn_failure_copy.py) as ordinary assistant text.
+// row (agent/turn_failure_copy.py) as ordinary assistant text streamed in
+// several delta chunks — the shape the chat service would reassemble into a
+// reply if reconciliation dropped only the item's completed event.
 func (a *fakeHermesAgent) hermesReplayUpdates(ctx context.Context, sessionID acpsdk.SessionId) {
+	notice := hermesFailedTurnNotices[0]
 	updates := []acpsdk.SessionUpdate{
 		acpsdk.UpdateUserMessageText("What is X?"),
 		acpsdk.UpdateAgentMessageText("Answer one."),
 		acpsdk.UpdateUserMessageText("Do turn two."),
-		acpsdk.UpdateAgentMessageText(hermesFailedTurnNotices[0]),
+		acpsdk.UpdateAgentMessageText(notice[:20]),
+		acpsdk.UpdateAgentMessageText(notice[20:]),
 	}
 	for _, update := range updates {
 		_ = a.conn.SessionUpdate(ctx, acpsdk.SessionNotification{SessionId: sessionID, Update: update})
