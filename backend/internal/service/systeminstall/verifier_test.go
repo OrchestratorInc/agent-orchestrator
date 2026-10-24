@@ -208,6 +208,34 @@ func verifierBinaryFixture(t *testing.T, name string) string {
 	return binary
 }
 
+func TestVerifierCoversEveryAgentTarget(t *testing.T) {
+	// Iterate the production target list so adding an agent without executable
+	// ownership coverage fails here before discovery or update checks ship.
+	for _, target := range agentTargets {
+		t.Run(string(target), func(t *testing.T) {
+			name := string(target)
+			switch target {
+			case TargetCursor:
+				name = "cursor-agent"
+			case TargetContinue:
+				name = "cn"
+			case TargetOpencodeV2:
+				name = "opencode2"
+			}
+			binary := verifierBinaryFixture(t, name)
+			runner := &recordingCommandRunner{}
+			verifier := NewVerifier(verifierResolver{domain.AgentHarness(target): verifierAgent{path: binary}}, runner)
+			result, err := verifier.Verify(t.Context(), target)
+			if err != nil {
+				t.Fatalf("agent target %q lacks executable identity coverage for %q: %v", target, name, err)
+			}
+			if result.ResolvedPath != binary || !reflect.DeepEqual(runner.argv, []string{binary, "--version"}) {
+				t.Fatalf("Verify = %+v, command = %v, want selected executable %q", result, runner.argv, binary)
+			}
+		})
+	}
+}
+
 func TestVerifierRejectsRedirectedVersionProbe(t *testing.T) {
 	for _, target := range []Target{TargetCursor, TargetCodex, TargetClaudeCode, TargetGrok} {
 		t.Run(string(target), func(t *testing.T) {
