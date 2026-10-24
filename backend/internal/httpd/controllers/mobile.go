@@ -223,8 +223,8 @@ type TunnelController interface {
 	Status() mobilebridge.TunnelStatus
 }
 
-// KeepAwakeController holds the machine awake while the bridge is on. Start and
-// Stop are idempotent.
+// KeepAwakeController holds the machine awake independently of the listener.
+// Start and Stop are idempotent.
 type KeepAwakeController interface {
 	Start() error
 	Stop()
@@ -278,8 +278,8 @@ type BridgeService struct {
 	// status of a bridge that has no connector yet. Nil in tests.
 	ConnectorInstalling func() bool
 
-	// KeepAwake holds the machine awake while the bridge is on and the user has
-	// opted in. Nil where the platform has no way to do it (everything but
+	// KeepAwake holds the machine awake while the user has opted in, independently
+	// of the listener. Nil where the platform has no way to do it (everything but
 	// macOS), which Status reports as unsupported.
 	KeepAwake KeepAwakeController
 
@@ -589,14 +589,13 @@ func (b *BridgeService) keepAwakeStatus(on, lidClosed bool) KeepAwakeStatus {
 	return res
 }
 
-// applyKeepAwakeLocked holds the machine awake only while the user opted in
-// and the bridge is actually serving: there is no phone to stay reachable for
-// otherwise. The caller owns transitionMu.
+// applyKeepAwakeLocked applies the user's wake choice independently of the
+// mobile listener. The caller owns transitionMu.
 func (b *BridgeService) applyKeepAwakeLocked(on, lidClosed bool) error {
 	if b.KeepAwake == nil {
 		return nil
 	}
-	if on && b.LAN.Running() {
+	if on {
 		if err := b.KeepAwake.Start(); err != nil {
 			return err
 		}
@@ -621,12 +620,13 @@ func (b *BridgeService) SetKeepAwake(on bool) (MobileStatusResponse, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return MobileStatusResponse{}, err
 	}
+	previous := st
 	st.KeepAwake = on
 	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 		return MobileStatusResponse{}, err
 	}
-	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
-		return MobileStatusResponse{}, err
+	if err := b.applyKeepAwakeLocked(on, st.KeepAwakeLid); err != nil {
+		return MobileStatusResponse{}, errors.Join(err, mobilebridge.Save(b.ConfigPath, previous))
 	}
 	return b.Status(), nil
 }
@@ -658,12 +658,13 @@ func (b *BridgeService) SetKeepAwakeLid(on, lidClosed bool) (MobileStatusRespons
 			return MobileStatusResponse{}, err
 		}
 	}
+	previous := st
 	st.KeepAwake, st.KeepAwakeLid = on, lidClosed
 	if err := mobilebridge.Save(b.ConfigPath, st); err != nil {
 		return MobileStatusResponse{}, err
 	}
-	if err := b.applyKeepAwakeLocked(on && st.Enabled, st.KeepAwakeLid); err != nil {
-		return MobileStatusResponse{}, err
+	if err := b.applyKeepAwakeLocked(on, st.KeepAwakeLid); err != nil {
+		return MobileStatusResponse{}, errors.Join(err, mobilebridge.Save(b.ConfigPath, previous))
 	}
 	return b.Status(), nil
 }
@@ -793,9 +794,6 @@ func (b *BridgeService) startConnectorsLocked(port int, st mobilebridge.State) {
 	if st.SecurePairing && !st.LoopbackOnly {
 		b.setServeError(b.applyServe(port))
 	}
-	// Best-effort like the proxy: a failed caffeinate leaves the bridge up and
-	// Status reports the assertion as inactive.
-	_ = b.applyKeepAwakeLocked(st.KeepAwake && st.Enabled, st.KeepAwakeLid)
 	// Point the connector at the port Start actually bound, not DefaultPort:
 	// Start falls back to an ephemeral port when the default is taken, and a
 	// connector aimed at the wrong port tunnels nothing. Start is idempotent
@@ -818,11 +816,18 @@ func (b *BridgeService) startConnectorsLocked(port int, st mobilebridge.State) {
 // LastPort is taken (e.g. by another AO instance), and a `tailscale serve`
 // config pinned to a stale port would proxy the tailnet at this machine's
 // hostname to whatever now holds that port. A failure to apply is recorded in
-// serveErr, never returned — the caller (restoreMobileOnBoot) treats this as
-// best-effort and must never block daemon boot on it.
+// serveErr, never returned. Saved wake ownership is restored separately from
+// listener availability. The caller treats restoration as best-effort.
 func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	b.transitionMu.Lock()
 	defer b.transitionMu.Unlock()
+
+	// Restore wake ownership even with mobile disabled or a failed listener bind.
+	// This path must not start listeners, connectors, or rotate credentials.
+	wakeErr := b.applyKeepAwakeLocked(state.KeepAwake, state.KeepAwakeLid)
+	if !state.Enabled {
+		return wakeErr
+	}
 
 	prevHash := b.LAN.PasswordHash()
 	accountSetter, hasAccountSetter := b.LAN.(interface {
@@ -850,10 +855,10 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 		if hasAccountSetter {
 			accountSetter.SetAccountTokenHash(previousAccountHash)
 		}
-		return err
+		return errors.Join(err, wakeErr)
 	}
 	b.startConnectorsLocked(port, state)
-	return nil
+	return wakeErr
 }
 
 // hostPublicKey is the machine's host key for the listing, or empty when it
@@ -1114,11 +1119,7 @@ func (b *BridgeService) Disable() error {
 	if t := b.tunnel(); t != nil {
 		t.Stop()
 	}
-	// No phone to stay reachable for once the bridge is off. The preference
-	// itself is kept, so turning the bridge back on resumes it.
-	if b.KeepAwake != nil {
-		b.KeepAwake.Stop()
-	}
+	// The independent wake choice remains active until explicitly turned off.
 	stopErr := b.LAN.Stop(ctx)
 	if stopErr != nil && b.LAN.Running() {
 		return stopErr
