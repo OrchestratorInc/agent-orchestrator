@@ -676,6 +676,10 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 	if err != nil || turnID == "" {
 		t.Fatalf("RelayChatTurnWithID = %q, %v", turnID, err)
 	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(resumed.sentMessages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if resumeConfig.ProviderConversationID != old.ProviderConversationID() {
 		t.Fatalf("native resume id = %q, want %q", resumeConfig.ProviderConversationID, old.ProviderConversationID())
 	}
@@ -691,18 +695,25 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 }
 
 func TestSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T) {
-	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false, false)
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false, false, false)
 }
 
 func TestSendSurvivesCancelledViewWake(t *testing.T) {
-	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, true, false)
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, true, false, false)
 }
 
 func TestSendAfterRecoveredHibernationDrainsQueueOnce(t *testing.T) {
-	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false, true)
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false, true, false)
 }
 
-func testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T, cancelView, failedShutdown bool) {
+// A relay (lifecycle nudge, ao send) must not wait for the provider resume: the
+// lifecycle guard holds the session's input lease across the relay, and the
+// resume waits for that lease to drain (#6888).
+func TestRelayWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T) {
+	testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t, false, false, true)
+}
+
+func testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T, cancelView, failedShutdown, relay bool) {
 	h, old := settledHibernationHarness(t, domain.TurnStateCompleted)
 	if failedShutdown {
 		old.shutdownErr = errors.New("shutdown acknowledgement lost")
@@ -758,11 +769,18 @@ func testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T, cancel
 		cancel()
 	}
 	started := time.Now()
-	turn, err := wakeService.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "send while cold", ClientMessageID: "cold-send-1",
-	})
-	if err != nil || turn.State != domain.TurnStateQueued || time.Since(started) > 250*time.Millisecond {
-		t.Fatalf("cold send = %+v, %v; elapsed=%s", turn, err, time.Since(started))
+	if relay {
+		turnID, err := wakeService.RelaySessionChatTurn(ctx, testSession, "send while cold", "cold-send-1", ports.MessageDeliveryOptions{})
+		if err != nil || turnID == "" || time.Since(started) > 250*time.Millisecond {
+			t.Fatalf("cold relay = %q, %v; elapsed=%s", turnID, err, time.Since(started))
+		}
+	} else {
+		turn, err := wakeService.Send(ctx, testSession, ports.ChatUserMessage{
+			Text: "send while cold", ClientMessageID: "cold-send-1",
+		})
+		if err != nil || turn.State != domain.TurnStateQueued || time.Since(started) > 250*time.Millisecond {
+			t.Fatalf("cold send = %+v, %v; elapsed=%s", turn, err, time.Since(started))
+		}
 	}
 	select {
 	case <-wakeEntered:
