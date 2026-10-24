@@ -2147,7 +2147,7 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 			return nil, err
 		}
 		defer func() { _ = tx.Rollback() }()
-		account, err := s.ReconcileConversationAuthentication(context.WithValue(ctx, conversationProjectionTxKey{}, s.qw.WithTx(tx)), conversationID, generation, providerTurnID, now)
+		account, err := s.ReconcileConversationAuthentication(context.WithValue(ctx, conversationProjectionTxKey{}, s.txQueries(tx)), conversationID, generation, providerTurnID, now)
 		if err != nil {
 			return nil, err
 		}
@@ -2609,7 +2609,7 @@ func (s *Store) ReorderQueuedTurns(
 		return fmt.Errorf("begin queued turn reorder: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	for i, turnID := range turnIDs {
 		rows, err := q.UpdateQueuedConversationTurnRequestedAt(ctx,
 			gen.UpdateQueuedConversationTurnRequestedAtParams{
@@ -3148,7 +3148,7 @@ func (s *Store) projectProviderEvent(
 		return false, fmt.Errorf("begin provider event projection: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 	projected, err := projectProviderEventTx(
 		ctx, q, conversationID, session, reviewID, generation,
 		providerEventID, method, payloadJSON, now, project,
