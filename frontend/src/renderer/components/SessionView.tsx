@@ -1772,6 +1772,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		toggleInspector(uiSessionId);
 	}, [browserOnly, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
+	// A narrow inspector folds the pinned toggle and bell into its ⋮ menu.
+	const [pinnedActionsFolded, setPinnedActionsFolded] = useState(false);
+	const [notificationsOpenRequest, setNotificationsOpenRequest] = useState(0);
+	const [notificationsUnread, setNotificationsUnread] = useState(0);
+	const openNotifications = useCallback(() => setNotificationsOpenRequest((request) => request + 1), []);
+	const pinnedFolded = pinnedActionsFolded && isInspectorOpen;
+
 	// Keyboard commands scoped to the session on screen. The main process matches
 	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
 	// native Browser view.
@@ -2130,6 +2137,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
+							notificationsUnread={notificationsUnread}
+							onOpenNotifications={openNotifications}
+							onPinnedActionsFoldChange={setPinnedActionsFolded}
+							onToggleInspector={handleToggleInspector}
 							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							browserOnly={browserOnly}
@@ -2172,7 +2183,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				) : null}
 			</div>
 			{hasInspector ? (
-				<div className="session-pinned-actions" data-testid="session-pinned-actions" style={noDragStyle}>
+				<div
+					className="session-pinned-actions"
+					data-folded={pinnedFolded ? "" : undefined}
+					data-testid="session-pinned-actions"
+					// Folded controls stay mounted so the bell's popover keeps its anchor.
+					inert={pinnedFolded}
+					style={noDragStyle}
+				>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<TopbarButton
@@ -2209,7 +2227,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						</TooltipContent>
 					</Tooltip>
 					{/* Keep the global notification action trailing at the window edge. */}
-					<NotificationCenter style={noDragStyle} />
+					<NotificationCenter onUnreadCountChange={setNotificationsUnread} openRequest={notificationsOpenRequest} style={noDragStyle} />
 				</div>
 			) : null}
 			{interfaceUi.cloudLoader

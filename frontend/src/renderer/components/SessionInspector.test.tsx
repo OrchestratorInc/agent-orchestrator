@@ -10,10 +10,12 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionInspector } from "./SessionInspector";
+import { InspectorSection } from "@aoagents/product-ui";
+import { ActivityTimeline, SessionInspector } from "./SessionInspector";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
+import { sessionPRDisplaySummaries } from "../lib/pr-display";
+import { sessionScmSummaryQueryKey, useSessionScmSummary } from "../hooks/useSessionScmSummary";
 import { settingsQueryKey } from "../hooks/useSettings";
 import { sessionWorkspaceFilesQueryKey } from "../hooks/useSessionWorkspaceFiles";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
@@ -463,6 +465,63 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByText("workspace file review")).toBeInTheDocument();
   });
 
+  it("folds the pinned toggle and bell into the ⋮ menu when they would cover the field", async () => {
+    // jsdom has no layout: give the topbar a field that leaves the trailing
+    // column 50px, less than the 100px the ⋮ and pinned controls need.
+    const rect = (left: number, right: number) =>
+      ({ left, right, width: right - left, top: 0, bottom: 40, height: 40, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const spy = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.classList.contains("session-inspector__trailing")) return rect(300, 400);
+      if (this.classList.contains("files-panel__topbar-host")) return rect(100, 350);
+      if (this.querySelector(":scope > .session-inspector__trailing")) return rect(0, 400);
+      return rect(0, 0);
+    });
+    const onFold = vi.fn();
+    const onToggleInspector = vi.fn();
+    const onOpenNotifications = vi.fn();
+    try {
+      renderWithQuery(
+        <SessionInspector
+          filesView={<div>workspace file review</div>}
+          notificationsUnread={2}
+          onOpenNotifications={onOpenNotifications}
+          onPinnedActionsFoldChange={onFold}
+          onToggleInspector={onToggleInspector}
+          session={session([])}
+          view="files"
+        />,
+      );
+
+      await waitFor(() => expect(onFold).toHaveBeenLastCalledWith(true));
+      await userEvent.click(screen.getByRole("button", { name: "More" }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Close inspector panel" }));
+      expect(onToggleInspector).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(screen.getByRole("button", { name: "More" }));
+      await userEvent.click(await screen.findByRole("menuitem", { name: /2 unread/ }));
+      await waitFor(() => expect(onOpenNotifications).toHaveBeenCalledTimes(1));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("keeps the pinned controls when the trailing column has room", async () => {
+    const onFold = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        filesView={<div>workspace file review</div>}
+        onPinnedActionsFoldChange={onFold}
+        onToggleInspector={vi.fn()}
+        session={session([])}
+        view="files"
+      />,
+    );
+
+    await waitFor(() => expect(onFold).toHaveBeenCalled());
+    expect(onFold).not.toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+  });
+
   it("warms the workspace files cache before the Files tab opens", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 
@@ -609,14 +668,14 @@ describe("SessionInspector PR section", () => {
       client.setQueryData(["project", "ws-1"], { repo: "https://gitlab.com/my-app/backend", config: {} });
     });
 
-    await screen.findByRole("link", { name: /gitlab.com\/release\/notes MR #9/ });
+    await screen.findByRole("link", { name: "Open PR #9" });
 
     const section = prSection("Pull request");
-    expect(section.getByRole("link", { name: /gitlab.com\/release\/notes MR #9/ })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
-    expect(section.getByText("Reported by worker")).toBeInTheDocument();
-    expect(section.getByText("External repository")).toBeInTheDocument();
+    expect(section.getByRole("link", { name: "Open PR #9" })).toHaveAttribute("href", "https://gitlab.com/release/notes/-/merge_requests/9");
+    expect(section.getByText("MR #9")).toBeInTheDocument();
+    expect(section.getByText(/release\/notes/)).toBeInTheDocument();
+    expect(section.getByText("Not tracked · External repository")).toBeInTheDocument();
     expect(section.getByRole("button", { name: /Linked for reference.*AO does not track checks/ })).toBeInTheDocument();
-    expect(section.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
     expect(section.queryByRole("button", { name: /^Merge PR #/ })).not.toBeInTheDocument();
     expect(section.queryByText("No pull request opened yet.")).not.toBeInTheDocument();
     expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/pr")).toHaveLength(1);
@@ -639,8 +698,9 @@ describe("SessionInspector PR section", () => {
       client.setQueryData(["project", "ws-1"], { repo: "git@github.com:acme/repo.git", config: {} });
     });
 
-    await screen.findByRole("link", { name: /github.com\/acme\/repo PR #9/ });
-    expect(prSection("Pull request").queryByText("External repository")).not.toBeInTheDocument();
+    await screen.findByRole("link", { name: "Open PR #9" });
+    expect(prSection("Pull request").getByText("Not tracked")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText(/External repository/)).not.toBeInTheDocument();
   });
 
   it("renders one card per PR, ordered actionable-first, when a session owns a stack", () => {
@@ -658,11 +718,12 @@ describe("SessionInspector PR section", () => {
     expect(cards).toEqual(["PR #41", "PR #42", "PR #40"]);
   });
 
-  it("uses the singular heading and shows enriched facts for a single PR", () => {
+  it("keeps merge details folded behind the readiness row while Merge stays available", async () => {
     renderWithQuery(
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
+        client.setQueryDefaults(sessionScmSummaryQueryKey("sess-1"), { staleTime: Infinity });
         seedPRSummaries(client, [
           prSummary(7, "open", {
             review: {
@@ -681,20 +742,23 @@ describe("SessionInspector PR section", () => {
     expect(
       prSection("Pull request").getByText("Mergeable"),
     ).toBeInTheDocument();
-    expect(prSection("Pull request").getByText("PR approved")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("PR approved")).not.toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("Checks passing")).not.toBeInTheDocument();
+    const readiness = prSection("Pull request").getByRole("button", { name: "Mergeable" });
+    expect(readiness).toHaveAttribute("aria-expanded", "false");
+    expect(prSection("Pull request").getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
+    await userEvent.click(readiness);
+    expect(readiness).toHaveAttribute("aria-expanded", "true");
+    const details = prSection("Pull request").getByRole("region", { name: "Pull request status" });
+    expect(details.compareDocumentPosition(readiness) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Pull request status" })).getByText("PR approved")).toBeInTheDocument();
     expect(
-      prSection("Pull request").getByText("Checks passing"),
+      within(screen.getByRole("region", { name: "Pull request status" })).getByText("Checks passing"),
     ).toBeInTheDocument();
     expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
-    ).toHaveClass("text-sm");
-    expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
+      prSection("Pull request").getByRole("link", { name: "Open PR #7" }),
     ).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
-    expect(prSection("Pull request").getByText("open")).toHaveClass(
-      "text-[9px]",
-      "leading-none",
-    );
+    expect(prSection("Pull request").getByText("open")).toBeInTheDocument();
     expect(
       prSection("Pull request").getByRole("button", { name: "Merge PR #7" }),
     ).toBeInTheDocument();
@@ -847,17 +911,20 @@ describe("SessionInspector PR section", () => {
     expect(screen.queryByRole("button", { name: "Merge PR #7" })).not.toBeInTheDocument();
   });
 
-  it("offers Merge when the provider requires no review", () => {
+  it("offers Merge without opening the review and check details", async () => {
     renderWithQuery(
       <SessionInspector session={session([pr(7, "open", { review: "none" })])} />,
       undefined,
       (client) => {
+        client.setQueryDefaults(sessionScmSummaryQueryKey("sess-1"), { staleTime: Infinity });
         seedPRSummaries(client, [prSummary(7, "open")]);
       },
     );
 
     expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
-    expect(prSection("Pull request").getByText("No review required")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("No review required")).not.toBeInTheDocument();
+    await userEvent.click(prSection("Pull request").getByRole("button", { name: "Mergeable" }));
+    expect(within(screen.getByRole("region", { name: "Pull request status" })).getByText("No review required")).toBeInTheDocument();
     expect(prSection("Pull request").queryByText("Review pending")).not.toBeInTheDocument();
   });
 
@@ -904,11 +971,7 @@ describe("SessionInspector PR section", () => {
     const card = prSection("Pull request")
       .getByText("PR #7")
       .closest("article") as HTMLElement;
-    expect(within(card).getByText("merged", { exact: true })).toHaveClass(
-      "border-border-strong",
-      "bg-overlay",
-      "text-success",
-    );
+    expect(within(card).getByText("merged", { exact: true })).toBeInTheDocument();
     expect(
       within(card).queryByText("Pull request merged"),
     ).not.toBeInTheDocument();
@@ -1055,7 +1118,7 @@ describe("SessionInspector PR section", () => {
     expect(toggle).toBeChecked();
   });
 
-  it("shows failing checks without an injection notice", () => {
+  it("reveals failing checks from the blocked merge row", async () => {
     const failingPR = prSummary(7, "open", {
       ci: {
         autoInjectCI: false,
@@ -1079,6 +1142,7 @@ describe("SessionInspector PR section", () => {
       <SessionInspector session={session([pr(7, "open")])} />,
       undefined,
       (client) => {
+        client.setQueryDefaults(sessionScmSummaryQueryKey("sess-1"), { staleTime: Infinity });
         seedPRSummaries(client, [failingPR]);
       },
     );
@@ -1086,7 +1150,9 @@ describe("SessionInspector PR section", () => {
     const card = prSection("Pull request")
       .getByText("PR #7")
       .closest("article") as HTMLElement;
-    expect(within(card).getByText("Checks failing")).toBeInTheDocument();
+    expect(within(card).queryByText("Checks failing")).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Not mergeable yet" }));
+    expect(within(screen.getByRole("region", { name: "Pull request status" })).getByText("Checks failing")).toBeInTheDocument();
     expect(within(card).queryByText("CI failures not injected")).not.toBeInTheDocument();
   });
 
@@ -1098,10 +1164,6 @@ describe("SessionInspector PR section", () => {
       prSection("Pull requests (2)").getByRole("link", { name: "Open PR #41" }),
       prSection("Pull requests (2)").getByRole("link", { name: "Open PR #42" }),
     ];
-    expect(links[0]).toHaveClass(
-      "text-settings-label",
-      "hover:text-settings-label",
-    );
     expect(links.map((a) => a.getAttribute("href"))).toEqual([
       "https://example.com/pr/41",
       "https://example.com/pr/42",
@@ -1480,6 +1542,15 @@ describe("SessionInspector completion controls", () => {
   });
 });
 
+function ActivityUnderTest({ session }: { session: WorkspaceSession }) {
+  const query = useSessionScmSummary(session.id);
+  return (
+    <InspectorSection title="Activity">
+      <ActivityTimeline session={session} prs={sessionPRDisplaySummaries(session, query.data?.prs)} />
+    </InspectorSection>
+  );
+}
+
 describe("SessionInspector Activity section", () => {
   const activitySectionElement = () =>
     screen
@@ -1498,7 +1569,7 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      screen.getByRole("button", { name: "Resume agent" }),
     );
 
     await waitFor(() =>
@@ -1524,9 +1595,7 @@ describe("SessionInspector Activity section", () => {
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
-    expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
 
     live.unmount();
     renderWithQuery(
@@ -1563,9 +1632,7 @@ describe("SessionInspector Activity section", () => {
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();
-    expect(
-      activitySectionElement().querySelector(".mt-3.border-t.pt-3:not([data-testid=session-account-summary])"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
   });
 
   it("keeps resume failures visible beside the action", async () => {
@@ -1583,11 +1650,11 @@ describe("SessionInspector Activity section", () => {
     );
 
     await userEvent.click(
-      activitySection().getByRole("button", { name: "Resume agent" }),
+      screen.getByRole("button", { name: "Resume agent" }),
     );
 
     expect(
-      await activitySection().findByText("agent restart failed"),
+      await screen.findByText("agent restart failed"),
     ).toBeInTheDocument();
   });
 
@@ -1598,7 +1665,7 @@ describe("SessionInspector Activity section", () => {
     ["exited", "Exited"],
   ] as const)("renders %s from raw session activity", (state, label) => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([pr(7, "open")], {
           status: "review_pending",
           activity: { state, lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -1611,7 +1678,7 @@ describe("SessionInspector Activity section", () => {
 
   it("renders unknown activity through the shared activity label", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([], {
           status: "working",
           activity: {
@@ -1630,7 +1697,7 @@ describe("SessionInspector Activity section", () => {
 
   it("falls back to unknown when no activity has been reported", () => {
     renderWithQuery(
-      <SessionInspector session={session([], { status: "working" })} />,
+      <ActivityUnderTest session={session([], { status: "working" })} />,
     );
 
     expect(activitySection().getByText("Unknown")).toBeInTheDocument();
@@ -1638,7 +1705,7 @@ describe("SessionInspector Activity section", () => {
 
   it("keeps the last known activity visible when the daemon reports no signal", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([], {
           status: "no_signal",
           activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -1654,7 +1721,7 @@ describe("SessionInspector Activity section", () => {
 
   it("does not derive the Activity label from PR-oriented session status", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([], {
           status: "review_pending",
           activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -1676,7 +1743,7 @@ describe("SessionInspector Activity section", () => {
     "renders %s as an SCM state in the current Activity row",
     (status, label) => {
       renderWithQuery(
-        <SessionInspector
+        <ActivityUnderTest
           session={session([], {
             status,
             activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -1693,7 +1760,7 @@ describe("SessionInspector Activity section", () => {
 
   it("keeps an unresolved, non-blocking review comment visible as Commented feedback while the agent is working (#5765)", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session(
           [pr(5765, "open", { review: "review_required", reviewComments: true })],
           {
@@ -1713,7 +1780,7 @@ describe("SessionInspector Activity section", () => {
 
   it("does not show Commented for a stale unresolved comment on a merged PR", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session(
           [pr(5765, "merged", { review: "review_required", reviewComments: true })],
           {
@@ -1732,7 +1799,7 @@ describe("SessionInspector Activity section", () => {
 
   it("ignores stale failing CI from a merged PR when the open PR is passing", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session(
           [pr(5753, "open", { ci: "passing" }), pr(5754, "merged", { ci: "failing" })],
           {
@@ -1751,7 +1818,7 @@ describe("SessionInspector Activity section", () => {
 
   it("renders PR conflicts as an SCM state in the current Activity row", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([pr(7, "open", { mergeability: "conflicting" })], {
           status: "working",
           activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -1770,7 +1837,7 @@ describe("SessionInspector Activity section", () => {
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
 
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([], {
           status: "working",
           updatedAt: "2026-06-15T11:55:00Z",
@@ -1789,7 +1856,7 @@ describe("SessionInspector Activity section", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([pr(7, "open")], {
           status: "working",
           createdAt: "2026-06-15T09:00:00Z",
@@ -1828,7 +1895,7 @@ describe("SessionInspector Activity section", () => {
         }
         : respond(path),
     );
-    renderWithQuery(<SessionInspector session={session([])} />);
+    renderWithQuery(<ActivityUnderTest session={session([])} />);
 
     expect(await activitySection().findByText("commit 0")).toBeInTheDocument();
     expect(activitySection().getAllByText("Committed")).toHaveLength(5);
@@ -1837,7 +1904,7 @@ describe("SessionInspector Activity section", () => {
 
   it("uses the timeline node as the single live activity indicator", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session([], {
           status: "working",
           activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
@@ -1867,11 +1934,12 @@ describe("SessionInspector Activity section", () => {
       />,
     );
 
-    for (const title of ["Pull request", "Session controls", "Activity"]) {
+    for (const title of ["Pull request", "Session controls"]) {
       expect(
         screen.getByText(title).closest('[data-testid="inspector-section"]'),
       ).toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
   });
 
 	it("keeps execution context out of the summary", () => {
@@ -1882,7 +1950,7 @@ describe("SessionInspector Activity section", () => {
 
   it("keeps workspace, PR, and SCM context rows in the Activity timeline", () => {
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session(
           [pr(7, "open", { ci: "failing", review: "changes_requested" })],
           {
@@ -1935,7 +2003,7 @@ describe("SessionInspector Activity section", () => {
     });
 
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session(
           [
             pr(8, "draft", {
@@ -2022,7 +2090,7 @@ describe("SessionInspector Activity section", () => {
     ];
 
     renderWithQuery(
-      <SessionInspector
+      <ActivityUnderTest
         session={session(
           [
             pr(42, "draft", {
@@ -2110,8 +2178,8 @@ describe("SessionInspector tabs", () => {
   });
 
   it("collapses and expands a section from its heading", async () => {
-    renderWithQuery(<SessionInspector session={session([])} />);
-    const heading = screen.getByRole("button", { name: "Activity" });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")])} />);
+    const heading = screen.getByRole("button", { name: "Pull request" });
     await userEvent.click(heading);
     expect(heading).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(heading);
@@ -4307,7 +4375,7 @@ describe("SessionInspector summary reviews", () => {
       "true",
     );
     expect(screen.queryByRole("tab", { name: "Reviews" })).not.toBeInTheDocument();
-    expect(screen.getByText("Activity")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Activity" })).not.toBeInTheDocument();
     await waitFor(() => expect(onViewChange).toHaveBeenCalledWith("summary"));
   });
 });
@@ -4785,25 +4853,25 @@ describe("SessionInspector branch summary", () => {
     useSessionGitActionStore.setState({ pending: {} });
   });
 
-  it("shows uncommitted work and commits, pushes, and opens a PR in one step", async () => {
+  it("commits and pushes uncommitted work before offering a PR", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 10, 2), changedFile("src/b.ts", 3, 1)] });
     renderWithQuery(<SessionInspector session={session([])} />);
 
     expect(await screen.findByText("2 uncommitted files")).toBeInTheDocument();
     expect(branch().getByText("feat/ns")).toBeInTheDocument();
-    expect(branch().getByText("→ main")).toBeInTheDocument();
+    expect(branch().getByText("main ←")).toBeInTheDocument();
     expect(branch().getByText("+13")).toBeInTheDocument();
     expect(within(screen.getByRole("tab", { name: "Files" })).getByText("2")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Commit & create PR" }));
+    await userEvent.click(screen.getByRole("button", { name: "Commit & push" }));
 
     await waitFor(() => expect(sendCalls()).toHaveLength(1));
     expect(sendCalls()[0][1]).toEqual({
       params: { path: { sessionId: "sess-1" } },
-      body: { message: expect.stringContaining("open a pull request against `main`") },
+      body: { message: expect.stringContaining("Commit all uncommitted changes with a clear message and push this branch") },
     });
-    expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeDisabled();
-    expect(screen.queryByText(/agent/i)).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Committing and pushing…" })).toBeDisabled();
+    expect(sendCalls()[0][1].body.message).not.toContain("open a pull request");
   });
 
   it("opens the Files tab from a status row", async () => {
@@ -4821,15 +4889,42 @@ describe("SessionInspector branch summary", () => {
 
     expect(await screen.findByText("2 commits")).toBeInTheDocument();
     expect(screen.getByText("not pushed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Push & create PR" })).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "More git actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Push" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("menuitem", { name: "Create draft PR" }));
-
+    await userEvent.click(screen.getByRole("button", { name: "Push" }));
     await waitFor(() => expect(sendCalls()).toHaveLength(1));
-    expect(sendCalls()[0][1].body.message).toContain("open a draft pull request");
-    expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeDisabled();
+    expect(sendCalls()[0][1].body.message).toContain("Push this branch");
+    expect(sendCalls()[0][1].body.message).not.toContain("pull request");
+    expect(await screen.findByRole("button", { name: "Pushing…" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
+  });
+
+  it("shows the last commit and how far the branch is behind its base", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          branchState: {
+            ...pushed(2),
+            behind: 3,
+            conflicts: true,
+            lastCommit: { sha: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0", subject: "fix sidebar spacing", committedAt: new Date().toISOString() },
+          },
+        })}
+      />,
+    );
+
+    expect(await branch().findByText("fix sidebar spacing")).toBeInTheDocument();
+    expect(branch().getByText(/^a1b2c3d · /)).toBeInTheDocument();
+    expect(await branch().findByText("3 commits behind main")).toBeInTheDocument();
+    expect(branch().getByText("conflicts")).toHaveClass("text-status-in-review");
+  });
+
+  it("omits the behind row and conflict note while the branch is current", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: { ...pushed(2), behind: 0, conflicts: false } })} />);
+
+    expect(await screen.findByText("pushed")).toBeInTheDocument();
+    expect(branch().queryByText(/behind/)).not.toBeInTheDocument();
+    expect(branch().queryByText("conflicts")).not.toBeInTheDocument();
   });
 
   it("offers a plain Create PR once every commit is pushed", async () => {
@@ -4878,10 +4973,10 @@ describe("SessionInspector branch summary", () => {
   });
 
   it("leaves the loading state once the PR appears", async () => {
-    mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
-    const { queryClient, rerender } = renderWithQuery(<SessionInspector session={session([])} />);
+    mockGitState({ committed: [changedFile("src/a.ts", 1, 0)] });
+    const { queryClient, rerender } = renderWithQuery(<SessionInspector session={session([], { branchState: pushed(1) })} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Commit & create PR" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Create PR" }));
     expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeInTheDocument();
 
     rerender(
@@ -4927,9 +5022,9 @@ describe("SessionInspector branch summary", () => {
     );
     renderWithQuery(<SessionInspector session={session([])} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Commit & create PR" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Commit & push" }));
 
     expect(await screen.findByText("Session is terminated")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Commit & create PR" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Commit & push" })).toBeEnabled();
   });
 });

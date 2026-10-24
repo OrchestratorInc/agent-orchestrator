@@ -6,27 +6,38 @@ import type { TFunction } from "i18next";
 import {
 	ArrowUpFromLine,
 	ChevronDown,
-	ChevronRight,
 	GitBranch,
 	GitCommitHorizontal,
+	GitMerge,
 	GitPullRequest,
 	GitPullRequestDraft,
+	History,
 	Loader2,
 	Pencil,
 } from "lucide-react";
 import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 import { apiErrorMessage } from "../lib/api-client";
+import { formatTimeCompact } from "../lib/format-time";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
+import { cn } from "../lib/utils";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { DiffCounts, InfoRow } from "./InspectorInfoRow";
 
 const PENDING_MAX_MS = 10 * 60_000;
+// The branch action is a thin, full-width 24px control under the status
+// rows. size="none" keeps Button's default height/padding from competing with
+// these tokens; the ring matches the status rows above it. bg-clip-border lets
+// the fill run under the transparent border, so split segments meet with one
+// painted hairline instead of a gap.
+const COMPACT_ACTION =
+	"h-control-sm gap-1 bg-clip-border px-2 text-xs focus-visible:relative focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-ring/60";
 // After the session goes idle, how long to wait for the result to show up.
 // A new PR reaches the session through SCM discovery, which lags the push.
 const SETTLE_MS: Record<SessionGitActionKind, number> = {
@@ -52,6 +63,7 @@ export function SessionBranchSummary({
 	hostId,
 	onOpenFiles,
 	openPRNumber,
+	shippedHeadShas,
 	pullRequests,
 	session,
 	title,
@@ -60,7 +72,10 @@ export function SessionBranchSummary({
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
-	pullRequests: ReactNode;
+	/** Head commits of merged or closed PRs: a branch still sitting on one has nothing new to ship. */
+	shippedHeadShas?: string[];
+	/** Renders the PR rows; `branchWork` belongs inside the open PR, when there is one. */
+	pullRequests?: (branchWork: ReactNode | undefined) => ReactNode;
 	session: WorkspaceSession;
 	title: string;
 }) {
@@ -84,7 +99,7 @@ export function SessionBranchSummary({
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
-	const plan = gitActionPlan(facts, openPRNumber);
+	const plan = gitActionPlan(facts, openPRNumber, shippedHeadShas);
 
 	const send = useMutation({
 		mutationFn: async (kind: SessionGitActionKind) => {
@@ -123,10 +138,26 @@ export function SessionBranchSummary({
 		return () => clearTimeout(timer);
 	}, [clearPending, key, pending]);
 
-	const cards = pullRequests ? <div className="flex flex-col gap-2 pb-3 last:pb-0">{pullRequests}</div> : null;
-	if (!showGit) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+	// With PRs, one card holds each PR's rows. The branch's own work is what
+	// lands on the open PR, so it renders inside that PR; with no open PR it gets
+	// a group of its own, led by the branch row so it says whose work it is.
+	const prCard = (work?: ReactNode, branchRow?: ReactNode, cardAction?: ReactNode) => (
+		<div className="flex min-w-0 flex-col divide-y divide-border rounded-(--radius-panel) border border-border/50 bg-card px-3">
+			{pullRequests?.(openPRNumber !== undefined ? work : undefined)}
+			{work && openPRNumber === undefined ? (
+				<div className="flex min-w-0 flex-col py-1.5">
+					{branchRow}
+					{work}
+				</div>
+			) : null}
+			{cardAction ? <div className="flex min-w-0 justify-end py-2.5">{cardAction}</div> : null}
+		</div>
+	);
+	if (!showGit) return pullRequests ? <InspectorSection surface={false} title={title}>{prCard()}</InspectorSection> : null;
 
 	const commitsRow = commitsRowView(facts, t);
+	const lastCommit = facts.branch?.lastCommit;
+	const behind = facts.branch?.behind ?? 0;
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
 	const { branch, naming } = sessionBranchPresentation(session);
 	if (!branch && !naming && !pullRequests && !hasWork) return null;
@@ -135,9 +166,9 @@ export function SessionBranchSummary({
 	let action: ReactNode = null;
 	if (pending) {
 		action = (
-			<Button aria-busy="true" className="w-full" disabled size="sm" type="button" variant="secondary">
+			<Button aria-busy="true" className={cn(COMPACT_ACTION, "min-w-0 shrink")} disabled size="none" type="button" variant="secondary">
 				<Loader2 aria-hidden="true" className="size-icon-sm animate-spin" />
-				{pendingLabel(pending.kind, t)}
+				<span className="truncate">{pendingLabel(pending.kind, t)}</span>
 			</Button>
 		);
 	} else if (plan) {
@@ -145,38 +176,84 @@ export function SessionBranchSummary({
 			<GitActionButton
 				menu={plan.menu.map((kind) => ({ kind, label: menuLabel(kind, t) }))}
 				onRun={(kind) => send.mutate(kind)}
-				primary={{ kind: plan.primary, label: primaryLabel(plan.primary, facts, openPRNumber, t) }}
+				primary={{ kind: plan.primary, label: primaryLabel(plan.primary, openPRNumber, t) }}
 				variant={openPRNumber === undefined ? "primary" : "secondary"}
 			/>
 		);
 	}
 
+	const workRows = (
+		<>
+			{facts.uncommitted.length > 0 ? (
+				<InfoRow
+					icon={Pencil}
+					label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
+					onClick={onOpenFiles}
+					trailing={<DiffCounts additions={sum(facts.uncommitted, "additions")} deletions={sum(facts.uncommitted, "deletions")} />}
+				/>
+			) : null}
+			{commitsRow ? (
+				<InfoRow
+					icon={GitCommitHorizontal}
+					label={commitsRow.label}
+					note={commitsRow.note}
+					noteTone={commitsRow.noteTone}
+					onClick={onOpenFiles}
+					trailing={<DiffCounts additions={sum(facts.committed, "additions")} deletions={sum(facts.committed, "deletions")} />}
+				/>
+			) : null}
+			{lastCommit ? (
+				<InfoRow
+					icon={History}
+					label={lastCommit.subject}
+					note={`${lastCommit.sha.slice(0, 7)} · ${formatTimeCompact(lastCommit.committedAt)}`}
+					noteTone="muted"
+					title={lastCommit.subject}
+				/>
+			) : null}
+			{facts.base && behind > 0 ? (
+				<InfoRow
+					icon={GitMerge}
+					label={t("inspector.git.behind", { base: facts.base, count: behind })}
+					note={facts.branch?.conflicts ? t("inspector.git.conflicts") : undefined}
+					noteTone="warn"
+				/>
+			) : null}
+		</>
+	);
+	const hasWorkRows = hasWork || lastCommit !== undefined || (facts.base !== undefined && behind > 0);
+	const branchRow =
+		branch || naming ? (
+			<InfoRow
+				icon={GitBranch}
+				label={
+					naming ? (
+						<BranchNamingLabel />
+					) : (
+						<>
+							{/* GitHub order: base ← head. */}
+							{facts.base ? <span className="text-passive">{facts.base} ← </span> : null}
+							{branch}
+						</>
+					)
+				}
+				title={branch}
+			/>
+		) : null;
+
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
-				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
-				{cards}
-				{facts.uncommitted.length > 0 ? (
-					<GitStatusRow
-						additions={sum(facts.uncommitted, "additions")}
-						deletions={sum(facts.uncommitted, "deletions")}
-						icon={<Pencil aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-						label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
-						onClick={onOpenFiles}
-					/>
-				) : null}
-				{commitsRow ? (
-					<GitStatusRow
-						additions={sum(facts.committed, "additions")}
-						deletions={sum(facts.committed, "deletions")}
-						icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-						label={commitsRow.label}
-						note={commitsRow.note}
-						noteTone={commitsRow.noteTone}
-						onClick={onOpenFiles}
-					/>
-				) : null}
-				{action ? <div className={hasWork ? "mt-3" : undefined}>{action}</div> : null}
+				{pullRequests ? (
+					// The open PR shows its own base ← head; work outside any PR is led by the branch row.
+					prCard(hasWorkRows ? workRows : undefined, branchRow, action)
+				) : (
+					<>
+						{branchRow}
+						{workRows}
+					</>
+				)}
+				{action && !pullRequests ? <div className={cn("flex min-w-0 justify-end", hasWork && "mt-3")}>{action}</div> : null}
 				{sendError ? (
 					<p className="mt-1.5 text-xs leading-normal text-error" role="status">
 						{sendError}
@@ -184,57 +261,6 @@ export function SessionBranchSummary({
 				) : null}
 			</section>
 		</InspectorSection>
-	);
-}
-
-function BranchLine({ base, branch, naming }: { base?: string; branch?: string; naming: boolean }) {
-	return (
-		<div className="flex min-w-0 items-center gap-1.5 pb-3 font-mono last:pb-0 text-xs text-muted-foreground">
-			<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />
-			{naming ? <BranchNamingLabel /> : <span className="min-w-0 truncate" title={branch}>
-				{branch}
-			</span>}
-			{base && !naming ? <span className="shrink-0 text-passive">→ {base}</span> : null}
-		</div>
-	);
-}
-
-function GitStatusRow({
-	additions,
-	deletions,
-	icon,
-	label,
-	note,
-	noteTone,
-	onClick,
-}: {
-	additions: number;
-	deletions: number;
-	icon: ReactNode;
-	label: string;
-	note?: string;
-	noteTone?: "warn" | "muted";
-	onClick: () => void;
-}) {
-	return (
-		<button
-			className="-mx-1.5 flex min-h-8 items-center gap-2 rounded-md px-1.5 text-left text-sm transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-			onClick={onClick}
-			type="button"
-		>
-			{icon}
-			<span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-sm">
-				<span className="truncate">{label}</span>
-				{note ? (
-					<span className={noteTone === "warn" ? "shrink-0 text-xs text-status-in-review" : "shrink-0 text-xs text-passive"}>{note}</span>
-				) : null}
-			</span>
-			<span className="inline-flex shrink-0 gap-1.5 font-mono text-xs tabular-nums">
-				<span className="text-success">+{additions}</span>
-				<span className="text-error">−{deletions}</span>
-			</span>
-			<ChevronRight aria-hidden="true" className="size-icon-sm shrink-0 text-passive" />
-		</button>
 	);
 }
 
@@ -254,11 +280,18 @@ function GitActionButton({
 		? <ArrowUpFromLine aria-hidden="true" className="size-icon-sm" />
 		: <GitPullRequest aria-hidden="true" className="size-icon-sm" />;
 	return (
-		<div className="flex w-full">
+		// The split button presses as one piece: the wrapper takes the tap scale
+		// so the primary half never shrinks away from the menu trigger.
+		<div className="flex min-w-0 max-w-full transition-transform duration-[100ms] ease-out has-[[data-split-primary]:active]:translate-y-px has-[[data-split-primary]:active]:scale-[0.96]">
 			<Button
-				className={menu.length ? "min-w-0 flex-1 rounded-r-none" : "w-full"}
+				className={cn(
+					COMPACT_ACTION,
+					"min-w-0 shrink active:not-aria-[haspopup]:translate-y-0 active:not-aria-[haspopup]:scale-100",
+					menu.length > 0 && "rounded-r-none border-r-0",
+				)}
+				data-split-primary=""
 				onClick={() => onRun(primary.kind)}
-				size="sm"
+				size="none"
 				type="button"
 				variant={variant}
 			>
@@ -270,10 +303,12 @@ function GitActionButton({
 					<DropdownMenuTrigger asChild>
 						<Button
 							aria-label={t("inspector.git.moreActions")}
-							className={variant === "primary"
-								? "w-control-md rounded-l-none border-l-primary-foreground/20 px-0"
-								: "w-control-md rounded-l-none border-l-border px-0"}
-							size="sm"
+							className={cn(
+								COMPACT_ACTION,
+								"w-control-sm rounded-l-none px-0",
+								variant === "primary" ? "border-l-primary-foreground/15" : "border-l-border",
+							)}
+							size="none"
 							type="button"
 							variant={variant}
 						>
@@ -315,18 +350,24 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined): GitActionPlan | null {
+export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, shippedHeadShas: string[] = []): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
+	// A squash or rebase merge leaves the branch "ahead" of its base for good, so
+	// a branch whose tip is a merged PR's head has nothing left to open a PR for.
+	const tip = facts.branch?.lastCommit?.sha;
+	if (openPRNumber === undefined && !dirty && unpushed === 0 && tip && shippedHeadShas.some((sha) => sha && sha === tip)) return null;
 	if (openPRNumber !== undefined) {
 		if (dirty) return { primary: "commitPush", menu: ["commit"] };
 		if (unpushed > 0) return { primary: "push", menu: [] };
 		return null;
 	}
-	if (dirty) return { primary: "createPR", menu: ["commit", "commitPush", "createDraftPR"] };
-	if (unpushed > 0) return { primary: "createPR", menu: ["push", "createDraftPR"] };
-	if (facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
+	// Opening a PR comes last: nothing is offered for it until all work is committed and pushed.
+	if (dirty) return { primary: "commitPush", menu: ["commit"] };
+	const commits = facts.branch?.commits ?? 0;
+	if (unpushed > 0 || (commits > 0 && !facts.branch?.remoteBranch)) return { primary: "push", menu: [] };
+	if (commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
 	return null;
 }
 
@@ -361,11 +402,9 @@ export function gitActionMessage(kind: SessionGitActionKind, base: string | unde
 	}
 }
 
-function primaryLabel(kind: SessionGitActionKind, facts: GitFacts, openPRNumber: number | undefined, t: TFunction): string {
-	if (kind === "commitPush") return t("inspector.git.commitAndPushToPR", { number: openPRNumber });
-	if (kind === "push") return t("inspector.git.pushToPR", { number: openPRNumber });
-	if (facts.uncommitted.length > 0) return t("inspector.git.commitAndCreatePR");
-	if (!isPushed(facts.branch)) return t("inspector.git.pushAndCreatePR");
+function primaryLabel(kind: SessionGitActionKind, openPRNumber: number | undefined, t: TFunction): string {
+	if (kind === "commitPush") return openPRNumber === undefined ? t("inspector.git.commitAndPush") : t("inspector.git.commitAndPushToPR", { number: openPRNumber });
+	if (kind === "push") return openPRNumber === undefined ? t("inspector.git.push") : t("inspector.git.pushToPR", { number: openPRNumber });
 	return t("inspector.git.createPR");
 }
 
