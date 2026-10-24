@@ -192,6 +192,11 @@ Orchestrator.inc works with the coding agents and source-control workflow you al
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="frontend/src/renderer/assets/agents/zcode-dark.svg" /><img src="frontend/src/renderer/assets/agents/zcode-light.svg" alt="ZCode" width="24" height="24" align="middle" /></picture> &nbsp; <b>ZCode</b></td>
+    <td valign="middle" nowrap></td>
+    <td valign="middle" nowrap></td>
+  </tr>
 </table>
 
 [Browse agent setup guides →](https://docs.orchestrator.inc/plugins/agents)

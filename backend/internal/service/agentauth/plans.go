@@ -59,6 +59,18 @@ var plans = []Plan{
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
 	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
+	zcodeLoginPlan(),
+}
+
+// zcodeLoginPlan opens the trusted `ao zcode-login` menu: the CLI's browser
+// login against the adapter-owned credential store (service.start injects
+// ZCODE_DATA_BASE_DIR to match the auth probe and session launches), or a
+// Z.ai Coding Plan API key saved to the AO-owned provider config
+// (service.start appends --provider-config with that path). The raw z.ai
+// OAuth token lives one hour and the CLI has no refresh flow; the API key
+// does not expire, so the guidance steers unattended runs to it.
+func zcodeLoginPlan() Plan {
+	return loginMenuPlan("zcode", "zcode-login", nil, "Log in to ZCode", []string{"zcode", "login", "zai"}, "Choose browser sign-in to Z.AI (token lives one hour) or a Z.ai Coding Plan API key for unattended runs", "https://z.ai")
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {

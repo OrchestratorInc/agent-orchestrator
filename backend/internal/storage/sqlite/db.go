@@ -2123,7 +2123,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode {
+	needsZcode := !strings.Contains(schema, "'zcode'")
+	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsZcode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2253,6 +2254,12 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsZcode {
+		// Migration 20261019154945497_allow_zcode_harness widens the constraint by
+		// anchoring on the retained 'fake' fixture harness, for the same reason
+		// as Command Code above.
+		repairs = append(repairs, replacement{"'fake'))", "'zcode', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2310,6 +2317,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'zcode'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing ZCode and did not match known pre-ZCode schema")
 	}
 	return nil
 }

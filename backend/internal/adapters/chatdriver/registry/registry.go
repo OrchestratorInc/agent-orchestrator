@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/zcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/agyacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
@@ -42,6 +43,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/piacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/qwenacp"
 	unrealchat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/unrealagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/zcodeappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -71,8 +73,9 @@ func New(drivers ...ports.ChatDriver) *Registry {
 
 // Build returns the drivers the daemon ships.
 //
-// Codex uses its native app-server protocol. Claude Code uses AO's reusable ACP
-// transport plus claude-agent-acp, pointed at the user's own Claude executable.
+// Codex and ZCode use their native app-server protocols. Claude Code uses AO's
+// reusable ACP transport plus claude-agent-acp, pointed at the user's own
+// Claude executable.
 // Cursor, OpenCode, Droid, Kimi, Kimchi, Pi, OMP, Qwen, Command Code,
 // DeepSeek Harness, and GitHub Copilot expose ACP themselves, so AO launches the exact executable
 // resolved by each existing agent plugin. No path scrapes terminal output or
@@ -123,6 +126,8 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	add(copilotacp.New(copilotPlugin, log), copilotPlugin)
 	agyPlugin := agy.New()
 	add(agyacp.New(agyPlugin, log), agyPlugin)
+	zcodePlugin := zcode.New()
+	add(zcodeappserver.New(zcodePlugin, log), zcodePlugin)
 	return r
 }
 
