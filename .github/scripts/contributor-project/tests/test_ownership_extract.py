@@ -243,3 +243,32 @@ class IncrementalExtractionTests(unittest.TestCase):
             self.assertEqual([p["number"] for p in raw["prs"]], [1, 2])
             self.assertEqual(raw["meta"]["generated_at"], self.now.isoformat())
             self.assertFalse((root / "research/ownership-cache").exists())
+
+    def test_inconsistent_pagination_discards_partial_cache_but_keeps_previous_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "research/ownership-raw.json"
+            ownership.save(raw, self.cached())
+            before = raw.read_bytes()
+            cache = root / "research/ownership-cache"
+            ownership.save(cache / "page.json", {"data": "cached page"})
+            with patch.object(ownership, "ROOT", root), patch.object(sys, "argv", ["ownership_extract.py"]), \
+                    patch.object(ownership, "pull_requests", side_effect=ownership.IncompleteEvidence("pagination changed")), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ownership.IncompleteEvidence):
+                ownership.main()
+            self.assertEqual(raw.read_bytes(), before)
+            self.assertFalse(cache.exists())
+            self.assertFalse((root / "research/ownership-progress.json").exists())
+
+    def test_file_pagination_without_progress_fails_instead_of_looping(self):
+        empty = {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+        files = {"nodes": [{"path": "a.py", "additions": 1, "deletions": 0}],
+                 "pageInfo": {"hasNextPage": True, "endCursor": "same"}}
+        node = {"number": 1, "mergedAt": self.now.isoformat(), "changedFiles": 2,
+                "author": {"login": "alice", "__typename": "User"}, "files": files, "reviews": empty}
+        responses = [{"data": {"search": {**empty, "nodes": [node], "issueCount": 1}}},
+                     {"data": {"repository": {"pullRequest": {"files": files}}}}]
+        with patch.object(ownership, "api", side_effect=responses) as api, contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(ownership.IncompleteEvidence, "did not advance"):
+            ownership.pull_requests(Path("unused"), self.now - timedelta(days=1), self.now)
+        self.assertEqual(api.call_count, 2)

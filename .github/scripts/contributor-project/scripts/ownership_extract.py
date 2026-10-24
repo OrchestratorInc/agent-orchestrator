@@ -27,6 +27,10 @@ QUERY = '''query($search:String!,$cursor:String) {
 }'''.replace("FILES", FILES.replace(",after:$cursor", "")).replace("REVIEWS", REVIEWS.replace(",after:$cursor", "")).replace("PAGE", PAGE)
 
 
+class IncompleteEvidence(RuntimeError):
+    """Discard inconsistent cached pagination instead of retrying it forever."""
+
+
 def is_bot(value, bot_logins=()):
     value = (value or "").lower()
     return bool(value in bot_logins or "[bot]" in value or value in {"noreply@github.com", "actions@github.com"} or
@@ -102,26 +106,31 @@ def pull_requests(cache, start, end):
                 break
             following = connection["pageInfo"]["endCursor"]
             if not following or following == cursor:
-                raise RuntimeError("PR pagination did not advance")
+                raise IncompleteEvidence("PR pagination did not advance")
             cursor = following
         if len(nodes) != total:
-            raise RuntimeError("PR pagination is incomplete; refresh the GraphQL cache")
+            raise IncompleteEvidence("PR pagination is incomplete; refresh the GraphQL cache")
         print(f"PRs: {len(nodes)} in {first.date()}..{last.date()}", flush=True)
         return nodes
 
     nodes = window(start, end)
     if len({n["number"] for n in nodes}) != len(nodes):
-        raise RuntimeError("PR pagination is inconsistent; refresh the GraphQL cache")
+        raise IncompleteEvidence("PR pagination is inconsistent; refresh the GraphQL cache")
     prs = []
     for node in nodes:
         for field, selection in [("files", FILES), ("reviews", REVIEWS)]:
             connection = node[field]
+            seen_cursors = set()
             while connection["pageInfo"]["hasNextPage"]:
+                cursor = connection["pageInfo"]["endCursor"]
+                if not cursor or cursor in seen_cursors:
+                    raise IncompleteEvidence(f"PR #{node['number']} {field} pagination did not advance")
+                seen_cursors.add(cursor)
                 query = 'query($number:Int!,$cursor:String) { repository(owner:"OrchestratorInc",name:"agent-orchestrator") { pullRequest(number:$number) { ' + selection + ' } } }'
                 connection = api(cache, query, {"number": node["number"], "cursor": connection["pageInfo"]["endCursor"]})["data"]["repository"]["pullRequest"][field]
                 node[field]["nodes"].extend(connection["nodes"])
-        if len(node["files"]["nodes"]) != node["changedFiles"]:
-            raise RuntimeError(f"Incomplete file list for PR #{node['number']}")
+        if len(node["files"]["nodes"]) != node["changedFiles"] or len({f["path"] for f in node["files"]["nodes"]}) != node["changedFiles"]:
+            raise IncompleteEvidence(f"Incomplete or duplicate file list for PR #{node['number']}")
         author = (node["author"] or {}).get("login")
         if not is_bot(author):
             reviewers = {(r["author"] or {}).get("login") for r in node["reviews"]["nodes"]}
@@ -177,7 +186,13 @@ def main():
     # Pin request windows across runner timeouts, so successful API pages can be
     # restored and reused until this extraction is complete.
     save(progress, {"repo": REPO, "as_of": as_of.isoformat()})
-    prs, fetched, bot_prs, bots = pull_requests(cache, refresh_start, as_of)
+    try:
+        prs, fetched, bot_prs, bots = pull_requests(cache, refresh_start, as_of)
+    except IncompleteEvidence:
+        # Outages retain completed pages; inconsistent snapshots need fresh ones.
+        progress.unlink(missing_ok=True)
+        shutil.rmtree(cache, ignore_errors=True)
+        raise
     retained = {}
     if previous:
         bots |= set(previous["meta"].get("excluded_bot_logins", []))
