@@ -1042,19 +1042,20 @@ func TestAddWorktreeReportsOrphanedWorktreeFromPreviousDataRoot(t *testing.T) {
 	}
 }
 
-// TestQuoteRecoveryPath covers the shell-escaping used by the remediation
-// commands: the user copies the command into a shell, so the path must arrive as
-// one argument even when an old data root contains spaces.
+// TestQuoteRecoveryPath covers the literal quoting used by the remediation
+// commands: the user copies the command into a POSIX shell or PowerShell, so
+// spaces must stay part of one argument and `$VAR`, `$(...)` and backticks must
+// not be expanded.
 func TestQuoteRecoveryPath(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
 		want string
 	}{
-		{"plain", "/managed/proj/sess", `"/managed/proj/sess"`},
-		{"windows", `D:/managed/proj/sess`, `"D:/managed/proj/sess"`},
-		{"spaces", `D:/AO Lab/worktrees/proj/sess`, `"D:/AO Lab/worktrees/proj/sess"`},
-		{"embedded quote", `/tmp/weird"name/proj/sess`, `"/tmp/weird\"name/proj/sess"`},
+		{"plain", "/managed/proj/sess", `'/managed/proj/sess'`},
+		{"windows", `D:/managed/proj/sess`, `'D:/managed/proj/sess'`},
+		{"spaces", `D:/AO Lab/worktrees/proj/sess`, `'D:/AO Lab/worktrees/proj/sess'`},
+		{"expansion characters", "/tmp/AO $HOME/$(id)/`whoami`", "'/tmp/AO $HOME/$(id)/`whoami`'"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1063,11 +1064,22 @@ func TestQuoteRecoveryPath(t *testing.T) {
 			}
 		})
 	}
+
+	// An embedded quote is the one case whose escape differs by platform: POSIX
+	// closes and reopens the string, PowerShell doubles the quote.
+	want := `'/tmp/AO'\''s worktree'`
+	if runtime.GOOS == "windows" {
+		want = `'/tmp/AO''s worktree'`
+	}
+	if got := quoteRecoveryPath("/tmp/AO's worktree"); got != want {
+		t.Fatalf("quoteRecoveryPath with embedded quote = %q, want %q", got, want)
+	}
 }
 
 // TestAddWorktreeQuotesOrphanRemediationPath covers the recovery command for an
-// orphan under a data root that contains spaces: the command must quote the path
-// so copying it into a shell does not split it into several arguments.
+// orphan under a data root that contains spaces and shell-expansion characters:
+// the path must be quoted as a literal so copying the command into a shell does
+// not split or rewrite it.
 func TestAddWorktreeQuotesOrphanRemediationPath(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -1075,7 +1087,7 @@ func TestAddWorktreeQuotesOrphanRemediationPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	orphanPath := filepath.Join(t.TempDir(), "AO Lab", "proj", "sess")
+	orphanPath := filepath.Join(t.TempDir(), "AO $HOME Lab", "proj", "sess")
 	managedPath := filepath.Join(root, "proj", "sess")
 	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")

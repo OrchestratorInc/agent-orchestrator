@@ -1663,15 +1663,16 @@ func TestWorkspaceIntegrationReportsOrphanedWorktreeFromPreviousDataRoot(t *test
 	}
 }
 
-// TestWorkspaceIntegrationOrphanRemediationCommandHandlesSpacedPath proves the
-// recovery command from the 409 is copy-pasteable when the previous data root
-// contains spaces: the quoted path survives a real shell and actually clears the
-// orphan, after which the spawn succeeds.
-func TestWorkspaceIntegrationOrphanRemediationCommandHandlesSpacedPath(t *testing.T) {
+// TestWorkspaceIntegrationOrphanRemediationCommandHandlesShellMetacharacters
+// proves the recovery command from the 409 is copy-pasteable when the previous
+// data root contains spaces and shell metacharacters ($HOME, backticks): the
+// path must survive a real shell literally, actually clear the orphan, and let
+// the spawn succeed.
+func TestWorkspaceIntegrationOrphanRemediationCommandHandlesShellMetacharacters(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
 	repo := setupOriginClone(t, git, tmp)
-	oldRoot := filepath.Join(tmp, "old managed root")
+	oldRoot := filepath.Join(tmp, "old $HOME `whoami` root")
 	newRoot := filepath.Join(tmp, "managed")
 	oldWS, err := New(Options{Binary: git, ManagedRoot: oldRoot, RepoResolver: StaticRepoResolver{"proj": repo}})
 	if err != nil {
@@ -1695,8 +1696,8 @@ func TestWorkspaceIntegrationOrphanRemediationCommandHandlesSpacedPath(t *testin
 	}
 	command := remediationCommandFromError(t, err)
 	// git prints worktree paths with forward slashes, including on Windows.
-	if quoted := `"` + filepath.ToSlash(orphanInfo.Path) + `"`; !strings.Contains(command, quoted) {
-		t.Fatalf("command = %q, want quoted orphan path %s", command, quoted)
+	if quoted := "'" + filepath.ToSlash(orphanInfo.Path) + "'"; !strings.Contains(command, quoted) {
+		t.Fatalf("command = %q, want literal orphan path %s", command, quoted)
 	}
 	runShellCommand(t, command)
 	if _, statErr := os.Stat(orphanInfo.Path); !errors.Is(statErr, os.ErrNotExist) {
@@ -1707,17 +1708,21 @@ func TestWorkspaceIntegrationOrphanRemediationCommandHandlesSpacedPath(t *testin
 	}
 }
 
-// remediationCommandFromError returns the first backticked command in a 409
-// message, i.e. the exact text the user is told to paste into a shell.
+// remediationCommandFromError returns the command fenced by the 409's
+// "(`...`), then retry" remediation, i.e. the exact text the user is told to
+// paste into a shell. The delimiters, not backtick counting, identify it: the
+// path itself may legally contain backticks.
 func remediationCommandFromError(t *testing.T, err error) string {
 	t.Helper()
 	msg := err.Error()
-	start := strings.Index(msg, "`")
+	const prefix = "(`"
+	const suffix = "`), then retry"
+	start := strings.Index(msg, prefix)
 	if start < 0 {
 		t.Fatalf("err = %v, want a backticked remediation command", err)
 	}
-	rest := msg[start+1:]
-	end := strings.Index(rest, "`")
+	rest := msg[start+len(prefix):]
+	end := strings.Index(rest, suffix)
 	if end < 0 {
 		t.Fatalf("err = %v, want a closed backticked remediation command", err)
 	}
@@ -1725,19 +1730,22 @@ func remediationCommandFromError(t *testing.T, err error) string {
 }
 
 // runShellCommand runs a copy-pasted remediation command the way a user would:
-// through the platform shell, so quoting is exercised for real.
+// through the platform shell, so quoting is exercised for real. The commands
+// assume a POSIX shell or PowerShell; cmd.exe has no literal quoting form.
 func runShellCommand(t *testing.T, command string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		// Go's argv escaping is not cmd.exe escaping, so a quoted command passed
-		// as an argument would be mangled before cmd ever sees it. Run it from a
-		// batch file instead, which is how the command is pasted on Windows
-		// anyway.
-		path := filepath.Join(t.TempDir(), "recover.bat")
-		if err := os.WriteFile(path, []byte("@echo off\r\n"+command+"\r\n"), 0o644); err != nil {
-			t.Fatalf("write recovery batch file: %v", err)
+		// Go's argv escaping is not PowerShell escaping, so a quoted command
+		// passed as an argument would be mangled before PowerShell ever sees it.
+		// Run it from a script file instead, which is how the command is pasted
+		// on Windows anyway. The BOM keeps Windows PowerShell 5.1 from reading
+		// the file as ANSI.
+		path := filepath.Join(t.TempDir(), "recover.ps1")
+		script := append([]byte{0xEF, 0xBB, 0xBF}, []byte(command+"\r\n")...)
+		if err := os.WriteFile(path, script, 0o644); err != nil {
+			t.Fatalf("write recovery script: %v", err)
 		}
-		run(t, "cmd", "/c", path)
+		run(t, "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path)
 		return
 	}
 	run(t, "sh", "-c", command)

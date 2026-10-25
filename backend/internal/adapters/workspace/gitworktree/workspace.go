@@ -1652,7 +1652,7 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 // this same project and session ends with exactly the same relative path under
 // some other root, while a worktree AO still owns sits inside the managed root
 // (orphanedManagedWorktree). An orphan is surfaced as the typed 409 with the
-// exact, shell-quoted `git -C <repo> worktree remove "<path>"` command, so the
+// exact, shell-quoted `git -C <repo> worktree remove '<path>'` command, so the
 // user can clear it from any directory; it is never removed automatically,
 // because a path-suffix match cannot prove the other owner is inactive (two
 // active AO instances share the layout) and `git worktree remove` (without
@@ -1678,8 +1678,9 @@ func (w *Workspace) resolveBranchConflict(records []worktreeRecord, repo, branch
 	// the typed 409 with the exact, copy-pasteable remediation instead.
 	//
 	// The commands name the repository with -C because the user is pasting them
-	// into whatever directory their terminal happens to be in, and they quote
-	// every path so a data root with spaces stays a single argument.
+	// into whatever directory their terminal happens to be in, and every path is
+	// quoted as a literal argument (quoteRecoveryPath) so spaces stay part of the
+	// path and shell expansion cannot rewrite it.
 	gitCommand := "git -C " + quoteRecoveryPath(repo)
 	quoted := quoteRecoveryPath(conflict.Path)
 	remediation := fmt.Sprintf("this looks like an orphaned AO worktree from a previous data root; remove it (`%s worktree remove %s`), then retry", gitCommand, quoted)
@@ -1692,18 +1693,21 @@ func (w *Workspace) resolveBranchConflict(records []worktreeRecord, repo, branch
 	return records, branchCheckedOutElsewhereError(branch, conflict.Path, remediation)
 }
 
-// quoteRecoveryPath renders path as one argument in the copy-pasteable
-// remediation command. The user pastes it into whatever shell the machine runs
-// (POSIX sh, PowerShell or cmd.exe), and double quotes are the one quoting form
-// all three agree on, so an old data root such as `D:/AO Lab/worktrees/...`
-// reaches `git worktree remove` as a single argument instead of word-splitting.
-// Everything else is left verbatim: a backslash is a literal path separator in
-// PowerShell and cmd.exe and is not an escape inside POSIX double quotes, so
-// escaping it would corrupt a Windows path. An embedded double quote is escaped
-// the POSIX way; AO's managed layout never contains one, and Windows paths
-// cannot.
+// quoteRecoveryPath renders path as one literal argument in the copy-pasteable
+// remediation command. Double quotes are not enough for that: POSIX shells and
+// PowerShell still expand `$VAR`, `$(...)` and backticks inside them, so a data
+// root that really contains those characters would resolve to a different path
+// or even run the substitution. Single quotes suppress every expansion in both
+// shells and also keep spaces in one argument; only the escape for an embedded
+// single quote differs, because POSIX closes and reopens the string while
+// PowerShell doubles the quote. cmd.exe has no literal quoting form at all, so
+// these commands assume a POSIX shell or PowerShell (which includes the default
+// Windows terminals AO users reach for).
 func quoteRecoveryPath(path string) string {
-	return `"` + strings.ReplaceAll(path, `"`, `\"`) + `"`
+	if runtime.GOOS == "windows" {
+		return "'" + strings.ReplaceAll(path, "'", "''") + "'"
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 }
 
 // branchCheckedOutElsewhereError keeps the typed sentinel and the conflicting
