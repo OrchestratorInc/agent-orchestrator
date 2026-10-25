@@ -105,34 +105,15 @@ func TestSessionOptionsSelectOnlyAChosenModel(t *testing.T) {
 	if got := sessionOptions(ports.ChatTurnSettings{}); got != nil {
 		t.Fatalf("empty settings options = %#v, want nil", got)
 	}
+	if got := sessionOptions(ports.ChatTurnSettings{Effort: "high"}); got != nil {
+		t.Fatalf("effort-only options = %#v, want nil", got)
+	}
 	if got := sessionOptions(ports.ChatTurnSettings{Model: "  "}); got != nil {
 		t.Fatalf("blank model options = %#v, want nil", got)
 	}
 	want := []acpdriver.SessionOption{{ID: "model", Value: "anthropic/claude-opus-4.6"}}
 	if got := sessionOptions(ports.ChatTurnSettings{Model: "  anthropic/claude-opus-4.6  "}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want %#v", got, want)
-	}
-}
-
-// An explicit reasoning effort must fail the turn instead of riding it as a
-// silent no-op: Hermes' session advertises only `model` and `mode`, so AO
-// cannot deliver the choice, and the shared port reserves
-// ErrChatCapabilityUnavailable for exactly this refusal (review comment
-// 4365736480 on PR #6635).
-func TestValidateTurnSettingsRejectsExplicitEffort(t *testing.T) {
-	if err := validateTurnSettings("", ports.ChatTurnSettings{}); err != nil {
-		t.Fatalf("empty settings error = %v, want nil", err)
-	}
-	if err := validateTurnSettings("", ports.ChatTurnSettings{
-		Model: "anthropic/claude-opus-4.6", Approval: ports.PermissionModeDefault,
-	}); err != nil {
-		t.Fatalf("model+approval error = %v, want nil", err)
-	}
-	for _, effort := range []string{"high", "  low  "} {
-		err := validateTurnSettings("", ports.ChatTurnSettings{Effort: effort})
-		if !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
-			t.Fatalf("effort %q error = %v, want ErrChatCapabilityUnavailable", effort, err)
-		}
 	}
 }
 

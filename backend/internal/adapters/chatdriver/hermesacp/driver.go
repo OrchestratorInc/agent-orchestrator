@@ -37,13 +37,12 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityDiffs: true,
 		},
-		Configure:            configure,
-		SessionMode:          sessionMode,
-		SessionOptions:       sessionOptions,
-		ValidateTurnSettings: validateTurnSettings,
-		PermissionPolicy:     permissionPolicy,
-		HistoryReconciler:    reconcileReplay,
-		VersionProbe:         probe,
+		Configure:         configure,
+		SessionMode:       sessionMode,
+		SessionOptions:    sessionOptions,
+		PermissionPolicy:  permissionPolicy,
+		HistoryReconciler: reconcileReplay,
+		VersionProbe:      probe,
 	}, log)
 }
 
@@ -112,6 +111,11 @@ const (
 // advertised id's provider-prefixed suffix (acp/config_options.go
 // resolveProviderPrefixedChoice); the launch carries no model flag because
 // models are session-owned.
+//
+// Effort is not sent. Hermes' session advertises only `model` and `mode`, and
+// like Copilot an effort carried over from another harness's settings must not
+// fail the session: rejecting it would also fail every Resume, and AO's Hermes
+// composer has no effort control to clear it with.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		return []acpdriver.SessionOption{{ID: "model", Value: model}}
@@ -153,18 +157,6 @@ func permissionOption(
 		}
 	}
 	return "", false
-}
-
-// validateTurnSettings refuses an explicit reasoning effort. Hermes' ACP
-// session advertises only `model` and `mode`, so an effort choice would ride
-// every turn as a silent no-op; failing the turn tells the user the choice
-// never reached the provider instead of letting them believe it did.
-func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
-	if effort := strings.TrimSpace(settings.Effort); effort != "" {
-		return fmt.Errorf("%w: Hermes' session advertises no reasoning-effort capability; clear the effort choice to send turns",
-			ports.ErrChatCapabilityUnavailable)
-	}
-	return nil
 }
 
 // versionProbe gates admission on `hermes acp --version` succeeding, which

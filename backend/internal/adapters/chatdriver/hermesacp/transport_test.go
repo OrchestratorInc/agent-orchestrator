@@ -112,6 +112,52 @@ func TestHermesACPTransportSendsExplicitDefaultModeOnPermissiveToDefaultTransiti
 	}
 }
 
+// A saved reasoning effort must not block a Hermes session. Hermes advertises
+// no effort option, so the driver ignores it; refusing it made every send and
+// every Resume fail, and AO's Hermes composer has no effort control to clear
+// the saved value with.
+func TestHermesACPTransportStartsAndResumesWithSavedEffort(t *testing.T) {
+	binary := writeHermesACPExecutable(t, filepath.Join(t.TempDir(), "modes.json"), "")
+	driver := newDriver(
+		&fakePlugin{status: ports.AgentAuthStatusAuthorized, binary: binary},
+		nil,
+		nil,
+	)
+	ctx := context.Background()
+	start := ports.ChatStartConfig{
+		SessionID: "hermes-acp-effort", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
+		Permissions: ports.PermissionModeDefault, Effort: "high",
+	}
+	conversation, err := driver.Start(ctx, start)
+	if err != nil {
+		t.Fatalf("Start with a saved effort: %v", err)
+	}
+	ref, err := conversation.SendTurn(ctx, ports.ChatUserMessage{
+		Text: "hello", Settings: ports.ChatTurnSettings{Effort: "high"},
+	})
+	if err != nil {
+		t.Fatalf("SendTurn with a saved effort: %v", err)
+	}
+	if err := conversation.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+		t.Fatalf("StartDeferredTurn: %v", err)
+	}
+	finishTurn(t, conversation, conversation.Events(), domain.TurnStateCompleted)
+	providerID := conversation.ProviderConversationID()
+	if err := conversation.(ports.ChatProviderTerminator).Terminate(); err != nil {
+		t.Fatalf("Terminate: %v", err)
+	}
+
+	resumed, err := driver.Resume(ctx, ports.ChatResumeConfig{
+		SessionID: start.SessionID, ProviderConversationID: providerID,
+		DataDir: start.DataDir, WorkspacePath: start.WorkspacePath,
+		Permissions: start.Permissions, Effort: "high", HasPriorTurns: true,
+	})
+	if err != nil {
+		t.Fatalf("Resume with a saved effort: %v", err)
+	}
+	_ = resumed.(ports.ChatProviderTerminator).Terminate()
+}
+
 // finishTurn waits for the turn to settle, answering any approval the provider
 // parks for a person, acknowledges the durable receipt, and waits for the
 // controller to release the next turn: the persistent host rejects a
