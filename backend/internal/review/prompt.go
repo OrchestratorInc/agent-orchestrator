@@ -33,6 +33,7 @@ Do these steps in order:
      - Leave optional or nice-to-have suggestions out of "comments"; mention them in the summary only.
      - Omit "comments" only when nothing needs to change.
 	   - Keep the JSON on one line and shell-escape any single quotes in review text before passing it to printf; do not use a heredoc because reviewer panes run through an interactive PTY.
+   - Run each command in steps 1 and 2 as its own shell call, in exactly the shape shown, with nothing before or after it (no cd, &&, ;, or redirection). A headless reviewer has no one to approve commands, so AO approves only that exact shape and refuses anything else.
    - Always use "event": "COMMENT": reviews are posted from the PR author's own account, and GitHub rejects both APPROVE and REQUEST_CHANGES on your own PR. State in the body whether you are requesting changes or approving; the machine-readable verdict goes to AO in step 2.
    - The printed number is the review id. If the call fails on the provider, leave the id empty.
 2. After every PR has its own GitHub review from step 1, record AO's bookkeeping for those already-posted reviews using one command. Pass JSON on stdin so nothing is ever written into the worktree (a file there could be committed onto the worker's branch). Include one object per PR/run from the queue:

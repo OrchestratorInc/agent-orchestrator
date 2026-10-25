@@ -43,52 +43,12 @@ func (r *Reviewer) InvalidateBinaryResolution() {
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
+var _ ports.ReviewerChatProfile = (*Reviewer)(nil)
 
-// reviewerAllowedTools is the read-only tool allowlist the reviewer launches
-// with. The reviewer runs headless (no human to approve prompts) but must stay
-// read-only, so instead of bypassPermissions — which skips the permission
-// system entirely and ignores allow/deny rules — it launches in the default
-// mode where these rules are honored: allow rules auto-approve without
-// prompting, so the reviewer can read the checkout and run the few commands it
-// needs (git diff/log/show to inspect the PR, gh pr view/diff/checks to read
-// PR metadata, printf to pipe review JSON into the downstream commands without
-// writing a worktree file, and `ao review submit` to record the verdict).
-// Claude Code ≥ 2.1.257 still prompts on Bash commands its analyzer cannot
-// verify statically even when an allow rule matches; the PermissionRequest
-// hook AO installs answers those for reviewers (see
-// cli.reviewerPermissionDecision) so the pane never stalls. That hook is also
-// the only route for the `gh api --method POST .../reviews` call that posts
-// the review: a blanket Bash(gh:*) allow rule would admit merges, closes, and
-// arbitrary API mutations that a prefix deny list cannot enumerate (flag
-// spellings, flag order, graphql).
-var reviewerAllowedTools = []string{
-	"Read",
-	"Grep",
-	"Glob",
-	"Bash(printf:*)",
-	"Bash(gh pr view:*)",
-	"Bash(gh pr diff:*)",
-	"Bash(gh pr checks:*)",
-	"Bash(git diff:*)",
-	"Bash(git log:*)",
-	"Bash(git show:*)",
-	"Bash(git status:*)",
-	"Bash(ao review submit:*)",
-}
-
-// reviewerDisallowedTools hard-denies the write paths as defense in depth, so a
-// misbehaving model cannot edit files or move the branch even if a future
-// allowlist entry would otherwise admit it.
-var reviewerDisallowedTools = []string{
-	"Edit",
-	"Write",
-	"NotebookEdit",
-	"Bash(git push:*)",
-	"Bash(git commit:*)",
-	// The reviewer must never merge. No allow rule admits it, so this only
-	// documents the intent and survives a future broader gh allow entry.
-	"Bash(gh pr merge:*)",
-}
+// ReviewChatHarness runs review passes in Claude Code's typed Chat. The review
+// conversation is read-only, so the Chat launches with the same tool lists and
+// answers permission prompts with the same submit-command rule as the pane.
+func (r *Reviewer) ReviewChatHarness() domain.AgentHarness { return domain.HarnessClaudeCode }
 
 // ReviewCommand builds a claude-code invocation that reviews the worker's
 // checkout for the PR. Production launches provide the standing instructions
@@ -111,8 +71,8 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		// Set an explicit non-bypass mode instead of deferring to the user's
 		// Claude defaultMode, which may itself be bypassPermissions.
 		Permissions:     ports.PermissionModeAuto,
-		AllowedTools:    reviewerAllowedTools,
-		DisallowedTools: reviewerDisallowedTools,
+		AllowedTools:    workeragent.ReviewerAllowedTools,
+		DisallowedTools: workeragent.ReviewerDisallowedTools,
 	})
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
@@ -164,8 +124,8 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 	}
 	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{
 		Permissions:     ports.PermissionModeAuto,
-		AllowedTools:    reviewerAllowedTools,
-		DisallowedTools: reviewerDisallowedTools,
+		AllowedTools:    workeragent.ReviewerAllowedTools,
+		DisallowedTools: workeragent.ReviewerDisallowedTools,
 	})
 	if err != nil || !ok {
 		return cmd, ok, err

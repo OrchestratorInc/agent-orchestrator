@@ -2493,6 +2493,100 @@ func TestACPDriverUsesProviderPermissionPolicyBeforeParking(t *testing.T) {
 	}
 }
 
+func TestACPDriverPinsReadOnlyModeAndPolicy(t *testing.T) {
+	agent := &fakeAgent{}
+	var launched LaunchConfig
+	driver := New(Config{
+		Harness: domain.HarnessClaudeCode,
+		Probe:   func(context.Context) error { return nil },
+		Launch: func(_ context.Context, cfg LaunchConfig) (Launch, error) {
+			launched = cfg
+			return Launch{Command: "fake"}, nil
+		},
+		SessionMode: func(ports.PermissionMode) string { return "auto" },
+		PermissionPolicy: func(_ ports.PermissionMode, params acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+			return "allow-once", true
+		},
+		ReadOnly: func(LaunchConfig) ReadOnlySession {
+			return ReadOnlySession{Mode: "default", PermissionPolicy: func(ports.PermissionMode, acpsdk.RequestPermissionRequest) (acpsdk.PermissionOptionId, bool) {
+				return "reject-once", true
+			}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto, ReadOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+	if !launched.ReadOnly {
+		t.Fatal("binding launch config lost ReadOnly")
+	}
+	conv := opened.(*conversation)
+	// A later turn naming Auto must not move the provider off the pinned mode.
+	if err := conv.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}); err != nil {
+		t.Fatalf("apply turn settings: %v", err)
+	}
+	agent.mu.Lock()
+	mode := agent.mode
+	agent.mu.Unlock()
+	if mode != "default" {
+		t.Fatalf("provider mode = %q, want the read-only mode", mode)
+	}
+	response, err := conv.RequestPermission(context.Background(), acpsdk.RequestPermissionRequest{
+		ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "edit-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)},
+		Options: []acpsdk.PermissionOption{
+			{OptionId: "allow-once", Name: "Allow", Kind: acpsdk.PermissionOptionKindAllowOnce},
+			{OptionId: "reject-once", Name: "Deny", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RequestPermission: %v", err)
+	}
+	if response.Outcome.Selected == nil || response.Outcome.Selected.OptionId != "reject-once" {
+		t.Fatalf("permission response = %#v, want the read-only policy's rejection", response)
+	}
+}
+
+func TestACPDriverRefusesReadOnlyWithoutBinding(t *testing.T) {
+	launches := 0
+	driver := New(Config{
+		Harness: domain.HarnessCursor,
+		Probe:   func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) {
+			launches++
+			return Launch{Command: "fake"}, nil
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(&fakeAgent{}))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir(), ReadOnly: true})
+	if !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
+		t.Fatalf("Start read-only = %v, want ErrChatCapabilityUnavailable", err)
+	}
+	_, err = driver.Resume(context.Background(), ports.ChatResumeConfig{
+		WorkspacePath: t.TempDir(), ProviderConversationID: "session-1", ReadOnly: true,
+	})
+	if !errors.Is(err, ports.ErrChatCapabilityUnavailable) {
+		t.Fatalf("Resume read-only = %v, want ErrChatCapabilityUnavailable", err)
+	}
+	if launches != 0 {
+		t.Fatalf("refused read-only launch started %d provider processes", launches)
+	}
+	// A tool-less background task has nothing to restrict.
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), ReadOnly: true, DisableTools: true,
+	})
+	if err != nil {
+		t.Fatalf("Start tool-less read-only: %v", err)
+	}
+	opened.Close()
+}
+
 func TestACPDriverKeepsPermissionPolicyWhenLaterTurnSettingFails(t *testing.T) {
 	agent := &fakeAgent{}
 	driver := New(Config{

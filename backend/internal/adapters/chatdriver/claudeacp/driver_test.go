@@ -11,6 +11,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -311,6 +312,78 @@ func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
 				if !ok || env[claudeAutoCompactWindowEnv] != window {
 					t.Fatalf("lost compaction environment: %#v", options)
 				}
+			}
+		})
+	}
+}
+
+func TestClaudeSessionMetaSendsReviewerToolListsWhenReadOnly(t *testing.T) {
+	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "Review the PR.", ReadOnly: true})
+	options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+	if !reflect.DeepEqual(options["allowedTools"], claudecode.ReviewerAllowedTools) ||
+		!reflect.DeepEqual(options["disallowedTools"], claudecode.ReviewerDisallowedTools) {
+		t.Fatalf("read-only options = %#v, want the reviewer tool lists", options)
+	}
+	if _, restricted := options["tools"]; restricted {
+		t.Fatalf("read-only reviewer lost its read tools: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaKeepsBackgroundTasksToolless(t *testing.T) {
+	meta := claudeSessionMeta(acpdriver.LaunchConfig{ReadOnly: true, DisableTools: true})
+	options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+	if tools, _ := options["tools"].([]string); tools == nil || len(tools) != 0 {
+		t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+	}
+	if !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+		t.Fatalf("background disallowedTools = %#v", options["disallowedTools"])
+	}
+}
+
+func TestClaudeReadOnlySessionPinsDefaultMode(t *testing.T) {
+	session := claudeReadOnlySession(acpdriver.LaunchConfig{ReadOnly: true})
+	if session.Mode != "default" || session.PermissionPolicy == nil {
+		t.Fatalf("read-only session = %#v, want default mode with a policy", session)
+	}
+}
+
+func TestReviewerPermissionPolicyAllowsOnlyTheSubmitCommands(t *testing.T) {
+	const worker = "proj-7"
+	// The options claude-agent-acp offers on an ordinary tool permission.
+	options := []acpsdk.PermissionOption{
+		{OptionId: "reject", Name: "Deny", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		{OptionId: "allow", Name: "Allow Once", Kind: acpsdk.PermissionOptionKindAllowOnce},
+		{OptionId: "allow_always", Name: "Always Allow", Kind: acpsdk.PermissionOptionKindAllowAlways},
+	}
+	request := func(kind acpsdk.ToolKind, command string) acpsdk.RequestPermissionRequest {
+		return acpsdk.RequestPermissionRequest{Options: options, ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: "call-1", Kind: acpsdk.Ptr(kind), RawInput: map[string]any{"command": command},
+		}}
+	}
+	post := `printf '%s' '{"event":"COMMENT"}' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'`
+	submit := `printf '%s' '[{"id":1}]' | ao review submit --session ` + worker + ` --reviews -`
+	tests := []struct {
+		name   string
+		worker string
+		req    acpsdk.RequestPermissionRequest
+		want   acpsdk.PermissionOptionId
+	}{
+		{"review POST", worker, request(acpsdk.ToolKindExecute, post), "allow"},
+		{"ao review submit for the worker", worker, request(acpsdk.ToolKindExecute, submit), "allow"},
+		{"ao review submit for another worker", "proj-8", request(acpsdk.ToolKindExecute, submit), "reject"},
+		{"launch without a worker", "", request(acpsdk.ToolKindExecute, post), "reject"},
+		{"shell write", worker, request(acpsdk.ToolKindExecute, "touch pwned"), "reject"},
+		{"submit with a chained command", worker, request(acpsdk.ToolKindExecute, post+"; rm -rf ."), "reject"},
+		{"file edit", worker, request(acpsdk.ToolKindEdit, post), "reject"},
+		{"no input", worker, acpsdk.RequestPermissionRequest{Options: options, ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute),
+		}}, "reject"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, handled := reviewerPermissionPolicy(tt.worker)(ports.PermissionModeAuto, tt.req)
+			if !handled || got != tt.want {
+				t.Fatalf("policy = (%q, %v), want (%q, true)", got, handled, tt.want)
 			}
 		})
 	}

@@ -47,6 +47,7 @@ type LaunchConfig struct {
 	Permissions     ports.PermissionMode
 	SystemPrompt    string
 	DisableTools    bool
+	ReadOnly        bool // a review-owned session; see Config.ReadOnly
 	ProviderScopeID string
 	// ProviderConversationID carries the stored native conversation on resume so
 	// a binding can migrate provider-side history into a fresh process home.
@@ -115,6 +116,10 @@ type Config struct {
 	// have an exact AO policy mapping before the generic client parks them for a
 	// human. Returning handled=false preserves the ordinary approval flow.
 	PermissionPolicy PermissionPolicy
+	// ReadOnly binds LaunchConfig.ReadOnly launches. It replaces SessionMode and
+	// PermissionPolicy for them; the binding's SessionMeta restricts the tools.
+	// Without it a read-only launch that has tools is refused.
+	ReadOnly func(LaunchConfig) ReadOnlySession
 	// ClientExtension handles provider-defined agent-to-client JSON-RPC methods.
 	ClientExtension ClientExtensionHandler
 	// ClientExtensionAliases maps explicitly supported legacy wire methods onto
@@ -168,6 +173,32 @@ type PermissionPolicy func(
 	ports.PermissionMode,
 	acpsdk.RequestPermissionRequest,
 ) (acpsdk.PermissionOptionId, bool)
+
+// ReadOnlySession is how a binding runs a read-only launch: the provider mode it
+// pins, whatever AO approval the turn settings name, and the policy that answers
+// its permission requests in place of a human.
+type ReadOnlySession struct {
+	Mode             string
+	PermissionPolicy PermissionPolicy
+}
+
+// sessionPolicy picks the mode mapping and permission policy for a launch.
+func (d *Driver) sessionPolicy(cfg LaunchConfig) (func(ports.PermissionMode) string, PermissionPolicy) {
+	if !cfg.ReadOnly || d.cfg.ReadOnly == nil {
+		return d.cfg.SessionMode, d.cfg.PermissionPolicy
+	}
+	session := d.cfg.ReadOnly(cfg)
+	return func(ports.PermissionMode) string { return session.Mode }, session.PermissionPolicy
+}
+
+// checkReadOnly refuses a read-only launch the binding cannot honor. A launch
+// with its tools disabled has nothing left to restrict.
+func (d *Driver) checkReadOnly(cfg LaunchConfig) error {
+	if cfg.ReadOnly && !cfg.DisableTools && d.cfg.ReadOnly == nil {
+		return fmt.Errorf("%w: %s chat cannot run read-only", ports.ErrChatCapabilityUnavailable, d.cfg.Harness)
+	}
+	return nil
+}
 
 // SessionOption is one ACP session configuration selection.
 type SessionOption struct {
@@ -296,7 +327,11 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		DisableTools:    cfg.DisableTools,
+		ReadOnly:        cfg.ReadOnly,
 		ProviderScopeID: cfg.ProviderScopeID,
+	}
+	if err := d.checkReadOnly(launchCfg); err != nil {
+		return nil, err
 	}
 	connectStarted := time.Now()
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
@@ -366,9 +401,10 @@ func (d *Driver) openNewSession(
 	if resp.SessionId == "" {
 		return errors.New("ACP session/new returned no session id")
 	}
+	modeFor, permissionFor := d.sessionPolicy(launchCfg)
 	conv.start(
 		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init),
-		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
+		modeFor, d.cfg.SessionOptions, permissionFor,
 		settings.Approval, d.cfg.ValidateTurnSettings, resp.ConfigOptions,
 		conv.legacyWire.modelState(), resp.Modes,
 	)
@@ -460,11 +496,15 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		SessionID: cfg.SessionID, DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath,
 		Env:   cfg.Env,
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
+		ReadOnly:        cfg.ReadOnly,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
 		// The connect below spawns a fresh process, so a resumed conversation's
 		// provider-side history has to be reachable from the new process home.
 		ProviderConversationID: cfg.ProviderConversationID,
+	}
+	if err := d.checkReadOnly(launchCfg); err != nil {
+		return nil, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, err)
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -499,9 +539,10 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		}
 		conv.liveState = live
 		conv.hasDurableTurns = cfg.HasPriorTurns
+		modeFor, permissionFor := d.sessionPolicy(launchCfg)
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
-			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
+			modeFor, d.cfg.SessionOptions, permissionFor,
 			cfg.Permissions, d.cfg.ValidateTurnSettings, setup.ConfigOptions,
 			setup.Models, setup.Modes,
 		)
@@ -592,9 +633,10 @@ func (d *Driver) resumeSession(
 		modes = resp.Modes
 	}
 	conv.hasDurableTurns = cfg.HasPriorTurns
+	modeFor, permissionFor := d.sessionPolicy(launchCfg)
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
-		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
+		modeFor, d.cfg.SessionOptions, permissionFor,
 		cfg.Permissions, d.cfg.ValidateTurnSettings, configOptions,
 		conv.legacyWire.modelState(), modes,
 	)

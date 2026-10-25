@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
@@ -575,29 +576,15 @@ func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, paylo
 	}
 }
 
-// reviewerSubmitCommandPattern matches the exact command shapes the review
-// prompt dictates: a single-quoted JSON literal fed through `printf '%s'` into
-// either the GitHub review POST or `ao review submit`. Claude Code ≥ 2.1.257
-// prompts on any Bash command its analyzer cannot verify statically, and allow
-// rules never match such commands, so the headless reviewer would hang. The
-// shape is safe to auto-allow: `printf '%s'` performs no format interpretation
-// and a single-quoted operand (quote-backslash-quote-quote for embedded single
-// quotes, as the prompt instructs) cannot expand or run anything. The
-// captured session id is checked against AO_REVIEW_WORKER_SESSION_ID after the
-// match.
-const reviewerSubmitJSONLiteral = `'[^']*(?:'\\''[^']*)*'`
-
-var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| (?:` +
-	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
-	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
-
 const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
 	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
-// allow the exact submit shapes, deny everything else so the session degrades
-// into a denial the model can route around instead of an unanswered prompt.
+// allow the exact submit shapes (claudecode.ReviewerSubmitCommandAllowed, which
+// checks the captured session against AO_REVIEW_WORKER_SESSION_ID), deny
+// everything else so the session degrades into a denial the model can route
+// around instead of an unanswered prompt.
 func reviewerPermissionDecision(payload []byte, workerSessionID string) claudePermissionHookOutput {
 	var p struct {
 		ToolName  string `json:"tool_name"`
@@ -610,16 +597,7 @@ func reviewerPermissionDecision(payload []byte, workerSessionID string) claudePe
 	out.HookSpecificOutput.HookEventName = "PermissionRequest"
 	out.HookSpecificOutput.Decision.Behavior = "deny"
 	out.HookSpecificOutput.Decision.Message = reviewerPermissionDenyMessage
-	if p.ToolName != "Bash" {
-		return out
-	}
-	m := reviewerSubmitCommandPattern.FindStringSubmatch(strings.TrimSpace(p.ToolInput.Command))
-	if m == nil {
-		return out
-	}
-	if session := m[reviewerSubmitCommandPattern.SubexpIndex("session")]; workerSessionID == "" || (session != "" && session != workerSessionID) {
-		// An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
-		// launcher always sets it); admit nothing rather than any worker.
+	if p.ToolName != "Bash" || !claudecode.ReviewerSubmitCommandAllowed(p.ToolInput.Command, workerSessionID) {
 		return out
 	}
 	out.HookSpecificOutput.Decision.Behavior = "allow"
