@@ -65,7 +65,7 @@ vi.mock("./ThemeProvider", () => {
 vi.mock("./worker-action-model", () => ({ workerContextActions: () => [] }));
 vi.mock("./worker-row-actions", () => ({ WorkerRowActions: "WorkerRowActions" }));
 vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader", Spinning: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader" }));
 vi.mock("./store", () => ({ useApp: () => ({ ...boardStore, ...useContext(appContext) }) }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("react-native-reanimated", () => ({

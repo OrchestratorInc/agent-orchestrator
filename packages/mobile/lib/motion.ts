@@ -31,18 +31,6 @@ import { duration, press, spring } from "./tokens";
 export const BREATHE_MS = 1200;
 
 /**
- * One full turn of a progress spinner.
- *
- * 1000ms linear, because that is what the desktop's spinner is: it draws the
- * same glyph with Tailwind's `animate-spin`, which is `spin 1s linear infinite`
- * (HarnessSettingsSection and the Codex account rows are the reference). A
- * spinner is a promise that something is still happening, so matching the
- * renderer's cadence matters more here than matching its own duration ladder —
- * and anything eased appears to hitch once per turn.
- */
-export const SPIN_MS = 1000;
-
-/**
  * The sidebar drawer's spring.
  *
  * Note for a future Reanimated port: these are `Animated.spring` parameters. The
@@ -122,17 +110,6 @@ export function shouldAnimateLayout(reduced: boolean): boolean {
 /** Whether the breathing status dot should loop. */
 export function shouldBreathe(reduced: boolean, breathing: boolean): boolean {
 	return breathing && !reduced;
-}
-
-/**
- * Whether a spinner should turn.
- *
- * The same rule as the breathing dot, and for the same reason: Reduce Motion
- * means the loop never starts, rather than starting and being cancelled. A
- * continuous rotation is the thing that setting is most often asking us to stop.
- */
-export function shouldSpin(reduced: boolean, spinning: boolean): boolean {
-	return spinning && !reduced;
 }
 
 export { duration, press, spring };

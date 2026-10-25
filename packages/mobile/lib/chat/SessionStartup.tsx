@@ -8,8 +8,9 @@ import { haptics } from "../haptics";
 import { LAYOUT_MS, ROW_ENTER_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { space, type } from "../tokens";
-import { Spinning, useBreathing } from "../ui";
+import { Spinner } from "../Spinner";
+import { iconSize, space, type } from "../tokens";
+import { useBreathing } from "../ui";
 import { useNow } from "../useNow";
 import { useReducedMotion } from "../useReducedMotion";
 import {
@@ -44,7 +45,7 @@ export function SessionStartupStatus({ startup, onRetry, retrying }: { startup: 
 			<View style={styles.header}>
 				{startup.failed
 					? <Feather name="x" size={12} color={t.red} />
-					: <Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning>}
+					: <Spinner size={iconSize.xs} color={t.textTertiary} />}
 				<Text accessibilityRole={startup.failed ? "alert" : undefined} accessibilityLiveRegion="polite" style={[styles.headerLabel, startup.failed && { color: t.red }]}>{title}</Text>
 			</View>
 			{startup.steps.length ? <StartupSteps startup={startup} /> : null}
@@ -117,7 +118,7 @@ function StepIcon({ status }: { status: StepStatus }) {
 	const t = useTheme();
 	switch (status) {
 		case "running":
-			return <Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning>;
+			return <Spinner size={iconSize.xs} color={t.textTertiary} />;
 		case "done":
 			return <Feather name="check" size={12} color={t.textTertiary} />;
 		case "failed":

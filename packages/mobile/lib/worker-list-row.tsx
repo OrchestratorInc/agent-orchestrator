@@ -16,7 +16,7 @@ import { workerContextActions, type WorkerActionId } from "./worker-action-model
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
-import { Spinning } from "./ui";
+import { Spinner } from "./Spinner";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { useOpenPage } from "./pageNavigation";
 import { iconSize, press, space, type } from "./tokens";
@@ -297,13 +297,13 @@ function WorkerRowContents({
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.
-				    A working row turns: the shape for "working" is a circle, and a
-				    circle only says so while it is moving — a pulse says "waiting",
-				    which is what the row above it says for a different state. */}
+				    A working row shows the system's spinner: a still circle reads as
+				    stuck, and a pulse says "waiting", which is what the row above it
+				    says for a different state. */}
 				{glyph && row.trailingKind === "status" ? (
-					<Spinning enabled={Boolean(visual.breathing)}>
-						<Feather name={glyph} size={12} color={visual.color} />
-					</Spinning>
+					visual.breathing
+						? <Spinner size={iconSize.xs} color={visual.color} />
+						: <Feather name={glyph} size={12} color={visual.color} />
 				) : null}
 				<Text
 					style={[styles.trailing, { color: row.trailingKind === "status" ? visual.color : t.textTertiary }]}

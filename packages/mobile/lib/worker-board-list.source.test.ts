@@ -50,23 +50,22 @@ describe("worker row second line", () => {
 describe("worker row working indicator", () => {
 	const row = source("./worker-list-row.tsx");
 	const ui = source("./ui.tsx");
+	const spinner = source("./Spinner.tsx");
 
-	// The shape for "working" is a circle, and a still circle reads as stuck or
-	// decided rather than live. It shipped as a bare glyph — the one status that
-	// means "still going" was the one that never moved — and then as a pulse, which
-	// is a waiting signal, not a working one.
-	it("turns the status glyph a working row is showing", () => {
-		expect(row).toContain("<Spinning enabled={Boolean(visual.breathing)}>");
+	// A still circle reads as stuck or decided rather than live. It shipped as a
+	// bare glyph, then as a pulse (a waiting signal, not a working one), then as
+	// a turning Lucide loader, which only imitated the system's indicator.
+	it("shows the system spinner in a working row's status slot", () => {
+		expect(row).toMatch(/visual\.breathing\s*\?\s*<Spinner size=\{iconSize\.xs\} color=\{visual\.color\} \/>/);
+		expect(row).not.toContain("<Spinning");
 		expect(row).not.toContain("<Breathing");
+		expect(spinner).toContain("<ActivityIndicator");
+		expect(ui).not.toContain("export function Spinning(");
 	});
 
-	// One decision each, read inside the primitive, so a new consumer cannot
-	// forget Reduce Motion.
-	it("drives the turn and the dot's pulse off the motion rules", () => {
-		expect(ui).toContain("export function Spinning(");
-		expect(ui).toContain("shouldSpin(reduceMotion, enabled)");
-		// Linear, or every lap appears to hitch.
-		expect(ui).toContain("Easing.linear");
+	// One decision, read inside the primitive, so a new consumer cannot forget
+	// Reduce Motion.
+	it("drives the dot's pulse off the motion rules", () => {
 		expect(ui).toContain("export function useBreathing(");
 		expect(ui).toContain("shouldBreathe(reduceMotion, enabled)");
 		expect(ui).toContain("const pulse = useBreathing(breathing);");

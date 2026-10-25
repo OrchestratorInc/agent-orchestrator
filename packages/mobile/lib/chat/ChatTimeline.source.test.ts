@@ -20,9 +20,11 @@ describe("chat turn summary styling", () => {
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
 
-	it("holds the working indicator still under Reduce Motion", () => {
-		expect(turnSummarySource).toContain('<Spinning enabled><Feather name="loader"');
-		expect(turnSummarySource).not.toContain("<ActivityIndicator");
+	// A turning Lucide loader only imitated a progress indicator; the system's
+	// own is what each platform reads as working.
+	it("shows the system activity indicator while a turn runs", () => {
+		expect(turnSummarySource).toContain("{running ? <StatusSpinner><Spinner size={iconSize.xs} color={t.textTertiary} /></StatusSpinner> : null}");
+		expect(turnSummarySource).not.toContain('name="loader"');
 	});
 });
 

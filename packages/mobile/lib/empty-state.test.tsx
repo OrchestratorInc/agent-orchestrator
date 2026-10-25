@@ -96,6 +96,12 @@ describe("EmptyState", () => {
 		expect(root.findAllByType("SymbolView" as never)).toHaveLength(0);
 	});
 
+	it("shows the system's large spinner in place of the glyph while loading", () => {
+		const root = render(<EmptyState icon="chat" busy title="Loading conversation…" />).root;
+		expect(root.findByType("ActivityIndicator" as never).props.size).toBe("large");
+		expect(root.findAllByType("SymbolView" as never)).toHaveLength(0);
+	});
+
 	it("stacks several actions under the message", () => {
 		const root = render(<EmptyState title="Offline" action={<><ActionStub /><ActionStub /></>} />).root;
 		const actions = root.findAllByType(ActionStub);

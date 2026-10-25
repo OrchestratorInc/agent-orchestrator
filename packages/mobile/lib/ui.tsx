@@ -1,9 +1,7 @@
 import { Feather } from "./icons";
 import { memo, useEffect, useRef, type ReactNode } from "react";
 import {
-	ActivityIndicator,
 	Animated,
-	Easing,
 	Image,
 	Pressable,
 	StyleSheet,
@@ -16,11 +14,12 @@ import {
 import { AppSymbol } from "./AppSymbol";
 import { resolveChromeIcon, type ChromeIcon } from "./chromeIcon";
 import { haptics } from "./haptics";
-import { BREATHE_MS, shouldBreathe, shouldSpin, SPIN_MS } from "./motion";
+import { BREATHE_MS, shouldBreathe } from "./motion";
 import { useEnterTransition } from "./motionHooks";
 import { NativeHeaderButton, type NativeHeaderButtonIcon } from "./native-header-button";
 import { usePressFeedback, type PressTone } from "./pressFeedback";
 import { useOptionalSidebarNavigation } from "./sidebar-navigation-context";
+import { Spinner } from "./Spinner";
 import { useReducedMotion } from "./useReducedMotion";
 import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "./tokens";
 import type { ConnStatus } from "./store";
@@ -99,47 +98,6 @@ export const Dot = memo(function Dot({
 		/>
 	);
 });
-
-/**
- * A continuous turn, for a glyph that means "in progress".
- *
- * A circle drawn still reads as stopped, which is the one thing a progress
- * indicator must not say — and a pulse is a different signal: it reads as waiting
- * or attention, not as work happening. Linear and endless, so nothing about it
- * suggests it is about to finish. Returning a fragment when the loop is off keeps
- * the resting state free of an extra view.
- */
-export function Spinning({ enabled, children }: { enabled: boolean; children: ReactNode }) {
-	const spin = useRef(new Animated.Value(0)).current;
-	const reduceMotion = useReducedMotion();
-	const animate = shouldSpin(reduceMotion, enabled);
-	useEffect(() => {
-		if (!animate) return;
-		const loop = Animated.loop(
-			Animated.timing(spin, {
-				toValue: 1,
-				duration: SPIN_MS,
-				easing: Easing.linear,
-				useNativeDriver: true,
-			}),
-		);
-		loop.start();
-		return () => {
-			loop.stop();
-			// Back to the starting angle: a stopped loop otherwise leaves the glyph
-			// frozen mid-turn, which reads as the progress it is depicting.
-			spin.setValue(0);
-		};
-	}, [animate, spin]);
-	if (!animate) return <>{children}</>;
-	return (
-		<Animated.View
-			style={{ transform: [{ rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }] }}
-		>
-			{children}
-		</Animated.View>
-	);
-}
 
 // A selectable pill - used by the project switcher, PR filters, and spawn picker
 // so the active/inactive color logic lives in exactly one place.
@@ -423,7 +381,7 @@ export function Button({
 			]}
 		>
 			{loading ? (
-				<ActivityIndicator color={ink} size="small" />
+				<Spinner color={ink} />
 			) : (
 				<View style={s.btnInner}>
 					{icon ? <ChromeGlyph icon={icon} size={iconSize.md} color={ink} /> : null}
@@ -556,6 +514,7 @@ export function EmptyState({
 	message,
 	action,
 	pulse = false,
+	busy = false,
 	visual,
 	iconColor,
 }: {
@@ -567,7 +526,9 @@ export function EmptyState({
 	action?: ReactNode;
 	/** Breathe the icon, for a state that is waiting on something. */
 	pulse?: boolean;
-	/** Drawn in place of the icon: a mascot, a machine's avatar, a spinner. */
+	/** The system's activity indicator in place of the icon, for a state still loading. */
+	busy?: boolean;
+	/** Drawn in place of the icon: a mascot, a machine's avatar. */
 	visual?: ReactNode;
 	/** The glyph's colour. Secondary text unless the state means something, like a failure. */
 	iconColor?: string;
@@ -581,7 +542,11 @@ export function EmptyState({
 	return (
 		<Animated.View style={[s.empty, enter]}>
 			<Animated.View style={[s.emptyVisual, breathing ? { opacity: breathing } : undefined]}>
-				{visual ?? <ChromeGlyph icon={icon} size={iconSize.hero} color={iconColor ?? t.textSecondary} />}
+				{busy ? (
+					<Spinner size="large" color={iconColor ?? t.textSecondary} />
+				) : (
+					visual ?? <ChromeGlyph icon={icon} size={iconSize.hero} color={iconColor ?? t.textSecondary} />
+				)}
 			</Animated.View>
 			<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.body} style={s.emptyTitle}>
 				{title}

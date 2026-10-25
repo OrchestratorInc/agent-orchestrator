@@ -9,8 +9,8 @@ import { prLine, workerRowPresentation } from "./agentsView";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
+import { Spinner } from "./Spinner";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { Spinning } from "./ui";
 import { iconSize, press, space, type } from "./tokens";
 
 /**
@@ -95,9 +95,7 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 				onPress={() => onRestore(session)}
 				style={({ pressed }) => [styles.restore, pressed && styles.restorePressed, disabled && !restoring && styles.restoreDisabled]}
 			>
-				<Spinning enabled={restoring}>
-					<Feather name="rotate-ccw" size={iconSize.md} color={restoring ? t.textPrimary : t.textSecondary} />
-				</Spinning>
+				{restoring ? <Spinner size={iconSize.md} color={t.textPrimary} /> : <Feather name="rotate-ccw" size={iconSize.md} color={t.textSecondary} />}
 			</Pressable>
 		</View>
 	);
