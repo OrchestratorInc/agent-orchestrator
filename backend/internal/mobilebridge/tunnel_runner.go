@@ -34,6 +34,10 @@ type TunnelRunner struct {
 	// Named, when set, runs this host's named tunnel instead of a quick tunnel.
 	Named  *NamedTunnelConfig
 	HostID string
+	// reprovision is set when a named connector exited without reaching an
+	// edge, so the next start asks Cloudflare rather than trusting the cached
+	// run token: the tunnel may have been deleted.
+	reprovision bool
 }
 
 // Run supervises the connector until ctx is cancelled. It blocks, so callers
@@ -68,26 +72,39 @@ func (t *TunnelRunner) Run(ctx context.Context) {
 // treated as a fresh fault rather than a continuing failure.
 const stableTunnelRun = 60 * time.Second
 
-func (t *TunnelRunner) runOnce(ctx context.Context) error {
-	metricsPort, err := freeLoopbackPort()
-	if err != nil {
-		return fmt.Errorf("reserve metrics port: %w", err)
-	}
+// namedProvisionTimeout bounds all of one named tunnel provision's API calls.
+const namedProvisionTimeout = 30 * time.Second
 
-	args := CloudflaredArgs(t.LocalPort, metricsPort)
-	var hostname, runToken string
+func (t *TunnelRunner) runOnce(ctx context.Context) error {
+	var named NamedTunnel
 	if t.Named != nil {
-		hostname, runToken, err = ProvisionNamedTunnel(ctx, *t.Named, t.HostID, t.LocalPort)
+		// Bounded well under stableTunnelRun, so a failing provision never
+		// counts as a stable run that resets the backoff ladder.
+		provisionCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
+		var err error
+		named, err = NamedTunnelFor(provisionCtx, *t.Named, t.HostID, !t.reprovision)
+		cancel()
 		if err != nil {
 			t.Runtime.Exited(err)
 			return fmt.Errorf("provision named tunnel: %w", err)
 		}
-		args = NamedCloudflaredArgs(metricsPort)
+		t.reprovision = false
+	}
+
+	// Reserved after provisioning, which can take seconds, to keep the
+	// bind-and-release window short.
+	metricsPort, err := freeLoopbackPort()
+	if err != nil {
+		return fmt.Errorf("reserve metrics port: %w", err)
+	}
+	args := CloudflaredArgs(t.LocalPort, metricsPort)
+	if named.RunToken != "" {
+		args = NamedCloudflaredArgs(t.LocalPort, metricsPort)
 	}
 
 	cmd := aoprocess.CommandContext(ctx, t.Binary, args...)
-	if runToken != "" {
-		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+runToken)
+	if named.RunToken != "" {
+		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+named.RunToken)
 	}
 	// cloudflared logs to stderr; the hostname is only available there.
 	stderr, err := cmd.StderrPipe()
@@ -109,11 +126,16 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	}
 
 	// Hold the endpoint back until its hostname has had time to propagate: DNS
-	// for a brand-new quick tunnel lags the connector's own "registered" signal.
+	// for a brand-new quick tunnel, or a named tunnel's just-published record,
+	// lags the connector's own "registered" signal. A named record published
+	// on an earlier start has nothing left to wait for.
 	settleCtx, stopSettle := context.WithCancel(ctx)
 	defer stopSettle()
-	if hostname != "" {
-		t.Runtime.NamedHostname(hostname)
+	if named.Hostname != "" {
+		t.Runtime.NamedHostname(named.Hostname)
+	}
+	if named.Hostname != "" && !named.NewRecord {
+		t.Runtime.Settled()
 	} else {
 		go t.awaitSettled(settleCtx)
 	}
@@ -128,6 +150,9 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 
 	waitErr := cmd.Wait()
 	t.Runtime.Exited(waitErr)
+	if t.Named != nil && !t.Runtime.Registered() {
+		t.reprovision = true
+	}
 	// Only if this runner still owns the record: a replacement started while
 	// this one was unwinding will already have written its own pid there.
 	_ = pidOwner.release(cmd.Process.Pid)

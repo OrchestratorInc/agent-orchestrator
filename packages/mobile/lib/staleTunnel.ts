@@ -16,7 +16,8 @@ import type { Endpoint } from "./endpoints";
  * stop reporting a bare "can't connect" and say the code needs rescanning,
  * which is the one action that actually works.
  *
- * A stable hostname removes the cause; see the named-tunnel follow-up.
+ * A named tunnel's stable hostname removes the cause, so only quick tunnels
+ * count.
  */
 export function tunnelMayHaveRotated(
 	known: Endpoint[],
@@ -28,5 +29,6 @@ export function tunnelMayHaveRotated(
 	// active LAN or tailnet address failed. This distinction matters when the
 	// phone simply leaves Wi-Fi: the LAN endpoint becomes unreachable, but its
 	// address did not rotate.
-	return activeKind === "tunnel" && known.some((e) => e.kind === "tunnel");
+	// Only quick tunnels rotate; a named tunnel keeps its hostname.
+	return activeKind === "tunnel" && known.some((e) => e.kind === "tunnel" && e.host.endsWith(".trycloudflare.com"));
 }

@@ -32,6 +32,11 @@ describe("recognising a rotated tunnel", () => {
 		expect(tunnelMayHaveRotated([lan, tunnel], "tunnel", true)).toBe(false);
 	});
 
+	it("does not suspect rotation for a named tunnel, whose hostname is stable", () => {
+		const named: Endpoint = { kind: "tunnel", host: "h-0d483066194a12a5dc17.useao.dev", port: 443, secure: true };
+		expect(tunnelMayHaveRotated([lan, named], "tunnel", false)).toBe(false);
+	});
+
 	it("has nothing to suspect with no endpoints at all", () => {
 		expect(tunnelMayHaveRotated([], "tunnel", false)).toBe(false);
 	});

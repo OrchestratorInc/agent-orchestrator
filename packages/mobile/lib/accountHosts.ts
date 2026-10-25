@@ -1,5 +1,6 @@
 import { getAccountAccessToken, loadAccount, type Account } from "./account";
 import { ignoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
+import { isLocalNetworkHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
@@ -14,8 +15,9 @@ function endpoint(raw: string): Endpoint | null {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			// LAN endpoints are IP literals; any other name is a quick or named tunnel.
-			kind: url.hostname.endsWith(".ts.net") ? "tailscale" : /^[\d.]+$|^\[/.test(url.hostname) ? "lan" : "tunnel",
+			// Tunnels, quick or named, are https on a public name; the LAN listener is plain http.
+			kind: url.hostname.endsWith(".ts.net") ? "tailscale"
+				: url.protocol === "https:" && !isLocalNetworkHost(url.hostname) ? "tunnel" : "lan",
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",

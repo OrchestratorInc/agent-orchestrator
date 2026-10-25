@@ -919,8 +919,10 @@ func Run(buildVersion string) error {
 		deps := mobilebridge.ManagedTunnelDeps{Binary: res.Path, PIDPath: tunnelPID, Log: log}
 		if named, err := mobilebridge.LoadNamedTunnelConfig(cfg.DataDir); err != nil {
 			log.Warn("ignoring named tunnel config; using a quick tunnel", "error", err)
-		} else if named != nil && hostIdentity.HostID != "" {
-			log.Info("mobile remote access uses a named tunnel", "zone", named.Zone)
+		} else if named != nil && hostIdentity.HostID == "" {
+			log.Warn("ignoring named tunnel config: no host identity; using a quick tunnel")
+		} else if named != nil {
+			log.Info("mobile remote access uses a named tunnel")
 			deps.Named, deps.HostID = named, hostIdentity.HostID
 		}
 		return mobilebridge.NewManagedTunnel(deps)
