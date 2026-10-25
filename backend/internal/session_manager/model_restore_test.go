@@ -15,8 +15,12 @@ import (
 
 // Use the production lifecycle and reopen SQLite: the fake lifecycle copies
 // metadata wholesale and cannot catch fields dropped by the real reducer.
+//
+// Hermes is absent from the harness list: upstream's harness feature is
+// skipped by this fork's fixes-only sync, while the #7144 fix that carries
+// this file cherry-picked cleanly except for that reference.
 func TestSessionModelSurvivesRestore(t *testing.T) {
-	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessCommandCode, domain.HarnessHermes} {
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessCommandCode} {
 		t.Run(string(harness), func(t *testing.T) {
 			testSessionModelSurvivesRestore(t, harness)
 		})

@@ -19,7 +19,7 @@ func TestSetModelEffortOverridePersistsAndSurvivesRefresh(t *testing.T) {
 	// override must reapply to the fresh discovery output.
 	discoverer := successfulModelDiscoverer()
 	discoverer.catalog.Models = []ports.AgentModelInfo{{ID: "custom-model", Label: "Custom"}}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, nil, discoverer)
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, discoverer)
 
 	if err := svc.SetModelEffortOverride(context.Background(), "codex", "", "custom-model", "high"); err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestModelsReadAppliesPersistedOverrideWithoutDiscovery(t *testing.T) {
 	}
 	record.CatalogJSON = string(data)
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"codex\x00": record}}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, nil, successfulModelDiscoverer())
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, successfulModelDiscoverer())
 
 	got, err := svc.Models(context.Background(), "codex", "", false)
 	if err != nil {
@@ -88,7 +88,7 @@ func TestSetModelEffortOverrideClearsAndValidates(t *testing.T) {
 	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{
 		"codex\x00": cachedModelRecord(t, "codex", "", now, false),
 	}}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, nil, successfulModelDiscoverer())
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, cache, successfulModelDiscoverer())
 	ctx := context.Background()
 
 	if err := svc.SetModelEffortOverride(ctx, "codex", "", "cached-model", "high"); err != nil {

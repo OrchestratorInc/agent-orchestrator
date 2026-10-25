@@ -8,6 +8,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
 )
 
+// fakeProjectLookup satisfies ProjectLookup for tests that build a Service by
+// struct literal; the shared fakes that used to provide this were refactored
+// away upstream.
+type fakeProjectLookup struct {
+	records map[string]domain.ProjectRecord
+}
+
+func (f *fakeProjectLookup) GetProject(_ context.Context, id string) (domain.ProjectRecord, bool, error) {
+	record, ok := f.records[id]
+	return record, ok, nil
+}
+
 func TestRoleScopeParts(t *testing.T) {
 	for _, tc := range []struct {
 		scope     string
@@ -30,14 +42,7 @@ func TestRoleScopeParts(t *testing.T) {
 }
 
 func TestModelCatalogScopePreservesRoleScope(t *testing.T) {
-	projects := &fakeProjectLookup{records: map[string]domain.ProjectRecord{
-		"proj-1": {ID: "proj-1", Path: "/work/project"},
-	}}
-	s := &Service{projects: projects}
-	got, err := s.modelCatalogScope(context.Background(), "proj-1@role:worker")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	got := modelCatalogScope("proj-1@role:worker")
 	if got != "proj-1@role:worker" {
 		t.Fatalf("scope = %q, want the role scope preserved", got)
 	}
@@ -68,7 +73,7 @@ func TestModelDiscoveryRequestFoldsRolePinIntoEnv(t *testing.T) {
 		providerEntries: func(context.Context) []agentcreds.GatewayEntry { return entries },
 	}
 
-	request, err := s.modelDiscoveryRequest(context.Background(), "claude-code", "proj-1@role:worker", "/bin/claude")
+	request, err := s.modelDiscoveryRequest("claude-code", "proj-1@role:worker", "/bin/claude")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +86,7 @@ func TestModelDiscoveryRequestFoldsRolePinIntoEnv(t *testing.T) {
 
 	// A pinless role resolves against the default gateway entry — project
 	// scope first — deterministically, not the plain project env.
-	request, err = s.modelDiscoveryRequest(context.Background(), "claude-code", "proj-1@role:reviewer", "/bin/claude")
+	request, err = s.modelDiscoveryRequest("claude-code", "proj-1@role:reviewer", "/bin/claude")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +97,7 @@ func TestModelDiscoveryRequestFoldsRolePinIntoEnv(t *testing.T) {
 	// With no gateway entries configured at all, a pinless role yields the
 	// plain project resolution.
 	plain := &Service{projects: projects}
-	request, err = plain.modelDiscoveryRequest(context.Background(), "claude-code", "proj-1@role:reviewer", "/bin/claude")
+	request, err = plain.modelDiscoveryRequest("claude-code", "proj-1@role:reviewer", "/bin/claude")
 	if err != nil {
 		t.Fatal(err)
 	}
