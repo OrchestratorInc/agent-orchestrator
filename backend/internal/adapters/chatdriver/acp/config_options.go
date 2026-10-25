@@ -409,7 +409,7 @@ func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested 
 // it resolves to the session's current provider, and any other collision stays
 // ambiguous rather than guessed.
 func resolveProviderPrefixedChoice(choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
-	auto, matched := "", ""
+	auto, matched, ambiguous := "", "", false
 	for _, choice := range choices {
 		provider, model, found := strings.Cut(choice.Value, ":")
 		if !found || provider == "" || model == "" || model != requested {
@@ -419,13 +419,14 @@ func resolveProviderPrefixedChoice(choices []ports.ChatConfigOptionChoice, reque
 			auto = choice.Value
 			continue
 		}
-		if matched != "" {
-			return "", false
-		}
+		ambiguous = ambiguous || matched != ""
 		matched = choice.Value
 	}
 	if auto != "" {
 		return auto, true
+	}
+	if ambiguous {
+		return "", false
 	}
 	return matched, matched != ""
 }

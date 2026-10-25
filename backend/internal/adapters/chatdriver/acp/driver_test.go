@@ -3883,6 +3883,16 @@ func TestResolveLegacyModelChoiceResolvesProviderPrefixedAdvertisedID(t *testing
 			requested: "gpt-5.6",
 			want:      "",
 		},
+		{
+			name: "an auto row wins over several provider collisions",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:gpt-5.6"},
+				{Value: "azure:gpt-5.6"},
+				{Value: "auto:gpt-5.6"},
+			},
+			requested: "gpt-5.6",
+			want:      "auto:gpt-5.6",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
