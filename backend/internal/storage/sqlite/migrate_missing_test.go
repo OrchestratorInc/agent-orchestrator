@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -232,7 +233,8 @@ func TestMigrateRecognizesGatewayEntriesFromEarlierBuild(t *testing.T) {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 9006)
+	gatewayVersion := migrationVersion(t, "gateway_entries")
+	upTo(t, db, gatewayVersion-1)
 
 	if _, err := db.Exec(`
 CREATE TABLE gateway_entries (
@@ -258,13 +260,13 @@ VALUES ('app', '', 'https://example.invalid', '', 'gateway-model', '2026-10-14T0
 	}
 
 	var applied int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 9011 AND is_applied = 1`,
-	).Scan(&applied); err != nil {
+	if err := db.QueryRow(fmt.Sprintf(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = %d AND is_applied = 1`, gatewayVersion,
+	)).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
 	if applied != 1 {
-		t.Fatalf("gateway migration 9011 applied rows = %d, want 1", applied)
+		t.Fatalf("gateway migration %d applied rows = %d, want 1", gatewayVersion, applied)
 	}
 	var profiles int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM gateway_entries`).Scan(&profiles); err != nil {
@@ -288,7 +290,8 @@ VALUES ('app', '', 'https://example.invalid', '', 'gateway-model', '2026-10-14T0
 // daemon wedged at startup. Migration must recognize the existing columns,
 // replay only the backfill, record 9012, and start.
 func TestMigrateRecognizesReviewRunPublicationFromEarlierBuild(t *testing.T) {
-	db := openMigratedDatabaseCopyNoForeignKeys(t, 9011)
+	publicationVersion := migrationVersion(t, "review_run_publication")
+	db := openMigratedDatabaseCopyNoForeignKeys(t, publicationVersion-1)
 	if _, err := db.Exec(`
 ALTER TABLE review_run ADD COLUMN findings TEXT NOT NULL DEFAULT '';
 ALTER TABLE review_run ADD COLUMN publish_state TEXT NOT NULL DEFAULT 'pending' CHECK (publish_state IN ('pending', 'publishing', 'published', 'failed', 'uncertain'));
@@ -307,13 +310,13 @@ VALUES ('run-old', 'rev-1', 's1', 'claude-code', '', '', 'complete', '', '', '20
 	}
 
 	var applied int
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 9012 AND is_applied = 1`,
-	).Scan(&applied); err != nil {
+	if err := db.QueryRow(fmt.Sprintf(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = %d AND is_applied = 1`, publicationVersion,
+	)).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
 	if applied != 1 {
-		t.Fatalf("publication migration 9012 applied rows = %d, want 1", applied)
+		t.Fatalf("publication migration %d applied rows = %d, want 1", publicationVersion, applied)
 	}
 	// The backfill marks reviewer-published runs (github_review_id set) as
 	// published and leaves everything else alone.
@@ -345,7 +348,8 @@ VALUES ('run-old', 'rev-1', 's1', 'claude-code', '', '', 'complete', '', '', '20
 // process_inventory" and wedge daemon startup; the prepare repair must record
 // 9013 instead.
 func TestMigrateRecognizesProcessInventoryFromEarlierBuild(t *testing.T) {
-	db := openMigratedDatabaseCopyNoForeignKeys(t, 9012)
+	inventoryVersion := migrationVersion(t, "app_settings_process_inventory")
+	db := openMigratedDatabaseCopyNoForeignKeys(t, inventoryVersion-1)
 	if _, err := db.Exec(`
 ALTER TABLE app_settings ADD COLUMN process_inventory INTEGER NOT NULL DEFAULT 1
     CHECK (process_inventory IN (0, 1))`); err != nil {
@@ -362,13 +366,84 @@ ALTER TABLE app_settings ADD COLUMN process_inventory INTEGER NOT NULL DEFAULT 1
 	).Scan(&columns); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 9013 AND is_applied = 1`,
-	).Scan(&applied); err != nil {
+	if err := db.QueryRow(fmt.Sprintf(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = %d AND is_applied = 1`, inventoryVersion,
+	)).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
 	if columns != 1 || applied != 1 {
 		t.Fatalf("process inventory state = columns %d, applied rows %d; want 1, 1", columns, applied)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migrate: %v", err)
+	}
+}
+
+// TestMigrateRecognizesRenumberedAddColumnFromEarlierBuild covers the outage
+// class of 2026-10-25: a fork-local ADD COLUMN migration renumbered by a sync
+// (report_emitted_at landed on 20261022172135182) replays against a database
+// that already carries the column under the migration's earlier version. The
+// replay can only fail with "duplicate column name"; the runner must
+// recognize the physically-present effect, record the new version, and move
+// on — without a hand-written prepare* function per casualty.
+func TestMigrateRecognizesRenumberedAddColumnFromEarlierBuild(t *testing.T) {
+	emittedVersion := migrationVersion(t, "report_emitted_at")
+	db := openMigratedDatabaseCopyNoForeignKeys(t, emittedVersion-1)
+	if _, err := db.Exec(`ALTER TABLE reports ADD COLUMN emitted_at TIMESTAMP`); err != nil {
+		t.Fatalf("seed emitted_at column from earlier build: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate database with pre-existing emitted_at column: %v", err)
+	}
+
+	var columns, applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('reports') WHERE name = 'emitted_at'`,
+	).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(fmt.Sprintf(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = %d AND is_applied = 1`, emittedVersion,
+	)).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 1 || applied != 1 {
+		t.Fatalf("renumbered report_emitted_at state = columns %d, applied rows %d; want 1, 1", columns, applied)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("repeat migrate: %v", err)
+	}
+}
+
+// TestMigrateRecognizesRenumberedCreateIndexFromEarlierBuild covers the
+// second half of the 2026-10-25 outage: the renumbered
+// review_run_current_head_lookup migration replays a plain "CREATE INDEX"
+// onto a database that already carries the index under the migration's
+// earlier version. Same contract as the ADD COLUMN case above: recognize the
+// physically-present effect, record the new version, move on.
+func TestMigrateRecognizesRenumberedCreateIndexFromEarlierBuild(t *testing.T) {
+	lookupVersion := migrationVersion(t, "review_run_current_head_lookup")
+	db := openMigratedDatabaseCopyNoForeignKeys(t, lookupVersion-1)
+	if _, err := db.Exec(`CREATE INDEX idx_review_run_current_head_lookup
+ON review_run (session_id, pr_url, target_sha, harness, created_at, id)`); err != nil {
+		t.Fatalf("seed review lookup index from earlier build: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate database with pre-existing review lookup index: %v", err)
+	}
+
+	var applied int
+	if err := db.QueryRow(fmt.Sprintf(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = %d AND is_applied = 1`, lookupVersion,
+	)).Scan(&applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied != 1 {
+		t.Fatalf("renumbered review_run_current_head_lookup applied rows = %d, want 1", applied)
 	}
 
 	if err := migrate(db); err != nil {
@@ -382,13 +457,15 @@ ALTER TABLE app_settings ADD COLUMN process_inventory INTEGER NOT NULL DEFAULT 1
 // repair must release the entry so the real migration applies and the column
 // appears.
 func TestMigrateReleasesForeignProcessInventoryLedgerEntry(t *testing.T) {
-	db := openMigratedDatabaseCopyNoForeignKeys(t, 9012)
-	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (9013, 1)`); err != nil {
-		t.Fatalf("seed foreign 9013 ledger entry: %v", err)
+	inventoryVersion := migrationVersion(t, "app_settings_process_inventory")
+	db := openMigratedDatabaseCopyNoForeignKeys(t, inventoryVersion-1)
+	if _, err := db.Exec(fmt.Sprintf(
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (%d, 1)`, inventoryVersion)); err != nil {
+		t.Fatalf("seed foreign %d ledger entry: %v", inventoryVersion, err)
 	}
 
 	if err := migrate(db); err != nil {
-		t.Fatalf("migrate database with foreign 9013 record: %v", err)
+		t.Fatalf("migrate database with foreign %d record: %v", inventoryVersion, err)
 	}
 
 	var columns, applied int
@@ -397,9 +474,10 @@ func TestMigrateReleasesForeignProcessInventoryLedgerEntry(t *testing.T) {
 	).Scan(&columns); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRow(
-		`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 9013 ORDER BY id DESC LIMIT 1), 0)`,
-	).Scan(&applied); err != nil {
+	if err := db.QueryRow(fmt.Sprintf(
+		`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = %d ORDER BY id DESC LIMIT 1), 0)`,
+		inventoryVersion,
+	)).Scan(&applied); err != nil {
 		t.Fatal(err)
 	}
 	if columns != 1 || applied != 1 {

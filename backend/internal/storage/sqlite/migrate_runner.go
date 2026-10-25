@@ -199,11 +199,189 @@ func migrateUpTo(db *sql.DB, fsys fs.FS, to int64) error {
 		if applied[m.version] {
 			continue
 		}
+		present, err := migrationEffectsPresent(db, m)
+		if err != nil {
+			return fmt.Errorf("migration %s: %w", m.name, err)
+		}
+		if present {
+			// Every effect the file would create already exists: the file is a
+			// renumbered re-introduction of schema an earlier install applied
+			// under the migration's previous version. Executing it could only
+			// fail, so record the new version and skip. Empty Up sections take
+			// the same path applyMigration would give them.
+			if _, err := db.Exec(
+				`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, ?)`, m.version, 1,
+			); err != nil {
+				return fmt.Errorf("migration %s: %w", m.name, err)
+			}
+			continue
+		}
 		if err := applyMigration(db, m, true); err != nil {
 			return fmt.Errorf("migration %s: %w", m.name, err)
 		}
 	}
 	return nil
+}
+
+// migrationEffectsPresent reports whether every statement of the migration's
+// Up section is a plain ALTER TABLE ADD COLUMN, CREATE TABLE, or CREATE
+// [UNIQUE] INDEX whose target the database already holds. That is the
+// signature of this fork's recurring outage: a sync renumbered a fork-local
+// migration onto a fresh version after a live install applied it under the
+// old one (9011 gateway_entries, 9012 review publication,
+// 20261022172135182 report_emitted_at, 20261022172135183 review_run_current_
+// head_lookup), and replaying the file could only die on "duplicate column
+// name", "table already exists", or "index already exists".
+//
+// Files containing any other statement kind return false and run normally:
+// skipping a mixed file could silently drop a backfill or data migration the
+// database never received, so those stay loud and remain the territory of
+// hand-written prepare*/repair* helpers.
+//
+// ponytail: naive ";" split and prefix matching — quoted ";" inside these DDL
+// kinds does not occur in this repo's migrations, and anything that doesn't
+// parse as one of the patterns falls out as "run normally", which is the
+// pre-guard behavior.
+func migrationEffectsPresent(db *sql.DB, m migrationFile) (bool, error) {
+	for _, raw := range strings.Split(m.upSQL, ";") {
+		stmt := stripSQLCommentLines(raw)
+		if stmt == "" {
+			continue
+		}
+		check, ok := parsePresenceCheck(stmt)
+		if !ok {
+			return false, nil
+		}
+		var found int
+		var err error
+		switch check.kind {
+		case "column":
+			err = db.QueryRow(
+				`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ? COLLATE NOCASE`, check.table, check.name,
+			).Scan(&found)
+		case "index":
+			err = db.QueryRow(
+				`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ? COLLATE NOCASE`, check.name,
+			).Scan(&found)
+		default:
+			err = db.QueryRow(
+				`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE`, check.name,
+			).Scan(&found)
+		}
+		if err != nil {
+			return false, err
+		}
+		if found == 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// stripSQLCommentLines drops "--" comment lines and surrounding whitespace so
+// a statement carrying annotation comments still matches the presence
+// patterns.
+func stripSQLCommentLines(raw string) string {
+	var kept []string
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, " "))
+}
+
+// presenceCheck describes one guarded DDL statement: what to look up and
+// where. kind is "column" (name within table), "index", or "table" (name).
+type presenceCheck struct {
+	kind  string
+	name  string
+	table string
+}
+
+// parsePresenceCheck recognizes the replay-unsafe DDL kinds the guard skips —
+// "ALTER TABLE <t> ADD [COLUMN] <c>", "CREATE TABLE [IF NOT EXISTS] <t>", and
+// "CREATE [UNIQUE] INDEX [IF NOT EXISTS] <i> ON <t>" — returning what to
+// check. ok=false for any other statement shape.
+func parsePresenceCheck(stmt string) (presenceCheck, bool) {
+	upper := strings.ToUpper(stmt)
+	switch {
+	case strings.HasPrefix(upper, "ALTER TABLE "):
+		rest := stmt[len("ALTER TABLE "):]
+		table, restAfter := nextIdentifier(rest)
+		if table == "" {
+			return presenceCheck{}, false
+		}
+		restAfter = strings.TrimSpace(restAfter)
+		if !strings.HasPrefix(strings.ToUpper(restAfter), "ADD ") {
+			return presenceCheck{}, false
+		}
+		restAfter = restAfter[len("ADD "):]
+		if strings.HasPrefix(strings.ToUpper(restAfter), "COLUMN ") {
+			restAfter = restAfter[len("COLUMN "):]
+		}
+		column, _ := nextIdentifier(restAfter)
+		if column == "" {
+			return presenceCheck{}, false
+		}
+		return presenceCheck{kind: "column", name: column, table: table}, true
+	case strings.HasPrefix(upper, "CREATE TABLE "):
+		rest := stmt[len("CREATE TABLE "):]
+		if strings.HasPrefix(strings.ToUpper(rest), "IF NOT EXISTS ") {
+			rest = rest[len("IF NOT EXISTS "):]
+		}
+		table, _ := nextIdentifier(rest)
+		if table == "" {
+			return presenceCheck{}, false
+		}
+		return presenceCheck{kind: "table", name: table}, true
+	case strings.HasPrefix(upper, "CREATE UNIQUE INDEX "), strings.HasPrefix(upper, "CREATE INDEX "):
+		rest := stmt[strings.Index(upper, "INDEX ")+len("INDEX "):]
+		if strings.HasPrefix(strings.ToUpper(rest), "IF NOT EXISTS ") {
+			rest = rest[len("IF NOT EXISTS "):]
+		}
+		index, _ := nextIdentifier(rest)
+		if index == "" {
+			return presenceCheck{}, false
+		}
+		return presenceCheck{kind: "index", name: index}, true
+	}
+	return presenceCheck{}, false
+}
+
+// nextIdentifier extracts a leading SQL identifier — plain, double-quoted,
+// backquoted, or bracketed — and returns the remainder of the string.
+func nextIdentifier(s string) (ident, rest string) {
+	s = strings.TrimLeft(s, " \t\r\n")
+	if s == "" {
+		return "", ""
+	}
+	switch s[0] {
+	case '"', '`':
+		if i := strings.IndexByte(s[1:], s[0]); i > 0 {
+			return s[1 : 1+i], s[2+i:]
+		}
+		return "", ""
+	case '[':
+		if i := strings.IndexByte(s, ']'); i > 0 {
+			return s[1:i], s[i+1:]
+		}
+		return "", ""
+	}
+	end := len(s)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isWord := c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9'
+		if !isWord {
+			end = i
+			break
+		}
+	}
+	if end == 0 {
+		return "", ""
+	}
+	return s[:end], s[end:]
 }
 
 // migrateDownTo reverts every applied migration with version > to, in
