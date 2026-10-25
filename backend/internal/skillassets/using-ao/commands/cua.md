@@ -187,6 +187,8 @@ account rather than posting, sending, or buying as the wrong person.
 - `COMPUTER_USE_FOREGROUND_DISABLED`: AO does not send foreground input. Act
   in the background; if the window is not drawing, ask the user, then use
   `bring_to_front`.
+- `COMPUTER_USE_STEP_UNSUPPORTED`: a `run_steps` step names a tool AO does
+  not know. Use one of the action tools the error lists.
 - `COMPUTER_USE_CALL_FAILED`: the driver's own message follows. For example,
   `window_id_not_found` means the window closed, so list windows again;
   `stale_element_token` means a newer read replaced that token, so read again
