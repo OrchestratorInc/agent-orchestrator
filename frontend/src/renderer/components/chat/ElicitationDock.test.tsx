@@ -399,4 +399,119 @@ describe("ElicitationDock", () => {
 		expect(screen.getByRole("alert")).toHaveTextContent(/unsafe or invalid URL/i);
 		expect(screen.getByRole("button", { name: "Open link" })).toBeDisabled();
 	});
+
+	it("makes the form body scrollable with composer scrollbar and caps dock height", () => {
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: claudeQuestions })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		const dock = screen.getByTestId("elicitation-dock");
+		expect(dock).toHaveClass("flex", "max-h-[min(65vh,32rem)]", "flex-col", "overflow-hidden");
+
+		const scrollBody = screen.getByTestId("elicitation-scroll-body");
+		expect(scrollBody).toHaveClass("chat-composer-scrollbar", "min-h-0", "flex-1", "overflow-y-auto", "overscroll-contain");
+	});
+
+	it("keeps multi-question generic forms in a scrollable body with pinned footer", () => {
+		const genericSchema = {
+			type: "object" as const,
+			properties: {
+				scope: {
+					type: "string",
+					title: "Scope",
+					description: "Which scope?",
+					oneOf: [
+						{ const: "entries", title: "Only entries" },
+						{ const: "all", title: "All crontab" },
+					],
+				},
+				scope_other: { type: "string", title: "Scope (other)" },
+				location: {
+					type: "string",
+					title: "Code location",
+					description: "Where to put code?",
+					oneOf: [
+						{ const: "tool", title: "Own tool" },
+						{ const: "repo", title: "In repo" },
+					],
+				},
+				location_other: { type: "string", title: "Code location (other)" },
+			},
+		};
+
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "form", schema: genericSchema })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		const scrollBody = screen.getByTestId("elicitation-scroll-body");
+		expect(scrollBody).toHaveClass("chat-composer-scrollbar", "overflow-y-auto");
+
+		expect(screen.getByRole("group", { name: /Scope/ })).toBeInTheDocument();
+		expect(screen.getByLabelText("Scope (other)")).toBeInTheDocument();
+		expect(screen.getByRole("group", { name: /Code location/ })).toBeInTheDocument();
+		expect(screen.getByLabelText("Code location (other)")).toBeInTheDocument();
+
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Skip" })).toBeInTheDocument();
+		const continueBtn = screen.getByRole("button", { name: "Continue" });
+		expect(continueBtn).toBeInTheDocument();
+		expect(scrollBody).not.toContainElement(continueBtn);
+	});
+
+	it("caps a long question so the answers and actions keep their room", () => {
+		const longQuestion = "Before I refactor the scheduler, confirm the scope. ".repeat(20).trim();
+		const schema = {
+			type: "object" as const,
+			properties: { answer: { type: "string", title: "Answer" } },
+			required: ["answer"],
+		};
+		render(
+			<ElicitationDock activity={activity({ inputMode: "form", message: longQuestion, schema })} onResolve={vi.fn()} />,
+		);
+
+		const question = screen.getByTestId("elicitation-question");
+		expect(question).toHaveTextContent(longQuestion);
+		expect(question).toHaveClass("max-h-[min(25vh,8rem)]", "overflow-y-auto");
+		expect(screen.getByTestId("elicitation-scroll-body")).toContainElement(screen.getByLabelText(/Answer/));
+		expect(question).not.toContainElement(screen.getByRole("button", { name: "Continue" }));
+	});
+
+	it("scrolls a long URL inside the dock with the consent actions pinned", () => {
+		const longURL = `https://console.anthropic.com/oauth/authorize?${"scope=org%3Acreate_api_key&".repeat(40)}`;
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "url", url: longURL, message: "Sign in" })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByTestId("elicitation-dock")).toHaveClass("max-h-[min(65vh,32rem)]", "flex-col");
+		const scrollBody = screen.getByTestId("elicitation-scroll-body");
+		expect(scrollBody).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+		expect(scrollBody).toContainElement(screen.getByText(longURL));
+		for (const name of ["Cancel", "Decline", "Open console.anthropic.com"]) {
+			expect(scrollBody).not.toContainElement(screen.getByRole("button", { name }));
+		}
+	});
+
+	it("keeps an open failure beside the actions when a long URL scrolls", async () => {
+		const user = userEvent.setup();
+		vi.spyOn(aoBridge.app, "openExternal").mockRejectedValue(new Error("refused"));
+		const onResolve = vi.fn();
+		const longURL = `https://console.anthropic.com/oauth/authorize?${"scope=org%3Acreate_api_key&".repeat(40)}`;
+		render(<ElicitationDock activity={activity({ inputMode: "url", url: longURL, message: "Sign in" })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("button", { name: "Open console.anthropic.com" }));
+
+		const error = await screen.findByRole("alert");
+		expect(error).toHaveTextContent("The link could not be opened. Nothing was approved.");
+		expect(screen.getByTestId("elicitation-scroll-body")).not.toContainElement(error);
+		expect(onResolve).not.toHaveBeenCalled();
+	});
 });

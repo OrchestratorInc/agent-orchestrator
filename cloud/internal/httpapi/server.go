@@ -116,6 +116,7 @@ type Store interface {
 	RefreshTerminalInteraction(context.Context, domain.TerminalSession, time.Duration) error
 	QueueTerminalInput(context.Context, domain.TerminalSession, string, []byte) error
 	QueueTerminalResize(context.Context, domain.TerminalSession, uint16, uint16) error
+	QueueTerminalRepaint(context.Context, domain.TerminalSession) error
 	CloseTerminal(context.Context, domain.TerminalSession) error
 	AppendTerminalOutput(context.Context, string, string, string, string, int64, []byte) (int64, error)
 	AppendTerminalOutputAt(context.Context, string, string, string, string, int64, int64, []byte) (int64, error)

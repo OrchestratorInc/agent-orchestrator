@@ -5,6 +5,7 @@ import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
+import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -75,6 +76,17 @@ export type SettingsModal =
 export type WorkbenchTab = "changes" | "files" | "terminal";
 export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
+export type CloudReviewUiState = {
+	showChanges?: boolean;
+	filter?: string;
+	selectedPath?: string | null;
+	commitBrowserOpen?: boolean;
+	pane?: {
+		selectionKey: string;
+		files: Record<string, { fingerprint: string; collapsed: boolean; loadedDeferred: boolean }>;
+	};
+};
+
 export type InspectorSessionState = {
 	isOpen: boolean;
 	view: InspectorView;
@@ -86,6 +98,11 @@ export type InspectorSessionState = {
 	filesChangedOnly?: boolean;
 	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
 	filesSelection?: FilesSelection;
+	/** Cloud Files: review targets per repository, shared by docked and maximized explorers. The main repository uses "". */
+	cloudReviewSelection?: Record<string, { scope: CloudCpWorkspaceReviewScope; commitSha?: string }>;
+	/** Cloud Files: selected repository across remounts; "" or unset selects the main repository. */
+	cloudReviewRepository?: string;
+	cloudReviewUi?: Record<string, CloudReviewUiState>;
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
@@ -240,6 +257,9 @@ export type UiState = {
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
 	/** Back to the checked-out branch and the default changes. */
 	resetFilesSelection: (sessionId: string) => void;
+	setCloudReviewSelection: (sessionId: string, repository: string | undefined, selection: { scope: CloudCpWorkspaceReviewScope; commitSha?: string }) => void;
+	setCloudReviewRepository: (sessionId: string, repository: string) => void;
+	setCloudReviewUi: (sessionId: string, repository: string | undefined, changes: CloudReviewUiState) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
@@ -289,8 +309,8 @@ function initialDeveloperMode() {
 }
 
 function initialRemoteHosts() {
-	// Developer mode remains the feature gate. Once enabled, signed-in devices
-	// should discover account hosts without an extra per-device setup switch.
+	// On by default: signed-in devices discover account hosts without an extra
+	// per-device setup switch.
 	return getLocalStorage()?.getItem(remoteHostsStorageKey) !== "false";
 }
 
@@ -585,11 +605,51 @@ export const useUiStore = create<UiState>((set, get) => ({
 	resetFilesSelection: (sessionId) =>
 		set((state) => {
 			const current = state.inspectorSessions[sessionId];
-			if (!current?.filesSelection) return state;
+			if (!current || (!current.filesSelection && !current.cloudReviewSelection && current.cloudReviewRepository === undefined && !current.cloudReviewUi)) return state;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, filesSelection: undefined },
+					[sessionId]: { ...current, filesSelection: undefined, cloudReviewSelection: undefined, cloudReviewRepository: undefined, cloudReviewUi: undefined },
+				},
+			};
+		}),
+	setCloudReviewSelection: (sessionId, repository, selection) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const key = repository ?? "";
+			const previous = current.cloudReviewSelection?.[key];
+			if (previous?.scope === selection.scope && previous.commitSha === selection.commitSha) return state;
+			const cloudReviewUi = current.cloudReviewUi?.[key]?.pane
+				? { ...current.cloudReviewUi, [key]: { ...current.cloudReviewUi[key], pane: undefined } }
+				: current.cloudReviewUi;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, cloudReviewSelection: { ...current.cloudReviewSelection, [key]: selection }, cloudReviewUi },
+				},
+			};
+		}),
+	setCloudReviewRepository: (sessionId, cloudReviewRepository) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if ((current.cloudReviewRepository ?? "") === cloudReviewRepository) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, cloudReviewRepository },
+				},
+			};
+		}),
+	setCloudReviewUi: (sessionId, repository, changes) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const key = repository ?? "";
+			const previous = current.cloudReviewUi?.[key];
+			if (previous && Object.entries(changes).every(([field, value]) => previous[field as keyof CloudReviewUiState] === value)) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, cloudReviewUi: { ...current.cloudReviewUi, [key]: { ...previous, ...changes } } },
 				},
 			};
 		}),

@@ -294,6 +294,12 @@ type ChatModel struct {
 	Default       bool     `json:"default"`
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// ApprovalModes are the approval modes ("default", "accept-edits", "auto",
+	// "bypass-permissions") a turn on this model can run, as its provider
+	// offers them for the model. Absent means unknown (an older worker, or a
+	// provider that did not say): a client then offers every mode the session
+	// allows, and the worker still steps down from one the model lacks.
+	ApprovalModes []string `json:"approvalModes,omitempty"`
 }
 
 type ChatModelsResponse struct {
@@ -515,18 +521,26 @@ type TerminalCommand struct {
 	Rows        uint16                  `json:"rows,omitempty"`
 	ReviewRunID string                  `json:"reviewRunId,omitempty"`
 	Reviewer    *domain.ProjectReviewer `json:"reviewer,omitempty"`
+	// Repaint on a terminal.resize carries no size: it asks the worker to make
+	// the program redraw at its current size. A worker that predates it sees a
+	// zero-size resize, rejects it as invalid, and changes nothing.
+	Repaint bool `json:"repaint,omitempty"`
 }
 
 // TerminalStreamFrame is one message on the persistent duplex terminal
 // stream between a worker and the control plane. "output" carries PTY bytes
-// up with the terminal-local, gap-free ID used for durable replay; "input"
-// pushes user keystrokes down; "error" tells the worker to fall back to the
-// polled transport.
+// up with the terminal-local ID used for durable replay; "ack" confirms the
+// control plane stored output up to ID; "input" pushes user keystrokes down;
+// "error" tells the worker to fall back to the polled transport. A worker that
+// dials with TerminalStreamControlFeature also receives "resize" (Columns and
+// Rows) and "repaint" frames down the stream instead of the durable queue.
 type TerminalStreamFrame struct {
 	Type       string          `json:"type"`
 	Data       []byte          `json:"data,omitempty"`
 	ID         int64           `json:"id,omitempty"`
 	Sequence   int64           `json:"sequence,omitempty"`
+	Columns    uint16          `json:"columns,omitempty"`
+	Rows       uint16          `json:"rows,omitempty"`
 	Code       string          `json:"code,omitempty"`
 	EventID    string          `json:"eventId,omitempty"`
 	EventType  string          `json:"eventType,omitempty"`
@@ -534,6 +548,11 @@ type TerminalStreamFrame struct {
 	Payload    json.RawMessage `json:"payload,omitempty"`
 	Duplicate  bool            `json:"duplicate,omitempty"`
 }
+
+// TerminalStreamControlFeature is the stream dial's "features" query value a
+// worker sends when it understands "resize" and "repaint" stream frames. A
+// control plane that predates it ignores the query and keeps the durable path.
+const TerminalStreamControlFeature = "control"
 
 type TerminalOutputRequest struct {
 	ID   int64  `json:"id,omitempty"`

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
@@ -15,6 +16,7 @@ import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspa
 import { requestWorkspaceRetry } from "../CloudSessionStartupError";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
 import { ChatWorkspace } from "./ChatWorkspace";
+import type { ApprovalModeLimits } from "./TurnSettingsBar";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -68,6 +70,34 @@ function defaultApprovalMode(harness: string, modes: ApprovalMode[], ceiling?: "
 		? "bypass-permissions"
 		: ceiling === "standard" ? (harness === "codex" ? "auto" : "accept-edits") : undefined;
 	return preferred && modes.includes(preferred) ? preferred : modes[0];
+}
+
+// Each approval mode steps down only to the modes after it, which approve less
+// on their own, so a substitute is never more permissive than the pick: bypass
+// never asks, auto approves routine actions, accept edits approves file edits,
+// and the agent's own permissions ask. Codex's default is full access, so it
+// sits just below bypass. The worker steps down a Claude turn the same way.
+const APPROVAL_STEP_DOWN: ApprovalMode[] = ["bypass-permissions", "auto", "accept-edits", "default"];
+const CODEX_APPROVAL_STEP_DOWN: ApprovalMode[] = ["bypass-permissions", "default", "auto", "accept-edits"];
+
+/**
+ * The approval mode a turn that asks for `wanted` runs with: `wanted` when
+ * `offered` has it, else the closest weaker mode it has, else undefined.
+ */
+export function effectiveApprovalMode(harness: string, wanted: ApprovalMode, offered: readonly ApprovalMode[]): ApprovalMode | undefined {
+	const order = harness === "codex" ? CODEX_APPROVAL_STEP_DOWN : APPROVAL_STEP_DOWN;
+	const start = order.indexOf(wanted);
+	if (start < 0) return offered.includes(wanted) ? wanted : undefined;
+	return order.slice(start).find((mode) => offered.includes(mode));
+}
+
+/**
+ * The session's approval modes a model can run. A worker that does not say
+ * which modes a model offers (an older one) leaves every mode the session allows.
+ */
+function modelApprovalModes(sessionModes: ApprovalMode[], model?: { approvalModes?: ApprovalMode[] }): ApprovalMode[] {
+	const offered = model?.approvalModes;
+	return offered ? sessionModes.filter((mode) => offered.includes(mode)) : sessionModes;
 }
 
 function savedApprovalMode(value: unknown): ApprovalMode | undefined {
@@ -399,6 +429,21 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				}
 				continue;
 			}
+			// The worker's one turn notice: the approval mode it ran in place of
+			// one the turn's model does not offer. Only its words are kept, so a
+			// worker row can never name a page or artifact this desktop would open.
+			if (value.kind === "system") {
+				const key = `${turnID}:${value.id}`;
+				if (detail.event !== "approval_mode.substituted" || typeof value.summary !== "string" || activities.has(key)) continue;
+				const activity: ConversationActivity = {
+					kind: "activity", id: `cloud-activity-${key}`, turnId: turnID, sequence: event.sequence, revision: 1,
+					activityKind: "system", status: "completed", summary: value.summary,
+					detail: { event: "approval_mode.substituted" }, createdAt: event.createdAt,
+				};
+				activities.set(key, activity);
+				items.push(activity);
+				continue;
+			}
 			if (!["command", "file_change", "reasoning", "plan", "mcp_tool"].includes(value.kind)) continue;
 			const key = `${turnID}:${value.id}`;
 			const previous = activities.get(key);
@@ -577,6 +622,11 @@ export function CloudSessionChatSurface({
 	onOpenReviewerTerminal,
 	reviewerTarget,
 	onSelectChat,
+	shellTerminals,
+	shellTarget,
+	onSelectShellTerminal,
+	onCloseShellTerminal,
+	onRenameShellTerminal,
 	daemonReady,
 	theme,
 	auxiliaryTabOrder,
@@ -591,6 +641,13 @@ export function CloudSessionChatSurface({
 	/** The selected reviewer pane, if any. */
 	reviewerTarget?: Extract<TerminalTarget, { kind: "reviewer" }>;
 	onSelectChat?: () => void;
+	/** This session's sandbox shells, shown as tabs beside the chat as in local sessions. */
+	shellTerminals?: ShellTerminal[];
+	/** The selected shell pane, if any. */
+	shellTarget?: Extract<TerminalTarget, { kind: "shell" }>;
+	onSelectShellTerminal?: (handleId: string) => void;
+	onCloseShellTerminal?: (handleId: string) => void;
+	onRenameShellTerminal?: (handleId: string, title: string) => void;
 	daemonReady?: boolean;
 	theme?: "light" | "dark";
 	auxiliaryTabOrder?: string[];
@@ -633,14 +690,17 @@ export function CloudSessionChatSurface({
 	});
 	const settingsKey = `cloud-chat-settings:${cloud?.orgId ?? ""}:${session.id}:${session.provider}`;
 	const projectKey = `cloud-chat-approval:${cloud?.orgId ?? ""}:${session.workspaceId}:${session.provider}`;
-	const approvalModes = useMemo(() => allowedApprovalModes(session.provider, cloud?.permissionMode), [session.provider, cloud?.permissionMode]);
+	// The approval modes the session allows. A pick among them is kept even
+	// while the selected model cannot run it (approvalModes below), so it
+	// returns once a model that can is picked again.
+	const sessionApprovalModes = useMemo(() => allowedApprovalModes(session.provider, cloud?.permissionMode), [session.provider, cloud?.permissionMode]);
 	// settings.approvalMode is only the user's pick; the composer shows this
 	// default when there is none.
-	const shownDefaultApprovalMode = defaultApprovalMode(session.provider, approvalModes, cloud?.permissionMode);
+	const shownDefaultApprovalMode = defaultApprovalMode(session.provider, sessionApprovalModes, cloud?.permissionMode);
 	const readSettings = () => {
 		const saved = readCloudTurnSettings(settingsKey);
 		const selectedMode = saved.approvalMode ?? readRememberedApprovalMode(projectKey);
-		return { ...saved, approvalMode: selectedMode && approvalModes.includes(selectedMode) ? selectedMode : undefined };
+		return { ...saved, approvalMode: selectedMode && sessionApprovalModes.includes(selectedMode) ? selectedMode : undefined };
 	};
 	const [selected, setSelected] = useState<{ key: string; settings: CloudTurnSettings }>(() => ({ key: settingsKey, settings: readSettings() }));
 	const settings = selected.key === settingsKey ? selected.settings : readSettings();
@@ -698,6 +758,15 @@ export function CloudSessionChatSurface({
 			return { ...catalog, selectionVersionAtFetch };
 		},
 	});
+	const workerModels = modelsQuery.data?.models ?? [];
+	const selectedModel = workerModels.find((model) => model.id === settings.model) ?? workerModels.find((model) => model.default);
+	// The session's approval modes the selected model can run: Claude offers
+	// Auto-approve only for models that support it (not Haiku).
+	const selectedModelApprovalModes = selectedModel?.approvalModes;
+	const approvalModes = useMemo(
+		() => modelApprovalModes(sessionApprovalModes, selectedModelApprovalModes ? { approvalModes: selectedModelApprovalModes } : undefined),
+		[sessionApprovalModes, selectedModelApprovalModes],
+	);
 	// Opening Chat wakes an idle-paused session once, the way opening its
 	// terminal does. It is not repeated while Chat stays open, so an open tab
 	// does not keep an idle session from pausing.
@@ -753,9 +822,12 @@ export function CloudSessionChatSurface({
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
 			const selectedSettings: CloudTurnSettings = settingsRef.current.key === settingsKey ? settingsRef.current.settings : {};
 			// Without the user's pick the turn carries no approval mode: the
-			// worker derives it from the session's mode.
-			const approvalMode = selectedSettings.approvalMode && approvalModes.includes(selectedSettings.approvalMode)
+			// worker derives it from the session's mode. A pick the turn's model
+			// cannot run is sent as the mode the composer shows in its place.
+			const picked = selectedSettings.approvalMode && sessionApprovalModes.includes(selectedSettings.approvalMode)
 				? selectedSettings.approvalMode : undefined;
+			const turnModel = workerModels.find((model) => model.id === selectedSettings.model) ?? workerModels.find((model) => model.default);
+			const approvalMode = picked && (effectiveApprovalMode(session.provider, picked, modelApprovalModes(sessionApprovalModes, turnModel)) ?? picked);
 			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
 			return client.sendSessionMessage(cloud.orgId, session.id, {
@@ -769,9 +841,20 @@ export function CloudSessionChatSurface({
 		onSuccess: () => void invalidate(),
 	});
 	// A pick the session no longer allows (its mode dropped while Chat was
-	// open) is neither sent nor shown.
-	const shownApprovalMode = settings.approvalMode && approvalModes.includes(settings.approvalMode)
+	// open) is neither sent nor shown. One the selected model cannot run shows
+	// as the mode that runs instead, the one the worker would step down to.
+	const wantedApprovalMode = settings.approvalMode && sessionApprovalModes.includes(settings.approvalMode)
 		? settings.approvalMode : shownDefaultApprovalMode;
+	const shownApprovalMode = wantedApprovalMode && (effectiveApprovalMode(session.provider, wantedApprovalMode, approvalModes) ?? wantedApprovalMode);
+	const selectedModelName = selectedModel?.displayName.split(" · ")[0] || selectedModel?.id || "this model";
+	const approvalModeLimits = useMemo<ApprovalModeLimits | undefined>(() => {
+		const unavailable = sessionApprovalModes.filter((mode) => !approvalModes.includes(mode));
+		return unavailable.length > 0 ? {
+			model: selectedModelName,
+			unavailable,
+			requested: wantedApprovalMode !== shownApprovalMode ? wantedApprovalMode : undefined,
+		} : undefined;
+	}, [approvalModes, selectedModelName, sessionApprovalModes, shownApprovalMode, wantedApprovalMode]);
 	const startFailed = Boolean(workspaceFailure);
 	const startStopped = startFailed && !rerunning;
 	const snapshot = useMemo(() => {
@@ -857,8 +940,6 @@ export function CloudSessionChatSurface({
 		: workerConnected && modelsQuery.error instanceof Error && !isWorkerUnavailable(modelsQuery.error)
 			? `Model choices unavailable: ${modelsQuery.error.message}`
 			: undefined;
-	const workerModels = modelsQuery.data?.models ?? [];
-	const selectedModel = workerModels.find((model) => model.id === settings.model) ?? workerModels.find((model) => model.default);
 	// Claude's model and effort as provider options, the shape local Claude Chat gets from its agent.
 	const claudeOptions: ChatConfigOption[] = session.provider === "claude-code" && workerModels.length > 0 ? [
 		{ id: "model", name: "Model", category: "model", type: "select", currentValue: selectedModel?.id, choices: workerModels.map((model) => ({ value: model.id, name: model.displayName, description: model.description })) },
@@ -890,9 +971,10 @@ export function CloudSessionChatSurface({
 				const approvalMode = picked === "approvalMode" ? next.approvalMode : current.approvalMode;
 				updateSettings({ ...current, ...next, approvalMode });
 			}}
-			showApprovalMode={approvalModes.length > 0}
+			showApprovalMode={sessionApprovalModes.length > 0}
 			approvalModes={approvalModes}
-			onRememberPermissions={approvalModes.length > 0 ? (mode) => {
+			approvalModeLimits={approvalModeLimits}
+			onRememberPermissions={sessionApprovalModes.length > 0 ? (mode) => {
 				try {
 					if (mode) localStorage.setItem(projectKey, JSON.stringify({ approvalMode: mode, approvalModeChosen: true }));
 					else localStorage.removeItem(projectKey);
@@ -941,6 +1023,11 @@ export function CloudSessionChatSurface({
 			onOpenReviewerTerminal={onOpenReviewerTerminal}
 			reviewerTarget={reviewerTarget}
 			onSelectChat={onSelectChat}
+			shellTerminals={shellTerminals}
+			shellTarget={shellTarget}
+			onSelectShellTerminal={onSelectShellTerminal}
+			onCloseShellTerminal={onCloseShellTerminal}
+			onRenameShellTerminal={onRenameShellTerminal}
 			daemonReady={daemonReady}
 			theme={theme}
 			auxiliaryTabOrder={auxiliaryTabOrder}

@@ -552,6 +552,11 @@ func (s *Supervisor) runCodex(ctx context.Context, turn worker.Turn, command Com
 	}
 }
 
+// codexApprovalModes are the approval modes a Codex turn runs
+// (codexApprovalSettings). Codex applies each as its own approval policy and
+// sandbox whatever the model, so every Codex model offers all of them.
+var codexApprovalModes = []string{"default", "accept-edits", "auto", "bypass-permissions"}
+
 func codexApprovalSettings(turn worker.Turn) (policy, sandbox, reviewer string) {
 	reviewer = "user"
 	if turn.Mode == "read-only" {

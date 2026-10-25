@@ -1426,7 +1426,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 			backfilledArtifactDir = true
 		}
 	}
-	artifactFiles, err := sessionartifacts.List(rec.Metadata.ArtifactDir)
+	artifactFiles, err := sessionartifacts.List(ctx, rec.Metadata.ArtifactDir)
 	if err != nil {
 		// An unwalkable artifact root must not fail the session read (and with
 		// it the whole board); the artifact list is simply empty for this read.

@@ -1900,8 +1900,8 @@ describe("CreateProjectFlow project import validation", () => {
 
 		const cloud = screen.getByRole("button", { name: "Clone to the cloud" });
 		const local = screen.getByRole("button", { name: "Open a local folder" });
-		expect(cloud.closest(".rounded-md")).toHaveClass("border-[var(--color-border-import-modal)]", "bg-[var(--color-bg-import-modal)]");
-		expect(local.closest(".rounded-md")).toHaveClass("border-[var(--color-border-import-modal)]", "bg-[var(--color-bg-import-modal)]");
+		expect(cloud.closest(".rounded-md")).toHaveClass("bg-[var(--color-bg-import-modal)]");
+		expect(local.closest(".rounded-md")).toHaveClass("bg-[var(--color-bg-import-modal)]");
 		expect(local).toHaveClass("border-[var(--color-border-import-modal)]");
 		expect(screen.queryByText("Local")).not.toBeInTheDocument();
 		expect(cloud.closest(".rounded-md")).not.toBe(local.closest(".rounded-md"));

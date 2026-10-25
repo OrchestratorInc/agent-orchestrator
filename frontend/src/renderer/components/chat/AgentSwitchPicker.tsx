@@ -658,7 +658,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 				return (
 					<Fragment key={key}>
 						{model.group && model.group !== matches[index - 1]?.group ? (
-							<OptionMenuLabel className="px-3 pt-2.5 pb-0.5 text-[10px]! text-muted-foreground/70">{model.group}</OptionMenuLabel>
+							<OptionMenuLabel>{model.group}</OptionMenuLabel>
 						) : null}
 						<OptionMenuItem
 							id={optionID?.(key)}

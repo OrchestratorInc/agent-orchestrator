@@ -1,4 +1,5 @@
-import { Code2, Download, ExternalLink, FilePlus, FileText, Globe2, Loader2, Maximize2, WrapText } from "lucide-react";
+import { BrowserIcon } from "../icons";
+import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useOpenArtifactPreview } from "../../hooks/useOpenArtifactPreview";
@@ -253,7 +254,7 @@ function OpenInPanelAction({ sessionId, previewUrl, onOpen }: { sessionId: strin
 				openArtifactPreview(previewUrl);
 			}}
 		>
-			<Globe2 className="size-3.5" />
+			<BrowserIcon className="size-3.5" />
 		</RenderAction>
 	);
 }

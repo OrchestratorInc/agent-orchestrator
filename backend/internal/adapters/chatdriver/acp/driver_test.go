@@ -5009,6 +5009,31 @@ func TestACPDriverAppliesLaunchSessionOptionsOnStartAndResume(t *testing.T) {
 	}
 }
 
+func TestACPDriverFailsStartWhenRequiredLaunchOptionIsRejected(t *testing.T) {
+	catalog := []acpsdk.SessionConfigOption{selectConfigOption("required_option", "Required option", "", "accepted", "accepted", "rejected")}
+	agent := &fakeAgent{
+		newConfig: catalog,
+		configErr: acpsdk.NewInvalidParams(map[string]any{"error": "required option is unsupported"}),
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessFake,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		LaunchSessionOptions: func(LaunchConfig) []SessionOption {
+			return []SessionOption{{ID: "required_option", Value: "rejected"}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), `required option is unsupported`) {
+		t.Fatalf("Start error = %v, want required launch option rejection", err)
+	}
+}
+
 // A setter may accept a launch option without returning the catalog. Keep the
 // remaining advertised choices available for subsequent launch settings.
 func TestACPDriverPreservesCatalogAcrossLaunchOptionsWithoutReturnedCatalog(t *testing.T) {

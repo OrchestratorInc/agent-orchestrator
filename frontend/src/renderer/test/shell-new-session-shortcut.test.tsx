@@ -281,7 +281,7 @@ vi.mock("../components/SettingsDialog", () => ({
 	useSettingsPage: () => null,
 }));
 vi.mock("../components/KeyboardShortcutsDialog", () => ({
-	KeyboardShortcutsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="keyboard-shortcuts" /> : null),
+	KeyboardShortcutsDialog: ({ open, onCustomize }: { open: boolean; onCustomize?: () => void }) => (open ? <div data-testid="keyboard-shortcuts"><button type="button" onClick={onCustomize}>Customize</button></div> : null),
 }));
 vi.mock("../lib/shell-context", () => ({
 	ShellProvider: ({ children, value }: PropsWithChildren<{ value?: { workspaceStartupState?: string } }>) => {
@@ -1010,6 +1010,15 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 });
 
 describe("shell keyboard-shortcuts help subscription", () => {
+	it("opens the Shortcuts settings page from Customize and closes help", async () => {
+		await renderShell();
+		act(() => shellMocks.state.keyboardShortcutsListener?.());
+		fireEvent.click(screen.getByRole("button", { name: "Customize" }));
+
+		expect(screen.queryByTestId("keyboard-shortcuts")).not.toBeInTheDocument();
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "shortcuts" });
+	});
+
 	it("opens the keyboard-shortcuts dialog", async () => {
 		await renderShell();
 

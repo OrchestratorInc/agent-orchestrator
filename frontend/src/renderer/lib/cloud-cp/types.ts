@@ -1200,6 +1200,11 @@ export interface CloudCpChatModelsResponse {
 		default: boolean;
 		efforts?: string[];
 		defaultEffort?: string;
+		/**
+		 * The approval modes a turn on this model can run, as its provider offers
+		 * them. Absent from an older worker: every mode the session allows is offered.
+		 */
+		approvalModes?: Array<"default" | "accept-edits" | "auto" | "bypass-permissions">;
 	}>;
 }
 
