@@ -190,7 +190,7 @@ export function SessionTopbarActions({
 			{!isOrchestrator &&
 				(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
 				<div
-					className="inline-flex shrink-0 items-center gap-1"
+					className="inline-flex shrink-0 items-center gap-(--gap-topbar-control)"
 					data-testid="session-local-actions"
 					style={noDragStyle}
 				>
@@ -224,7 +224,7 @@ export function SessionTopbarActions({
 						<span className="inline-flex" style={noDragStyle}>
 							<TopbarButton
 								aria-label={t("shell.openOrchestrator")}
-								className="topbar-control--labeled -mr-1"
+								className="topbar-control--labeled"
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => void openOrchestrator()}

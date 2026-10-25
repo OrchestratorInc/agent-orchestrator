@@ -122,7 +122,7 @@ export function SessionTabsTopbar({
 				</div>
 				{hideActions ? null : (
 					<div
-						className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
+						className="session-topbar-actions ml-auto flex shrink-0 items-center"
 						data-testid="session-action-region"
 					>
 						{actions}

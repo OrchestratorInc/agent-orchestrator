@@ -23,8 +23,8 @@ describe("ProjectBoardActions", () => {
 				<ProjectBoardActions actions={actions} cloud placement="header" />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action", "bg-raised", "border-0");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action", "bg-raised", "border-0");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action", "bg-interactive-hover/50", "border-0");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action", "bg-interactive-hover/50", "border-0");
 	});
 
 	it("keeps the same filled header actions on an empty local board", () => {
@@ -33,7 +33,7 @@ describe("ProjectBoardActions", () => {
 				<ProjectBoardActions actions={actions} placement="header" quiet />
 			</TooltipProvider>,
 		);
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action", "bg-raised", "border-0");
-		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action", "bg-raised", "border-0");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--action", "bg-interactive-hover/50", "border-0");
+		expect(screen.getByRole("button", { name: /orchestrator/i })).toHaveClass("topbar-control--action", "bg-interactive-hover/50", "border-0");
 	});
 });

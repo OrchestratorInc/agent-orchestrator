@@ -3382,7 +3382,12 @@ html.sidebar-reordering * {
 	min-width: 0;
 	flex: 0 0 auto;
 	align-items: center;
-	gap: var(--space-1);
+	gap: var(--gap-topbar-control);
+}
+
+.session-topbar-actions {
+	gap: var(--gap-topbar-control);
+	padding-inline: var(--space-2) var(--gap-topbar-control);
 }
 
 .workspace-topbar-actions .topbar-control {
@@ -3454,7 +3459,7 @@ html.sidebar-reordering * {
 	flex: 0 0 auto;
 	align-items: center;
 	justify-content: flex-end;
-	margin-left: calc(-1 * var(--space-2));
+	margin-left: calc(-1 * var(--gap-topbar-control));
 	transition:
 		width var(--session-inspector-motion-duration, 400ms)
 			var(--session-inspector-motion-easing, linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1)),
@@ -3463,7 +3468,7 @@ html.sidebar-reordering * {
 }
 
 .session-pinned-actions-reserve[data-state="expanded"] {
-	width: calc(var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2));
+	width: calc(var(--size-topbar-control) + var(--size-topbar-control) + var(--gap-topbar-control));
 	margin-left: 0;
 }
 
@@ -3479,12 +3484,12 @@ html.sidebar-reordering * {
 	-webkit-app-region: no-drag;
 	position: absolute;
 	top: 0;
-	right: var(--space-1);
+	right: var(--gap-topbar-control);
 	z-index: var(--z-index-chrome);
 	display: flex;
 	height: var(--size-inspector-tabs);
 	align-items: center;
-	gap: var(--space-1);
+	gap: var(--gap-topbar-control);
 }
 
 .session-inspector-actions-spacer {
