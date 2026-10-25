@@ -3,11 +3,14 @@ import type { CloudCpClient, CloudCpComposerAnswer, CloudCpComposerParticipant, 
 
 /** How often a holder renews while the composer is in use. */
 export const COMPOSER_RENEW_MS = 3_000;
-/** How long a holder's keystrokes are gathered before their draft is shared. */
+/** At most how often a holder's draft is shared while they type. */
 export const COMPOSER_DRAFT_PUBLISH_MS = 120;
 
 export interface ComposerLeaseState {
-	/** Someone else can write in this session right now, so the lease applies. */
+	/**
+	 * Someone else has this session open right now, so the lease applies and
+	 * the holder's draft is shared, a viewer's view included.
+	 */
 	shared: boolean;
 	/** This person holds the lease. */
 	holding: boolean;
@@ -38,8 +41,8 @@ export interface ComposerLeaseState {
 type ComposerClient = Pick<CloudCpClient, "acquireComposer" | "renewComposer" | "releaseComposer" | "requestComposerTurn" | "leaveComposerQueue" | "takeOverComposer" | "publishComposerDraft">;
 
 /**
- * Drives a shared cloud session's composer lease from its live state. In a
- * session nobody else can write in, it does nothing at all, so solo use costs
+ * Drives a shared cloud session's composer lease from its live state. While
+ * nobody else has the session open it does nothing at all, so solo use costs
  * no extra requests: the server admits a send without a grant while the lease
  * is free and nobody waits.
  */
@@ -66,8 +69,10 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 	const composer = live?.composer;
 	const liveHolder = composer?.holder ?? undefined;
 	const holdingLive = Boolean(liveHolder && liveHolder.userId === userId);
-	const otherWriters = (live?.viewers ?? []).some((viewer) => viewer.userId !== userId && viewer.role !== "viewer");
-	const shared = canWrite && Boolean(live) && (otherWriters || Boolean(liveHolder && !holdingLive) || (composer?.waitlist.length ?? 0) > 0);
+	// Anyone else here, a viewer too, watches the holder's draft, so the lease
+	// (which carries the draft) applies as soon as someone else has it open.
+	const othersHere = (live?.viewers ?? []).some((viewer) => viewer.userId !== userId);
+	const shared = canWrite && Boolean(live) && (othersHere || Boolean(liveHolder && !holdingLive) || (composer?.waitlist.length ?? 0) > 0);
 	const holding = holdingLive || (grant !== undefined && !(liveHolder && !holdingLive));
 	const epoch = holdingLive ? composer!.epoch : grant;
 	const position = composer ? composer.waitlist.findIndex((waiter) => waiter.userId === userId) + 1 : 0;
@@ -131,8 +136,10 @@ export function useComposerLease({ client, orgId, sessionId, userId, live, canWr
 			}
 		}
 	}, [client, orgId, sessionId]);
+	// Throttled, not debounced: steady typing still reaches the others every
+	// COMPOSER_DRAFT_PUBLISH_MS, and the publish sends the newest draft.
 	const scheduleDraft = useCallback(() => {
-		if (publishTimerRef.current !== undefined) window.clearTimeout(publishTimerRef.current);
+		if (publishTimerRef.current !== undefined) return;
 		publishTimerRef.current = window.setTimeout(() => {
 			publishTimerRef.current = undefined;
 			void publishDraft();

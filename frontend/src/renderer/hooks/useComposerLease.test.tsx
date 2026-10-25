@@ -172,6 +172,33 @@ describe("useComposerLease", () => {
 		await waitFor(() => expect(client.publishComposerDraft).toHaveBeenLastCalledWith("org-1", "session-1", 7, "hello", 1));
 	});
 
+	it("shares the draft with someone who can only watch", async () => {
+		const client = fakeClient();
+		const { result } = render(client, live([me, { ...ALICE, role: "viewer" }]));
+		act(() => result.current.noteDraft("h", 1));
+		await waitFor(() => expect(result.current.epoch).toBe(7));
+		act(() => result.current.noteDraft("hello", 5));
+		await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS + 10); });
+		await waitFor(() => expect(client.publishComposerDraft).toHaveBeenLastCalledWith("org-1", "session-1", 7, "hello", 5));
+	});
+
+	it("keeps sharing the draft while someone types without pausing", async () => {
+		const client = fakeClient();
+		const { result } = render(client, live([me, aliceEditor]));
+		act(() => result.current.noteDraft("x", 1));
+		await waitFor(() => expect(result.current.epoch).toBe(7));
+		let text = "x";
+		for (let keystroke = 0; keystroke < 20; keystroke++) {
+			text += "y";
+			act(() => result.current.noteDraft(text, text.length));
+			await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS / 3); });
+		}
+		// 20 keystrokes over about six publish windows, with no pause.
+		expect(client.publishComposerDraft.mock.calls.length).toBeGreaterThanOrEqual(4);
+		await act(async () => { vi.advanceTimersByTime(COMPOSER_DRAFT_PUBLISH_MS + 10); });
+		await waitFor(() => expect(client.publishComposerDraft).toHaveBeenLastCalledWith("org-1", "session-1", 7, text, text.length));
+	});
+
 	it("never shares a draft while nobody else is in the session", async () => {
 		const client = fakeClient();
 		const { result } = render(client, live([me]));
