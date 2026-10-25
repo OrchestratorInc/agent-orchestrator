@@ -20,7 +20,6 @@ import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } fr
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -430,7 +429,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
  * shared page topbar above a centered, scrolling content column.
  */
 export function SettingsPane() {
-	const { t } = useTranslation();
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	useSettingsRowFocus(scrollerRef, page?.active ?? null);
@@ -444,11 +442,6 @@ export function SettingsPane() {
 						{layer.title}
 						{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
 					</PageTopbarTitle>
-				}
-				actions={
-					<TopbarButton aria-label={t("settings.close")} variant="icon" disabled={layer.cueBusy} onClick={layer.close} type="button">
-						<X aria-hidden="true" className="size-4" />
-					</TopbarButton>
 				}
 			/>
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}
