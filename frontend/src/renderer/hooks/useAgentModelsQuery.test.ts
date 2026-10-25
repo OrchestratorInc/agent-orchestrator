@@ -28,14 +28,14 @@ describe("cached model loading", () => {
 		let finish!: (value: { data: AgentModelCatalog }) => void;
 		const taskResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finish = resolve; });
 		vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: catalog } as never).mockReturnValueOnce(taskResponse as never);
-		const observer = new QueryObserver(client, agentModelsQueryOptions("codex", "project-one"));
+		const observer = new QueryObserver(client, agentModelsQueryOptions("codex", ""));
 		const unsubscribe = observer.subscribe(() => {});
 		try {
 			await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(catalog));
 			expect(observer.getCurrentResult().isFetching).toBe(true);
 			expect(observer.getCurrentResult().isPending).toBe(false);
 			expect(apiClient.GET).toHaveBeenNthCalledWith(1, "/api/v1/agents/{agent}/models", {
-				params: { path: { agent: "codex" }, query: { projectId: "project-one", catalogOnly: true } },
+				params: { path: { agent: "codex" }, query: { projectId: undefined, catalogOnly: true } },
 			});
 			const enriched = { ...catalog, models: [{ ...catalog.models[0], lastUsedAt: "2026-10-18T01:00:00Z" }] };
 			finish({ data: enriched });
@@ -59,14 +59,14 @@ describe("cached model loading", () => {
 	});
 
 	it("restores models synchronously after a frontend restart, then applies the DB update before recency", async () => {
-		cacheAgentModels({ ...catalog, refreshRecommended: true, refreshState: "refreshing" }, "codex", "project-one");
+		cacheAgentModels({ ...catalog, refreshRecommended: true, refreshState: "refreshing" }, "codex", "");
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		let finishDB!: (value: { data: AgentModelCatalog }) => void;
 		let finishRecency!: (value: { data: AgentModelCatalog }) => void;
 		const dbResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishDB = resolve; });
 		const recencyResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishRecency = resolve; });
 		vi.mocked(apiClient.GET).mockReturnValueOnce(dbResponse as never).mockReturnValueOnce(recencyResponse as never);
-		const observer = new QueryObserver(client, agentModelsQueryOptions("codex", "project-one"));
+		const observer = new QueryObserver(client, agentModelsQueryOptions("codex", ""));
 		expect(observer.getCurrentResult().data?.models).toEqual(catalog.models);
 		expect(observer.getCurrentResult().data?.refreshRecommended).toBe(false);
 		const unsubscribe = observer.subscribe(() => {});
@@ -76,7 +76,7 @@ describe("cached model loading", () => {
 			finishDB({ data: updated });
 			await vi.waitFor(() => expect(observer.getCurrentResult().data?.models).toEqual(updated.models));
 			expect(observer.getCurrentResult().isFetching).toBe(true);
-			expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(updated.models);
+			expect(readCachedAgentModels("codex", "")?.models).toEqual(updated.models);
 			finishRecency({ data: updated });
 			await vi.waitFor(() => expect(observer.getCurrentResult().isFetching).toBe(false));
 		} finally {
@@ -88,10 +88,10 @@ describe("cached model loading", () => {
 	});
 
 	it("keeps the saved frontend catalog when its background DB read fails", async () => {
-		cacheAgentModels(catalog, "codex", "project-one");
+		cacheAgentModels(catalog, "codex", "");
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("DB unavailable"));
-		const options = agentModelsQueryOptions("codex", "project-one");
+		const options = agentModelsQueryOptions("codex", "");
 		await expect(client.fetchQuery(options)).rejects.toThrow("DB unavailable");
 		expect(client.getQueryData<AgentModelCatalog>(options.queryKey)?.models).toEqual(catalog.models);
 		client.clear();
@@ -100,7 +100,7 @@ describe("cached model loading", () => {
 	it("reuses fresh in-memory models on remount and revalidates after ten minutes", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
-		const options = agentModelsQueryOptions("codex", "project-one");
+		const options = agentModelsQueryOptions("codex", "");
 		await client.fetchQuery(options);
 		expect(apiClient.GET).toHaveBeenCalledTimes(2);
 		const freshObserver = new QueryObserver(client, options);
@@ -130,16 +130,16 @@ describe("cached model loading", () => {
 		let finishDB!: (value: { data: AgentModelCatalog }) => void;
 		const dbResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishDB = resolve; });
 		vi.mocked(apiClient.GET).mockReturnValueOnce(dbResponse as never);
-		const options = agentModelsQueryOptions("codex", "project-one");
+		const options = agentModelsQueryOptions("codex", "");
 		const pending = client.fetchQuery(options);
 		await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
 		const fresh = { ...catalog, models: [{ id: "new-model", label: "New model" }] };
 		client.setQueryData(options.queryKey, fresh);
-		cacheAgentModels(fresh, "codex", "project-one");
+		cacheAgentModels(fresh, "codex", "");
 		finishDB({ data: catalog });
 		expect(await pending).toEqual(fresh);
 		expect(client.getQueryData(options.queryKey)).toEqual(fresh);
-		expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(fresh.models);
+		expect(readCachedAgentModels("codex", "")?.models).toEqual(fresh.models);
 		expect(apiClient.GET).toHaveBeenCalledTimes(1);
 		client.clear();
 	});
@@ -149,20 +149,20 @@ describe("cached model loading", () => {
 		let finish!: (value: { data: AgentModelCatalog }) => void;
 		const recency = new Promise<{ data: AgentModelCatalog }>((resolve) => { finish = resolve; });
 		vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: catalog } as never).mockReturnValueOnce(recency as never);
-		const options = agentModelsQueryOptions("codex", "project-one");
+		const options = agentModelsQueryOptions("codex", "");
 		const pending = client.fetchQuery(options);
 		await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
 		const fresh = { ...catalog, models: [{ id: "new-model", label: "New model" }] };
 		client.setQueryData(options.queryKey, fresh);
 		finish({ data: catalog });
 		expect(await pending).toEqual(fresh);
-		expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(fresh.models);
+		expect(readCachedAgentModels("codex", "")?.models).toEqual(fresh.models);
 		client.clear();
 	});
 
 	it("preserves recency for surviving models while refreshing DB facts, even if the history read fails", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const options = agentModelsQueryOptions("codex", "project-one");
+		const options = agentModelsQueryOptions("codex", "");
 		const lastUsedAt = "2026-10-18T01:00:00Z";
 		client.setQueryData(options.queryKey, { ...catalog, models: [
 			{ ...catalog.models[0], lastUsedAt }, { id: "removed-model", label: "Removed model", lastUsedAt },
@@ -180,7 +180,7 @@ describe("cached model loading", () => {
 			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
 			const expectedModels = [{ ...dbCatalog.models[0], lastUsedAt }, dbCatalog.models[1]];
 			expect(observer.getCurrentResult().data?.models).toEqual(expectedModels);
-			expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(expectedModels);
+			expect(readCachedAgentModels("codex", "")?.models).toEqual(expectedModels);
 			failHistory(new Error("history unavailable"));
 			await vi.waitFor(() => expect(observer.getCurrentResult().isError).toBe(true));
 			expect(observer.getCurrentResult().data?.models).toEqual(expectedModels);
@@ -202,12 +202,12 @@ describe("cached model loading", () => {
 	});
 
 	it("ignores corrupt saved data and still reads models from the DB", async () => {
-		cacheAgentModels(catalog, "codex", "project-one");
+		cacheAgentModels(catalog, "codex", "");
 		window.localStorage.setItem(window.localStorage.key(0)!, "not JSON");
-		expect(readCachedAgentModels("codex", "project-one")).toBeUndefined();
+		expect(readCachedAgentModels("codex", "")).toBeUndefined();
 		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
 		const client = new QueryClient();
-		expect((await client.fetchQuery(agentModelsQueryOptions("codex", "project-one"))).models).toEqual(catalog.models);
+		expect((await client.fetchQuery(agentModelsQueryOptions("codex", ""))).models).toEqual(catalog.models);
 		client.clear();
 	});
 
@@ -215,7 +215,7 @@ describe("cached model loading", () => {
 		vi.spyOn(window.localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
 		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
 		const client = new QueryClient();
-		expect((await client.fetchQuery(agentModelsQueryOptions("codex", "project-one"))).models).toEqual(catalog.models);
+		expect((await client.fetchQuery(agentModelsQueryOptions("codex", ""))).models).toEqual(catalog.models);
 		client.clear();
 	});
 
@@ -247,12 +247,12 @@ describe("cached model loading", () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const beforeLogin = { ...catalog, warning: "Not signed in", warningCode: "auth_required" as const };
 		const afterLogin = { ...catalog, models: [{ id: "signed-in-model", label: "Signed in model" }] };
-		cacheAgentModels(beforeLogin, "codex", "project-one");
+		cacheAgentModels(beforeLogin, "codex", "");
 		let finishOld!: (value: { data: AgentModelCatalog }) => void;
 		const oldResponse = new Promise<{ data: AgentModelCatalog }>((resolve) => { finishOld = resolve; });
 		if (phase === "history") vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: beforeLogin } as never);
 		vi.mocked(apiClient.GET).mockReturnValueOnce(oldResponse as never).mockResolvedValue({ data: afterLogin } as never);
-		const options = agentModelsQueryOptions("codex", "project-one");
+		const options = agentModelsQueryOptions("codex", "");
 		const observer = new QueryObserver(client, options);
 		const unsubscribe = observer.subscribe(() => {});
 		try {
@@ -262,8 +262,8 @@ describe("cached model loading", () => {
 			finishOld({ data: beforeLogin });
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(observer.getCurrentResult().data).toEqual(afterLogin);
-			expect(readCachedAgentModels("codex", "project-one")?.models).toEqual(afterLogin.models);
-			expect(readCachedAgentModels("codex", "project-one")?.warning).toBeUndefined();
+			expect(readCachedAgentModels("codex", "")?.models).toEqual(afterLogin.models);
+			expect(readCachedAgentModels("codex", "")?.warning).toBeUndefined();
 			expect(apiClient.GET).toHaveBeenCalledTimes(phase === "catalog" ? 3 : 4);
 		} finally {
 			finishOld({ data: beforeLogin });
@@ -273,14 +273,14 @@ describe("cached model loading", () => {
 	});
 
 	it("clears all saved project catalogs for the changed login without touching another host", async () => {
-		cacheAgentModels(catalog, "codex", "project-one");
+		cacheAgentModels(catalog, "codex", "");
 		cacheAgentModels(catalog, "codex", "project-two");
-		cacheAgentModels(catalog, "codex", "project-one", "box-a");
+		cacheAgentModels(catalog, "codex", "", "box-a");
 		const client = new QueryClient();
 		await invalidateAgentModelCatalogs(client, "codex");
-		expect(readCachedAgentModels("codex", "project-one")).toBeUndefined();
+		expect(readCachedAgentModels("codex", "")).toBeUndefined();
 		expect(readCachedAgentModels("codex", "project-two")).toBeUndefined();
-		expect(readCachedAgentModels("codex", "project-one", "box-a")?.models).toEqual(catalog.models);
+		expect(readCachedAgentModels("codex", "", "box-a")?.models).toEqual(catalog.models);
 		client.clear();
 	});
 
@@ -297,15 +297,15 @@ describe("cached model loading", () => {
 	});
 
 	it.each([
-		{ agent: "codex", project: "another-project", host: undefined },
-		{ agent: "codex", project: "project-one", host: "box-a" },
-		{ agent: "claude-code", project: "project-one", host: undefined },
+		{ agent: "codex", project: "@cred:openai_api_key", host: undefined },
+		{ agent: "codex", project: "", host: "box-a" },
+		{ agent: "claude-code", project: "", host: undefined },
 	])("does not borrow a catalog from a different scope: %j", async ({ agent, project, host }) => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		cacheAgentModels({ ...catalog, agentId: agent }, agent, project, host);
 		client.setQueryData(agentModelsQueryOptions(agent, project, host, true).queryKey, catalog);
 		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("DB read failed"));
-		const options = agentModelsQueryOptions("codex", "project-one");
+		const options = agentModelsQueryOptions("codex", "");
 		await expect(client.fetchQuery({ ...options, retry: false })).rejects.toThrow("DB read failed");
 		expect(client.getQueryData(options.queryKey)).toBeUndefined();
 		client.clear();

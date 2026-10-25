@@ -119,6 +119,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const [loadedReviewPromptStateKey, setLoadedReviewPromptStateKey] = useState<string>();
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
+	// An earlier prompt open in its inline editor takes the keyboard, so the
+	// composer steps aside (still mounted, keeping its draft and attachments).
+	const [editingMessage, setEditingMessage] = useState(false);
 	// Which request the user pushed aside to type instead. It lives here because
 	// both the composer and the timeline change shape depending on it.
 	const [dismissedRequest, setDismissedRequest] = useState<number>();
@@ -690,6 +693,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onDecide={conversation.resolveApproval}
 					onResolveInput={conversation.resolveInput}
 					onRollback={conversation.rollback}
+					onEditMessage={conversation.editMessage}
+					onEditingChange={setEditingMessage}
 					jumpToSequence={jumpToSequence}
 					onJumpHandled={clearJumpToSequence}
 					answeredBelow={answeredBelow}
@@ -697,53 +702,56 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				/>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
-			<ChatComposer
-				key={composerKey}
-				quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
-				onQuoteHandled={quoteHandled}
-				reviewPR={reviewPromptPR}
-				reviewPRSummary={reviewPromptSummary}
-				reviewPRCollapsed={reviewPromptCollapsed}
-				onCollapseReviewPR={collapseReviewPrompt}
-				onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
-				sessionId={session.id}
-				config={config}
-				snapshot={snapshot}
-				changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
-				quotaActive={Boolean(quota)}
-				request={request}
-				requestDismissed={requestDismissed}
-				onRequestDecide={conversation.resolveApproval}
-				onRequestResolveInput={conversation.resolveInput}
-				onShowRequest={setJumpToSequence}
-				onDismissRequest={() => setDismissedRequest(request?.sequence)}
-				onRestoreRequest={restoreRequest}
-				skills={conversation.skills}
-				filePaths={filePaths}
-				filePathsTruncated={filePathsTruncated}
-				onLoadSkills={conversation.loadSkills}
-				onLoadFiles={loadWorkspaceFiles}
-				configOptions={conversation.configOptions}
-				models={conversation.models}
-				steerUnavailable={steerUnsupported}
-				disabled={interfaceTransitionActive || Boolean(failedStart)}
-				pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
-				interrupting={conversation.pendingActions.includes("interrupt")}
-				onSend={conversation.send}
-				onAcknowledgeSend={conversation.acknowledgeSend}
-				completedRetry={conversation.completedRetry}
-				onSteer={conversation.steer}
-				onPromoteQueuedTurn={conversation.promoteQueuedTurn}
-				onCancelQueuedTurn={conversation.cancelQueuedTurn}
-				onInterrupt={() => void conversation.interrupt().catch(() => {})}
-				onOpenSettings={() => void openTurnSettings()}
-				onSettings={conversation.chooseSettings}
-				onConfigOption={conversation.setConfigOption}
-				restingInset={chatKeyboard.restingInset}
-				dockRiseOverride={chatKeyboard.dockRiseOverride}
-				openingTurnId={startupView?.openingTurnId}
-				startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
-			/>
+			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
+			<View style={editingMessage ? styles.composerHidden : undefined}>
+				<ChatComposer
+					key={composerKey}
+					quoteRequest={quoteRequest?.composerKey === composerKey ? quoteRequest : undefined}
+					onQuoteHandled={quoteHandled}
+					reviewPR={reviewPromptPR}
+					reviewPRSummary={reviewPromptSummary}
+					reviewPRCollapsed={reviewPromptCollapsed}
+					onCollapseReviewPR={collapseReviewPrompt}
+					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
+					sessionId={session.id}
+					config={config}
+					snapshot={snapshot}
+					changes={changeSummary?.files ? { ...changeSummary, onOpen: filesNavigation.openChanges } : undefined}
+					quotaActive={Boolean(quota)}
+					request={request}
+					requestDismissed={requestDismissed}
+					onRequestDecide={conversation.resolveApproval}
+					onRequestResolveInput={conversation.resolveInput}
+					onShowRequest={setJumpToSequence}
+					onDismissRequest={() => setDismissedRequest(request?.sequence)}
+					onRestoreRequest={restoreRequest}
+					skills={conversation.skills}
+					filePaths={filePaths}
+					filePathsTruncated={filePathsTruncated}
+					onLoadSkills={conversation.loadSkills}
+					onLoadFiles={loadWorkspaceFiles}
+					configOptions={conversation.configOptions}
+					models={conversation.models}
+					steerUnavailable={steerUnsupported}
+					disabled={interfaceTransitionActive || Boolean(failedStart)}
+					pending={mobileInterfaceTransitionIsBusy(interfaceSwitch.transition) || conversation.pendingSends.some((item) => item.state === "sending")}
+					interrupting={conversation.pendingActions.includes("interrupt")}
+					onSend={conversation.send}
+					onAcknowledgeSend={conversation.acknowledgeSend}
+					completedRetry={conversation.completedRetry}
+					onSteer={conversation.steer}
+					onPromoteQueuedTurn={conversation.promoteQueuedTurn}
+					onCancelQueuedTurn={conversation.cancelQueuedTurn}
+					onInterrupt={() => void conversation.interrupt().catch(() => {})}
+					onOpenSettings={() => void openTurnSettings()}
+					onSettings={conversation.chooseSettings}
+					onConfigOption={conversation.setConfigOption}
+					restingInset={chatKeyboard.restingInset}
+					dockRiseOverride={chatKeyboard.dockRiseOverride}
+					openingTurnId={startupView?.openingTurnId}
+					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
+				/>
+			</View>
 		</KeyboardAvoidingView>
 	);
 }
@@ -806,6 +814,7 @@ function interfacePhaseLabel(phase?: string): string {
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
+	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	banner: { minHeight: 35, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.sm, paddingVertical: space.xs, borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
 	bannerIcon: { alignSelf: "flex-start", marginTop: space.hair },

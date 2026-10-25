@@ -185,10 +185,9 @@ export function TaskComposer({
 	}).current;
 	const createCloudTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
-			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
-			if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 			try {
+				if (input.attachments?.length) throw new Error(t("newTask.cloudAttachmentsUnsupported", { defaultValue: "File attachments are not supported for cloud tasks yet." }));
+				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// No provider: the control plane runs the session on the project's
 				// stored provider (config.sandboxProvider), else the org's default.
 				// The task starts in the interface the composer resolved (its choice,
@@ -221,7 +220,6 @@ export function TaskComposer({
 
 	const createDaemonTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			void captureRendererEvent("ao.renderer.task_create_requested", { project_id: input.projectId });
 			try {
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -270,7 +268,7 @@ export function TaskComposer({
 
 	const createStandaloneTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
-			void captureRendererEvent("ao.renderer.task_create_requested", { scope: "standalone" });
+			try {
 			const displayName = input.brief.trim().slice(0, 100) || input.agent || "Standalone agent";
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -293,6 +291,10 @@ export function TaskComposer({
 			if (!data?.session.id) throw new Error(t("newTask.noSession"));
 			void captureRendererEvent("ao.renderer.task_create_succeeded", { scope: "standalone" });
 			return data.session.id;
+			} catch (err) {
+				void captureRendererEvent("ao.renderer.task_create_failed", { scope: "standalone" });
+				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
+			}
 		},
 		[hostId, t],
 	);
@@ -393,20 +395,17 @@ export function TaskComposer({
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
-	// A cloud project is unknown to the local daemon, so its model catalog is
-	// queried agent-level (no project scope); otherwise the request 404s and the
-	// dropdown spins forever. opencode is the exception: its catalog depends on
-	// the connected provider, so scope the query by that credential type
+	// Model catalogs are device-wide, so every local project reads the one catalog
+	// per agent. opencode in a cloud project is the exception: its catalog depends
+	// on the connected provider, so scope the query by that credential type
 	// (credentialModelScope) to show the models the cloud VM will actually run.
-	// Local projects keep their real project scope.
-	const modelsProjectId = useMemo(() => {
-		if (!isCloudProject && !isStandalone) return projectId ?? "";
+	const modelScope = useMemo(() => {
 		if (isCloudProject && selectedAgent === "opencode") {
 			const credentialType = connectedCredentialType(cloudConnectionsQuery.data, "opencode");
 			if (credentialType !== "") return credentialModelScope(credentialType);
 		}
 		return "";
-	}, [isCloudProject, isStandalone, projectId, selectedAgent, cloudConnectionsQuery.data]);
+	}, [isCloudProject, selectedAgent, cloudConnectionsQuery.data]);
 	const defaultWorkerModel =
 		projectConfig?.worker?.agentConfig?.model ?? projectConfig?.agentConfig?.model ?? "";
 	const defaultWorkerMode = projectConfig?.worker?.agentConfig?.mode ?? projectConfig?.agentConfig?.mode ?? "";
@@ -419,16 +418,16 @@ export function TaskComposer({
 		? defaultWorkerMode
 		: "";
 	// Shares the picker's query key, so this is the same fetch, not a second one.
-	const modelCatalogQuery = useQuery(agentModelsQueryOptions(selectedAgent, modelsProjectId, hostId));
+	const modelCatalogQuery = useQuery(agentModelsQueryOptions(selectedAgent, modelScope, hostId));
 	const revalidationQuery = useQuery({
 		queryKey: [
 			"agent-model-revalidation",
 			hostId ?? "",
 			selectedAgent,
-			modelsProjectId,
+			modelScope,
 			modelCatalogQuery.data?.validatedAt ?? "",
 		],
-		queryFn: () => revalidateAgentModels(selectedAgent, modelsProjectId, hostId),
+		queryFn: () => revalidateAgentModels(selectedAgent, modelScope, hostId),
 		enabled: selectedAgent !== "" && modelCatalogQuery.data?.refreshRecommended === true,
 		staleTime: Number.POSITIVE_INFINITY,
 		retry: false,
@@ -436,11 +435,11 @@ export function TaskComposer({
 	useEffect(() => {
 		if (revalidationQuery.data) {
 			queryClient.setQueryData(
-				agentModelsQueryKey(selectedAgent, modelsProjectId, hostId),
+				agentModelsQueryKey(selectedAgent, modelScope, hostId),
 				revalidationQuery.data,
 			);
 		}
-	}, [hostId, modelsProjectId, queryClient, revalidationQuery.data, selectedAgent]);
+	}, [hostId, modelScope, queryClient, revalidationQuery.data, selectedAgent]);
 	const revalidationWarning = revalidationQuery.isError
 		? revalidationQuery.error instanceof Error
 			? revalidationQuery.error.message
@@ -605,9 +604,9 @@ export function TaskComposer({
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
 	const refreshSelectedModels = useCallback(async () => {
-		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId, hostId);
-		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId, hostId), refreshed);
-	}, [hostId, modelsProjectId, queryClient, selectedAgent]);
+		const refreshed = await refreshAgentModels(selectedAgent, modelScope, hostId);
+		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelScope, hostId), refreshed);
+	}, [hostId, modelScope, queryClient, selectedAgent]);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const startAgentLogin = useCallback(() => {
 		openGlobalSettings("harness", {

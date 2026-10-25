@@ -24,6 +24,7 @@ tags:
   - name: Events
   - name: Terminal
   - name: Workspace
+  - name: Artifacts
   - name: Providers
   - name: Worker Lifecycle
   - name: Worker Execution
@@ -98,6 +99,121 @@ paths:
       responses:
         "204":
           description: The personal coding-agent credential was disconnected.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares:
+    get:
+      operationId: listArtifactShares
+      tags: [Artifacts]
+      description: >-
+        Lists the signed-in user's public artifact share links, newest first,
+        with how many they may hold. Revoked links are listed with revokedAt:
+        they no longer serve but still use a slot, so used counts them. Available only when the development-only
+        AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404.
+      responses:
+        "200":
+          description: The user's share links.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Publishes the request body, one file from a local session, as the
+        link of the document named by project, feature and name. A new
+        document gets a new public link at <project>-<feature>-<email> under
+        the share origin; a taken name gets a -2, -3, ... suffix. Publishing
+        a document that already has a link replaces the version that link
+        serves: the URL and slot stay, the earlier version is no longer
+        served, and the response is 200 with replaced true. A revoked link
+        is restored the same way.
+        Content-Length and X-AO-Artifact-SHA256 are required. Returns 409
+        artifact_share_limit_reached when a new document would exceed the
+        user's limit of links; revoked links count toward it.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: feature
+          in: query
+          schema:
+            type: string
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The document's existing link, now serving the new version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        "201":
+          description: The new share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/{shareId}:
+    parameters:
+      - name: shareId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      operationId: updateArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Replaces the file an existing link serves. The link keeps its URL and
+        does not count against the limit again. name must match the link's
+        file name, which is part of its document; another name returns 409
+        artifact_share_name_changed, and the renamed file is published as a
+        new link with POST.
+      parameters:
+        - $ref: "#/components/parameters/ArtifactShareName"
+        - $ref: "#/components/parameters/ArtifactShareSHA256"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The updated share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Revokes a link: it stops serving at once and its stored file is
+        deleted after a grace period. The link still uses its slot, so
+        revoking never makes room for a new document. Publishing the same
+        document again restores it. A link already revoked returns 404.
+      responses:
+        "204":
+          description: The link was revoked.
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
@@ -696,6 +812,49 @@ paths:
                 $ref: "#/components/schemas/SessionChildrenPage"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listSessionArtifacts
+      tags: [Artifacts]
+      description: >-
+        Lists the session's committed artifact files, sorted by path. Reads
+        Postgres only and never wakes or resumes the sandbox. Present only
+        when the deployment reports offering.artifacts; otherwise 404.
+      responses:
+        "200":
+          description: The session's artifact files.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: createSessionArtifactAccess
+      tags: [Artifacts]
+      description: >-
+        Returns a short-lived path prefix that serves this session's artifact
+        files without a bearer header, for a sandboxed frame. Append a file's
+        URL-escaped path to filesPrefix; relative links inside an HTML file
+        resolve against the same prefix. A prefix lasts ten minutes and
+        stops working when the caller leaves the organization; request a new
+        one before expiresAt.
+      responses:
+        "200":
+          description: The file access prefix.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionArtifactAccess"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -1069,6 +1228,54 @@ paths:
       responses:
         "101":
           description: WebSocket protocol upgrade accepted.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/artifact-files/{token}/{path}:
+    get:
+      operationId: getSessionArtifactFile
+      tags: [Artifacts]
+      summary: Read one artifact file through an access prefix.
+      security: []
+      description: >-
+        Streams the committed version of one artifact file. The token comes
+        from createSessionArtifactAccess and binds one organization and
+        session. Every response carries a Content-Security-Policy sandbox
+        without allow-same-origin, X-Content-Type-Options nosniff, and an
+        ETag of the file's SHA-256. A listed file whose stored object is gone
+        returns 404 with code artifact_unavailable.
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: path
+          in: path
+          required: true
+          description: The file's path in the artifact directory; may contain slashes.
+          schema:
+            type: string
+        - name: If-None-Match
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The file bytes, with Content-Type from the file extension.
+          content:
+            "*/*":
+              schema:
+                type: string
+                format: binary
+        "304":
+          description: The file has not changed since the given ETag.
+        "401":
+          description: The access token is invalid or expired (artifact_access_invalid).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/workspace/files:
@@ -1755,6 +1962,124 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/manifest:
+    post:
+      operationId: compareWorkerArtifactManifest
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Compares the worker's artifact directory listing against the
+        session's committed files and returns the paths whose size or SHA-256
+        differ, including new paths. Requires `worker:connect`. Absent when
+        the deployment does not keep artifacts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerArtifactManifestInput"
+      responses:
+        "200":
+          description: The changed paths.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerArtifactManifestResponse"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "413":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/blob/{path}:
+    put:
+      operationId: putWorkerArtifactBlob
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Streams one artifact file to storage under the worker's own session.
+        Content-Length is required and the body's SHA-256 must match the
+        X-AO-Artifact-SHA256 header; storage rejects a mismatch without
+        keeping it. Returns the stored version for the commit. Requires
+        `worker:connect`.
+      parameters:
+        - name: path
+          in: path
+          required: true
+          description: The file's path in the artifact directory; may contain slashes.
+          schema:
+            type: string
+        - name: X-AO-Artifact-SHA256
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The stored version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerArtifactBlobResponse"
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "411":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "422":
+          description: The body does not match its SHA-256 (checksum_mismatch).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/worker/artifacts/commit:
+    post:
+      operationId: commitWorkerArtifacts
+      tags: [Worker Execution]
+      security:
+        - workerAuth: []
+      description: |
+        Records uploaded versions and deletions for the worker's own session
+        in one transaction and appends an artifact.changed event. Each
+        version must exist with the given size and SHA-256
+        (artifact_version_missing or artifact_version_mismatch otherwise).
+        Requires `worker:connect`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkerArtifactCommitInput"
+      responses:
+        "204":
+          description: The changes are committed.
+        "401":
+          $ref: "#/components/responses/WorkerUnauthorized"
+        "403":
+          $ref: "#/components/responses/WorkerScopeRequired"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/worker/children:
     get:
       operationId: listWorkerChildren
@@ -2315,6 +2640,22 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    ArtifactShareName:
+      name: name
+      in: query
+      required: true
+      description: The file name, without a directory.
+      schema:
+        type: string
+        maxLength: 255
+    ArtifactShareSHA256:
+      name: X-AO-Artifact-SHA256
+      in: header
+      required: true
+      description: Lowercase hex SHA-256 of the body.
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{64}$"
     OrgId:
       name: orgId
       in: path
@@ -2729,6 +3070,12 @@ components:
             deployment offers coder without gating it. Also true while the
             organization still has a stored connection, so it can inspect or
             clear one. Absent from older control planes.
+        artifacts:
+          type: boolean
+          description: >-
+            Whether cloud sessions keep artifact files. When false the
+            artifact routes return 404 and requestedOutput "artifact" is
+            rejected. Older control planes omit it.
         coderWorkerWorkingFolder:
           type: boolean
           description: >-
@@ -3883,6 +4230,15 @@ components:
           format: uri
         defaultBranch:
           type: string
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        artifacts:
+          type: boolean
+          description: >-
+            When true the worker syncs the session's artifact directory
+            through the worker artifact routes and names that directory in the
+            agent prompt and AO_SESSION_ARTIFACTS_DIR. Workers that do not advertise
+            the session.artifacts capability ignore it.
     WorkerBootstrapResponse:
       type: object
       additionalProperties: false
@@ -5038,12 +5394,245 @@ components:
           $ref: "#/components/schemas/Turn"
         isTerminated:
           type: boolean
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        outputType:
+          $ref: "#/components/schemas/SessionOutputType"
+        artifactCount:
+          type: integer
+          minimum: 0
+          description: >-
+            How many committed artifact files the session has, on the session
+            read and list routes while the deployment keeps artifacts.
+        artifactsUpdatedAt:
+          type: string
+          format: date-time
+          description: >-
+            When the newest of the session's artifact files was committed. It
+            changes whenever a commit changes the files, and only then, so a
+            client can keep a file list until it moves. Absent without files.
+        artifactFiles:
+          type: array
+          description: >-
+            The session's committed artifact files, on the session read route
+            while the deployment keeps artifacts. The list route sends only
+            artifactCount; listSessionArtifacts returns the files.
+          items:
+            $ref: "#/components/schemas/SessionArtifact"
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
+    RequestedOutput:
+      type: string
+      enum: [artifact]
+      description: >-
+        The deliverable a session was created for. artifact asks the agent for
+        a file in its artifact directory instead of a pull request.
+    SessionOutputType:
+      type: string
+      enum: [none, pr, artifact, pr_artifact]
+      description: What the session owns, a pull request, artifact files, or both.
+    SessionArtifact:
+      type: object
+      additionalProperties: false
+      required: [path, name, kind, contentType, size, sha256, updatedAt]
+      properties:
+        path:
+          type: string
+          description: Slash-separated path in the session's artifact directory.
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [html, markdown, file]
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        updatedAt:
+          type: string
+          format: date-time
+          description: >-
+            When the control plane last committed a new version of the file.
+    SessionArtifactList:
+      type: object
+      additionalProperties: false
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionArtifact"
+    SessionArtifactAccess:
+      type: object
+      additionalProperties: false
+      required: [filesPrefix, expiresAt]
+      properties:
+        filesPrefix:
+          type: string
+          description: >-
+            Path on this control plane ending in "/", for example
+            /api/cloud/v1/artifact-files/<token>/.
+        expiresAt:
+          type: string
+          format: date-time
+    ArtifactShare:
+      type: object
+      additionalProperties: false
+      required: [id, slug, url, name, contentType, size, sha256, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+          description: The link's subdomain label.
+        url:
+          type: string
+          description: The public link, for example http://<slug>.share.localhost:8081/.
+        name:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+          description: When the link was revoked. A revoked link serves nothing but still uses a slot.
+    ArtifactShareEnvelope:
+      type: object
+      additionalProperties: false
+      required: [share]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+    ArtifactSharePublishResult:
+      type: object
+      additionalProperties: false
+      required: [share, replaced]
+      properties:
+        share:
+          $ref: "#/components/schemas/ArtifactShare"
+        replaced:
+          type: boolean
+          description: True when publishing replaced the version of the document's existing link.
+    ArtifactShareList:
+      type: object
+      additionalProperties: false
+      required: [shares, limit, used]
+      properties:
+        shares:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArtifactShare"
+        limit:
+          type: integer
+          minimum: 1
+        used:
+          type: integer
+          minimum: 0
+    WorkerArtifactFile:
+      type: object
+      additionalProperties: false
+      required: [path, size, sha256]
+      properties:
+        path:
+          type: string
+          minLength: 1
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 26214400
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    WorkerArtifactManifestInput:
+      type: object
+      additionalProperties: false
+      required: [files]
+      properties:
+        files:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/WorkerArtifactFile"
+    WorkerArtifactManifestResponse:
+      type: object
+      additionalProperties: false
+      required: [changed]
+      properties:
+        changed:
+          type: array
+          items:
+            type: string
+    WorkerArtifactBlobResponse:
+      type: object
+      additionalProperties: false
+      required: [path, versionId]
+      properties:
+        path:
+          type: string
+        versionId:
+          type: string
+    WorkerArtifactCommitFile:
+      type: object
+      additionalProperties: false
+      required: [path, versionId, size, sha256]
+      properties:
+        path:
+          type: string
+          minLength: 1
+        versionId:
+          type: string
+          minLength: 1
+          maxLength: 1024
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 26214400
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        mtime:
+          type: string
+          format: date-time
+    WorkerArtifactCommitInput:
+      type: object
+      additionalProperties: false
+      properties:
+        files:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/WorkerArtifactCommitFile"
+        deleted:
+          type: array
+          maxItems: 200
+          description: Paths this worker previously synced and has since removed.
+          items:
+            type: string
     SessionStartupError:
       type: object
       additionalProperties: false
@@ -5126,6 +5715,8 @@ components:
         sandboxProviderConnectionId:
           type: string
           format: uuid
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
         interfaceMode:
           $ref: "#/components/schemas/SessionInterfaceMode"
           description: >-

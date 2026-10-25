@@ -86,6 +86,7 @@ var (
 // SessionService is the controller-facing session service contract.
 type SessionService interface {
 	List(ctx context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error)
+	ListPage(ctx context.Context, filter sessionsvc.ListFilter) (sessionsvc.ListPage, error)
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -295,12 +296,27 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_QUERY", err.Error(), nil)
 		return
 	}
-	sessions, err := c.Svc.List(r.Context(), filter)
+	page, err := c.Svc.ListPage(r.Context(), filter)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
+	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{
+		Sessions:   sessionViews(r, page.Sessions),
+		NextCursor: page.NextCursor,
+		Archived:   archiveSummaryView(page.Archived),
+	})
+}
+
+func archiveSummaryView(in *sessionsvc.ArchiveSummary) *SessionArchiveSummary {
+	if in == nil {
+		return nil
+	}
+	byProject := make(map[string]int, len(in.ByProject))
+	for project, count := range in.ByProject {
+		byProject[string(project)] = count
+	}
+	return &SessionArchiveSummary{Total: in.Total, ByProject: byProject}
 }
 
 func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
@@ -750,6 +766,10 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			}
 		},
 		ModifyResponse: func(res *http.Response) error {
+			// Remote proxies publish this app on a separate origin, where the
+			// sandbox is removed in favor of their existing preview policy.
+			res.Header.Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
+			res.Header.Set("X-AO-Preview-API-Sandbox", "1")
 			if location := res.Header.Get("Location"); location != "" {
 				if redirect, parseErr := url.Parse(location); parseErr == nil && redirect.IsAbs() && isPreviewLoopback(redirect.Hostname()) {
 					if redirect.Port() != target.Port() {
@@ -945,6 +965,8 @@ func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *ht
 }
 
 func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.File, info fs.FileInfo, clean string) {
+	sandboxLegacyPreview(w, r)
+
 	if !previewutil.IsMarkdownPath(clean) || previewRawRequested(r) {
 		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
@@ -966,8 +988,26 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if r.Method != http.MethodHead {
-		_, _ = w.Write(rendered) //nolint:gosec // G705: preview content is workspace-local and agent-trusted
+		_, _ = w.Write(rendered) //nolint:gosec // G705: legacy documents are sandboxed; isolated previews have no daemon API authority
 	}
+}
+
+// Legacy API URLs must not give workspace HTML, Markdown or SVG the API's
+// origin. The sandbox permits scripts/forms but deliberately omits same-origin.
+// Normal isolated preview origins retain their own module/asset behavior.
+func sandboxLegacyPreview(w http.ResponseWriter, r *http.Request) {
+	if _, ok := previewutil.SessionIDFromHost(r.Host); ok {
+		return
+	}
+	if _, ok := previewutil.SessionIDFromArtifactHost(r.Host); ok {
+		return
+	}
+	if _, ok := previewutil.SessionIDFromInlineArtifactHost(r.Host); ok {
+		return
+	}
+	w.Header().Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
+	w.Header().Set("X-AO-Preview-API-Sandbox", "1")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
 func previewRawRequested(r *http.Request) bool {
@@ -2638,6 +2678,23 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 			return sessionsvc.ListFilter{}, errors.New("fresh must be a boolean")
 		}
 		filter.Fresh = fresh
+	}
+	switch kind := domain.SessionKind(q.Get("kind")); kind {
+	case "":
+	case domain.KindWorker, domain.KindOrchestrator:
+		filter.Kind = kind
+	default:
+		return sessionsvc.ListFilter{}, errors.New("kind must be worker or orchestrator")
+	}
+	if raw := q.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > sessionsvc.MaxListLimit {
+			return sessionsvc.ListFilter{}, fmt.Errorf("limit must be an integer from 1 to %d", sessionsvc.MaxListLimit)
+		}
+		filter.Limit = limit
+	}
+	if filter.Cursor = q.Get("cursor"); filter.Cursor != "" && filter.Limit == 0 {
+		return sessionsvc.ListFilter{}, errors.New("cursor requires limit")
 	}
 	return filter, nil
 }

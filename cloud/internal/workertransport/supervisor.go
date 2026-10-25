@@ -191,6 +191,22 @@ type ChatRunner interface {
 // reusing the bootstrap command would start a fresh TUI after ChatUI work.
 type AgentCommandFactory func(context.Context, string, string, string) (workerexec.Command, error)
 
+// modelDiscoveryCommand is the coding agent's command a model catalog is read
+// with: the running agent's, or one built like it (binary, config home and
+// credential) when none has started yet, as in a Chat session before its
+// first turn.
+func (s *Supervisor) modelDiscoveryCommand(ctx context.Context, nativeID, selectedModel, selectedEffort string) (workerexec.Command, error) {
+	s.mu.Lock()
+	command := s.AgentCommand
+	s.mu.Unlock()
+	if command.Path != "" || s.AgentCommandFactory == nil {
+		// Only the builder's Cleanup belongs to this request.
+		command.Cleanup = nil
+		return command, nil
+	}
+	return s.AgentCommandFactory(ctx, nativeID, selectedModel, selectedEffort)
+}
+
 // chatActivity is implemented by the durable headless controller. Keeping it
 // optional preserves the runner boundary for alternate worker implementations
 // while allowing a real Chat turn to drain before a TUI handoff begins.
@@ -842,14 +858,12 @@ func (s *Supervisor) handle(
 		} else if s.Harness == "claude-code" {
 			nativeID := s.nativeConversationID(ctx, interfacePayload{})
 			s.mu.Lock()
-			command := s.AgentCommand
 			selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
 			s.mu.Unlock()
-			if command.Path == "" && s.AgentCommandFactory != nil {
-				command, err = s.AgentCommandFactory(ctx, nativeID, selectedModel, selectedEffort)
-				if err == nil && command.Cleanup != nil {
-					defer command.Cleanup()
-				}
+			var command workerexec.Command
+			command, err = s.modelDiscoveryCommand(ctx, nativeID, selectedModel, selectedEffort)
+			if err == nil && command.Cleanup != nil {
+				defer command.Cleanup()
 			}
 			var models []worker.ChatModel
 			var nativeModel, nativeEffort string
@@ -875,13 +889,21 @@ func (s *Supervisor) handle(
 				}
 			}
 		} else {
+			nativeID := s.nativeConversationID(ctx, interfacePayload{})
+			s.mu.Lock()
+			selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
+			s.mu.Unlock()
 			var models []worker.ChatModel
-			models, err = workerexec.DiscoverCodexModels(ctx, "codex", s.Workspace)
+			var command workerexec.Command
+			command, err = s.modelDiscoveryCommand(ctx, nativeID, selectedModel, selectedEffort)
+			if err == nil && command.Cleanup != nil {
+				defer command.Cleanup()
+			}
 			if err == nil {
-				s.mu.Lock()
-				selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
-				s.mu.Unlock()
-				model, effort, settingsErr := workerexec.CodexConversationSettingsAfter(s.DataDir, s.nativeConversationID(ctx, interfacePayload{}), selectionAt)
+				models, err = workerexec.DiscoverCodexModels(ctx, command)
+			}
+			if err == nil {
+				model, effort, settingsErr := workerexec.CodexConversationSettingsAfter(s.DataDir, nativeID, selectionAt)
 				if settingsErr != nil {
 					err = settingsErr
 				} else {

@@ -735,6 +735,8 @@ type Session struct {
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
 	LaunchOptions                    string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 }
 
 type SessionAgentAccount struct {

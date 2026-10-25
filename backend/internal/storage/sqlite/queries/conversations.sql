@@ -129,6 +129,15 @@ WHERE id = ?;
 UPDATE conversations SET current_session_id = NULL, updated_at = ?
 WHERE id = ? AND scope = 'session' AND current_session_id = ?;
 
+-- name: SelectSessionForActivityProviderItem :one
+SELECT current_session_id
+FROM conversations
+JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
+WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
+  AND current_session_id IS NOT NULL
+LIMIT 1;
+
 -- name: SelectProjectConversation :one
 SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
 
@@ -515,6 +524,43 @@ UPDATE conversations
 SET active_branch_id = ?, updated_at = ?
 WHERE id = ?;
 
+-- Intake a session queued before its fresh provider existed belongs to that
+-- provider's scope, so native replay can correlate it after a restart. Rows
+-- move with their turn; dispatched or rolled-back turns stay where they are.
+-- name: MoveUndispatchedTurnMessagesToBranch :exec
+UPDATE conversation_messages
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_messages.branch_id = sqlc.arg(parent_branch_id)
+  AND conversation_messages.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = sqlc.arg(conversation_id)
+        AND intake.branch_id = sqlc.arg(parent_branch_id)
+        AND intake.handled_by_session_id = sqlc.arg(session_id)
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  );
+
+-- name: MoveUndispatchedTurnActivitiesToBranch :exec
+UPDATE conversation_activities
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_activities.branch_id = sqlc.arg(parent_branch_id)
+  AND conversation_activities.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = sqlc.arg(conversation_id)
+        AND intake.branch_id = sqlc.arg(parent_branch_id)
+        AND intake.handled_by_session_id = sqlc.arg(session_id)
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  );
+
+-- name: MoveUndispatchedTurnsToBranch :exec
+UPDATE conversation_turns
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND branch_id = sqlc.arg(parent_branch_id)
+  AND handled_by_session_id = sqlc.arg(session_id)
+  AND state = 'queued' AND provider_turn_id = '' AND rolled_back_at IS NULL;
+
 -- The next turn's provider choices. Written only when the user picks something,
 -- so NULL keeps meaning "use whatever the conversation was started with".
 -- NOTE: keep these comments ASCII. sqlc locates its star-expansion edits by byte
@@ -790,10 +836,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
@@ -851,10 +899,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
@@ -885,10 +935,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
@@ -919,10 +971,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
   AND (
@@ -1190,8 +1244,13 @@ INSERT INTO conversation_messages (
 -- because AO does not know the message id the provider will use.
 -- name: AppendConversationMessageDelta :exec
 UPDATE conversation_messages
-SET text = text || ?, revision = revision + 1, streaming = 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?;
+SET text = text || ?, revision = revision + 1,
+    streaming = NOT EXISTS (
+        SELECT 1 FROM conversation_turns
+        WHERE conversation_turns.id = conversation_messages.turn_id
+          AND conversation_turns.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+    ), updated_at = ?
+WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ?;
 
 -- name: SettleConversationMessage :exec
 UPDATE conversation_messages

@@ -381,20 +381,24 @@ export const McpServerBanner = memo(function McpServerBanner({
  * A harness update replaced the release this session's agent runs. With
  * "move open sessions to new versions" on, the daemon restarts the agent on
  * the new release once it is idle, or before the next message; a failed
- * restart keeps the queued messages for a manual resume.
+ * restart keeps the queued messages for a manual resume. A stopped agent is
+ * never moved on its own: resuming it starts the new release.
  */
 export const VersionSwitchBanner = memo(function VersionSwitchBanner({
 	staleBinary,
 	hostId,
+	agentStopped,
 }: {
 	staleBinary?: SessionStaleBinary;
 	hostId?: string;
+	/** The agent controller stopped and waits for the user to resume it. */
+	agentStopped?: boolean;
 }) {
 	// Most sessions are current; only a marked one reads the setting.
-	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} /> : null;
+	return staleBinary?.version ? <VersionSwitchNotice staleBinary={staleBinary} hostId={hostId} agentStopped={agentStopped} /> : null;
 });
 
-function VersionSwitchNotice({ staleBinary, hostId }: { staleBinary: SessionStaleBinary; hostId?: string }) {
+function VersionSwitchNotice({ staleBinary, hostId, agentStopped }: { staleBinary: SessionStaleBinary; hostId?: string; agentStopped?: boolean }) {
 	const { t } = useTranslation();
 	const { settings } = useSettings(hostId);
 	const version = truncateMiddle(versionLabel(staleBinary.version));
@@ -414,9 +418,11 @@ function VersionSwitchNotice({ staleBinary, hostId }: { staleBinary: SessionStal
 		<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-1.5">
 			<span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-caption text-muted-foreground">
 				<CircleArrowUp aria-hidden="true" className="size-3 shrink-0 text-settings-accent" />
-				{t("chat.versionSwitch.pending", { version })}
+				{t(agentStopped ? "chat.versionSwitch.installed" : "chat.versionSwitch.pending", { version })}
 			</span>
-			<span className="min-w-0 truncate text-caption text-muted-foreground">{t("chat.versionSwitch.pendingHint")}</span>
+			<span className="min-w-0 truncate text-caption text-muted-foreground">
+				{t(agentStopped ? "chat.versionSwitch.stoppedHint" : "chat.versionSwitch.pendingHint")}
+			</span>
 		</div>
 	);
 }

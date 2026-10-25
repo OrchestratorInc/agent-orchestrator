@@ -1,5 +1,5 @@
-import { useId, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { ArrowUp, Check, ChevronDown, ChevronLeft, ExternalLink, Loader2, X } from "lucide-react";
 import { aoBridge } from "../../lib/bridge";
 import { cn } from "../../lib/utils";
 import type { ConversationActivity } from "../../types/conversation";
@@ -47,7 +47,7 @@ export function ElicitationDock({
 			role="group"
 			aria-label="Agent question"
 			data-testid="elicitation-dock"
-			className="elicitation-dock overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
+			className="elicitation-dock animate-in fade-in-0 slide-in-from-bottom-1 duration-200 overflow-hidden rounded-[var(--radius-chat-composer)] border border-border-strong bg-surface shadow-sm"
 		>
 			{activity.detail?.inputMode === "url" ? (
 				<URLRequest activity={activity} disabled={submitting || unavailable} onResolve={resolve} />
@@ -128,8 +128,14 @@ function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; 
 				return (
 					<div key={name} className="min-w-0">
 						<dt className="text-muted-foreground">{propertyLabel([name, property])}</dt>
-						<dd className="whitespace-pre-wrap break-words text-foreground">
-							{Array.isArray(value) ? value.map(label).join(", ") : label(value)}
+						<dd className="mt-0.5 flex min-w-0 items-start gap-2 text-foreground">
+							{/* The same tile the dock marks a picked choice with. */}
+							<span aria-hidden="true" className="mt-0.5 grid size-4 shrink-0 place-items-center rounded bg-logo-accent text-logo-accent-foreground">
+								<Check className="size-3" />
+							</span>
+							<span className="min-w-0 whitespace-pre-wrap break-words">
+								{Array.isArray(value) ? value.map(label).join(", ") : label(value)}
+							</span>
 						</dd>
 					</div>
 				);
@@ -139,21 +145,65 @@ function HistoryAnswers({ properties, content }: { properties: PropertyEntry[]; 
 }
 
 /** The full question stays visible above its answers, alongside the step count. */
-function DockHeader({ id, title, pager }: { id?: string; title: string; pager?: string }) {
+function DockHeader({
+	id,
+	title,
+	pager,
+	onDismiss,
+	disabled,
+	collapsed,
+	onToggleCollapsed,
+}: {
+	id?: string;
+	title: string;
+	pager?: string;
+	/** Cancel lives in the header as a quiet close, not as a footer pill. */
+	onDismiss?: () => void;
+	disabled?: boolean;
+	/** Folds the answers away so the transcript above can be read first. */
+	collapsed?: boolean;
+	onToggleCollapsed?: () => void;
+}) {
 	return (
-		<div className="flex min-h-8 items-start gap-2 px-3 py-2">
-			<p id={id} className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs font-medium leading-relaxed text-foreground">
-				{title}
-			</p>
-			{pager ? (
-				<span className="shrink-0 text-caption tabular-nums text-muted-foreground">{pager}</span>
+		<div className="flex items-start gap-2 px-4 pb-2 pt-3">
+			<div className="min-w-0 flex-1">
+				<p className="text-caption leading-snug text-muted-foreground">
+					Question{pager ? <span className="tabular-nums"> · {pager}</span> : null}
+				</p>
+				<p id={id} className="mt-0.5 whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground">
+					{title}
+				</p>
+			</div>
+			{onToggleCollapsed ? (
+				<button
+					type="button"
+					aria-label={collapsed ? "Expand question" : "Collapse question"}
+					aria-expanded={!collapsed}
+					title={collapsed ? "Expand" : "Collapse"}
+					onClick={onToggleCollapsed}
+					className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+				>
+					<ChevronDown aria-hidden="true" className={cn("size-3.5 transition-transform", collapsed && "-rotate-90")} />
+				</button>
+			) : null}
+			{onDismiss ? (
+				<button
+					type="button"
+					aria-label="Cancel"
+					title="Cancel"
+					disabled={disabled}
+					onClick={onDismiss}
+					className="-mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+				>
+					<X aria-hidden="true" className="size-3.5" />
+				</button>
 			) : null}
 		</div>
 	);
 }
 
 function DockFooter({ children }: { children: ReactNode }) {
-	return <div className="flex flex-wrap items-center justify-between gap-1.5 px-3 pb-2.5 pt-1">{children}</div>;
+	return <div className="flex flex-wrap items-center justify-between gap-1.5 px-4 pb-3 pt-1.5">{children}</div>;
 }
 
 function URLRequest({
@@ -247,14 +297,29 @@ function FormRequest({
 	const schema = activity.detail?.schema;
 	const properties = useMemo(() => Object.entries(schema?.properties ?? {}), [schema?.properties]);
 	const questionGroups = useMemo(() => claudeQuestionGroups(properties), [properties]);
+	const otherAnswers = useMemo(() => otherAnswerFields(properties), [properties]);
 	const required = useMemo(() => new Set(schema?.required ?? []), [schema?.required]);
 	const [values, setValues] = useState<Record<string, InputValue>>(() => initialValues(properties));
 	const [missing, setMissing] = useState<Set<string>>(new Set());
 	const [activeQuestion, setActiveQuestion] = useState(0);
+	const [collapsed, setCollapsed] = useState(false);
 	const visibleProperties = questionGroups?.[activeQuestion] ?? properties;
 	const hasPreviousQuestion = questionGroups !== undefined && activeQuestion > 0;
 	const hasNextQuestion = questionGroups !== undefined && activeQuestion < questionGroups.length - 1;
 	const headerId = useId();
+	const formRef = useRef<HTMLFormElement>(null);
+	const shownQuestion = useRef(activeQuestion);
+
+	// Changing question unmounts the focused choice (and Back, on the first
+	// question), which drops focus out of the card. Put it on the new question so
+	// the next number key and Enter still reach it.
+	useEffect(() => {
+		if (shownQuestion.current === activeQuestion) return;
+		shownQuestion.current = activeQuestion;
+		const form = formRef.current;
+		if (!form || form.contains(document.activeElement)) return;
+		(form.querySelector<HTMLInputElement>("input:checked") ?? form.querySelector<HTMLInputElement>("input"))?.focus();
+	}, [activeQuestion]);
 
 	// Claude puts a single prompt in message and each prompt of a multi-question
 	// form in its field description. The field title is only a short topic label.
@@ -267,11 +332,41 @@ function FormRequest({
 			? `${activeQuestion + 1} of ${questionGroups.length}`
 			: undefined;
 
+	// Number keys pick the matching choice and 0 jumps to "Other", the same
+	// shortcuts the rows print. Typing in a text field is left alone.
+	function pickByNumber(event: KeyboardEvent<HTMLFormElement>) {
+		if (!questionGroups || disabled || event.metaKey || event.ctrlKey || event.altKey) return;
+		const onChoice = event.target instanceof HTMLInputElement
+			&& (event.target.type === "radio" || event.target.type === "checkbox");
+		if (event.target instanceof HTMLInputElement && !onChoice) return;
+		const form = event.currentTarget;
+		// Browsers don't submit a form when Enter is pressed on a radio.
+		if (event.key === "Enter" && onChoice) {
+			event.preventDefault();
+			form.requestSubmit();
+			return;
+		}
+		if (!/^[0-9]$/.test(event.key)) return;
+		const target = event.key === "0"
+			? form.querySelector<HTMLInputElement>("input[type=text], input[type=number]")
+			: form.querySelectorAll<HTMLInputElement>("input[type=radio], input[type=checkbox]")[Number(event.key) - 1];
+		if (!target) return;
+		event.preventDefault();
+		if (event.key === "0") target.focus();
+		else target.click();
+	}
+
 	function submit(event: FormEvent) {
 		event.preventDefault();
+		// A marked Other answer stands in for its question's choice; the daemon
+		// accepts it in the question's place on the same marker.
 		const absent = new Set(
 			visibleProperties
-				.filter(([name]) => required.has(name) && isEmpty(values[name]))
+				.filter(([name]) => {
+					if (!required.has(name) || !isEmpty(values[name])) return false;
+					const other = otherAnswers.get(name);
+					return other === undefined || isBlank(values[other]);
+				})
 				.map(([name]) => name),
 		);
 		setMissing(absent);
@@ -284,71 +379,129 @@ function FormRequest({
 	}
 
 	return (
-		<form onSubmit={submit}>
-			<DockHeader id={headerId} title={title} pager={pager} />
-			{!questionGroups && schema?.description ? (
-				<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
-			) : null}
-			<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
-				{visibleProperties.map(([name, property], index) => (
-					<FormField
-						key={name}
-						name={name}
-						property={property}
-						value={values[name]}
-						required={required.has(name)}
-						invalid={missing.has(name)}
-						disabled={disabled}
-						// Inside a Claude question the header is the prompt, so the first
-						// field borrows it as its accessible name instead of printing it.
-						labelledBy={questionGroups && index === 0 ? headerId : undefined}
-						rows={Boolean(questionGroups)}
-						onChange={(value) => {
-							setValues((current) => ({ ...current, [name]: value }));
-							setMissing((current) => {
-								if (!current.has(name)) return current;
-								const next = new Set(current);
-								next.delete(name);
-								return next;
-							});
-						}}
-					/>
-				))}
-			</div>
-			<DockFooter>
-				<div className="flex items-center gap-1.5">
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>
-						Cancel
-					</button>
-					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("decline")}>
-						Skip
-					</button>
+		<form ref={formRef} onSubmit={submit} onKeyDown={pickByNumber}>
+			<DockHeader
+				id={headerId}
+				title={title}
+				pager={pager}
+				disabled={disabled}
+				onDismiss={() => void onResolve("cancel")}
+				collapsed={collapsed}
+				onToggleCollapsed={questionGroups ? () => setCollapsed((current) => !current) : undefined}
+			/>
+			{collapsed ? null : (
+				<>
+				{!questionGroups && schema?.description ? (
+					<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
+				) : null}
+				<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
+					{visibleProperties.map(([name, property], index) => (
+						<FormField
+							key={name}
+							name={name}
+							property={property}
+							value={values[name]}
+							required={required.has(name)}
+							invalid={missing.has(name)}
+							disabled={disabled}
+							// Inside a Claude question the header is the prompt, so the first
+							// field borrows it as its accessible name instead of printing it.
+							labelledBy={questionGroups && index === 0 ? headerId : undefined}
+							rows={Boolean(questionGroups)}
+							onChange={(value) => {
+								// A choice and its marked "Other" answer are alternatives: picking
+								// one clears the other so it is always clear which one is sent.
+								// Unmarked fields are independent, whatever their names.
+								const question = [...otherAnswers].find(([, other]) => other === name)?.[0];
+								const sibling = question ?? otherAnswers.get(name);
+								setValues((current) => {
+									const next: Record<string, InputValue> = { ...current, [name]: value };
+									const singleChoice = sibling && !Array.isArray(current[question ?? name]) && !Array.isArray(value);
+									if (singleChoice && !isBlank(value) && sibling in current) delete next[sibling];
+									return next;
+								});
+								setMissing((current) => {
+									if (!current.has(name)) return current;
+									const next = new Set(current);
+									next.delete(name);
+									return next;
+								});
+							}}
+						/>
+					))}
 				</div>
-				<div className="flex items-center gap-1.5">
-					{hasPreviousQuestion ? (
+				<DockFooter>
+					<div className="flex items-center gap-1">
+						{hasPreviousQuestion ? (
+							<button
+								type="button"
+								aria-label="Back"
+								title="Back"
+								className="grid size-7 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
+								disabled={disabled}
+								onClick={() => {
+									setMissing(new Set());
+									setActiveQuestion((current) => current - 1);
+								}}
+							>
+								<ChevronLeft aria-hidden="true" className="size-4" />
+							</button>
+						) : null}
+						{questionGroups && questionGroups.length > 1 ? (
+							<div className="flex items-center gap-1 px-1" aria-hidden="true">
+								{questionGroups.map((group, step) => (
+									<button
+										key={group[0]?.[0] ?? step}
+										type="button"
+										tabIndex={-1}
+										disabled={disabled || step >= activeQuestion}
+										onClick={() => {
+											setMissing(new Set());
+											setActiveQuestion(step);
+										}}
+										className={cn(
+											"size-1.5 rounded-full transition-colors",
+											step === activeQuestion
+												? "bg-foreground"
+												: step < activeQuestion
+													? "bg-logo-accent hover:bg-logo-accent-bright"
+													: "bg-border-strong",
+										)}
+									/>
+								))}
+							</div>
+						) : null}
 						<button
 							type="button"
-							className={QUIET_ACTION_PILL}
+							className="h-7 rounded-full px-2 text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
 							disabled={disabled}
-							onClick={() => {
-								setMissing(new Set());
-								setActiveQuestion((current) => current - 1);
-							}}
+							onClick={() => onResolve("decline")}
 						>
-							Back
-						</button>
-					) : null}
-					<button type="submit" className={cn(ACCENT_ACTION_PILL, "min-w-20 justify-center")} disabled={disabled}>
+							Skip
+						</button>					</div>
+					{/* Sending an answer is the composer's send, so it wears the composer's send colour. */}
+					<button
+						type="submit"
+						className={cn(
+							ACCENT_ACTION_PILL,
+							"min-w-20 justify-center bg-foreground text-background hover:bg-foreground/90",
+						)}
+						disabled={disabled}
+					>
 						{disabled ? (
 							<Loader2 aria-label="Sending answer" className="size-3.5 animate-spin" />
 						) : hasNextQuestion ? (
 							"Next"
 						) : (
-							"Continue"
+							<>
+								Continue
+								<ArrowUp aria-hidden="true" className="size-3.5" />
+							</>
 						)}
 					</button>
-				</div>
-			</DockFooter>
+				</DockFooter>
+				</>
+			)}
 		</form>
 	);
 }
@@ -402,8 +555,8 @@ function FormField({
 				{description && !labelledBy ? (
 					<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{description}</p>
 				) : null}
-				<div className={cn(rows ? "flex flex-col" : "flex flex-col px-1")}>
-					{options.map((option) => {
+				<div className="flex flex-col gap-0.5 px-2">
+					{options.map((option, index) => {
 						const checked = multi
 							? Array.isArray(value) && value.includes(option.value)
 							: value === option.value;
@@ -411,9 +564,8 @@ function FormField({
 							<label
 								key={option.value}
 								className={cn(
-									"flex min-h-10 min-w-0 cursor-pointer items-center gap-2.5 px-3 py-2 transition-colors",
-									rows ? "" : "rounded-lg",
-									checked ? "bg-logo-accent/[0.08]" : "hover:bg-interactive-hover",
+									"group relative flex min-w-0 cursor-pointer items-start gap-3 rounded-lg px-2 py-2 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40",
+									checked ? "bg-logo-accent/[0.1]" : "hover:bg-interactive-hover",
 								)}
 							>
 								<input
@@ -424,12 +576,26 @@ function FormField({
 									onChange={() =>
 										onChange(multi ? toggleValue(Array.isArray(value) ? value : [], option.value) : option.value)
 									}
-									className="size-3 shrink-0 accent-[var(--logo-accent)]"
+									// Invisible but laid over the whole row, so a pointer on the row
+									// lands on the real radio rather than on its label.
+									className="absolute inset-0 m-0 size-full cursor-pointer opacity-0"
 								/>
+								{/* The number doubles as the keyboard shortcut and the selection mark. */}
+								<span
+									aria-hidden="true"
+									className={cn(
+										"mt-px grid size-[18px] shrink-0 place-items-center rounded-[5px] border text-[10px] font-medium leading-none tabular-nums transition-colors",
+										checked
+											? "border-logo-accent bg-logo-accent text-logo-accent-foreground"
+											: "border-border-strong text-muted-foreground group-hover:text-foreground",
+									)}
+								>
+									{index < 9 ? index + 1 : ""}
+								</span>
 								<span className="min-w-0 flex-1">
-									<span className="block text-xs leading-relaxed text-foreground">{option.label}</span>
+									<span className="block text-xs font-medium leading-5 text-foreground">{option.label}</span>
 									{option.description ? (
-										<span className="mt-0.5 block text-caption leading-relaxed text-muted-foreground">
+										<span className="block text-caption leading-relaxed text-muted-foreground">
 											{option.description}
 										</span>
 									) : null}
@@ -489,7 +655,7 @@ function FormField({
 		<input
 			id={id}
 			type={numeric ? "number" : "text"}
-			aria-required={required || undefined}
+			placeholder={rows ? `${label}…` : undefined}			aria-required={required || undefined}
 			min={typeof property.minimum === "number" ? property.minimum : undefined}
 			max={typeof property.maximum === "number" ? property.maximum : undefined}
 			step={property.type === "integer" ? 1 : undefined}
@@ -501,9 +667,9 @@ function FormField({
 			aria-describedby={invalid ? errorId : undefined}
 			onChange={(event) => onChange(numeric && event.target.value !== "" ? Number(event.target.value) : event.target.value)}
 			className={cn(
-				"h-8 w-full min-w-0 rounded-lg border bg-background/40 px-2.5 text-xs leading-relaxed text-foreground outline-none transition-colors focus-visible:border-border-strong",
-				rows ? "mt-1" : "mt-1.5",
-				invalid ? "border-destructive" : "border-border",
+				"w-full min-w-0 rounded-lg border bg-background/40 px-2.5 text-xs leading-relaxed text-foreground outline-none transition-colors focus-visible:border-border-strong",
+				rows ? "h-7 border-0 bg-transparent px-0 focus-visible:border-transparent" : "mt-1.5 h-8",
+				invalid ? "border-destructive" : rows ? "border-transparent" : "border-border",
 			)}
 		/>
 	);
@@ -516,15 +682,17 @@ function FormField({
 	if (rows) {
 		return (
 			<>
-				<div className="flex min-w-0 items-start gap-2.5 px-3 py-2">
-					<span aria-hidden="true" className="size-3 shrink-0" />
-					<span className="flex min-w-0 flex-1 flex-col">
-						<label htmlFor={id} className="text-xs leading-snug text-muted-foreground">
-							{label}
-							{required ? " *" : ""}
-						</label>
-						{control}
+				{/* The field itself is borderless here and global CSS strips rings from
+				    the focused element, so the row carries focus like a choice row does. */}
+				<div className="mx-2 mt-0.5 flex min-w-0 items-center gap-3 rounded-lg px-2 py-1 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40">
+					<span aria-hidden="true" className="grid size-[18px] shrink-0 place-items-center rounded-[5px] border text-[10px] font-medium leading-none tabular-nums transition-colors border-border-strong text-muted-foreground">
+						0
 					</span>
+					<label htmlFor={id} className="sr-only">
+						{label}
+						{required ? " *" : ""}
+					</label>
+					<span className="min-w-0 flex-1">{control}</span>
 				</div>
 				{invalid ? (
 					<p id={errorId} className="px-3 pb-1 text-xs text-destructive">
@@ -606,6 +774,25 @@ function claudeQuestionGroups(properties: PropertyEntry[]): PropertyEntry[][] | 
 	return ordered;
 }
 
+/**
+ * Marks the free-text "Other" field an AskUserQuestion bridge (claude-agent-acp)
+ * adds after each question. The daemon recognises the same marker
+ * (`askUserQuestionCustomAnswerMetaKey` in chatdriver/acp).
+ */
+const CUSTOM_ANSWER_META_KEY = "_askUserQuestionCustomAnswer";
+
+/** Each marked question mapped to the field that answers it in free text. */
+function otherAnswerFields(properties: PropertyEntry[]): Map<string, string> {
+	const names = new Set(properties.map(([name]) => name));
+	const fields = new Map<string, string>();
+	for (const [name, property] of properties) {
+		const marker = isRecord(property._meta) ? property._meta[CUSTOM_ANSWER_META_KEY] : undefined;
+		if (!isRecord(marker) || marker.isCustomAnswer !== true || typeof marker.questionId !== "string") continue;
+		if (marker.questionId !== name && names.has(marker.questionId)) fields.set(marker.questionId, name);
+	}
+	return fields;
+}
+
 function initialValues(properties: PropertyEntry[]): Record<string, InputValue> {
 	const values: Record<string, InputValue> = {};
 	for (const [name, property] of properties) {
@@ -637,6 +824,11 @@ function toggleValue(values: string[], value: string): string[] {
 
 function isEmpty(value: InputValue | undefined): boolean {
 	return value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+/** Empty, or text that is only whitespace, which the adapter ignores as an Other answer. */
+function isBlank(value: InputValue | undefined): boolean {
+	return typeof value === "string" ? value.trim() === "" : isEmpty(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -179,8 +179,11 @@ jobs:
       - name: Test SQLite filesystem path identity
         run: go test -race -count=1 -run 'Test(OpenPreservesDataDirectoryCharacters|FragmentPathsKeepDatabasesIsolated|OpenRefusesToHideLegacyDatabase|OpenPrefersExistingIntendedDatabase|DatabaseURIPreservesWindowsPaths)$' ./internal/storage/sqlite
 
+      - name: Test data-dir lock (LockFileEx)
+        run: go test -race -count=1 ./internal/datadirlock/
+
       - name: Test workspace teardown and session kill
-        run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate|TaskNaming|NameTaskWorkspace' ./internal/adapters/workspace/... ./internal/session_manager/
+        run: go test -race -count=1 -v -run 'Destroy|Discard|Sweep|Kill|RunPostCreate|TaskNaming|RenameTaskBranch' ./internal/adapters/workspace/... ./internal/session_manager/
 
       - name: Test Windows Chat environment precedence
         run: go test -race -count=1 ./internal/adapters/chatdriver/processenv/ ./internal/agentlaunch/
@@ -246,6 +249,12 @@ jobs:
           docker build --target expat-build --file Dockerfile \
             --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
             --build-arg EXPAT_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
+
+      - name: Test Brotli security backport
+        run: |
+          docker build --target brotli-build --file Dockerfile \
+            --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
+            --build-arg BROTLI_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
 
   lint:
     runs-on: ubuntu-latest

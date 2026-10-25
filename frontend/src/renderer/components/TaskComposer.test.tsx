@@ -1178,6 +1178,7 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("File attachments are not supported for cloud tasks yet.");
 		expect(onCreated).not.toHaveBeenCalled();
 		expect(h.post).not.toHaveBeenCalled();
+		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { project_id: "cloud-1" });
 	});
 
 	it("starts a cloud task in the default session mode, as a local task does", async () => {
@@ -1563,6 +1564,17 @@ describe("TaskComposer", () => {
 		});
 	});
 
+	it("reports a standalone create failure", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.post.mockResolvedValue({ error: { code: "SESSION_CREATE_FAILED", message: "no session" } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex"));
+		fireEvent.change(task(), { target: { value: "Say hello" } });
+		fireEvent.click(screen.getByText("Start task"));
+		expect(await screen.findByRole("alert")).toHaveTextContent("no session");
+		expect(h.capture).toHaveBeenCalledWith("ao.renderer.task_create_failed", { scope: "standalone" });
+	});
+
 	it("reports dirty then clears it on unmount", () => {
 		const onDirtyChange = vi.fn();
 		const { unmount } = render(
@@ -1762,7 +1774,7 @@ describe("TaskComposer", () => {
 			models: [{ id: "cached-model", label: "GPT Cached", isDefault: true }],
 			allowCustom: false, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z",
 		};
-		cacheAgentModels(cached, "codex", "proj-1");
+		cacheAgentModels(cached, "codex", "");
 		const updated = { ...cached, models: [{ id: "fresh-model", label: "GPT Fresh", isDefault: true }] };
 		let finishDB!: (value: { data: typeof cached }) => void;
 		const dbResponse = new Promise<{ data: typeof cached }>((resolve) => { finishDB = resolve; });

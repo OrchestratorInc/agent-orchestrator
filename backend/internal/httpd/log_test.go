@@ -130,6 +130,31 @@ func TestRequestLoggerPreservesObservedDisconnectedStateOnTimeout(t *testing.T) 
 	}
 }
 
+func TestRequestLoggerSkipsExpectedCodexUnavailableAndCapturesReal500Once(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	sink := &captureSink{}
+	captures := 0
+	handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string) {
+		captures++
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/unavailable" {
+			envelope.WriteError(w, r, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account management is unavailable"))
+			return
+		}
+		envelope.WriteError(w, r, errors.New("boom"))
+	}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/unavailable", nil))
+	if len(sink.events) != 0 || captures != 0 {
+		t.Fatalf("unavailable events=%d captures=%d, want none", len(sink.events), captures)
+	}
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/real", nil))
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.http.5xx" || captures != 1 {
+		t.Fatalf("real failure events=%#v captures=%d, want one PostHog event and one Sentry capture", sink.events, captures)
+	}
+}
+
 type captureSink struct {
 	events []ports.TelemetryEvent
 }

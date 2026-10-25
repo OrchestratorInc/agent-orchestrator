@@ -832,6 +832,47 @@ describe("XtermTerminal", () => {
 		}
 	});
 
+	it.each(["dark", "light"] as const)("toggles transparency on a retained %s terminal", (theme) => {
+		setNavigatorPlatform("MacIntel");
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme={theme} />);
+		const terminal = state.lastTerminal!;
+		const background = theme === "dark" ? "#0d1117" : "#ffffff";
+		try {
+			expect(terminal.options.allowTransparency).toBe(true);
+			expect(terminal.options.theme).toMatchObject({
+				background: "#00000000",
+				black: background,
+				cursorAccent: background,
+			});
+
+			act(() => useUiStore.getState().setWindowTranslucency(false));
+			expect(terminal.options.theme).toMatchObject({ background });
+			act(() => useUiStore.getState().setWindowTranslucency(true));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			act(() => useUiStore.getState().setThemeStyle("orchestrate"));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			expect(state.lastTerminal).toBe(terminal);
+			expect(terminal.dispose).not.toHaveBeenCalled();
+			expect(terminal.clear).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
+		}
+	});
+
+	it("keeps terminals opaque outside macOS even with a saved transparency preference", () => {
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme="dark" />);
+		try {
+			expect(state.lastTerminal!.options.allowTransparency).toBe(false);
+			expect(state.lastTerminal!.options.theme).toMatchObject({ background: "#0d1117" });
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
+		}
+	});
+
 	it("uses the terminal foreground for the light-mode block cursor", () => {
 		const style = document.createElement("style");
 		style.textContent = `

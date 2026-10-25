@@ -19,6 +19,36 @@ services:
       retries: 30
     restart: unless-stopped
 
+  # S3-compatible store for cloud session artifacts (AO_CLOUD_ARTIFACTS=1).
+  # It runs as the invoking user (set by cloud-local-up.sh), who owns the data
+  # directory; on Linux the image's own user cannot write a root-owned bind.
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:2136d593beacf4461187035eca949fe49abd589d5079735025c711ca58fee0c8
+    user: "${AO_CLOUD_LOCAL_UID:-65532}:${AO_CLOUD_LOCAL_GID:-65532}"
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ao_cloud_local_minio
+      MINIO_ROOT_PASSWORD: ao_cloud_local_minio_secret
+    volumes:
+      - "${AO_CLOUD_LOCAL_MINIO_DATA_DIR:-${AO_DATA_DIR:-${HOME}/.ao}/cloud/minio}:/data"
+    restart: unless-stopped
+
+  # Creates the artifact bucket with versioning on, then exits. It gives up
+  # after a minute so a MinIO that cannot start fails the bring-up.
+  minio-init:
+    image: cgr.dev/chainguard/minio-client@sha256:3b5eb8505b378708e08491bd2b487cb39621cabd0cf99bd90927ae83b7378c9b
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        tries=0;
+        until mc alias set local http://minio:9000 ao_cloud_local_minio ao_cloud_local_minio_secret;
+        do tries=$$((tries + 1)); [ "$$tries" -ge 60 ] && exit 1; sleep 1; done &&
+        mc mb --ignore-existing local/ao-cloud-local-tenant-artifacts &&
+        mc version enable local/ao-cloud-local-tenant-artifacts
+    depends_on:
+      - minio
+    restart: "no"
+
   migrate:
     build:
       context: .
@@ -52,6 +82,20 @@ services:
       # the durable-only path.
       AO_CLOUD_TERMINAL_STREAM: "${AO_CLOUD_TERMINAL_STREAM:-1}"
       AO_CLOUD_TERMINAL_RELAY: "${AO_CLOUD_TERMINAL_RELAY:-1}"
+      # Cloud session artifacts, off by default. The bucket lives in the local
+      # MinIO service, which the control plane reaches with these credentials.
+      AO_CLOUD_ARTIFACTS: "${AO_CLOUD_ARTIFACTS:-0}"
+      AO_CLOUD_ARTIFACT_BUCKET: ao-cloud-local-tenant-artifacts
+      AO_CLOUD_ARTIFACT_REGION: us-east-1
+      AO_CLOUD_ARTIFACT_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: ao_cloud_local_minio
+      AWS_SECRET_ACCESS_KEY: ao_cloud_local_minio_secret
+      # Public links to single files published from local sessions, off by
+      # default and development-only. They need AO_CLOUD_ARTIFACTS=1. A link
+      # is http://<slug>.share.localhost:<port>/, which resolves to loopback.
+      AO_CLOUD_ARTIFACT_SHARES: "${AO_CLOUD_ARTIFACT_SHARES:-0}"
+      AO_CLOUD_ARTIFACT_SHARE_ORIGIN: "${AO_CLOUD_ARTIFACT_SHARE_ORIGIN:-http://share.localhost:${AO_CLOUD_PORT:-8081}}"
+      AO_CLOUD_ARTIFACT_SHARE_LIMIT: "${AO_CLOUD_ARTIFACT_SHARE_LIMIT:-3}"
       AO_CLOUD_PROVIDER_SECRET_KEY: "${AO_CLOUD_PROVIDER_SECRET_KEY:?AO_CLOUD_PROVIDER_SECRET_KEY is required}"
       AO_CLOUD_PUBLIC_URL: "${AO_CLOUD_PUBLIC_URL:-http://control-plane:8080}"
       AO_CLOUD_WORKER_SIGNING_KEY: "${AO_CLOUD_WORKER_SIGNING_KEY:?AO_CLOUD_WORKER_SIGNING_KEY is required}"
@@ -82,6 +126,8 @@ services:
       postgres:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/ao-cloud-healthcheck"]

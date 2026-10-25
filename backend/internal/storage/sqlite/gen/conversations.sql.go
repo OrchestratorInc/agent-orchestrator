@@ -313,8 +313,13 @@ func (q *Queries) AppendConversationActivityStreamedText(ctx context.Context, ar
 
 const appendConversationMessageDelta = `-- name: AppendConversationMessageDelta :exec
 UPDATE conversation_messages
-SET text = text || ?, revision = revision + 1, streaming = 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?
+SET text = text || ?, revision = revision + 1,
+    streaming = NOT EXISTS (
+        SELECT 1 FROM conversation_turns
+        WHERE conversation_turns.id = conversation_messages.turn_id
+          AND conversation_turns.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+    ), updated_at = ?
+WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ?
 `
 
 type AppendConversationMessageDeltaParams struct {
@@ -1450,10 +1455,12 @@ WHERE conversation_turns.conversation_id = ?1
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
@@ -1660,6 +1667,97 @@ type MoveConversationTurnsParams struct {
 // stays behind: it would break the target's unique client id.
 func (q *Queries) MoveConversationTurns(ctx context.Context, arg MoveConversationTurnsParams) error {
 	_, err := q.db.ExecContext(ctx, moveConversationTurns, arg.TargetID, arg.BranchID, arg.SourceID)
+	return err
+}
+
+const moveUndispatchedTurnActivitiesToBranch = `-- name: MoveUndispatchedTurnActivitiesToBranch :exec
+UPDATE conversation_activities
+SET branch_id = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND conversation_activities.branch_id = ?3
+  AND conversation_activities.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = ?2
+        AND intake.branch_id = ?3
+        AND intake.handled_by_session_id = ?4
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  )
+`
+
+type MoveUndispatchedTurnActivitiesToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+func (q *Queries) MoveUndispatchedTurnActivitiesToBranch(ctx context.Context, arg MoveUndispatchedTurnActivitiesToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnActivitiesToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
+}
+
+const moveUndispatchedTurnMessagesToBranch = `-- name: MoveUndispatchedTurnMessagesToBranch :exec
+UPDATE conversation_messages
+SET branch_id = ?1
+WHERE conversation_messages.conversation_id = ?2
+  AND conversation_messages.branch_id = ?3
+  AND conversation_messages.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = ?2
+        AND intake.branch_id = ?3
+        AND intake.handled_by_session_id = ?4
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  )
+`
+
+type MoveUndispatchedTurnMessagesToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+// Intake a session queued before its fresh provider existed belongs to that
+// provider's scope, so native replay can correlate it after a restart. Rows
+// move with their turn; dispatched or rolled-back turns stay where they are.
+func (q *Queries) MoveUndispatchedTurnMessagesToBranch(ctx context.Context, arg MoveUndispatchedTurnMessagesToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnMessagesToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
+}
+
+const moveUndispatchedTurnsToBranch = `-- name: MoveUndispatchedTurnsToBranch :exec
+UPDATE conversation_turns
+SET branch_id = ?1
+WHERE conversation_id = ?2
+  AND branch_id = ?3
+  AND handled_by_session_id = ?4
+  AND state = 'queued' AND provider_turn_id = '' AND rolled_back_at IS NULL
+`
+
+type MoveUndispatchedTurnsToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+func (q *Queries) MoveUndispatchedTurnsToBranch(ctx context.Context, arg MoveUndispatchedTurnsToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnsToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
 	return err
 }
 
@@ -3442,10 +3540,12 @@ WHERE conversation_turns.conversation_id = ?1
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
@@ -3524,10 +3624,12 @@ WHERE conversation_turns.conversation_id = ?1
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
   AND (
@@ -3768,10 +3870,12 @@ WHERE conversation_turns.conversation_id = ?1
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
@@ -4134,6 +4238,23 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 		&i.ActiveLineage,
 	)
 	return i, err
+}
+
+const selectSessionForActivityProviderItem = `-- name: SelectSessionForActivityProviderItem :one
+SELECT current_session_id
+FROM conversations
+JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
+WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
+  AND current_session_id IS NOT NULL
+LIMIT 1
+`
+
+func (q *Queries) SelectSessionForActivityProviderItem(ctx context.Context, providerItemID string) (*domain.SessionID, error) {
+	row := q.db.QueryRowContext(ctx, selectSessionForActivityProviderItem, providerItemID)
+	var current_session_id *domain.SessionID
+	err := row.Scan(&current_session_id)
+	return current_session_id, err
 }
 
 const selectVerifiedAuthenticationTurn = `-- name: SelectVerifiedAuthenticationTurn :one

@@ -286,12 +286,15 @@ paths:
           description: Return catalog facts without reading session history for model
             recency. Cached catalogs are served while discovery refreshes in the background.
           type: boolean
-      - description: Optional project identifier used as the model-catalog cache scope.
+      - description: 'Optional cloud credential scope. Any other value, including
+          a project identifier, is ignored: model catalogs are cached per device,
+          not per project.'
         in: query
         name: projectId
         schema:
-          description: Optional project identifier used as the model-catalog cache
-            scope.
+          description: 'Optional cloud credential scope. Any other value, including
+            a project identifier, is ignored: model catalogs are cached per device,
+            not per project.'
           type: string
       responses:
         "200":
@@ -347,12 +350,15 @@ paths:
           description: Refresh the Harness Settings browsing catalog without session-history
             enrichment; FX includes all connections in a separate cache.
           type: boolean
-      - description: Optional project identifier used as the model-catalog cache scope.
+      - description: 'Optional cloud credential scope. Any other value, including
+          a project identifier, is ignored: model catalogs are cached per device,
+          not per project.'
         in: query
         name: projectId
         schema:
-          description: Optional project identifier used as the model-catalog cache
-            scope.
+          description: 'Optional cloud credential scope. Any other value, including
+            a project identifier, is ignored: model catalogs are cached per device,
+            not per project.'
           type: string
       - description: When true, compare executable and config metadata before running
           discovery.
@@ -3249,7 +3255,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: List paired mobile devices with their live/muted status
+      summary: List paired mobile devices with their live status
       tags:
       - mobile
   /api/v1/mobile/devices/{installId}:
@@ -3279,52 +3285,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Remove a paired device from the roster
-      tags:
-      - mobile
-    patch:
-      operationId: muteMobileDevice
-      parameters:
-      - description: The device's stable install id.
-        in: path
-        name: installId
-        required: true
-        schema:
-          description: The device's stable install id.
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MuteDeviceRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                additionalProperties:
-                  type: boolean
-                type: object
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Mute or unmute push notifications for a paired device
       tags:
       - mobile
   /api/v1/mobile/disable:
@@ -5367,6 +5327,35 @@ paths:
           type:
           - "null"
           - boolean
+      - description: Session kind filter. worker keeps every session that is not an
+          orchestrator.
+        in: query
+        name: kind
+        schema:
+          description: Session kind filter. worker keeps every session that is not
+            an orchestrator.
+          enum:
+          - worker
+          - orchestrator
+          type: string
+      - description: Page size. When set, sessions are ordered pinned first, then
+          most recently updated, and nextCursor resumes the list. When omitted, every
+          match is returned.
+        in: query
+        name: limit
+        schema:
+          description: Page size. When set, sessions are ordered pinned first, then
+            most recently updated, and nextCursor resumes the list. When omitted,
+            every match is returned.
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: Opaque cursor returned by the previous page. Requires limit.
+        in: query
+        name: cursor
+        schema:
+          description: Opaque cursor returned by the previous page. Requires limit.
+          type: string
       responses:
         "200":
           content:
@@ -15028,6 +15017,8 @@ components:
           type: boolean
         branch:
           type: string
+        branchNaming:
+          type: boolean
         branchState:
           $ref: '#/components/schemas/SessionBranchState'
         chatProviderPreserved:
@@ -15331,6 +15322,7 @@ components:
           - mcp_tool
           - auto_review
           - user_input
+          - ao_action
           type: string
         createdAt:
           type: string
@@ -15674,6 +15666,8 @@ components:
       properties:
         explanation:
           type: string
+        spansTurns:
+          type: boolean
         steps:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'
@@ -17274,6 +17268,10 @@ components:
       type: object
     ListSessionsResponse:
       properties:
+        archived:
+          $ref: '#/components/schemas/SessionArchiveSummary'
+        nextCursor:
+          type: string
         sessions:
           items:
             $ref: '#/components/schemas/ControllersSessionView'
@@ -17469,8 +17467,6 @@ components:
         live:
           description: True when the phone's app is open and polling.
           type: boolean
-        muted:
-          type: boolean
         notificationsEnabled:
           description: True when this device has a push token registered.
           type: boolean
@@ -17483,7 +17479,6 @@ components:
           type: string
       required:
       - installId
-      - muted
       - live
       - notificationsEnabled
       - createdAt
@@ -17583,14 +17578,6 @@ components:
       - hostname
       - location
       - lastError
-      type: object
-    MuteDeviceRequest:
-      properties:
-        muted:
-          description: True to stop sending push notifications to this device.
-          type: boolean
-      required:
-      - muted
       type: object
     NotificationEnvelope:
       properties:
@@ -18690,6 +18677,20 @@ components:
           type: string
         codex:
           type: string
+      type: object
+    SessionArchiveSummary:
+      properties:
+        byProject:
+          additionalProperties:
+            type: integer
+          type:
+          - object
+          - "null"
+        total:
+          type: integer
+      required:
+      - total
+      - byProject
       type: object
     SessionArtifact:
       properties:
@@ -20732,6 +20733,8 @@ components:
         distinctId:
           type: string
         githubLogin:
+          type: string
+        installId:
           type: string
         optedOut:
           type: boolean

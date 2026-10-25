@@ -44,6 +44,10 @@ import (
 )
 
 type fakeSessionService struct {
+	// lastListFilter is the filter the controller parsed; listPage, when set,
+	// replaces the page built from sessions so a test can pin the wire shape.
+	lastListFilter             sessionsvc.ListFilter
+	listPage                   *sessionsvc.ListPage
 	workspaceSnapshotInput     sessionsvc.WorkspaceSelectionRevisionInput
 	workspaceSnapshotFilter    string
 	cleanupPending             bool
@@ -261,6 +265,15 @@ func (f *fakeSessionService) List(_ context.Context, filter sessionsvc.ListFilte
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+func (f *fakeSessionService) ListPage(ctx context.Context, filter sessionsvc.ListFilter) (sessionsvc.ListPage, error) {
+	f.lastListFilter = filter
+	if f.listPage != nil {
+		return *f.listPage, nil
+	}
+	sessions, err := f.List(ctx, filter)
+	return sessionsvc.ListPage{Sessions: sessions}, err
 }
 
 func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -915,7 +928,7 @@ func newSessionTestServerWithPreview(
 		deps.PreviewServer = managed
 		deps.SessionCapabilities = allowSessionCapability{}
 	}
-	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, deps, httpd.ControlDeps{}))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}, log, nil, deps, httpd.ControlDeps{}))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -1063,6 +1076,61 @@ func TestSessionsAPI_StartInterfaceTransitionDefaultsOmittedHistoryPolicyToStric
 	mustJSON(t, body, &response)
 	if response.Transition.HistoryPolicy != domain.SessionInterfaceTransitionHistoryStrict {
 		t.Fatalf("response history policy = %q, want strict", response.Transition.HistoryPolicy)
+	}
+}
+
+// A phone polls only live workers and pages the archive when it is opened. The
+// paging query reaches the service intact, and the page's cursor and the
+// archive's size are on the wire only when there is something to report.
+func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.listPage = &sessionsvc.ListPage{
+		Sessions:   []domain.Session{svc.sessions["ao-1"]},
+		NextCursor: "next-page",
+		Archived:   &sessionsvc.ArchiveSummary{Total: 3, ByProject: map[domain.ProjectID]int{"ao": 2, "": 1}},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?active=true&kind=worker&limit=50&cursor=abc", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if f := svc.lastListFilter; f.Active == nil || !*f.Active || f.Kind != domain.KindWorker || f.Limit != 50 || f.Cursor != "abc" {
+		t.Fatalf("filter = %+v, want active worker page of 50 after abc", f)
+	}
+	var page struct {
+		Sessions   []sessionBody `json:"sessions"`
+		NextCursor string        `json:"nextCursor"`
+		Archived   *struct {
+			Total     int            `json:"total"`
+			ByProject map[string]int `json:"byProject"`
+		} `json:"archived"`
+	}
+	mustJSON(t, body, &page)
+	if len(page.Sessions) != 1 || page.NextCursor != "next-page" {
+		t.Fatalf("page = %d sessions, cursor %q", len(page.Sessions), page.NextCursor)
+	}
+	if page.Archived == nil || page.Archived.Total != 3 || page.Archived.ByProject["ao"] != 2 || page.Archived.ByProject[""] != 1 {
+		t.Fatalf("archived = %+v, want 3 (ao 2, standalone 1)", page.Archived)
+	}
+
+	svc.listPage = nil
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if strings.Contains(string(body), "nextCursor") || strings.Contains(string(body), "\"archived\"") {
+		t.Fatalf("unpaged list carries paging fields: %s", body)
+	}
+}
+
+func TestSessionsAPI_ListRejectsBadPagingQuery(t *testing.T) {
+	srv := newSessionTestServer(t, newFakeSessionService())
+	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc"} {
+		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?"+query, "")
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_QUERY") {
+			t.Fatalf("GET sessions?%s = %d %s, want 400 INVALID_QUERY", query, status, body)
+		}
 	}
 }
 
@@ -3479,7 +3547,7 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer host-password")
-	request.Header.Set("Origin", "http://ao-preview-client.localhost:4321")
+	request.Header.Set("Origin", "app://renderer")
 	request.Header.Set("X-AO-Preview-App-Authorization", "Basic app-token")
 	request.Header.Set("X-AO-Preview-App-Origin", "http://ao-preview-client.localhost:4321")
 	response, err = http.DefaultClient.Do(request)
@@ -3505,7 +3573,7 @@ func TestSessionsAPI_ManagedPreviewAppProxy(t *testing.T) {
 	conn, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/v1/sessions/ao-1/preview/app/ws", &websocket.DialOptions{
 		HTTPHeader: http.Header{
 			"Authorization":                  []string{"Bearer host-password"},
-			"Origin":                         []string{"http://ao-preview-client.localhost:4321"},
+			"Origin":                         []string{"app://renderer"},
 			"X-Ao-Preview-App-Authorization": []string{"Basic ws-token"},
 			"X-Ao-Preview-App-Origin":        []string{"http://ao-preview-client.localhost:4321"},
 		},
@@ -5233,5 +5301,33 @@ func TestSessionsAPI_SourceSelectorCannotFallBackToLiveFiles(t *testing.T) {
 				t.Fatalf("source selector fell back to the worktree: %d %s input=%+v", status, body, svc.workspaceSnapshotInput)
 			}
 		})
+	}
+}
+
+func TestSessionsAPI_LegacyPreviewDocumentsHaveNoAPIOrigin(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"index.html", "report.md", "image.svg", "asset.js"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("<script>window.preview=true</script>"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := newFakeSessionService()
+	sess := svc.sessions["ao-1"]
+	sess.Metadata.WorkspacePath = root
+	svc.sessions["ao-1"] = sess
+	srv := newSessionTestServer(t, svc)
+	previewURL, err := previewutil.FileURL(srv.URL, "ao-1", "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"index.html", "report.md", "image.svg", "asset.js"} {
+		_, status, headers := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/preview/files/"+name, "")
+		if status != 200 || headers.Get("Content-Security-Policy") != "sandbox allow-scripts allow-forms" || headers.Get("X-Content-Type-Options") != "nosniff" {
+			t.Fatalf("legacy %s: status=%d headers=%v", name, status, headers)
+		}
+		_, status, headers = doPreviewOriginRequest(t, srv, previewURL, "/"+name)
+		if status != 200 || headers.Get("Content-Security-Policy") != "" {
+			t.Fatalf("isolated %s: status=%d headers=%v", name, status, headers)
+		}
 	}
 }
