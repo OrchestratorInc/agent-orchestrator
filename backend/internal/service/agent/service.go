@@ -773,10 +773,12 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		cached.Catalog = applyCustomModelEntryPolicy(cached.Catalog, policy)
 	}
 	var binary string
+	var binaryResolveErr error
 	if resolver, ok := item.Agent.(ports.AgentBinaryResolver); ok {
 		lock := s.resolverMu[agentID]
 		lock.Lock()
 		resolved, err := resolver.ResolveBinary(ctx)
+		binaryResolveErr = err
 		lock.Unlock()
 		if err == nil {
 			binary = resolved
@@ -840,6 +842,11 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		_ = s.persistCatalogState(ctx, cached, hasCached, "refreshing", "", time.Time{}, generation)
 	}
 	discovered, discoverErr := s.discoverer.Discover(ctx, request)
+	if errors.Is(binaryResolveErr, ports.ErrAgentBinaryNotFound) {
+		// Some discovery adapters report an empty executable as an untyped error.
+		// Retain the resolver's definitive cause even after readiness expires.
+		discoverErr = errors.Join(binaryResolveErr, discoverErr)
+	}
 	discovered = applyCustomModelEntryPolicy(discovered, policy)
 	discovered.BinaryVersion = version
 	persistCtx := s.ctx
