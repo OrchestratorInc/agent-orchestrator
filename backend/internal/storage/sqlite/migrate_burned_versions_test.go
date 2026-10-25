@@ -214,6 +214,7 @@ var shippedMigrations = map[int64]string{
 
 	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 	20261022054735000: "20261022054735000_device_model_catalogs.sql",
+	20261022144835405: "20261022144835405_provider_events_turn_completed_index.sql",
 	20261022172135175: "20261022172135175_session_branch_naming.sql",
 	// Fork-local migrations live in the reserved 9000+ range so a sync rebase
 	// can never renumber them onto a number upstream will claim. See

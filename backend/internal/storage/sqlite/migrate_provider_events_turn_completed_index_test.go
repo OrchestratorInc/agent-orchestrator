@@ -14,7 +14,7 @@ func TestMigrationIndexesOnlyTurnCompletedProviderEvents(t *testing.T) {
 	const index = "idx_conversation_provider_events_turn_completed"
 	// The archive rows are seeded without their conversation and session parents:
 	// the migration only reads the table, so the parent chain adds nothing.
-	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261021230230412)
+	db := openMigratedDatabaseCopyNoForeignKeys(t, migrationVersion(t, "provider_events_session_index"))
 	for i, method := range []string{"reasoning.delta", "turn.completed", "agent_message.delta", "turn.completed", "turn.completed"} {
 		mustExec(t, db, `INSERT INTO conversation_provider_events
 			(conversation_id, session_id, provider_event_id, method, payload_json, received_at, branch_id)
@@ -25,7 +25,7 @@ func TestMigrationIndexesOnlyTurnCompletedProviderEvents(t *testing.T) {
 		t.Fatalf("index before migration = %d, err = %v; want 0", count, err)
 	}
 
-	upTo(t, db, 20261022144835405)
+	upTo(t, db, migrationVersion(t, "provider_events_turn_completed_index"))
 
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM conversation_provider_events INDEXED BY ` + index + ` WHERE method = 'turn.completed'`,
@@ -42,7 +42,7 @@ func TestMigrationIndexesOnlyTurnCompletedProviderEvents(t *testing.T) {
 		t.Fatalf("forcing the index for another method = %v; want a no-query-solution error", err)
 	}
 
-	downTo(t, db, 20261021230230412)
+	downTo(t, db, migrationVersion(t, "provider_events_session_index"))
 
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, index).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("index after down migration = %d, err = %v; want 0", count, err)
