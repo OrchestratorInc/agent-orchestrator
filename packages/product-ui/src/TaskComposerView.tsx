@@ -183,6 +183,28 @@ const TaskPrompt = memo(function TaskPrompt({
 		el.style.height = `${el.scrollHeight}px`;
 	}, [value]);
 
+	const handleDrop = (event: DragEvent<HTMLTextAreaElement>) => {
+		if (disabled) return;
+		const files = Array.from(event.dataTransfer?.files ?? []);
+		if (files.length > 0) return;
+		const text = event.dataTransfer?.getData("text/plain") || event.dataTransfer?.getData("text/uri-list");
+		if (text) {
+			event.preventDefault();
+			const textarea = textareaRef.current;
+			if (textarea) {
+				const start = textarea.selectionStart ?? value.length;
+				const end = textarea.selectionEnd ?? value.length;
+				const nextValue = value.slice(0, start) + text + value.slice(end);
+				setValue(nextValue);
+				onChange(nextValue);
+				const nextCursor = start + text.length;
+				requestAnimationFrame(() => {
+					textarea.setSelectionRange(nextCursor, nextCursor);
+				});
+			}
+		}
+	};
+
 	return (
 		<>
 			<label className="sr-only" htmlFor={id}>
@@ -201,6 +223,7 @@ const TaskPrompt = memo(function TaskPrompt({
 					onChange(nextValue);
 				}}
 				onPaste={onPaste}
+				onDrop={handleDrop}
 				onKeyDown={(event) => {
 					if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.nativeEvent.isComposing) {
 						event.preventDefault();
@@ -260,18 +283,25 @@ export function TaskComposerView({
 	};
 
 	const handleDrop = (event: DragEvent<HTMLFormElement>) => {
-		event.preventDefault();
 		setIsDragging(false);
 		if (submission.isSubmitting) return;
 		const files = Array.from(event.dataTransfer?.files ?? []);
-		if (files.length > 0) attachments.onAddFiles(files);
+		if (files.length > 0) {
+			event.preventDefault();
+			attachments.onAddFiles(files);
+		}
 	};
 
 	const handleDragOver = (event: DragEvent<HTMLFormElement>) => {
 		if (submission.isSubmitting) return;
-		if (Array.from(event.dataTransfer?.items ?? []).some((item) => item.kind === "file")) {
+		const types = Array.from(event.dataTransfer?.types ?? []);
+		if (types.includes("Files") || Array.from(event.dataTransfer?.items ?? []).some((item) => item.kind === "file")) {
 			event.preventDefault();
 			setIsDragging(true);
+			return;
+		}
+		if (types.includes("text/plain") || types.includes("text/uri-list")) {
+			event.preventDefault();
 		}
 	};
 

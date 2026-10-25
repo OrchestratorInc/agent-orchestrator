@@ -17,6 +17,8 @@ import {
 	$createTextNode,
 	CLEAR_HISTORY_COMMAND,
 	COMMAND_PRIORITY_HIGH,
+	DRAGOVER_COMMAND,
+	DROP_COMMAND,
 	DecoratorNode,
 	getDOMSelectionFromTarget,
 	HISTORY_PUSH_TAG,
@@ -73,6 +75,8 @@ export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: (
 export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
+	/** Inserts text at the current caret, or at the end if unselected. */
+	insertText(text: string): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
 	setText(text: string, caret?: "start" | "end"): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
@@ -471,6 +475,19 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
+			insertText: (text) => {
+				editor.update(() => {
+					$addUpdateTag(HISTORY_PUSH_TAG);
+					let selection = $getSelection();
+					if (!$isRangeSelection(selection)) {
+						$getRoot().selectEnd();
+						selection = $getSelection();
+					}
+					if ($isRangeSelection(selection)) {
+						selection.insertRawText(text);
+					}
+				}, { discrete: true });
+			},
 			setText: (text, caret) => {
 				editor.update(() => {
 					$replaceEditorText(text, attachedImages(), caret);
@@ -588,10 +605,80 @@ const EditorBridge = forwardRef<
 			event.stopPropagation();
 			return true;
 		}, COMMAND_PRIORITY_HIGH);
+		const removeDragOver = editor.registerCommand(
+			DRAGOVER_COMMAND,
+			(event) => {
+				const dataTransfer = event.dataTransfer;
+				if (!dataTransfer) return false;
+				if (dataTransfer.files && dataTransfer.files.length > 0) return false;
+				const isText = Array.from(dataTransfer.types ?? []).some((t) => t === "text/plain" || t === "text/uri-list");
+				if (!isText) return false;
+				event.preventDefault();
+				dataTransfer.dropEffect = "copy";
+				return true;
+			},
+			COMMAND_PRIORITY_HIGH,
+		);
+		const removeDrop = editor.registerCommand(
+			DROP_COMMAND,
+			(event) => {
+				const dataTransfer = event.dataTransfer;
+				if (!dataTransfer) return false;
+				if (dataTransfer.files && dataTransfer.files.length > 0) return false;
+				if (Array.from(dataTransfer.types ?? []).includes("application/x-lexical-drag")) return false;
+
+				const text = dataTransfer.getData("text/plain") || dataTransfer.getData("text/uri-list");
+				if (!text) return false;
+
+				event.preventDefault();
+				editor.update(() => {
+					$addUpdateTag(HISTORY_PUSH_TAG);
+					const rootElement = editor.getRootElement();
+					if (rootElement && typeof event.clientX === "number" && typeof event.clientY === "number") {
+						const doc = rootElement.ownerDocument;
+						let domRange: Range | null = null;
+						if (typeof doc.caretRangeFromPoint === "function") {
+							domRange = doc.caretRangeFromPoint(event.clientX, event.clientY);
+						} else if (typeof (doc as Document & { caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint === "function") {
+							const pos = (doc as Document & { caretPositionFromPoint: (x: number, y: number) => { offsetNode: Node; offset: number } | null }).caretPositionFromPoint(event.clientX, event.clientY);
+							if (pos) {
+								domRange = doc.createRange();
+								domRange.setStart(pos.offsetNode, pos.offset);
+								domRange.collapse(true);
+							}
+						}
+						if (domRange && rootElement.contains(domRange.startContainer)) {
+							const domSelection = doc.defaultView?.getSelection();
+							if (domSelection) {
+								domSelection.removeAllRanges();
+								domSelection.addRange(domRange);
+								const rangeSelection = $createRangeSelectionFromDom(domSelection, editor);
+								if (rangeSelection) {
+									rangeSelection.insertRawText(text);
+									return;
+								}
+							}
+						}
+					}
+					let selection = $getSelection();
+					if (!$isRangeSelection(selection)) {
+						$getRoot().selectEnd();
+						selection = $getSelection();
+					}
+					if ($isRangeSelection(selection)) {
+						selection.insertRawText(text);
+					}
+				});
+				return true;
+			},
+			COMMAND_PRIORITY_HIGH,
+		);
 		return () => {
 			removeEnter();
 			removeTab();
 			removeEscape();
+			removeDragOver();
+			removeDrop();
 		};
 	}, [editor, onComplete, onDismissSuggestion, onEnter, promptSuggestion]);
 
