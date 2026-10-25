@@ -3390,6 +3390,12 @@ html.sidebar-reordering * {
 	padding-inline: var(--space-2) var(--gap-topbar-control);
 }
 
+.topbar-control > [data-nav-row-highlight],
+.topbar-control-group > [data-nav-row-highlight] {
+	z-index: -1;
+	border-radius: inherit;
+}
+
 .workspace-topbar-actions .topbar-control {
 	-webkit-app-region: no-drag;
 	height: var(--size-topbar-control);

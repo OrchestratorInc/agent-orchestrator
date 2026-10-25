@@ -1,7 +1,8 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 
-const topbarActionClass = "border-0 bg-interactive-hover/50 text-foreground hover:bg-interactive-hover data-[state=open]:bg-interactive-active aria-pressed:bg-interactive-active";
+const topbarActionClass = "border-0 bg-transparent text-foreground";
 
 const topbarButtonVariants = cva(
 	"topbar-control topbar-control--disabled-affordance inline-flex items-center transition-[transform,filter,background-color,color,border-color] duration-fast ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
@@ -25,12 +26,29 @@ const topbarButtonVariants = cva(
 );
 
 export function TopbarButton({
+	children,
 	className,
-	variant,
+	highlight = true,
+	variant = "action",
 	type = "button",
 	...props
-}: React.ComponentProps<"button"> & VariantProps<typeof topbarButtonVariants>) {
-	return <button className={cn(topbarButtonVariants({ variant }), className)} type={type} {...props} />;
+}: React.ComponentProps<"button"> & VariantProps<typeof topbarButtonVariants> & {
+	/** Joined controls can let their surrounding group own the highlight. */
+	highlight?: boolean;
+}) {
+	const useHighlight = highlight && (variant === "action" || variant === "icon");
+	const active = props["aria-pressed"] === true || props["aria-pressed"] === "true" ||
+		props["aria-expanded"] === true || props["aria-expanded"] === "true";
+	return (
+		<button
+			className={cn(topbarButtonVariants({ variant }), useHighlight && NAV_ROW_HIGHLIGHT_HOST_CLASS, useHighlight && "isolate", className)}
+			type={type}
+			{...props}
+		>
+			{useHighlight ? <NavRowHighlight active={active} disabled={props.disabled} /> : null}
+			{children}
+		</button>
+	);
 }
 
 export function TopbarActionError({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) {
