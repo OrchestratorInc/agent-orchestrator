@@ -19,6 +19,7 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse } from "../lib/cloud-cp";
 import {
 	cacheAgentReadiness,
+	agentReadinessQueryKeyForHost,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
 } from "../hooks/useAgentReadinessQuery";
@@ -798,7 +799,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		}
 		const refreshed = await refreshAgentModels(selectedAgent, modelScope, hostId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelScope, hostId), refreshed);
-	}, [cloudCatalogAgent, cloudModelCatalogQuery.refetch, cloudOrg?.id, hostId, isCloudProject, modelScope, queryClient, selectedAgent]);
+		if (modelNotInstalled) {
+			await queryClient.invalidateQueries({ queryKey: agentReadinessQueryKeyForHost(hostId) });
+		}
+	}, [cloudCatalogAgent, cloudModelCatalogQuery.refetch, cloudOrg?.id, hostId, isCloudProject, modelNotInstalled, modelScope, queryClient, selectedAgent]);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	const startAgentLogin = useCallback(() => {
 		openGlobalSettings("harness", {
