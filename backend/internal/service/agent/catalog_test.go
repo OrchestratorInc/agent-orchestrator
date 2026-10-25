@@ -1727,6 +1727,31 @@ func TestModelUpdateSkipsAgentReadinessFoundNotInstalled(t *testing.T) {
 	}
 }
 
+func TestCachedModelsExposeMissingCLIWithoutDiscardingSavedChoices(t *testing.T) {
+	now := time.Now().UTC()
+	record := cachedModelRecord(t, "gemini", "", now, false)
+	cache := &fakeModelCache{records: map[string]ports.CachedAgentModelCatalog{"gemini\x00": record}}
+	agent := &mutableInstallAgent{}
+	item := harnessAgent("gemini", "Gemini", nil)
+	item.Agent = agent
+	svc := newService([]agentregistry.HarnessAgent{item}, cache, successfulModelDiscoverer())
+	if _, err := svc.readiness.EnsureInstallation(context.Background(), []string{"gemini"}, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Models(context.Background(), "gemini", "", false)
+	if err != nil || got.WarningCode != ports.ModelCatalogWarningNotInstalled || !got.Stale || len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
+		t.Fatalf("cached missing-CLI catalog = %#v, %v", got, err)
+	}
+	agent.installed.Store(true)
+	if _, err := svc.readiness.Force(context.Background(), []string{"gemini"}, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	got, err = svc.Models(context.Background(), "gemini", "", false)
+	if err != nil || got.WarningCode != "" || got.Warning != "" {
+		t.Fatalf("recovered cached catalog = %#v, %v", got, err)
+	}
+}
+
 func TestFirstModelsReadDoesNotWaitForSlowDiscovery(t *testing.T) {
 	previousWait := modelCatalogFirstLoadWait
 	modelCatalogFirstLoadWait = 20 * time.Millisecond
