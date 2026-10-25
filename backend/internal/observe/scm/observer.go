@@ -45,8 +45,8 @@ const (
 	// DefaultLifecycleTimeout bounds one PR's lifecycle reaction. Reactions
 	// write into agent panes and chat hosts, and Poll runs them one after
 	// another, so a single wedged session would otherwise stall every later
-	// session's PR status, indefinitely. A timed-out reaction stays
-	// unacknowledged and is redelivered on the next poll.
+	// session's PR status, indefinitely. A timed-out reaction takes the
+	// ordinary lifecycle-failure path: its hashes stay unacknowledged.
 	DefaultLifecycleTimeout = 30 * time.Second
 )
 
