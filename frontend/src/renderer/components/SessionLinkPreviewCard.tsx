@@ -1,3 +1,4 @@
+import { BrowserIcon } from "./icons";
 import { mediaCrossOrigin } from "../lib/file-media";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -5,7 +6,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { FileText, Globe, LoaderCircle, Play, Sheet } from "lucide-react";
+import { FileText, LoaderCircle, Play, Sheet } from "lucide-react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
@@ -384,7 +385,7 @@ function ArtifactContentPreview({ artifact, session, remote }: { artifact: Sessi
 
 function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArtifact; session: WorkspaceSession; remote: boolean }) {
 	const { t } = useTranslation();
-	const Icon = artifact.kind === "html" ? Globe : tabularDelimiter(artifact.path) ? Sheet : FileText;
+	const Icon = artifact.kind === "html" ? BrowserIcon : tabularDelimiter(artifact.path) ? Sheet : FileText;
 	const author = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>

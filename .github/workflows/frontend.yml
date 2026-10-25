@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   mac-update-helper:
     # Keep this on Intel to exercise the x64 release target natively while
@@ -130,6 +134,14 @@ jobs:
 
       - name: Install docs dependencies
         run: npm ci --prefix src/docs
+
+      # Re-extracts the docs catalogs, then fails if any locale is missing a
+      # translation for a string in the source.
+      - name: Check docs translations
+        run: npm run check:i18n --prefix src/docs
+
+      - name: Test docs
+        run: npm test --prefix src/docs
 
       - name: Build docs
         run: npm run build --prefix src/docs

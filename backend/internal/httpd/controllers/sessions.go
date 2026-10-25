@@ -86,6 +86,7 @@ var (
 // SessionService is the controller-facing session service contract.
 type SessionService interface {
 	List(ctx context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error)
+	ListPage(ctx context.Context, filter sessionsvc.ListFilter) (sessionsvc.ListPage, error)
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
 	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, requestedMode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
@@ -135,6 +136,7 @@ type SessionService interface {
 	ListWorkspaceSnapshotTree(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput, filter string) (sessionsvc.WorkspaceTree, error)
 	GetWorkspaceCommitSelection(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView, commitSHAs []string, workspaceVersion string) (sessionsvc.WorkspaceCommitSelection, error)
 	SearchWorkspaceFiles(ctx context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error)
+	SearchWorkspaceContent(ctx context.Context, id domain.SessionID, query string) ([]sessionsvc.WorkspaceContentHit, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
@@ -243,6 +245,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/workspace/diffs", c.getWorkspaceDiffs)
 	r.Get("/sessions/{sessionId}/workspace/file/revision", c.getWorkspaceFileRevision)
 	r.Get("/sessions/{sessionId}/workspace/search", c.searchWorkspaceFiles)
+	r.Get("/sessions/{sessionId}/workspace/search/content", c.searchWorkspaceContent)
 	r.Get("/sessions/{sessionId}/workspace/resolve", c.resolveWorkspacePath)
 	r.Get("/sessions/{sessionId}/workspace/tree", c.listWorkspaceTree)
 	r.Get("/sessions/{sessionId}/pr/{prNumber}/files", c.listPRFiles)
@@ -295,12 +298,27 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_QUERY", err.Error(), nil)
 		return
 	}
-	sessions, err := c.Svc.List(r.Context(), filter)
+	page, err := c.Svc.ListPage(r.Context(), filter)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
+	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{
+		Sessions:   sessionViews(r, page.Sessions),
+		NextCursor: page.NextCursor,
+		Archived:   archiveSummaryView(page.Archived),
+	})
+}
+
+func archiveSummaryView(in *sessionsvc.ArchiveSummary) *SessionArchiveSummary {
+	if in == nil {
+		return nil
+	}
+	byProject := make(map[string]int, len(in.ByProject))
+	for project, count := range in.ByProject {
+		byProject[string(project)] = count
+	}
+	return &SessionArchiveSummary{Total: in.Total, ByProject: byProject}
 }
 
 func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
@@ -1350,6 +1368,23 @@ func (c *SessionsController) searchWorkspaceFiles(w http.ResponseWriter, r *http
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFileSearchResponse(result))
+}
+
+func (c *SessionsController) searchWorkspaceContent(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/search/content")
+		return
+	}
+	hits, err := c.Svc.SearchWorkspaceContent(r.Context(), sessionID(r), r.URL.Query().Get("query"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	resp := WorkspaceContentSearchResponse{Results: make([]WorkspaceContentSearchHitResponse, 0, len(hits))}
+	for _, hit := range hits {
+		resp.Results = append(resp.Results, WorkspaceContentSearchHitResponse{Path: hit.Path, Line: hit.Line, Text: hit.Text})
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 // resolveWorkspacePath classifies a path from chat as a workspace file, a
@@ -2662,6 +2697,23 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 			return sessionsvc.ListFilter{}, errors.New("fresh must be a boolean")
 		}
 		filter.Fresh = fresh
+	}
+	switch kind := domain.SessionKind(q.Get("kind")); kind {
+	case "":
+	case domain.KindWorker, domain.KindOrchestrator:
+		filter.Kind = kind
+	default:
+		return sessionsvc.ListFilter{}, errors.New("kind must be worker or orchestrator")
+	}
+	if raw := q.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > sessionsvc.MaxListLimit {
+			return sessionsvc.ListFilter{}, fmt.Errorf("limit must be an integer from 1 to %d", sessionsvc.MaxListLimit)
+		}
+		filter.Limit = limit
+	}
+	if filter.Cursor = q.Get("cursor"); filter.Cursor != "" && filter.Limit == 0 {
+		return sessionsvc.ListFilter{}, errors.New("cursor requires limit")
 	}
 	return filter, nil
 }

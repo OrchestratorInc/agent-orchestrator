@@ -67,4 +67,48 @@ func (c *authCache) invalidate() {
 	c.mu.Lock()
 	c.entry = nil
 	c.mu.Unlock()
+	claudeAuthReports.invalidate()
+}
+
+// authReportCache remembers what `claude auth status` printed, keyed by
+// authReportCacheKey, so chat starts do not run the CLI once for the launch
+// check and again for model discovery. It shares the verdict cache's TTL and
+// is dropped with it.
+type authReportCache struct {
+	mu      sync.Mutex
+	entries map[string]authReportEntry
+	ttl     time.Duration
+	now     func() time.Time
+}
+
+type authReportEntry struct {
+	report   claudeAuthReport
+	storedAt time.Time
+}
+
+var claudeAuthReports = &authReportCache{ttl: defaultAuthCacheTTL, now: time.Now}
+
+func (c *authReportCache) get(key string) (claudeAuthReport, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || c.now().Sub(entry.storedAt) > c.ttl {
+		return claudeAuthReport{}, false
+	}
+	return entry.report, true
+}
+
+func (c *authReportCache) put(key string, report claudeAuthReport) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]authReportEntry)
+	}
+	c.entries[key] = authReportEntry{report: report, storedAt: c.now()}
+}
+
+func (c *authReportCache) invalidate() {
+	c.mu.Lock()
+	c.entries = nil
+	c.mu.Unlock()
 }

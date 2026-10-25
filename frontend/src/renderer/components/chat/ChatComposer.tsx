@@ -2009,7 +2009,7 @@ export const ChatComposer = memo(function ChatComposer({
 											style={addMenuBox ? { width: addMenuBox.width } : undefined}
 											className="chat-settings-menu max-w-none text-[12px]!"
 										>
-											<OptionMenuLabel className="px-3 pt-1.5 pb-1 text-[11px]!">Add</OptionMenuLabel>
+											<OptionMenuLabel>Add</OptionMenuLabel>
 											<ComposerMenuRow
 												icon={Paperclip}
 												title="Files"

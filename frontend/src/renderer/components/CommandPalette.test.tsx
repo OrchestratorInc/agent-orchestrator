@@ -282,6 +282,7 @@ beforeEach(() => {
 			restartingProjectIds: new Set(),
 			settingsModal: null,
 			workspaceFileOpenRequest: null,
+			chatMessageFocusRequest: null,
 		});
 	});
 });
@@ -320,12 +321,20 @@ describe("CommandPalette gating", () => {
 	});
 });
 
+/** Answers the palette's searches: file names, file contents and chats. */
+function mockSearch(names: unknown[], content: unknown[] = [], messages: unknown[] = []) {
+	getMock.mockImplementation(async (path: string) => {
+		if (path.endsWith("/workspace/search/content")) return { data: { results: content } };
+		if (path === "/api/v1/conversations/search") return { data: { results: messages } };
+		if (path.endsWith("/workspace/search")) return { data: { query: "", results: names, truncated: false } };
+		return { data: {} };
+	});
+}
+
 describe("CommandPalette workspace file search", () => {
 	it("searches the current session and requests the selected file without navigating", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
-		getMock.mockImplementation(async (path: string) => path.includes("/workspace/search")
-			? { data: { query: "App", results: [{ path: "src/components/App.tsx", status: "modified", size: 42, binary: false, fileFingerprint: "v1" }], truncated: false } }
-			: { data: {} });
+		mockSearch([{ path: "src/components/App.tsx", status: "modified", size: 42, binary: false, fileFingerprint: "v1" }]);
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search projects/i);
@@ -403,9 +412,7 @@ describe("CommandPalette workspace file search", () => {
 		ctx.params = { hostId: "host-a", projectId: "proj-1" };
 		ctx.workspaces[0].hostId = "host-a";
 		for (const session of ctx.workspaces[0].sessions) session.hostId = "host-a";
-		getMock.mockResolvedValue({
-			data: { query: "app", results: [{ path: "src/app.ts", status: "modified", size: 5, binary: false, fileFingerprint: "v1" }], truncated: false },
-		});
+		mockSearch([{ path: "src/app.ts", status: "modified", size: 5, binary: false, fileFingerprint: "v1" }]);
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		await screen.findByPlaceholderText(/search projects/i);
@@ -420,6 +427,101 @@ describe("CommandPalette workspace file search", () => {
 			params: { hostId: "host-a", projectId: "proj-1", sessionId: "w-fix" },
 		});
 		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ hostId: "host-a", sessionId: "w-fix", path: "src/app.ts" });
+	});
+});
+
+describe("CommandPalette content search", () => {
+	const contentHit = { path: "src/lib/palette.ts", line: 12, text: "export function \x02closePalette\x03() {}" };
+	const chatHit = { messageId: "msg-1", sessionId: "w-fix", projectId: "proj-1", title: "Palette cleanup", text: "we should \x02close\x03 the \x02palette\x03 on Escape" };
+
+	it("opens a file at its matched line", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		mockSearch([], [contentHit]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search projects/i), { target: { value: "close palette" } });
+
+		fireEvent.click(await screen.findByText("palette.ts:12", {}, { timeout: 2_000 }));
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/workspace/search/content",
+			expect.objectContaining({ params: expect.objectContaining({ query: { query: "close palette" } }) }),
+		);
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "w-fix", path: "src/lib/palette.ts", line: 12 });
+	});
+
+	it("opens a chat scrolled to its message, from any page", async () => {
+		ctx.params = {};
+		mockSearch([], [], [chatHit]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search projects/i), { target: { value: "close the palette" } });
+
+		fireEvent.click(await screen.findByText("Palette cleanup", {}, { timeout: 2_000 }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "w-fix" } });
+		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({ sessionId: "w-fix", messageId: "msg-1", text: "we should close the palette on Escape" });
+	});
+
+	it("hides chat hits without a loaded session instead of guessing a route", async () => {
+		mockSearch([], [], [
+			chatHit,
+			{ ...chatHit, messageId: "missing", sessionId: "removed", title: "Removed session hit" },
+			{ ...chatHit, messageId: "unbound", sessionId: undefined, title: "Unbound conversation hit" },
+		]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search projects/i), { target: { value: "close palette" } });
+		await screen.findByText("Palette cleanup", {}, { timeout: 2_000 });
+		expect(screen.queryByText("Removed session hit")).not.toBeInTheDocument();
+		expect(screen.queryByText("Unbound conversation hit")).not.toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["remote", "cloud"])("does not open a local chat hit in a %s session with the same ID", async (location) => {
+		const localSession = ctx.workspaces[0].sessions[0];
+		const originalSessions = ctx.workspaces[1].sessions;
+		ctx.workspaces[1].sessions = [{ ...localSession, id: "local-result", workspaceId: "proj-2" }];
+		if (location === "remote") ctx.workspaces[0].hostId = "other-host";
+		else ctx.workspaces[0].kind = "cloud";
+		try {
+			mockSearch([], [], [chatHit, { ...chatHit, messageId: "local", sessionId: "local-result", title: "Local chat hit" }]);
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+			fireEvent.change(await screen.findByPlaceholderText(/search projects/i), { target: { value: "close palette" } });
+			await screen.findByText("Local chat hit", {}, { timeout: 2_000 });
+			expect(screen.queryByText("Palette cleanup")).not.toBeInTheDocument();
+		} finally {
+			ctx.workspaces[1].sessions = originalSessions;
+		}
+	});
+
+	it.each([
+		["/workspace/search/content", "Unable to search file contents."],
+		["/api/v1/conversations/search", "Unable to search chats."],
+	])("shows errors from %s only for the current query", async (failedPath, message) => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockImplementation(async (path: string) => path.endsWith(failedPath)
+			? { error: {} }
+			: { data: { results: [], truncated: false } });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.change(input, { target: { value: "close palette" } });
+		expect(await screen.findByRole("alert", {}, { timeout: 2_000 })).toHaveTextContent(message);
+		fireEvent.change(input, { target: { value: "new query" } });
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("keeps a control that names every word above content that mentions them", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		mockSearch([], [{ path: "src/Sidebar.tsx", line: 3, text: "// \x02hide\x03 \x02sidebar\x03" }]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		for (const query of ["hide sidebar", "toggle sidbar"]) {
+			fireEvent.change(input, { target: { value: query } });
+			await screen.findByText("Sidebar.tsx:3", {}, { timeout: 2_000 });
+			expect(screen.getAllByRole("option")[0]).toHaveTextContent("Toggle sidebar");
+		}
 	});
 });
 

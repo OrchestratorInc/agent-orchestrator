@@ -11,7 +11,9 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
+	buildChatSearchCommands,
 	buildCommands,
+	buildContentSearchCommands,
 	buildFileSessionCommands,
 	buildSessionActions,
 	buildWorkspaceFileCommands,
@@ -26,14 +28,18 @@ import {
 } from "../lib/command-palette";
 import {
 	type CommandPaletteFileSearchResponse,
+	commandPaletteChatSearchQueryOptions,
+	commandPaletteContentSearchQueryOptions,
 	commandPaletteFileSearchAvailable,
 	commandPaletteFileSearchQueryOptions,
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
+import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
+import { cn } from "../lib/utils";
 import {
 	findProjectOrchestrator,
 	hasConfiguredOrchestratorAgent,
@@ -42,7 +48,7 @@ import {
 	workerSessions,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
-import { useAppShortcut } from "../hooks/useAppShortcut";
+import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { Button } from "./ui/button";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { TaskComposer } from "./TaskComposer";
@@ -74,6 +80,8 @@ export function CommandPalette() {
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
+	const developerMode = useUiStore((s) => s.developerMode);
+	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
@@ -153,6 +161,20 @@ export function CommandPalette() {
 		cloud,
 	});
 	const fileSearchQuery = useQuery<CommandPaletteFileSearchResponse>({ ...fileSearchOptions, enabled: fileSearchEnabled });
+	// File contents (this session's daemon) and chats (this machine) are searched
+	// beside file names; Cloud sessions have no daemon to search their contents.
+	const searchQueryReady = isOpen && normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS;
+	const contentTarget = activeFileTarget && !activeFileTarget.cloudOrgId ? activeFileTarget : undefined;
+	const contentSearchEnabled = searchQueryReady && (view.mode === "root" || view.mode === "file-search") && Boolean(contentTarget);
+	const contentSearchQuery = useQuery({
+		...commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError")),
+		enabled: contentSearchEnabled,
+	});
+	const chatSearchEnabled = searchQueryReady && view.mode === "root";
+	const chatSearchQuery = useQuery({
+		...commandPaletteChatSearchQueryOptions(normalizedFileQuery, t("command.searchChatsError")),
+		enabled: chatSearchEnabled,
+	});
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -217,8 +239,8 @@ export function CommandPalette() {
 	const reviewStatesForCommands = isOpen && reviewActionsReady ? reviewStatesSnapshot : EMPTY_REVIEW_STATES;
 
 	const rootItems = useMemo(
-		() =>
-			buildCommands({
+		() => [
+			...buildCommands({
 				workspaces,
 				currentProjectId,
 				currentSessionId: params.sessionId,
@@ -226,7 +248,10 @@ export function CommandPalette() {
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
 			}, t),
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, t, i18n.resolvedLanguage],
+			...buildShortcutCommands(t),
+			...buildSettingsCommands(t, { developerMode, diagnostics }),
+		],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, developerMode, diagnostics, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -249,6 +274,24 @@ export function CommandPalette() {
 			: [],
 		[activeFileTarget, fileSearchQuery.data],
 	);
+	const contentItems = useMemo(
+		() => contentTarget && contentSearchEnabled && contentSearchQuery.data
+			? buildContentSearchCommands(contentTarget, contentSearchQuery.data.results)
+			: [],
+		[contentTarget, contentSearchEnabled, contentSearchQuery.data],
+	);
+	const findLocalChatWorkspace = useCallback(
+		(sessionId: string | undefined) => workspaces.find((workspace) =>
+			!workspace.hostId && workspace.kind !== "cloud"
+			&& workspace.sessions.some((session) => session.id === sessionId && !session.hostId && !session.cloud)),
+		[workspaces],
+	);
+	const chatItems = useMemo(
+		() => chatSearchEnabled && chatSearchQuery.data
+			? buildChatSearchCommands(chatSearchQuery.data.results.filter((hit) => findLocalChatWorkspace(hit.sessionId)), t)
+			: [],
+		[chatSearchEnabled, chatSearchQuery.data, findLocalChatWorkspace, t],
+	);
 
 	const groups = useMemo(() => {
 		if (view.mode === "session-actions") {
@@ -258,11 +301,11 @@ export function CommandPalette() {
 			return [{ id: "file-sessions", label: "", items: filterCommands(fileSessionItems, query) }];
 		}
 		if (view.mode === "file-search") {
-			return displayGroups(fileItems, normalizedFileQuery, t);
+			return displayGroups([...fileItems, ...contentItems], normalizedFileQuery, t);
 		}
-		const settledFileItems = normalizedFileQuery === query.trim() ? fileItems : [];
-		return displayGroups([...rootItems, ...settledFileItems], query, t);
-	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
+		const settledSearchItems = normalizedFileQuery === query.trim() ? [...fileItems, ...contentItems, ...chatItems] : [];
+		return displayGroups([...rootItems, ...settledSearchItems], query, t);
+	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	const value =
@@ -570,11 +613,36 @@ export function CommandPalette() {
 						action.target.sessionId,
 						action.path,
 						action.target.hostId,
+						undefined,
+						action.line,
 					);
 					const alreadyOpen = params.sessionId === action.target.sessionId
 						&& (params.hostId ?? "") === (action.target.hostId ?? "");
 					if (!alreadyOpen) navigateToTarget(fileSessionRoute(action.target));
 					closePalette();
+					break;
+				}
+				case "open-chat-message": {
+					const workspace = findLocalChatWorkspace(action.sessionId);
+					if (!workspace || !action.sessionId) {
+						setError(t("command.chatSessionUnavailable"));
+						break;
+					}
+					navigateToTarget(sessionRoute(workspace.id, action.sessionId));
+					useUiStore.getState().requestChatMessageFocus(action.sessionId, action.messageId, action.text, action.reviewId);
+					closePalette();
+					break;
+				}
+				case "open-settings-section":
+					closePalette();
+					useUiStore.getState().openGlobalSettings(action.section, action.focus ? { focusSetting: action.focus } : undefined);
+					break;
+				case "run-shortcut": {
+					closePalette();
+					// After the palette has closed, so the action sees the screen
+					// it was asked about, not the palette.
+					const shortcut = action.shortcut;
+					window.setTimeout(() => runAppShortcut({ id: shortcut }), 0);
 					break;
 				}
 				case "resume-session": {
@@ -606,7 +674,7 @@ export function CommandPalette() {
 				setPendingId(null);
 			}
 		},
-		[navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute],
+		[findLocalChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -696,6 +764,17 @@ export function CommandPalette() {
 	const fileSearchError = fileSearchActive && fileSearchSettled && fileSearchQuery.error
 		? (fileSearchQuery.error instanceof Error ? fileSearchQuery.error.message : t("command.searchFilesError"))
 		: null;
+	const contentSearchError = contentSearchEnabled && fileSearchSettled && contentSearchQuery.error
+		? (contentSearchQuery.error instanceof Error ? contentSearchQuery.error.message : t("command.searchContentError"))
+		: null;
+	const chatSearchError = chatSearchEnabled && fileSearchSettled && chatSearchQuery.error
+		? (chatSearchQuery.error instanceof Error ? chatSearchQuery.error.message : t("command.searchChatsError"))
+		: null;
+	const searchErrors = [
+		{ id: "files", message: fileSearchError },
+		{ id: "content", message: contentSearchError },
+		{ id: "chats", message: chatSearchError },
+	].filter((searchError) => searchError.message);
 
 	return (
 		<>
@@ -816,11 +895,11 @@ export function CommandPalette() {
 									{error}
 								</div>
 							)}
-							{fileSearchError && (
-								<div role="alert" className="mx-1 mb-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-									{fileSearchError}
+							{searchErrors.map((searchError) => (
+								<div key={searchError.id} role="alert" className="mx-1 mb-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+									{searchError.message}
 								</div>
-							)}
+							))}
 							{view.mode === "file-search" && fileSearchQuery.isFetching && fileItems.length > 0 && (
 								<div role="status" className="px-3 py-1 text-xs text-muted-foreground">{t("command.searchFilesLoading")}</div>
 							)}
@@ -836,7 +915,14 @@ export function CommandPalette() {
 											onSelect={() => onSelectItem(item)}
 										>
 											{Icon ? <Icon strokeWidth={1.75} aria-hidden="true" /> : null}
-											<span className="min-w-0 flex-1 truncate">{item.title}</span>
+											{item.snippet ? (
+												<span className="flex min-w-0 flex-1 flex-col">
+													<span className="truncate">{item.title}</span>
+													<HighlightedSnippet snippet={item.snippet} />
+												</span>
+											) : (
+												<span className="min-w-0 flex-1 truncate">{item.title}</span>
+											)}
 											{pendingId === item.id ? (
 												<Loader2 className="ml-auto size-3.5 animate-spin text-[var(--color-text-command-muted)]" aria-hidden="true" />
 											) : item.disabled && item.disabledReason ? (
@@ -885,5 +971,35 @@ export function CommandPalette() {
 				/>
 			) : null}
 		</>
+	);
+}
+
+/** Characters of context kept before the first match when the line is cut. */
+const SNIPPET_LEAD = 16;
+
+/**
+ * One matched line with the matched spans in the foreground. A line whose
+ * first match sits deep in it starts just before that match, so the reason
+ * for the hit is not lost to truncation.
+ */
+function HighlightedSnippet({ snippet }: { snippet: NonNullable<CommandItemModel["snippet"]> }) {
+	const parts: { text: string; hit: boolean }[] = [];
+	const firstMatch = snippet.highlights[0]?.start ?? 0;
+	const offset = firstMatch > SNIPPET_LEAD * 2 ? firstMatch - SNIPPET_LEAD : 0;
+	if (offset > 0) parts.push({ text: "…", hit: false });
+	let cursor = offset;
+	for (const { start, end } of snippet.highlights) {
+		if (start < cursor || end > snippet.text.length || start >= end) continue;
+		if (start > cursor) parts.push({ text: snippet.text.slice(cursor, start), hit: false });
+		parts.push({ text: snippet.text.slice(start, end), hit: true });
+		cursor = end;
+	}
+	if (cursor < snippet.text.length) parts.push({ text: snippet.text.slice(cursor), hit: false });
+	return (
+		<span className={cn("truncate text-control text-[var(--color-text-command-muted)]", snippet.code && "font-mono")}>
+			{parts.map((part, index) => part.hit
+				? <span key={index} className="font-medium text-foreground">{part.text}</span>
+				: <span key={index}>{part.text}</span>)}
+		</span>
 	);
 }

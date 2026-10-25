@@ -22,10 +22,10 @@ const OptOutFile = "telemetry_opt_out"
 
 const (
 	installIDFile      = "telemetry_install_id"
+	anonymousIDFile    = "telemetry_anonymous_id"
 	installedEventFile = "telemetry_installed_emitted"
-	// boundUserFile remembers which AO Cloud user the install ID may be linked
-	// to. The desktop identify() merges the install ID into that person for good,
-	// so once the user changes or signs out the ID is retired.
+	// boundUserFile remembers which AO Cloud user the anonymous distinct ID may
+	// be linked to. A sign-out or account switch retires that ID.
 	boundUserFile = "telemetry_bound_user"
 )
 
@@ -47,6 +47,8 @@ type Identity struct {
 
 	mu          sync.RWMutex
 	installID   string
+	anonymousID string
+	onRetired   func()
 	cloudUserID string
 	// persistFailed is set while the last SetCloudUserID could not persist.
 	persistFailed bool
@@ -59,12 +61,40 @@ func NewIdentity(dataDir string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
+	anon, err := readTrimmed(filepath.Join(dataDir, anonymousIDFile))
+	if err != nil {
+		return nil, err
+	}
+	if anon == "" {
+		anon = id
+	}
+	bound, err := readTrimmed(filepath.Join(dataDir, boundUserFile))
+	if err != nil {
+		return nil, err
+	}
+	if bound != "" && anon == id {
+		anon = "anon_" + uuid.NewString()
+		if err := writeFileAtomic(filepath.Join(dataDir, anonymousIDFile), []byte(anon+"\n")); err != nil {
+			return nil, fmt.Errorf("record telemetry anonymous id: %w", err)
+		}
+	}
+	return &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
 }
 
 // FreshInstall reports whether this process is the first run of a brand new
 // install, the one moment ao.app.installed is emitted.
 func (i *Identity) FreshInstall() bool { return i.fresh }
+
+// OnInstallRetired runs after the anonymous ID is replaced. The CLI usage
+// summary uses it to drop in-memory counts for the retired install.
+func (i *Identity) OnInstallRetired(fn func()) {
+	if i == nil {
+		return
+	}
+	i.mu.Lock()
+	i.onRetired = fn
+	i.mu.Unlock()
+}
 
 // MarkInstalledEvent reserves the one install event before it enters the
 // best-effort queue. A restart cannot emit it again if the queued send is lost.
@@ -115,19 +145,23 @@ func (i *Identity) OptedOut() bool {
 	return err == nil
 }
 
-// InstallID is the current anonymous install ID. It changes when an account
-// sign-out or switch retires the previous one.
+// InstallID is the durable installation attribution key.
 func (i *Identity) InstallID() string {
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	return i.installID
 }
 
-// SetCloudUserID implements ports.TelemetryIdentityStore. The install ID is
-// aliased into the first account that signs in on the desktop and PostHog never
-// splits it again, so a sign-out or a different account retires it for a fresh
-// anonymous one. Without that, signed-out or next-account daemon events would
-// keep resolving to the first account.
+// AnonymousID is the distinct ID used when no Cloud user is bound.
+func (i *Identity) AnonymousID() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.anonymousID
+}
+
+// SetCloudUserID implements ports.TelemetryIdentityStore. The anonymous
+// distinct ID may be merged into a Cloud person. A sign-out or account switch
+// retires it, while the installation attribution ID remains fixed.
 //
 // The binding must be durable before any event is exported under it, so a failed
 // write leaves the previous binding in place, returns the error, and suppresses
@@ -155,11 +189,18 @@ func (i *Identity) bindLocked(id string) error {
 		return fmt.Errorf("read telemetry bound user: %w", err)
 	}
 	if bound != "" && bound != id {
-		next := "ins_" + uuid.NewString()
-		if err := i.writeFile(filepath.Join(i.dataDir, installIDFile), []byte(next+"\n")); err != nil {
-			return fmt.Errorf("retire telemetry install id: %w", err)
+		next := "anon_" + uuid.NewString()
+		if err := i.writeFile(filepath.Join(i.dataDir, anonymousIDFile), []byte(next+"\n")); err != nil {
+			return fmt.Errorf("retire telemetry anonymous id: %w", err)
 		}
-		i.installID = next
+		i.anonymousID = next
+		_ = os.Remove(filepath.Join(i.dataDir, "telemetry", "cli-usage-daily.json"))
+		if i.onRetired != nil {
+			retired := i.onRetired
+			i.mu.Unlock()
+			retired()
+			i.mu.Lock()
+		}
 	}
 	switch {
 	case id == "" && bound != "":
@@ -215,7 +256,7 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	optedOut := i.OptedOut()
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	snap := ports.TelemetryIdentity{InstallID: i.installID, OptedOut: optedOut || i.persistFailed}
+	snap := ports.TelemetryIdentity{InstallID: i.installID, AnonymousID: i.anonymousID, OptedOut: optedOut || i.persistFailed}
 	if !snap.OptedOut {
 		snap.CloudUserID, snap.GitHubLogin = i.cloudUserID, i.githubLogin
 	}

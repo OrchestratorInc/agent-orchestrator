@@ -52,7 +52,7 @@ import { createEditorHandoff } from "./main/editor-handoff";
 import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
-import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
+import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
 import { isAgentPageUrl } from "./shared/agent-page-url";
 import {
@@ -86,9 +86,13 @@ import {
 import { toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity } from "./main/browser-identity";
 import { attachAppShortcuts } from "./main/app-shortcuts";
+import { relayScrollPhases } from "./main/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
+	QUIT_CONFIRM_REQUEST_CHANNEL,
+	QUIT_CONFIRM_RESULT_CHANNEL,
+	type QuitConfirmRequest,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	type KeybindingOverrides,
@@ -96,6 +100,7 @@ import {
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
+import { createQuitConfirmController } from "./main/quit-confirm";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
 	TRAY_SET_ATTENTION_STATE_CHANNEL,
@@ -162,6 +167,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
+import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -393,6 +399,25 @@ const desktopQuit = createDesktopQuitController({
 		}
 	},
 	hideDock: () => app.dock?.hide(),
+	quit: () => app.quit(),
+});
+// macOS app menu Quit. ⌘Q asks the shell to confirm; with no visible window
+// there is nowhere to show the dialog, so the shortcut quits directly.
+const quitConfirm = createQuitConfirmController({
+	canConfirm: () => {
+		const shell = getShellWebContents();
+		return Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized() && shell && !shell.isDestroyed());
+	},
+	requestConfirm: () => {
+		const shell = getShellWebContents();
+		shell?.focus();
+		// Mirrors desktopQuit.handleBeforeQuit: with the tray up, quitting only
+		// closes the window, and the dialog says so.
+		const request: QuitConfirmRequest = {
+			keepsRunning: trayController !== null && !browserQuitRequested && !isUpdateRestartRequested(),
+		};
+		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
+	},
 	quit: () => app.quit(),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
@@ -859,9 +884,13 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
+	relayScrollPhases(shellWebContents);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
+		quitConfirm.reset();
 	});
+	// A reload drops any open quit dialog, so the next ⌘Q should ask again.
+	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
 	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
@@ -886,7 +915,7 @@ async function createWindowInternal(): Promise<void> {
 					void host.toggleDevToolsForLastFocused().then((state) => {
 						if (!state) fallback();
 					}).catch(fallback);
-				}),
+				}, { appName: app.name, onQuit: quitConfirm.menuQuit }),
 			),
 		);
 	} else if (process.platform === "linux") {
@@ -917,6 +946,18 @@ async function createWindowInternal(): Promise<void> {
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
 		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+	});
+
+	// A cloud artifact frame's page can open another file of its session; the
+	// renderer follows it (the file's name, a refused link) by its URL.
+	shellWebContents.on("did-frame-navigate", (_event, url, httpResponseCode, _statusText, isMainFrame) => {
+		if (isMainFrame) return;
+		try {
+			if (cloudArtifactPrefix(new URL(url)) === undefined) return;
+		} catch {
+			return;
+		}
+		shellWebContents.send("cloudArtifact:frameNavigated", { url, status: httpResponseCode });
 	});
 
 	// Agent pages framed in the chat (renders, HTML artifacts) stay off this
@@ -2606,6 +2647,11 @@ ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: 
 	closeShellTerminalShortcutEnabled = enabled === true;
 });
 
+ipcMain.on(QUIT_CONFIRM_RESULT_CHANNEL, (event, confirmed: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof confirmed !== "boolean") return;
+	quitConfirm.resolve(confirmed);
+});
+
 ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSize: unknown) => {
 	if (event.sender !== getShellWebContents() || typeof focused !== "boolean") return;
 	terminalFocused = focused;
@@ -2911,6 +2957,7 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
+registerCloudArtifactIpc({ ipcMain });
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

@@ -104,6 +104,15 @@ func sentryEnvironment(version string) string {
 	}
 }
 
+// Session Manager asserts the terminal input gate's optional capabilities at
+// runtime: a signature drift compiles but silently turns the send guard's
+// keystroke fence off (#5711).
+var _ interface {
+	sessionmanager.TerminalInputGate
+	sessionmanager.TerminalInputObserver
+	sessionmanager.TerminalInputFencer
+} = (*terminal.Manager)(nil)
+
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) error {
@@ -213,12 +222,16 @@ func Run(buildVersion string) error {
 	sentryobs.SetPolicyEnabled(eventsAllowed)
 	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
-	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
-	// Initialize the transport once so a later policy opt-in works without a
-	// daemon restart. The policy gate remains fail-closed and is checked before
-	// every capture; a blank DSN still leaves this as a no-op.
+	installID := ""
+	if telemetryIdentity != nil {
+		installID = telemetryIdentity.Snapshot().InstallID
+	}
+	// Initialize daemon Sentry once so a later policy opt-in works without a
+	// restart. The policy gate is checked before every capture. An unavailable
+	// install ID omits the tag without disabling error reporting.
 	if err := sentryobs.Init(sentryobs.Config{
 		DSN:         cfg.Telemetry.SentryDSN,
+		InstallID:   installID,
 		Release:     cfg.Telemetry.AppVersion,
 		Environment: sentryEnvironment(cfg.Telemetry.AppVersion),
 	}); err != nil {
@@ -1001,6 +1014,7 @@ func Run(buildVersion string) error {
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
+		ConversationSearch: store,
 		Settings:           settingsSvc,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
@@ -1307,7 +1321,11 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	if d.sessions == nil {
 		return reportsvc.ErrReportDeliveryModeUnsupported
 	}
-	return d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	if errors.Is(err, sessionmanager.ErrComposerBusy) {
+		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
+	}
+	return err
 }
 
 func (d reportSemanticDelivery) Interrupt(ctx context.Context, id domain.SessionID) error {

@@ -825,13 +825,13 @@ button.settings-row-bar {
 	display: flex;
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
-	border-radius: var(--radius-settings-row);
+	/* Same row as the action menus (menu-styles.ts): one menu rhythm app-wide. */
+	border-radius: var(--radius-md);
 	border: 1px solid transparent;
-	padding-inline: var(--space-3);
-	padding-block: var(--space-2_5);
-	font-size: var(--font-size-md);
-	line-height: var(--line-height-row);
-	color: var(--color-text-settings-row);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
+	font-size: var(--font-size-base);
+	color: var(--muted-foreground);
 }
 
 @utility settings-option-trigger {
@@ -878,21 +878,21 @@ button.settings-row-bar {
 	border-radius: var(--radius-settings-panel);
 	border: 1px solid var(--color-border-settings-menu);
 	background-color: var(--color-bg-settings-menu);
-	padding: var(--space-2);
-	gap: var(--space-1_5);
-	box-shadow: none;
+	padding: var(--space-1);
+	gap: 1px;
+	box-shadow: var(--shadow-popover);
 }
 
 @utility settings-agent-menu-surface {
 	width: var(--size-settings-agent-menu-min-width);
 	min-width: var(--size-settings-agent-menu-min-width);
-	padding: var(--space-3);
-	gap: var(--space-2);
+	padding: var(--space-1);
+	gap: 1px;
 }
 
 @utility settings-agent-menu-item {
-	padding-inline: var(--space-4);
-	padding-block: var(--space-3);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
 }
 
 @utility settings-field-label {
@@ -6063,6 +6063,14 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	border-radius: 10px;
 }
 
+/* A setting a deep link opened (lib/settings-focus.ts), marked like the
+ * Harness page's focused agent. */
+.settings-focus-target {
+	background-color: var(--color-accent-weak);
+	box-shadow: inset 0 0 0 2px var(--color-accent);
+	transition: background-color 200ms, box-shadow 200ms;
+}
+
 /* The top effort level ("Ultra", "Ultracode"): a slow colour sweep on its label. */
 @keyframes ultra-sweep {
 	from { background-position: 0% 50%; }
@@ -6094,7 +6102,7 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
  *      card or button reads one step up from whatever sits behind it.
  *   3. Floating surfaces (menus, popovers, tooltips, dialogs) restore the
  *      solid theme values so they stay legible above the material.
- * The terminal keeps its own opaque plate. */
+ * Terminal canvases are clear too, showing the same shell tint. */
 
 /* Solid copies, resolved on :root where the theme declares them. :root raises
  * specificity past the theme catalog's :root[data-style-theme] blocks. */
@@ -6114,6 +6122,9 @@ html:root[data-window-translucent="true"] {
 html[data-window-translucent="true"] body {
 	--color-bg-primary: transparent;
 	--color-bg-sidebar: transparent;
+	--color-bg-terminal: transparent;
+	--color-bg-terminal-opaque: transparent;
+	--term-bg: transparent;
 	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
 	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
 	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
@@ -6138,6 +6149,9 @@ html[data-window-translucent="true"] :is(
 	--color-bg-secondary: var(--solid-bg-secondary);
 	--color-bg-tertiary: var(--solid-bg-tertiary);
 	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
 	--muted: var(--solid-muted);
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);

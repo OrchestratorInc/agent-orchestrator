@@ -616,7 +616,7 @@ export function ResponseSpinner() {
 	);
 }
 
-function formatTime(iso: string): string {
+export function formatTime(iso: string): string {
 	const parsed = new Date(iso);
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
@@ -2722,7 +2722,7 @@ export function SteerMessage({
 	);
 }
 
-function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
+export function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
 	const escaped = senderSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const prefix = new RegExp(`^\\[from (?:worker\\s+)?${escaped}(?:\\s+"[^"]*")?\\]\\s*`);
 	return text.replace(prefix, "");

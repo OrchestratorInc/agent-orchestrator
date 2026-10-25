@@ -355,6 +355,10 @@ type ConversationMessage struct {
 	Continuation        int64
 }
 
+type ConversationMessagesFt struct {
+	Text string
+}
+
 type ConversationProviderEvent struct {
 	ID              int64
 	ConversationID  string

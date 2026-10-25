@@ -178,7 +178,6 @@ func mountMobileDevices(r chi.Router, c *controllers.MobileDevicesController) {
 		return
 	}
 	r.Get("/api/v1/mobile/devices", c.List)
-	r.Patch("/api/v1/mobile/devices/{installId}", c.Mute)
 	r.Delete("/api/v1/mobile/devices/{installId}", c.Remove)
 }
 
