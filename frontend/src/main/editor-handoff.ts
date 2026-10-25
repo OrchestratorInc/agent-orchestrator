@@ -547,9 +547,23 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 			if (input.action === "copy") {
 				// Copy is textual and supports missing files; retain their original components.
 				if (!absolute) {
-					const realTarget = await deps.realPath(target).catch(() => undefined);
-					const root = realTarget ? await deps.realPath(workspace) : workspace;
-					const candidate = realTarget ?? api.resolve(target);
+					const root = await deps.realPath(workspace);
+					let ancestor = target;
+					const missing: string[] = [];
+					let candidate: string;
+					for (;;) {
+						try {
+							candidate = api.resolve(await deps.realPath(ancestor), ...missing);
+							break;
+						} catch (error) {
+							const parent = api.dirname(ancestor);
+							if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === ancestor) throw new Error("That path could not be resolved.");
+							// dirname preserves '..': follow existing links before normalizing
+							// the suffix whose components do not exist yet.
+							missing.unshift(api.basename(ancestor));
+							ancestor = parent;
+						}
+					}
 					if (candidate !== root && !isInside(api, root, candidate)) throw new Error("That path is outside the session workspace.");
 				}
 				if (!deps.copyText) throw new Error("Copying is not available.");

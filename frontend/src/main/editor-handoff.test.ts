@@ -691,6 +691,61 @@ describe("editor handoff (win32 fallback discovery)", () => {
 });
 
 describe("chat path actions", () => {
+	it.skipIf(process.platform === "win32")("checks existing symlink parents before copying missing relative paths", async () => {
+		const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "ao-missing-path-")));
+		const workspace = path.join(root, "workspace");
+		try {
+			await mkdir(path.join(workspace, "nested", "deeper"), { recursive: true });
+			await mkdir(path.join(root, "outside", "dir"), { recursive: true });
+			await symlink(path.join(workspace, "nested", "deeper"), path.join(workspace, "deep-link"));
+			await symlink(path.join(root, "outside", "dir"), path.join(workspace, "outside-link"));
+			const copyText = vi.fn();
+			const input = deps({ resolveWorkspace: async () => workspace, realPath: realpath, copyText });
+			const handoff = createEditorHandoff(input);
+			for (const reference of ["deep-link/../../missing.ts", "deep-link/../../missing-dir/nested/file.ts"]) {
+				await handoff.pathAction({ sessionId: "ao-1", path: reference, action: "copy" });
+				expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/${reference}`);
+			}
+			// Creating the leaf must not change whether the same reference is accepted.
+			await writeFile(path.join(workspace, "missing.ts"), "now present");
+			await handoff.pathAction({ sessionId: "ao-1", path: "deep-link/../../missing.ts", action: "copy" });
+			expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/deep-link/../../missing.ts`);
+			const alias = path.join(root, "workspace-alias");
+			await symlink(workspace, alias);
+			await createEditorHandoff(deps({ resolveWorkspace: async () => alias, realPath: realpath, copyText })).pathAction({
+				sessionId: "ao-1", path: "deep-link/../../another-missing.ts", action: "copy",
+			});
+			expect(copyText).toHaveBeenLastCalledWith(`${alias}/deep-link/../../another-missing.ts`);
+			copyText.mockClear();
+			for (const reference of ["outside-link/../missing.ts", "outside-link/../missing-dir/file.ts"]) {
+				await expect(handoff.pathAction({ sessionId: "ao-1", path: reference, action: "copy" })).rejects.toThrow("outside");
+			}
+			expect(input.copyText).not.toHaveBeenCalled();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each(["EACCES", "ELOOP", "ENOTDIR"])("does not treat %s as a missing copy target", async (code) => {
+		const input = deps({ copyText: vi.fn(), realPath: vi.fn(async (value) => {
+			if (value === "/worktrees/ao-1") return value;
+			throw Object.assign(new Error("cannot resolve"), { code });
+		}) });
+		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "link/file.ts", action: "copy" })).rejects.toThrow("could not be resolved");
+		expect(input.copyText).not.toHaveBeenCalled();
+	});
+
+	it("resolves existing Windows parents before checking missing copy paths", async () => {
+		const workspace = "C:\\worktrees\\ao-1";
+		const reference = "deep-link/../../new-dir/file.ts";
+		const input = winDeps({ resolveWorkspace: async () => workspace, copyText: vi.fn(), realPath: vi.fn(async (value) => {
+			if (value === workspace || value === `${workspace}\\deep-link\\..\\..`) return workspace;
+			throw Object.assign(new Error("missing"), { code: "ENOENT" });
+		}) });
+		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: reference, action: "copy" });
+		expect(input.copyText).toHaveBeenCalledExactlyOnceWith(`${workspace}\\deep-link\\..\\..\\new-dir\\file.ts`);
+	});
+
 	it.skipIf(process.platform === "win32")("resolves symlinks before parent components for absolute and relative native paths", async () => {
 		const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "ao-path-actions-")));
 		const workspace = path.join(root, "workspace");
@@ -744,7 +799,10 @@ describe("chat path actions", () => {
 	});
 
 	it("copies an absolute workspace path without requiring the file to exist", async () => {
-		const input = deps({ copyText: vi.fn(), realPath: vi.fn().mockRejectedValue(new Error("missing")) });
+		const input = deps({ copyText: vi.fn(), realPath: vi.fn(async (value) => {
+			if (value === "/worktrees/ao-1") return value;
+			throw Object.assign(new Error("missing"), { code: "ENOENT" });
+		}) });
 		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/new file.ts", action: "copy" });
 		expect(input.copyText).toHaveBeenCalledExactlyOnceWith("/worktrees/ao-1/src/new file.ts");
 		expect(input.realPath).toHaveBeenCalledWith("/worktrees/ao-1/src/new file.ts");
