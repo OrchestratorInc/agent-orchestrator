@@ -10,6 +10,7 @@ import {
 	shouldSignalAttention,
 	shouldToast,
 	toastSilent,
+	trayNotificationsDisabled,
 	type NotificationType,
 } from "./notification-signals";
 
@@ -49,6 +50,16 @@ describe("loudNotificationsEnabled", () => {
 
 	it.each([undefined, "", "0", "false", "loud", "yes"])("stays quiet for %s", (value) => {
 		expect(loudNotificationsEnabled(value)).toBe(false);
+	});
+});
+
+describe("trayNotificationsDisabled", () => {
+	it.each(["1", "true", " 1 ", "TRUE"])("mutes the OS notification surface for %s", (value) => {
+		expect(trayNotificationsDisabled(value)).toBe(true);
+	});
+
+	it.each([undefined, "", "0", "false", "off", "yes"])("keeps signaling for %s", (value) => {
+		expect(trayNotificationsDisabled(value)).toBe(false);
 	});
 });
 

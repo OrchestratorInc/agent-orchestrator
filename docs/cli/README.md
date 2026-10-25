@@ -272,6 +272,7 @@ The CLI and daemon share the same environment-driven config:
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 | `AO_NO_TRAY`          | unset (off)          | `1`/`true` skips the macOS menu bar tray; any other value keeps the default. (fork)             |
 | `AO_NO_QUIET_NOTIFICATIONS` | unset (quiet)  | `1`/`true` restores the upstream loud notifications: bell/OS-toast/sound on every event type. Default signals only for human-feedback events (blocked agent, changes-requested review, failed agent). Read at app startup. (fork) |
+| `AO_DISABLE_TRAY_NOTIFICATIONS` | unset (off) | `1`/`true` mutes the desktop app's OS notification surface: toasts, sounds, dock/taskbar attention and badges, and the tray attention count. In-app feeds keep recording events; the tray icon (Show/Quit) stays. Read at app startup. (fork) |
 
 The primary daemon always binds `127.0.0.1`. Connect Mobile is a separate,
 opt-in authenticated listener; see [network boundaries](../architecture.md#multi-listener-architecture-loopback--lan).
