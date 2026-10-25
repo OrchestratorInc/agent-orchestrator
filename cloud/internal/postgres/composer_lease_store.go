@@ -458,7 +458,7 @@ func (s *Store) TakeOverComposerLease(ctx context.Context, principal domain.Prin
 func mayManageSessionTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, userID string) (bool, error) {
 	var allowed bool
 	err := tx.QueryRow(ctx,
-		`SELECT session.created_by_user_id = $3::uuid OR EXISTS (
+		`SELECT session.created_by_user_id IS NOT DISTINCT FROM $3::uuid OR EXISTS (
 			SELECT 1 FROM ao_org_memberships membership
 			WHERE membership.org_id = $1 AND membership.user_id = $3::uuid
 			  AND membership.status = 'active' AND membership.role IN ('owner', 'admin')
@@ -529,7 +529,7 @@ func (s *Store) SweepComposerLeases(ctx context.Context) (int, error) {
 func mayDirectTurnTx(ctx context.Context, tx pgx.Tx, orgID, sessionID, turnID, userID string) (bool, error) {
 	var allowed bool
 	err := tx.QueryRow(ctx,
-		`SELECT session.created_by_user_id = $4::uuid
+		`SELECT session.created_by_user_id IS NOT DISTINCT FROM $4::uuid
 			OR EXISTS (
 				SELECT 1 FROM ao_org_memberships membership
 				WHERE membership.org_id = $1 AND membership.user_id = $4::uuid
