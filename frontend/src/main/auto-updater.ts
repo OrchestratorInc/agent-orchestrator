@@ -209,7 +209,7 @@ let stagedReleaseNotes: string | undefined;
 // MacUpdater has no native feed/server after relaunch until it downloads again.
 let stagedInCurrentProcess = false;
 let macRestartPreparation: Promise<UpdateInstallResult> | undefined;
-let macRestartRequested = false;
+let updateRestartRequested = false;
 let restartFailureHandler: (() => void) | undefined;
 let macRestartProgress: Awaited<ReturnType<typeof startMacUpdateProgress>> | undefined;
 let nativeReadyVersion: string | undefined;
@@ -548,7 +548,7 @@ export function recordUpdateDiagnostic(
       phase: activeUpdaterPhase, targetVersion: nativePreparation?.version ?? pendingUpdateVersion ?? stagedVersion,
       channel: autoUpdater.channel, stagedInCurrentProcess,
       nativeReadyVersion, preparationBlocked: nativePreparationBlocked !== undefined,
-      status: lastStatus.state, restartRequested: macRestartRequested,
+      status: lastStatus.state, restartRequested: updateRestartRequested,
       ...fields,
     }, error);
   } catch { /* Observability must not change updater behavior. */ }
@@ -2011,8 +2011,8 @@ function wireUpdaterEvents(): void {
       // Preparation may already be ready while install awaits the helper or
       // relaunch marker. Reject that request too, so late waits cannot quit AO.
       if (activeUpdaterOperation === "manual-install") rejectNativeOperation?.(short);
-      if (macRestartRequested) {
-        macRestartRequested = false;
+      if (updateRestartRequested) {
+        updateRestartRequested = false;
         macRestartPreparation = undefined;
         stagedInCurrentProcess = false;
         // shortStagingMessage passes an unrecognized failure through verbatim;
@@ -2192,6 +2192,10 @@ function wireUpdaterEvents(): void {
     }
   });
   autoUpdater.on("error", (err) => {
+    if (process.platform !== "darwin" && updateRestartRequested) {
+      clearUpdateRestartRequest();
+      restartFailureHandler?.();
+    }
     recordUpdateDiagnostic("electron-updater-error", {}, err);
     clearDownloadStallWatchdog();
     if (handleMacStagingFailure(err)) {
@@ -2958,7 +2962,12 @@ function applyInstallOnQuitPolicy(): void {
 // false keeps the installer UI on Windows; isForceRunAfter relaunches the app.
 export function setUpdateRestartFailureHandler(handler: () => void): void { restartFailureHandler = handler; }
 
-export function isUpdateRestartRequested(): boolean { return macRestartRequested; }
+export function isUpdateRestartRequested(): boolean { return updateRestartRequested; }
+
+export function clearUpdateRestartRequest(): void {
+  updateRestartRequested = false;
+  macRestartPreparation = undefined;
+}
 
 export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<UpdateInstallResult> {
   recordUpdateDiagnostic("install-requested", { confirmedVersion });
@@ -3005,7 +3014,13 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       ]);
     }
     recordUpdateDiagnostic("quit-and-install", { version: stagedVersion });
-    autoUpdater.quitAndInstall(false, true);
+    updateRestartRequested = true;
+    try {
+      autoUpdater.quitAndInstall(false, true);
+    } catch (error) {
+      clearUpdateRestartRequest();
+      throw error;
+    }
     return;
   }
   if (macRestartPreparation) return macRestartPreparation;
@@ -3051,7 +3066,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       assertInstallActive();
       progress.assertAlive();
       macRestartProgress = progress;
-      macRestartRequested = true;
+      updateRestartRequested = true;
       // Same cross-platform post-update signal the renderer reads at boot. This
       // is separate from the helper's active.json handshake above and only drives
       // the startup loader copy; failing to write it must not abort the install.
@@ -3066,14 +3081,14 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       assertInstallActive();
       recordUpdateDiagnostic("quit-and-install", { version });
       autoUpdater.quitAndInstall(false, true);
-      if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
+      if (!updateRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
     } catch (err) {
       if (installAbandoned) {
         await progress?.fail(userFacingUpdateError(err, "install")).catch(() => undefined);
         return;
       }
       recordUpdateDiagnostic("install-preparation-failed", {}, err);
-      macRestartRequested = false;
+      updateRestartRequested = false;
       stagedInCurrentProcess = false;
       nativeReadyVersion = undefined;
       console.error("failed to prepare update for restart:", err);
@@ -3092,7 +3107,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       broadcast({ state: "error", ...failureFields(failure) });
     }
     throw userFacingInstallError(err);
-  }).finally(() => { if (!macRestartRequested) macRestartPreparation = undefined; });
+  }).finally(() => { if (!updateRestartRequested) macRestartPreparation = undefined; });
   return macRestartPreparation;
 }
 

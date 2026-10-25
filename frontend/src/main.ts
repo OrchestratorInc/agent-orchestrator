@@ -35,6 +35,7 @@ import {
 	downloadUpdateNow,
 	quitAndInstallUpdate,
 	isUpdateRestartRequested,
+	clearUpdateRestartRequest,
 	setUpdateRestartFailureHandler,
 	getUpdateStatus,
 	recordUpdateDiagnostic,
@@ -4012,6 +4013,7 @@ app.on("before-quit", (event) => {
 			app.quit();
 		} else {
 			preserveAgentsOnQuit = false;
+			clearUpdateRestartRequest();
 			desktopQuit.cancelQuit();
 		}
 		return;
@@ -4027,6 +4029,7 @@ app.on("before-quit", (event) => {
 				.catch((error) => {
 					console.error("AO: daemon shutdown on desktop quit failed", error);
 					preserveAgentsOnQuit = false;
+					clearUpdateRestartRequest();
 					desktopQuit.cancelQuit();
 					dialog.showErrorBox("Could not quit AO", "AO could not stop its agents. Try quitting again.");
 					focusMainWindow();
