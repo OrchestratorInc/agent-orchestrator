@@ -1,0 +1,73 @@
+# Nightly fixes-only sync of fork main with upstream.
+#
+# Runs the repo's own ao-sync.sh (classification by ledger → cherry-pick of
+# typed fixes → traps → gates) on a hosted runner and pushes fork main only
+# when everything is green. A red run pushes nothing — the owner wakes up to
+# a red check and a one-line verdict, not to a broken local sync.
+#
+# The live-database migration dry-run (script step 4b) skips here: the runner
+# has no ~/.ao/data/ao.db. The owner's local `ao-sync.sh` (idempotent when
+# there is nothing new) runs that dry-run against the real DB before a rebuild.
+#
+# Remote layout: ao-sync.sh speaks to origin as the UPSTREAM and never pushes,
+# so origin is re-pointed at the upstream repo and a `fork` remote is added
+# for the final push. actions/checkout's credential header applies to all
+# github.com URLs, so both the upstream fetch and the fork push authenticate
+# with the workflow token.
+#
+# Schedules only fire from the default branch and can slip by tens of
+# minutes; a long idle period can also get schedules auto-disabled —
+# re-enable in the Actions tab if this stops running.
+
+name: Nightly sync
+
+on:
+  schedule:
+    - cron: "0 19 * * *" # 03:00 GMT+8 — ночь владельца
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      LANG: en_US.UTF-8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies (gates run npm run api)
+        run: npm ci --no-audit --no-fund
+        working-directory: frontend
+
+      - name: Point origin at upstream, keep fork for the push
+        run: |
+          git remote set-url origin https://github.com/Untrivial-ai/agent-orchestrator.git
+          git fetch origin main
+          git remote add fork https://github.com/axisrow/agent-orchestrator.git
+          git status -sb
+
+      - name: Run fixes-only sync
+        run: bash local/toolbox/ao-sync.sh
+
+      - name: Push fork main (green syncs only)
+        if: success()
+        run: git push fork main
