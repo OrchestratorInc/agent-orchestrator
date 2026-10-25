@@ -693,7 +693,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			<PopoverContent
 				align="end"
 				aria-label={t("notify.title")}
-				className="flex max-h-[calc(100dvh-5rem)] w-notification-width max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-lg border-border bg-popover p-0 shadow-sm [&_button]:transition-none [&_a]:transition-none"
+				className="flex max-h-[calc(100dvh-5rem)] w-notification-width max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-lg p-0 [&_button]:transition-none [&_a]:transition-none"
 				sideOffset={6}
 			>
 				<div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-3">

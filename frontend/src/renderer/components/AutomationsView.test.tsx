@@ -357,7 +357,7 @@ describe("AutomationsView", () => {
 		await userEvent.click(screen.getAllByRole("button", { name: /create automation/i })[0]);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
-		expect(dialog).toHaveClass("border-border", "bg-popover", "rounded-lg");
+		expect(dialog).toHaveClass("border-(--color-border-overlay)", "bg-popover", "rounded-lg");
 		expect(dialog.querySelector(".border-b")).toBeNull();
 		expect(dialog.querySelector(".border-t")).toBeNull();
 		expect(within(dialog).getByRole("heading", { name: "Create automation" })).toHaveClass(

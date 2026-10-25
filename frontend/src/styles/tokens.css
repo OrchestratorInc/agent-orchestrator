@@ -463,7 +463,7 @@
 	--tracking-settings-title: -0.015em;
 	--tracking-settings-section: 0.06em;
 	--tracking-settings-mono: 0.08em;
-	--radius-settings-panel: 14px;
+	--radius-settings-panel: var(--radius-lg);
 	--radius-settings-row: 16px;
 	--size-settings-row: 52px;
 	--size-settings-section-gap: 40px;
