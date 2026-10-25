@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { touchTarget as androidTouchTarget } from "./platformTokens.android";
-import { fontScaleCap, microLabel, press, radius, space, stateOpacity, touchTarget, type } from "./tokens";
+import { sheetCornerRadius as androidSheetCornerRadius, touchTarget as androidTouchTarget } from "./platformTokens.android";
+import { fontScaleCap, microLabel, press, radius, sheetCornerRadius, space, stateOpacity, touchTarget, type } from "./tokens";
 
 // These tests are a regression fence, not a description of taste. A scale that
 // stops ascending has been edited carelessly, and the anchors below are the
@@ -38,6 +38,15 @@ describe("touch target", () => {
 	it("meets the HIG on iOS and Material 3 on Android", () => {
 		expect(touchTarget).toBe(44);
 		expect(androidTouchTarget).toBe(48);
+	});
+});
+
+describe("sheet corners", () => {
+	// Unset, iOS draws the system sheet shape; react-native-screens draws an
+	// unset Android sheet square, so Android names Material 3's corner.
+	it("leaves iOS to UIKit and gives Android Material 3's bottom-sheet shape", () => {
+		expect(sheetCornerRadius).toBeUndefined();
+		expect(androidSheetCornerRadius).toBe(28);
 	});
 });
 

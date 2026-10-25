@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { act, create } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -84,6 +86,24 @@ describe("root stack", () => {
 			expect(android.root.findByType("NavigationThemeProvider" as never).props.value.colors.card).toBe("#bgSurface");
 		} finally {
 			act(() => android.unmount());
+		}
+	});
+
+	// UIKit draws its own sheet shape when none is named; Android takes Material
+	// 3's corner from the token. No sheet picks a radius of its own.
+	it("leaves every sheet's shape to the platform", async () => {
+		const layout = readFileSync(fileURLToPath(new URL("../app/_layout.tsx", import.meta.url)), "utf8");
+		expect(layout).not.toMatch(/sheetCornerRadius:\s*\d/);
+		const renderer = await renderRoot("ios");
+		try {
+			const sheets = renderer.root.findAll((node) => (node.type as unknown) === "StackScreen" && node.props.options?.presentation === "formSheet");
+			expect(sheets.length).toBeGreaterThan(10);
+			for (const sheet of sheets) {
+				expect(sheet.props.options.sheetCornerRadius).toBeUndefined();
+				expect(sheet.props.options.sheetAllowedDetents).toBeDefined();
+			}
+		} finally {
+			act(() => renderer.unmount());
 		}
 	});
 

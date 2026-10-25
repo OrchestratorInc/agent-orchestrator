@@ -160,6 +160,13 @@ export const iconSize = {
 export { touchTarget } from "./platformTokens";
 
 /**
+ * A form sheet's `sheetCornerRadius`: the system's own shape on iOS (unset) and
+ * Material 3's bottom-sheet corner on Android. Pass this rather than a number,
+ * so a sheet keeps the platform's shape.
+ */
+export { sheetCornerRadius } from "./platformTokens";
+
+/**
  * The inset every sheet body shares. The native sheet draws its own top
  * clearance, so this is the one place the JS side pads — keeping it here is what
  * stops two pickers from disagreeing about their top edge.

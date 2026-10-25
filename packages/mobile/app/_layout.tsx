@@ -24,6 +24,7 @@ import { AppProvider } from "../lib/store";
 import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
+import { sheetCornerRadius } from "../lib/tokens";
 
 // Sheet routes, and how tall each is allowed to be.
 //
@@ -72,7 +73,7 @@ const CONNECT_SHEET_OPTIONS = {
 	presentation: "formSheet",
 	sheetAllowedDetents: Platform.OS === "ios" ? "fitToContents" : [0.6, 0.95],
 	sheetGrabberVisible: true,
-	sheetCornerRadius: 20,
+	sheetCornerRadius,
 	headerShown: false,
 } as const;
 
@@ -202,7 +203,7 @@ function Shell() {
 						sheetAllowedDetents: [0.92],
 						sheetInitialDetentIndex: 0,
 						sheetGrabberVisible: false,
-						sheetCornerRadius: 24,
+						sheetCornerRadius,
 						contentStyle: { backgroundColor: t.bgBase },
 					}}
 				/>
@@ -229,7 +230,6 @@ function Shell() {
 						// still there for anyone who wants the board behind it.
 						sheetInitialDetentIndex: Platform.OS === "ios" ? 1 : 0,
 						sheetGrabberVisible: Platform.OS === "ios",
-						sheetCornerRadius: 24,
 						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgSurface : "transparent" },
 					}}
 				/>
@@ -261,7 +261,7 @@ function Shell() {
 							sheetAllowedDetents: Platform.OS === "android" && androidDetents ? [...androidDetents] : detents === "fitToContents" ? "fitToContents" : [...detents],
 							sheetInitialDetentIndex: 0,
 							sheetGrabberVisible: true,
-							sheetCornerRadius: 20,
+							sheetCornerRadius,
 							headerShown: false,
 							contentStyle: { backgroundColor: t.bgSurface },
 						}}
