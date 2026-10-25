@@ -198,10 +198,21 @@ export const spring = {
 	snappy: { damping: 20, stiffness: 320, mass: 0.8 },
 } as const;
 
+/**
+ * Opacity for a control's interactive states, one value each so every control
+ * dims by the same amount. `pressed` is for iOS controls that fade on touch; an
+ * Android control shows a ripple instead (see `pressFeedback.ts`). `disabled`
+ * sits at Material 3's 38% for disabled content, rounded.
+ */
+export const stateOpacity = {
+	pressed: 0.7,
+	disabled: 0.4,
+} as const;
+
 /** Press feedback: scale down, fade a touch, and come back on the same curve. */
 export const press = {
 	scale: 0.96,
-	opacity: 0.7,
+	opacity: stateOpacity.pressed,
 	in: duration.fast,
 	out: duration.base,
 } as const;

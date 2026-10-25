@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { touchTarget as androidTouchTarget } from "./platformTokens.android";
-import { fontScaleCap, microLabel, radius, space, touchTarget, type } from "./tokens";
+import { fontScaleCap, microLabel, press, radius, space, stateOpacity, touchTarget, type } from "./tokens";
 
 // These tests are a regression fence, not a description of taste. A scale that
 // stops ascending has been edited carelessly, and the anchors below are the
@@ -38,6 +38,17 @@ describe("touch target", () => {
 	it("meets the HIG on iOS and Material 3 on Android", () => {
 		expect(touchTarget).toBe(44);
 		expect(androidTouchTarget).toBe(48);
+	});
+});
+
+describe("state opacity", () => {
+	it("keeps a pressed control more visible than a disabled one", () => {
+		expect(stateOpacity.pressed).toBeLessThan(1);
+		expect(stateOpacity.disabled).toBeLessThan(stateOpacity.pressed);
+	});
+
+	it("is the opacity press feedback fades to", () => {
+		expect(press.opacity).toBe(stateOpacity.pressed);
 	});
 });
 
