@@ -2579,7 +2579,7 @@ function ControllerBanner({
 					</>
 				) : null}
 			</div>
-			{controller.state === "stopped" && !waking ? (
+			{actionable ? (
 				<div className="flex shrink-0 flex-wrap justify-end gap-2 self-center">
 					{onResume ? (
 						<Button
