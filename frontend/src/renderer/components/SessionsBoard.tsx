@@ -36,7 +36,6 @@ import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
-import { NotificationCenter } from "./NotificationCenter";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
@@ -253,11 +252,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			<ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />
-			<NotificationCenter />
 		</>
-	) : (
-		<NotificationCenter />
-	);
+	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
@@ -269,22 +265,18 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 	return (
 		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>
-			{/* Welcome skips the bar: a dangling "Board" above the import chooser
-			    was review feedback on #2432. */}
-			{!showWelcome ? (
-				<PageTopbar
-					lead={
-						<PageTopbarTitle
-							data-testid="board-topbar-label"
-							icon={<LayoutDashboard aria-hidden="true" className="size-icon-md" />}
-						>
-							{boardLabel}
-							{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
-						</PageTopbarTitle>
-					}
-					actions={actions}
-				/>
-			) : null}
+			<PageTopbar
+				lead={showWelcome ? undefined : (
+					<PageTopbarTitle
+						data-testid="board-topbar-label"
+						icon={<LayoutDashboard aria-hidden="true" className="size-icon-md" />}
+					>
+						{boardLabel}
+						{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
+					</PageTopbarTitle>
+				)}
+				actions={showWelcome ? undefined : actions}
+			/>
 			{hostId && !connected ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("remote.hostOffline")}</p> : null}
 			{hostId && remoteProjectQuery.isError ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("shell.couldNotLoadProjects")}</p> : null}
 			{hostId && remoteProjectQuery.isSuccess && !workspace ? <p role="alert" className="px-4 py-3 text-sm text-destructive">{t("session.notFound")}</p> : null}

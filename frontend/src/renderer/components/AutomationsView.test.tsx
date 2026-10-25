@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AutomationsView } from "./AutomationsView";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const mocks = vi.hoisted(() => ({
 	automations: [] as Array<Record<string, unknown>>,
 	create: vi.fn(),

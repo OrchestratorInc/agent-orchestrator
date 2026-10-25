@@ -1,6 +1,7 @@
 import type { ComponentProps, ComponentPropsWithoutRef, CSSProperties, ReactNode, Ref } from "react";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
+import { NotificationCenter } from "./NotificationCenter";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 
 /**
@@ -52,7 +53,10 @@ export function PageTopbar({
 			<div className="flex min-w-0 flex-1 items-center gap-2.5">
 				{lead}
 			</div>
-			{actions ? <PageTopbarActions>{actions}</PageTopbarActions> : null}
+			<PageTopbarActions>
+				{actions}
+				<PageTopbarGlobalActions />
+			</PageTopbarActions>
 		</PageTopbarFrame>
 	);
 }
@@ -70,6 +74,11 @@ export function PageTopbarTitle({
 			<span className="max-w-content-max truncate">{children}</span>
 		</Component>
 	);
+}
+
+/** App-wide controls shared by page headers and the pinned session chrome. */
+export function PageTopbarGlobalActions() {
+	return <NotificationCenter style={noDragStyle} />;
 }
 
 /** Right-aligned action cluster. Controls inside never start a window drag. */
@@ -99,6 +108,7 @@ export function SessionTabsTopbar({
 	regionWidth = "100%",
 	clearanceClassName,
 	hideActions = false,
+	globalActions = <PageTopbarGlobalActions />,
 }: {
 	className?: string;
 	tabs: ReactNode;
@@ -108,6 +118,8 @@ export function SessionTabsTopbar({
 	/** Window-control clearance classes for the tabs region. */
 	clearanceClassName?: string;
 	hideActions?: boolean;
+	/** SessionView supplies these in its pinned window-edge cluster. */
+	globalActions?: ReactNode;
 }) {
 	return (
 		<PageTopbarFrame className={cn("items-stretch bg-sidebar", className)}>
@@ -120,14 +132,15 @@ export function SessionTabsTopbar({
 				>
 					{tabs}
 				</div>
-				{hideActions ? null : (
+				{!hideActions || globalActions ? (
 					<div
 						className="session-topbar-actions ml-auto flex shrink-0 items-center"
 						data-testid="session-action-region"
 					>
-						{actions}
+						{hideActions ? null : actions}
+						{globalActions}
 					</div>
-				)}
+				) : null}
 			</div>
 		</PageTopbarFrame>
 	);

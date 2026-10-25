@@ -2337,6 +2337,7 @@ function ChatHeader({
 	const header = (
 		<SessionTabsTopbar
 			className={slideIn ? "chat-header-slide-in" : undefined}
+			globalActions={inline ? undefined : null}
 			actions={
 				<>
 					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
