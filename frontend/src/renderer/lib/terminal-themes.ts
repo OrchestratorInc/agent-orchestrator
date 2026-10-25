@@ -7,26 +7,27 @@ function cssVar(name: string): string {
 }
 
 /** xterm palettes harmonized to tokens.css (--color-term-* / semantic colors). */
-export function buildTerminalThemes(): { dark: ITheme; light: ITheme } {
-	// Opaque plate — xterm cells must not be translucent or the p-2 gutter and
-	// the glyph grid pick up different composites against app chrome.
+export function buildTerminalThemes(translucent = false): { dark: ITheme; light: ITheme } {
 	// Named themes re-point the plate tokens to their palette in tokens.css
 	// (:root[data-style-theme]); the default Orchestrate plate is pinned dark
 	// and never follows the app theme: agent TUIs print 24-bit text designed
 	// for a dark plate, and a light plate turns that output white-on-white
-	// (#6861).
+	// (#6861). With window transparency enabled the background slot goes
+	// fully translucent (#7195); text colors and cursor stay solid below.
 	const namedThemeActive = typeof document !== "undefined" && Boolean(document.documentElement.dataset.styleTheme);
 	const terminalBg = namedThemeActive
 		? cssVar("--background")
 		: cssVar("--terminal-plate");
 	const terminalForeground = namedThemeActive ? cssVar("--foreground") : cssVar("--terminal-plate-foreground");
 	const terminalCursor = namedThemeActive ? cssVar("--primary") : cssVar("--color-working");
+	// Only the canvas becomes transparent; text colors and the block cursor's
+	// contrasting glyph color still need the solid theme background.
 	// Collapse ANSI black into the plate. Agent TUIs (Cursor's prompt bar) fill
 	// rows with "black"; leaving the slot as a true dark color paints a black
 	// stripe on the light canvas. Same approach as packages/mobile/lib/theme.ts.
 	const ansiBlack = terminalBg;
 	const dark: ITheme = {
-		background: terminalBg,
+		background: translucent ? "#00000000" : terminalBg,
 		// AO owns the scrollbar gutter; xterm 6 otherwise paints a white ruler edge.
 		overviewRulerBorder: "transparent",
 		foreground: terminalForeground,
@@ -53,7 +54,7 @@ export function buildTerminalThemes(): { dark: ITheme; light: ITheme } {
 	};
 
 	const light: ITheme = {
-		background: terminalBg,
+		background: translucent ? "#00000000" : terminalBg,
 		// AO owns the scrollbar gutter; xterm 6 otherwise paints a white ruler edge.
 		overviewRulerBorder: "transparent",
 		foreground: terminalForeground,

@@ -457,7 +457,9 @@ export function sessionLinkProvider(
 export function XtermTerminal(props: XtermTerminalProps) {
 	const { t } = useTranslation();
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const macPlatform = isMacPlatform();
+	const translucent = macPlatform && windowTranslucency;
 	const shellRef = useRef<HTMLDivElement | null>(null);
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
@@ -611,10 +613,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		applyDocumentThemeStyle(themeStyle);
 		const term = termRef.current;
 		if (!term) return;
-		const { dark, light } = buildTerminalThemes();
+		const { dark, light } = buildTerminalThemes(translucent);
 		term.options.theme = props.theme === "dark" ? dark : light;
+		webglLeaseRef.current?.setEnabled(!translucent);
 		colorSchemeReporterRef.current?.(props.theme, themeStyle);
-	}, [props.theme, themeStyle]);
+	}, [props.theme, themeStyle, translucent]);
 
 	useEffect(() => {
 		if (!termRef.current || !props.supportsCursorColorScheme) return;
@@ -694,8 +697,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 
 		let term: Terminal;
 		try {
-			const { dark, light } = buildTerminalThemes();
+			const { dark, light } = buildTerminalThemes(translucent);
 			term = new Terminal({
+				// xterm requires this before open; keep macOS terminals ready for
+				// live transparency toggles without recreating their buffers.
+				allowTransparency: macPlatform,
 				// Required for the Unicode 11 width addon below.
 				allowProposedApi: true,
 				cursorBlink: true,
@@ -780,7 +786,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		if (import.meta.env.DEV) {
 			(host as DevXtermHost).__aoXtermForTest = term;
 		}
-		const webglLease = leaseWebglRenderer(term, () => callbacksRef.current.isVisible !== false);
+		// WebGL forces alpha to 1 for default-background cells carrying flags
+		// such as dim, leaving opaque rectangles on a transparent canvas. The
+		// DOM renderer respects their alpha and preserves the same buffer.
+		const webglLease = leaseWebglRenderer(term, () => callbacksRef.current.isVisible !== false, !translucent);
 		webglLeaseRef.current = webglLease;
 		webglLease.activate();
 		term.options.macOptionClickForcesSelection = true;
