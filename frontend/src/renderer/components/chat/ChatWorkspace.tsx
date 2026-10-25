@@ -21,6 +21,7 @@ import {
 	memo,
 	useCallback,
 	useEffect,
+	useId,
 	useLayoutEffect,
 	useMemo,
 	useRef,
@@ -35,7 +36,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, ChevronRight, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
@@ -145,6 +146,7 @@ import {
 } from "./WorkerUpdates";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
+import { CopyButton } from "./CopyButton";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import type { AgentSwitchProps } from "./AgentSwitchPicker";
 import type { ComposerPromptSuggestion } from "./ComposerEditor";
@@ -1564,6 +1566,16 @@ function ChatWorkspaceContent({
 	const arrivingPlaceholder = snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"
 		? "Restoring your conversation"
 		: "Starting the chat agent";
+	const controllerBannerVisible =
+		["connecting", "recovering", "stopped"].includes(snapshot.controller.state) &&
+		!orchestratorStarting && session?.provisionState !== "provisioning" && session?.provisionState !== "failed" &&
+		(snapshot.controller.state !== "stopped" || !(controllerTransitioning || agentResuming || suppressStopped));
+	const controllerErrors = useMemo(
+		() => [snapshot.controller.error, resumeError, shellError]
+			.map((text) => text?.trim())
+			.filter((text, index, all): text is string => Boolean(text) && all.indexOf(text) === index),
+		[snapshot.controller.error, resumeError, shellError],
+	);
 	const compactStartup = sessionRole === "orchestrator" && startupState === "failed" ? startup : undefined;
 	// Arriving in a chat that already has messages docks the composer at the
 	// bottom while they load; a chat with none opens centered like any new chat.
@@ -1768,19 +1780,18 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					<ControllerBanner
+					{controllerBannerVisible ? <ControllerBanner
+						key={JSON.stringify([snapshot.controller.state, ...controllerErrors])}
 						controller={snapshot.controller}
-						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
-						transitioning={controllerTransitioning || agentResuming}
-						automaticWakePending={suppressStopped}
+						agent={snapshot.harness ? agentLabel(snapshot.harness) : undefined}
+						errors={controllerErrors}
 						reconnecting={startupReconnecting}
 						onResume={newWorkDisabled ? undefined : onResumeAgent}
 						resuming={resumingAgent}
 						resumeError={resumeError}
 						onOpenShell={onOpenShell}
 						openingShell={openingShell}
-						shellError={shellError}
-					/>
+					/> : null}
 					{snapshot.threadState ? <ThreadStateBanner threadState={snapshot.threadState} /> : null}
 					<VersionSwitchBanner
 						staleBinary={session?.staleBinary}
@@ -1805,6 +1816,7 @@ function ChatWorkspaceContent({
 							<ChatHostId.Provider value={activeRemoteHostId}>
 
 								<Timeline
+									controllerErrors={controllerBannerVisible ? controllerErrors : undefined}
 							onAddToSideChat={onAddToSideChat}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
@@ -1958,7 +1970,11 @@ function ChatWorkspaceContent({
 													? (sessionRole === "orchestrator" ? "Starting the orchestrator" : "Resuming agent")
 													: startupReconnecting
 														? "Reconnecting to the agent…"
-														: undefined
+														: snapshot.controller.state === "stopped"
+															? (onResumeAgent
+																? t(resumeError?.trim() ? "chat.composer.reconnectPlaceholder" : "chat.composer.stoppedPlaceholder")
+																: t("chat.controller.stopped"))
+															: undefined
 										}
 										// Keep the composer useful outside the centered welcome state too. A
 										// task can have non-message activity before its first visible chat
@@ -2369,21 +2385,19 @@ function ChatHeader({
  */
 function ControllerBanner({
 	controller,
-	provisionState,
-	transitioning,
-	automaticWakePending,
+	agent,
+	errors,
 	reconnecting,
 	onResume,
 	resuming,
 	resumeError,
 	onOpenShell,
 	openingShell,
-	shellError,
 }: {
 	controller: { state: ControllerState; error?: string };
-	provisionState?: WorkspaceSession["provisionState"];
-	transitioning?: boolean;
-	automaticWakePending?: boolean;
+	/** The agent's display name ("Claude Code"), when known. */
+	agent?: string;
+	errors: readonly string[];
 	/** The daemon is still reconnecting this session after a restart. */
 	reconnecting?: boolean;
 	onResume?: () => void | Promise<unknown>;
@@ -2391,10 +2405,10 @@ function ControllerBanner({
 	resumeError?: string;
 	onOpenShell?: () => void;
 	openingShell?: boolean;
-	shellError?: string;
 }) {
-	// Startup failures use the checklist's Retry action.
-	if (provisionState === "provisioning" || provisionState === "failed") return null;
+	const { t } = useTranslation();
+	const detailsId = useId();
+	const [detailsOpen, setDetailsOpen] = useState(false);
 	const waking = Boolean(resuming && controller.state === "stopped");
 	// Nothing to act on yet: offering Resume here invites a click the daemon is
 	// about to make unnecessary.
@@ -2403,36 +2417,44 @@ function ControllerBanner({
 		void Promise.resolve().then(() => onResume?.()).catch(() => {});
 	};
 
-	// The transition coordinator intentionally stops one controller before it
-	// starts the other. The top-bar handoff state already explains that interval;
-	// presenting its intermediate snapshot as a crash produces a red false alarm.
-	if (controller.state === "ready" || controller.state === "busy" || controller.state === "hibernated") return null;
-	if (controller.state === "stopped" && (transitioning || automaticWakePending)) return null;
+	if (controller.state !== "connecting" && controller.state !== "recovering" && controller.state !== "stopped") return null;
 
-	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
-		connecting: {
-			title: "Connecting to the agent…",
-			tone: "text-muted-foreground",
-		},
-		recovering: {
-			title: "Reconnecting to the agent",
-			tone: "text-warning",
-		},
-		stopped: {
-			title: waking ? "Waking agent…" : restarting ? "Reconnecting to the agent…" : "The agent controller stopped",
-			tone: waking || restarting ? "text-muted-foreground" : "text-destructive",
-		},
-	};
-	const shown = copy[controller.state];
-	if (!shown) return null;
-	const loading = controller.state === "connecting" || waking || restarting;
-	const actionable = controller.state === "stopped" && !waking && !restarting;
+	const named = agent ? { agent } : undefined;
+	const loading = controller.state !== "stopped" || waking || restarting;
+	const actionable = !loading;
+	// The primary action names what it will do for this failure. A failed resume
+	// reads as a broken connection, so retrying it is "Reconnect"; a plain stop
+	// is "Resume agent". Both run the same resume.
+	const reconnectFailed = Boolean(resumeError?.trim());
+	const title = controller.state === "connecting"
+		? (named ? t("chat.controller.connectingTo", named) : t("chat.controller.connecting"))
+		: controller.state === "recovering" || restarting
+			? (named ? t("chat.controller.reconnectingTo", named) : t("chat.controller.reconnecting"))
+			: waking
+				? (named ? t("chat.controller.wakingAgent", named) : t("chat.controller.waking"))
+				: reconnectFailed
+					? (named ? t("chat.controller.reconnectFailed", named) : t("chat.controller.reconnectFailedGeneric"))
+					: t("chat.controller.stopped");
+	const sentence = waking
+		? t("chat.controller.wakingHint")
+		: restarting
+			? t("chat.controller.restartedHint")
+			: actionable
+				? (reconnectFailed ? t("chat.controller.reconnectFailedHint") : t("chat.controller.stoppedHint"))
+				: undefined;
+	const primaryLabel = resuming
+		? (reconnectFailed ? t("chat.controller.reconnectingShort") : t("chat.controller.resuming"))
+		: reconnectFailed
+			? t("chat.controller.reconnect")
+			: t("chat.controller.resume");
+	const details = errors.join("\n\n");
 
 	return (
 		<div
 			role={actionable ? "alert" : "status"}
 			aria-atomic="true"
 			className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5"
+			data-testid="controller-banner"
 		>
 			{loading ? (
 				<Loader2
@@ -2440,53 +2462,50 @@ function ControllerBanner({
 					className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground"
 				/>
 			) : (
-				<TriangleAlert aria-hidden="true" className={cn("mt-0.5 size-3.5 shrink-0", shown.tone)} />
+				<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
 			)}
 			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<strong className={cn("text-xs font-medium", shown.tone)}>{shown.title}</strong>
-				{controller.state === "stopped" && waking ? (
-					<span className="text-xs leading-snug text-muted-foreground">Restoring the agent. You can keep typing.</span>
-				) : restarting ? (
-					<span className="text-xs leading-snug text-muted-foreground">AO restarted. History is kept.</span>
-				) : controller.error ? (
-					<span className="text-xs leading-snug text-muted-foreground">{controller.error}</span>
-				) : null}
-				{actionable ? (
-					<>
-						<span className="text-xs leading-snug text-muted-foreground">
-							History is kept. Resume the agent or open a shell in the same worktree.
-						</span>
-						{resumeError || shellError ? (
-							<span className="text-xs leading-snug text-destructive">
-								{resumeError ?? shellError}
-							</span>
+				<strong className="text-xs font-medium text-foreground">{title}</strong>
+				{sentence ? <span className="text-xs leading-snug text-muted-foreground">{sentence}</span> : null}
+				{actionable && (onResume || onOpenShell) || details ? (
+					<div className="mt-1.5 flex flex-wrap items-center gap-2">
+						{actionable && onResume ? (
+							<Button
+								type="button"
+								size="sm"
+								variant="primary"
+								onClick={resumeClick}
+								disabled={resuming}
+								>
+								{primaryLabel}
+							</Button>
 						) : null}
-						<div className="mt-1.5 flex flex-wrap gap-2">
-							{onResume ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="outline"
-									onClick={resumeClick}
-									disabled={resuming}
-								>
-									{resuming ? "Resuming…" : "Resume agent"}
-								</Button>
-							) : null}
-							{onOpenShell ? (
-								<Button
-									type="button"
-									size="sm"
-									variant="ghost"
-									onClick={onOpenShell}
-									disabled={openingShell}
-								>
-									{openingShell ? "Opening shell…" : "Open shell"}
-								</Button>
-							) : null}
-						</div>
-					</>
+						{actionable && onOpenShell ? (
+							<Button
+								type="button"
+								size="sm"
+								variant="ghost"
+								onClick={onOpenShell}
+								disabled={openingShell}
+							>
+								{openingShell ? t("chat.controller.openingShell") : t("chat.controller.openShell")}
+							</Button>
+						) : null}
+						{details ? <Button
+							type="button" size="sm" variant="ghost"
+							aria-expanded={detailsOpen}
+							aria-controls={detailsOpen ? detailsId : undefined}
+							onClick={() => setDetailsOpen((open) => !open)}
+						>
+							{t("chat.errorDetails.toggle")}
+							<ChevronRight aria-hidden="true" className={cn("size-3", detailsOpen && "rotate-90")} />
+						</Button> : null}
+					</div>
 				) : null}
+				{details && detailsOpen ? <div id={detailsId} className="mt-1.5 flex min-w-0 items-start gap-1 rounded-md bg-muted/40 py-1.5 pr-1 pl-2.5">
+					<pre className="max-h-48 min-w-0 flex-1 select-text overflow-auto whitespace-pre-wrap wrap-anywhere py-0.5 font-mono text-xs leading-snug text-muted-foreground">{details}</pre>
+					<CopyButton text={details} label={t("chat.errorDetails.copy")} copiedLabel={t("chat.errorDetails.copied")} compact className="shrink-0" />
+				</div> : null}
 			</div>
 		</div>
 	);
@@ -2532,6 +2551,7 @@ export function Timeline({
 	onForeignAnnotation,
 	annotationNavigationRef,
 	snapshot,
+	controllerErrors,
 	assetBaseUrl,
 	remoteHost,
 	draftScope,
@@ -2568,6 +2588,8 @@ export function Timeline({
 	onForeignAnnotation?: (annotation: { text: string; messageId?: string; revision?: number; conversationId?: string }) => void;
 	annotationNavigationRef: MutableRefObject<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>;
 	snapshot: ConversationSnapshot;
+	/** A diagnostic already owned by the visible session failure banner. */
+	controllerErrors?: readonly string[];
 	assetBaseUrl?: string;
 	remoteHost?: boolean;
 	draftScope: ChatDraftScope;
@@ -4051,6 +4073,7 @@ export function Timeline({
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
 								<TurnGroup
 									group={group}
+									controllerErrors={index === groups.length - 1 ? controllerErrors : undefined}
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
 									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
@@ -4264,6 +4287,7 @@ export function Timeline({
  */
 const TurnGroup = memo(function TurnGroup({
 	group,
+	controllerErrors,
 	activityDisclosureOverrides,
 	onActivityDisclosureChange,
 	sessionId,
@@ -4301,6 +4325,7 @@ const TurnGroup = memo(function TurnGroup({
 	tight = false,
 }: {
 	group: TimelineGroup;
+	controllerErrors?: readonly string[];
 	activityDisclosureOverrides: Readonly<Record<string, boolean>>;
 	onActivityDisclosureChange: (key: string, open: boolean) => void;
 	sessionId: string;
@@ -4345,11 +4370,13 @@ const TurnGroup = memo(function TurnGroup({
 	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
+	const failureInBanner = Boolean(hasTerminalFailure && !group.outcome?.usageLimit && controllerErrors?.includes(group.outcome?.error?.trim() ?? ""));
 	const runs = useMemo(
 		() =>
 			runsOf(
 				group.items.filter((item) => {
 					if (item.id === group.liveProviderFailure?.id) return false;
+					if (item.kind === "activity" && item.activityKind === "error" && controllerErrors?.includes(item.summary.trim())) return false;
 					if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
 					return !(
 						hasTerminalFailure &&
@@ -4359,7 +4386,7 @@ const TurnGroup = memo(function TurnGroup({
 					);
 				}),
 			),
-		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
+		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure, controllerErrors],
 	);
 	const lastAssistantId = [...group.items]
 		.reverse()
@@ -4573,7 +4600,7 @@ const TurnGroup = memo(function TurnGroup({
 					) : null}
 				</div>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !failureInBanner ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}

@@ -1924,12 +1924,74 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
-		expect(screen.getByText("The controller is not connected")).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("Agent stopped");
+		expect(screen.getByText("Agent stopped. Resume it above to continue.")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Resume agent" }));
 		await user.click(screen.getByRole("button", { name: "Open shell" }));
 		expect(resume).toHaveBeenCalledOnce();
 		expect(openShell).toHaveBeenCalledOnce();
+	});
+
+	it("keeps unique diagnostics behind Details with a copy action", async () => {
+		const user = userEvent.setup();
+		const error = 'ACP initialize: {"code":-32603,"message":"driver exited"}';
+		render(<ChatWorkspace
+			snapshot={{ ...chatFixtureSettled, controller: { state: "stopped", error } }}
+			onResumeAgent={vi.fn()}
+			resumeError={`  ${error}  `}
+			shellError="Could not open the worktree shell"
+		/>);
+		const banner = screen.getByRole("alert");
+		expect(banner).toHaveTextContent("Couldn't reconnect to Codex");
+		expect(screen.queryByText(/ACP initialize/)).not.toBeInTheDocument();
+		const details = within(banner).getByRole("button", { name: "Details" });
+		expect(details).toHaveAttribute("aria-expanded", "false");
+		await user.click(details);
+		expect(details).toHaveAttribute("aria-expanded", "true");
+		await user.click(within(banner).getByRole("button", { name: "Copy error details" }));
+		expect(writeText).toHaveBeenCalledWith(`${error}\n\nCould not open the worktree shell`);
+		await user.click(details);
+		expect(screen.queryByText(/ACP initialize/)).not.toBeInTheDocument();
+	});
+
+	it("offers Reconnect after a resume fails, using the existing recovery callback", async () => {
+		const resume = vi.fn();
+		render(<ChatWorkspace
+			snapshot={{ ...chatFixtureSettled, controller: { state: "stopped" } }}
+			onResumeAgent={resume}
+			resumeError="resume chat: driver exited"
+		/>);
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		await userEvent.setup().click(screen.getByRole("button", { name: "Reconnect" }));
+		expect(resume).toHaveBeenCalledOnce();
+	});
+
+	it("shows a matching latest-turn failure once, restoring the historical error after recovery", async () => {
+		const snapshot = structuredClone(chatFixtureSettled);
+		const error = 'ACP initialize: {"code":-32603}';
+		const latest = snapshot.turns.at(-1)!;
+		latest.state = "failed";
+		latest.errorMessage = error;
+		snapshot.controller = { state: "stopped", error };
+		const view = render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} />);
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		await userEvent.setup().click(screen.getByRole("button", { name: "Details" }));
+		expect(screen.getAllByText(error)).toHaveLength(1);
+		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "ready" } }} />);
+		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
+		expect(screen.getByText(error)).toBeInTheDocument();
+	});
+
+	it("preserves a distinct turn error alongside a stopped-agent banner", () => {
+		const snapshot = structuredClone(chatFixtureSettled);
+		const latest = snapshot.turns.at(-1)!;
+		latest.state = "failed";
+		latest.errorMessage = "The provider rejected this prompt";
+		snapshot.controller = { state: "stopped", error: "driver exited" };
+		render(<ChatWorkspace snapshot={snapshot} onResumeAgent={vi.fn()} />);
+		expect(screen.getByText("The provider rejected this prompt")).toBeInTheDocument();
+		expect(screen.getByRole("alert")).toHaveTextContent("Agent stopped");
 	});
 
 	it("shows a reconnect in progress while the daemon is still checking the session", () => {
@@ -1946,7 +2008,8 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		expect(screen.getByText("AO restarted. History is kept.")).toBeInTheDocument();
 		// The banner title and the composer placeholder both say so.
-		expect(screen.getAllByText("Reconnecting to the agent…")).toHaveLength(2);
+		expect(screen.getByText("Reconnecting to Codex…")).toBeInTheDocument();
+		expect(screen.getByText("Reconnecting to the agent…")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
 
@@ -1959,7 +2022,7 @@ describe("ChatWorkspace timeline", () => {
 				onOpenShell={vi.fn()}
 			/>,
 		);
-		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		expect(screen.getByRole("alert")).toHaveTextContent("Agent stopped");
 		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
 	});
 
@@ -1991,7 +2054,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(resume).not.toHaveBeenCalled();
 		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={resume} onSend={send} resumingAgent resumeError="resume agent error" />);
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent stopped")).not.toBeInTheDocument();
 		expect(screen.queryByText("resume agent error")).not.toBeInTheDocument();
 		expect(composer).toHaveAttribute("contenteditable", "true");
 		await user.click(screen.getByRole("button", { name: "Send message" }));
@@ -2000,7 +2063,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(resume).not.toHaveBeenCalled();
 
 		view.rerender(<ChatWorkspace snapshot={{ ...snapshot, controller: { state: "stopped" } }} onResumeAgent={resume} />);
-		expect(screen.getByRole("alert")).toHaveTextContent("The agent controller stopped");
+		expect(screen.getByRole("alert")).toHaveTextContent("Agent stopped");
 		expect(screen.getByRole("button", { name: "Resume agent" })).toBeInTheDocument();
 	});
 
@@ -2048,7 +2111,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.queryByTestId("queued-message-dock")).not.toBeInTheDocument();
 		expect(screen.getByText("Codex is starting. Messages send in order")).toBeInTheDocument();
 		expect(screen.queryByText(/^Working for /)).not.toBeInTheDocument();
-		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
 	});
@@ -2345,7 +2408,7 @@ describe("ChatWorkspace timeline", () => {
 		expect(startup).toHaveTextContent("branch already checked out");
 		expect(startup.querySelector('[data-step="worktree"]')).toHaveAttribute("data-status", "failed");
 		expect(screen.getByText("Fix clicking attachments")).toBeInTheDocument();
-		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent stopped")).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Retry start" }));
 		expect(resume).toHaveBeenCalledOnce();
 	});
@@ -2363,10 +2426,10 @@ describe("ChatWorkspace timeline", () => {
 			/>,
 		);
 
-		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent stopped")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-conversation-panel")).toHaveAttribute("inert");
-		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
+		expect(screen.queryByText("Connecting to Codex…")).not.toBeInTheDocument();
 		expect(screen.queryByText("The controller is not connected")).not.toBeInTheDocument();
 		expect(screen.getByText("Starting the chat agent")).toBeInTheDocument();
 		expect(document.querySelector(".cursor-chat-composer[data-starting]")).not.toBeNull();
@@ -2447,7 +2510,7 @@ describe("ChatWorkspace timeline", () => {
 		);
 
 		expect(screen.getByTestId("chat-conversation-panel")).not.toHaveAttribute("inert");
-		expect(screen.queryByText("The agent controller stopped")).not.toBeInTheDocument();
+		expect(screen.queryByText("Agent stopped")).not.toBeInTheDocument();
 		expect(screen.getByText("Resuming agent")).toBeInTheDocument();
 		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
 	});
