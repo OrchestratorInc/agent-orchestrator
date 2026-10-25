@@ -45,7 +45,7 @@ export function PageTopbar({
 	const paddingLeft = usePageTopbarPaddingLeft();
 	return (
 		<PageTopbarFrame
-			className={cn("workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-3", className)}
+			className={cn("workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-(--gap-topbar-control)", className)}
 			style={isMac ? dragStyle : { paddingLeft }}
 			{...props}
 		>
