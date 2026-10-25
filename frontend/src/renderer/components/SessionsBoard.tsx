@@ -11,7 +11,7 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
+import { AlertTriangle, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
 	STANDALONE_PROJECT_KIND,
@@ -236,7 +236,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				lead={showWelcome ? undefined : (
 					<PageTopbarTitle
 						data-testid="board-topbar-label"
-						icon={<LayoutDashboard aria-hidden="true" className="size-icon-md" />}
 					>
 						{boardLabel}
 						{hostId ? <span className="truncate text-muted-foreground">· {labelForHost(hostId) ?? hostId}</span> : null}
