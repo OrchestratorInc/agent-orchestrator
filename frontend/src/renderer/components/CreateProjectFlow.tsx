@@ -2115,7 +2115,7 @@ function ImportSourcePicker({
 			</div>}
 			<div className="mx-4 mb-4 flex flex-col gap-3">
 				{cloudEnabled && onCloudSelect ? (
-					<div className="overflow-hidden rounded-md bg-[var(--color-bg-import-modal)]">
+					<div className="overflow-hidden rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]">
 						<button
 							type="button"
 							className="group flex min-h-[76px] w-full items-center gap-3 px-3.5 py-3 text-left hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50"
@@ -2133,7 +2133,7 @@ function ImportSourcePicker({
 						</button>
 					</div>
 				) : null}
-				<div className="overflow-hidden rounded-md bg-[var(--color-bg-import-modal)]">
+				<div className="overflow-hidden rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]">
 					<div className="flex flex-col">
 						{localSources.map(({ source, icon, label, description }) => (
 							<button
