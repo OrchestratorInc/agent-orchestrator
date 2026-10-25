@@ -393,10 +393,20 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 	if second.InstallID() != original {
 		t.Fatal("same account replayed after restart must not rotate")
 	}
+	summary := filepath.Join(dir, "telemetry", "cli-usage-daily.json")
+	if err := os.MkdirAll(filepath.Dir(summary), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(summary, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	_ = second.SetCloudUserID(context.Background(), "")
 	rotated := second.AnonymousID()
 	if rotated == original || second.InstallID() != original {
-		t.Fatal("sign-out did not retire the bound install ID")
+		t.Fatal("sign-out did not retire the anonymous ID")
+	}
+	if _, err := os.Stat(summary); !os.IsNotExist(err) {
+		t.Fatal("install reset left the CLI usage summary on disk")
 	}
 
 	third, err := NewIdentity(dir)

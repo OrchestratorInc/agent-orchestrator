@@ -579,7 +579,6 @@ func (s *Service) triggerWithOptions(
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
-		s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
 		return reviewcore.TriggerResult{}, err
 	}
 	usesCodex := s.codexReviewUsesCodex(ctx, workerID, harness)
@@ -598,19 +597,18 @@ func (s *Service) triggerWithOptions(
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
-		s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
 		return result, err
 	}
 	if result.Run.Harness != "" {
 		triggeredPayload["harness"] = string(result.Run.Harness)
 	}
-	// ao.review.triggered counts every attempt. created_runs still counts only
-	// brand-new rows, while Created also covers restart flows that relaunch a
-	// pass against an existing row after a reviewer config change. reused must
-	// stay false for those restarts even though created_runs is zero.
+	// A created run or a restarted pass is an actual review. Reused and skipped
+	// automatic attempts can recur on every sweep and are not new reviews.
 	createdOrRestarted := result.Created || len(result.CreatedRuns) > 0
+	if !createdOrRestarted {
+		return result, nil
+	}
 	triggeredPayload["created_runs"] = len(result.CreatedRuns)
-	triggeredPayload["reused"] = !createdOrRestarted
 	s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
 	return result, nil
 }
