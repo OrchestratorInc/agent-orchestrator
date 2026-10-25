@@ -42,6 +42,12 @@ const (
 	DefaultPRMaxAge = 5 * time.Minute
 	// BatchSize is the maximum number of PRs in one provider batch fetch.
 	BatchSize = 25
+	// DefaultLifecycleTimeout bounds one PR's lifecycle reaction. Reactions
+	// write into agent panes and chat hosts, and Poll runs them one after
+	// another, so a single wedged session would otherwise stall every later
+	// session's PR status, indefinitely. A timed-out reaction stays
+	// unacknowledged and is redelivered on the next poll.
+	DefaultLifecycleTimeout = 30 * time.Second
 )
 
 // identityKey builds the cache key for a per-provider, per-host identity.
@@ -256,12 +262,14 @@ type Observer struct {
 	Cache ObserverCache
 	// branchStates refreshes local branch facts on each tick.
 	branchStates BranchStateReconciler
+	// lifecycleTimeout bounds each lifecycle notification.
+	lifecycleTimeout time.Duration
 }
 
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -629,7 +637,10 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			continue
 		}
 		if o.lifecycle != nil {
-			if err := o.lifecycle.ApplySCMObservation(ctx, subj.session.ID, prepared); err != nil {
+			lifecycleCtx, cancel := context.WithTimeout(ctx, o.lifecycleTimeout)
+			err := o.lifecycle.ApplySCMObservation(lifecycleCtx, subj.session.ID, prepared)
+			cancel()
+			if err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
 				markRepoRefreshFailed(subj.repo)
 				continue

@@ -1247,6 +1247,61 @@ func TestPoll_CIETagChangeRefreshesWhenRepoUnchanged(t *testing.T) {
 	}
 }
 
+// stallingLifecycle hangs on one session's reaction until its context ends,
+// like a merge-conflict nudge stuck on a wedged agent pane or chat host.
+type stallingLifecycle struct {
+	mu       sync.Mutex
+	stall    domain.SessionID
+	observed []domain.SessionID
+}
+
+func (l *stallingLifecycle) ApplySCMObservation(ctx context.Context, id domain.SessionID, _ ports.SCMObservation) error {
+	if id == l.stall {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.observed = append(l.observed, id)
+	return nil
+}
+
+func TestPoll_StalledLifecycleDoesNotBlockOtherSessions(t *testing.T) {
+	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
+	for i := 1; i <= 2; i++ {
+		id := domain.SessionID("p-" + fmt.Sprint(i))
+		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
+		pr := knownPR(i)
+		pr.SessionID = id
+		pr.MetadataHash = "" // force candidate
+		store.prs[id] = []domain.PullRequest{pr}
+		provider.observations[prKey(testRepo, i)] = testObs(i)
+	}
+	conflicted := testObs(1)
+	conflicted.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeConflicting), Conflict: true}
+	provider.observations[prKey(testRepo, 1)] = conflicted
+	lc := &stallingLifecycle{stall: "p-1"}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	obs.lifecycleTimeout = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- obs.Poll(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll stalled behind one session's lifecycle reaction")
+	}
+	if len(lc.observed) != 1 || lc.observed[0] != "p-2" {
+		t.Fatalf("lifecycle observed %v, want [p-2]", lc.observed)
+	}
+}
+
 func TestPoll_GraphQLBatchChunksAt25(t *testing.T) {
 	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
 	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
