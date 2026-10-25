@@ -1727,6 +1727,25 @@ func TestModelUpdateSkipsAgentReadinessFoundNotInstalled(t *testing.T) {
 	}
 }
 
+func TestModelsClassifiesMissingAiderAfterReadinessExpires(t *testing.T) {
+	now := time.Now().UTC()
+	svc := newService([]agentregistry.HarnessAgent{
+		harnessAgent("aider", "Aider", fmt.Errorf("aider: %w", ports.ErrAgentBinaryNotFound)),
+	}, &fakeModelCache{}, modelcatalog.Discoverer{})
+	svc.readiness.now = func() time.Time { return now }
+	if _, err := svc.readiness.EnsureInstallation(context.Background(), []string{"aider"}, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(svc.readiness.displayTTL + time.Second)
+	got, err := svc.Models(context.Background(), "aider", "", true)
+	if err != nil || got.WarningCode != ports.ModelCatalogWarningNotInstalled || !got.Stale {
+		t.Fatalf("stale-readiness missing Aider catalog = %#v, %v", got, err)
+	}
+	if !strings.Contains(got.Warning, "agent binary is not installed") {
+		t.Fatalf("warning = %q, want the adapter diagnostic retained", got.Warning)
+	}
+}
+
 func TestCachedModelsExposeMissingCLIWithoutDiscardingSavedChoices(t *testing.T) {
 	now := time.Now().UTC()
 	record := cachedModelRecord(t, "gemini", "", now, false)
