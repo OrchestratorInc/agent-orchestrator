@@ -99,6 +99,17 @@ func (t *cuaText) runSteps(result map[string]any) {
 		t.line(fmt.Sprintf("%d. %s %s: %s", position+1, cuaString(step["tool"]), status, message))
 	}
 	observation, _ := result["observation"].(map[string]any)
+	if observation["ok"] == false {
+		// The steps ran even though the read after them failed; the result is
+		// not an error, which an agent would answer by running them again.
+		reason := cuaString(observation["message"])
+		if reason == "" {
+			reason = cuaString(observation["error"])
+		}
+		t.line("observation failed: " + reason)
+		t.line("The steps above ran, but AO could not read the window after them. Read it with get_window_state before acting again.")
+		return
+	}
 	if summary := cuaString(observation["summary"]); summary != "" {
 		t.line("observation: " + summary)
 	}

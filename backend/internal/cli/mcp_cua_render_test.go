@@ -115,6 +115,24 @@ since s00000030: 1 changed
 	}
 }
 
+// A step can succeed while the read after the batch fails; the agent must
+// learn it could not see the result.
+func TestRenderCuaRunStepsWithFailedObservation(t *testing.T) {
+	response := decodeCuaResponse(t, `{"tool":"run_steps","result":{"ok":true,"executed":1,"total":1,
+		"steps":[{"index":0,"tool":"click","ok":true,"message":"✅ Performed AXPress on [2] AXButton \"\"."}],
+		"observation":{"ok":false,"tool":"get_window_state","message":"window_id 99999999 is not a live window (closed, or the id is stale)."}},
+		"images":[]}`)
+	text, _ := renderCuaCall(response)
+	want := `run_steps: 1/1 steps ok
+1. click ok: ✅ Performed AXPress on [2] AXButton "".
+observation failed: window_id 99999999 is not a live window (closed, or the id is stale).
+The steps above ran, but AO could not read the window after them. Read it with get_window_state before acting again.
+`
+	if text != want {
+		t.Fatalf("text =\n%s\nwant\n%s", text, want)
+	}
+}
+
 func TestRenderCuaLeavesOtherToolsToJSON(t *testing.T) {
 	for _, raw := range []string{
 		`{"tool":"list_windows","result":{"windows":[]},"images":[]}`,
