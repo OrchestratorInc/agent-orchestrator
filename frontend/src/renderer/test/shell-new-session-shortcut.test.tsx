@@ -306,7 +306,7 @@ vi.mock("../components/NewTaskNavigator", async () => {
 	return {
 		NewTaskNavigator: () => {
 			const request = useStore((state) => state.newTaskRequest);
-			return request ? <div data-testid="new-task-flow" data-project={request.projectId} /> : null;
+			return request ? <div data-testid="new-task-flow" data-project={request.projectId} data-host={request.hostId} /> : null;
 		},
 	};
 });
@@ -1114,6 +1114,18 @@ describe("shell new-session shortcut subscription", () => {
 		emitShortcut();
 
 		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "proj-2");
+	});
+
+	it("stays with the project and host a remote new chat page shows", async () => {
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "remote-proj", host: "host-a" };
+		await renderShell();
+
+		emitShortcut();
+
+		const flow = screen.getByTestId("new-task-flow");
+		expect(flow).toHaveAttribute("data-project", "remote-proj");
+		expect(flow).toHaveAttribute("data-host", "host-a");
 	});
 });
 

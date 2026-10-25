@@ -1097,6 +1097,7 @@
 	"newTask.titlePlaceholder": "Corriger le moteur de rendu de secours WebGL",
 	"newTask.titleRequired": "Le titre et le brief sont obligatoires.",
 	"newTask.unableToStart": "Impossible de démarrer la tâche",
+	"newTask.noReadyAgent": "Aucun agent n'est prêt. Configurez-en un dans les Réglages.",
 	"standalone.workspaceName": "Bloc-notes",
 	"notify.all": "Toutes",
 	"notify.bell": "Notifications",

@@ -1089,6 +1089,7 @@
 	"newTask.titlePlaceholder": "WebGL 폴백 렌더러 수정",
 	"newTask.titleRequired": "제목과 브리프는 필수입니다.",
 	"newTask.unableToStart": "작업을 시작할 수 없습니다",
+	"newTask.noReadyAgent": "준비된 에이전트가 없습니다. 설정에서 하나를 설정하세요.",
 	"standalone.workspaceName": "스크래치패드",
 	"notify.all": "전체",
 	"notify.bell": "알림",

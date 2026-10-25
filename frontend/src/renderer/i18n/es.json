@@ -1097,6 +1097,7 @@
 	"newTask.titlePlaceholder": "Corregir el renderizador de respaldo de WebGL",
 	"newTask.titleRequired": "El título y la descripción son obligatorios.",
 	"newTask.unableToStart": "No se pudo iniciar la tarea",
+	"newTask.noReadyAgent": "Ningún agente está listo. Configura uno en Ajustes.",
 	"standalone.workspaceName": "Bloc de notas",
 	"notify.all": "Todas",
 	"notify.bell": "Notificaciones",

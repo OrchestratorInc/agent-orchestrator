@@ -1097,6 +1097,7 @@
 	"newTask.titlePlaceholder": "Corrigir renderer de fallback WebGL",
 	"newTask.titleRequired": "Título e briefing são obrigatórios.",
 	"newTask.unableToStart": "Não foi possível iniciar a tarefa",
+	"newTask.noReadyAgent": "Nenhum agente está pronto. Configure um nas Configurações.",
 	"standalone.workspaceName": "Bloco de notas",
 	"notify.all": "Todas",
 	"notify.bell": "Notificações",

@@ -62,9 +62,14 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const [launched, setLaunched] = useState<LaunchSettings>();
 	// A failed fallback start has no composer send to report it, so the page does.
 	const [fallbackFailed, setFallbackFailed] = useState(false);
+	// A load error a send already reported in the composer.
+	const [reportedLoadError, setReportedLoadError] = useState<string>();
+	// Why the daemon refused a retry of a send whose first answer was lost.
+	const [refusedRetry, setRefusedRetry] = useState<string>();
 	// A fallback start keeps its request id until it is answered, so a retry after a
 	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
+	const fallbackInFlight = useRef(false);
 	// Bumped when a saved launch is resolved, so the page re-reads it.
 	const [, setLaunchRevision] = useState(0);
 	// "@" files and attachments go through the prepared worktree's session, which
@@ -151,8 +156,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			replace: true,
 		});
 	}, [hostId, navigate, pendingLaunch, projectId]);
-	const resolveLaunch = () => {
-		clearPendingLaunch(hostKey);
+	const resolveLaunch = (clientMessageId: string) => {
+		clearPendingLaunch(hostKey, clientMessageId);
 		setLaunchRevision((revision) => revision + 1);
 	};
 
@@ -209,10 +214,16 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		// After the composer settles this send, so its draft never outlives the page.
 		// Someone who has since left, or opened another new task, stays where they are.
 		setTimeout(() => {
+			if (!mounted.current) return;
 			const here = targetRef.current;
-			if (mounted.current && here.projectId === target.projectId && here.hostId === target.hostId) {
+			if (here.projectId === target.projectId && here.hostId === target.hostId) {
 				void navigate({ ...sessionNavigateTarget(target.projectId, sessionId, target.hostId), replace: true });
+				return;
 			}
+			// The page now shows another project: the task is in the sidebar, and this
+			// page is a fresh new chat again.
+			setEcho(undefined);
+			setLaunched(undefined);
 		}, 0);
 	};
 
@@ -221,14 +232,17 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
 		setEcho(brief);
+		setRefusedRetry(undefined);
 		// Held still from Enter; replaced by the loaded bar once the page is ready.
 		setLaunched(saved?.settings ?? barRef.current);
 		try {
 			// A saved send belongs to its own project; the page is on its way back there.
 			if (saved && saved.projectId !== target.projectId) throw new Error(t("newTask.unableToStart"));
 			// A send right after opening waits for the project and agents to load,
-			// unless loading has already failed.
-			if (!(await until(() => taskRef.current.canSubmit || Boolean(taskRef.current.remoteLoadError), 10_000)) || !taskRef.current.canSubmit) {
+			// unless loading has already failed or the page has gone.
+			if (!(await until(() => !mounted.current || taskRef.current.canSubmit || Boolean(taskRef.current.remoteLoadError), 10_000)) || !mounted.current || !taskRef.current.canSubmit) {
+				// The composer shows this reason with the returned brief, so the notice below steps aside.
+				setReportedLoadError(taskRef.current.remoteLoadError);
 				throw Object.assign(new Error(taskRef.current.remoteLoadError ?? t("newTask.unableToStart")), { code: "TASK_NOT_READY" });
 			}
 			// Nothing was created yet, so a page that moved to another project or host
@@ -243,15 +257,18 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
 			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay });
-			resolveLaunch();
+			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
 			setEcho(undefined);
 			// Only a refusal from the daemon is final: it returns the brief with the
 			// reason. A lost response, or a failure after the session may have started,
-			// stays uncertain, so the composer retries with the same request id.
-			if (sendIsUncertain(error)) throw error;
-			resolveLaunch();
+			// stays uncertain, so the composer retries with the same request id. A refused
+			// retry says nothing about the attempt whose answer was lost: the composer
+			// still holds it, so it stays pinned to its project and settings.
+			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
+			if (sendIsUncertain(error) || saved) throw error;
+			resolveLaunch(clientMessageId);
 			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
 		}
 	};
@@ -259,7 +276,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// The fallback starts what the composer holds now; a brief the user cleared stays cleared.
 	const sendFallback = async () => {
 		const text = readChatSessionDraft(draftScope).composer.text.trim();
-		if (!text) return;
+		// A second click before the page re-renders must not start it twice.
+		if (!text || fallbackInFlight.current) return;
+		fallbackInFlight.current = true;
 		const target = { ...targetRef.current };
 		fallbackRequest.current ??= crypto.randomUUID();
 		const clientMessageId = fallbackRequest.current;
@@ -282,6 +301,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			// The hook keeps the reason; the notice below shows it.
 			setFallbackFailed(true);
 			setEcho(undefined);
+		} finally {
+			fallbackInFlight.current = false;
 		}
 	};
 
@@ -295,7 +316,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		</div>
 	) : fallbackFailed && task.error ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{task.error}</p>
-	) : task.remoteLoadError ? (
+	) : pendingLaunch && refusedRetry ? (
+		<p role="alert" className="px-1 text-xs text-destructive">{refusedRetry}</p>
+	) : task.remoteLoadError && task.remoteLoadError !== reportedLoadError ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{task.remoteLoadError}</p>
 	) : typeof task.modelWarning === "string" ? (
 		<div className="flex items-center gap-2 px-1">
@@ -461,9 +484,11 @@ function writePendingLaunch(hostKey: string, launch: PendingLaunch): void {
 	}
 }
 
-function clearPendingLaunch(hostKey: string): void {
+/** Drops this host's saved send; with an id, only when it is still that send. */
+function clearPendingLaunch(hostKey: string, clientMessageId?: string): void {
 	const all = readPendingLaunches();
 	if (!(hostKey in all)) return;
+	if (clientMessageId !== undefined && all[hostKey]?.clientMessageId !== clientMessageId) return;
 	delete all[hostKey];
 	try {
 		window.localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify(all));

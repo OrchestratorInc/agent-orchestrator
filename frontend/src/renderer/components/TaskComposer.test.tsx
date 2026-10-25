@@ -2528,3 +2528,59 @@ describe("useTaskLaunch agent choices", () => {
 		await waitFor(() => expect(screen.getAllByRole("listitem").map((item) => item.textContent).sort()).toEqual(["claude-code", "fx"]));
 	});
 });
+
+describe("useTaskLaunch on the new chat page", () => {
+	function LoadError() {
+		const task = useTaskLaunch({ projectId: "__standalone__" });
+		return <p>{task.remoteLoadError ?? "ready"}</p>;
+	}
+
+	it("says at once that Scratchpad has no ready agent", async () => {
+		h.agentCatalog = { agents: [agentReadiness("goose", "Goose", { authentication: "unauthorized" })] };
+		render(<Wrap><LoadError /></Wrap>);
+		await screen.findByText("No agent is ready. Set one up in Settings.");
+	});
+
+	it("reports no load error for Scratchpad once an agent is ready", async () => {
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		render(<Wrap><LoadError /></Wrap>);
+		await screen.findByText("ready");
+	});
+
+	it("keeps the prepared worktree a send in flight will claim when the page goes away", async () => {
+		h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code")] };
+		h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: { worker: { agent: "claude-code" } } } } });
+		h.delete.mockResolvedValue({});
+		let created!: (value: unknown) => void;
+		h.post.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/projects/{id}/tasks/prepare") return { data: { taskPreparation: "proj-1-7" } };
+			if (path === "/api/v1/orchestrators/delegate") return new Promise((done) => { created = done; });
+			return { data: {} };
+		});
+		// The readiness check before the create is the window in which the page can go away.
+		let checked!: () => void;
+		h.ensureTargetedReadiness.mockReturnValue(new Promise((done) => { checked = () => done({ agents: [] }); }));
+		let task!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() {
+			task = useTaskLaunch({ projectId: "proj-1" });
+			return <p>{task.preparedSessionId || "unprepared"}{task.canSubmit ? " ready" : ""}</p>;
+		}
+		const { unmount } = render(<Wrap><Launcher /></Wrap>);
+		await screen.findByText("proj-1-7 ready");
+		let launched!: Promise<string>;
+		act(() => { launched = task.launch("Fix it"); });
+		unmount();
+		expect(h.delete).not.toHaveBeenCalled();
+
+		await act(async () => { checked(); });
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({ taskPreparation: "proj-1-7" }),
+		})));
+		await act(async () => {
+			created({ data: { workerId: "proj-1-7" } });
+			await launched;
+		});
+		// Answered, the send releases it as any send does.
+		expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+	});
+});

@@ -170,6 +170,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const [error, setError] = useState<string | undefined>();
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
+	// The preparation a send in flight will claim. Leaving the page or project does not
+	// cancel it; the send does, once answered.
+	const launchingPreparationRef = useRef("");
 	// The prepared worktree's session id. It becomes the task's session id on send,
 	// so files uploaded into it before then are already where the agent reads them.
 	const [preparedSessionId, setPreparedSessionId] = useState("");
@@ -368,7 +371,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			const token = taskPreparationRef.current;
 			taskPreparationRef.current = "";
 			setPreparedSessionId("");
-			cancelTaskPreparation(token, hostId);
+			if (token !== launchingPreparationRef.current) cancelTaskPreparation(token, hostId);
 		};
 	}, [hostId, projectQuery.data?.id]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
@@ -627,7 +630,12 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// Named for its remote origins; a local project that failed to load reports here too.
 	// A cloud project is not read locally, so a lookup made before it was known to be
 	// a cloud project must not linger as its error.
-	const remoteLoadError = !hostId ? (!isCloudProject && projectQuery.error instanceof Error ? projectQuery.error.message : undefined) : !hostConnected ? t("remote.hostOffline") :
+	// Scratchpad has no project agent to fall back to: with no ready agent, or no agent
+	// list at all, a send could never start, so it says why at once.
+	const standaloneAgentError = isStandalone && !isCloudProject && selectedAgent === ""
+		? agentsQuery.error instanceof Error ? agentsQuery.error.message : agentsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined
+		: undefined;
+	const remoteLoadError = !hostId ? (!isCloudProject && projectQuery.error instanceof Error ? projectQuery.error.message : standaloneAgentError) : !hostConnected ? t("remote.hostOffline") :
 		[projectQuery.error, agentsQuery.error].find((cause): cause is Error => cause instanceof Error)?.message ?? settingsError ??
 			(agentsQuery.isSuccess && !agentCatalog?.agents.some(isLaunchableAgent) ? t("remote.noReadyAgent") : undefined);
 	const refreshSelectedModels = useCallback(async () => {
@@ -681,6 +689,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		setIsSubmitting(true);
 		setError(undefined);
 		setFallbackAction(undefined);
+		const heldPreparation = taskPreparationRef.current;
+		launchingPreparationRef.current = heldPreparation;
+		let submittedPreparation = heldPreparation;
 		try {
 			if (!isCloudProject && selectedAgent) {
 				// This check lacks the selected project's cwd and environment, so it
@@ -693,7 +704,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					.catch(() => {});
 			}
 			const attachmentPayloads = await toSettledPayload();
-			const submittedPreparation = taskPreparationRef.current;
+			// One that resolved while the checks above ran is claimed too.
+			submittedPreparation = heldPreparation || taskPreparationRef.current;
+			launchingPreparationRef.current = submittedPreparation;
 			const request: CreateTaskInput = {
 				projectId,
 				brief,
@@ -778,10 +791,13 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 						? "tui"
 						: undefined,
 			);
+			// A page that has since left this preparation no longer offers it for a retry.
+			if (submittedPreparation && taskPreparationRef.current !== submittedPreparation) cancelTaskPreparation(submittedPreparation, hostId);
 			const message = err instanceof Error ? err.message : t("newTask.unableToStart");
 			setError(message);
 			throw err instanceof Error ? err : new Error(message);
 		} finally {
+			launchingPreparationRef.current = "";
 			setIsSubmitting(false);
 		}
 	};

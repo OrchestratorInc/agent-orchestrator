@@ -1279,12 +1279,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	useEffect(
 		() =>
 			aoBridge.app.onNewSessionShortcut(() => {
-			// The last project is remembered for this machine only; a remote new chat stays on its host.
+			// On the new chat page, stay with the project and host it shows.
 			if (newChatHost) {
-				requestNewTask(STANDALONE_WORKSPACE_ID, newChatHost);
+				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID, newChatHost);
 				return;
 			}
-			// On the new chat page, stay with the project it shows.
 			if (isNewChatRoute) {
 				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID);
 				return;

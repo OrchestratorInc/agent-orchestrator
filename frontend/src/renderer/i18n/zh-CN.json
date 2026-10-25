@@ -1089,6 +1089,7 @@
 	"newTask.titlePlaceholder": "修复 WebGL 回退渲染器",
 	"newTask.titleRequired": "标题和简述为必填项。",
 	"newTask.unableToStart": "无法启动任务",
+	"newTask.noReadyAgent": "没有可用的智能体。请在设置中配置一个。",
 	"standalone.workspaceName": "草稿区",
 	"notify.bell": "通知",
 	"notify.clearAll": "清除全部",

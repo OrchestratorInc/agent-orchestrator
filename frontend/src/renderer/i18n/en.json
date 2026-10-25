@@ -1076,6 +1076,7 @@
 	"newTask.titlePlaceholder": "Fix WebGL fallback renderer",
 	"newTask.titleRequired": "Title and brief are required.",
 	"newTask.unableToStart": "Unable to start task",
+	"newTask.noReadyAgent": "No agent is ready. Set one up in Settings.",
 	"standalone.workspaceName": "Scratchpad",
 	"notify.bell": "Notifications",
 	"notify.clearAll": "Clear all",
