@@ -1582,7 +1582,7 @@ const ProjectItem = memo(function ProjectItem({
 		onToggle(workspace.id);
 	};
 
-	// Mirrors ShellTopbar's launcher: attach to the running orchestrator, or
+	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
 	// spawn one via the daemon and follow it once the workspace refetches.
 	// Expand a collapsed project so opening the orchestrator also reveals its
 	// session list — otherwise the tree stays shut while you're inside it.

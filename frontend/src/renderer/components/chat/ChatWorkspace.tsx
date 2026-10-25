@@ -2342,7 +2342,6 @@ function ChatHeader({
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
 		<SessionTabsTopbar
-			as="header"
 			className={slideIn ? "chat-header-slide-in" : undefined}
 			actions={
 				<>

@@ -1,14 +1,12 @@
-import { useEffect, type ComponentProps, type CSSProperties, type ReactNode, type Ref } from "react";
-import { animate, motion, useMotionValue, useReducedMotion } from "motion/react";
+import type { ComponentProps, ComponentPropsWithoutRef, CSSProperties, ReactNode, Ref } from "react";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
-import { SHELL_PANEL_SPRING } from "../lib/motion-spring";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 
 /**
  * The one page topbar. Every center-panel page (board, automations, archive,
- * settings, session chrome) renders its header through this module so height,
- * insets, gaps, border, drag region and window-control clearance are defined
+ * settings, artifacts, session chrome) renders its header through this module.
+ * Height, insets, gaps, border, drag region and window-control clearance are defined
  * once. Pages supply only content: a lead (where am I) and actions.
  *
  * - `PageTopbar` is the page header row (lead + actions).
@@ -19,30 +17,17 @@ const isMac = isMacPlatform();
 const dragStyle = isMac ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
 
-// Pixel equivalents of the CSS custom properties used for titlebar clearance on
-// Linux, which animates its inset in JS when the sidebar toggles. macOS clears
-// its traffic lights through `.center-panel-shell--titlebar-clearance*` CSS and
-// Windows owns a separate window titlebar, so neither needs the JS inset.
-// --size-titlebar-cluster-left-linux-panel (26) + --size-titlebar-cluster-width (92)
-// + --size-titlebar-content-gap (12) - --size-center-panel-inline-inset (16).
-const PADDING_DEFAULT = 18; // 1.125rem
-const PADDING_CLEARANCE_LINUX = 114;
-
-/** Left padding of a page topbar, animated as the sidebar toggles so the lead clears the window controls. */
-export function usePageTopbarPaddingLeft() {
+// Linux's fixed navigation cluster extends beyond the collapsed sidebar.
+// macOS clearance comes from the center-panel-titlebar CSS; Windows has its
+// own titlebar above the panel.
+function usePageTopbarPaddingLeft() {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
-	const prefersReducedMotion = useReducedMotion();
-	const target = !isSidebarOpen && isLinuxPlatform() ? PADDING_CLEARANCE_LINUX : PADDING_DEFAULT;
-	const paddingLeft = useMotionValue(target);
-	useEffect(() => {
-		const controls = animate(paddingLeft, target, prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING);
-		return controls.stop;
-	}, [target, paddingLeft, prefersReducedMotion]);
-	return paddingLeft;
+	return !isSidebarOpen && isLinuxPlatform() ? 114 : 18;
 }
 
-/** Height and flex frame shared by the page header row and the session tab strip. */
-const topbarFrameClass = "flex h-toolbar w-full shrink-0 items-center";
+function PageTopbarFrame({ className, ...props }: ComponentProps<"header">) {
+	return <header className={cn("flex h-toolbar w-full shrink-0 items-center", className)} {...props} />;
+}
 
 export const topbarTitleClass = "text-brand font-semibold tracking-tight leading-none text-foreground whitespace-nowrap";
 
@@ -59,16 +44,16 @@ export function PageTopbar({
 }) {
 	const paddingLeft = usePageTopbarPaddingLeft();
 	return (
-		<motion.header
-			className={cn(topbarFrameClass, "workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-3", className)}
+		<PageTopbarFrame
+			className={cn("workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-3", className)}
 			style={isMac ? dragStyle : { paddingLeft }}
-			{...(props as object)}
+			{...props}
 		>
 			<div className="flex min-w-0 flex-1 items-center gap-2.5">
 				{lead}
 			</div>
 			{actions ? <PageTopbarActions>{actions}</PageTopbarActions> : null}
-		</motion.header>
+		</PageTopbarFrame>
 	);
 }
 
@@ -78,9 +63,9 @@ export function PageTopbarTitle({
 	icon,
 	children,
 	...props
-}: Omit<ComponentProps<"span">, "className"> & { as?: "span" | "h1"; icon?: ReactNode }) {
+}: Omit<ComponentPropsWithoutRef<"span">, "className"> & { as?: "span" | "h1"; icon?: ReactNode }) {
 	return (
-		<Component className={cn(topbarTitleClass, "inline-flex min-w-0 items-center gap-1.5")} {...(props as object)}>
+		<Component className={cn(topbarTitleClass, "inline-flex min-w-0 items-center gap-1.5")} {...props}>
 			{icon}
 			<span className="max-w-content-max truncate">{children}</span>
 		</Component>
@@ -107,7 +92,6 @@ export function PageTopbarActions({ className, children, ...props }: ComponentPr
  * trailing action region.
  */
 export function SessionTabsTopbar({
-	as: Component = "div",
 	className,
 	tabs,
 	actions,
@@ -116,7 +100,6 @@ export function SessionTabsTopbar({
 	clearanceClassName,
 	hideActions = false,
 }: {
-	as?: "div" | "header";
 	className?: string;
 	tabs: ReactNode;
 	actions?: ReactNode;
@@ -127,7 +110,7 @@ export function SessionTabsTopbar({
 	hideActions?: boolean;
 }) {
 	return (
-		<Component className={cn(topbarFrameClass, "items-stretch bg-sidebar", className)}>
+		<PageTopbarFrame className={cn("items-stretch bg-sidebar", className)}>
 			<div className="session-topbar-surface flex min-w-0 flex-1" data-testid="session-workspace-topbar">
 				<div
 					className={cn("flex min-w-0 shrink items-stretch", clearanceClassName)}
@@ -146,6 +129,6 @@ export function SessionTabsTopbar({
 					</div>
 				)}
 			</div>
-		</Component>
+		</PageTopbarFrame>
 	);
 }

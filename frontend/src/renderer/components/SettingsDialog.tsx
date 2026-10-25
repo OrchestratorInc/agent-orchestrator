@@ -20,7 +20,7 @@ import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } fr
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
-import { PageTopbar } from "./PageTopbar";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
@@ -426,10 +426,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
 /**
  * Settings page rendered inside the center panel, in place of the routed page:
- * no top bar, just one centered, scrolling content column on the normal page
- * background, headed by the page's sentence-case title.
+ * shared page topbar above a centered, scrolling content column.
  */
 export function SettingsPane() {
+	const { t } = useTranslation();
 	const page = useContext(SettingsPageContext);
 	const scrollerRef = useRef<HTMLDivElement>(null);
 	useSettingsRowFocus(scrollerRef, page?.active ?? null);
@@ -439,12 +439,10 @@ export function SettingsPane() {
 		<div className="flex min-h-0 flex-1 flex-col" data-testid="settings-page">
 			<PageTopbar
 				lead={
-					<h1 className="text-brand flex min-w-0 items-center gap-2 font-medium leading-none tracking-tight">
-						<span className="text-muted-foreground">{layer.rootLabel}</span>
-						<span aria-hidden="true" className="text-muted-foreground/50">/</span>
-						<span className="min-w-0 truncate text-foreground">{layer.title}</span>
-						{layer.remoteHostId && <span className="truncate text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
-					</h1>
+					<PageTopbarTitle as="h1">
+						{layer.title}
+						{layer.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(layer.remoteHostId) ?? layer.remoteHostId}</span>}
+					</PageTopbarTitle>
 				}
 				actions={
 					<button aria-label={t("settings.close")} className="settings-close-button shrink-0" disabled={layer.cueBusy} onClick={layer.close} type="button">
@@ -464,11 +462,7 @@ export function SettingsPane() {
 					key={entry.bodyKey}
 					ref={entry === layer ? scrollerRef : undefined}
 				>
-					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
-						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
-							{entry.title}
-							{entry.remoteHostId && <span className="ml-2 text-xs font-normal text-muted-foreground">· {labelForHost(entry.remoteHostId) ?? entry.remoteHostId}</span>}
-						</h1>
+					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-6">
 						{entry.body()}
 					</div>
 				</div>
