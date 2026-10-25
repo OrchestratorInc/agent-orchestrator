@@ -77,6 +77,38 @@ func TestGuestMessagesRunWithTheOwnersSettings(t *testing.T) {
 
 // A teammate in the organization keeps their own choice until the owner
 // sets the session's, then runs with the owner's.
+// A guest retrying a message the server ran with the owner's settings gets
+// the same message back, even after the owner changed them in between.
+func TestGuestRetryMatchesTheMessageItSent(t *testing.T) {
+	c := openComposerFixture(t)
+	ctx := context.Background()
+	if _, err := c.store.SetSessionChatSettings(ctx, c.owner, c.fixture.orgID, c.fixture.sessionID, domain.ChatTurnSettings{Model: "opus"}); err != nil {
+		t.Fatal(err)
+	}
+	key := uuid.NewString()
+	asked := domain.ChatTurnSettings{Model: "haiku", ReasoningEffort: "low"}
+	first, err := c.store.SendMessageWithLease(ctx, c.alice, c.fixture.orgID, c.fixture.sessionID, key, "hi", asked, 0)
+	if err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	if got := sentSettings(t, first); got.Model != "opus" {
+		t.Fatalf("the message ran with %+v, want the owner's opus", got)
+	}
+	if _, err := c.store.SetSessionChatSettings(ctx, c.owner, c.fixture.orgID, c.fixture.sessionID, domain.ChatTurnSettings{Model: "sonnet"}); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := c.store.SendMessageWithLease(ctx, c.alice, c.fixture.orgID, c.fixture.sessionID, key, "hi", asked, 0)
+	if err != nil {
+		t.Fatalf("an identical retry: %v", err)
+	}
+	if retried.Sequence != first.Sequence {
+		t.Fatalf("the retry returned event %d, want the first message %d", retried.Sequence, first.Sequence)
+	}
+	if _, err := c.store.SendMessageWithLease(ctx, c.alice, c.fixture.orgID, c.fixture.sessionID, key, "different text", asked, 0); err == nil {
+		t.Fatal("a different message under the same key was accepted")
+	}
+}
+
 func TestTeammateMessagesFollowTheOwnerOnceSet(t *testing.T) {
 	c := openComposerFixture(t)
 	ctx := context.Background()
@@ -125,5 +157,33 @@ func TestSessionChatSettingsNotifyLiveListeners(t *testing.T) {
 		if notification.Payload == c.fixture.sessionID {
 			return
 		}
+	}
+}
+
+// A session whose creator is gone (older sessions, or a deleted account)
+// still works for everyone allowed in: nobody is its creator, so only the
+// organization's owners and admins manage it.
+func TestSessionWithoutACreatorStillWorks(t *testing.T) {
+	c := openComposerFixture(t)
+	ctx := context.Background()
+	execOneRowAsOrg(t, c.admin, c.fixture.orgID, `UPDATE ao_sessions SET created_by_user_id = NULL WHERE org_id = $1 AND id = $2`, c.fixture.orgID, c.fixture.sessionID)
+
+	for _, who := range []domain.Principal{c.owner, c.alice} {
+		state, err := c.store.SessionLiveState(ctx, who, c.fixture.orgID, c.fixture.sessionID)
+		if err != nil {
+			t.Fatalf("live state for %s: %v", who.UserID, err)
+		}
+		if who.UserID == c.alice.UserID && (state.CanTakeOver || state.CanConfigure) {
+			t.Fatalf("a guest manages a session without a creator: %+v", state)
+		}
+	}
+	if _, err := c.store.SendMessageWithLease(ctx, c.alice, c.fixture.orgID, c.fixture.sessionID, uuid.NewString(), "hi", domain.ChatTurnSettings{}, 0); err != nil {
+		t.Fatalf("a guest's message: %v", err)
+	}
+	if _, err := c.store.AcquireComposerLease(ctx, c.alice, c.fixture.orgID, c.fixture.sessionID); err != nil {
+		t.Fatalf("the chat box: %v", err)
+	}
+	if _, err := c.store.SessionParticipants(ctx, c.alice, c.fixture.orgID, []string{c.fixture.sessionID}); err != nil {
+		t.Fatalf("participants: %v", err)
 	}
 }

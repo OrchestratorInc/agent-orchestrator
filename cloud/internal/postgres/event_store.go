@@ -93,6 +93,9 @@ func (s *Store) SendMessageWithLease(
 		if err != nil {
 			return err
 		}
+		// The command records what the sender asked for, so a retry of the
+		// same request matches it however the owner's settings changed it.
+		requested := settings
 		if !retry {
 			if err := claimComposerForSendTx(ctx, tx, orgID, sessionID, principal.UserID, composerEpoch); err != nil {
 				return err
@@ -109,9 +112,9 @@ func (s *Store) SendMessageWithLease(
 		if err != nil {
 			return err
 		}
-		event, err = sendMessageTx(
+		event, err = sendRequestedMessageTx(
 			ctx, tx, orgID, sessionID, idempotencyKey, text, principal.UserID, "",
-			access.ModeCap, access.DeniedCommands, settings, wake,
+			access.ModeCap, access.DeniedCommands, requested, settings, wake,
 		)
 		return err
 	})
@@ -141,7 +144,23 @@ func sendMessageTx(
 	// queued until it is woken.
 	wake bool,
 ) (domain.ClientEvent, error) {
-	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: settings})
+	return sendRequestedMessageTx(ctx, tx, orgID, sessionID, idempotencyKey, text, actorUserID, actorSessionID, modeCap, deniedCommands, settings, settings, wake)
+}
+
+// sendRequestedMessageTx is sendMessageTx for a message whose turn runs with
+// settings other than the ones its sender asked for (a shared session's
+// guest gets the owner's): the idempotent command keeps requested, the
+// message carries settings.
+func sendRequestedMessageTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, sessionID, idempotencyKey, text, actorUserID, actorSessionID string,
+	modeCap string,
+	deniedCommands []string,
+	requested, settings domain.ChatTurnSettings,
+	wake bool,
+) (domain.ClientEvent, error) {
+	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: requested})
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
