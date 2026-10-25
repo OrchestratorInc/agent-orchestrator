@@ -94,7 +94,7 @@ export function AutomationsView() {
 						<p className="hidden min-w-0 truncate text-xs text-muted-foreground @2xl:block">{t("automations.description")}</p>
 					</>
 				}
-				actions={<TopbarButton variant="action" className="topbar-control--labeled" onClick={() => setCreateOpen(true)}><Plus className="size-icon-md" aria-hidden="true" />{t("automations.new")}</TopbarButton>}
+				actions={<TopbarButton variant="primary" className="topbar-control--labeled" onClick={() => setCreateOpen(true)}><Plus className="size-icon-md" aria-hidden="true" />{t("automations.new")}</TopbarButton>}
 			/>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 			<main className="relative min-h-0 flex-1 overflow-hidden">
