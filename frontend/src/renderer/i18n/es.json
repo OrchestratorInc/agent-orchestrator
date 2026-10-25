@@ -3598,5 +3598,13 @@
 	"chat.shared.draftOf": "Borrador de {{name}}",
 	"shareLink.expired": "Este enlace caducó o se revocó. Pide uno nuevo.",
 	"shareLink.notForYou": "Este enlace es para otras personas. Pide a quien lo envió que lo comparta con tu cuenta.",
-	"chat.shared.checkingAccess": "Comprobando qué puedes hacer en esta sesión…"
+	"chat.shared.checkingAccess": "Comprobando qué puedes hacer en esta sesión…",
+	"share.button": "Compartir",
+	"share.people.label": "Personas en esta sesión: {{names}}",
+	"share.people.more": "+{{count}}",
+	"share.people.you": "{{name}} (tú)",
+	"share.people.working": "trabajando",
+	"share.people.waiting": "en espera",
+	"share.people.idle": "inactivo",
+	"board.shared.working": "{{name}} trabajando"
 }

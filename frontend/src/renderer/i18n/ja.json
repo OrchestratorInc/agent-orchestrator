@@ -3533,5 +3533,13 @@
 	"chat.shared.draftOf": "{{name}} の下書き",
 	"shareLink.expired": "このリンクは期限切れか取り消されています。新しいリンクを依頼してください。",
 	"shareLink.notForYou": "このリンクはほかの人向けです。送信者にあなたのアカウントと共有するよう依頼してください。",
-	"chat.shared.checkingAccess": "このセッションでできることを確認しています…"
+	"chat.shared.checkingAccess": "このセッションでできることを確認しています…",
+	"share.button": "共有",
+	"share.people.label": "このセッションの参加者: {{names}}",
+	"share.people.more": "+{{count}}",
+	"share.people.you": "{{name}}（あなた）",
+	"share.people.working": "作業中",
+	"share.people.waiting": "順番待ち",
+	"share.people.idle": "待機中",
+	"board.shared.working": "{{name}} が作業中"
 }

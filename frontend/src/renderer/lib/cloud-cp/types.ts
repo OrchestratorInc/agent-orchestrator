@@ -1565,6 +1565,23 @@ export interface CloudCpSessionLive {
 }
 
 /** A session's owner-set turn settings; an absent field means the default. */
+/** One person in a shared session, as a board shows them. */
+export interface CloudCpSessionParticipant {
+	userId: string;
+	name: string;
+	/** "owner" is the session's creator. */
+	role: "owner" | "member" | "editor" | "viewer";
+	/** Whether they have the session open now. */
+	present: boolean;
+	/** working while they hold the composer, waiting while in line for it. */
+	state: "working" | "waiting" | "idle";
+}
+
+export interface CloudCpSharedSessionParticipants {
+	sessionId: string;
+	participants: CloudCpSessionParticipant[];
+}
+
 export interface CloudCpSessionChatSettings {
 	model?: string;
 	reasoningEffort?: string;

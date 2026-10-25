@@ -3515,5 +3515,13 @@
 	"chat.shared.draftOf": "{{name}} 的草稿",
 	"shareLink.expired": "此链接已过期或已被撤销。请索取新链接。",
 	"shareLink.notForYou": "此链接是给其他人的。请让发送者与你的账户共享。",
-	"chat.shared.checkingAccess": "正在确认你在此会话中的权限…"
+	"chat.shared.checkingAccess": "正在确认你在此会话中的权限…",
+	"share.button": "共享",
+	"share.people.label": "此会话中的人：{{names}}",
+	"share.people.more": "+{{count}}",
+	"share.people.you": "{{name}}（你）",
+	"share.people.working": "工作中",
+	"share.people.waiting": "排队中",
+	"share.people.idle": "空闲",
+	"board.shared.working": "{{name}} 工作中"
 }

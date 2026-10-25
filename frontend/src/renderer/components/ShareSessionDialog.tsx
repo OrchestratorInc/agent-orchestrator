@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Share2, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -8,7 +8,6 @@ import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpShareLink } from "../lib/cloud-cp";
 import { shareLinkUrl } from "../lib/share-links";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -23,7 +22,6 @@ import {
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type ShareAccess = "viewer" | "editor";
 type ShareExpiry = "24" | "168" | "never";
@@ -36,24 +34,6 @@ export function shareLinksQueryKey(baseUrl: string, orgId: string, projectId: st
 }
 
 /** The session topbar's Share control for a cloud session the person's organization owns. */
-export function ShareSessionButton({ orgId, projectId, sessionId }: { orgId: string; projectId: string; sessionId: string }) {
-	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
-	return (
-		<>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<TopbarButton variant="icon" aria-label={t("share.open")} onClick={() => setOpen(true)} data-share-session-button>
-						<Share2 className="size-4" aria-hidden="true" />
-					</TopbarButton>
-				</TooltipTrigger>
-				<TooltipContent side="bottom">{t("share.open")}</TooltipContent>
-			</Tooltip>
-			<ShareSessionDialog open={open} onOpenChange={setOpen} orgId={orgId} projectId={projectId} sessionId={sessionId} />
-		</>
-	);
-}
-
 /**
  * Makes a link that lets other people open this cloud session, and lists the
  * session's live links so they can be revoked. The link is shown once: the

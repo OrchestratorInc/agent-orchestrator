@@ -3533,5 +3533,13 @@
 	"chat.shared.draftOf": "Entwurf von {{name}}",
 	"shareLink.expired": "Dieser Link ist abgelaufen oder wurde widerrufen. Bitte um einen neuen.",
 	"shareLink.notForYou": "Dieser Link ist für andere Personen. Bitte den Absender, ihn für dein Konto freizugeben.",
-	"chat.shared.checkingAccess": "Es wird geprüft, was du in dieser Sitzung tun darfst…"
+	"chat.shared.checkingAccess": "Es wird geprüft, was du in dieser Sitzung tun darfst…",
+	"share.button": "Teilen",
+	"share.people.label": "Personen in dieser Sitzung: {{names}}",
+	"share.people.more": "+{{count}}",
+	"share.people.you": "{{name}} (du)",
+	"share.people.working": "arbeitet",
+	"share.people.waiting": "wartet",
+	"share.people.idle": "inaktiv",
+	"board.shared.working": "{{name}} arbeitet"
 }

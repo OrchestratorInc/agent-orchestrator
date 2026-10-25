@@ -3514,5 +3514,13 @@
 	"chat.shared.draftOf": "{{name}}'s draft",
 	"shareLink.expired": "This link has expired or was revoked. Ask for a new one.",
 	"shareLink.notForYou": "This link is for other people. Ask its sender to share it with your account.",
-	"chat.shared.checkingAccess": "Checking what this session lets you do…"
+	"chat.shared.checkingAccess": "Checking what this session lets you do…",
+	"share.button": "Share",
+	"share.people.label": "People in this session: {{names}}",
+	"share.people.more": "+{{count}}",
+	"share.people.you": "{{name}} (you)",
+	"share.people.working": "working",
+	"share.people.waiting": "in line",
+	"share.people.idle": "idle",
+	"board.shared.working": "{{name}} working"
 }

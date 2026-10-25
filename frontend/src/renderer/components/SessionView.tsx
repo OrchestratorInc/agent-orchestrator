@@ -102,7 +102,7 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
-import { ShareSessionButton } from "./ShareSessionDialog";
+import { SessionPeopleControl } from "./SessionPeople";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { openComposerModelPicker } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
@@ -1501,9 +1501,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			data-compact-session-chrome="false"
 		>
 			{hostId ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel ?? hostId}</span> : null}
-			{/* Only the session's own organization can share it; a guest cannot re-share. */}
-			{session?.cloud && session.cloud.orgId === cloudOrgId && session.isTerminated !== true ? (
-				<ShareSessionButton orgId={session.cloud.orgId} projectId={session.workspaceId} sessionId={session.id} />
+			{/* Who else is here, or Share; only the session's own organization can share it. */}
+			{session?.cloud && session.isTerminated !== true ? (
+				<SessionPeopleControl
+					orgId={session.cloud.orgId}
+					projectId={session.workspaceId}
+					sessionId={session.id}
+					canShare={session.cloud.orgId === cloudOrgId}
+				/>
 			) : null}
 			<ShellTopbar embedded />
 		</div>

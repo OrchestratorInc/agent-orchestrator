@@ -58,6 +58,7 @@ import type {
 	CloudCpSteerTurnResponse,
 	CloudCpComposerAnswer,
 	CloudCpSessionChatSettings,
+	CloudCpSharedSessionParticipants,
 	CloudCpCreateShareLinkRequest,
 	CloudCpShareLink,
 	CloudCpSharedProject,
@@ -416,6 +417,8 @@ export interface CloudCpClient {
 	takeOverComposer(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	/** Sets the model and settings the session's turns run with (its owner only). */
 	setSessionChatSettings(orgId: string, sessionId: string, settings: CloudCpSessionChatSettings, options?: CloudCpRequestOptions): Promise<{ chatSettings: CloudCpSessionChatSettings }>;
+	/** Who is in each of these sessions that someone has shared; the rest are left out. */
+	listSessionParticipants(orgId: string, sessionIds: readonly string[], options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSharedSessionParticipants[] }>;
 	/** Shares the holder's draft and caret live with the session; counts as a keystroke. */
 	publishComposerDraft(orgId: string, sessionId: string, epoch: number, text: string, cursor: number, options?: CloudCpRequestOptions): Promise<CloudCpComposerAnswer>;
 	createShareLink(orgId: string, projectId: string, body: CloudCpCreateShareLinkRequest, options?: CloudCpRequestOptions): Promise<{ link: CloudCpShareLink }>;
@@ -497,7 +500,8 @@ export interface CloudCpClient {
 	): Promise<CloudCpProjectResponse>;
 }
 
-type QueryParams = Record<string, string | number | undefined>;
+/** A value per key; an array repeats the key once per item. */
+type QueryParams = Record<string, string | number | readonly string[] | undefined>;
 
 interface SendOptions {
 	body?: unknown;
@@ -512,7 +516,11 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 	if (query !== undefined) {
 		const params = new URLSearchParams();
 		for (const [key, value] of Object.entries(query)) {
-			if (value !== undefined) params.set(key, String(value));
+			if (Array.isArray(value)) {
+				for (const item of value) params.append(key, item);
+			} else if (value !== undefined) {
+				params.set(key, String(value));
+			}
 		}
 		const search = params.toString();
 		if (search !== "") url += `?${search}`;
@@ -940,6 +948,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/takeover`, { signal: o?.signal }),
 		setSessionChatSettings: (orgId, sessionId, settings, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-settings`, { body: settings, signal: o?.signal }),
+		listSessionParticipants: (orgId, sessionIds, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/session-participants`, { query: { sessionId: sessionIds }, signal: o?.signal }),
 		publishComposerDraft: (orgId, sessionId, epoch, text, cursor, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/composer/draft`, { body: { epoch, text, cursor }, signal: o?.signal }),
 		createShareLink: (orgId, projectId, body, o) =>
