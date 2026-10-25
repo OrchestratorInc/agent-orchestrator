@@ -3379,6 +3379,7 @@ html.sidebar-reordering * {
  * accessible names remain available. */
 .workspace-topbar-actions {
 	display: flex;
+	height: var(--size-topbar-content);
 	min-width: 0;
 	flex: 0 0 auto;
 	align-items: center;
@@ -3493,7 +3494,7 @@ html.sidebar-reordering * {
 	right: var(--gap-topbar-control);
 	z-index: var(--z-index-chrome);
 	display: flex;
-	height: var(--size-inspector-tabs);
+	height: var(--size-topbar-content);
 	align-items: center;
 	gap: var(--gap-topbar-control);
 }
