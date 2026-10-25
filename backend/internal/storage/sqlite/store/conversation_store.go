@@ -2424,6 +2424,19 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 	}, nil
 }
 
+// QueuedTurnOrder lists the undispatched queued turns in dispatch (FIFO) order.
+func (s *Store) QueuedTurnOrder(ctx context.Context, conversationID string) ([]string, error) {
+	rows, err := s.qr.SelectQueuedConversationTurnOrder(ctx, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("list queued turns for %s: %w", conversationID, err)
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	return ids, nil
+}
+
 // ReserveQueuedTurnForPromotion atomically removes one selected queued turn from
 // automatic drain and returns the durable content that must be steered.
 func (s *Store) ReserveQueuedTurnForPromotion(

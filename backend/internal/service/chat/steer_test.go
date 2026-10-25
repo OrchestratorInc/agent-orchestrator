@@ -40,19 +40,54 @@ type steerRecorder struct {
 	landed string
 }
 
-type cancelAfterSteerRecorder struct {
+// interruptCounting replaces the fake's silent cancel with the two facts a real
+// provider reports on session/cancel: which turn it stopped, and the completion
+// that settles the cut turn and releases the promotion's settle wait. The
+// optional fields model the edge cases: interruptErr refuses the cancel,
+// completionState overrides the settled state (completed models a turn that
+// finished on its own in the race window), and settleOnInterrupt suppresses the
+// completion entirely to model a cancel the provider never answers.
+type interruptCounting struct {
 	*steerRecorder
-	cancel context.CancelFunc
+
+	mu                sync.Mutex
+	interrupts        []string
+	interruptErr      error
+	completionState   domain.TurnState
+	settleOnInterrupt bool
 }
 
-func (s *cancelAfterSteerRecorder) Steer(
-	ctx context.Context,
-	providerTurnID string,
-	msg ports.ChatUserMessage,
-) (ports.ChatTurnRef, error) {
-	ref, err := s.steerRecorder.Steer(ctx, providerTurnID, msg)
-	s.cancel()
-	return ref, err
+func (s *interruptCounting) Interrupt(_ context.Context, providerTurnID string) error {
+	s.mu.Lock()
+	s.interrupts = append(s.interrupts, providerTurnID)
+	interruptErr := s.interruptErr
+	state := s.completionState
+	noSettle := s.settleOnInterrupt
+	s.mu.Unlock()
+	if noSettle {
+		return interruptErr
+	}
+	if state == "" {
+		state = domain.TurnStateInterrupted
+	}
+	s.emit(ports.ChatEvent{
+		Kind:           ports.ChatEventTurnCompleted,
+		ProviderTurnID: providerTurnID,
+		TurnState:      state,
+	})
+	return interruptErr
+}
+
+func (s *interruptCounting) failInterrupt(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.interruptErr = err
+}
+
+func (s *interruptCounting) interruptCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.interrupts...)
 }
 
 func newSteerRecorder() *steerRecorder {
@@ -778,16 +813,6 @@ func TestSteerIsRefusedWhenTheProviderDidNotAdvertiseIt(t *testing.T) {
 	if !errors.Is(err, chatsvc.ErrSteerUnsupported) {
 		t.Fatalf("Steer err = %v, want ErrSteerUnsupported", err)
 	}
-
-	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "queued", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman,
-	})
-	if err != nil {
-		t.Fatalf("queue: %v", err)
-	}
-	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); !errors.Is(err, chatsvc.ErrSteerUnsupported) {
-		t.Fatalf("PromoteQueuedTurn err = %v, want ErrSteerUnsupported", err)
-	}
 	if calls := provider.steers(); len(calls) != 0 {
 		t.Fatalf("provider received %d steer attempts, want none", len(calls))
 	}
@@ -871,13 +896,25 @@ func TestSteerRecordsTheTurnTheProviderNames(t *testing.T) {
 	}
 }
 
-// Promoting a selected queued turn must use AO's durable content, attach it to
-// the running provider turn, and remove only that source turn from the visible
-// queue. If this regresses to queue-head-only behavior, the second message below
-// is never the one the provider receives.
-func TestPromoteSelectedQueuedTurnIntoTheRunningTurn(t *testing.T) {
-	h, provider := steerHarness(t)
+// The whole queued-turn steer: the running turn is cut and settles interrupted,
+// the addressed message starts as its own turn immediately, the rest of the queue
+// keeps its order, and the mid-turn steer seam is never contacted — which is what
+// makes the control harness-agnostic, so it works on a provider that never
+// advertised steering at all.
+func TestSteerQueuedTurnCutsTheRunningTurnAndPromotesTheMessage(t *testing.T) {
+	provider := &interruptCounting{steerRecorder: newSteerRecorder()}
+	// Deliberately WITHOUT the steer capability: promotion rides the shared
+	// interrupt seam every driver has, not the steering extension.
+	provider.setCapabilities(productionCaps())
+	h := newHarnessWithConversation(t, provider)
 	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
 
 	first, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "first queued", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman,
@@ -885,6 +922,9 @@ func TestPromoteSelectedQueuedTurnIntoTheRunningTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("queue first: %v", err)
 	}
+	// Queue order is a timestamp ordering; the injected clock must move for the
+	// promotion's reorder to be able to jump the queue.
+	h.advance(time.Second)
 	selected, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "second queued", ClientMessageID: "queued-2", Origin: domain.MessageOriginHuman,
 		Content: []ports.ChatContent{{Type: "image", Data: "aGVsbG8=", MIMEType: "image/png"}},
@@ -897,66 +937,235 @@ func TestPromoteSelectedQueuedTurnIntoTheRunningTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PromoteQueuedTurn: %v", err)
 	}
-	if result.SourceTurnID != selected.ID || result.ProviderTurnID != "provider-turn-1" || result.ActivityID == "" {
+	if result.SourceTurnID != selected.ID ||
+		result.InterruptedTurnID != "provider-turn-1" ||
+		result.ProviderTurnID != "provider-turn-2" {
 		t.Fatalf("promotion result = %+v", result)
 	}
-	calls := provider.steers()
-	if len(calls) != 1 {
-		t.Fatalf("provider steers = %+v, want one", calls)
+	if calls := provider.interruptCalls(); len(calls) != 1 || calls[0] != "provider-turn-1" {
+		t.Fatalf("provider interrupts = %v, want exactly provider-turn-1", calls)
 	}
-	if calls[0].msg.Text != "second queued" || calls[0].msg.ClientMessageID != "queued-2" {
-		t.Fatalf("provider message = %+v, want selected durable message", calls[0].msg)
-	}
-	if len(calls[0].msg.Content) != 1 || calls[0].msg.Content[0].MIMEType != "image/png" {
-		t.Fatalf("provider content = %+v, want stored image", calls[0].msg.Content)
+	if len(provider.steers()) != 0 {
+		t.Fatalf("promotion contacted the mid-turn steer seam: %+v", provider.steers())
 	}
 
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return len(steerMarkers(s)) == 1
+		for _, turn := range s.Turns {
+			if turn.ID == selected.ID {
+				return turn.State == domain.TurnStateRunning
+			}
+		}
+		return false
 	})
-	for _, turn := range snapshot.Turns {
-		if turn.ID == selected.ID {
-			t.Fatalf("promoted source turn remains visible: %+v", turn)
+	var cut *domain.ConversationTurn
+	for index := range snapshot.Turns {
+		if snapshot.Turns[index].ProviderTurnID == "provider-turn-1" {
+			cut = &snapshot.Turns[index]
 		}
 	}
-	next, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
-	if err != nil {
-		t.Fatalf("remaining queue: %v", err)
+	if cut == nil || cut.State != domain.TurnStateInterrupted {
+		t.Fatalf("cut turn = %+v, want provider-turn-1 interrupted", cut)
 	}
-	if next.TurnID != first.ID {
-		t.Fatalf("remaining queue head = %q, want %q", next.TurnID, first.ID)
+
+	sent := provider.sentTexts()
+	if len(sent) != 2 || sent[1] != "second queued" {
+		t.Fatalf("provider received %q, want the promoted durable message second", sent)
+	}
+	next, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
+	if err != nil || next.TurnID != first.ID {
+		t.Fatalf("remaining queue head = %+v, %v; want %s", next, err, first.ID)
 	}
 }
 
-// A provider refusal has not delivered anything, so the exact selected message
-// must return to its original queue position instead of being lost or failed.
-func TestPromoteQueuedTurnRefusalRestoresItsQueuePosition(t *testing.T) {
-	h, provider := steerHarness(t)
+// The provider is the authority on whether a turn is still running. When it
+// answers the cancel with "nothing active" — the turn settled on its own in the
+// race window — the interrupt is a no-op and the request degrades to a plain
+// promotion. Nothing the provider completed may be marked interrupted.
+func TestSteerQueuedTurnDegradesToPlainPromotionWhenTheCancelLostTheRace(t *testing.T) {
+	provider := &interruptCounting{steerRecorder: newSteerRecorder()}
+	h := newHarnessWithConversation(t, provider)
 	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	selected, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "take me now", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+
+	// The cancel lands on a turn the provider has just completed on its own: the
+	// refusal says so, and the completion that beat the cancel settles the turn
+	// completed rather than interrupted.
+	provider.mu.Lock()
+	provider.completionState = domain.TurnStateCompleted
+	provider.mu.Unlock()
+	provider.failInterrupt(ports.ErrChatNoActiveTurn)
+
+	result, err := h.svc.PromoteQueuedTurn(ctx, testSession, selected.ID)
+	if err != nil {
+		t.Fatalf("PromoteQueuedTurn: %v", err)
+	}
+	if result.InterruptedTurnID != "" {
+		t.Fatalf("interruptedTurnId = %q, want empty: the turn completed on its own", result.InterruptedTurnID)
+	}
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, turn := range s.Turns {
+			if turn.ID == selected.ID {
+				return turn.State == domain.TurnStateRunning
+			}
+		}
+		return false
+	})
+	for _, turn := range snapshot.Turns {
+		if turn.ProviderTurnID == "provider-turn-1" && turn.State != domain.TurnStateCompleted {
+			t.Fatalf("raced turn = %+v, want completed without an interrupted marker", turn)
+		}
+	}
+	if sent := provider.sentTexts(); len(sent) != 2 || sent[1] != "take me now" {
+		t.Fatalf("provider received %q, want the promoted message dispatched after the race", sent)
+	}
+}
+
+// A queue can outlive the turn it was queued behind when that turn fails: the
+// settle holds the queue on purpose, and there is nothing running to cut. Steer
+// on the stranded head is then just "send this now".
+func TestSteerQueuedTurnWithNothingRunningIsAPlainPromotion(t *testing.T) {
+	provider := &interruptCounting{steerRecorder: newSteerRecorder()}
+	h := newHarnessWithConversation(t, provider)
+	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "breaks", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "stranded behind the failure", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+	provider.emit(ports.ChatEvent{
+		Kind:           ports.ChatEventTurnCompleted,
+		ProviderTurnID: "provider-turn-1",
+		Err:            errors.New("provider exploded"),
+	})
+
+	result, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID)
+	if err != nil {
+		t.Fatalf("PromoteQueuedTurn: %v", err)
+	}
+	if result.InterruptedTurnID != "" || result.ProviderTurnID != "provider-turn-2" {
+		t.Fatalf("promotion result = %+v, want a plain promotion onto provider-turn-2", result)
+	}
+	if calls := provider.interruptCalls(); len(calls) != 0 {
+		t.Fatalf("provider received %v interrupts, want none: nothing was running", calls)
+	}
+}
+
+// A provider that accepts the cancel but never settles the turn must not hang the
+// request or leave a zombie Working bar. After the settle budget the durable rows
+// are reconciled the same way Stop reconciles them, and the promotion still goes
+// out.
+func TestSteerQueuedTurnReconcilesWhenTheCancelNeverSettles(t *testing.T) {
+	restore := chatsvc.SetQueuedTurnSettleWait(50 * time.Millisecond)
+	t.Cleanup(restore)
+
+	provider := &interruptCounting{steerRecorder: newSteerRecorder(), settleOnInterrupt: true}
+	h := newHarnessWithConversation(t, provider)
+	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	selected, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "deliver me anyway", ClientMessageID: "queued-1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("queue: %v", err)
+	}
+
+	result, err := h.svc.PromoteQueuedTurn(ctx, testSession, selected.ID)
+	if err != nil {
+		t.Fatalf("PromoteQueuedTurn: %v", err)
+	}
+	if result.InterruptedTurnID != "provider-turn-1" || result.ProviderTurnID != "provider-turn-2" {
+		t.Fatalf("promotion result = %+v", result)
+	}
+
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	for _, turn := range snapshot.Turns {
+		if turn.ProviderTurnID == "provider-turn-1" && turn.State != domain.TurnStateInterrupted {
+			t.Fatalf("reconciled cut turn = %+v, want interrupted", turn)
+		}
+	}
+	if sent := provider.sentTexts(); len(sent) != 2 || sent[1] != "deliver me anyway" {
+		t.Fatalf("provider received %q, want the promoted message after reconciliation", sent)
+	}
+}
+
+// A refused cancel has stopped nothing, so nothing may be dispatched and the
+// addressed message stays queued for the user to retry.
+func TestPromoteQueuedTurnInterruptFailureKeepsTheTurnQueued(t *testing.T) {
+	provider := &interruptCounting{steerRecorder: newSteerRecorder()}
+	provider.failInterrupt(errors.New("cancel refused"))
+	h := newHarnessWithConversation(t, provider)
+	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
 	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "keep me queued", ClientMessageID: "queued-refused", Origin: domain.MessageOriginHuman,
 	})
 	if err != nil {
 		t.Fatalf("queue: %v", err)
 	}
-	provider.failWith(ports.ErrChatTurnNotSteerable)
 
 	_, err = h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID)
-	if !errors.Is(err, chatsvc.ErrTurnNotSteerable) {
-		t.Fatalf("promotion error = %v, want ErrTurnNotSteerable", err)
+	if err == nil {
+		t.Fatal("promotion error = nil, want the interrupt refusal")
 	}
 	next, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
 	if err != nil || next.TurnID != queued.ID {
-		t.Fatalf("restored queue head = %+v, %v; want %s", next, err, queued.ID)
+		t.Fatalf("queue head = %+v, %v; want %s still queued", next, err, queued.ID)
+	}
+	if calls := provider.sendCallCount(); calls != 1 {
+		t.Fatalf("provider send calls = %d, want only the original turn", calls)
 	}
 }
 
-// Only human-originated queue items are eligible for mid-turn guidance. The
-// service must enforce that boundary even when a caller bypasses the frontend,
-// without consuming or reordering the automation item.
+// Only human-originated queue items are steerable. The service must enforce that
+// boundary even when a caller bypasses the frontend, without cutting the running
+// turn or reordering the automation item.
 func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *testing.T) {
-	h, provider := steerHarness(t)
+	provider := &interruptCounting{steerRecorder: newSteerRecorder()}
+	h := newHarnessWithConversation(t, provider)
 	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
 	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "automation follow-up", ClientMessageID: "queued-automation", Origin: domain.MessageOriginAutomation,
 	})
@@ -968,8 +1177,8 @@ func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *test
 	if !errors.Is(err, chatsvc.ErrTurnNotQueued) {
 		t.Fatalf("promotion error = %v, want ErrTurnNotQueued", err)
 	}
-	if calls := provider.steers(); len(calls) != 0 {
-		t.Fatalf("provider received %d steer attempts, want none", len(calls))
+	if calls := provider.interruptCalls(); len(calls) != 0 {
+		t.Fatalf("provider received %v interrupts, want none", calls)
 	}
 	next, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
 	if err != nil {
@@ -977,69 +1186,6 @@ func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *test
 	}
 	if next.TurnID != queued.ID || next.Origin != domain.MessageOriginAutomation {
 		t.Fatalf("queue head after rejection = %+v, want unchanged automation turn %s", next, queued.ID)
-	}
-}
-
-// A transport failure after the request leaves delivery unknowable. Returning the
-// source to the queue would let drain send guidance the provider may already have
-// accepted, so it must settle failed and require an explicit user decision.
-func TestPromoteQueuedTurnAmbiguousProviderFailureSettlesUncertainWithoutRedelivery(t *testing.T) {
-	requestCtx, cancelRequest := context.WithCancel(context.Background())
-	t.Cleanup(cancelRequest)
-	provider := &cancelAfterSteerRecorder{steerRecorder: newSteerRecorder(), cancel: cancelRequest}
-	h := newHarnessWithConversation(t, provider)
-	storeCtx := context.Background()
-	if _, err := h.svc.Send(storeCtx, testSession, ports.ChatUserMessage{
-		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
-	}); err != nil {
-		t.Fatalf("start running turn: %v", err)
-	}
-	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
-	queued, err := h.svc.Send(storeCtx, testSession, ports.ChatUserMessage{
-		Text: "deliver me at most once", ClientMessageID: "queued-uncertain", Origin: domain.MessageOriginHuman,
-	})
-	if err != nil {
-		t.Fatalf("queue: %v", err)
-	}
-	transportErr := errors.New("connection lost after request write")
-	provider.failWith(transportErr)
-
-	_, err = h.svc.PromoteQueuedTurn(requestCtx, testSession, queued.ID)
-	if !errors.Is(err, chatsvc.ErrPromotionUncertain) {
-		t.Fatalf("promotion error = %v, want ErrPromotionUncertain", err)
-	}
-	if !errors.Is(err, transportErr) {
-		t.Fatalf("promotion error = %v, want transport cause", err)
-	}
-
-	snapshot, err := h.st.LoadConversationSnapshot(storeCtx, h.ctrl.ConversationID())
-	if err != nil {
-		t.Fatalf("load snapshot: %v", err)
-	}
-	var source *domain.ConversationTurn
-	for index := range snapshot.Turns {
-		if snapshot.Turns[index].ID == queued.ID {
-			source = &snapshot.Turns[index]
-			break
-		}
-	}
-	if source == nil {
-		t.Fatalf("uncertain source turn %s is not visible", queued.ID)
-		return
-	}
-	if source.State != domain.TurnStateFailed || source.ErrorMessage != chatsvc.ErrPromotionUncertain.Error() {
-		t.Fatalf("uncertain source = %+v, want failed with promotion-uncertain error", *source)
-	}
-	if _, err := h.st.NextQueuedTurn(storeCtx, h.ctrl.ConversationID()); !errors.Is(err, domain.ErrNoQueuedTurn) {
-		t.Fatalf("uncertain source remained drainable: %v", err)
-	}
-
-	_, retryErr := h.svc.PromoteQueuedTurn(storeCtx, testSession, queued.ID)
-	if !errors.Is(retryErr, chatsvc.ErrTurnNotQueued) {
-		t.Fatalf("retry error = %v, want ErrTurnNotQueued", retryErr)
-	}
-	if calls := provider.steers(); len(calls) != 1 {
-		t.Fatalf("provider received %d steer attempts, want one", len(calls))
 	}
 }
 
