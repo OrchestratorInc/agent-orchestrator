@@ -348,3 +348,33 @@ func (s *Store) WorkerRemoteGitHubCheckoutContext(
 	}
 	return authorization, nil
 }
+
+// SessionCreatorUserID returns the AO user who started a live session: the one
+// whose GitHub authorization the session acts with (its pull requests and
+// commits are theirs). A session shared with guests still answers its owner.
+// ErrNotFound means the session is gone or has no recorded creator.
+func (s *Store) SessionCreatorUserID(ctx context.Context, orgID, sessionID string) (string, error) {
+	var creator *string
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT created_by_user_id::text
+			FROM ao_sessions
+			WHERE org_id = $1 AND id = $2 AND is_terminated = false`,
+			orgID, sessionID,
+		).Scan(&creator)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("resolve session creator: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if creator == nil || *creator == "" {
+		return "", ErrNotFound
+	}
+	return *creator, nil
+}

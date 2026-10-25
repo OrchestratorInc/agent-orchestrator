@@ -97,7 +97,7 @@ func resolveConfiguredWorkspace(
 	ctx context.Context,
 	logger *slog.Logger,
 	bootstrap worker.BootstrapResponse,
-	template, defaultWorkspace, dataDir string,
+	template, defaultWorkspace, dataDir, publicURL string,
 ) (worker.ReuseDecision, error) {
 	home := strings.TrimSpace(os.Getenv("HOME"))
 	decision, err := worker.ResolveWorkingDirectory(
@@ -113,7 +113,8 @@ func resolveConfiguredWorkspace(
 	if decision.Reused {
 		logger.Info("working directory: working in the template's existing checkout",
 			"workspace", decision.Workspace, "adopted_now", decision.AdoptedNow, "stash", decision.Stash)
-		for key, value := range worker.ReusedCheckoutGitEnvironment(dataDir) {
+		for key, value := range worker.ReusedCheckoutGitEnvironment(publicURL, bootstrap.SessionID, dataDir,
+			bootstrap.Launch.GitIdentity()) {
 			_ = os.Setenv(key, value)
 		}
 	} else {

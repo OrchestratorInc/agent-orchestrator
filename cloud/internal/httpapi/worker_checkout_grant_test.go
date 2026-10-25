@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,11 +15,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
-// checkoutGrantBroker returns configurable App checkout/push grants so the
-// handler's App-first preference can be exercised without a real GitHub App.
+// checkoutGrantBroker returns a configurable App checkout grant, without a
+// real GitHub App.
 type checkoutGrantBroker struct {
 	recordingCheckoutBroker
 	checkout      githubapp.CheckoutGrant
@@ -65,10 +65,10 @@ func checkoutGrantRequest(t *testing.T) *http.Request {
 	return workerRequest(t, http.MethodPost, "/worker/checkout-grant", "", "worker:git")
 }
 
-// The App installation grant must win even when a PAT exists: preferring the PAT
-// is exactly what let a rotted PAT (validation_state is a cached snapshot) shadow
-// a healthy App installation and fail every clone with "Invalid username or token".
-func TestWorkerCheckoutGrantPrefersAppOverPAT(t *testing.T) {
+// The checkout grant names the repository only: the App installation token the
+// broker minted to confirm the grant stays on the control plane, since the
+// clone goes through the git proxy.
+func TestWorkerCheckoutGrantCarriesNoCredential(t *testing.T) {
 	appGrant := githubapp.CheckoutGrant{
 		CloneURL:  "https://github.com/octo/widgets.git",
 		Token:     "APP_INSTALLATION_TOKEN",
@@ -82,46 +82,56 @@ func TestWorkerCheckoutGrantPrefersAppOverPAT(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	if broker.checkoutCalls != 1 {
-		t.Fatalf("IssueCheckoutGrant called %d times, want 1 (App tried first)", broker.checkoutCalls)
-	}
-	var resp worker.CheckoutGrantResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp.Token != "APP_INSTALLATION_TOKEN" {
-		t.Fatalf("token = %q, want the App token (a PAT must not shadow a healthy App grant)", resp.Token)
-	}
-}
-
-// When the App path cannot serve the project (no installation / not App-connected),
-// fall back to the stored PAT rather than failing.
-func TestWorkerCheckoutGrantFallsBackToPAT(t *testing.T) {
-	srv, broker := newCheckoutGrantServer(t, githubapp.CheckoutGrant{}, postgres.ErrForbidden, true)
-	w := httptest.NewRecorder()
-	srv.workerCheckoutGrant(w, checkoutGrantRequest(t))
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (PAT fallback); body=%s", w.Code, w.Body.String())
-	}
-	if broker.checkoutCalls != 1 {
 		t.Fatalf("IssueCheckoutGrant called %d times, want 1", broker.checkoutCalls)
 	}
-	var resp worker.CheckoutGrantResponse
+	var resp map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Token != grantTestPAT {
-		t.Fatalf("token = %q, want the PAT fallback", resp.Token)
+	if len(resp) != 1 || resp["cloneUrl"] != appGrant.CloneURL {
+		t.Fatalf("response = %v, want the clone URL alone", resp)
 	}
+	assertNoGitHubCredential(t, w.Body.String(), appGrant.Token, grantTestPAT)
 }
 
-// No App grant and no PAT: surface the App error semantics (403), not a fallback.
-func TestWorkerCheckoutGrantForbiddenWithoutAppOrPAT(t *testing.T) {
-	srv, _ := newCheckoutGrantServer(t, githubapp.CheckoutGrant{}, postgres.ErrForbidden, false)
+// A session the App cannot serve gets no credential at all: the creator's
+// stored personal access token is never handed to the sandbox.
+func TestWorkerCheckoutGrantNeverHandsOutAPAT(t *testing.T) {
+	srv, broker := newCheckoutGrantServer(t, githubapp.CheckoutGrant{}, postgres.ErrForbidden, true)
 	w := httptest.NewRecorder()
 	srv.workerCheckoutGrant(w, checkoutGrantRequest(t))
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	if broker.checkoutCalls != 1 {
+		t.Fatalf("IssueCheckoutGrant called %d times, want 1", broker.checkoutCalls)
+	}
+	assertNoGitHubCredential(t, w.Body.String(), grantTestPAT)
+
+	noBroker := New(Options{Store: &patServerStore{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	w = httptest.NewRecorder()
+	noBroker.workerCheckoutGrant(w, checkoutGrantRequest(t))
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status without a broker = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// assertNoGitHubCredential fails when a worker-facing response carries any
+// GitHub credential: the given secrets, or anything shaped like a GitHub token.
+func assertNoGitHubCredential(t *testing.T, body string, secrets ...string) {
+	t.Helper()
+	for _, secret := range secrets {
+		if secret != "" && strings.Contains(body, secret) {
+			t.Fatalf("a GitHub credential reached the worker: %s", body)
+		}
+	}
+	for _, prefix := range []string{"ghp_", "ghs_", "ghu_", "gho_", "ghr_", "github_pat_", "x-access-token"} {
+		if strings.Contains(body, prefix) {
+			t.Fatalf("a GitHub credential (%s...) reached the worker: %s", prefix, body)
+		}
+	}
+	if strings.Contains(strings.ToLower(body), `"token"`) {
+		t.Fatalf("a worker-facing response carries a token field: %s", body)
 	}
 }

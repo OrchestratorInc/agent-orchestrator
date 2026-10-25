@@ -81,8 +81,8 @@ type CheckoutOptions struct {
 const PartialCloneEnv = "AO_WORKER_PARTIAL_CLONE"
 
 // PrepareCheckout clones once, then validates and fetches the persistent
-// workspace. The token exists only in the network command's askpass
-// environment. A fresh clone is a full clone; see PrepareCheckoutWithOptions.
+// workspace, through grant.Proxy: no GitHub credential is involved. A fresh
+// clone is a full clone; see PrepareCheckoutWithOptions.
 func PrepareCheckout(ctx context.Context, runner GitRunner, workspace string, grant CheckoutGrantResponse) error {
 	return PrepareCheckoutWithOptions(ctx, runner, workspace, grant, CheckoutOptions{})
 }
@@ -106,9 +106,6 @@ func PrepareCheckoutWithOptions(
 	if err != nil {
 		return fmt.Errorf("validate checkout grant: %w", err)
 	}
-	if grant.Token != "" && !grant.ExpiresAt.After(time.Now().Add(30*time.Second)) {
-		return errors.New("checkout grant is expired")
-	}
 	info, statErr := os.Stat(workspace)
 	if statErr == nil {
 		if !info.IsDir() {
@@ -124,11 +121,11 @@ func PrepareCheckoutWithOptions(
 			if err := validateOrigin(ctx, runner, workspace, expected); err != nil {
 				return err
 			}
-			return withGitCredential(grant.Token, func(env map[string]string) error {
-				if _, err := runner.Run(ctx, workspace, env, "fetch", "--prune", "--", "origin"); err != nil {
+			return withGitProxy(grant.Proxy, func(env map[string]string, config []string) error {
+				if _, err := runner.Run(ctx, workspace, env, gitArgs(config, "fetch", "--prune", "--", "origin")...); err != nil {
 					return err
 				}
-				return adoptProjectSnapshot(ctx, runner, workspace, env)
+				return adoptProjectSnapshot(ctx, runner, workspace, env, config)
 			})
 		} else {
 			// The workspace is non-empty but not a Git checkout. This happens
@@ -146,9 +143,9 @@ func PrepareCheckoutWithOptions(
 	if err := os.MkdirAll(filepath.Dir(workspace), 0o700); err != nil {
 		return fmt.Errorf("create workspace parent: %w", err)
 	}
-	if err := withGitCredential(grant.Token, func(env map[string]string) error {
+	if err := withGitProxy(grant.Proxy, func(env map[string]string, config []string) error {
 		_, err := runner.Run(ctx, filepath.Dir(workspace), env,
-			cloneArgs(options, grant.CloneURL, workspace)...)
+			gitArgs(config, cloneArgs(options, grant.CloneURL, workspace)...)...)
 		return err
 	}); err != nil {
 		return err
@@ -253,8 +250,8 @@ func cloneIntoNonEmptyWorkspace(
 	}
 	defer os.RemoveAll(staging)
 	clone := filepath.Join(staging, "repository")
-	if err := withGitCredential(grant.Token, func(env map[string]string) error {
-		_, err := runner.Run(ctx, staging, env, cloneArgs(options, grant.CloneURL, clone)...)
+	if err := withGitProxy(grant.Proxy, func(env map[string]string, config []string) error {
+		_, err := runner.Run(ctx, staging, env, gitArgs(config, cloneArgs(options, grant.CloneURL, clone)...)...)
 		return err
 	}); err != nil {
 		return err
@@ -283,8 +280,8 @@ func cloneIntoNonEmptyWorkspace(
 
 // partialCloneFilter clones history without the contents of older file
 // versions. The checked-out tree is still complete; an older version is fetched
-// on demand (blame, log -p, checking out another commit) through the repo's
-// credential helper, which brokers a fresh token for every network operation.
+// on demand (blame, log -p, checking out another commit) through the git
+// proxy, like every other network operation.
 // For a mature repository this cuts the clone to a fraction of its full size.
 // It is applied only when CheckoutOptions.PartialClone is set (Freestyle).
 const partialCloneFilter = "--filter=blob:none"
@@ -298,13 +295,15 @@ func cloneArgs(options CheckoutOptions, cloneURL, destination string) []string {
 	return append(args, "--", cloneURL, destination)
 }
 
-// ConfigureWorkerGit prepares the assigned branch and a repo-local credential
-// helper that brokers a fresh scoped token for each GitHub network operation.
-// The helper stores only the rotating worker-token path, never a GitHub token.
+// ConfigureWorkerGit prepares the assigned branch and the repository's git
+// configuration: GitHub URLs rewritten to the session's git proxy, a repo-local
+// credential helper that answers the control plane with the worker token, and
+// the session owner's commit identity. The checkout holds no GitHub credential.
 func ConfigureWorkerGit(
 	ctx context.Context,
 	runner GitRunner,
 	workspace, dataDir, publicURL, sessionID, branch string,
+	identity GitIdentity,
 ) error {
 	if runner == nil {
 		return errors.New("git runner is required")
@@ -320,15 +319,7 @@ func ConfigureWorkerGit(
 	if err := writeWorkerGitTooling(dataDir, publicURL, sessionID); err != nil {
 		return err
 	}
-	helperPath := GitCredentialHelperPath(dataDir)
-	commands := [][]string{
-		{"config", "--local", "--replace-all", "credential.helper", ""},
-		{"config", "--local", "--add", "credential.helper", helperPath},
-		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
-		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
-		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-	}
-	for _, command := range commands {
+	for _, command := range localGitConfigCommands(publicURL, sessionID, dataDir, identity) {
 		if _, err := runner.Run(ctx, workspace, nil, command...); err != nil {
 			return fmt.Errorf("configure worker Git repository: %w", err)
 		}
@@ -442,6 +433,10 @@ func writeWorkerGitTooling(dataDir, publicURL, sessionID string) error {
 			return fmt.Errorf("%s is required", label)
 		}
 	}
+	proxy, err := url.Parse(GitProxyBaseURL(publicURL, sessionID))
+	if err != nil || proxy.Host == "" || (proxy.Scheme != "https" && proxy.Scheme != "http") {
+		return fmt.Errorf("public URL %q is not an absolute HTTP origin", publicURL)
+	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("create worker Git credential directory: %w", err)
 	}
@@ -454,71 +449,44 @@ func writeWorkerGitTooling(dataDir, publicURL, sessionID string) error {
 set -eu
 [ "${1:-}" = "get" ] || exit 0
 # git supplies the request as protocol/host/path lines on stdin (path is
-# included because credential.useHttpPath is true). Read them so the token can
-# be scoped to the exact repository being fetched or pushed — the primary
-# checkout or a declared extra dev-kit repository. Any parse miss leaves
-# repo_query empty and the control plane issues the broad multi-repository
-# grant, so this never narrows a request it cannot classify.
+# included because credential.useHttpPath is true).
+req_protocol=""
 req_host=""
 req_path=""
 while IFS='=' read -r key value; do
   [ -n "$key" ] || break
   case "$key" in
+    protocol) req_protocol="$value" ;;
     host) req_host="$value" ;;
     path) req_path="$value" ;;
   esac
 done
-# Only ever hand the GitHub installation token to github.com. This helper is
-# registered unscoped and credential.useHttpPath makes git invoke it for EVERY
-# host, so without this gate a sandbox git operation against a non-github remote
-# (which the coding agent can add) would be handed the installation token. exit 0
-# returns no credential, so git falls through rather than leaking it.
-[ "$req_host" = "github.com" ] || exit 0
-repo_query=""
-if [ -n "$req_path" ]; then
-  repo="${req_path%%.git}"
-  repo="${repo#/}"
-  # Only a real owner/repo (exactly two segments) is forwarded; a single-segment
-  # or multi-segment path leaves repo_query empty → the broad multi-repository
-  # grant, never a bogus scoped request.
-  case "$repo" in
-    */*)
-      owner="${repo%%%%/*}"
-      name="${repo#*/}"
-      case "$name" in */*) name="" ;; esac
-      if [ -n "$owner" ] && [ -n "$name" ]; then
-        repo_query="?repo=${owner}/${name}"
-      fi
-      ;;
-  esac
-fi
+# This sandbox holds no GitHub credential: GitHub URLs are rewritten to the
+# control plane's git proxy, which adds one itself. The helper answers only that
+# proxy, for this session, with the worker token; every other host (github.com
+# included) gets nothing, so git falls through rather than send it anywhere.
+[ "$req_protocol" = %s ] || exit 0
+[ "$req_host" = %s ] || exit 0
+case "$req_path" in
+  %s*) ;;
+  *) exit 0 ;;
+esac
 worker_token="$(tr -d '\r\n' < %s)"
-token_url=%s
-response="$(curl -fsS --connect-timeout 10 --max-time 30 -X POST \
-  -H "Authorization: Worker ${worker_token}" \
-  -H "X-AO-Session-ID: %s" \
-  "${token_url}${repo_query}")"
-# jq is not on every workspace image (BYO templates), so parse the token with
-# sed when it is missing. GitHub tokens are [A-Za-z0-9_], so the pattern is exact.
-ao_extract_token() {
-  if command -v jq >/dev/null 2>&1; then
-    printf '%%s' "$1" | jq -er '.token | select(type == "string" and length > 0)'
-    return
-  fi
-  token="$(printf '%%s' "$1" | tr -d '\r\n' | sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_.-]*\)".*/\1/p')"
-  [ -n "$token" ] || { echo "AO could not read the GitHub token response" >&2; return 1; }
-  printf '%%s\n' "$token"
-}
-github_token="$(ao_extract_token "$response")"
-printf 'username=x-access-token\npassword=%%s\n' "$github_token"
-`, shellQuote(filepath.Join(dataDir, "worker-token")),
-		shellQuote(strings.TrimRight(publicURL, "/")+"/api/cloud/v1/worker/github-token"),
-		sessionID)
+[ -n "$worker_token" ] || exit 0
+printf 'username=%%s\npassword=%%s\n' %s "$worker_token"
+`, shellQuote(proxy.Scheme), shellQuote(proxy.Host), shellQuote(strings.TrimPrefix(proxy.EscapedPath(), "/")),
+		shellQuote(filepath.Join(dataDir, "worker-token")), shellQuote(GitProxyUsername))
 	if err := os.WriteFile(helperPath, []byte(helper), 0o700); err != nil {
 		return fmt.Errorf("write worker Git credential helper: %w", err)
 	}
 	githubWrapper := fmt.Sprintf(`#!/bin/sh
 set -eu
+# gh pr create opens the pull request through AO, which raises it on the control
+# plane as the session's owner and shows it in the session at once.
+if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
+  shift 2
+  exec ao pr-create "$@"
+fi
 # jq is not on every workspace image (BYO templates), so parse the token with
 # sed when it is missing. GitHub tokens are [A-Za-z0-9_], so the pattern is exact.
 ao_extract_token() {
@@ -543,6 +511,16 @@ if [ -z "$real_gh" ] || [ ! -x "$real_gh" ]; then
   echo "AO GitHub CLI is unavailable; expected /usr/local/bin/gh or /usr/bin/gh" >&2
   exit 127
 fi
+# The checkout's remotes point at the control plane's git proxy, which gh does
+# not recognize as GitHub, so name the repository from origin's configured
+# GitHub URL.
+if [ -z "${GH_REPO:-}" ]; then
+  origin="$(git config --get remote.origin.url 2>/dev/null || true)"
+  repo="$(printf '%%s' "$origin" | sed -n 's#^https://github\.com/\([^/][^/]*/[^/][^/]*\)$#\1#p' | sed 's#\.git$##')"
+  if [ -n "$repo" ]; then
+    export GH_REPO="$repo"
+  fi
+fi
 if [ -n "${GH_TOKEN:-}" ]; then
   github_token="$GH_TOKEN"
 elif [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -555,22 +533,6 @@ else
     %s)"
   github_token="$(ao_extract_token "$response")"
 fi
-if [ "${1:-}" = "pr" ] && [ "${2:-}" = "create" ]; then
-  set +e
-  output="$(GH_TOKEN="$github_token" "$real_gh" "$@" 2>&1)"
-  status=$?
-  set -e
-  printf '%%s\n' "$output"
-  if [ "$status" -ne 0 ]; then
-    exit "$status"
-  fi
-  pr_url="$(printf '%%s\n' "$output" | sed -n 's#.*\(https://github.com/[^[:space:]]*/pull/[0-9][0-9]*\).*#\1#p' | tail -n 1)"
-  if [ -z "$pr_url" ]; then
-    echo "AO could not observe the pull request URL; run ao claim-pr <number-or-url>." >&2
-    exit 1
-  fi
-  exec ao claim-pr "$pr_url"
-fi
 GH_TOKEN="$github_token" exec "$real_gh" "$@"
 `, shellQuote(filepath.Join(dataDir, "worker-token")), sessionID,
 		shellQuote(strings.TrimRight(publicURL, "/")+"/api/cloud/v1/worker/github-token"))
@@ -580,29 +542,36 @@ GH_TOKEN="$github_token" exec "$real_gh" "$@"
 	return nil
 }
 
+// WriteWorkerGitTooling writes the session's git credential helper and gh
+// wrapper. The worker writes them before its first clone, which already
+// authenticates to the git proxy through the helper.
+func WriteWorkerGitTooling(dataDir, publicURL, sessionID string) error {
+	return writeWorkerGitTooling(dataDir, publicURL, sessionID)
+}
+
 func ToolingBinDir(dataDir string) string {
 	return filepath.Join(dataDir, "bin")
 }
 
-// GitCredentialHelperPath is where ConfigureWorkerGit writes the repo-local
-// credential helper that brokers fresh scoped GitHub tokens. Exported so extra
-// dev-kit repositories can reuse the same session helper.
+// GitCredentialHelperPath is where the session's git credential helper is
+// written: it answers the control plane's git proxy with the worker token and
+// gives nothing to any other host. Exported so extra dev-kit repositories can
+// reuse the same session helper.
 func GitCredentialHelperPath(dataDir string) string {
 	return filepath.Join(dataDir, "git-credential-ao")
 }
 
 // CloneExtraRepo clones an additional dev-kit repository beside the primary
-// checkout using the SAME askpass mechanism as the primary (the token lives only
-// in the clone command's environment - never in the URL, the process argv, or
-// the repository's .git/config, so the coding agent cannot read it back). It
-// then points the repo at the session credential helper (already written by
-// ConfigureWorkerGit for the primary checkout) so the agent's own git
-// fetch/push in the extra repo keeps working after the short-lived clone token
-// expires. cloneURL must be an uncredentialed GitHub URL.
+// checkout through the git proxy, as the primary is, then gives the repository
+// the same git configuration (configureExtraRepoGit) so the agent's own fetch
+// and push in it go through the proxy too. cloneURL must be an uncredentialed
+// GitHub URL.
 func CloneExtraRepo(
 	ctx context.Context,
 	runner GitRunner,
-	parentDir, dest, cloneURL, branch, token, dataDir string,
+	parentDir, dest, cloneURL, branch string,
+	proxy GitProxy,
+	identity GitIdentity,
 ) error {
 	if runner == nil {
 		return errors.New("git runner is required")
@@ -613,37 +582,53 @@ func CloneExtraRepo(
 		args = append(args, "--branch", branch)
 	}
 	args = append(args, "--", cloneURL, dest)
-	if err := withGitCredential(token, func(env map[string]string) error {
-		_, err := runner.Run(ctx, parentDir, env, args...)
+	if err := withGitProxy(proxy, func(env map[string]string, config []string) error {
+		_, err := runner.Run(ctx, parentDir, env, gitArgs(config, args...)...)
 		return err
 	}); err != nil {
 		return err
 	}
-	return configureExtraRepoGit(ctx, runner, dest, dataDir)
+	return configureExtraRepoGit(ctx, runner, dest, proxy, identity)
 }
 
-// configureExtraRepoGit points an additional repository at the session's
-// credential helper and commit identity, as ConfigureWorkerGit does for the
-// main checkout. Without a session helper (no main checkout was configured)
-// the repository is left as it is: its origin is uncredentialed, so the
-// agent's network operations fail rather than leak a token.
-func configureExtraRepoGit(ctx context.Context, runner GitRunner, dest, dataDir string) error {
-	helperPath := GitCredentialHelperPath(dataDir)
-	if _, statErr := os.Stat(helperPath); statErr != nil {
+// configureExtraRepoGit gives an additional repository the main checkout's
+// git configuration (localGitConfigCommands). Without a session helper (no
+// main checkout was configured) the repository is left as it is: its origin
+// is uncredentialed, so the agent's network operations fail closed.
+func configureExtraRepoGit(ctx context.Context, runner GitRunner, dest string, proxy GitProxy, identity GitIdentity) error {
+	if proxy.DataDir == "" {
 		return nil
 	}
-	for _, command := range [][]string{
-		{"config", "--local", "--replace-all", "credential.helper", ""},
-		{"config", "--local", "--add", "credential.helper", helperPath},
-		{"config", "--local", "--replace-all", "credential.useHttpPath", "true"},
-		{"config", "--local", "--replace-all", "user.name", cloudGitAuthorName},
-		{"config", "--local", "--replace-all", "user.email", cloudGitAuthorEmail},
-	} {
+	if _, statErr := os.Stat(GitCredentialHelperPath(proxy.DataDir)); statErr != nil {
+		return nil
+	}
+	for _, command := range localGitConfigCommands(proxy.PublicURL, proxy.SessionID, proxy.DataDir, identity) {
 		if _, err := runner.Run(ctx, dest, nil, command...); err != nil {
 			return fmt.Errorf("configure extra repo git: %w", err)
 		}
 	}
 	return nil
+}
+
+// localGitConfigCommands write a session checkout's git configuration
+// (GitProxyConfig: every GitHub URL rewritten to the session's git proxy, and
+// only the session credential helper, which answers the proxy with the worker
+// token) and the commit identity.
+func localGitConfigCommands(publicURL, sessionID, dataDir string, identity GitIdentity) [][]string {
+	identity = identity.orDefault()
+	var commands [][]string
+	for _, entry := range GitProxyConfig(publicURL, sessionID, dataDir) {
+		mode := "--replace-all"
+		if entry[0] == "credential.helper" && entry[1] != "" {
+			// After the empty value that clears every inherited helper.
+			mode = "--add"
+		}
+		commands = append(commands, []string{"config", "--local", mode, entry[0], entry[1]})
+	}
+	return append(commands,
+		[]string{"config", "--local", "--replace-all", "user.name", identity.Name},
+		[]string{"config", "--local", "--replace-all", "user.email", identity.Email},
+	)
 }
 
 // ExtraRepoOptions configures PrepareExtraRepo.
@@ -652,8 +637,11 @@ type ExtraRepoOptions struct {
 	// SessionBranch is the main repository's session branch, checked out in
 	// every additional repository too.
 	SessionBranch string
-	Token         string
 	DataDir       string
+	// Proxy is how the repository's git reaches GitHub (the session's git
+	// proxy); Identity is the commit identity its configuration gets.
+	Proxy    GitProxy
+	Identity GitIdentity
 	// Adopt means the session works in the user's own workspace (a reused
 	// template checkout or a configured working directory), so an existing
 	// checkout of the repository belongs to the user: it is adopted like the
@@ -700,11 +688,12 @@ func PrepareExtraRepo(
 	branch := strings.TrimSpace(opts.SessionBranch)
 	if existing && opts.Adopt {
 		// Fetch from the repository URL rather than the named remote (the user
-		// may have cloned over SSH) and clear any configured helper for this
-		// one command, so only the grant is used and nothing is persisted.
-		if err := withGitCredential(opts.Token, func(env map[string]string) error {
-			_, fetchErr := runner.Run(ctx, dest, env, "-c", "credential.helper=",
-				"fetch", "--prune", "--no-tags", "--", repo.URL, "+refs/heads/*:refs/remotes/origin/*")
+		// may have cloned over SSH) through the git proxy, whose configuration
+		// for this one command replaces any helper the user configured, so
+		// nothing is persisted.
+		if err := withGitProxy(opts.Proxy, func(env map[string]string, config []string) error {
+			_, fetchErr := runner.Run(ctx, dest, env, gitArgs(config,
+				"fetch", "--prune", "--no-tags", "--", repo.URL, "+refs/heads/*:refs/remotes/origin/*")...)
 			return fetchErr
 		}); err != nil {
 			return false, fmt.Errorf("fetch the existing checkout: %w", err)
@@ -724,16 +713,16 @@ func PrepareExtraRepo(
 		return true, EnsureWorkspaceReviewBase(ctx, runner, dest, base)
 	}
 	if existing {
-		if err := withGitCredential(opts.Token, func(env map[string]string) error {
-			_, fetchErr := runner.Run(ctx, dest, env, "fetch", "--no-tags", "--quiet", "origin")
+		if err := withGitProxy(opts.Proxy, func(env map[string]string, config []string) error {
+			_, fetchErr := runner.Run(ctx, dest, env, gitArgs(config, "fetch", "--no-tags", "--quiet", "origin")...)
 			return fetchErr
 		}); err != nil {
 			return false, fmt.Errorf("fetch the existing checkout: %w", err)
 		}
-		if err := configureExtraRepoGit(ctx, runner, dest, opts.DataDir); err != nil {
+		if err := configureExtraRepoGit(ctx, runner, dest, opts.Proxy, opts.Identity); err != nil {
 			return false, err
 		}
-	} else if err := CloneExtraRepo(ctx, runner, parent, dest, repo.URL, repo.Branch, opts.Token, opts.DataDir); err != nil {
+	} else if err := CloneExtraRepo(ctx, runner, parent, dest, repo.URL, repo.Branch, opts.Proxy, opts.Identity); err != nil {
 		return false, err
 	}
 	if base := extraRepoBaseBranch(ctx, runner, dest, repo.Branch); sessionBranchIsBase(branch, base) {
@@ -812,7 +801,7 @@ func extraRepoCheckoutState(ctx context.Context, runner GitRunner, dest, repoURL
 	if info, statErr := os.Stat(filepath.Join(dest, ".git")); statErr != nil || !info.IsDir() {
 		return false, fmt.Errorf("%s already exists and is not a Git checkout", dest)
 	}
-	output, err := runner.Run(ctx, dest, nil, "remote", "get-url", "origin")
+	output, err := OriginURL(ctx, runner, dest)
 	if err != nil {
 		return false, fmt.Errorf("%s has no origin remote: %w", dest, err)
 	}
@@ -840,15 +829,15 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
-// PushBranch pushes the current HEAD to a remote branch using a fresh
-// write-scoped grant. It never force-pushes: git push refuses non-fast-
+// PushBranch pushes the current HEAD to a remote branch through the git
+// proxy, which holds the write credential. It never force-pushes: git push refuses non-fast-
 // forward updates by default, so a branch that already has commits this
 // workspace doesn't have fails loudly instead of silently discarding them.
 func PushBranch(
 	ctx context.Context,
 	runner GitRunner,
 	workspace, branch string,
-	grant CheckoutGrantResponse,
+	proxy GitProxy,
 ) error {
 	if runner == nil {
 		return errors.New("git runner is required")
@@ -861,12 +850,9 @@ func PushBranch(
 	if branch == "" {
 		return errors.New("branch name is required")
 	}
-	if grant.Token != "" && !grant.ExpiresAt.After(time.Now().Add(30*time.Second)) {
-		return errors.New("push grant is expired")
-	}
-	return withGitCredential(grant.Token, func(env map[string]string) error {
+	return withGitProxy(proxy, func(env map[string]string, config []string) error {
 		_, err := runner.Run(ctx, workspace, env,
-			"push", "--", "origin", "HEAD:refs/heads/"+branch)
+			gitArgs(config, "push", "--", "origin", "HEAD:refs/heads/"+branch)...)
 		return err
 	})
 }
@@ -953,7 +939,7 @@ func PrepareStandaloneWorkspace(ctx context.Context, runner GitRunner, workspace
 // worker restarting on a session's own workspace never resets its work.
 const ProjectSnapshotMarker = "ao-project-snapshot"
 
-func adoptProjectSnapshot(ctx context.Context, runner GitRunner, workspace string, env map[string]string) error {
+func adoptProjectSnapshot(ctx context.Context, runner GitRunner, workspace string, env map[string]string, config []string) error {
 	marker := filepath.Join(workspace, ".git", ProjectSnapshotMarker)
 	if _, err := os.Stat(marker); err != nil {
 		return nil
@@ -963,8 +949,8 @@ func adoptProjectSnapshot(ctx context.Context, runner GitRunner, workspace strin
 	// baked rather than fail the session.
 	if _, err := runner.Run(ctx, workspace, env, "rev-parse", "--verify", "--quiet", "origin/HEAD^{commit}"); err == nil {
 		// A partial clone downloads the new tree's file contents here, so this
-		// runs with the same credential as the fetch.
-		if _, err := runner.Run(ctx, workspace, env, "reset", "--hard", "--quiet", "origin/HEAD"); err != nil {
+		// runs through the git proxy like the fetch.
+		if _, err := runner.Run(ctx, workspace, env, gitArgs(config, "reset", "--hard", "--quiet", "origin/HEAD")...); err != nil {
 			return fmt.Errorf("move project snapshot checkout to origin/HEAD: %w", err)
 		}
 	}
@@ -978,7 +964,7 @@ func validateOrigin(ctx context.Context, runner GitRunner, workspace, expected s
 	if info, err := os.Stat(filepath.Join(workspace, ".git")); err != nil || !info.IsDir() {
 		return errors.New("existing workspace is not a Git repository")
 	}
-	output, err := runner.Run(ctx, workspace, nil, "remote", "get-url", "origin")
+	output, err := OriginURL(ctx, runner, workspace)
 	if err != nil {
 		return fmt.Errorf("read workspace origin: %w", err)
 	}
@@ -989,31 +975,28 @@ func validateOrigin(ctx context.Context, runner GitRunner, workspace, expected s
 	return nil
 }
 
-func withGitCredential(token string, operation func(map[string]string) error) error {
-	if token == "" {
-		return operation(map[string]string{"GIT_TERMINAL_PROMPT": "0"})
+// withGitProxy runs a network git operation through the session's git proxy:
+// config is the git -c arguments that send it there (GitProxy.configArgs),
+// and git never prompts. A zero proxy is an anonymous public operation, which
+// still clears every configured credential helper.
+func withGitProxy(proxy GitProxy, operation func(env map[string]string, config []string) error) error {
+	config := proxy.configArgs()
+	if config == nil {
+		config = []string{"-c", "credential.helper="}
 	}
-	return withAskpass(token, operation)
+	return operation(map[string]string{"GIT_TERMINAL_PROMPT": "0"}, config)
 }
 
-func withAskpass(token string, operation func(map[string]string) error) error {
-	dir, err := os.MkdirTemp("", "ao-git-askpass-")
-	if err != nil {
-		return fmt.Errorf("create askpass directory: %w", err)
-	}
-	defer os.RemoveAll(dir)
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("secure askpass directory: %w", err)
-	}
-	path := filepath.Join(dir, "askpass")
-	script := "#!/bin/sh\ncase \"$1\" in\n*Username*) printf '%s\\n' x-access-token;;\n*Password*) printf '%s\\n' \"$AO_GIT_TOKEN\";;\n*) exit 1;;\nesac\n"
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		return fmt.Errorf("write askpass helper: %w", err)
-	}
-	return operation(map[string]string{
-		"GIT_ASKPASS": path, "GIT_ASKPASS_REQUIRE": "force",
-		"GIT_TERMINAL_PROMPT": "0", "AO_GIT_TOKEN": token,
-	})
+// gitArgs is a git command line after its -c configuration arguments.
+func gitArgs(config []string, args ...string) []string {
+	return append(append([]string(nil), config...), args...)
+}
+
+// OriginURL is the origin remote's URL as the checkout configures it, before
+// any url.<base>.insteadOf rewrite: the session's own rewrite sends every
+// GitHub URL to the git proxy, while a checkout's identity is the GitHub URL.
+func OriginURL(ctx context.Context, runner GitRunner, dir string) (string, error) {
+	return runner.Run(ctx, dir, nil, "config", "--get", "remote.origin.url")
 }
 
 // GitHubRepositoryIdentity returns the lower-case owner/name a GitHub URL

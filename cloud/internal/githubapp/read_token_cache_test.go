@@ -150,7 +150,7 @@ func TestWriteTokensAreNeverCached(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := client.repositoryWriteTokenForRepos(context.Background(), 1234, []int64{7}); err != nil {
+	if _, err := client.repositoryCLIToken(context.Background(), 1234, []int64{7}); err != nil {
 		t.Fatal(err)
 	}
 	if backend.mints.Load() != 4 {
@@ -160,6 +160,33 @@ func TestWriteTokensAreNeverCached(t *testing.T) {
 	defer backend.mu.Unlock()
 	if got := backend.permissions[1]["contents"]; got != "write" {
 		t.Fatalf("a write request was answered from the read cache: %v", backend.permissions)
+	}
+}
+
+// The git proxy's write tokens stay on the control plane, so they are reused
+// like read tokens, but never answered from the read cache or vice versa.
+func TestProxyWriteTokensAreReusedApartFromReadTokens(t *testing.T) {
+	backend := &tokenBackend{expiresIn: time.Hour}
+	client := newTokenTestClient(t, backend)
+	if _, err := client.repositoryToken(context.Background(), 1234, 7); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		token, err := client.proxyWriteToken(context.Background(), 1234, 7)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token.Token == "" {
+			t.Fatal("proxy write token is empty")
+		}
+	}
+	if backend.mints.Load() != 2 {
+		t.Fatalf("mints = %d, want 1 read + 1 reused proxy write", backend.mints.Load())
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if got := backend.permissions[1]["contents"]; got != "write" {
+		t.Fatalf("the proxy write token was answered from the read cache: %v", backend.permissions)
 	}
 }
 

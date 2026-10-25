@@ -118,7 +118,7 @@ func FindExistingCheckout(ctx context.Context, runner GitRunner, home, repositor
 		if _, err := os.Stat(filepath.Join(candidate, ".git")); err != nil {
 			continue
 		}
-		output, err := runner.Run(ctx, candidate, nil, "remote", "get-url", "origin")
+		output, err := OriginURL(ctx, runner, candidate)
 		if err != nil {
 			continue
 		}
@@ -303,10 +303,7 @@ func PrepareReusedCheckout(ctx context.Context, runner GitRunner, workspace stri
 	if err != nil {
 		return fmt.Errorf("validate checkout grant: %w", err)
 	}
-	if grant.Token != "" && !grant.ExpiresAt.After(time.Now().Add(30*time.Second)) {
-		return errors.New("checkout grant is expired")
-	}
-	output, err := runner.Run(ctx, workspace, nil, "remote", "get-url", "origin")
+	output, err := OriginURL(ctx, runner, workspace)
 	if err != nil {
 		return fmt.Errorf("read workspace origin: %w", err)
 	}
@@ -314,11 +311,11 @@ func PrepareReusedCheckout(ctx context.Context, runner GitRunner, workspace stri
 		return errors.New("workspace origin does not match the authorized repository")
 	}
 	// Fetch from the authorized URL rather than the named remote: a template
-	// may have cloned over SSH, where the grant cannot authenticate. The
+	// may have cloned over SSH, which the git proxy does not carry. The
 	// refspec keeps origin's remote-tracking refs current either way.
-	return withGitCredential(grant.Token, func(env map[string]string) error {
-		_, err := runner.Run(ctx, workspace, env, "-c", "credential.helper=",
-			"fetch", "--prune", "--", grant.CloneURL, "+refs/heads/*:refs/remotes/origin/*")
+	return withGitProxy(grant.Proxy, func(env map[string]string, config []string) error {
+		_, err := runner.Run(ctx, workspace, env, gitArgs(config,
+			"fetch", "--prune", "--", grant.CloneURL, "+refs/heads/*:refs/remotes/origin/*")...)
 		return err
 	})
 }
@@ -392,17 +389,16 @@ func CheckoutContinuesRemoteBranch(ctx context.Context, runner GitRunner, worksp
 // ReusedCheckoutGitEnvironment scopes AO's git setup to the worker's process
 // tree through git's environment configuration (the equivalent of git -c)
 // instead of writing it into the reused checkout or the user's global config:
-// the session credential helper (after clearing any other helper), per-path
-// credential scoping, and the AO commit identity. Every git command the worker
-// and its agent run inherits it; the user's own shells outside AO do not.
-func ReusedCheckoutGitEnvironment(dataDir string) map[string]string {
-	entries := [][2]string{
-		{"credential.helper", ""},
-		{"credential.helper", GitCredentialHelperPath(dataDir)},
-		{"credential.useHttpPath", "true"},
-		{"user.name", cloudGitAuthorName},
-		{"user.email", cloudGitAuthorEmail},
-	}
+// GitHub URLs rewritten to the session's git proxy, the session credential
+// helper (after clearing any other helper), and the session's commit
+// identity. Every git command the worker and its agent run inherits it; the
+// user's own shells outside AO do not.
+func ReusedCheckoutGitEnvironment(publicURL, sessionID, dataDir string, identity GitIdentity) map[string]string {
+	identity = identity.orDefault()
+	entries := append(GitProxyConfig(publicURL, sessionID, dataDir),
+		[2]string{"user.name", identity.Name},
+		[2]string{"user.email", identity.Email},
+	)
 	environment := map[string]string{"GIT_CONFIG_COUNT": strconv.Itoa(len(entries))}
 	for index, entry := range entries {
 		environment["GIT_CONFIG_KEY_"+strconv.Itoa(index)] = entry[0]

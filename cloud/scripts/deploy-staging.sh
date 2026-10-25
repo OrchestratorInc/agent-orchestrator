@@ -58,6 +58,10 @@ WORKER_SECRET_ID="${AO_CLOUD_WORKER_SECRET_ID:-ao-cloud/staging/worker}"
 # billing off, as before.
 STRIPE_SECRET_ID="${AO_CLOUD_STRIPE_SECRET_ID:-ao-cloud/staging/stripe}"
 SUPPORT_SECRET_ID="${AO_CLOUD_SUPPORT_SECRET_ID:-ao-cloud/staging/support}"
+# Staging's own GitHub App (app_id, app_slug, client_id, client_secret,
+# private_key, webhook_secret, state_key, as in production's secret). Optional:
+# without it staging reaches GitHub only through the repository broker.
+GITHUB_SECRET_ID="${AO_CLOUD_GITHUB_SECRET_ID:-ao-cloud/staging/github}"
 HEAD_SHA="$(git rev-parse HEAD)"
 RELEASE="${RELEASE_ARG:-$HEAD_SHA}"
 IMAGE_TAG="${RELEASE//+/-}-linux-amd64"
@@ -238,6 +242,13 @@ fi
 unset worker_settings
 # The operator support lookup token is optional: without it the endpoint is off.
 support_secret_arn="$(optional_secret_arn "$SUPPORT_SECRET_ID")"
+# Only a missing secret leaves staging without its GitHub App.
+github_secret_arn="$(optional_secret_arn "$GITHUB_SECRET_ID")"
+if [[ -n "$github_secret_arn" ]]; then
+	echo "GitHub App: enabled from $GITHUB_SECRET_ID" >&2
+else
+	echo "GitHub App: off ($GITHUB_SECRET_ID not found)" >&2
+fi
 # Only a missing secret turns billing off; any other lookup error fails here.
 stripe_secret_arn="$(optional_secret_arn "$STRIPE_SECRET_ID")"
 if [[ -n "$stripe_secret_arn" ]]; then
@@ -472,6 +483,17 @@ register_task_definition() {
 		fi
 		if [[ -n "$support_secret_arn" ]]; then
 			render_args+=(--set-secret "AO_CLOUD_SUPPORT_TOKEN=${support_secret_arn}:token::")
+		fi
+		if [[ -n "$github_secret_arn" ]]; then
+			render_args+=(
+				--set-secret "AO_CLOUD_GITHUB_APP_ID=${github_secret_arn}:app_id::"
+				--set-secret "AO_CLOUD_GITHUB_APP_SLUG=${github_secret_arn}:app_slug::"
+				--set-secret "AO_CLOUD_GITHUB_CLIENT_ID=${github_secret_arn}:client_id::"
+				--set-secret "AO_CLOUD_GITHUB_CLIENT_SECRET=${github_secret_arn}:client_secret::"
+				--set-secret "AO_CLOUD_GITHUB_PRIVATE_KEY=${github_secret_arn}:private_key::"
+				--set-secret "AO_CLOUD_GITHUB_WEBHOOK_SECRET=${github_secret_arn}:webhook_secret::"
+				--set-secret "AO_CLOUD_GITHUB_STATE_KEY=${github_secret_arn}:state_key::"
+			)
 		fi
 		if [[ -n "$stripe_secret_arn" ]]; then
 			render_args+=(

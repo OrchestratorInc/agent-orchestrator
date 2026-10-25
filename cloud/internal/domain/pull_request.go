@@ -66,6 +66,8 @@ type RaisePullRequest struct {
 	// request in; empty means the main repository. Any other value must be
 	// one of the project's additional repositories.
 	Repository string
+	// Draft opens the pull request as a draft.
+	Draft bool
 }
 
 // PullRequestRef identifies a pull request for background status polling.

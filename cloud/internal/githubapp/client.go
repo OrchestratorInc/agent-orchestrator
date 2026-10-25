@@ -23,9 +23,12 @@ import (
 
 const (
 	defaultAPIBaseURL = "https://api.github.com"
-	defaultWebBaseURL = "https://github.com"
+	defaultWebBaseURL = DefaultWebBaseURL
 	maxResponseBytes  = 8 << 20
 )
+
+// DefaultWebBaseURL is GitHub's web origin, which git URLs start with.
+const DefaultWebBaseURL = "https://github.com"
 
 type Config struct {
 	AppID         int64
@@ -51,6 +54,9 @@ type Client struct {
 	now          func() time.Time
 	// readTokens reuses contents:read checkout tokens (see readTokenCache).
 	readTokens readTokenCache
+	// proxyWriteTokens reuses the write tokens the git proxy pushes with; they
+	// never leave the control plane (see proxyWriteToken).
+	proxyWriteTokens readTokenCache
 }
 
 type HTTPError struct {
@@ -587,11 +593,13 @@ type CreatePullRequestInput struct {
 	Body  string
 	Head  string
 	Base  string
+	Draft bool
 }
 
-// CreatePullRequest opens a pull request using an installation access token
-// (from repositoryWriteToken, not repositoryToken — this needs pull_requests
-// write, not just contents read).
+// CreatePullRequest opens a pull request with a token that can write pull
+// requests: a GitHub user token (the pull request is then authored by that
+// user) or an installation token from repositoryWriteToken (authored by the
+// App).
 func (c *Client) CreatePullRequest(
 	ctx context.Context,
 	token, owner, repo string,
@@ -618,6 +626,7 @@ func (c *Client) CreatePullRequest(
 			"body":  input.Body,
 			"head":  head,
 			"base":  base,
+			"draft": input.Draft,
 		},
 		&pr,
 	); err != nil {
@@ -1053,14 +1062,28 @@ func (c *Client) repositoryWriteToken(
 	return response, nil
 }
 
-// repositoryWriteTokenForRepos is repositoryWriteToken's multi-repository
-// counterpart: it mints one short-lived installation token scoped to a set of
-// repositories with write access to their contents and pull requests. It backs
-// a worker's push and gh-CLI pull-request creation across the project's primary
-// repository plus any declared extra repositories that resolve within the same
-// installation — the write-side mirror of repositoryReadTokenForRepos. The
-// scope is exactly the given IDs; nothing is granted installation-wide.
-func (c *Client) repositoryWriteTokenForRepos(
+// proxyWriteToken is repositoryWriteToken reused while it has lifetime left.
+// Only the control plane's git proxy uses it: the token is attached to the
+// push it forwards to GitHub and is never handed to a worker, so keeping it
+// for the rest of its hour exposes nothing new, and a push (an info/refs
+// request then a receive-pack request) does not mint twice.
+func (c *Client) proxyWriteToken(
+	ctx context.Context,
+	installationID, repositoryID int64,
+) (installationAccessToken, error) {
+	if installationID <= 0 || repositoryID <= 0 {
+		return installationAccessToken{}, errors.New("GitHub installation token scope is invalid")
+	}
+	return c.proxyWriteTokens.get(ctx, readTokenKey(installationID, []int64{repositoryID}), c.now,
+		func(ctx context.Context) (installationAccessToken, error) {
+			return c.repositoryWriteToken(ctx, installationID, repositoryID)
+		})
+}
+
+// repositoryCLIToken mints the sandbox GitHub CLI's token: read access to the
+// repositories' contents and write access to their pull requests, so gh can
+// read and comment on pull requests but cannot push.
+func (c *Client) repositoryCLIToken(
 	ctx context.Context,
 	installationID int64,
 	repositoryIDs []int64,
@@ -1076,7 +1099,7 @@ func (c *Client) repositoryWriteTokenForRepos(
 	response, err := c.createInstallationToken(ctx, installationID, map[string]any{
 		"repository_ids": repositoryIDs,
 		"permissions": map[string]string{
-			"contents":      "write",
+			"contents":      "read",
 			"pull_requests": "write",
 		},
 	})

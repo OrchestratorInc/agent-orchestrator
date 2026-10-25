@@ -165,8 +165,11 @@ type WorkerTokens interface {
 
 type CheckoutBroker interface {
 	IssueCheckoutGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
-	IssuePushGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
-	IssuePushGrantForRepo(context.Context, string, string, string) (githubapp.CheckoutGrant, error)
+	// IssueCLIGrant is the sandbox GitHub CLI's token (see workerGitHubToken).
+	IssueCLIGrant(context.Context, string, string) (githubapp.CheckoutGrant, error)
+	// IssueGitProxyGrant is the credential the git proxy forwards one fetch or
+	// push of a session repository with; it never leaves the control plane.
+	IssueGitProxyGrant(ctx context.Context, orgID, sessionID, repoFullName string, push bool) (githubapp.CheckoutGrant, error)
 	RaisePullRequest(context.Context, string, string, domain.RaisePullRequest) (domain.PullRequest, error)
 	ClaimPullRequest(context.Context, string, string, string) (domain.PullRequest, error)
 	SubmitReview(context.Context, string, string, string, domain.SubmitReviewResult) (domain.ReviewRun, error)
@@ -199,30 +202,35 @@ type Server struct {
 	workerTokens     WorkerTokens
 	// workerTokenLifetime is zero when the deployment does not override the
 	// protocol default; workerTokenTTL() resolves that.
-	workerTokenLifetime     time.Duration
-	workerRequestTimeout    time.Duration
-	maxSandboxes            int
-	environment             string
-	release                 string
-	draining                atomic.Bool
-	drainOnce               sync.Once
-	drain                   chan struct{}
-	logger                  *slog.Logger
-	github                  *githubapp.Service
-	reviewService           *githubapp.Service
-	checkoutBroker          CheckoutBroker
-	patWrites               *githubapp.PATWriteService
-	brokerAuthToken         string
-	environmentControlToken string
-	secretCipher            *secrets.Cipher
-	credentialValidator     credentialValidator
-	repositoryProbeClient   *http.Client
-	webhookMaxBody          int64
-	terminalStreamEnabled   bool
-	terminalRelayEnabled    bool
-	terminalStreams         *terminalStreams
-	agentBrowserRelays      *agentBrowserRelays
-	workWaiters             *workWaiters
+	workerTokenLifetime  time.Duration
+	workerRequestTimeout time.Duration
+	maxSandboxes         int
+	environment          string
+	release              string
+	draining             atomic.Bool
+	drainOnce            sync.Once
+	drain                chan struct{}
+	logger               *slog.Logger
+	github               *githubapp.Service
+	reviewService        *githubapp.Service
+	checkoutBroker       CheckoutBroker
+	patWrites            *githubapp.PATWriteService
+	// gitUpstreamURL, gitProxyClient and allowAnonymousGitHubCheckout
+	// configure the git proxy (see Options).
+	gitUpstreamURL               string
+	gitProxyClient               *http.Client
+	allowAnonymousGitHubCheckout bool
+	brokerAuthToken              string
+	environmentControlToken      string
+	secretCipher                 *secrets.Cipher
+	credentialValidator          credentialValidator
+	repositoryProbeClient        *http.Client
+	webhookMaxBody               int64
+	terminalStreamEnabled        bool
+	terminalRelayEnabled         bool
+	terminalStreams              *terminalStreams
+	agentBrowserRelays           *agentBrowserRelays
+	workWaiters                  *workWaiters
 	// sessionEventWaiters wakes a session's event streams on ao_session_event;
 	// sessionEventNotify is set once that listener runs.
 	sessionEventWaiters *workWaiters
@@ -279,25 +287,33 @@ type Options struct {
 	WorkerHelperBinary []byte
 	// WorkerBuilds are additional architectures' worker/helper binaries served
 	// from the same content-addressed self-update route.
-	WorkerBuilds            map[string]sandbox.WorkerBuild
-	WorkerRequestTimeout    time.Duration
-	MaxSandboxes            int
-	Environment             string
-	Release                 string
-	Logger                  *slog.Logger
-	GitHub                  *githubapp.Service
-	ReviewService           *githubapp.Service
-	CheckoutBroker          CheckoutBroker
-	PATWrites               *githubapp.PATWriteService
-	BrokerAuthToken         string
-	EnvironmentControlToken string
-	SecretCipher            *secrets.Cipher
-	CredentialValidator     credentialValidator
-	RepositoryProbeClient   *http.Client
-	WebhookMaxBody          int64
-	TerminalStreamEnabled   bool
-	TerminalRelayEnabled    bool
-	NotificationWake        func()
+	WorkerBuilds         map[string]sandbox.WorkerBuild
+	WorkerRequestTimeout time.Duration
+	MaxSandboxes         int
+	Environment          string
+	Release              string
+	Logger               *slog.Logger
+	GitHub               *githubapp.Service
+	ReviewService        *githubapp.Service
+	CheckoutBroker       CheckoutBroker
+	PATWrites            *githubapp.PATWriteService
+	// GitUpstreamURL is the GitHub web origin the git proxy forwards to;
+	// empty is githubapp.DefaultWebBaseURL.
+	GitUpstreamURL string
+	// GitProxyClient is the git proxy's client to GitHub; nil builds one.
+	GitProxyClient *http.Client
+	// AllowAnonymousGitHubCheckout lets the git proxy read a public repository
+	// without a credential for a session that has no repository grant.
+	AllowAnonymousGitHubCheckout bool
+	BrokerAuthToken              string
+	EnvironmentControlToken      string
+	SecretCipher                 *secrets.Cipher
+	CredentialValidator          credentialValidator
+	RepositoryProbeClient        *http.Client
+	WebhookMaxBody               int64
+	TerminalStreamEnabled        bool
+	TerminalRelayEnabled         bool
+	NotificationWake             func()
 	// Analytics receives server-side product events. Nil disables them.
 	Analytics analytics.Sink
 	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
@@ -387,52 +403,55 @@ func New(options Options) *Server {
 		}
 	}
 	server := &Server{
-		store:                     options.Store,
-		transcripts:               options.Transcripts,
-		workos:                    options.WorkOS,
-		localAuthEnabled:          options.LocalAuthEnabled,
-		localSessionTTL:           options.LocalSessionTTL,
-		localAuthLimiter:          newFixedWindowLimiter(10, time.Minute, 4096),
-		sandboxProvider:           sandboxProvider,
-		availableSandboxProviders: availableSandboxProviders,
-		capabilityGatedProviders:  capabilityGatedProviders,
-		defaultOrgCapabilities:    defaultOrgCapabilities,
-		coderTemplates:            options.CoderTemplates,
-		coderTemplateIDs:          options.CoderTemplateIDs,
-		provisioning:              options.Provisioning,
-		workerTokens:              options.WorkerTokens,
-		workerTokenLifetime:       options.WorkerTokenTTL,
-		workerRequestTimeout:      workerRequestTimeout,
-		maxSandboxes:              maxSandboxes,
-		environment:               environment,
-		release:                   release,
-		drain:                     make(chan struct{}),
-		logger:                    logger,
-		github:                    options.GitHub,
-		reviewService:             options.ReviewService,
-		checkoutBroker:            options.CheckoutBroker,
-		patWrites:                 options.PATWrites,
-		brokerAuthToken:           options.BrokerAuthToken,
-		environmentControlToken:   options.EnvironmentControlToken,
-		secretCipher:              options.SecretCipher,
-		credentialValidator:       options.CredentialValidator,
-		repositoryProbeClient:     options.RepositoryProbeClient,
-		webhookMaxBody:            webhookMaxBody,
-		terminalStreamEnabled:     options.TerminalStreamEnabled,
-		terminalRelayEnabled:      options.TerminalRelayEnabled,
-		terminalStreams:           newTerminalStreams(),
-		agentBrowserRelays:        newAgentBrowserRelays(),
-		workWaiters:               newWorkWaiters(),
-		sessionEventWaiters:       newWorkWaiters(),
-		sessionLiveWaiters:        newWorkWaiters(),
-		notificationWake:          options.NotificationWake,
-		analytics:                 options.Analytics,
-		sandboxWake:               options.SandboxWake,
-		projectSnapshots:          options.ProjectSnapshots,
-		billingOptions:            options.Billing,
-		notificationWaiters:       newNotificationWaiters(),
-		activity:                  options.Activity,
-		supportToken:              options.SupportToken,
+		store:                        options.Store,
+		transcripts:                  options.Transcripts,
+		workos:                       options.WorkOS,
+		localAuthEnabled:             options.LocalAuthEnabled,
+		localSessionTTL:              options.LocalSessionTTL,
+		localAuthLimiter:             newFixedWindowLimiter(10, time.Minute, 4096),
+		sandboxProvider:              sandboxProvider,
+		availableSandboxProviders:    availableSandboxProviders,
+		capabilityGatedProviders:     capabilityGatedProviders,
+		defaultOrgCapabilities:       defaultOrgCapabilities,
+		coderTemplates:               options.CoderTemplates,
+		coderTemplateIDs:             options.CoderTemplateIDs,
+		provisioning:                 options.Provisioning,
+		workerTokens:                 options.WorkerTokens,
+		workerTokenLifetime:          options.WorkerTokenTTL,
+		workerRequestTimeout:         workerRequestTimeout,
+		maxSandboxes:                 maxSandboxes,
+		environment:                  environment,
+		release:                      release,
+		drain:                        make(chan struct{}),
+		logger:                       logger,
+		github:                       options.GitHub,
+		reviewService:                options.ReviewService,
+		checkoutBroker:               options.CheckoutBroker,
+		patWrites:                    options.PATWrites,
+		gitUpstreamURL:               strings.TrimRight(options.GitUpstreamURL, "/"),
+		gitProxyClient:               options.GitProxyClient,
+		allowAnonymousGitHubCheckout: options.AllowAnonymousGitHubCheckout,
+		brokerAuthToken:              options.BrokerAuthToken,
+		environmentControlToken:      options.EnvironmentControlToken,
+		secretCipher:                 options.SecretCipher,
+		credentialValidator:          options.CredentialValidator,
+		repositoryProbeClient:        options.RepositoryProbeClient,
+		webhookMaxBody:               webhookMaxBody,
+		terminalStreamEnabled:        options.TerminalStreamEnabled,
+		terminalRelayEnabled:         options.TerminalRelayEnabled,
+		terminalStreams:              newTerminalStreams(),
+		agentBrowserRelays:           newAgentBrowserRelays(),
+		workWaiters:                  newWorkWaiters(),
+		sessionEventWaiters:          newWorkWaiters(),
+		sessionLiveWaiters:           newWorkWaiters(),
+		notificationWake:             options.NotificationWake,
+		analytics:                    options.Analytics,
+		sandboxWake:                  options.SandboxWake,
+		projectSnapshots:             options.ProjectSnapshots,
+		billingOptions:               options.Billing,
+		notificationWaiters:          newNotificationWaiters(),
+		activity:                     options.Activity,
+		supportToken:                 options.SupportToken,
 	}
 	if rows, ok := options.Store.(sessionArtifactStore); ok && options.Artifacts != nil {
 		server.artifacts = options.Artifacts
@@ -465,6 +484,12 @@ func New(options Options) *Server {
 	}
 	if server.checkoutBroker == nil && options.GitHub != nil {
 		server.checkoutBroker = options.GitHub
+	}
+	if server.gitUpstreamURL == "" {
+		server.gitUpstreamURL = githubapp.DefaultWebBaseURL
+	}
+	if server.gitProxyClient == nil {
+		server.gitProxyClient = newGitProxyClient()
 	}
 	if server.reviewService == nil && options.GitHub != nil {
 		server.reviewService = options.GitHub
@@ -556,6 +581,11 @@ func New(options Options) *Server {
 		// they ship in every sandbox image — so this is content-addressed and
 		// unauthenticated like bootstrap itself.
 		router.Get("/worker/binary/{sha256}", server.serveWorkerBinary)
+		// Git in the sandbox authenticates to the git proxy with HTTP Basic
+		// (the worker token as password), not the worker header, so the proxy
+		// has its own authentication in front of it.
+		router.With(server.workerGitAuth).Get("/worker/git/{sessionId}/*", server.workerGitProxy)
+		router.With(server.workerGitAuth).Post("/worker/git/{sessionId}/*", server.workerGitProxy)
 		router.Group(func(router chi.Router) {
 			router.Use(server.workerAuth)
 			router.Post("/worker/heartbeat", server.workerHeartbeat)
@@ -576,7 +606,6 @@ func New(options Options) *Server {
 			router.Post("/worker/turns/{turnId}/fail", server.workerFailTurn)
 			router.Get("/worker/credential", server.workerCredential)
 			router.Post("/worker/checkout-grant", server.workerCheckoutGrant)
-			router.Post("/worker/push-grant", server.workerPushGrant)
 			router.Post("/worker/github-token", server.workerGitHubToken)
 			router.Post("/worker/pull-requests", server.workerRaisePullRequest)
 			router.Post("/worker/pull-requests/claim", server.workerClaimPullRequest)

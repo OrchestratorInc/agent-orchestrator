@@ -136,12 +136,10 @@ func TestGetTranscriptUsesThePrefetchOnce(t *testing.T) {
 	}
 }
 
-// The checkout uses the startup grant once; a grant about to expire, or any
-// later request, goes to the control plane.
-func TestCheckoutGrantUsesThePrefetchUnlessNearlyExpired(t *testing.T) {
+// The checkout uses the startup grant once; any later request goes to the
+// control plane.
+func TestCheckoutGrantUsesThePrefetchOnce(t *testing.T) {
 	var calls atomic.Int32
-	var expiresIn atomic.Int64
-	expiresIn.Store(int64(time.Hour))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/worker/checkout-grant" {
 			http.NotFound(w, r)
@@ -149,8 +147,7 @@ func TestCheckoutGrantUsesThePrefetchUnlessNearlyExpired(t *testing.T) {
 		}
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		expires := time.Now().Add(time.Duration(expiresIn.Load())).UTC().Format(time.RFC3339Nano)
-		_, _ = io.WriteString(w, `{"cloneUrl":"https://github.com/o/r.git","token":"t","expiresAt":"`+expires+`"}`)
+		_, _ = io.WriteString(w, `{"cloneUrl":"https://github.com/o/r.git"}`)
 	}))
 	defer server.Close()
 	c := &client{baseURL: server.URL, http: server.Client()}
@@ -161,13 +158,5 @@ func TestCheckoutGrantUsesThePrefetchUnlessNearlyExpired(t *testing.T) {
 	}
 	if _, err := c.checkoutGrant(context.Background()); err != nil || calls.Load() != 2 {
 		t.Fatalf("second grant: err=%v calls=%d, want a fresh request", err, calls.Load())
-	}
-
-	expiresIn.Store(int64(time.Minute))
-	c.startStartupPrefetch(context.Background(), worker.LaunchContext{RepositoryURL: "https://github.com/o/r.git", Harness: "none"})
-	<-c.grantPrefetch.done
-	before := calls.Load()
-	if _, err := c.checkoutGrant(context.Background()); err != nil || calls.Load() != before+1 {
-		t.Fatalf("nearly expired prefetch was used: err=%v calls=%d", err, calls.Load()-before)
 	}
 }

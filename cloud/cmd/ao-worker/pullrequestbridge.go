@@ -27,6 +27,8 @@ type pullRequestBridgeRequest struct {
 	// its GitHub owner/name or its checkout's folder name. Empty is the main
 	// repository.
 	Repository string `json:"repository"`
+	// Draft opens the pull request as a draft.
+	Draft bool `json:"draft"`
 }
 
 func runPullRequestBridge(
@@ -34,6 +36,7 @@ func runPullRequestBridge(
 	socketPath string,
 	apiClient *client,
 	workspace, dataDir string,
+	proxy worker.GitProxy,
 	launch worker.LaunchContext,
 	logger *slog.Logger,
 ) error {
@@ -48,7 +51,7 @@ func runPullRequestBridge(
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /pull-request", func(w http.ResponseWriter, r *http.Request) {
-		handlePullRequestBridgeRequest(w, r, apiClient, workspace, dataDir, launch, logger)
+		handlePullRequestBridgeRequest(w, r, apiClient, workspace, dataDir, proxy, launch, logger)
 	})
 	server := &http.Server{Handler: mux}
 	errCh := make(chan error, 1)
@@ -73,6 +76,7 @@ func handlePullRequestBridgeRequest(
 	r *http.Request,
 	apiClient pullRequestBridgeClient,
 	workspace, dataDir string,
+	proxy worker.GitProxy,
 	launch worker.LaunchContext,
 	logger *slog.Logger,
 ) {
@@ -119,13 +123,9 @@ func handlePullRequestBridgeRequest(
 		writeBridgeError(w, http.StatusBadRequest, "refusing to push "+input.Branch+": it is the base branch of "+checkout.Name+"; commit on the session branch instead")
 		return
 	}
-	grant, err := apiClient.pushGrant(ctx)
-	if err != nil {
-		logger.Error("pull request bridge: push grant failed", "error", err)
-		writeBridgeError(w, http.StatusBadGateway, "could not obtain a push grant")
-		return
-	}
-	if err := pushBranch(ctx, worker.ExecGitRunner{}, checkout.Path, input.Branch, grant); err != nil {
+	// The push goes through the control plane's git proxy, which checks the
+	// session's repository grant and holds the write credential.
+	if err := pushBranch(ctx, worker.ExecGitRunner{}, checkout.Path, input.Branch, proxy); err != nil {
 		logger.Error("pull request bridge: push failed", "error", err)
 		writeBridgeError(w, http.StatusBadGateway, "push failed: "+err.Error())
 		return
@@ -136,6 +136,7 @@ func handlePullRequestBridgeRequest(
 		HeadBranch: input.Branch,
 		BaseBranch: input.Base,
 		Repository: repository,
+		Draft:      input.Draft,
 	})
 	if err != nil {
 		logger.Error("pull request bridge: raise pull request failed", "error", err)
@@ -164,7 +165,6 @@ func pullRequestHelp(launch worker.LaunchContext) string {
 
 // pullRequestBridgeClient is the control-plane surface the bridge uses.
 type pullRequestBridgeClient interface {
-	pushGrant(context.Context) (worker.CheckoutGrantResponse, error)
 	raisePullRequest(context.Context, worker.RaisePullRequestRequest) (worker.RaisePullRequestResponse, error)
 }
 

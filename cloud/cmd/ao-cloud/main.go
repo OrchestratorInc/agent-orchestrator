@@ -395,11 +395,9 @@ func run(logger *slog.Logger) error {
 		go githubService.Run(ctx)
 		go githubService.RunAutomaticReviews(ctx, store)
 	}
-	var checkoutBroker httpapi.CheckoutBroker
-	if githubService != nil {
-		checkoutBroker = githubService
-	} else if cfg.RepositoryBrokerURL != "" {
-		checkoutBroker, err = githubapp.NewRemoteCheckoutBroker(
+	var remoteBroker *githubapp.RemoteCheckoutBroker
+	if cfg.RepositoryBrokerURL != "" {
+		remoteBroker, err = githubapp.NewRemoteCheckoutBroker(
 			store,
 			providerCipher,
 			cfg.RepositoryBrokerURL,
@@ -410,6 +408,17 @@ func run(logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+	}
+	var checkoutBroker httpapi.CheckoutBroker
+	switch {
+	case githubService != nil && remoteBroker != nil:
+		// Staging with its own GitHub App still reads the projects production
+		// created for it through the remote broker.
+		checkoutBroker = githubapp.LocalFirstBroker{Service: githubService, Remote: remoteBroker}
+	case githubService != nil:
+		checkoutBroker = githubService
+	case remoteBroker != nil:
+		checkoutBroker = remoteBroker
 	}
 	reviewService := githubService
 	if reviewService == nil {
@@ -522,38 +531,40 @@ func run(logger *slog.Logger) error {
 		logger.Info("artifact share links enabled", "origin", cfg.ArtifactShareOrigin, "limit", cfg.ArtifactShareLimit)
 	}
 	apiOptions := httpapi.Options{
-		Store:                     store,
-		CoderTemplates:            coderTemplates,
-		CoderTemplateIDs:          cfg.CoderTemplateIDs,
-		Transcripts:               store.SessionTranscripts(),
-		WorkOS:                    workosVerifier,
-		LocalAuthEnabled:          cfg.LocalAuthEnabled,
-		LocalSessionTTL:           cfg.LocalSessionTTL,
-		SandboxProvider:           cfg.SandboxProvider,
-		AvailableSandboxProviders: cfg.AvailableSandboxProviders,
-		CapabilityGatedProviders:  cfg.CapabilityGatedProviders,
-		DefaultOrgCapabilities:    cfg.DefaultOrgCapabilities,
-		Provisioning:              provisioningDefaults(cfg),
-		WorkerTokens:              workerTokens,
-		WorkerTokenTTL:            cfg.WorkerTokenTTL(),
-		WorkerBinary:              apiWorkerBinary,
-		WorkerHelperBinary:        apiWorkerHelperBinary,
-		WorkerBuilds:              apiWorkerBuilds,
-		MaxSandboxes:              cfg.MaxSandboxesPerOrg,
-		Environment:               cfg.Environment,
-		Release:                   cfg.Release,
-		Logger:                    logger,
-		GitHub:                    githubService,
-		ReviewService:             reviewService,
-		CheckoutBroker:            checkoutBroker,
-		PATWrites:                 patWrites,
-		BrokerAuthToken:           cfg.RepositoryBrokerToken,
-		EnvironmentControlToken:   cfg.EnvironmentControlToken,
-		SecretCipher:              providerCipher,
-		WebhookMaxBody:            cfg.GitHub.WebhookMaxBody,
-		TerminalStreamEnabled:     cfg.TerminalStreamEnabled,
-		TerminalRelayEnabled:      cfg.TerminalRelayEnabled,
-		NotificationWake:          notificationProcessor.Wake,
+		Store:                        store,
+		CoderTemplates:               coderTemplates,
+		CoderTemplateIDs:             cfg.CoderTemplateIDs,
+		Transcripts:                  store.SessionTranscripts(),
+		WorkOS:                       workosVerifier,
+		LocalAuthEnabled:             cfg.LocalAuthEnabled,
+		LocalSessionTTL:              cfg.LocalSessionTTL,
+		SandboxProvider:              cfg.SandboxProvider,
+		AvailableSandboxProviders:    cfg.AvailableSandboxProviders,
+		CapabilityGatedProviders:     cfg.CapabilityGatedProviders,
+		DefaultOrgCapabilities:       cfg.DefaultOrgCapabilities,
+		Provisioning:                 provisioningDefaults(cfg),
+		WorkerTokens:                 workerTokens,
+		WorkerTokenTTL:               cfg.WorkerTokenTTL(),
+		WorkerBinary:                 apiWorkerBinary,
+		WorkerHelperBinary:           apiWorkerHelperBinary,
+		WorkerBuilds:                 apiWorkerBuilds,
+		MaxSandboxes:                 cfg.MaxSandboxesPerOrg,
+		Environment:                  cfg.Environment,
+		Release:                      cfg.Release,
+		Logger:                       logger,
+		GitHub:                       githubService,
+		ReviewService:                reviewService,
+		CheckoutBroker:               checkoutBroker,
+		PATWrites:                    patWrites,
+		GitUpstreamURL:               githubapp.DefaultWebBaseURL,
+		AllowAnonymousGitHubCheckout: cfg.AllowAnonymousCheckout,
+		BrokerAuthToken:              cfg.RepositoryBrokerToken,
+		EnvironmentControlToken:      cfg.EnvironmentControlToken,
+		SecretCipher:                 providerCipher,
+		WebhookMaxBody:               cfg.GitHub.WebhookMaxBody,
+		TerminalStreamEnabled:        cfg.TerminalStreamEnabled,
+		TerminalRelayEnabled:         cfg.TerminalRelayEnabled,
+		NotificationWake:             notificationProcessor.Wake,
 		// Off unless AO_CLOUD_POSTHOG_KEY is set.
 		Analytics:            analytics.NewPostHog(os.Getenv("AO_CLOUD_POSTHOG_KEY"), posthogHost(), cfg.Environment, nil, logger),
 		Activity:             activityRecorder,

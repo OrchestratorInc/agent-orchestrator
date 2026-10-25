@@ -11,17 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 type fakePullRequestClient struct {
 	raised []worker.RaisePullRequestRequest
-}
-
-func (f *fakePullRequestClient) pushGrant(context.Context) (worker.CheckoutGrantResponse, error) {
-	return worker.CheckoutGrantResponse{Token: "t", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
 func (f *fakePullRequestClient) raisePullRequest(_ context.Context, request worker.RaisePullRequestRequest) (worker.RaisePullRequestResponse, error) {
@@ -32,7 +27,7 @@ func (f *fakePullRequestClient) raisePullRequest(_ context.Context, request work
 func TestPullRequestBridgeOpensThePullRequestOnTheChosenRepository(t *testing.T) {
 	var pushedFrom []string
 	previous := pushBranch
-	pushBranch = func(_ context.Context, _ worker.GitRunner, workspace, _ string, _ worker.CheckoutGrantResponse) error {
+	pushBranch = func(_ context.Context, _ worker.GitRunner, workspace, _ string, _ worker.GitProxy) error {
 		pushedFrom = append(pushedFrom, workspace)
 		return nil
 	}
@@ -59,7 +54,7 @@ func TestPullRequestBridgeOpensThePullRequestOnTheChosenRepository(t *testing.T)
 			client := &fakePullRequestClient{}
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/pull-request", strings.NewReader(test.body))
-			handlePullRequestBridgeRequest(recorder, request, client, workspace, "", launch, logger)
+			handlePullRequestBridgeRequest(recorder, request, client, workspace, "", worker.GitProxy{}, launch, logger)
 			if recorder.Code != test.status {
 				t.Fatalf("status = %d (%s), want %d", recorder.Code, recorder.Body.String(), test.status)
 			}
@@ -101,7 +96,7 @@ func TestPullRequestHelpMentionsRepositoriesOnlyWhenThereAreSome(t *testing.T) {
 func TestPullRequestBridgeRefusesToPushABaseBranch(t *testing.T) {
 	pushed := false
 	previousPush, previousBase := pushBranch, branchIsRepositoryBase
-	pushBranch = func(context.Context, worker.GitRunner, string, string, worker.CheckoutGrantResponse) error {
+	pushBranch = func(context.Context, worker.GitRunner, string, string, worker.GitProxy) error {
 		pushed = true
 		return nil
 	}
@@ -125,7 +120,7 @@ func TestPullRequestBridgeRefusesToPushABaseBranch(t *testing.T) {
 		client := &fakePullRequestClient{}
 		recorder := httptest.NewRecorder()
 		handlePullRequestBridgeRequest(recorder, httptest.NewRequest(http.MethodPost, "/pull-request", strings.NewReader(body)),
-			client, "/home/dev/work/alice", "", launch, logger)
+			client, "/home/dev/work/alice", "", worker.GitProxy{}, launch, logger)
 		if recorder.Code != http.StatusBadRequest || pushed || len(client.raised) != 0 {
 			t.Fatalf("%s: status %d pushed %v raised %d, want a refusal before any push", body, recorder.Code, pushed, len(client.raised))
 		}
@@ -139,7 +134,7 @@ func TestPullRequestBridgeRefusesToPushABaseBranch(t *testing.T) {
 func TestPullRequestBridgeRefusesARefusedRepositoryFolder(t *testing.T) {
 	var pushedFrom []string
 	previous := pushBranch
-	pushBranch = func(_ context.Context, _ worker.GitRunner, workspace, _ string, _ worker.CheckoutGrantResponse) error {
+	pushBranch = func(_ context.Context, _ worker.GitRunner, workspace, _ string, _ worker.GitProxy) error {
 		pushedFrom = append(pushedFrom, workspace)
 		return nil
 	}
@@ -165,7 +160,7 @@ func TestPullRequestBridgeRefusesARefusedRepositoryFolder(t *testing.T) {
 		client := &fakePullRequestClient{}
 		recorder := httptest.NewRecorder()
 		handlePullRequestBridgeRequest(recorder, httptest.NewRequest(http.MethodPost, "/pull-request",
-			strings.NewReader(`{"branch":"ao/1","title":"t","repository":"`+repository+`"}`)), client, workspace, dataDir, launch, logger)
+			strings.NewReader(`{"branch":"ao/1","title":"t","repository":"`+repository+`"}`)), client, workspace, dataDir, worker.GitProxy{}, launch, logger)
 		if recorder.Code != http.StatusBadRequest || len(pushedFrom) != 0 || len(client.raised) != 0 {
 			t.Fatalf("%s: status %d pushed %v raised %d, want a refusal", repository, recorder.Code, pushedFrom, len(client.raised))
 		}
@@ -173,7 +168,7 @@ func TestPullRequestBridgeRefusesARefusedRepositoryFolder(t *testing.T) {
 	client := &fakePullRequestClient{}
 	recorder := httptest.NewRecorder()
 	handlePullRequestBridgeRequest(recorder, httptest.NewRequest(http.MethodPost, "/pull-request",
-		strings.NewReader(`{"branch":"ao/1","title":"t"}`)), client, workspace, dataDir, launch, logger)
+		strings.NewReader(`{"branch":"ao/1","title":"t"}`)), client, workspace, dataDir, worker.GitProxy{}, launch, logger)
 	if recorder.Code != http.StatusOK || len(pushedFrom) != 1 || pushedFrom[0] != workspace {
 		t.Fatalf("main repository: status %d (%s) pushed %v", recorder.Code, recorder.Body.String(), pushedFrom)
 	}
