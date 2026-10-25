@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import semver from "semver";
 import { CancellationToken } from "builder-util-runtime";
 import nodePath from "node:path";
+import { requestDesktopShutdown } from "./desktop-shutdown";
 
 type UpdateSettings = {
   enabled: boolean;
@@ -3392,6 +3393,68 @@ describe("quitAndInstallUpdate", () => {
     vi.resetModules();
   });
 
+  async function requestQuit(preserveAgents: () => boolean) {
+    const requestShutdown = vi.fn(async (_port: number, _body: { stopAgents: boolean; appRunId: string }) => ({ ok: true, status: 202 }));
+    await requestDesktopShutdown({
+      keepAlive: false,
+      appRunId: "run-1",
+      status: { state: "ready", pid: 123, port: 3002 },
+      preserveAgents,
+      readRunInfo: async () => ({ pid: 123, port: 3002, startedAtMs: 0, owner: "app", appRunId: "run-1" }),
+      requestShutdown,
+    });
+    expect(requestShutdown).toHaveBeenCalledOnce();
+    return requestShutdown.mock.calls[0][1];
+  }
+
+  it.each(["darwin", "win32", "linux"] as const)("preserves agents during update quit and stops them after cancellation on %s", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      let shutdown: ReturnType<typeof requestQuit> | undefined;
+      autoUpdater.quitAndInstall.mockImplementation(() => {
+        shutdown = requestQuit(module.isUpdateRestartRequested);
+      });
+      await module.quitAndInstallUpdate();
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledOnce();
+      expect(await shutdown).toEqual({ stopAgents: false, appRunId: "run-1" });
+      module.clearUpdateRestartRequest();
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
+      await module.quitAndInstallUpdate();
+      expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(2);
+      expect(await shutdown).toEqual({ stopAgents: false, appRunId: "run-1" });
+    } finally { restore(); }
+  });
+
+  it.each(["win32", "linux"] as const)("stops agents on an ordinary quit after a synchronous install failure on %s", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    try {
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      autoUpdater.quitAndInstall.mockImplementationOnce(() => { throw new Error("installer failed"); });
+      await expect(module.quitAndInstallUpdate()).rejects.toThrow("installer failed");
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
+    } finally { restore(); }
+  });
+
+  it.each(["win32", "linux"] as const)("stops agents on an ordinary quit after an asynchronous install failure on %s", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    try {
+      const { module, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+      const failed = vi.fn();
+      module.setUpdateRestartFailureHandler(failed);
+      await module.quitAndInstallUpdate();
+      updaterEvents.get("error")?.(new Error("installer failed"));
+      expect(failed).toHaveBeenCalledOnce();
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
+    } finally { restore(); }
+  });
+
   it("requires new confirmation before downloading a changed remembered target", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {
@@ -3676,6 +3739,7 @@ describe("quitAndInstallUpdate", () => {
       await module.checkForUpdatesNow(stateDir);
       await expect(module.quitAndInstallUpdate()).rejects.toThrow(/not ready/);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+      expect(await requestQuit(module.isUpdateRestartRequested)).toEqual({ stopAgents: true, appRunId: "run-1" });
     } finally { restore(); }
   });
 
