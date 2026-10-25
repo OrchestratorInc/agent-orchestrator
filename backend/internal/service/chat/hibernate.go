@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -15,8 +18,26 @@ const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
 type wakeRun struct {
-	done chan struct{}
-	err  error
+	done    chan struct{}
+	err     error
+	started time.Time
+}
+
+// wakeCallers names the call chain that started a wake, nearest first. Wakes
+// are rare, so walking the stack costs nothing that matters.
+func wakeCallers() string {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(3, pcs)])
+	var names []string
+	for {
+		frame, more := frames.Next()
+		if frame.Function != "" {
+			names = append(names, path.Base(frame.Function))
+		}
+		if !more {
+			return strings.Join(names, " < ")
+		}
+	}
 }
 
 type hibernationStore interface {
@@ -560,8 +581,15 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 	s.wakeMu.Lock()
 	if run := s.wakeRuns[id]; run != nil {
 		s.wakeMu.Unlock()
+		joined := time.Now()
+		s.log.Info("chat wake joined an in-flight wake", "session", id,
+			"wakeRunningFor", joined.Sub(run.started).Round(time.Millisecond))
 		select {
 		case <-run.done:
+			if run.err != nil {
+				s.log.Warn("joined chat wake failed", "session", id,
+					"waited", time.Since(joined).Round(time.Millisecond), "err", run.err)
+			}
 			return run.err
 		case <-ctx.Done():
 			return ctx.Err()
@@ -581,11 +609,20 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		}
 		return ErrNoController
 	}
-	run := &wakeRun{done: make(chan struct{})}
+	run := &wakeRun{done: make(chan struct{}), started: time.Now()}
 	s.wakeRuns[id] = run
 	s.waking[id]++
 	s.wakeMu.Unlock()
+	// The caller chain tells a user's view or send apart from an automated relay.
+	s.log.Info("chat wake started", "session", id, "callers", wakeCallers())
 	finish := func(resultErr error) error {
+		if resultErr != nil {
+			s.log.Warn("chat wake failed", "session", id,
+				"took", time.Since(run.started).Round(time.Millisecond), "err", resultErr)
+		} else {
+			s.log.Info("chat wake finished", "session", id,
+				"took", time.Since(run.started).Round(time.Millisecond))
+		}
 		s.wakeMu.Lock()
 		run.err = resultErr
 		delete(s.wakeRuns, id)
@@ -634,6 +671,7 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			if s.versionSwitchFailed(ctx, id, err) {
 				return
 			}
+			s.log.Warn("chat session could not wake; failing its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not wake the agent: %v", err))
 			return
 		}
@@ -641,6 +679,7 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 			s.observeVersionSwitch(id, version, "succeeded")
 		}
 		if err := s.DrainQueued(ctx, id); err != nil {
+			s.log.Warn("chat session woke but could not deliver its queued messages", "session", id, "err", err)
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()

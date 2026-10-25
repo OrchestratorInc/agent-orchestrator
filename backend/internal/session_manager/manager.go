@@ -488,6 +488,9 @@ type Manager struct {
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
 	inputDrained              map[domain.SessionID]chan struct{}
+	// inputLeaseSince is when a session's current run of input leases began,
+	// for diagnosing an operation that cannot drain them.
+	inputLeaseSince map[domain.SessionID]time.Time
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context

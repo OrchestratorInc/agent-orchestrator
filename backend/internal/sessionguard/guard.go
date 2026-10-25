@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -124,6 +125,10 @@ type Guard struct {
 }
 
 var _ ports.AgentMessenger = (*Guard)(nil)
+
+// slowLeaseHold is how long a write may hold a session's input lease before
+// the hold is logged.
+const slowLeaseHold = 5 * time.Second
 
 func (g *Guard) tuiAwaitingStartupInput(rec domain.SessionRecord) bool {
 	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || !rec.FirstSignalAt.IsZero() {
@@ -398,6 +403,15 @@ func (g *Guard) sendThenChecked(ctx context.Context, id domain.SessionID, msg st
 			return SuppressedInputGated, nil
 		}
 		defer release()
+		// The lease blocks every exclusive operation on the session, including
+		// the resume a write into a sleeping Chat session triggers.
+		heldFrom := time.Now()
+		defer func() {
+			if held := time.Since(heldFrom); held >= slowLeaseHold {
+				g.logger.Warn("sessionguard: input lease held through a slow write",
+					"sessionID", id, "held", held.Round(time.Millisecond))
+			}
+		}()
 	}
 	outcome, err := g.sendAdmitted(ctx, id, msg, refuse, composerBusy)
 	if err == nil && outcome == Sent && after != nil {
