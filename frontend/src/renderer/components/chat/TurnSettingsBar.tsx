@@ -1264,7 +1264,7 @@ function ConfigOptionChoices({
 				return (
 					<Fragment key={choice.value}>
 						{choice.group && choice.group !== previousGroup ? (
-							<OptionMenuLabel className="px-3 pb-1 pt-2 text-micro text-muted-foreground">
+							<OptionMenuLabel>
 								{choice.groupName || choice.group}
 							</OptionMenuLabel>
 						) : null}
@@ -1358,7 +1358,7 @@ function PermissionRow({
 	const Icon = permissionIcon(mode);
 	const unrestricted = mode === "bypass-permissions";
 	return (
-		<OptionMenuItem active={active} radio disabled={disabled} onSelect={onSelect} className="items-start gap-3 whitespace-normal px-3 py-2">
+		<OptionMenuItem active={active} radio disabled={disabled} onSelect={onSelect} className="items-start gap-3 whitespace-normal">
 			<Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", unrestricted ? "text-warning" : "text-muted-foreground")} />
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className={cn("text-xs", unrestricted ? "text-warning" : "text-foreground")}>{title}</span>
@@ -1390,7 +1390,7 @@ export function ComposerMenuRow({
 	onSelect: () => void;
 }) {
 	return (
-		<OptionMenuItem disabled={disabled} onSelect={onSelect} className="gap-2 px-3 py-1.5 text-xs">
+		<OptionMenuItem disabled={disabled} onSelect={onSelect} className="gap-2">
 			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 			<span className="shrink-0 text-foreground">{title}</span>
 			{description ? <span className="min-w-0 truncate text-muted-foreground">{description}</span> : null}
