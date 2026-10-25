@@ -4,10 +4,11 @@ import regular from "expo-symbols/androidWeights/regular";
 /**
  * Faces `AppSymbol` needs loaded before the first frame.
  *
- * Android draws Material Symbols from a bundled font, and expo-symbols draws an
- * empty box until that font has loaded. Loading it with the app's own faces,
- * under the splash, keeps every icon from appearing a beat after its screen.
- * The key is the family name expo-symbols loads by, so its own load finds the
- * face already registered and resolves at once.
+ * Android draws Material Symbols from a bundled font. Loading it with the app's
+ * own faces, under the splash, means the face is in by the time any screen
+ * renders, so `AppSymbol` draws each glyph on its first render instead of
+ * waiting on expo-symbols' own load, which paints an empty box first. The key
+ * is the family name expo-symbols loads by, so a fallback `SymbolView` finds
+ * the face already registered too.
  */
 export const symbolFonts: Record<string, FontSource> = { [regular.name]: regular.font };

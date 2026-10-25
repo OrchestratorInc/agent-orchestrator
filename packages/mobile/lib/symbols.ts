@@ -23,6 +23,9 @@ export type PlatformSymbol = { ios: IOSSymbol; android: AndroidSymbol };
  * does. The values also suit APIs that take a bare name: `ios` for a SwiftUI
  * `systemImage`, a `Stack.Toolbar` icon or a `NativeTabs` `sf`, and `android`
  * for a `NativeTabs` `md`.
+ *
+ * A new Android name also needs its font codepoint in `./symbolCodepoints`,
+ * which typecheck asks for.
  */
 export const symbols = {
 	// Navigation and header actions
