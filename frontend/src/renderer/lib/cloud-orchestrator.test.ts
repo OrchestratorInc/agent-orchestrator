@@ -82,7 +82,7 @@ describe("spawnCloudOrchestrator", () => {
 			displayName: "Orchestrator",
 			prompt: "",
 			defaultInterfaceMode: "tui",
-		});
+		}, undefined);
 	});
 
 	// The control plane starts the orchestrator in Chat as the local daemon does
@@ -126,6 +126,7 @@ describe("spawnCloudOrchestrator", () => {
 		expect(cloudMocks.createSession).toHaveBeenCalledWith(
 			"org-1",
 			expect.objectContaining({ harness: "claude-code", kind: "orchestrator" }),
+			undefined,
 		);
 	});
 
@@ -144,6 +145,7 @@ describe("spawnCloudOrchestrator", () => {
 		expect(cloudMocks.createSession).toHaveBeenCalledWith(
 			"org-1",
 			expect.objectContaining({ harness: "codex" }),
+			undefined,
 		);
 	});
 });
