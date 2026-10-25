@@ -413,7 +413,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		const kanbanButton = screen.getByRole("button", { name: "Open Kanban" });
 		expect(kanbanButton).toHaveTextContent("Open Kanban");
 		expect(kanbanButton).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("bg-interactive-hover/50");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("bg-transparent");
 		await userEvent.click(kanbanButton);
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId",

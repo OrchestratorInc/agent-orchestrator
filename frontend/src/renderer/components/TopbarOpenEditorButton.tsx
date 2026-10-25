@@ -6,6 +6,8 @@ import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { useEditorHandoffState, useOpenSessionTarget, workspaceCheckFailed, editorHandoffErrorMessage } from "../hooks/useEditorHandoff";
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
+import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { cn } from "../lib/utils";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import {
 	DropdownMenu,
@@ -163,10 +165,11 @@ export function TopbarOpenEditorButton({
 				</TopbarActionError>
 			) : null}
 			<div
-				className="inline-flex items-center gap-0 rounded-md bg-interactive-hover/50 transition-colors hover:bg-interactive-hover data-[state=open]:bg-interactive-active"
+				className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "topbar-control-group isolate inline-flex items-center gap-0 rounded-md bg-transparent")}
 				data-state={menuOpen ? "open" : "closed"}
 				style={style}
 			>
+				<NavRowHighlight active={menuOpen} disabled={mainDisabled && menuDisabled} />
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<span className="inline-flex">
@@ -177,6 +180,7 @@ export function TopbarOpenEditorButton({
 											? t("editor.openInAria", { name: preferred.name })
 											: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
 								className="bg-transparent hover:bg-transparent"
+								highlight={false}
 								disabled={mainDisabled}
 								onClick={() => launch()}
 								variant="icon"
@@ -198,6 +202,7 @@ export function TopbarOpenEditorButton({
 									<TopbarButton
 										aria-label={t("editor.openOptionsAria")}
 										className="bg-transparent hover:bg-transparent"
+										highlight={false}
 										disabled={menuDisabled}
 										variant="icon"
 									>
