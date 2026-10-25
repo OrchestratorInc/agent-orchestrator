@@ -48,6 +48,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 			.find((candidate: WorkspaceSession) => candidate.id === paramsMock.sessionId);
 		return {
 			...query,
+			isSnapshotSuccess: query.isSnapshotSuccess ?? query.isSuccess,
+			isSnapshotError: query.isSnapshotError ?? query.isError,
 			data: {
 				project,
 				hasWorkerSessions: project?.sessions.some((candidate: WorkspaceSession) => candidate.kind !== "orchestrator") ?? false,

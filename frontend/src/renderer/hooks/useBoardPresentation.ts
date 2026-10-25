@@ -6,12 +6,14 @@ import { useSystemRequirementsGate } from "./useSystemRequirementsGate";
 export function useBoardPresentation({
 	projectId,
 	isSuccess,
+	isSnapshotSuccess = isSuccess,
 	isError,
 	hasProjects,
 	hasWorkerSessions,
 }: {
 	projectId?: string;
 	isSuccess: boolean;
+	isSnapshotSuccess?: boolean;
 	isError: boolean;
 	hasProjects: boolean;
 	hasWorkerSessions: boolean;
@@ -20,7 +22,7 @@ export function useBoardPresentation({
 	const { blocked: requirementsBlocked } = useSystemRequirementsGate();
 	const isDaemonReady = usesPreviewWorkspaceData || (shell ? shell.daemonStatus.state === "ready" : true);
 	const workspaceStartupState = shell?.workspaceStartupState ?? "ready";
-	const isLoaded = isDaemonReady && workspaceStartupState === "ready" && isSuccess && !requirementsBlocked;
+	const isLoaded = isDaemonReady && workspaceStartupState === "ready" && isSnapshotSuccess && !requirementsBlocked;
 	const showStartup = shell !== null && !shell.daemonStatus.code && (
 		!isDaemonReady || workspaceStartupState === "loading" || (!isSuccess && !isError) || requirementsBlocked
 	);

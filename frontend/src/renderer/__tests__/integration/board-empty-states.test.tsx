@@ -761,7 +761,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		renderBoard(board());
 		if (state === "missing") await waitFor(() => expect(lastQueryClient!.getQueryState(workspaceQueryKey)?.status).toBe("success"));
 		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
-		expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass(inPanel ? "topbar-control--secondary" : "topbar-control--accent");
+		expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass(inPanel ? "topbar-control--secondary" : "topbar-control--primary");
 	});
 });
