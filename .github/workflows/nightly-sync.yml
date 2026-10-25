@@ -61,6 +61,16 @@ jobs:
       - name: Install root dependencies (openapi-typescript lives here)
         run: npm ci --no-audit --no-fund
 
+      - name: Install sibling packages (frontend typecheck pulls their sources)
+        run: |
+          npm ci --no-audit --no-fund
+        working-directory: packages/product-ui
+
+      - name: Install cloud-client (imported by frontend renderer)
+        run: |
+          npm ci --no-audit --no-fund
+        working-directory: packages/cloud-client
+
       - name: Point origin at upstream, keep fork for the push
         run: |
           git remote set-url origin https://github.com/Untrivial-ai/agent-orchestrator.git
