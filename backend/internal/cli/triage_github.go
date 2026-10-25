@@ -94,7 +94,7 @@ func (g triageGitHub) summary() string {
 
 var triageLevel = regexp.MustCompile(`(?i)(?:^|[\s{,])"?level"?\s*[:=]\s*"?([a-z]+)\b`)
 var triagePlainLevel = regexp.MustCompile(`(?i)^(?:\d{4}-\d{2}-\d{2}\S*\s+)?\[?([a-z]+)\]?:?\s+`)
-var triageMessage = regexp.MustCompile(`(?:^|[\s{,])"?(msg|message|error)(?:"\s*:|\s*=)\s*("(?:\\.|[^"\\])*"|[^\s,}]+)`)
+var triageMessage = regexp.MustCompile(`(?:^|[\s{,])"?(msg|message|error|err)(?:"\s*:|\s*=)\s*("(?:\\.|[^"\\])*"|[^\s,}]+)`)
 var triageNoise = regexp.MustCompile(`\[[^\]]*\]|\S*[/\\]\S*|\b\S*\d\S*|\b\w+=\S+`)
 var triageWord = regexp.MustCompile(`[a-z]{3,}`)
 
@@ -122,7 +122,7 @@ func triageLogMessages(logs string) []string {
 			if unquoted, err := strconv.Unquote(value); err == nil {
 				value = unquoted
 			}
-			if field[1] == "error" {
+			if field[1] == "error" || field[1] == "err" {
 				if value != "null" && value != "<nil>" {
 					detail = value
 				}
