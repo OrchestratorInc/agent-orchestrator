@@ -808,22 +808,28 @@ func TestConversationSnapshotPageCutsBetweenTurns(t *testing.T) {
 func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 	s, session, conversation := conversationFixture(t)
 	ctx := context.Background()
-	for _, origin := range []domain.MessageOrigin{domain.MessageOriginHuman, domain.MessageOriginAutomation} {
-		turnID := "turn-" + string(origin)
+	// Three queued prompts, the human one first. Its tools run after the other
+	// two prompts, so a one-message page holds the human turn's tools but cannot
+	// reach back past two more prompts to its prompt.
+	turns := []struct {
+		id     string
+		origin domain.MessageOrigin
+	}{{"turn-human", domain.MessageOriginHuman}, {"turn-automation", domain.MessageOriginAutomation}, {"turn-automation-2", domain.MessageOriginAutomation}}
+	for _, turn := range turns {
 		created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
-			ID: "message-" + string(origin), Text: "finish the task", Origin: origin,
-		}, turnID, histClock)
+			ID: "message-" + turn.id, Text: "finish the task", Origin: turn.origin,
+		}, turn.id, histClock)
 		if err != nil || !created {
-			t.Fatalf("append %s: created=%v err=%v", origin, created, err)
+			t.Fatalf("append %s: created=%v err=%v", turn.id, created, err)
 		}
-		if err := s.BindTurnToProvider(ctx, turnID, "provider-"+string(origin), histClock); err != nil {
+		if err := s.BindTurnToProvider(ctx, turn.id, "provider-"+turn.id, histClock); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < store.DefaultConversationPageSize; i++ {
-		providerID := "provider-human"
+		providerID := "provider-turn-human"
 		if i == store.DefaultConversationPageSize-1 {
-			providerID = "provider-automation"
+			providerID = "provider-turn-automation-2"
 		}
 		if err := s.UpsertActivity(ctx, conversation, providerID, domain.ConversationActivity{
 			ID: fmt.Sprintf("activity-%d", i), Kind: domain.ActivityKindCommand,
@@ -832,41 +838,144 @@ func TestConversationSnapshotKeepsHumanPromptFactOutsidePage(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, turnID := range []string{"turn-human", "turn-automation"} {
-		if err := s.SettleTurnByID(ctx, turnID, domain.TurnStateFailed, "Usage limit reached; resets in 1 hour", histClock); err != nil {
+	for _, turn := range turns {
+		if err := s.SettleTurnByID(ctx, turn.id, domain.TurnStateFailed, "Usage limit reached; resets in 1 hour", histClock); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// A one-message page leaves the human prompt on the older page.
 	page, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := texts(page.Messages); len(got) != 1 || len(page.Activities) != store.DefaultConversationPageSize || !page.HasMoreBefore {
-		t.Fatalf("bounded page: messages=%v activities=%d hasMore=%v", got, len(page.Activities), page.HasMoreBefore)
+	if got := page.Messages; len(got) != 1 || got[0].TurnID != "turn-automation-2" || len(page.Activities) != store.DefaultConversationPageSize || !page.HasMoreBefore {
+		t.Fatalf("bounded page: messages=%v activities=%d hasMore=%v", texts(got), len(page.Activities), page.HasMoreBefore)
 	}
 	whole, err := s.LoadConversationSnapshot(ctx, conversation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	older, err := s.LoadConversationSnapshotPage(ctx, conversation, page.OldestSequence, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(whole.Messages) != 2 || len(older.Messages) != 1 || older.Messages[0].Origin != domain.MessageOriginHuman {
-		t.Fatalf("durable prompts: unbounded=%d older-page=%v", len(whole.Messages), older.Messages)
+	if len(whole.Messages) != 3 {
+		t.Fatalf("durable prompts: unbounded=%d", len(whole.Messages))
 	}
 	for name, snapshot := range map[string]store.ConversationSnapshot{"bounded page": page, "unbounded": whole} {
-		if len(snapshot.Turns) != 2 {
-			t.Fatalf("%s turns=%d, want both failed turns", name, len(snapshot.Turns))
+		want := map[string]bool{"turn-human": true, "turn-automation-2": false}
+		if name == "unbounded" {
+			want["turn-automation"] = false
+		}
+		if len(snapshot.Turns) != len(want) {
+			t.Fatalf("%s turns=%v, want %d", name, turnIDs(snapshot.Turns), len(want))
 		}
 		for _, turn := range snapshot.Turns {
-			wantHuman := turn.ID == "turn-human"
-			if turn.State != domain.TurnStateFailed || turn.HasHumanPrompt != wantHuman {
+			wantHuman, ok := want[turn.ID]
+			if !ok || turn.State != domain.TurnStateFailed || turn.HasHumanPrompt != wantHuman {
 				t.Errorf("%s turn=%s state=%s hasHumanPrompt=%v, want failed/%v", name, turn.ID, turn.State, turn.HasHumanPrompt, wantHuman)
 			}
 		}
+	}
+}
+
+// Prompts queued while the agent works land before the replies they lead to. A
+// page that ends among those replies reaches back to their prompts, as long as
+// that costs no more than another page of messages.
+func TestConversationSnapshotPageKeepsQueuedPromptsWithTheirTurns(t *testing.T) {
+	for _, tc := range []struct{ turns, limit int }{{2, 2}, {101, 200}} {
+		t.Run(fmt.Sprintf("%d-turns-limit-%d", tc.turns, tc.limit), func(t *testing.T) {
+			s, session, conversation := conversationFixture(t)
+			ctx := context.Background()
+			for i := 0; i < tc.turns; i++ {
+				id := fmt.Sprintf("turn-%d", i)
+				if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+					ID: id + "-prompt", Text: id + " prompt", Origin: domain.MessageOriginHuman,
+				}, id, histClock); err != nil || !created {
+					t.Fatalf("queue %s: created=%v err=%v", id, created, err)
+				}
+			}
+			for i := 0; i < tc.turns; i++ {
+				id := fmt.Sprintf("turn-%d", i)
+				if err := s.BindTurnToProvider(ctx, id, "provider-"+id, histClock); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.SettleAssistantMessage(ctx, conversation, id+"-reply", "provider-"+id, id+" reply", id+"-reply", histClock); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.SettleTurn(ctx, conversation, "provider-"+id, domain.TurnStateCompleted, "", histClock); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			page, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, int64(tc.limit))
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompts := map[string]bool{}
+			for _, message := range page.Messages {
+				if message.Role == domain.MessageRoleUser {
+					prompts[message.TurnID] = true
+				}
+			}
+			for _, turn := range page.Turns {
+				if !prompts[turn.ID] {
+					t.Errorf("turn %s is on the page without its prompt", turn.ID)
+				}
+			}
+			if len(page.Turns) != tc.turns || page.HasMoreBefore {
+				t.Fatalf("turns=%d hasMore=%v, want all %d turns and nothing older", len(page.Turns), page.HasMoreBefore, tc.turns)
+			}
+		})
+	}
+}
+
+// A long tool run with a prompt queued part way through fills a page at the
+// activity bound inside the long turn. Reaching back to that turn's prompt may
+// cost one more page, so the page still opens on the prompt.
+func TestConversationSnapshotPageReachesPastTheActivityBoundForAPrompt(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	prompt := func(id string) {
+		t.Helper()
+		if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+			ID: id + "-prompt", Text: id + " prompt", Origin: domain.MessageOriginHuman,
+		}, id, histClock); err != nil || !created {
+			t.Fatalf("prompt %s: created=%v err=%v", id, created, err)
+		}
+		if err := s.BindTurnToProvider(ctx, id, "provider-"+id, histClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tools := func(id string, from, n int) {
+		t.Helper()
+		for i := from; i < from+n; i++ {
+			if err := s.UpsertActivity(ctx, conversation, "provider-"+id, domain.ConversationActivity{
+				ID: fmt.Sprintf("%s-tool-%d", id, i), Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted,
+				Summary: "go test", ProviderItemID: fmt.Sprintf("%s-exec-%d", id, i),
+			}, histClock); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	finish := func(id string) {
+		t.Helper()
+		if err := s.SettleAssistantMessage(ctx, conversation, id+"-reply", "provider-"+id, id+" reply", id+"-reply", histClock); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SettleTurn(ctx, conversation, "provider-"+id, domain.TurnStateCompleted, "", histClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prompt("turn-long")
+	tools("turn-long", 0, 700)
+	prompt("turn-queued")
+	tools("turn-long", 700, 500)
+	finish("turn-long")
+	finish("turn-queued")
+
+	page, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := texts(page.Messages); len(got) == 0 || got[0] != "turn-long prompt" || len(page.Activities) != 1200 || page.HasMoreBefore {
+		t.Fatalf("messages=%v activities=%d hasMore=%v, want the long turn from its prompt", got, len(page.Activities), page.HasMoreBefore)
 	}
 }
 
