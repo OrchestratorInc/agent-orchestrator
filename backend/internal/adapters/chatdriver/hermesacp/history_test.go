@@ -76,3 +76,31 @@ func TestReconcileReplayDropsNoticeWithoutItemID(t *testing.T) {
 		t.Fatalf("reconciled events = %+v, want only the user message", got)
 	}
 }
+
+// A partial turn replays its text, a tool call, and PARTIAL_FAILED_TURN_NOTICE;
+// the id-less text and the notice share one item, so the completed text ends
+// with the notice. The reply keeps its text and loses every notice chunk.
+func TestReconcileReplayCutsPartialTurnNotice(t *testing.T) {
+	notice := hermesFailedTurnNotices[1]
+	events := []ports.ChatEvent{
+		{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "turn-1", Text: "Run the check."},
+		{Kind: ports.ChatEventMessageDelta, ProviderTurnID: "turn-1", ProviderItemID: "assistant-turn-1", Delta: "Starting the check now."},
+		{Kind: ports.ChatEventMessageDelta, ProviderTurnID: "turn-1", ProviderItemID: "assistant-turn-1", Delta: notice[:20]},
+		{Kind: ports.ChatEventMessageDelta, ProviderTurnID: "turn-1", ProviderItemID: "assistant-turn-1", Delta: notice[20:]},
+		{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "turn-1", ProviderItemID: "assistant-turn-1", Text: "Starting the check now." + notice},
+		{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "turn-2", Text: "Other reply.\n" + notice + "\n"},
+	}
+	got := reconcileReplay(events)
+	if len(got) != 4 {
+		t.Fatalf("reconciled events = %+v, want the user message, one delta and two replies", got)
+	}
+	if got[1].Kind != ports.ChatEventMessageDelta || got[1].Delta != "Starting the check now." {
+		t.Fatalf("delta = %+v, want only the reply text", got[1])
+	}
+	if got[2].Kind != ports.ChatEventMessageCompleted || got[2].Text != "Starting the check now." {
+		t.Fatalf("completed = %+v, want the reply without the notice", got[2])
+	}
+	if got[3].Text != "Other reply." {
+		t.Fatalf("id-less completed text = %q, want the notice cut", got[3].Text)
+	}
+}

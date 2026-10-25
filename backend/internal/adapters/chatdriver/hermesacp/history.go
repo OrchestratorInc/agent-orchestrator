@@ -28,18 +28,29 @@ var hermesFailedTurnNotices = []string{
 // rebuilds a reply from the replay's message.delta chunks (AppendAssistantDelta),
 // so dropping only the item's completed event still lets the notice text
 // reassemble from its deltas — every event carrying a notice item's provider
-// item id must go. Reply text is also persisted stripped while AO stored the
-// live untrimmed text; that side is handled by the whitespace-tolerant
-// fingerprints in the chat service, since the stripped text cannot be restored
-// here.
+// item id must go. A partial turn (text, then a tool call, then
+// PARTIAL_FAILED_TURN_NOTICE) replays its text and the notice under one
+// id-less item, so the completed text ends with the notice instead of being
+// one: that item keeps its text with the notice cut off, carried by a single
+// delta so no chunk of the notice survives. Reply text is also persisted
+// stripped while AO stored the live untrimmed text; that side is handled by
+// the whitespace-tolerant fingerprints in the chat service, since the stripped
+// text cannot be restored here.
 func reconcileReplay(events []ports.ChatEvent) []ports.ChatEvent {
 	noticeItems := make(map[string]bool)
+	trimmedItems := make(map[string]string)
 	for _, event := range events {
-		if event.Kind == ports.ChatEventMessageCompleted && isFailedTurnNotice(event.Text) && event.ProviderItemID != "" {
+		if event.Kind != ports.ChatEventMessageCompleted || event.ProviderItemID == "" {
+			continue
+		}
+		if isFailedTurnNotice(event.Text) {
 			noticeItems[event.ProviderItemID] = true
+		} else if reply, cut := cutFailedTurnNotice(event.Text); cut {
+			trimmedItems[event.ProviderItemID] = reply
 		}
 	}
 	reconciled := events[:0]
+	replacedDelta := make(map[string]bool)
 	for _, event := range events {
 		if noticeItems[event.ProviderItemID] {
 			continue
@@ -47,9 +58,39 @@ func reconcileReplay(events []ports.ChatEvent) []ports.ChatEvent {
 		if event.Kind == ports.ChatEventMessageCompleted && isFailedTurnNotice(event.Text) {
 			continue
 		}
+		if reply, ok := trimmedItems[event.ProviderItemID]; ok {
+			switch event.Kind {
+			case ports.ChatEventMessageDelta:
+				if replacedDelta[event.ProviderItemID] {
+					continue
+				}
+				replacedDelta[event.ProviderItemID] = true
+				event.Delta = reply
+			case ports.ChatEventMessageCompleted:
+				event.Text = reply
+			}
+		} else if event.Kind == ports.ChatEventMessageCompleted {
+			if reply, cut := cutFailedTurnNotice(event.Text); cut {
+				event.Text = reply
+			}
+		}
 		reconciled = append(reconciled, event)
 	}
 	return reconciled
+}
+
+// cutFailedTurnNotice returns text without a trailing boundary notice, and
+// whether one was cut. Text that is only a notice is isFailedTurnNotice's case.
+func cutFailedTurnNotice(text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	for _, notice := range hermesFailedTurnNotices {
+		if reply, found := strings.CutSuffix(trimmed, notice); found {
+			if reply = strings.TrimSpace(reply); reply != "" {
+				return reply, true
+			}
+		}
+	}
+	return text, false
 }
 
 func isFailedTurnNotice(text string) bool {
