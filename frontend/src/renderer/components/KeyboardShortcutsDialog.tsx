@@ -78,8 +78,8 @@ function BindingSummary({ bindings, isMac }: { bindings: readonly ShortcutBindin
 		<ShortcutKeys keys={shortcutBindingKeys(first, isMac)} />
 		{alternatives.length > 0 ? <Tooltip>
 			<TooltipTrigger asChild>
-				<span role="img" tabIndex={0} aria-label={t("shortcut.moreBindings", { count: alternatives.length })} className="inline-flex min-h-7 items-center rounded-sm px-1 text-xs tabular-nums text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
-					<span aria-hidden="true">(+{alternatives.length})</span>
+				<span role="img" tabIndex={0} aria-label={t("shortcut.moreBindings", { count: alternatives.length })} className="inline-flex h-6 min-w-6 items-center justify-center rounded-full border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-1.5 text-xs font-medium tabular-nums text-settings-label outline-none focus-visible:ring-2 focus-visible:ring-ring">
+					<span aria-hidden="true">+{alternatives.length}</span>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent className="max-w-xs">
