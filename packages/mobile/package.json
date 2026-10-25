@@ -79,6 +79,7 @@
     "patch-package": "^8.0.1",
     "pngjs": "3.4.0",
     "react-test-renderer": "^19.2.3",
+    "sf-symbols-typescript": "^2.2.0",
     "typescript": "~6.0.3",
     "vitest": "^4.1.10"
   }

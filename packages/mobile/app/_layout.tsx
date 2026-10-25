@@ -22,6 +22,7 @@ import { MinimalBackButton } from "../lib/MinimalBackButton";
 import { glassHeaderControl } from "../lib/native-header-items";
 import { LayoutGrid } from "../lib/layoutGrid";
 import { AppProvider } from "../lib/store";
+import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
 
@@ -89,7 +90,7 @@ export default function RootLayout() {
 	// `loaded`, so waiting on that flag alone left the app on a blank root forever,
 	// with no way out and nothing on screen to say why. A missing family is worth
 	// losing to a system fallback; it is not worth losing the app to.
-	const [fontsReady, fontError] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular });
+	const [fontsReady, fontError] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular, ...symbolFonts });
 	const fontsSettled = fontsReady || fontError != null;
 	// The stored theme is read under the splash too, for the same reason as the
 	// fonts: the first frame should already be the user's palette, not the default
