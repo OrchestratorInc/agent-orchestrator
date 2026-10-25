@@ -8,12 +8,22 @@ import { useUiStore } from "../stores/ui-store";
 // edge and fills once the swipe has gone far enough; lifting the fingers then
 // navigates, and pulling back below that point cancels.
 //
-// DOM wheel events carry no gesture phase. On macOS the main process relays
-// trackpad finger down/up (native/scroll-phase), so a held swipe never
-// navigates and momentum after the lift is ignored. Without that signal
-// (Windows/Linux, or the addon failed to load) a gesture ends after IDLE_MS
-// without wheel events.
+// DOM wheel events carry no gesture phase. The main process relays Chromium's
+// trackpad scroll begin/end, so a held swipe never navigates and momentum after
+// the lift is ignored. Without that signal a gesture ends after IDLE_MS without
+// wheel events.
 const IDLE_MS = 120;
+// Momentum can also arrive as a new scroll right after the previous one ends.
+// Touching the trackpad during momentum looks the same in timing, so a scroll
+// that starts this soon after an end is only treated as momentum if it also
+// decays from its first event, where a real swipe speeds up first.
+const MOMENTUM_GAP_MS = 120;
+// Chromium holds the scroll end until momentum finishes, which can take a
+// second after a fast swipe. Momentum shows up as steadily shrinking deltas,
+// so an armed swipe that was this fast and then decays this many events in a
+// row has been released.
+const FLICK_SPEED_PX = 10;
+const MOMENTUM_DECAY_EVENTS = 4;
 const AXIS_DECIDE_PX = 8;
 // Accumulated swipe distance that arms navigation.
 export const SWIPE_ARM_PX = 110;
@@ -37,6 +47,14 @@ type Gesture = {
 	sumX: number;
 	sumY: number;
 	offset: number;
+	// Consecutive events with shrinking deltas along the swipe, and the speed
+	// the run started from.
+	decay: number;
+	decayFrom: number;
+	lastSpeed: number;
+	tracked: number;
+	// Started right after a scroll ended and has only decayed since.
+	maybeMomentum: boolean;
 	// Horizontally scrollable ancestors with their starting scrollLeft. If one
 	// actually scrolls, the swipe belongs to it, as with browser overscroll.
 	scrollers: Array<[HTMLElement, number]>;
@@ -80,6 +98,7 @@ export function SwipeNavigation({
 		let frame = 0;
 		let nativePhases = false;
 		let fingersDown = false;
+		let lastEndAt = Number.NEGATIVE_INFINITY;
 		let snapPending = false;
 
 		const puck = (direction: Direction) => (direction === "back" ? backRef.current : forwardRef.current);
@@ -131,6 +150,13 @@ export function SwipeNavigation({
 				? historyState.current.canGoBack
 				: historyState.current.canGoForward;
 
+		const navigate = (offset: number) => {
+			const direction: Direction = offset > 0 ? "back" : "forward";
+			if (Math.abs(offset) < SWIPE_ARM_PX || !canNavigate(direction)) return;
+			if (direction === "back") historyState.current.back();
+			else historyState.current.forward();
+		};
+
 		const endGesture = () => {
 			window.clearTimeout(idleTimer);
 			idleTimer = undefined;
@@ -139,10 +165,7 @@ export function SwipeNavigation({
 			if (!ended || ended.mode !== "tracking") return;
 			release();
 			if (ended.scrollers.some(([el, start]) => el.scrollLeft !== start)) return;
-			const direction: Direction = ended.offset > 0 ? "back" : "forward";
-			if (Math.abs(ended.offset) < SWIPE_ARM_PX || !canNavigate(direction)) return;
-			if (direction === "back") historyState.current.back();
-			else historyState.current.forward();
+			navigate(ended.offset);
 		};
 
 		const onWheel = (event: WheelEvent) => {
@@ -156,7 +179,18 @@ export function SwipeNavigation({
 			}
 
 			if (!gesture) snapPending = true;
-			gesture ??= { mode: "pending", sumX: 0, sumY: 0, offset: 0, scrollers: horizontalScrollers(event.target, container) };
+			gesture ??= {
+				mode: "pending",
+				sumX: 0,
+				sumY: 0,
+				offset: 0,
+				decay: 0,
+				decayFrom: 0,
+				lastSpeed: 0,
+				tracked: 0,
+				maybeMomentum: performance.now() - lastEndAt <= MOMENTUM_GAP_MS,
+				scrollers: horizontalScrollers(event.target, container),
+			};
 			if (gesture.mode === "done") return;
 			if (gesture.scrollers.some(([el, start]) => el.scrollLeft !== start)) {
 				gesture.mode = "done";
@@ -184,6 +218,30 @@ export function SwipeNavigation({
 			if (offset < 0 && !canNavigate("forward")) offset = 0;
 			gesture.offset = offset;
 			paint(offset);
+
+			const speed = Math.abs(deltaX);
+			const alongSwipe = offset !== 0 && Math.sign(-deltaX) === Math.sign(offset);
+			if (alongSwipe && speed < gesture.lastSpeed) gesture.decay += 1;
+			else {
+				if (gesture.tracked > 0) gesture.maybeMomentum = false;
+				gesture.decay = 0;
+				gesture.decayFrom = speed;
+			}
+			gesture.lastSpeed = speed;
+			gesture.tracked += 1;
+			if (gesture.decay >= MOMENTUM_DECAY_EVENTS && gesture.maybeMomentum) {
+				// Momentum from the previous swipe, not a new one.
+				gesture.mode = "done";
+				release();
+				return;
+			}
+			if (gesture.decay >= MOMENTUM_DECAY_EVENTS && gesture.decayFrom >= FLICK_SPEED_PX && Math.abs(offset) >= SWIPE_ARM_PX) {
+				// Released into momentum: navigate now and ignore the rest of the scroll.
+				gesture.mode = "done";
+				window.clearTimeout(idleTimer);
+				release();
+				navigate(offset);
+			}
 		};
 
 		const stopPhases = aoBridge.app.onScrollPhase((phase) => {
@@ -193,13 +251,8 @@ export function SwipeNavigation({
 				window.clearTimeout(idleTimer);
 				return;
 			}
+			lastEndAt = performance.now();
 			fingersDown = false;
-			if (phase === "cancel") {
-				window.clearTimeout(idleTimer);
-				gesture = null;
-				release();
-				return;
-			}
 			endGesture();
 		});
 		container.addEventListener("wheel", onWheel, { capture: true, passive: true });

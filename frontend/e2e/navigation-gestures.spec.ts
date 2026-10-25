@@ -1,15 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { installFakeBridge } from "./support/fake-bridge";
 
-test("@P0 navigation gestures can be disabled, restored after reload, and enabled again", async ({ page }) => {
+test("@P0 navigation gestures are off by default, can be enabled, and survive a reload", async ({ page }) => {
 	await installFakeBridge(page);
 	await page.goto("/#/settings");
 	const toggle = page.getByRole("switch", { name: "Navigation gestures" });
-	await expect(toggle).toBeChecked();
-	await toggle.click();
-	await expect(toggle).not.toBeChecked();
-	await page.reload();
-	await page.goto("/#/settings");
 	await expect(toggle).not.toBeChecked();
 
 	const general = page.getByRole("button", { name: "General", exact: true });
@@ -23,6 +18,9 @@ test("@P0 navigation gestures can be disabled, restored after reload, and enable
 
 	await general.click();
 	await toggle.click();
+	await expect(toggle).toBeChecked();
+	await page.reload();
+	await page.goto("/#/settings");
 	await expect(toggle).toBeChecked();
 	await updates.click();
 	await settings.hover();

@@ -129,7 +129,7 @@ describe("SettingsDialog", () => {
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
-		useUiStore.setState({ developerMode: false, settingsModal: null });
+		useUiStore.setState({ developerMode: false, settingsModal: null, navigationGestures: true });
 		cloudProjectsState.data = [];
 		cloudProjectsState.isLoading = false;
 		cloudProjectsState.isError = false;

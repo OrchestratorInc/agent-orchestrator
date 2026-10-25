@@ -133,16 +133,51 @@ describe("SwipeNavigation", () => {
 	});
 
 	describe("with native finger phases", () => {
-		it("discards an armed gesture when macOS cancels it", () => {
+		it("goes back as soon as a fast swipe decays into momentum, before the scroll ends", () => {
 			const { getByTestId } = render(<Harness />);
 			const pane = getByTestId("pane");
 			fingers("down");
-			swipe(pane, drag(-20, 8));
-			fingers("cancel");
-			swipe(pane, drag(-20, 12));
-			expect(history.back).not.toHaveBeenCalled();
-			expect(pane.querySelector('[data-swipe-puck="back"]')).toHaveStyle({ opacity: "0" });
+			swipe(pane, [...drag(-30, 5), [-27, 0], [-24, 0], [-21, 0], [-18, 0]], 0);
+			expect(history.back).toHaveBeenCalledTimes(1);
+			swipe(pane, [[-15, 0], [-12, 0], [-9, 0], [-6, 0], [-3, 0]], 0);
+			fingers("up");
+			expect(history.back).toHaveBeenCalledTimes(1);
 		});
+
+		it("keeps a slow swipe armed while it eases off, until the fingers lift", () => {
+			const { getByTestId } = render(<Harness />);
+			const pane = getByTestId("pane");
+			fingers("down");
+			swipe(pane, [...drag(-8, 16), [-7, 0], [-6, 0], [-5, 0], [-4, 0], [-3, 0]], 500);
+			expect(history.back).not.toHaveBeenCalled();
+			fingers("up");
+			expect(history.back).toHaveBeenCalledTimes(1);
+		});
+
+		it("ignores momentum that arrives as a new scroll right after the lift", () => {
+			const { getByTestId } = render(<Harness />);
+			const pane = getByTestId("pane");
+			fingers("down");
+			swipe(pane, drag(-20, 3), 0);
+			fingers("up");
+			fingers("down");
+			swipe(pane, [-30, -27, -24, -21, -18, -15, -12, -9, -6, -3].map((deltaX) => [deltaX, 0] as [number, number]), 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("starts a new swipe right after the previous scroll ends", () => {
+			const { getByTestId } = render(<Harness />);
+			const pane = getByTestId("pane");
+			fingers("down");
+			swipe(pane, drag(-20, 3), 0);
+			fingers("up");
+			fingers("down");
+			swipe(pane, [[-4, 0], [-8, 0], [-12, 0], ...drag(-16, 8)], 0);
+			fingers("up");
+			expect(history.back).toHaveBeenCalledTimes(1);
+		});
+
 		it("holds an armed swipe until the fingers lift, then goes back", () => {
 			const { getByTestId } = render(<Harness />);
 			const pane = getByTestId("pane");
