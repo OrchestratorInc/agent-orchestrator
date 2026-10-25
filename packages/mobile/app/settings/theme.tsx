@@ -6,6 +6,7 @@ import { backOr } from "../../lib/backNavigation";
 import { haptics } from "../../lib/haptics";
 import { Feather } from "../../lib/icons";
 import { NativeHeaderButton } from "../../lib/native-header-button";
+import { usePressFeedback } from "../../lib/pressFeedback";
 import { themeFor, type Theme } from "../../lib/theme";
 import { ThemePaletteSwatch } from "../../lib/ThemePaletteSwatch";
 import { useTheme, useThemedStyles, useThemeState } from "../../lib/ThemeProvider";
@@ -24,6 +25,7 @@ export default function ThemeScreen() {
 	const router = useRouter();
 	const { scheme, style, setStyle } = useThemeState();
 	const insets = useSafeAreaInsets();
+	const feedback = usePressFeedback("row");
 
 	function choose(next: ThemeStyle) {
 		if (next === style) return;
@@ -55,7 +57,8 @@ export default function ThemeScreen() {
 									accessibilityState={{ selected }}
 									testID={`settings-theme-${theme.id}`}
 									onPress={() => choose(theme.id)}
-									style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+									android_ripple={feedback.android_ripple}
+									style={({ pressed }) => [styles.row, pressed && feedback.pressed]}
 								>
 									<ThemePaletteSwatch theme={themeFor(scheme, theme.id)} />
 									<Text style={[styles.rowLabel, selected && styles.rowLabelSelected]} numberOfLines={1}>{theme.label}</Text>
@@ -82,7 +85,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	list: { flexGrow: 0 },
 	separator: { height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle, marginLeft: space.md },
 	row: { minHeight: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: space.md, gap: space.md },
-	rowPressed: { backgroundColor: t.bgElevatedHover },
 	spacer: { flex: 1 },
 	rowLabel: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 	rowLabelSelected: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
