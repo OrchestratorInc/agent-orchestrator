@@ -361,9 +361,9 @@ func TestRequestKillCleanupFailureRemainsRetryable(t *testing.T) {
 // A Cleanup step runs without a limit unless it sets one; one that sets one
 // is stopped at it and reported as timed out, keeping the worktree.
 func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
-	previous := scriptStepMinute
-	scriptStepMinute = 100 * time.Millisecond
-	t.Cleanup(func() { scriptStepMinute = previous })
+	previous := scriptStepUnit
+	scriptStepUnit = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepUnit = previous })
 	slow := "sleep 2"
 	if runtime.GOOS == "windows" {
 		slow = "ping -n 3 127.0.0.1 > NUL"
@@ -382,9 +382,9 @@ func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
 // A step that exits cleanly at the very moment its limit expires succeeded and
 // must not be reported as timed out.
 func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
-	previousMinute, previousRun := scriptStepMinute, runCleanupStep
-	scriptStepMinute = 20 * time.Millisecond
-	t.Cleanup(func() { scriptStepMinute, runCleanupStep = previousMinute, previousRun })
+	previousMinute, previousRun := scriptStepUnit, runCleanupStep
+	scriptStepUnit = 20 * time.Millisecond
+	t.Cleanup(func() { scriptStepUnit, runCleanupStep = previousMinute, previousRun })
 	runCleanupStep = func(ctx context.Context, _, _ string, _ map[string]string, _ io.Writer) error {
 		<-ctx.Done()
 		return nil

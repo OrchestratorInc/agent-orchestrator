@@ -869,9 +869,9 @@ func TestResolveClaudeFamilyAliasUsesNewestModelEfforts(t *testing.T) {
 // A Setup step runs with the time limit its first line sets, which never
 // reaches the shell, and a step over it fails saying so.
 func TestRunPostCreateUsesEachStepsTimeLimit(t *testing.T) {
-	previous := scriptStepMinute
-	scriptStepMinute = 100 * time.Millisecond
-	t.Cleanup(func() { scriptStepMinute = previous })
+	previous := scriptStepUnit
+	scriptStepUnit = 100 * time.Millisecond
+	t.Cleanup(func() { scriptStepUnit = previous })
 	workspace := t.TempDir()
 	write := "echo ran > out.txt"
 	slow := "sleep 2"
