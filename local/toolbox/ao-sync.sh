@@ -583,6 +583,36 @@ fi
 rm -f "$MIG_LOG"
 echo "   OK"
 
+# 4b. Сухой прогон ПОЛНОЙ цепочки миграций на копии живой БД. Ловит класс
+#     «перенумерованная/конфликтная миграция переиграется в живую базу и убьёт
+#     демон при следующем старте» ДО package и запуска аппа (инцидент
+#     2026-10-25: report_emitted_at …182 переиграл ALTER в живую БД, демон умер
+#     сразу после пересборки). Копия через sqlite3 .backup — консистентный
+#     снапшот даже при живом демоне; оригинал не пишется.
+LIVE_DB="${AO_DATA_DIR:-$HOME/.ao/data}/ao.db"
+LIVE_LOG=/tmp/ao-sync-live-migrate.log
+if [ -f "$LIVE_DB" ]; then
+  echo "==> сухой прогон миграций на копии живой БД (${LIVE_DB})..."
+  LIVE_COPY=/tmp/ao-sync-live-db-check
+  mkdir -p "$LIVE_COPY"
+  sqlite3 "$LIVE_DB" ".backup '${LIVE_COPY}/ao.db'" || { echo "!! не смог снять копию живой БД" >&2; exit 1; }
+  if AO_SYNC_LIVE_DB="${LIVE_COPY}/ao.db" go -C backend test ./internal/storage/sqlite/ \
+      -run TestMigrateLiveDatabaseCopy >"$LIVE_LOG" 2>&1; then
+    rm -rf "$LIVE_COPY" "$LIVE_LOG"
+    echo "   OK, живая БД миграции пройдёт"
+  else
+    cat "$LIVE_LOG" >&2
+    cat >&2 <<'EOF'
+
+!! Живая БД НЕ пережила бы цепочку миграций — пересобранный демон упал бы на старте.
+   Чини миграции кодом (prepare*/guard) до сборки. Живая база не тронута — падала копия.
+EOF
+    exit 1
+  fi
+else
+  echo "==> живая БД не найдена (${LIVE_DB}) — сухой прогон пропущен"
+fi
+
 # 5. Регенерация артефактов — убирает ложные diff-конфликты между regen-файлами
 #    (openapi.yaml, schema.ts, sqlc gen/*.go) и то, что реально изменилось в API.
 echo "==> регенерация API-спеки (openapi.yaml + schema.ts)..."

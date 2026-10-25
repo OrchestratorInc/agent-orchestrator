@@ -10,7 +10,7 @@ import (
 // Settings browse scope); the migration drops those and keeps the device row
 // and cloud credential scopes.
 func TestMigrationDropsPerProjectModelCatalogs(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 20261021230230412)
+	db := openMigratedDatabaseCopy(t, migrationVersion(t, "provider_events_session_index"))
 
 	now := time.Now().UTC()
 	for _, scope := range []string{"", "@cred:openai_api_key", "agent-orchestrator", "@browse:all"} {
@@ -20,7 +20,7 @@ func TestMigrationDropsPerProjectModelCatalogs(t *testing.T) {
 		}
 	}
 
-	upTo(t, db, 20261022054735000)
+	upTo(t, db, migrationVersion(t, "device_model_catalogs"))
 
 	rows, err := db.Query(`SELECT project_id FROM agent_model_catalog WHERE agent_id = 'codex' ORDER BY project_id`)
 	if err != nil {

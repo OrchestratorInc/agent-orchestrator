@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+// migrationVersion resolves a migration's current version by name suffix, so
+// renumbering a file cannot strand this test's up/down targets below the
+// migration under test — that is exactly how this test went red (the lookup
+// migration moved above the previously hardcoded upTo target during the
+// 2026-10 sync settle).
+func migrationVersion(t *testing.T, suffix string) int64 {
+	t.Helper()
+	all, err := loadMigrations(migrationsFS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range all {
+		if strings.Contains(m.name, suffix) {
+			return m.version
+		}
+	}
+	t.Fatalf("migration with suffix %q not found", suffix)
+	return 0
+}
+
 func TestReviewRunCurrentHeadLookupIndex(t *testing.T) {
 	db := openMigratedTestDB(t)
 	assertLookup := func() {
@@ -45,7 +65,7 @@ func TestReviewRunCurrentHeadLookupIndex(t *testing.T) {
 		}
 	}
 	assertLookup()
-	downTo(t, db, 20261020173311321)
+	downTo(t, db, migrationVersion(t, "review_run_current_head_lookup")-1)
 	var remaining int
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master
 		WHERE type = 'index' AND name = 'idx_review_run_current_head_lookup'`).Scan(&remaining); err != nil {
@@ -54,6 +74,6 @@ func TestReviewRunCurrentHeadLookupIndex(t *testing.T) {
 	if remaining != 0 {
 		t.Fatal("rollback retained the review lookup index")
 	}
-	upTo(t, db, 20261022014101630)
+	upTo(t, db, migrationVersion(t, "review_run_current_head_lookup"))
 	assertLookup()
 }
