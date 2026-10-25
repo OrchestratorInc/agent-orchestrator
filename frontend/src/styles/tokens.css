@@ -384,7 +384,7 @@
 	--shadow-command-palette: var(--shadow-popover);
 	/* Overlay edge: a faint edge so a transient layer (menu, popover, dialog,
 	 * toast) separates from content without a drawn frame. */
-	--color-border-overlay: color-mix(in oklch, var(--foreground) 4%, transparent);
+	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
 	/* Overlay shadow: a barely-there lift. Black, not --background, so it
 	 * reads on a graphite canvas. */
 	--shadow-popover: 0 4px 12px -4px oklch(0 0 0 / 14%);
@@ -779,7 +779,7 @@
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);
 	--shadow-command-palette: var(--shadow-popover);
-	--color-border-overlay: color-mix(in oklch, var(--foreground) 4%, transparent);
+	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
 	--shadow-popover: 0 4px 12px -4px color-mix(in oklch, var(--foreground) 5%, transparent);
 
 	/* Welcome / import radius alias */
