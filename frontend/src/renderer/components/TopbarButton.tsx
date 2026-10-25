@@ -1,24 +1,26 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
+const topbarActionClass = "border-0 bg-raised text-foreground hover:bg-interactive-active data-[state=open]:bg-interactive-active aria-pressed:bg-interactive-active";
+
 const topbarButtonVariants = cva(
 	"topbar-control topbar-control--disabled-affordance inline-flex items-center transition-[transform,filter,background-color,color,border-color] duration-fast ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
 	{
 		variants: {
 			variant: {
+				action:
+					`topbar-control--action h-control-lg gap-1.5 rounded-md px-3.5 text-sm font-semibold leading-none ${topbarActionClass}`,
 				secondary:
 					"topbar-control--secondary h-control-lg gap-1.5 rounded-md px-3.5 text-sm font-semibold leading-none text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
 				primary:
 					"topbar-control--primary h-control-lg gap-1.5 rounded-md bg-accent-strong px-3.5 text-sm font-semibold leading-none text-accent-foreground hover:brightness-110 active:brightness-95",
 				accent:
 					"topbar-control--accent h-control-lg gap-1.5 rounded-md border border-border px-3.5 text-sm font-semibold leading-none bg-raised text-muted-foreground hover:bg-surface hover:text-foreground",
-				feature:
-					"topbar-control--feature h-control-lg gap-1.5 rounded-md border px-3 text-control font-semibold leading-none",
 				icon:
-					"topbar-control--icon grid size-control-md place-items-center rounded-md text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
+					`topbar-control--icon grid size-control-md place-items-center rounded-md ${topbarActionClass}`,
 			},
 		},
-		defaultVariants: { variant: "primary" },
+		defaultVariants: { variant: "action" },
 	},
 );
 

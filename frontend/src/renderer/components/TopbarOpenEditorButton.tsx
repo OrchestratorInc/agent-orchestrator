@@ -163,7 +163,7 @@ export function TopbarOpenEditorButton({
 				</TopbarActionError>
 			) : null}
 			<div
-				className="inline-flex items-center gap-0 rounded-md transition-colors hover:bg-interactive-hover data-[state=open]:bg-interactive-hover"
+				className="inline-flex items-center gap-0 rounded-md bg-raised transition-colors hover:bg-interactive-active data-[state=open]:bg-interactive-active"
 				data-state={menuOpen ? "open" : "closed"}
 				style={style}
 			>
@@ -176,7 +176,7 @@ export function TopbarOpenEditorButton({
 										?? (preferred
 											? t("editor.openInAria", { name: preferred.name })
 											: (noEditorInstalled ? t("editor.noEditorInstalled") : t("editor.chooseEditor"))))}
-								className="hover:bg-transparent"
+								className="bg-transparent hover:bg-transparent"
 								disabled={mainDisabled}
 								onClick={() => launch()}
 								variant="icon"
@@ -197,7 +197,7 @@ export function TopbarOpenEditorButton({
 								<DropdownMenuTrigger asChild>
 									<TopbarButton
 										aria-label={t("editor.openOptionsAria")}
-										className="hover:bg-transparent"
+										className="bg-transparent hover:bg-transparent"
 										disabled={menuDisabled}
 										variant="icon"
 									>

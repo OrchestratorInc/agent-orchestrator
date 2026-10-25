@@ -3423,8 +3423,7 @@ html.sidebar-reordering * {
 	transform: scale(0.96);
 }
 
-.workspace-topbar-actions .topbar-control--labeled,
-.workspace-topbar-actions .topbar-control--feature {
+.workspace-topbar-actions .topbar-control--labeled {
 	padding-inline: var(--space-2_5);
 }
 
@@ -3446,18 +3445,6 @@ html.sidebar-reordering * {
 		inline-size var(--duration-normal) ease,
 		opacity var(--duration-fast) ease,
 		transform var(--duration-normal) ease;
-}
-
-.workspace-topbar-actions .topbar-control--feature {
-	border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border-topbar));
-	background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg-topbar-raised));
-	color: color-mix(in srgb, var(--color-accent) 58%, var(--color-text-topbar));
-}
-
-.workspace-topbar-actions .topbar-control--feature:hover:not(:disabled) {
-	border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border-topbar-strong));
-	background: color-mix(in srgb, var(--color-accent) 18%, var(--color-bg-topbar-raised));
-	color: var(--color-text-topbar);
 }
 
 .session-pinned-actions-reserve {

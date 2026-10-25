@@ -398,7 +398,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 
 		const kanbanButton = screen.getByRole("button", { name: "Open Kanban" });
 		expect(kanbanButton).toHaveTextContent("Open Kanban");
-		expect(kanbanButton).toHaveClass("topbar-control--feature");
+		expect(kanbanButton).toHaveClass("topbar-control--action");
 		expect(screen.queryByText("my-app")).not.toBeInTheDocument();
 		await userEvent.click(kanbanButton);
 		expect(navigateMock).toHaveBeenCalledWith({
@@ -412,7 +412,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 
 		const kanbanButton = screen.getByRole("button", { name: "Open Kanban" });
 		expect(kanbanButton).toHaveTextContent("Open Kanban");
-		expect(kanbanButton).toHaveClass("topbar-control--feature");
+		expect(kanbanButton).toHaveClass("topbar-control--action");
 		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("bg-raised");
 		await userEvent.click(kanbanButton);
 		expect(navigateMock).toHaveBeenCalledWith({
