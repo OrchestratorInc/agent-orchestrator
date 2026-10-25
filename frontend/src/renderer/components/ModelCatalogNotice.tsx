@@ -1,32 +1,35 @@
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle, LogIn, RotateCw } from "lucide-react";
+import { Download, LoaderCircle, LogIn, RotateCw } from "lucide-react";
 import type { ModelCatalogAuthIssue } from "../hooks/useAgentModelsQuery";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 
 export type ModelCatalogNoticeProps = {
 	agentLabel: string;
-	issue: ModelCatalogAuthIssue;
+	issue: ModelCatalogAuthIssue | "not_installed";
 	/** The daemon's own wording, kept out of the headline but one click away. */
 	detail?: string;
 	onLogin: () => void;
+	onInstall?: () => void;
 	onRetry: () => Promise<void>;
 };
 
 /**
- * The model picker could not list an agent's models because of its login.
+ * The model picker could not list an agent's models because of its installation or login.
  * Says so in plain words and offers the fix (log in) and a retry in place,
  * instead of a raw provider error and a retry buried in the model menu.
  */
-export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry }: ModelCatalogNoticeProps) {
+export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onInstall, onRetry }: ModelCatalogNoticeProps) {
 	const { t } = useTranslation();
 	const detailId = useId();
 	const [showDetail, setShowDetail] = useState(false);
 	const [retrying, setRetrying] = useState(false);
-	const headline = issue === "expired"
-		? t("newTask.modelNotice.expired", { agent: agentLabel })
-		: t("newTask.modelNotice.signedOut", { agent: agentLabel });
+	const headline = issue === "not_installed"
+		? t("newTask.modelNotice.missingCLI", { agent: agentLabel })
+		: issue === "expired"
+			? t("newTask.modelNotice.expired", { agent: agentLabel })
+			: t("newTask.modelNotice.signedOut", { agent: agentLabel });
 	const retry = async () => {
 		if (retrying) return;
 		setRetrying(true);
@@ -40,7 +43,7 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 	};
 	return (
 		<div
-			// Only a signed-out agent is a problem to fix here. An expired token
+			// A missing CLI or signed-out agent needs action. An expired token
 			// renews on its own.
 			className={cn("flex flex-col gap-1 text-caption", issue === "expired" ? "text-muted-foreground" : "text-warning")}
 			data-testid="model-catalog-notice"
@@ -49,9 +52,9 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
 				<span className="min-w-0">{headline}</span>
 				<span className="inline-flex shrink-0 items-center gap-1">
-					<Button type="button" size="sm" variant="outline" className="h-6 px-2" onClick={onLogin}>
-						<LogIn aria-hidden="true" className="size-3.5" />
-						{issue === "expired" ? t("newTask.modelNotice.loginAgain") : t("newTask.modelNotice.login")}
+					<Button type="button" size="sm" variant="outline" className="h-6 px-2" onClick={issue === "not_installed" ? onInstall : onLogin}>
+						{issue === "not_installed" ? <Download aria-hidden="true" className="size-3.5" /> : <LogIn aria-hidden="true" className="size-3.5" />}
+						{issue === "not_installed" ? t("newTask.modelNotice.install") : issue === "expired" ? t("newTask.modelNotice.loginAgain") : t("newTask.modelNotice.login")}
 					</Button>
 					<Button type="button" size="sm" variant="ghost" className="h-6 px-2" disabled={retrying} onClick={() => void retry()}>
 						{retrying

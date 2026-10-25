@@ -809,14 +809,22 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		cached.Catalog.RefreshRecommended = true
 		return cached.Catalog, nil
 	}
-	if !s.readyForModelUpdate(agentID) {
-		// Readiness found nothing to discover with: keep serving the saved catalog
-		// rather than recording a failure over it.
-		if hasCached {
-			return cached.Catalog, nil
+	if mode == modelLoadRefresh && !s.readyForModelUpdate(agentID) {
+		// A user may have installed the CLI outside AO since the last check.
+		if _, err := s.readiness.Force(ctx, []string{agentID}, domain.AgentReadinessPurposeDisplay); err != nil {
+			return ports.AgentModelCatalog{}, err
 		}
+	}
+	if !s.readyForModelUpdate(agentID) {
+		// Keep saved models, but explain why discovery cannot run on this host.
 		fallback := policy
+		if hasCached {
+			fallback = cached.Catalog
+		}
 		fallback.BinaryVersion = version
+		fallback.Stale = true
+		fallback.WarningCode = ports.ModelCatalogWarningNotInstalled
+		fallback.Warning = fmt.Sprintf("%s: %s", item.Manifest.Name, ports.ErrAgentBinaryNotFound)
 		return fallback, nil
 	}
 	if mode == modelLoadRefresh || inputsChanged || explicitlyInvalidated {
@@ -956,9 +964,11 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 }
 
 // modelCatalogWarningCode classifies a discovery failure that clients can
-// resolve with the agent's own login.
+// resolve by installing the agent or using its own login.
 func modelCatalogWarningCode(err error) string {
 	switch {
+	case errors.Is(err, ports.ErrAgentBinaryNotFound):
+		return ports.ModelCatalogWarningNotInstalled
 	case errors.Is(err, ports.ErrAgentModelDiscoveryCredentialExpired):
 		return ports.ModelCatalogWarningAuthExpired
 	case errors.Is(err, ports.ErrAgentModelDiscoveryCredentialRejected),
