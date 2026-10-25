@@ -266,6 +266,35 @@ describe("SwipeNavigation", () => {
 		expect(history.back).toHaveBeenCalledTimes(1);
 	});
 
+	it("leaves the swipe to a scroller inside an open shadow root", () => {
+		const { getByTestId } = render(<Harness><div data-testid="host" /></Harness>);
+		const root = getByTestId("host").attachShadow({ mode: "open" });
+		const scroller = document.createElement("div");
+		scroller.style.overflowX = "auto";
+		const cell = document.createElement("span");
+		scroller.append(cell);
+		root.append(scroller);
+		Object.defineProperties(scroller, {
+			scrollWidth: { value: 800 },
+			clientWidth: { value: 400 },
+			scrollLeft: { value: 120, writable: true },
+		});
+		const wheel = (deltaX: number) => new WheelEvent("wheel", { bubbles: true, composed: true, deltaX, deltaMode: 0 });
+		act(() => {
+			cell.dispatchEvent(wheel(-20));
+			// The browser scrolls the code view with the swipe.
+			scroller.scrollLeft = 100;
+		});
+		act(() => {
+			for (let i = 0; i < 7; i++) {
+				cell.dispatchEvent(wheel(-20));
+				vi.advanceTimersByTime(8);
+			}
+			vi.advanceTimersByTime(200);
+		});
+		expect(history.back).not.toHaveBeenCalled();
+	});
+
 	it("goes forward on a swipe left only when forward history exists", () => {
 		const { getByTestId } = render(<Harness />);
 		swipe(getByTestId("pane"), drag(20, 8));

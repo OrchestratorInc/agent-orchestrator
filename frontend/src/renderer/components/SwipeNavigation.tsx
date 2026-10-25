@@ -60,15 +60,17 @@ type Gesture = {
 	scrollers: Array<[HTMLElement, number]>;
 };
 
-function horizontalScrollers(target: EventTarget | null, boundary: HTMLElement): Array<[HTMLElement, number]> {
+// Walks the composed path, not event.target: at the pane listener the target of
+// an event from inside an open shadow root (the @pierre/diffs code view) is the
+// shadow host, which hides the scroller inside it.
+function horizontalScrollers(path: EventTarget[], boundary: HTMLElement): Array<[HTMLElement, number]> {
 	const scrollers: Array<[HTMLElement, number]> = [];
-	let el = target instanceof Element ? target : null;
-	while (el && el !== boundary) {
-		if (el instanceof HTMLElement && el.scrollWidth > el.clientWidth) {
-			const overflowX = getComputedStyle(el).overflowX;
-			if (overflowX === "auto" || overflowX === "scroll") scrollers.push([el, el.scrollLeft]);
+	for (const node of path) {
+		if (node === boundary) break;
+		if (node instanceof HTMLElement && node.scrollWidth > node.clientWidth) {
+			const overflowX = getComputedStyle(node).overflowX;
+			if (overflowX === "auto" || overflowX === "scroll") scrollers.push([node, node.scrollLeft]);
 		}
-		el = el.parentElement;
 	}
 	return scrollers;
 }
@@ -189,7 +191,7 @@ export function SwipeNavigation({
 				lastSpeed: 0,
 				tracked: 0,
 				maybeMomentum: performance.now() - lastEndAt <= MOMENTUM_GAP_MS,
-				scrollers: horizontalScrollers(event.target, container),
+				scrollers: horizontalScrollers(event.composedPath(), container),
 			};
 			if (gesture.mode === "done") return;
 			if (gesture.scrollers.some(([el, start]) => el.scrollLeft !== start)) {
