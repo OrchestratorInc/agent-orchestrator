@@ -335,9 +335,9 @@ export default function PairScreen() {
 					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
 				</View>
 			) : <View style={styles.steps}>
-					<NumberedStep n={1} title="Enable Orchestrator on a machine" compact />
-					<NumberedStep n={2} title="Open Connect Mobile or run ao remote-host enable" compact />
-					<NumberedStep n={3} title="Scan the code or enter details manually" compact />
+					<NumberedStep n={1} total={3} title="Enable Orchestrator on a machine" compact />
+					<NumberedStep n={2} total={3} title="Open Connect Mobile or run ao remote-host enable" compact />
+					<NumberedStep n={3} total={3} title="Scan the code or enter details manually" compact />
 			</View>}
 
 			<View style={styles.viewfinder}>

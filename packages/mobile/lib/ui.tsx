@@ -230,7 +230,7 @@ export function ScreenHeader({
 		<View style={s.screenHeader}>
 			{left ?? (sidebar ? <HeaderIconButton icon="menu" label="Open navigation" onPress={sidebar.openSidebar} /> : null)}
 			<View style={{ flex: 1, minWidth: 0 }}>
-				<Text maxFontSizeMultiplier={fontScaleCap.title} numberOfLines={1} ellipsizeMode="tail" style={s.screenTitle}>
+				<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} numberOfLines={1} ellipsizeMode="tail" style={s.screenTitle}>
 					{title}
 				</Text>
 			</View>
@@ -260,13 +260,14 @@ export function ListSectionHeader({
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const body = (
 		<>
 			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={s.listSectionLabel}>
 				{label}
 			</Text>
 			{onToggle ? (
-				<Feather name={open ? "chevron-down" : "chevron-right"} size={15} color={t.textTertiary} />
+				<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.sm} color={t.textTertiary} />
 			) : null}
 			{count !== undefined ? (
 				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={s.listSectionCount}>
@@ -276,14 +277,21 @@ export function ListSectionHeader({
 		</>
 	);
 
-	if (!onToggle) return <View style={s.listSectionHeader}>{body}</View>;
+	if (!onToggle) {
+		return (
+			<View accessible accessibilityRole="header" accessibilityLabel={count === undefined ? label : `${label}, ${count}`} style={s.listSectionHeader}>
+				{body}
+			</View>
+		);
+	}
 	return (
 		<Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
 			accessibilityLabel={`${label} section`}
+			android_ripple={feedback.android_ripple}
 			onPress={onToggle}
-			style={({ pressed }) => [s.listSectionHeader, pressed && { opacity: 0.6 }]}
+			style={({ pressed }) => [s.listSectionHeader, pressed && feedback.pressed]}
 		>
 			{body}
 		</Pressable>
@@ -403,26 +411,33 @@ function ChromeGlyph({ icon, size, color }: { icon: ChromeIcon; size: number; co
 
 // A numbered instruction row. Used by both onboarding screens: the welcome
 // screen passes a `hint` for the full "how it works" list, the scanner omits it
-// so the steps stay one line each above the viewfinder.
+// and passes `compact` so the steps stay one line each above the viewfinder.
+// The badge is the same circle either way.
 export function NumberedStep({
 	n,
+	total,
 	title,
 	hint,
 	compact = false,
 }: {
 	n: number;
+	/** How many steps the list has, so a screen reader says "Step 1 of 3". */
+	total?: number;
 	title: string;
 	hint?: string;
 	compact?: boolean;
 }) {
 	const s = useThemedStyles(makeStyles);
+	const position = total ? `Step ${n} of ${total}` : `Step ${n}`;
 	return (
-		<View style={[s.step, compact && s.stepCompact]}>
-			<View style={[s.stepBadge, compact && s.stepBadgeCompact]}>
-				<Text style={[s.stepNum, compact && s.stepNumCompact]}>{n}</Text>
+		// One element for a screen reader, so the number is read with its step
+		// rather than as a stray digit before it.
+		<View accessible accessibilityLabel={[position, title, hint].filter(Boolean).join(", ")} style={[s.step, compact && s.stepCompact]}>
+			<View style={s.stepBadge}>
+				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={s.stepNum}>{n}</Text>
 			</View>
 			<View style={{ flex: 1 }}>
-				<Text style={[s.stepTitle, compact && s.stepTitleCompact]}>{title}</Text>
+				<Text style={s.stepTitle}>{title}</Text>
 				{hint ? <Text style={s.stepHint}>{hint}</Text> : null}
 			</View>
 		</View>
@@ -455,7 +470,7 @@ export function SheetHeader({
 	return (
 		<View style={s.sheetHeader}>
 			<View style={s.sheetTitleRow}>
-				<Text style={[s.sheetTitle, { flex: 1 }]}>{title}</Text>
+				<Text accessibilityRole="header" style={[s.sheetTitle, { flex: 1 }]}>{title}</Text>
 				{right}
 			</View>
 			{subtitle ? <Text style={s.sheetSubtitle}>{subtitle}</Text> : null}
@@ -561,6 +576,8 @@ export function EmptyState({
 	);
 }
 
+const STEP_BADGE = Math.ceil(type.footnote.lineHeight * fontScaleCap.chrome) + 2 * space.hair;
+
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		listSectionHeader: {
@@ -664,21 +681,21 @@ const makeStyles = (t: Theme) =>
 			paddingVertical: space.md,
 		},
 		stepCompact: { paddingVertical: space.xs, alignItems: "center", gap: space.md },
+		// No fixed box for the number to overflow. The floor is the number's line
+		// at the largest scale it allows plus the padding, so one digit always
+		// sits in a circle, and two stretch it into a capsule.
 		stepBadge: {
-			width: 30,
-			height: 30,
-			borderRadius: 8,
-			backgroundColor: t.bgElevated,
-			borderWidth: 1,
-			borderColor: t.borderSubtle,
+			minWidth: STEP_BADGE,
+			minHeight: STEP_BADGE,
+			paddingHorizontal: space.xs,
+			paddingVertical: space.hair,
+			borderRadius: radius.pill,
+			backgroundColor: t.accentTint,
 			alignItems: "center",
 			justifyContent: "center",
 		},
-		stepBadgeCompact: { width: 23, height: 23, borderRadius: 12 },
-		stepNum: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		stepNumCompact: { fontFamily: "Geist_400Regular", fontSize: type.caption2.fontSize },
+		stepNum: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600", fontVariant: ["tabular-nums"] },
 		stepTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
-		stepTitleCompact: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, fontWeight: "600" },
 		stepHint: { fontFamily: "Geist_400Regular",
 			color: t.textTertiary,
 			fontSize: type.footnote.fontSize,

@@ -67,18 +67,21 @@ export default function OnboardingScreen() {
 					<Text style={styles.howLabel}>HOW IT WORKS</Text>
 					<NumberedStep
 						n={1}
+						total={3}
 						title="Enable a connection on the machine"
 						hint="Use Settings → Connect Mobile, or run ao remote-host enable on a headless machine."
 					/>
 					<View style={styles.divider} />
 					<NumberedStep
 						n={2}
+						total={3}
 						title="Scan the code"
 						hint="Scan the QR code or enter the address and password manually."
 					/>
 					<View style={styles.divider} />
 					<NumberedStep
 						n={3}
+						total={3}
 						title="You're connected"
 						hint="Your sessions appear here, and you can drive them from your phone."
 					/>
