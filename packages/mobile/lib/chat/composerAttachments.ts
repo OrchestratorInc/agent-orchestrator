@@ -32,6 +32,17 @@ export function updateComposerAttachments(key: string, update: (current: Compose
 	listeners.get(key)?.forEach((listener) => listener());
 }
 
+/**
+ * Drops what a send delivered and nothing else. The send can finish after the
+ * composer that started it was replaced, and the new one may have added more.
+ */
+export function forgetComposerAttachments(key: string, ids: ReadonlySet<string>): void {
+	updateComposerAttachments(key, (current) => {
+		const items = current.items.filter((item) => !ids.has(item.id));
+		return items.length === current.items.length ? current : { items, notice: current.notice };
+	});
+}
+
 export function useComposerAttachments(key: string): ComposerAttachmentState {
 	const subscribe = useCallback((listener: () => void) => {
 		let set = listeners.get(key);

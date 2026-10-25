@@ -16,7 +16,7 @@ import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerGlass } from "./composer-glass";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
-import { readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
+import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { sniffImageMimeType } from "../imageMime";
 
 const MAX_ATTACHMENTS = 8;
@@ -117,10 +117,13 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 
 	const submit = async () => {
 		if (submitting || stopped || (!text.trim() && !attachments.length)) return;
+		// Only what this send submitted; see ChatComposer.
+		const sentKey = attachmentKey;
+		const sent = new Set(attachments.map((item) => item.id));
 		setSubmitting(true); setError(""); dismissAttachmentNotice();
 		try {
 			const id = await onSend(text.trim(), attachments.flatMap((item) => item.kind === "image" ? [item.image] : []), attachments.flatMap((item) => item.kind === "resource" ? [item.resource] : []));
-			setText(""); clearAttachments(); setFieldHeight(COMPOSER_FIELD_HEIGHT);
+			setText(""); forgetComposerAttachments(sentKey, sent); setFieldHeight(COMPOSER_FIELD_HEIGHT);
 			await onAcknowledgeSend(id);
 			haptics.success();
 		} catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send this reply."); }

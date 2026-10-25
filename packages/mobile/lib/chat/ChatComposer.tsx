@@ -40,7 +40,7 @@ import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRReviewPrompt } from "./PRReviewPrompt";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
-import { readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
+import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
 import { sniffImageMimeType } from "../imageMime";
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
@@ -348,6 +348,10 @@ export function ChatComposer({
 		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
 		const trimmed = responseReplyText(text, quotes);
 		if (!trimmed && attachments.length === 0) return;
+		// This send owns these attachments and no others: it can finish after the
+		// conversation was left and reopened, and the new composer may have added more.
+		const sentKey = attachmentKey;
+		const sent = new Set(attachments.map((item) => item.id));
 		// Dismissed on the tap, not after the send lands. Waiting for the request
 		// tied the keyboard's exit to the network, so it dropped whenever the
 		// answer arrived — which read as the keyboard being taken away mid-sentence.
@@ -381,14 +385,14 @@ export function ChatComposer({
 				setFieldHeight(COMPOSER_FIELD_HEIGHT);
 				latestQuotes.current = [];
 				setQuotes([]);
-				clearAttachments();
 			}
+			forgetComposerAttachments(sentKey, sent);
 			haptics.success();
 		} catch (cause) {
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, clearAttachments, dismissAttachmentNotice]);
+	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
 
 	const addImage = async () => {
 		// Captured now: the pick can outlive this composer, and the stored list may

@@ -46,3 +46,20 @@ it("keeps a photo picked while Android remounts the reviewer chat, labelled by i
 	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("", [{ mimeType: "image/jpeg", data: JPEG }], []);
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove shot.png" })).toHaveLength(0);
 });
+
+it("clears only what a send submitted, keeping a photo attached in a reopened reviewer composer meanwhile", async () => {
+	const JPEG = "/9j/4AAQSkZJRgAB";
+	const photo = (name: string) => ({ canceled: false, assets: [{ uri: `file:///${name}`, fileName: name, width: 1, height: 1, base64: JPEG, mimeType: "image/jpeg" }] });
+	vi.mocked(launchImageLibraryAsync).mockResolvedValueOnce(photo("a.jpg") as never).mockResolvedValueOnce(photo("b.jpg") as never);
+	let finish!: (id: string) => void;
+	const p = { ...props(), attachmentKey: "reviewer.host.deferred", onSend: vi.fn(() => new Promise<string>((resolve) => { finish = resolve; })) };
+	await act(async () => { renderer = create(<ReviewerComposer {...p} />); });
+	await act(async () => renderer.root.findByType(ChatAttachmentMenu).props.onChoosePhoto());
+	act(() => { renderer.root.findByProps({ accessibilityLabel: "Send reply" }).props.onPress(); });
+	act(() => renderer.unmount());
+	await act(async () => { renderer = create(<ReviewerComposer {...p} />); });
+	await act(async () => renderer.root.findByType(ChatAttachmentMenu).props.onChoosePhoto());
+	await act(async () => finish("send-id"));
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove a.jpg" })).toHaveLength(0);
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove b.jpg" })).toHaveLength(1);
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readComposerAttachments, updateComposerAttachments, type ComposerAttachment } from "./composerAttachments";
+import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, type ComposerAttachment } from "./composerAttachments";
 
 const photo = (id: string): ComposerAttachment => ({ id, kind: "image", name: `${id}.jpg`, bytes: 3, image: { mimeType: "image/jpeg", data: "/9j/" } });
 
@@ -21,5 +21,12 @@ describe("composer attachments", () => {
 		updateComposerAttachments("mac.c", () => ({ items: [photo("one")] }));
 		updateComposerAttachments("mac.c", () => ({ items: [] }));
 		expect(readComposerAttachments("mac.c")).toBe(readComposerAttachments("never-used"));
+	});
+
+	it("forgets only the attachments a send delivered", () => {
+		updateComposerAttachments("mac.d", () => ({ items: [photo("sent"), photo("added-later")], notice: "kept" }));
+		forgetComposerAttachments("mac.d", new Set(["sent"]));
+		expect(readComposerAttachments("mac.d")).toEqual({ items: [photo("added-later")], notice: "kept" });
+		updateComposerAttachments("mac.d", () => ({ items: [] }));
 	});
 });
