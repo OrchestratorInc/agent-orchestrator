@@ -37,8 +37,9 @@ describe("session header controls", () => {
 	});
 
 	it("gives every platform an icon for the more control", () => {
-		expect(source("../native-header-button.tsx")).toContain('"more"');
-		expect(source("../native-header-button.ios.tsx")).toContain('icon === "more"');
-		expect(source("../native-header-button.android.tsx")).toContain('more: "more-horizontal"');
+		expect(source("../native-header-button.types.ts")).toContain('more: { ios: "ellipsis", android: "more_vert" }');
+		expect(source("../native-header-button.tsx")).toContain("nativeHeaderGlyphs[icon]");
+		expect(source("../native-header-button.ios.tsx")).toContain("nativeHeaderGlyphs[icon].ios");
+		expect(source("../native-header-button.android.tsx")).toContain("nativeHeaderGlyphs[icon].android");
 	});
 });

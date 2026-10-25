@@ -1,7 +1,7 @@
 import { Feather } from "@expo/vector-icons";
-import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, triggerSessionReview, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
@@ -20,6 +20,7 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { AgentLogo } from "../../lib/AgentLogo";
 import { rowDividerWidth } from "../../lib/divider";
 import { SwipeToMerge } from "../../lib/SwipeToMerge";
+import { toolbarIcon } from "../../lib/toolbarIcon";
 import { space, type } from "../../lib/tokens";
 import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 
@@ -83,12 +84,17 @@ function ReviewDetailContent() {
 		title: review?.title || "Review",
 		headerTitleStyle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 	}), [navigation, review?.title, t.textPrimary]);
-	useLayoutEffect(() => navigation.setOptions({
-		headerRight: hostMatches && review?.prUrl ? () => <View style={styles.headerActions}>
-			<Pressable accessibilityRole="link" accessibilityLabel={`Open pull request ${review.prNumber} in GitHub`} hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); void openGitHub(review.prUrl); }}><Feather name="external-link" size={19} color={t.textSecondary} /></Pressable>
-			<Pressable accessibilityRole="button" accessibilityLabel="More review actions" hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); router.push({ pathname: "/sheets/review-actions", params: { sessionId, prUrl: review.prUrl, reviewer: data?.reviewerHarness ?? "", hostId: routeHostId } }); }}><Feather name="more-horizontal" size={21} color={t.textSecondary} /></Pressable>
-		</View> : undefined,
-	}), [data?.reviewerHarness, hostMatches, navigation, review?.prNumber, review?.prUrl, routeHostId, router, sessionId, styles.headerAction, styles.headerActions, t.textSecondary]);
+	// Memoized: each new element re-registers the header's items, and the page
+	// re-renders on every poll while a review runs.
+	const reviewPRUrl = review?.prUrl;
+	const reviewPRNumber = review?.prNumber;
+	const harness = data?.reviewerHarness;
+	const headerItems = useMemo(() => reviewPRUrl ? (
+		<Stack.Toolbar placement="right">
+			<Stack.Toolbar.Button icon={toolbarIcon("openExternal")} accessibilityLabel={`Open pull request ${reviewPRNumber} in GitHub`} onPress={() => void openGitHub(reviewPRUrl)} />
+			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="More review actions" onPress={() => router.push({ pathname: "/sheets/review-actions", params: { sessionId, prUrl: reviewPRUrl, reviewer: harness ?? "", hostId: routeHostId } })} />
+		</Stack.Toolbar>
+	) : null, [harness, reviewPRNumber, reviewPRUrl, routeHostId, router, sessionId]);
 	const observedPR = review ? pullRequestSummaryForURL(prs, review.prUrl) : undefined;
 	const awaitingMerge = Boolean(mergedURL && observedPR && observedPR.url === mergedURL && observedPR.state !== "merged");
 	useEffect(() => {
@@ -220,6 +226,7 @@ function ReviewDetailContent() {
 
 	return (
 		<View style={styles.screen}>
+		{headerItems}
 		<ScrollView style={styles.scroll} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
 			{/* Flat rows under section labels, like the worker board and project pages. */}
 			<ListSectionHeader label="Pull request" />
@@ -411,6 +418,4 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	pillDisabled: { opacity: 0.45 },
 	pillPressed: { opacity: 0.8 },
 	pillLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
-	headerActions: { flexDirection: "row", alignItems: "center", gap: 2 },
-	headerAction: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
 });

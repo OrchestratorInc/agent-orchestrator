@@ -41,7 +41,6 @@ describe("Android native compatibility boundaries", () => {
 
 	it("uses Android-native pressable icon controls rather than Unicode Expo buttons", () => {
 		for (const file of [
-			"./native-header-button.android.tsx",
 			"./sidebar-settings-button.android.tsx",
 			"./sidebar-spawn-button.android.tsx",
 		]) {
@@ -52,20 +51,19 @@ describe("Android native compatibility boundaries", () => {
 			expect(android).toContain("Feather");
 			expect(android).not.toContain("@expo/ui");
 		}
+	});
+
+	// Material's own icon button: the 48dp target, the ripple and the click all
+	// come from Compose, so no touch is recognised by hand in JavaScript.
+	it("draws the header button as a Compose icon button with a Material Symbol", () => {
 		const headerButton = source("./native-header-button.android.tsx");
-		expect(headerButton).toContain(
-			"hitSlop={{ top: space.sm, right: space.md, bottom: space.sm, left: space.xl }}",
-		);
-		// Fabric can omit Pressable.onPress when a native transform settles between
-		// touch-down and touch-up. Recover only a stationary, uncancelled touch, and
-		// wait long enough for the normal onPress path to win first.
-		expect(headerButton).toContain("onTouchStart");
-		expect(headerButton).toContain("onTouchMove");
-		expect(headerButton).toContain("onTouchEnd");
-		expect(headerButton).toContain("onTouchCancel");
-		expect(headerButton).toContain("pressHandledSequence");
-		expect(headerButton).toContain("PRESS_FALLBACK_DELAY_MS");
-		expect(headerButton).toMatch(/setTimeout\(\(\) => \{[\s\S]*pressHandledSequence\.current === sequence[\s\S]*movement > TAP_SLOP[\s\S]*onPress\(\);/);
+		expect(headerButton).toContain('from "@expo/ui/jetpack-compose"');
+		expect(headerButton).toMatch(/<IconButton onClick=\{onPress\}/);
+		expect(headerButton).toContain("materialDrawable(nativeHeaderGlyphs[icon].android)");
+		expect(headerButton).toContain("<BadgedBox>");
+		for (const handRolled of ["Pressable", "onTouchStart", "onTouchEnd", "setTimeout", "Feather"]) {
+			expect(headerButton).not.toContain(handRolled);
+		}
 	});
 
 	it("keeps SwiftUI and percentage native widths out of the cross-platform Spawn route", () => {

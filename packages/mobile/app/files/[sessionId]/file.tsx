@@ -1,19 +1,19 @@
 import * as Clipboard from "expo-clipboard";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AccessibilityInfo, ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { FlatList, GestureDetector } from "react-native-gesture-handler";
 import { SvgXml } from "react-native-svg";
 import { parseUnifiedDiff } from "../../../../shared/files/diff-parser";
 import { ChatMarkdown } from "../../../lib/chat/ChatMarkdown";
 import { userFacingError } from "../../../lib/connectionError";
 import { haptics } from "../../../lib/haptics";
-import { headerActionStyle, headerGlyphStyle } from "../../../lib/headerAction";
 import { hostRouteMatches } from "../../../lib/hostRoute";
 import { Feather } from "../../../lib/icons";
 import { HostScope, useApp } from "../../../lib/store";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
+import { toolbarIcon } from "../../../lib/toolbarIcon";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
@@ -146,22 +146,25 @@ function SessionFileContent() {
 	const commented = useMemo(() => new Set(fileComments.flatMap((comment) => comment.anchor ? [`${comment.anchor.side}:${comment.anchor.line}`] : [])), [fileComments]);
 
 	useLayoutEffect(() => {
-		navigation.setOptions({
-			title: name || "File",
-			headerRight: hostMatches && !image && !(markdown && rendered && effectiveMode === "file") ? () => (
-				<Pressable
-					accessibilityRole="switch"
-					accessibilityLabel="Wrap long lines"
-					accessibilityState={{ checked: wrap }}
-					hitSlop={10}
-					onPress={() => { haptics.select(); setWrap((value) => !value); }}
-					style={headerActionStyle}
-				>
-					<Feather name="wrap-text" size={iconSize.md} color={wrap ? t.textPrimary : t.textTertiary} style={headerGlyphStyle} />
-				</Pressable>
-			) : undefined,
-		});
-	}, [effectiveMode, hostMatches, image, markdown, name, navigation, rendered, t.textPrimary, t.textTertiary, wrap]);
+		navigation.setOptions({ title: name || "File" });
+	}, [name, navigation]);
+
+	// A toggle in the header. iOS draws a selected bar button as selected and
+	// VoiceOver says so; Android's header items have no selected state, so there
+	// the tint and the spoken label carry it. Memoized: each new element
+	// re-registers the header's items, and a line drag re-renders the page per
+	// frame.
+	const wrapToggle = useMemo(() => !image && !(markdown && rendered && effectiveMode === "file") ? (
+		<Stack.Toolbar placement="right">
+			<Stack.Toolbar.Button
+				icon={toolbarIcon("wrapLines")}
+				accessibilityLabel={Platform.OS === "android" ? `Wrap long lines, ${wrap ? "on" : "off"}` : "Wrap long lines"}
+				selected={wrap}
+				tintColor={wrap ? t.accent : t.textSecondary}
+				onPress={() => { haptics.select(); setWrap((value) => !value); }}
+			/>
+		</Stack.Toolbar>
+	) : null, [effectiveMode, image, markdown, rendered, t.accent, t.textSecondary, wrap]);
 
 	useEffect(() => {
 		if (!notice) return;
@@ -268,8 +271,8 @@ function SessionFileContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.navigate("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
+	if (!config && appLoading) return <View style={styles.center}>{wrapToggle}<ActivityIndicator color={t.accent} /></View>;
+	if (!config && connection === "closed") return <View style={styles.center}>{wrapToggle}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
 	const pathBar = (
 		<View style={styles.pathBar}>
@@ -387,6 +390,7 @@ function SessionFileContent() {
 
 	return (
 		<View style={styles.screen}>
+			{wrapToggle}
 			{pathBar}
 			<View style={styles.body}>{body}</View>
 			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}

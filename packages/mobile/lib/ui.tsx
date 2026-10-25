@@ -171,6 +171,8 @@ export function Pill({
 }
 
 // A bare glyph for the header's trailing slot, with an optional unread dot.
+// No haptic: every one of these navigates or opens a dialog, and neither the
+// system's header items nor its back button tick.
 export function HeaderIconButton({
 	icon,
 	label,
@@ -186,16 +188,13 @@ export function HeaderIconButton({
 }) {
 	const s = useThemedStyles(makeStyles);
 	return (
-		<View style={s.headerIconBtn} accessibilityLabel={badge > 0 ? `${label}, ${badge} unread` : label}>
+		<View style={s.headerIconBtn}>
 			<NativeHeaderButton
 				icon={icon}
 				label={badge > 0 ? `${label}, ${badge} unread` : label}
-				onPress={() => {
-					haptics.tap();
-					onPress();
-				}}
+				badge={badge}
+				onPress={onPress}
 			/>
-			{badge > 0 ? <View style={s.headerBadge} /> : null}
 		</View>
 	);
 }
@@ -694,17 +693,6 @@ const makeStyles = (t: Theme) =>
 			alignItems: "center",
 			justifyContent: "center",
 			padding: space.hair,
-		},
-		headerBadge: {
-			position: "absolute",
-			top: 0,
-			right: 1,
-			width: 9,
-			height: 9,
-			borderRadius: 4,
-			backgroundColor: t.accent,
-			borderWidth: 1.5,
-			borderColor: t.bgBase,
 		},
 
 		// The platform's touch target is the floor, so a one-line button is exactly

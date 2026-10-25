@@ -35,7 +35,8 @@ describe("NativeHeaderButton fallback", () => {
 		close: symbols.close,
 		check: symbols.checkmark,
 		back: symbols.back,
-		more: symbols.moreHorizontal,
+		// The glass circle rounds it on iOS; M3 stacks an app-bar overflow vertically.
+		more: { ios: "ellipsis", android: "more_vert" },
 		add: symbols.add,
 		trash: symbols.delete,
 	};
