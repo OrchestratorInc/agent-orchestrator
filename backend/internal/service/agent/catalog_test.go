@@ -1681,6 +1681,27 @@ func TestModelRefreshIgnoresExpiredNotInstalledReadiness(t *testing.T) {
 	}
 }
 
+func TestModelRefreshDetectsExternalInstallBeforeReadinessExpires(t *testing.T) {
+	now := time.Now().UTC()
+	agent := &mutableInstallAgent{}
+	discoverer := successfulModelDiscoverer()
+	item := harnessAgent("gemini", "Gemini", nil)
+	item.Agent = agent
+	svc := newService([]agentregistry.HarnessAgent{item}, &fakeModelCache{}, discoverer)
+	svc.readiness.now = func() time.Time { return now }
+	if _, err := svc.readiness.EnsureInstallation(context.Background(), []string{"gemini"}, domain.AgentReadinessPurposeDisplay); err != nil {
+		t.Fatal(err)
+	}
+	agent.installed.Store(true)
+	got, err := svc.Models(context.Background(), "gemini", "", true)
+	if err != nil || len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+		t.Fatalf("refresh after external install = %#v, %v", got, err)
+	}
+	if discoverer.discoverCalls.Load() != 1 {
+		t.Fatal("fresh not-installed observation blocked explicit recovery")
+	}
+}
+
 func TestModelUpdateSkipsAgentReadinessFoundNotInstalled(t *testing.T) {
 	now := time.Now().UTC()
 	record := cachedModelRecord(t, "gemini", "", now, false)
@@ -1700,6 +1721,9 @@ func TestModelUpdateSkipsAgentReadinessFoundNotInstalled(t *testing.T) {
 	}
 	if len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
 		t.Fatalf("catalog = %#v, want the saved catalog kept", got)
+	}
+	if got.WarningCode != ports.ModelCatalogWarningNotInstalled || got.Warning == "" {
+		t.Fatalf("catalog = %#v, want actionable missing-CLI warning", got)
 	}
 }
 

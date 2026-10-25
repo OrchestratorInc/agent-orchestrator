@@ -13857,6 +13857,7 @@ components:
           enum:
           - auth_required
           - auth_expired
+          - not_installed
           type: string
       required:
       - agentId

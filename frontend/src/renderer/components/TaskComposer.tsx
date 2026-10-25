@@ -603,6 +603,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// A login problem behind the catalog warning gets a plain-language notice
 	// with the fix in place. A cloud task never runs on this computer's login,
 	// so its composer never asks for it.
+	const modelNotInstalled = !isCloudProject && revalidationWarning === undefined && localCatalog?.warningCode === "not_installed";
 	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models a picker offers, for Cloud
@@ -890,23 +891,28 @@ export function useTaskLaunch({ projectId, hostId }: {
 			preserveProject: true,
 		});
 	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+const modelIssue = modelNotInstalled ? "not_installed" : modelAuthIssue;
 	// An expired login whose refresh token is still in date needs nothing from
 	// the user on this computer: its daemon lets the task start and the agent
 	// renews the token as it launches. A remote host may run an older daemon
 	// that still rejects the spawn for a stale catalog, so keep the notice there.
-	const loginRenewsItself = modelAuthIssue === "expired" && !hostId;
-	const showModelNotice = Boolean(modelAuthIssue) && !loginRenewsItself;
+	const loginRenewsItself = modelIssue === "expired" && !hostId;
+	const showModelNotice = Boolean(modelIssue) && !loginRenewsItself;
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
-		: modelAuthIssue && showModelNotice ? (
+		: modelIssue && showModelNotice ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
-			issue={modelAuthIssue}
+			issue={modelIssue}
 			detail={modelWarningText}
 			onLogin={startAgentLogin}
+			onInstall={() => openGlobalSettings("harness", {
+				focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}),
+				harnessView: "local", preserveProject: true,
+			})}
 			onRetry={refreshSelectedModels}
 		/>
-	) : modelAuthIssue ? undefined : modelWarningText;
+	) : modelIssue ? undefined : modelWarningText;
 	useEffect(() => {
 		if (!agentTouched) setAgent(defaultWorkerAgent);
 	}, [agentTouched, defaultWorkerAgent]);
