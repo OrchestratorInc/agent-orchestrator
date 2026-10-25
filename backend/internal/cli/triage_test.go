@@ -224,14 +224,23 @@ func TestTriageRedactionEscapedQuotedValues(t *testing.T) {
 		`err="{\"detail\":\"token=\\\"private value\\\"\"}" next=ok`,
 		`err="password=\"private`,
 		`token=\\private`,
+		`token=\'private value\'`,
+		`"token":\"private value\"`,
+		`err="{\"detail\":\"{\\\"token\\\":\\\"private value\\\"}\"}"`,
 	} {
 		got := redactTriage(input, "")
 		if strings.Contains(got, "private") || !strings.Contains(got, "[redacted-secret]") {
 			t.Errorf("%q => %q", input, got)
 		}
 	}
-	if got := redactTriage(`err="token=\"private\" status=ok"`, ""); got != `err="token=\"[redacted-secret]\" status=ok"` {
-		t.Fatal(got)
+	for input, want := range map[string]string{
+		`err="token=\"private\" status=ok"`: `err="token=\"[redacted-secret]\" status=ok"`,
+		`token=\\ next`:                     `token=[redacted-secret] next`,
+		`password=\\`:                       `password=[redacted-secret]`,
+	} {
+		if got := redactTriage(input, ""); got != want {
+			t.Errorf("%q => %q, want %q", input, got, want)
+		}
 	}
 }
 
