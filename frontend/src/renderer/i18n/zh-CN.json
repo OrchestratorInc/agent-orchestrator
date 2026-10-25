@@ -1105,6 +1105,7 @@
 	"notify.openPR": "打开拉取请求",
 	"notify.openSessionTitle": "打开会话",
 	"notify.retry": "重试",
+	"notify.restoreArchivedPrompt": "此会话已归档。要恢复吗？",
 	"notify.restoreUnavailable": "此会话已无法恢复。",
 	"notify.title": "通知",
 	"notify.unreadCount": "{{count}} 条未读通知",

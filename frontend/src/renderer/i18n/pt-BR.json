@@ -1124,6 +1124,7 @@
 	"notify.openSessionTitle": "Abrir sessão",
 	"notify.read": "Lidas",
 	"notify.retry": "Tentar novamente",
+	"notify.restoreArchivedPrompt": "Esta sessão foi arquivada. Deseja restaurá-la?",
 	"notify.restoreUnavailable": "Esta sessão não pode mais ser restaurada.",
 	"notify.title": "Notificações",
 	"notify.unread": "Não lidas",

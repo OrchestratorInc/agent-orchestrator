@@ -1116,6 +1116,7 @@
 	"notify.openSessionTitle": "Sitzung öffnen",
 	"notify.read": "Gelesen",
 	"notify.retry": "Erneut versuchen",
+	"notify.restoreArchivedPrompt": "Diese Sitzung wurde archiviert. Wiederherstellen?",
 	"notify.restoreUnavailable": "Diese Sitzung kann nicht mehr wiederhergestellt werden.",
 	"notify.title": "Benachrichtigungen",
 	"notify.unread": "Ungelesen",

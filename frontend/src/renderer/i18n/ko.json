@@ -1116,6 +1116,7 @@
 	"notify.openSessionTitle": "세션 열기",
 	"notify.read": "읽음",
 	"notify.retry": "다시 시도",
+	"notify.restoreArchivedPrompt": "이 세션은 보관되었습니다. 복원하시겠어요?",
 	"notify.restoreUnavailable": "이 세션은 더 이상 복원할 수 없습니다.",
 	"notify.title": "알림",
 	"notify.unread": "읽지 않음",

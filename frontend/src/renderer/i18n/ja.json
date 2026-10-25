@@ -1116,6 +1116,7 @@
 	"notify.openSessionTitle": "セッションを開く",
 	"notify.read": "既読",
 	"notify.retry": "再試行",
+	"notify.restoreArchivedPrompt": "このセッションはアーカイブされました。復元しますか？",
 	"notify.restoreUnavailable": "このセッションは復元できなくなりました。",
 	"notify.title": "通知",
 	"notify.unread": "未読",
