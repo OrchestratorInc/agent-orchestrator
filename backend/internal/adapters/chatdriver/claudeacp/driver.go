@@ -400,6 +400,8 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	return meta
 }
 
+const claudeAutoCompactWindowEnv = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+
 func claudeSessionMode(permission ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permission) {
 	case ports.PermissionModeAcceptEdits:

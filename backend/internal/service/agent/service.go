@@ -80,11 +80,14 @@ type Service struct {
 	modelDiscoveryDir  string
 	sessions           SessionUsageLookup
 	providerEntries    func(ctx context.Context) []agentcreds.GatewayEntry
-	resolverMu         map[string]*sync.Mutex
-	modelCallMu        sync.Mutex
-	modelCalls         map[string]*modelCatalogCall
-	modelGeneration    map[string]int64
-	discoverySlots     chan struct{}
+	// projects resolves the launch context for project- and role-scoped model
+	// catalogs (the fork's provider pins). Nil means no project scoping.
+	projects        ProjectLookup
+	resolverMu      map[string]*sync.Mutex
+	modelCallMu     sync.Mutex
+	modelCalls      map[string]*modelCatalogCall
+	modelGeneration map[string]int64
+	discoverySlots  chan struct{}
 	// inputChecks tracks background credential-input checks for cached
 	// catalogs, so a cache read never waits on them.
 	inputCheckMu  sync.Mutex
@@ -123,6 +126,12 @@ type Deps struct {
 	Clock func() time.Time
 }
 
+// ProjectLookup resolves the launch context used by project-scoped model
+// catalogs (the fork's provider pins).
+type ProjectLookup interface {
+	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
+}
+
 // SessionUsageLookup provides durable session facts used to rank agent choices.
 // The SQLite store satisfies this narrow read boundary.
 type SessionUsageLookup interface {
@@ -141,6 +150,7 @@ func NewWithDeps(deps Deps) *Service {
 	svc := newService(agents, deps.Cache, deps.Discoverer)
 	svc.modelDiscoveryDir = deps.ModelDiscoveryDir
 	svc.providerEntries = deps.ProviderEntries
+	svc.projects = deps.Projects
 	svc.readinessWarm = make(chan struct{})
 	if deps.Logger != nil {
 		svc.logger = deps.Logger

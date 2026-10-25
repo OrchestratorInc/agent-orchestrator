@@ -518,17 +518,8 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	if optionsFor != nil {
 		options = optionsFor(settings)
 	}
-	// A setting the session already has is skipped (some agents take seconds
-	// per change) unless session/set_model made the list stale.
-	catalogStale := false
 	if legacyModel && settings.Model != "" {
-		// A binding may name the model differently from the turn settings.
 		model := settings.Model
-		for _, option := range options {
-			if option.ID == "model" && option.Value != "" {
-				model = option.Value
-			}
-		}
 		modelOptionFound := false
 		for _, option := range configOptions {
 			if option.ID != "model" {
@@ -545,34 +536,16 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if !modelOptionFound {
 			return fmt.Errorf("%w: ACP session does not advertise a model option", ports.ErrChatConfigOptionInvalid)
 		}
-		if c.configOptionCurrent("model") != model {
-			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
-				if isACPMethodNotFound(err) {
-					return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
-				}
-				return fmt.Errorf("set ACP session model %q: %w", model, err)
+		if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
+			if isACPMethodNotFound(err) {
+				return fmt.Errorf("%w: session/set_model %q", ErrACPSetterUnsupported, model)
 			}
-			catalogStale = true
+			return fmt.Errorf("set ACP session model %q: %w", model, err)
 		}
 		c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 	}
 	applyOption := func(option SessionOption) error {
-		if option.ID == "" || option.Value == "" {
-			return nil
-		}
 		if (option.ID == "model" && legacyModel) || (option.ID == "mode" && legacyMode) {
-			return nil
-		}
-		if offered, known := c.configOptionOffers(option.ID, option.Value); known && !offered && option.Name != "" {
-			if value := c.configOptionValueNamed(option.ID, option.Name); value != "" {
-				option.Value = value
-			}
-		}
-		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
-			return nil
-		}
-		// The models offered do not depend on the model chosen, so this is final.
-		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
 			return nil
 		}
 		return c.setSessionOption(ctx, sessionID, option)
@@ -1173,16 +1146,8 @@ func (c *conversation) closeProvider(terminate, closeSession bool) error {
 		c.failPendingPermissions()
 		c.failPendingInputs()
 		if closeSession && sessionID != "" {
-			// The provider may save its session while answering; an answered close
-			// lets the host stop it sooner.
-			wait := sessionCloseWait
-			if c.proc != nil && c.proc.quickStop.Load() {
-				wait = quickSessionCloseWait
-			}
-			closeCtx, cancelClose := context.WithTimeout(context.Background(), wait)
-			if _, err := c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)}); err == nil && c.proc != nil {
-				c.proc.quickStop.Store(true)
-			}
+			closeCtx, cancelClose := context.WithTimeout(context.Background(), sessionCloseWait)
+			_, _ = c.conn.CloseSession(closeCtx, acpsdk.CloseSessionRequest{SessionId: acpsdk.SessionId(sessionID)})
 			cancelClose()
 		}
 		if persistent {

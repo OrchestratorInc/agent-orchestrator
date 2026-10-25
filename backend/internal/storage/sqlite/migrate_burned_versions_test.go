@@ -203,6 +203,7 @@ var shippedMigrations = map[int64]string{
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
 	202: "0202_allow_memcode_harness.sql",
+	// 0203 was an unmerged Hermes candidate; retain its reservation.
 	206: "0206_awake.sql",
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
@@ -211,12 +212,15 @@ var shippedMigrations = map[int64]string{
 	214: "0214_app_settings_version_refresh.sql",
 	215: "0215_session_harness_releases.sql",
 
+	20261021230230412: "20261021230230412_provider_events_session_index.sql",
+	20261022054735000: "20261022054735000_device_model_catalogs.sql",
+	20261022172135175: "20261022172135175_session_branch_naming.sql",
 	// Fork-local migrations live in the reserved 9000+ range so a sync rebase
 	// can never renumber them onto a number upstream will claim. See
 	// migrate_fork_reserved_range_test.go for why.
 	20261020173311321: "20261020173311321_preview_poll_sessions.sql",
-	20261022000000000: "20261022000000000_report_emitted_at.sql",
-	20261022014101630: "20261022014101630_review_run_current_head_lookup.sql",
+	20261022172135178: "20261022172135178_report_emitted_at.sql",
+	20261022172135179: "20261022172135179_review_run_current_head_lookup.sql",
 	9001:              "9001_add_user_config.sql",
 	9006:              "9006_session_provider_stamp.sql",
 	9011:              "9011_gateway_entries.sql",

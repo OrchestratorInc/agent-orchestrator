@@ -883,13 +883,7 @@ func (d *Driver) connectProcess(
 		reconnected: transport.Reconnected, acpState: transport.ACPState,
 	}
 	proc.stop = persistentStop(gate, transport.Stdin)
-	if d.cfg.QuickStop {
-		proc.quickStop.Store(true)
-	}
-	proc.terminate = persistentTerminate(gate, transport.Stdin, &proc.quickStop, func(shutdownCtx context.Context, quick bool) error {
-		if quick {
-			return persistenthost.ShutdownQuick(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
-		}
+	proc.terminate = persistentTerminate(gate, transport.Stdin, func(shutdownCtx context.Context) error {
 		return persistenthost.Shutdown(shutdownCtx, cfg.DataDir, string(cfg.SessionID))
 	})
 	return proc, nil
