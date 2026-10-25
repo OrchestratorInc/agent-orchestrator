@@ -20,6 +20,7 @@ import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } fr
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
+import { TopbarButton } from "./TopbarButton";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -445,9 +446,9 @@ export function SettingsPane() {
 					</PageTopbarTitle>
 				}
 				actions={
-					<button aria-label={t("settings.close")} className="settings-close-button shrink-0" disabled={layer.cueBusy} onClick={layer.close} type="button">
+					<TopbarButton aria-label={t("settings.close")} variant="icon" disabled={layer.cueBusy} onClick={layer.close} type="button">
 						<X aria-hidden="true" className="size-4" />
-					</button>
+					</TopbarButton>
 				}
 			/>
 			{/* A covered project layer stays mounted so its draft survives recovery settings above it. */}

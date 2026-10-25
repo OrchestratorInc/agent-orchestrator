@@ -35,7 +35,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						data-priority={header ? "secondary" : undefined}
 						disabled={busy}
 						onClick={() => openOrchestrator()}
-						variant={quiet ? "secondary" : "primary"}
+						variant={header ? "action" : quiet ? "secondary" : "primary"}
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
@@ -56,7 +56,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 						data-priority={header ? "primary" : undefined}
 						disabled={isProjectRestarting || isProvisioning}
 						onClick={openNewTask}
-						variant={quiet || cloud ? "secondary" : "accent"}
+						variant={header ? "action" : quiet || cloud ? "secondary" : "accent"}
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{t(header ? "newTask.task" : "shell.newTask")}</span>
@@ -71,7 +71,7 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 			<TopbarActionError role={header ? "alert" : "status"} className={header ? "max-w-content-max truncate" : "text-caption leading-body"} title={spawnError}>
 				{spawnError}
 			</TopbarActionError>
-			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style}>{t("newTask.createAsTui")}</TopbarButton> : null}
+			{canCreateAsTui ? <TopbarButton disabled={busy} onClick={() => openOrchestrator("tui")} style={style} variant={header ? "action" : "primary"}>{t("newTask.createAsTui")}</TopbarButton> : null}
 		</div>
 	) : null;
 	return header ? <>{feedback}{newTaskButton}{orchestratorButton}</> : <>

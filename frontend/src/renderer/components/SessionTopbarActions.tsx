@@ -117,7 +117,7 @@ export function SessionTopbarActions({
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
 									onClick={openNewTask}
-									variant="accent"
+									variant="action"
 								>
 									<Plus className="size-icon-md" aria-hidden="true" />
 									<span data-compact-label>{t("newTask.task")}</span>
@@ -135,7 +135,7 @@ export function SessionTopbarActions({
 								data-priority="secondary"
 								onClick={openBoard}
 								style={noDragStyle}
-								variant="feature"
+								variant="action"
 							>
 								<LayoutDashboard className="size-icon-md" aria-hidden="true" />
 								<span data-compact-label>{t("shell.openKanban")}</span>
@@ -228,7 +228,7 @@ export function SessionTopbarActions({
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => void openOrchestrator()}
-								variant="primary"
+								variant="action"
 							>
 								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 								<span data-compact-label>{t("shell.orchestrator")}</span>

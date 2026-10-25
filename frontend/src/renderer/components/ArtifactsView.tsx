@@ -433,7 +433,7 @@ function CreateArtifactMenu({
 		label === "new" ? (
 			// Anchors the menu, so it must not scale on press.
 			<TopbarButton
-				variant="primary"
+				variant="action"
 				className={cn("topbar-control--labeled topbar-control--static-press", className)}
 				disabled={disabled}
 				aria-busy={pending}
