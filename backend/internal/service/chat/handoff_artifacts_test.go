@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,7 @@ func TestHandoffArtifactsListsTheSessionDirectoryNewestFirst(t *testing.T) {
 	write(".versions/plan.md", base.Add(2*time.Hour))
 
 	svc := New(Options{DataDir: dataDir})
-	gotDir, files := svc.handoffArtifacts(domain.SessionRecord{ID: "s-1"})
+	gotDir, files := svc.handoffArtifacts(context.Background(), domain.SessionRecord{ID: "s-1"})
 	if gotDir != filepath.ToSlash(dir) {
 		t.Errorf("dir = %q, want %q", gotDir, filepath.ToSlash(dir))
 	}
@@ -39,7 +40,7 @@ func TestHandoffArtifactsListsTheSessionDirectoryNewestFirst(t *testing.T) {
 		t.Fatalf("files = %+v, want dashboard then plan, without version snapshots", files)
 	}
 
-	if _, files := svc.handoffArtifacts(domain.SessionRecord{ID: "missing"}); len(files) != 0 {
+	if _, files := svc.handoffArtifacts(context.Background(), domain.SessionRecord{ID: "missing"}); len(files) != 0 {
 		t.Errorf("a session with no artifact directory listed %+v", files)
 	}
 }

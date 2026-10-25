@@ -141,7 +141,7 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 	if err != nil {
 		return domain.HandoffNoteInput{}, err
 	}
-	artifactDir, artifacts := s.handoffArtifacts(record)
+	artifactDir, artifacts := s.handoffArtifacts(ctx, record)
 	return domain.HandoffNoteInput{
 		SwitchID:      switchID,
 		SourceHarness: record.Harness,
@@ -162,9 +162,9 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 
 // handoffArtifacts returns the session's artifact directory and its files,
 // most recently updated first. A directory that cannot be read lists none.
-func (s *Service) handoffArtifacts(record domain.SessionRecord) (string, []domain.SessionArtifactFile) {
+func (s *Service) handoffArtifacts(ctx context.Context, record domain.SessionRecord) (string, []domain.SessionArtifactFile) {
 	dir := cmp.Or(record.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, record.ID))
-	files, err := sessionartifacts.List(dir)
+	files, err := sessionartifacts.List(ctx, dir)
 	if err != nil {
 		s.log.Debug("list artifacts for handoff note", "session", record.ID, "error", err)
 		return filepath.ToSlash(dir), nil
