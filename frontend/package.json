@@ -130,8 +130,11 @@
 		"rehype-github-alerts": "^4.2.0",
 		"rehype-slug": "^6.0.0",
 		"remark-gfm": "^4.0.1",
+		"remark-parse": "11.0.0",
+		"remend": "1.4.0",
 		"semver": "^7.8.5",
 		"tailwind-merge": "^3.6.0",
+		"unified": "11.0.5",
 		"ws": "^8.21.1",
 		"zustand": "^5.0.14"
 	},

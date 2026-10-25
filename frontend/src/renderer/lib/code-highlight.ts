@@ -218,6 +218,7 @@ let pendingChars = 0;
 const pending = new Map<number, {
 	key: string;
 	chars: number;
+	cacheResult: boolean;
 	promise: Promise<Root | undefined>;
 	resolve: (tree: Root | undefined) => void;
 	timer: ReturnType<typeof setTimeout>;
@@ -235,8 +236,15 @@ function stopWorker(): void {
 	pendingChars = 0;
 }
 
-function highlightInWorker(code: string, language: GrammarName): Promise<Root | undefined> {
-	const key = cacheKey(code, language);
+// Live snapshots never enter the settled-block LRU. The whole prefix is sent
+// because lowlight has no public continuation API for multiline grammar state.
+export function highlightStreaming(code: string, language: GrammarName): Promise<Root | undefined> {
+	if (code.length > 100_000) return Promise.resolve(undefined);
+	return highlightInWorker(code, language, false);
+}
+
+function highlightInWorker(code: string, language: GrammarName, cacheResult = true): Promise<Root | undefined> {
+	const key = `${cacheResult ? "settled" : "live"}:${cacheKey(code, language)}`;
 	for (const request of pending.values()) {
 		if (request.key === key) return request.promise;
 	}
@@ -254,14 +262,14 @@ function highlightInWorker(code: string, language: GrammarName): Promise<Root | 
 				clearTimeout(request.timer);
 				pending.delete(event.data.id);
 				pendingChars -= request.chars;
-				if (event.data.tree) store(request.key, event.data.tree, request.chars);
+				if (event.data.tree && request.cacheResult) store(request.key.slice("settled:".length), event.data.tree, request.chars);
 				request.resolve(event.data.tree);
 			};
 		}
 		const id = ++nextRequestId;
 		let resolve!: (tree: Root | undefined) => void;
 		const promise = new Promise<Root | undefined>((done) => { resolve = done; });
-		pending.set(id, { key, chars: code.length, promise, resolve, timer: setTimeout(stopWorker, WORKER_TIMEOUT_MS) });
+		pending.set(id, { key, chars: code.length, cacheResult, promise, resolve, timer: setTimeout(stopWorker, WORKER_TIMEOUT_MS) });
 		pendingChars += code.length;
 		worker.postMessage({ id, code, language });
 		return promise;
