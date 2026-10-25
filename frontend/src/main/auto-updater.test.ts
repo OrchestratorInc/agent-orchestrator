@@ -3729,6 +3729,7 @@ describe("quitAndInstallUpdate", () => {
         await downloaded.promise;
       });
       const install = module.quitAndInstallUpdate();
+      module.clearUpdateRestartRequest();
       const duplicate = module.quitAndInstallUpdate();
       await flushMicrotasks();
       expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1);
