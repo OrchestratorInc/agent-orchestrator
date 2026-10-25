@@ -5291,6 +5291,70 @@ paths:
       summary: Report a reviewer-owned hook signal
       tags:
       - reviews
+  /api/v1/search:
+    get:
+      operationId: search
+      parameters:
+      - description: 'What the user typed: a name, an identifier, a copied phrase
+          or a plain-English question. Quote text to require it verbatim.'
+        in: query
+        name: q
+        required: true
+        schema:
+          description: 'What the user typed: a name, an identifier, a copied phrase
+            or a plain-English question. Quote text to require it verbatim.'
+          maxLength: 512
+          type: string
+      - description: Session whose workspace files are searched. Without it, only
+          chats are searched.
+        in: query
+        name: sessionId
+        schema:
+          description: Session whose workspace files are searched. Without it, only
+            chats are searched.
+          type: string
+      - description: Comma-separated subset of fileNames, fileContent and messages.
+          Defaults to all three.
+        in: query
+        name: kinds
+        schema:
+          description: Comma-separated subset of fileNames, fileContent and messages.
+            Defaults to all three.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Search workspace files by name and content, and chat messages
+      tags:
+      - search
   /api/v1/sessions:
     get:
       operationId: listSessions
@@ -18567,6 +18631,128 @@ components:
       - path
       - name
       type: object
+    SearchFileContentHit:
+      properties:
+        decisive:
+          description: 'Evidence strong enough to outrank a matching name: a code-like
+            or quoted query, or an exact phrase of three or more words.'
+          type: boolean
+        path:
+          description: Workspace-relative path.
+          type: string
+        score:
+          format: double
+          type: number
+        snippet:
+          $ref: '#/components/schemas/SearchSnippet'
+      required:
+      - path
+      - snippet
+      - score
+      - decisive
+      type: object
+    SearchFileNameHit:
+      properties:
+        exactName:
+          description: The query is the file's name, e.g. tokens.css.
+          type: boolean
+        path:
+          description: Workspace-relative path.
+          type: string
+        score:
+          format: double
+          type: number
+      required:
+      - path
+      - score
+      - exactName
+      type: object
+    SearchHighlight:
+      properties:
+        end:
+          type: integer
+        start:
+          type: integer
+      required:
+      - start
+      - end
+      type: object
+    SearchMessageHit:
+      properties:
+        conversationTitle:
+          type: string
+        decisive:
+          type: boolean
+        messageId:
+          type: string
+        olderVersion:
+          description: 'The message left the visible transcript: an edit forked past
+            it or its turn was rolled back.'
+          type: boolean
+        projectId:
+          type: string
+        reviewId:
+          description: 'Set for a reviewer chat message: the review whose chat, inside
+            sessionId''s view, holds it.'
+          type: string
+        score:
+          format: double
+          type: number
+        sessionId:
+          type: string
+        snippet:
+          $ref: '#/components/schemas/SearchSnippet'
+      required:
+      - messageId
+      - conversationTitle
+      - snippet
+      - score
+      - decisive
+      - olderVersion
+      type: object
+    SearchResponse:
+      properties:
+        fileContent:
+          items:
+            $ref: '#/components/schemas/SearchFileContentHit'
+          type: array
+        fileNames:
+          items:
+            $ref: '#/components/schemas/SearchFileNameHit'
+          type: array
+        files:
+          description: Readiness of the session's file index; building while its first
+            index runs.
+          enum:
+          - ready
+          - building
+          - unavailable
+          type: string
+        messages:
+          items:
+            $ref: '#/components/schemas/SearchMessageHit'
+          type: array
+      required:
+      - fileNames
+      - fileContent
+      - messages
+      - files
+      type: object
+    SearchSnippet:
+      properties:
+        highlights:
+          items:
+            $ref: '#/components/schemas/SearchHighlight'
+          type: array
+        line:
+          description: 1-based line in the file; absent for chat messages.
+          type: integer
+        text:
+          type: string
+      required:
+      - text
+      - highlights
+      type: object
     SendConversationMessageRequest:
       properties:
         attachments:
@@ -21865,6 +22051,8 @@ tags:
   name: browser
 - description: Read-only filesystem browsing for remote clients
   name: fs
+- description: Command-palette search over workspace files and chat messages
+  name: search
 - description: Local machine readiness checks the desktop app runs before showing
     the board
   name: system

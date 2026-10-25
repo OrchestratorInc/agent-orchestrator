@@ -1348,6 +1348,30 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
+	it("scrolls to and highlights a navigated message even when its text does not match the rendered body", async () => {
+		const { rerender } = render(<ChatWorkspace snapshot={chatFixtureSettled} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const source = log.querySelector<HTMLElement>("[data-chat-message-id]")!;
+		const bounds = HTMLElement.prototype.getBoundingClientRect;
+		const geometry = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this === log) return new DOMRect(0, 0, 600, 500);
+			if (this === source) return new DOMRect(0, 900, 600, 80);
+			return bounds.call(this);
+		});
+		const scrollIntoView = vi.fn();
+		source.scrollIntoView = scrollIntoView;
+		rerender(<ChatWorkspace
+			snapshot={chatFixtureSettled}
+			annotationNavigationRequest={{ id: "palette:1", text: "- **raw** `markdown` line", messageId: source.dataset.chatMessageId }}
+		/>);
+		try {
+			await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "center" }));
+			expect(source.querySelector("[data-chat-message-body]")).toHaveClass("chat-annotation-target");
+		} finally {
+			geometry.mockRestore();
+		}
+	});
+
 	it("hides Add to chat on surfaces whose send does not forward excerpts", () => {
 		render(<ChatWorkspace snapshot={chatFixtureSettled} />);
 		const log = screen.getByRole("log", { name: "Conversation" });

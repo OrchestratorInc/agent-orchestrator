@@ -21,8 +21,13 @@ import {
 	type PRReviewState,
 } from "./session-reviews";
 import { appI18n, type MessageKey } from "../i18n";
+import type { components } from "../../api/schema";
+import type { AppShortcutId } from "../../shared/shortcuts";
+import type { GlobalSettingsSection } from "../stores/ui-store";
+import { renderedSnippetText } from "./chat-annotation-navigation";
+import { applyNamesFirst, buildNameIndex, matchName, type NameIndex, type NameKind, type RankedEntry } from "./palette-search";
 
-export type CommandGroupId = "current" | "attention" | "files" | "projects" | "sessions" | "prs" | "global";
+export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
 
 export type NavigateTarget =
 	| { to: "/" }
@@ -54,7 +59,10 @@ export type CommandAction =
 	| { kind: "open-orchestrator"; projectId: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
-	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string }
+	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
+	| { kind: "open-chat-message"; sessionId?: string; projectId?: string; hostId?: string; reviewId?: string; messageId?: string; text: string }
+	| { kind: "open-settings-section"; section: GlobalSettingsSection; /** Visible label of the row to land on. */ focus?: string }
+	| { kind: "run-shortcut"; shortcut: AppShortcutId }
 	| { kind: "resume-session"; projectId: string; sessionId: string }
 	| { kind: "copy-branch"; branch: string }
 	| { kind: "open-pr"; url: string }
@@ -73,6 +81,14 @@ export type CommandItem = {
 	searchOnly?: boolean;
 	zone?: AttentionZone;
 	action?: CommandAction;
+	/** How the row is matched by name; defaults from its group. */
+	nameKind?: NameKind;
+	/** Rows found by the daemon's search carry its score (shared scale) and are not re-matched by name. */
+	serverScore?: number;
+	/** Daemon content evidence strong enough to outrank a matching name. */
+	decisive?: boolean;
+	/** A matched line shown in place of the subtitle, with the matched words marked. */
+	snippet?: { text: string; highlights: { start: number; end: number }[]; code?: boolean };
 };
 
 export type CommandPaletteContext = {
@@ -91,15 +107,18 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 };
 
-export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "projects", "sessions", "prs", "global"];
+export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
 
 const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
 	current: "command.group.current",
 	attention: "command.group.attention",
 	files: "command.group.files",
+	content: "command.group.content",
+	messages: "command.group.messages",
 	projects: "command.group.projects",
 	sessions: "command.group.sessions",
 	prs: "command.group.prs",
+	settings: "command.group.settings",
 	global: "command.group.global",
 };
 
@@ -114,6 +133,12 @@ export const commandGroupLabel: Record<CommandGroupId, string> = {
 	get files() {
 		return appI18n.t(commandGroupLabelKeys.files);
 	},
+	get content() {
+		return appI18n.t(commandGroupLabelKeys.content);
+	},
+	get messages() {
+		return appI18n.t(commandGroupLabelKeys.messages);
+	},
 	get projects() {
 		return appI18n.t(commandGroupLabelKeys.projects);
 	},
@@ -122,6 +147,9 @@ export const commandGroupLabel: Record<CommandGroupId, string> = {
 	},
 	get prs() {
 		return appI18n.t(commandGroupLabelKeys.prs);
+	},
+	get settings() {
+		return appI18n.t(commandGroupLabelKeys.settings);
 	},
 	get global() {
 		return appI18n.t(commandGroupLabelKeys.global);
@@ -225,6 +253,83 @@ export function buildWorkspaceFileCommands(
 			action: { kind: "open-workspace-file", target, path: file.path },
 		};
 	});
+}
+
+type SearchSchemas = components["schemas"];
+
+export type PaletteSearchResults = {
+	fileNames?: SearchSchemas["SearchFileNameHit"][];
+	fileContent?: SearchSchemas["SearchFileContentHit"][];
+	messages?: SearchSchemas["SearchMessageHit"][];
+};
+
+/**
+ * Rows for daemon search hits. They keep the daemon's score (the shared
+ * scale), so the palette ranks them against its own name matches without
+ * re-matching their text. A full file name typed with its extension
+ * ("tokens.css") is decisive: it beats a control of the same name.
+ */
+export function buildSearchResultCommands(
+	query: string,
+	target: WorkspaceFileSearchTarget | undefined,
+	results: PaletteSearchResults,
+	t: TFunction = appI18n.t,
+): CommandItem[] {
+	const items: CommandItem[] = [];
+	const host = target?.hostId ?? "local";
+	if (target) {
+		for (const hit of results.fileNames ?? []) {
+			const { basename, directory } = workspacePathParts(hit.path);
+			items.push({
+				id: `file:${host}:${target.sessionId}:${hit.path}`,
+				group: "files",
+				title: basename,
+				subtitle: directory,
+				keywords: [hit.path],
+				serverScore: hit.score,
+				decisive: hit.exactName && query.includes("."),
+				action: { kind: "open-workspace-file", target, path: hit.path },
+			});
+		}
+		for (const hit of results.fileContent ?? []) {
+			const { basename, directory } = workspacePathParts(hit.path);
+			const line = hit.snippet.line;
+			items.push({
+				id: `content:${host}:${target.sessionId}:${hit.path}`,
+				group: "content",
+				title: line ? `${basename}:${line}` : basename,
+				subtitle: directory,
+				keywords: [hit.path],
+				serverScore: hit.score,
+				decisive: hit.decisive,
+				snippet: { text: hit.snippet.text, highlights: hit.snippet.highlights, code: true },
+				action: { kind: "open-workspace-file", target, path: hit.path, ...(line ? { line } : {}) },
+			});
+		}
+	}
+	for (const hit of results.messages ?? []) {
+		const title = hit.conversationTitle || t("command.chatFallback");
+		items.push({
+			id: `message:${host}:${hit.messageId}`,
+			group: "messages",
+			title,
+			subtitle: hit.olderVersion ? t("command.olderVersion") : hit.reviewId ? t("terminal.reviewer") : undefined,
+			serverScore: hit.score,
+			decisive: hit.decisive,
+			snippet: { text: hit.snippet.text, highlights: hit.snippet.highlights },
+			action: {
+				kind: "open-chat-message",
+				...(hit.sessionId ? { sessionId: hit.sessionId } : {}),
+				...(hit.projectId ? { projectId: hit.projectId } : {}),
+				...(target?.hostId ? { hostId: target.hostId } : {}),
+				...(hit.reviewId ? { reviewId: hit.reviewId } : {}),
+				// A message an edit forked away is not in the transcript to scroll to.
+				...(hit.olderVersion ? {} : { messageId: hit.messageId }),
+				text: renderedSnippetText(hit.snippet.text),
+			},
+		});
+	}
+	return items;
 }
 
 function sessionCommand(
@@ -542,32 +647,57 @@ function prReviewCommand(
 	};
 }
 
-function isSubsequence(query: string, haystack: string): boolean {
-	let i = 0;
-	for (let j = 0; j < haystack.length && i < query.length; j++) {
-		if (haystack[j] === query[i]) i++;
+const groupNameKind: Record<CommandGroupId, NameKind> = {
+	current: "action",
+	attention: "session",
+	files: "other",
+	content: "other",
+	messages: "other",
+	projects: "project",
+	sessions: "session",
+	prs: "pr",
+	settings: "setting",
+	global: "action",
+};
+
+const nameIndexes = new WeakMap<readonly CommandItem[], NameIndex>();
+
+function nameIndexFor(items: readonly CommandItem[]): NameIndex {
+	let index = nameIndexes.get(items);
+	if (!index) {
+		index = buildNameIndex(items.filter((item) => item.serverScore === undefined).map(nameTarget));
+		nameIndexes.set(items, index);
 	}
-	return i === query.length;
+	return index;
+}
+
+function nameTarget(item: CommandItem) {
+	return {
+		title: item.title,
+		keywords: [item.subtitle ?? "", ...(item.keywords ?? [])],
+		kind: item.nameKind ?? groupNameKind[item.group],
+	};
+}
+
+/**
+ * Ranks items for a query on the shared scale: names are matched here,
+ * daemon search rows keep the daemon's score, and names come first when they
+ * clearly answer the query (see applyNamesFirst).
+ */
+export function rankCommands(items: CommandItem[], query: string): RankedEntry<CommandItem>[] {
+	const index = nameIndexFor(items);
+	const entries = items.map((item): RankedEntry<CommandItem> => {
+		if (item.serverScore !== undefined) return { item, score: item.serverScore, decisive: item.decisive };
+		const { score, coverage } = matchName(query, nameTarget(item), index);
+		return { item, score, coverage };
+	});
+	return applyNamesFirst(entries);
 }
 
 export function matchScore(query: string, item: CommandItem): number {
-	const q = query.trim().toLowerCase();
-	if (!q) return 1;
-	const title = item.title.toLowerCase();
-	const extras = [item.subtitle ?? "", ...(item.keywords ?? [])].join(" ").toLowerCase();
-
-	const titleIdx = title.indexOf(q);
-	if (item.group === "files") {
-		if (title === q) return 1200;
-		if (titleIdx === 0) return 1100;
-		if (titleIdx > 0) return 900 - titleIdx;
-	}
-	if (titleIdx === 0) return 1000;
-	if (titleIdx > 0) return 800 - titleIdx;
-	if (extras.includes(q)) return 500;
-	if (isSubsequence(q, title)) return 200;
-	if (isSubsequence(q, extras)) return 100;
-	return 0;
+	if (!query.trim()) return 1;
+	if (item.serverScore !== undefined) return item.serverScore;
+	return matchName(query, nameTarget(item), buildNameIndex([nameTarget(item)])).score;
 }
 
 function isAttentionItem(item: CommandItem): boolean {
@@ -579,12 +709,16 @@ function attentionRank(item: CommandItem): number {
 }
 
 export function filterCommands(items: CommandItem[], query: string): CommandItem[] {
-	if (!query.trim()) return items.filter((item) => !item.searchOnly);
-	return items
-		.map((item, index) => ({ item, index, score: matchScore(query, item) }))
-		.filter((entry) => entry.score > 0)
-		.sort((a, b) => b.score - a.score || attentionRank(a.item) - attentionRank(b.item) || a.index - b.index)
-		.map((entry) => entry.item);
+	return rankedForQuery(items, query).map((entry) => entry.item);
+}
+
+function rankedForQuery(items: CommandItem[], query: string): RankedEntry<CommandItem>[] {
+	if (!query.trim()) return items.filter((item) => !item.searchOnly).map((item) => ({ item, score: 1 }));
+	return rankCommands(items, query)
+		.map((entry, index) => ({ entry, index }))
+		.filter(({ entry }) => entry.score > 0)
+		.sort((a, b) => b.entry.score - a.entry.score || attentionRank(a.entry.item) - attentionRank(b.entry.item) || a.index - b.index)
+		.map(({ entry }) => entry);
 }
 
 export const MAX_ITEMS_PER_GROUP = 20;
@@ -633,11 +767,12 @@ export function displayGroups(items: CommandItem[], query: string, t: TFunction 
 	// The palette runs cmdk with shouldFilter:false and selects the first item in DOM
 	// order, so Enter follows category order. Rank categories by their best match to
 	// keep the highest-scoring hit — and therefore the Enter target — first.
+	const scores = new Map(rankedForQuery(items, query).map((entry) => [entry.item.id, entry.score]));
 	return groups
 		.map((group, index) => ({
 			group,
 			index,
-			score: Math.max(...group.items.map((item) => matchScore(query, item))),
+			score: Math.max(...group.items.map((item) => scores.get(item.id) ?? 0)),
 		}))
 		.sort((a, b) => b.score - a.score || a.index - b.index)
 		.map((entry) => entry.group);

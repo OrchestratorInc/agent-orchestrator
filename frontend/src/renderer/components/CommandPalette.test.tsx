@@ -217,6 +217,7 @@ vi.mock("./CreateProjectFlow", () => ({
 
 import { CommandPalette } from "./CommandPalette";
 import { appShortcutBus } from "../test/app-shortcut-bus";
+import { useAppShortcut } from "../hooks/useAppShortcut";
 
 function renderPalette() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -320,11 +321,15 @@ describe("CommandPalette gating", () => {
 	});
 });
 
+function paletteSearchData(overrides: Record<string, unknown> = {}) {
+	return { fileNames: [], fileContent: [], messages: [], files: "ready", ...overrides };
+}
+
 describe("CommandPalette workspace file search", () => {
 	it("searches the current session and requests the selected file without navigating", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
-		getMock.mockImplementation(async (path: string) => path.includes("/workspace/search")
-			? { data: { query: "App", results: [{ path: "src/components/App.tsx", status: "modified", size: 42, binary: false, fileFingerprint: "v1" }], truncated: false } }
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/search"
+			? { data: paletteSearchData({ fileNames: [{ path: "src/components/App.tsx", score: 8, exactName: true }] }) }
 			: { data: {} });
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
@@ -352,7 +357,7 @@ describe("CommandPalette workspace file search", () => {
 		expect(screen.getByText("ship banner")).toBeInTheDocument();
 		expect(screen.getByText("fix flake")).toBeInTheDocument();
 		expect(screen.queryByText("orchestrate")).not.toBeInTheDocument();
-		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/search", expect.objectContaining({ params: { query: expect.objectContaining({ sessionId: expect.anything() }) } }));
 
 		fireEvent.click(screen.getByText("fix flake"));
 		expect(await screen.findByPlaceholderText("Search files in fix flake…")).toBeInTheDocument();
@@ -360,18 +365,18 @@ describe("CommandPalette workspace file search", () => {
 
 	it("does not call workspace search until two characters settle", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
-		getMock.mockResolvedValue({ data: { query: "", results: [], truncated: false } });
+		getMock.mockResolvedValue({ data: paletteSearchData() });
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search projects/i);
 		fireEvent.change(input, { target: { value: "A" } });
 		await new Promise((resolve) => window.setTimeout(resolve, 250));
-		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/search", expect.anything());
 
 		fireEvent.change(input, { target: { value: "Ap" } });
 		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
-			expect.stringContaining("/workspace/search"),
-			expect.objectContaining({ params: expect.objectContaining({ query: { query: "Ap", limit: 20 } }) }),
+			"/api/v1/search",
+			expect.objectContaining({ params: { query: { q: "Ap", sessionId: "w-fix", kinds: "fileNames,fileContent,messages" } } }),
 		));
 	});
 
@@ -396,7 +401,7 @@ describe("CommandPalette workspace file search", () => {
 			{ query: "cloud", limit: 20 },
 			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
-		expect(getMock).not.toHaveBeenCalledWith(expect.stringContaining("/workspace/search"), expect.anything());
+		expect(getMock).not.toHaveBeenCalledWith("/api/v1/search", expect.objectContaining({ params: { query: expect.objectContaining({ sessionId: expect.anything() }) } }));
 	});
 
 	it("navigates to the selected connected-host worktree before opening its file", async () => {
@@ -404,7 +409,7 @@ describe("CommandPalette workspace file search", () => {
 		ctx.workspaces[0].hostId = "host-a";
 		for (const session of ctx.workspaces[0].sessions) session.hostId = "host-a";
 		getMock.mockResolvedValue({
-			data: { query: "app", results: [{ path: "src/app.ts", status: "modified", size: 5, binary: false, fileFingerprint: "v1" }], truncated: false },
+			data: paletteSearchData({ fileNames: [{ path: "src/app.ts", score: 7, exactName: false }] }),
 		});
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
@@ -420,6 +425,166 @@ describe("CommandPalette workspace file search", () => {
 			params: { hostId: "host-a", projectId: "proj-1", sessionId: "w-fix" },
 		});
 		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ hostId: "host-a", sessionId: "w-fix", path: "src/app.ts" });
+	});
+});
+
+function ShortcutProbe({ id, onRun }: { id: Parameters<typeof useAppShortcut>[0]; onRun: () => void }) {
+	useAppShortcut(id, onRun);
+	return null;
+}
+
+async function typeInPalette(value: string) {
+	act(() => useUiStore.getState().setCommandPaletteOpen(true));
+	const input = await screen.findByPlaceholderText(/search projects/i);
+	fireEvent.change(input, { target: { value } });
+	return input;
+}
+
+const chatHit = {
+	messageId: "m1",
+	conversationTitle: "Login flake chat",
+	sessionId: "w-fix",
+	projectId: "proj-1",
+	score: 5,
+	decisive: false,
+	olderVersion: false,
+	snippet: { text: "the login test is flaky on CI", highlights: [{ start: 4, end: 9 }] },
+};
+
+describe("CommandPalette search results", () => {
+	it("opens a passage inside a file at its line", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockResolvedValue({ data: paletteSearchData({
+			fileContent: [{ path: "src/flaky.ts", score: 6, decisive: false, snippet: { text: "retry the flaky login", line: 42, highlights: [{ start: 10, end: 15 }] } }],
+		}) });
+		renderPalette();
+		await typeInPalette("flaky login retry");
+
+		fireEvent.click(await screen.findByText("flaky.ts:42", {}, { timeout: 2_000 }));
+		expect(screen.queryByText("retry the")).toBeNull(); // palette closed
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "w-fix", path: "src/flaky.ts", line: 42 });
+	});
+
+	it("shows the matched line with its words marked", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockResolvedValue({ data: paletteSearchData({
+			fileContent: [{ path: "src/flaky.ts", score: 6, decisive: false, snippet: { text: "retry the flaky login", line: 42, highlights: [{ start: 10, end: 15 }] } }],
+		}) });
+		renderPalette();
+		await typeInPalette("flaky login retry");
+		const marked = await screen.findByText("flaky", {}, { timeout: 2_000 });
+		expect(marked.className).toContain("font-medium");
+	});
+
+	it("starts a long matched line just before its first match", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		const text = "const unrelatedPrefixThatIsQuiteLong = computeSomething(); setTheme(dark)";
+		const start = text.indexOf("dark");
+		getMock.mockResolvedValue({ data: paletteSearchData({
+			fileContent: [{ path: "src/theme.ts", score: 6, decisive: false, snippet: { text, line: 9, highlights: [{ start, end: start + 4 }] } }],
+		}) });
+		renderPalette();
+		await typeInPalette("dark theme code");
+		const marked = await screen.findByText("dark", {}, { timeout: 2_000 });
+		expect(marked.parentElement?.textContent?.startsWith("…")).toBe(true);
+		expect(marked.parentElement?.textContent).not.toContain("unrelatedPrefix");
+	});
+
+	it("opens a chat hit in its session and asks the chat to show the message", async () => {
+		ctx.params = {};
+		getMock.mockResolvedValue({ data: paletteSearchData({ messages: [chatHit] }) });
+		renderPalette();
+		await typeInPalette("login flaky ci");
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/search",
+			expect.objectContaining({ params: { query: { q: "login flaky ci", kinds: "messages" } } }),
+		));
+
+		fireEvent.click(await screen.findByText("Login flake chat", {}, { timeout: 2_000 }));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "w-fix" },
+		});
+		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({ sessionId: "w-fix", messageId: "m1" });
+	});
+
+	it("opens a reviewer chat hit in the reviewed session and names the review", async () => {
+		ctx.params = {};
+		useUiStore.setState({ chatMessageFocusRequest: null });
+		getMock.mockResolvedValue({ data: paletteSearchData({ messages: [{ ...chatHit, reviewId: "review-1" }] }) });
+		renderPalette();
+		await typeInPalette("login flaky ci");
+		const row = await screen.findByText("Login flake chat", {}, { timeout: 2_000 });
+		expect(row.closest("[cmdk-item]")?.textContent).toContain("Reviewer");
+		fireEvent.click(row);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "w-fix" },
+		});
+		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({ sessionId: "w-fix", messageId: "m1", reviewId: "review-1" });
+	});
+
+	it("labels a forked-away chat message and opens its chat without scrolling to it", async () => {
+		ctx.params = {};
+		useUiStore.setState({ chatMessageFocusRequest: null });
+		getMock.mockResolvedValue({ data: paletteSearchData({ messages: [{ ...chatHit, olderVersion: true }] }) });
+		renderPalette();
+		await typeInPalette("login flaky ci");
+
+		expect(await screen.findByText("Earlier version", {}, { timeout: 2_000 })).toBeInTheDocument();
+		fireEvent.click(screen.getByText("Login flake chat"));
+		expect(navigateMock).toHaveBeenCalled();
+		expect(useUiStore.getState().chatMessageFocusRequest).toBeNull();
+	});
+
+	it("opens the settings page of a matched setting", async () => {
+		renderPalette();
+		await typeInPalette("telemetry");
+		fireEvent.click(await screen.findByText("Share usage analytics"));
+		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "general" });
+	});
+
+	it("runs a shortcut action after the palette closes", async () => {
+		const ran = vi.fn();
+		render(<ShortcutProbe id="toggle-sidebar" onRun={ran} />);
+		renderPalette();
+		await typeInPalette("hide sidebar");
+		fireEvent.click(await screen.findByText("Toggle sidebar"));
+		await waitFor(() => expect(ran).toHaveBeenCalledTimes(1));
+		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
+	});
+
+	it("keeps a named setting as the Enter target over a file that only mentions it", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockResolvedValue({ data: paletteSearchData({
+			fileContent: [{ path: "docs/theme.md", score: 9, decisive: false, snippet: { text: "dark mode follows the system", line: 3, highlights: [] } }],
+		}) });
+		renderPalette();
+		await typeInPalette("dark mode");
+		await screen.findByText("theme.md:3", {}, { timeout: 2_000 });
+		const selected = document.querySelector("[cmdk-item][data-selected='true']");
+		expect(selected?.textContent).toMatch(/theme/i);
+		expect(selected?.textContent).not.toContain("theme.md");
+	});
+
+	it("says when the session's file index is still being built", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockResolvedValue({ data: paletteSearchData({ files: "building" }) });
+		renderPalette();
+		await typeInPalette("anything");
+		expect(await screen.findByText("Indexing files…", {}, { timeout: 2_000 })).toBeInTheDocument();
+	});
+
+	it("asks again while the file index builds, and shows content once it is ready", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockResolvedValueOnce({ data: paletteSearchData({ files: "building" }) });
+		getMock.mockResolvedValue({ data: paletteSearchData({
+			fileContent: [{ path: "src/flaky.ts", score: 6, decisive: false, snippet: { text: "retry the flaky login", line: 42, highlights: [] } }],
+		}) });
+		renderPalette();
+		await typeInPalette("flaky login");
+		expect(await screen.findByText("flaky.ts:42", {}, { timeout: 4_000 })).toBeInTheDocument();
+		expect(screen.queryByText("Indexing files…")).toBeNull();
 	});
 });
 

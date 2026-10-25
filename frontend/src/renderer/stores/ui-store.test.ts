@@ -271,3 +271,20 @@ describe("workspace file open requests", () => {
 		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 	});
 });
+
+describe("palette search requests", () => {
+	it("carries a line with a file open request", () => {
+		useUiStore.getState().requestWorkspaceFileOpen("session-1", "src/App.tsx", undefined, undefined, 42);
+		expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "session-1", path: "src/App.tsx", line: 42 });
+	});
+
+	it("records and clears a chat message focus request by nonce", () => {
+		useUiStore.getState().requestChatMessageFocus("session-1", "m1", "the passage", "host-a");
+		const request = useUiStore.getState().chatMessageFocusRequest;
+		expect(request).toMatchObject({ sessionId: "session-1", messageId: "m1", text: "the passage", hostId: "host-a" });
+		useUiStore.getState().clearChatMessageFocusRequest((request?.nonce ?? 0) + 1);
+		expect(useUiStore.getState().chatMessageFocusRequest).not.toBeNull();
+		useUiStore.getState().clearChatMessageFocusRequest(request!.nonce);
+		expect(useUiStore.getState().chatMessageFocusRequest).toBeNull();
+	});
+});

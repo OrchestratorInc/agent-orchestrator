@@ -49,6 +49,9 @@ type APIDeps struct {
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
+	// Search answers the command palette's file and chat search; nil returns
+	// 501 Not Implemented.
+	Search controllers.SearchService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -142,6 +145,7 @@ type API struct {
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
 	conversations *controllers.ConversationsController
+	search        *controllers.SearchController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
@@ -205,6 +209,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
+		search:        &controllers.SearchController{Svc: deps.Search},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser},
@@ -319,6 +324,7 @@ func (a *API) Register(root chi.Router) {
 			a.shellTerms.Register(r)
 			a.cues.Register(r)
 			a.conversations.Register(r)
+			a.search.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)

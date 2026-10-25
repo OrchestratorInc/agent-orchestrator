@@ -4,8 +4,11 @@ import {
 	File,
 	Folder,
 	FolderPlus,
+	FileText,
 	GitPullRequest,
 	House,
+	Keyboard,
+	MessageSquare,
 	Settings,
 	SquarePen,
 	Sun,
@@ -30,10 +33,14 @@ const COMMAND_ICONS: Record<string, LucideIcon> = {
 const GROUP_ICONS: Partial<Record<CommandGroupId, LucideIcon>> = {
 	projects: Folder,
 	files: File,
+	content: FileText,
+	messages: MessageSquare,
+	settings: Settings,
 	prs: GitPullRequest,
 	// Sessions / attention stay text-only, matching Cursor's "Chats" rows.
 };
 
 export function iconForCommand(item: CommandItem): LucideIcon | null {
+	if (item.action?.kind === "run-shortcut") return Keyboard;
 	return COMMAND_ICONS[item.id] ?? GROUP_ICONS[item.group] ?? null;
 }

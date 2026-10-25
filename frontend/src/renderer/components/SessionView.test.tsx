@@ -2258,6 +2258,19 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
 	});
 
+	it("opens the reviewer chat a palette hit names", async () => {
+		const view = render(<SessionView sessionId="sess-1" />);
+		act(() => view.client.setQueryData(["session-reviews", "sess-1"], {
+			reviewerHandleId: "review-chat:review-1",
+			reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" },
+			reviews: [], runs: [],
+		}));
+		expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument();
+		act(() => useUiStore.getState().requestChatMessageFocus("sess-1", "m1", "flaky login", undefined, "review-1"));
+		expect(await screen.findByTestId("reviewer-chat-surface")).toHaveTextContent("review-1");
+		act(() => useUiStore.setState({ chatMessageFocusRequest: null }));
+	});
+
 	it("does not offer a new terminal for orchestrator sessions", () => {
 		render(<SessionView sessionId="sess-orch" />);
 
