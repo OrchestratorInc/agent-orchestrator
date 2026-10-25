@@ -435,6 +435,8 @@ type Manager struct {
 	clock                       func() time.Time
 	reconcileWorkers            int
 	defaultBranchRefreshTimeout time.Duration
+	defaultBranchFetchMu        sync.Mutex
+	defaultBranchFetchedAt      map[string]time.Time
 	taskPreparationsMu          sync.Mutex
 	taskPreparations            map[domain.TaskPreparationToken]*taskPreparation
 	taskNamingSlots             chan struct{}
@@ -1928,6 +1930,11 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		if target.resolved.BaseRef == "" {
 			continue
 		}
+		// A base fetched moments ago for another start of the same project is
+		// fresh enough; the refresh is best effort either way.
+		if m.defaultBranchFetchedRecently(target.repoPath, target.resolved.BaseRef) {
+			continue
+		}
 		if err := refresher.FetchDefaultBranch(fetchCtx, target.repoPath, target.resolved); err != nil {
 			m.logger.Warn("spawn: default branch refresh failed; continuing with local refs",
 				"projectID", project.ID,
@@ -1940,6 +1947,27 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 	return baseRefs
+}
+
+// defaultBranchFetchWindow is how long a fetched base ref counts as current for
+// the next start of the same project.
+const defaultBranchFetchWindow = 30 * time.Second
+
+// defaultBranchFetchedRecently reports whether baseRef of repoPath was fetched
+// within defaultBranchFetchWindow, and otherwise records this fetch.
+func (m *Manager) defaultBranchFetchedRecently(repoPath, baseRef string) bool {
+	key := filepath.Clean(repoPath) + "\x00" + baseRef
+	now := m.clock()
+	m.defaultBranchFetchMu.Lock()
+	defer m.defaultBranchFetchMu.Unlock()
+	if at, ok := m.defaultBranchFetchedAt[key]; ok && now.Sub(at) < defaultBranchFetchWindow {
+		return true
+	}
+	if m.defaultBranchFetchedAt == nil {
+		m.defaultBranchFetchedAt = make(map[string]time.Time)
+	}
+	m.defaultBranchFetchedAt[key] = now
+	return false
 }
 
 func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.ProjectRecord, cfg ports.SpawnConfig, id domain.SessionID, branch string, baseRefs map[string]string) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {

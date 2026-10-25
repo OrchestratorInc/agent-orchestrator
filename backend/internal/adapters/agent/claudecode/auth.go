@@ -3,12 +3,15 @@ package claudecode
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -94,10 +97,13 @@ func claudeConfigDir() string {
 }
 
 // ValidateLaunchAuth checks the credential in the exact cwd/environment that
-// will be handed to Claude. Launch validation always bypasses the success cache:
-// a provider can revoke a credential without changing anything on disk.
+// will be handed to Claude. A verdict verified within the cache TTL is reused:
+// a provider can revoke a credential without changing anything on disk, but
+// the session then fails its first request and that rejection drops the cache
+// (see InvalidateAuthCache), so the next launch probes again. Probing on every
+// launch cost each chat start a CLI run and a network round trip.
 func (p *Plugin) ValidateLaunchAuth(ctx context.Context, workingDir string, env map[string]string) (ports.AgentAuthStatus, error) {
-	return p.authStatusFor(ctx, workingDir, env, true)
+	return p.authStatusFor(ctx, workingDir, env, false)
 }
 
 func (p *Plugin) authStatusFor(ctx context.Context, workingDir string, env map[string]string, fresh bool) (ports.AgentAuthStatus, error) {
@@ -392,15 +398,58 @@ func (p *Plugin) claudeCLIAuthReport(ctx context.Context, binary, workingDir str
 }
 
 func (p *Plugin) claudeCLIAuthReportDiagnostic(ctx context.Context, binary, workingDir string, env map[string]string) (claudeAuthReport, bool, domain.AgentAuthDiagnostic) {
+	started := time.Now()
+	key := authReportCacheKey(binary, workingDir, env)
+	if report, hit := claudeAuthReports.get(key); hit {
+		step := authprobe.CommandStep(binary, []string{"auth", "status"}, report.status(), nil, nil, started)
+		step.Cached = true
+		return report, true, step
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, claudeAuthProbeTimeout)
 	defer cancel()
-	started := time.Now()
 	out, err := claudeAuthCommand(probeCtx, binary, workingDir, env)
 	report, ok := claudeAuthReportFromOutput(out.Stdout)
 	if probeCtx.Err() != nil {
 		report, ok = claudeAuthReport{}, false
 	}
+	if ok {
+		claudeAuthReports.put(key, report)
+	}
 	return report, ok, authprobe.CommandStep(binary, []string{"auth", "status"}, report.status(), err, probeCtx.Err(), started)
+}
+
+// authReportCacheKey scopes a cached CLI report to what can change its answer:
+// the binary, the credential-bearing environment, and the Claude settings files
+// of the working directory. Per-session variables such as AO's own identifiers
+// are left out so every worktree of a project shares one report.
+func authReportCacheKey(binary, workingDir string, env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		for _, prefix := range []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "GCLOUD_", "CLOUD_ML_", "HOME"} {
+			if strings.HasPrefix(key, prefix) {
+				keys = append(keys, key)
+				break
+			}
+		}
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	h.Write([]byte(binary))
+	for _, key := range keys {
+		h.Write([]byte{0})
+		h.Write([]byte(key))
+		h.Write([]byte{'='})
+		h.Write([]byte(env[key]))
+	}
+	if workingDir = strings.TrimSpace(workingDir); workingDir != "" {
+		for _, name := range []string{"settings.json", "settings.local.json"} {
+			h.Write([]byte{0})
+			if content, err := os.ReadFile(filepath.Join(workingDir, ".claude", name)); err == nil {
+				h.Write(content)
+			}
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type claudeCommandOutput struct {

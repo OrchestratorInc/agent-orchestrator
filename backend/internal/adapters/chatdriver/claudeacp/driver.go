@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -133,16 +134,23 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			if err := validateClaudeACPExecutable(claudeBinary, runtime.GOOS); err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
+			authStarted := time.Now()
 			if err := validateClaudeLaunchAuth(ctx, plugin, cfg.WorkspacePath, cfg.Env, log); err != nil {
 				return acpdriver.Launch{}, err
 			}
+			authDuration := time.Since(authStarted)
 			var models []ports.AgentModelInfo
+			modelsStarted := time.Now()
 			if _, preserve := claudeACPModelConfig(cfg.Env); !preserve {
 				var modelErr error
 				models, modelErr = claudecode.ProviderModels(ctx, claudeBinary, cfg.WorkspacePath, cfg.Env)
 				if modelErr != nil && log != nil {
 					log.Debug("Claude provider model discovery unavailable; using ACP defaults", "error", modelErr)
 				}
+			}
+			if log != nil {
+				log.Debug("Claude launch prepared", "sessionID", cfg.SessionID,
+					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
 			return acpdriver.Launch{
@@ -521,7 +529,15 @@ func requireFile(path, label string) error {
 	return nil
 }
 
+// nodeVersionsChecked remembers which Node executables already passed the
+// version check. The packaged runtime does not change while the daemon runs,
+// and running `node --version` for every chat start cost a process spawn each.
+var nodeVersionsChecked sync.Map
+
 func requireNodeVersion(ctx context.Context, node string) error {
+	if _, ok := nodeVersionsChecked.Load(node); ok {
+		return nil
+	}
 	// node is the explicit AO override or the validated executable inside AO's
 	// packaged resources, never prompt/provider input.
 	out, err := aoprocess.CommandContext(ctx, node, "--version").Output() //nolint:gosec // Resolved local executable, not provider input.
@@ -534,5 +550,6 @@ func requireNodeVersion(ctx context.Context, node string) error {
 	if err != nil || major < minimumNodeMajor {
 		return fmt.Errorf("claude-agent-acp requires Node %d+; found %q", minimumNodeMajor, strings.TrimSpace(string(out)))
 	}
+	nodeVersionsChecked.Store(node, struct{}{})
 	return nil
 }
