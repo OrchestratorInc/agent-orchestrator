@@ -132,7 +132,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "shortcuts",
 		icon: Keyboard,
 		label: (t) => t("settings.shortcuts"),
-		render: (_t, titleHidden, { singlePage }) => <KeyboardShortcutsContent active titleHidden={titleHidden || Boolean(singlePage)} />,
+		render: (_t, titleHidden, { singlePage }) => <KeyboardShortcutsContent active bounded={Boolean(singlePage)} titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "diagnostics",

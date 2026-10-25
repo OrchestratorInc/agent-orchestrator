@@ -6,7 +6,7 @@ import {
 	type AppShortcutId,
 	type ShortcutCategory,
 } from "../../shared/shortcuts";
-import { Fragment, memo } from "react";
+import { memo } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../i18n/key-maps";
@@ -27,6 +27,7 @@ import {
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { ShortcutKeys } from "./ShortcutKeys";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -67,37 +68,18 @@ function isMacPlatform(): boolean {
 	return platform.toLowerCase().includes("mac");
 }
 
-// Screen readers skip or mangle the modifier glyphs, so spell them out.
-const spokenKeys: Record<string, string> = { "⌘": "Command", "⌥": "Option", "⌃": "Control", "⇧": "Shift" };
-
-function Keys({ keys }: { keys: readonly string[] }) {
-	return (
-		<span className="inline-flex items-center gap-1" aria-label={keys.map((key) => spokenKeys[key] ?? key).join("+")}>
-			{keys.map((key, index) => (
-				<kbd
-					className="inline-flex h-6 min-w-6 items-center justify-center rounded-sm bg-muted px-1.5 font-mono text-caption font-medium text-muted-foreground"
-					// Keys can repeat (⌘ + ⌘ never, but "1-9" labels may), so index disambiguates.
-					key={`${key}-${index}`}
-				>
-					{key}
-				</kbd>
-			))}
-		</span>
-	);
-}
-
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
 	return (
-		<li className="flex min-h-8 items-center justify-between gap-3 py-0.5">
-			<span className="min-w-0 text-control text-foreground">{label}</span>
-			<span className="flex shrink-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">{children}</span>
+		<li className="flex min-h-8 flex-wrap items-center justify-between gap-x-2 gap-y-1 py-0.5">
+			<span className="min-w-0 flex-1 basis-28 text-control leading-5 text-foreground">{label}</span>
+			<span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1">{children}</span>
 		</li>
 	);
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
 	return (
-		<section className="mb-5 break-inside-avoid">
+		<section className="mb-4 break-inside-avoid">
 			<h2 className="mb-1 text-caption font-medium text-passive">{title}</h2>
 			<ul>{children}</ul>
 		</section>
@@ -126,14 +108,14 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
 				showCloseButton={false}
-				className={cn(settingsDialogContentClass, "w-[min(1040px,calc(100vw-32px))]")}
+				className={cn(settingsDialogContentClass, "w-[min(1280px,calc(100vw-32px))] max-h-[calc(100svh-32px)]")}
 				onCloseAutoFocus={restoreFocusOnClose}
 			>
-				<div className={cn(settingsDialogHeaderClass, "flex-row items-center gap-3 px-4 py-2.5")}>
+				<div className={cn(settingsDialogHeaderClass, "flex-row flex-wrap items-center gap-3 px-4 py-2.5")}>
 					<DialogTitle className="settings-dialog-title">{t("shortcut.dialogTitle")}</DialogTitle>
-					{helpBinding ? <Keys keys={shortcutBindingKeys(helpBinding, isMac)} /> : null}
+					{helpBinding ? <ShortcutKeys keys={shortcutBindingKeys(helpBinding, isMac)} /> : null}
 					{onCustomize ? (
-						<Button className="ml-auto h-8"type="button" variant="ghost" size="sm" onClick={onCustomize}>
+						<Button className="ml-auto h-8" type="button" variant="ghost" size="sm" onClick={onCustomize}>
 							{t("shortcut.customize")}
 						</Button>
 					) : null}
@@ -145,7 +127,7 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 				</div>
 				<DialogDescription className="sr-only">{t("shortcut.dialogDescription")}</DialogDescription>
 
-				<div role="region" aria-label={t("shortcut.dialogTitle")} tabIndex={0} className={cn(settingsDialogBodyClass, "block columns-1 gap-x-10 sm:columns-2 lg:columns-3")}>
+				<div role="region" aria-label={t("shortcut.dialogTitle")} tabIndex={0} className={cn(settingsDialogBodyClass, "block columns-1 gap-x-6 p-4 sm:columns-2 lg:columns-3")}>
 					{SHORTCUT_CATEGORIES.map((category) => {
 						const shortcuts = availableShortcuts.filter((shortcut) => shortcut.category === category);
 						if (shortcuts.length === 0) return null;
@@ -154,11 +136,11 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 								{shortcuts.map((shortcut) => (
 									<Row key={shortcut.id} label={shortcutLabel(shortcut.id, t)}>
 										{effectiveShortcutBindings(shortcut.id, isMac, overrides).map((binding, bindingIndex) => (
-											<Fragment key={`${binding.key}-${bindingIndex}`}>
+											<span className="inline-flex items-center gap-2" key={`${binding.key}-${bindingIndex}`}>
 												{/* A divider keeps two alternative chords from reading as one long chord. */}
 												{bindingIndex > 0 ? <span aria-hidden="true" className="h-4 w-px bg-border" /> : null}
-												<Keys keys={shortcutBindingKeys(binding, isMac)} />
-											</Fragment>
+												<ShortcutKeys keys={shortcutBindingKeys(binding, isMac)} />
+											</span>
 										))}
 									</Row>
 								))}
@@ -168,7 +150,7 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 					<Section title={t("shortcut.category.context")}>
 						{contextualShortcuts(isMac).map((shortcut) => (
 							<Row key={shortcut.id} label={t(shortcut.label)}>
-								<Keys keys={shortcut.keys} />
+								<ShortcutKeys keys={shortcut.keys} />
 							</Row>
 						))}
 					</Section>
