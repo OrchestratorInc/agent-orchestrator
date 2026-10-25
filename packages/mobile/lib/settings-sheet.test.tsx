@@ -26,8 +26,6 @@ vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
-vi.mock("./MinimalBackButton", () => ({ MinimalBackButton: () => null }));
-vi.mock("./native-header-items", () => ({ glassHeaderControl: () => ({}) }));
 vi.mock("./layoutGrid", () => ({ LayoutGrid: () => null }));
 
 import RootLayout from "../app/_layout";

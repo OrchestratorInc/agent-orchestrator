@@ -34,7 +34,7 @@ import { connectSheetRoute, machineNameSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
 import { Button, NumberedStep } from "../lib/ui";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { MinimalBackButton } from "../lib/MinimalBackButton";
+import { NativeHeaderButton } from "../lib/native-header-button";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
 import { iconSize, space, type } from "../lib/tokens";
@@ -327,7 +327,8 @@ export default function PairScreen() {
 
 	return (
 		<View style={[styles.screen, { paddingTop: insets.top }]}>
-			<View style={styles.topBar}><MinimalBackButton onPress={back} /></View>
+			{/* Presented as a modal, so it closes rather than goes back. */}
+			<View style={styles.topBar}><NativeHeaderButton icon="close" label="Close" onPress={back} /></View>
 
 			{repairHost ? (
 				<View style={styles.repairIntro}>

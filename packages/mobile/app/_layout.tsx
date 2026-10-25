@@ -18,8 +18,6 @@ import { TelemetryManager } from "../lib/TelemetryManager";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
-import { MinimalBackButton } from "../lib/MinimalBackButton";
-import { glassHeaderControl } from "../lib/native-header-items";
 import { LayoutGrid } from "../lib/layoutGrid";
 import { AppProvider } from "../lib/store";
 import { symbolFonts } from "../lib/symbolFonts";
@@ -76,6 +74,13 @@ const CONNECT_SHEET_OPTIONS = {
 	sheetCornerRadius: 20,
 	headerShown: false,
 } as const;
+
+// The board sits under every route the app is opened on. A deep link or a
+// notification tap that cold-starts the app on a session, a review or a file
+// otherwise arrives with nothing behind it, and the system back button only
+// appears when there is somewhere to go back to. Opening the app on "/" itself
+// is unchanged: the board is then the only route.
+export const unstable_settings = { initialRouteName: "(tabs)" };
 
 // Held until the faces are in, so the wait is spent on the splash instead of on
 // an empty root. The tree draws nothing without the family, and the splash is the
@@ -183,10 +188,9 @@ function Shell() {
 					// different presentation than the page beside it.
 					animation: "slide_from_right",
 					headerStyle: { backgroundColor: t.bgSurface },
-					// Every native header control draws its glyph in this tone. At `textPrimary`
-					// the back and action buttons on sub-pages came out near-white — brighter
-					// than the identical-looking glass buttons on the board, which use this one.
-					headerTintColor: t.textSecondary,
+					// The app's tint: the system back button and every native header item
+					// draw in it, as bar buttons do in any app on either platform.
+					headerTintColor: t.accent,
 					headerTitleStyle: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 					headerShadowVisible: false,
 					headerBackButtonDisplayMode: "minimal",
@@ -216,13 +220,13 @@ function Shell() {
 						contentStyle: { backgroundColor: t.bgBase },
 					}}
 				/>
-				<Stack.Screen name="session/[id]" options={{ title: "Session", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
-				<Stack.Screen name="review/[sessionId]" options={{ title: "Review", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
-				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
-				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
-				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
-				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
-				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="session/[id]" options={{ title: "Session" }} />
+				<Stack.Screen name="review/[sessionId]" options={{ title: "Review" }} />
+				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer" }} />
+				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell" }} />
+				<Stack.Screen name="preview/[id]" options={{ title: "Preview" }} />
+				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files" }} />
+				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File" }} />
 				<Stack.Screen
 					name="spawn"
 					options={{

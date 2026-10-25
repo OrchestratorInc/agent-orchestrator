@@ -9,7 +9,6 @@ import { isConfigured } from "../config";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
-import { MinimalBackButton } from "../MinimalBackButton";
 import { MuxClient, type MuxStatus } from "../mux";
 import { filesRoute } from "../files/navigation";
 import { glassHeaderControl } from "../native-header-items";
@@ -771,12 +770,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: shellOnly ? (params.title || "Worktree shell") : id.length > 22 ? `${id.slice(0, 20)}...` : id,
-			// Always render our own Back control so it works even when the app was
-			// cold-started directly on this route (reload/deep link) and the stack
-			// has no history for the default back button to use.
-			...glassHeaderControl("left", <MinimalBackButton onPress={leave} />),
 		});
-	}, [navigation, id, leave, params.title, shellOnly]);
+	}, [navigation, id, params.title, shellOnly]);
 
 	// Load config, then connect the mux socket.
 	// Rebuilt whenever the active endpoint changes, not only when the session
@@ -1138,7 +1133,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	}, [interfaceFailureRecovery, startInterfaceSwitch]);
 
 	// The browser toggle lives in the nav bar, beside the session name, to keep the
-	// status row uncluttered. Separate from the headerLeft effect above because
+	// status row uncluttered. Separate from the title effect above because
 	// `toggleBrowser` is declared here — referencing it in that effect's dep array
 	// would read it before initialisation.
 	useLayoutEffect(() => {

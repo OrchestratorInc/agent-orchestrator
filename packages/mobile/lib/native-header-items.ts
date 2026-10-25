@@ -2,10 +2,8 @@ import type { NativeStackHeaderItemCustom, NativeStackNavigationOptions } from "
 import type { ReactElement } from "react";
 import { Platform } from "react-native";
 
-type HeaderSide = "left" | "right";
-
 /**
- * Where a *glass* control goes when it lives in a native header.
+ * Where a trailing *glass* control goes when it lives in a native header.
  *
  * iOS 26 gives every bar-button item a shared glass background of its own, and
  * that is the correct default: it is what makes a system back button and a
@@ -20,45 +18,28 @@ type HeaderSide = "left" | "right";
  * items there. Below iOS 26 the flag is ignored, which is what we want: there is
  * no shared background to hide, and the button keeps its own material.
  *
- * Android has no shared background at all — its header controls are ordinary
- * pressables — so it keeps the plain `headerLeft`/`headerRight` slots and this
- * helper only picks the platform's spelling.
+ * Android has no shared background at all, so it keeps the plain `headerRight`
+ * slot and this helper only picks the platform's spelling.
+ *
+ * Only the trailing side: the leading side belongs to the system back button.
  *
  * Pass no element to vacate the slot; native-stack holds the previous item for a
  * frame otherwise, which is what `resetHeaderRightForSwap` exists to work
  * around.
  */
 export function glassHeaderControl(
-	side: HeaderSide,
+	side: "right",
 	element?: ReactElement,
 ): NativeStackNavigationOptions {
 	if (Platform.OS !== "ios") {
-		return side === "right"
-			? { headerRight: element ? () => element : undefined }
-			: { headerLeft: element ? () => element : undefined };
+		return { headerRight: element ? () => element : undefined };
 	}
 	// An empty item list is not "no items" to native-stack — it is a list that
-	// renders nothing, and it outranks `headerRight`/`headerLeft`. Vacating the
-	// slot has to clear the items outright, or a screen that swaps a glass
-	// control for a plain one (the terminal's browser toggles) would be left with
-	// a blank bar.
-	if (!element) {
-		return side === "right"
-			? { headerRight: undefined, unstable_headerRightItems: undefined }
-			: { headerLeft: undefined, unstable_headerLeftItems: undefined };
-	}
+	// renders nothing, and it outranks `headerRight`. Vacating the slot has to
+	// clear the items outright, or a screen that swaps a glass control for a
+	// plain one (the terminal's browser toggles) would be left with a blank bar.
+	if (!element) return { headerRight: undefined, unstable_headerRightItems: undefined };
 	const items = (): NativeStackHeaderItemCustom[] =>
 		[{ type: "custom", element, hidesSharedBackground: true }];
-	if (side === "right") {
-		return { headerRight: undefined, unstable_headerRightItems: items };
-	}
-	// Our control replaces the back button rather than joining it. Left to its
-	// default the bar would keep the system chevron and draw ours beside it,
-	// because the item API does not imply the replacement the way `headerLeft`
-	// does.
-	return {
-		headerLeft: undefined,
-		headerBackVisible: false,
-		unstable_headerLeftItems: items,
-	};
+	return { headerRight: undefined, unstable_headerRightItems: items };
 }

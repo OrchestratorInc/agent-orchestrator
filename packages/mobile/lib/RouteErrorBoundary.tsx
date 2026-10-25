@@ -37,7 +37,7 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 		navigation.setOptions({ headerRight: undefined });
 	}, [navigation]);
 	// Onboarding is entered with `router.replace` and has no header, so there is
-	// nothing to go back to; the same rule as MinimalBackButton.
+	// nothing to go back to; the same rule as `backOr`.
 	const canGoBack = router.canGoBack();
 
 	return (
