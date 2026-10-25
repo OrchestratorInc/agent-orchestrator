@@ -248,7 +248,7 @@ export default function FleetScreen() {
 										{/* Re-scanning is the only fix for a rotated password, and the
 										    fastest one for a moved/renamed host — so it belongs beside
 										    Retry rather than three taps away in Settings. */}
-										<Button title="Scan" icon="qrScanner" onPress={() => router.push("/pair")} />
+										<Button title="Scan" icon="qrScanner" variant="primary" onPress={() => router.push("/pair")} />
 									</View>
 								}
 							/>

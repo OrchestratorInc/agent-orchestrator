@@ -1,7 +1,9 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
+
+const fixtures = vi.hoisted(() => ({ platform: { OS: "ios" } }));
 
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -13,7 +15,7 @@ vi.mock("react-native", async () => {
 		ActivityIndicator: host("ActivityIndicator"),
 		Animated: { View: host("AnimatedView"), Value, loop: () => ({ start() {}, stop() {} }), sequence: () => ({}), timing: () => ({}) },
 		Image: host("Image"),
-		Platform: { OS: "ios" },
+		Platform: fixtures.platform,
 		Pressable: host("Pressable"),
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
 		Text: host("Text"),
@@ -35,9 +37,13 @@ vi.mock("./ThemeProvider", async () => {
 
 import { darkTheme } from "./theme";
 import { iconSize } from "./tokens";
-import { EmptyState } from "./ui";
+import { Button, EmptyState } from "./ui";
 
 let renderer: ReactTestRenderer | undefined;
+
+beforeEach(() => {
+	fixtures.platform.OS = "ios";
+});
 
 afterEach(() => {
 	act(() => renderer?.unmount());
@@ -53,6 +59,10 @@ function render(element: React.ReactElement): ReactTestRenderer {
 
 function flat(style: unknown): Record<string, unknown> {
 	return Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+}
+
+function buttonFills(root: ReactTestRenderer["root"]): unknown[] {
+	return root.findAllByType("Pressable" as never).map((button) => flat(button.props.style({ pressed: false })).backgroundColor);
 }
 
 describe("EmptyState", () => {
@@ -107,6 +117,31 @@ describe("EmptyState", () => {
 		const actions = root.findAllByType(ActionStub);
 		expect(actions).toHaveLength(2);
 		expect(flat(actions[0].parent!.props.style)).toMatchObject({ alignItems: "center" });
+	});
+
+	it.each([
+		["ios", darkTheme.accent],
+		["android", darkTheme.accentTint],
+	])("draws an action that names no variant as %s's empty-state button", (os, fill) => {
+		fixtures.platform.OS = os;
+		const root = render(<EmptyState title="Machine offline" action={<Button title="Open board" onPress={() => {}} />} />).root;
+		expect(buttonFills(root)).toEqual([fill]);
+	});
+
+	it("keeps the variant each action names, so a pair stays ranked on Android", () => {
+		fixtures.platform.OS = "android";
+		const root = render(
+			<EmptyState
+				title="Couldn't connect"
+				action={
+					<>
+						<Button title="Retry" variant="secondary" onPress={() => {}} />
+						<Button title="Scan" variant="primary" onPress={() => {}} />
+					</>
+				}
+			/>,
+		).root;
+		expect(buttonFills(root)).toEqual([darkTheme.accentTint, darkTheme.accent]);
 	});
 });
 

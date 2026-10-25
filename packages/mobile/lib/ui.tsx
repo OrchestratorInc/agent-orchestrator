@@ -1,8 +1,9 @@
 import { Feather } from "./icons";
-import { memo, useEffect, useRef, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useRef, type ReactNode } from "react";
 import {
 	Animated,
 	Image,
+	Platform,
 	Pressable,
 	StyleSheet,
 	Text,
@@ -306,13 +307,17 @@ export function ListSectionHeader({
  *    `borderedProminent`, M3 `Button`.
  *  - `secondary`: a tinted fill for an action beside the primary, or for the
  *    one action of an empty or error state. iOS `bordered`, M3
- *    `FilledTonalButton`.
+ *    `FilledTonalButton`. On Android it is also what a button in an
+ *    `EmptyState` draws as when it names no variant.
  *  - `ghost`: text only, for the least important action in a group. iOS
  *    `plain`, M3 `TextButton`.
  *  - `danger`: a red tint, for an action that destroys something.
  *  - `success`: desktop's green merge action.
  */
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "success";
+
+/** The variant a `Button` takes when its call site names none. */
+const DefaultButtonVariant = createContext<ButtonVariant>("primary");
 
 function buttonColors(t: Theme, variant: ButtonVariant): { fill: string; ink: string; ripple: PressTone } {
 	switch (variant) {
@@ -343,7 +348,7 @@ function buttonColors(t: Theme, variant: ButtonVariant): { fill: string; ink: st
 export function Button({
 	title,
 	onPress,
-	variant = "primary",
+	variant: namedVariant,
 	loading = false,
 	disabled = false,
 	icon,
@@ -351,6 +356,7 @@ export function Button({
 }: {
 	title: string;
 	onPress: () => void;
+	/** `primary` unless the button sits in an `EmptyState`, which picks the platform's own. */
 	variant?: ButtonVariant;
 	loading?: boolean;
 	disabled?: boolean;
@@ -360,6 +366,8 @@ export function Button({
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
+	const fallbackVariant = useContext(DefaultButtonVariant);
+	const variant = namedVariant ?? fallbackVariant;
 	const { fill, ink, ripple } = buttonColors(t, variant);
 	const feedback = usePressFeedback("button", { tone: ripple });
 	const inactive = disabled || loading;
@@ -537,7 +545,10 @@ export function EmptyState({
 	icon?: ChromeIcon;
 	title: string;
 	message?: string;
-	/** A `Button`, or several: they stack, centred, under the message. */
+	/**
+	 * A `Button`, or several: they stack, centred, under the message. One that
+	 * names no variant is prominent on iOS and tonal on Android.
+	 */
 	action?: ReactNode;
 	/** Breathe the icon, for a state that is waiting on something. */
 	pulse?: boolean;
@@ -571,7 +582,14 @@ export function EmptyState({
 					{message}
 				</Text>
 			) : null}
-			{action ? <View style={s.emptyActions}>{action}</View> : null}
+			{action ? (
+				// Material leads an empty state with a tonal button where iOS keeps the
+				// prominent one. A button that names its variant keeps it, so a pair can
+				// still rank one action above the other.
+				<DefaultButtonVariant.Provider value={Platform.OS === "android" ? "secondary" : "primary"}>
+					<View style={s.emptyActions}>{action}</View>
+				</DefaultButtonVariant.Provider>
+			) : null}
 		</Animated.View>
 	);
 }

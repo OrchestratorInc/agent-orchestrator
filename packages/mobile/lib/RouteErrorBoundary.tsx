@@ -49,7 +49,7 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 				action={
 					<View style={styles.actions}>
 						<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void retry()} />
-						{canGoBack ? null : <Button title="Go to board" icon="workers" onPress={() => router.replace("/")} />}
+						{canGoBack ? null : <Button title="Go to board" icon="workers" variant="primary" onPress={() => router.replace("/")} />}
 					</View>
 				}
 			/>
