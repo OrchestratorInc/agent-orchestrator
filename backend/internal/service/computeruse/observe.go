@@ -242,8 +242,10 @@ func flagUnrenderedRead(state map[string]any) {
 	if state == nil || state["snapshot_id"] == nil && state["screenshot_file_path"] == nil {
 		return
 	}
+	// A read cut short by max_elements is small because it was asked to be;
+	// only its screenshot can say whether the window painted.
 	elements, counted := state["element_count"].(float64)
-	sparse := counted && elements < minRenderedElements
+	sparse := counted && elements < minRenderedElements && state["truncated"] != true
 	path, _ := state["screenshot_file_path"].(string)
 	if sparse || (path != "" && blankScreenshot(path)) {
 		state["render_warning"] = renderWarning

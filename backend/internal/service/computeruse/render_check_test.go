@@ -51,6 +51,9 @@ func TestFlagUnrenderedReads(t *testing.T) {
 		"unreadable image":    {map[string]any{"snapshot_id": "s1", "element_count": float64(33), "screenshot_file_path": "/no/such.png"}, false},
 		"not a window read":   {map[string]any{"summary": "clicked"}, false},
 		"blank, no tree read": {map[string]any{"screenshot_file_path": blank}, true},
+		// Cua Driver 0.37.0 on Windows, max_elements 5 on a painted Notepad.
+		"truncated, painted": {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "total_element_count": float64(1), "truncated": true, "truncation_reason": "node_budget", "screenshot_file_path": painted}, false},
+		"truncated, blank":   {map[string]any{"snapshot_id": "s1", "element_count": float64(1), "truncated": true, "screenshot_file_path": blank}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			flagUnrenderedRead(tc.state)

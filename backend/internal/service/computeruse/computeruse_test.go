@@ -1003,6 +1003,8 @@ func TestCallFailureStatusFollowsTheDriverAnswer(t *testing.T) {
 			want: apierr.KindInvalid},
 		"window gone": {stdout: `{"code":"window_id_not_found","hint":"No window matches that target now.","pid":1,"window_id":1}`,
 			want: apierr.KindConflict},
+		"window gone, Windows": {stdout: "No window with window_id 1 exists. Call `list_windows({\"pid\": 1})` for candidates.\n",
+			want: apierr.KindConflict},
 		"crashed": {stderr: "thread 'main' panicked at src/main.rs:1:1\n", want: apierr.KindUnavailable},
 	} {
 		t.Run(name, func(t *testing.T) {

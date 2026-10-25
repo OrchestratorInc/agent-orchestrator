@@ -195,6 +195,10 @@ var driverRefusalHints = map[string]string{
 // rejects before running, such as "Missing required integer field: pid".
 var missingArgument = regexp.MustCompile(`(?m)^Missing required \w+ field: `)
 
+// windowNotFound is the Windows driver's plain-text answer for a window that
+// does not exist, where macOS answers {"code":"window_id_not_found"}.
+var windowNotFound = regexp.MustCompile(`(?m)^No window with window_id \d+ exists`)
+
 // driverFailureKind is the API error kind for a failed driver call. A
 // refusal or rejected arguments is the caller's request (400); an error with
 // its own code, such as window_id_not_found or stale_element_token, is the
@@ -214,8 +218,12 @@ func driverFailureKind(stdout, stderr []byte) apierr.Kind {
 			return apierr.KindConflict
 		}
 	}
-	if missingArgument.MatchString(cleanText(string(stdout))) || missingArgument.MatchString(cleanText(string(stderr))) {
+	out, errOut := cleanText(string(stdout)), cleanText(string(stderr))
+	switch {
+	case missingArgument.MatchString(out) || missingArgument.MatchString(errOut):
 		return apierr.KindInvalid
+	case windowNotFound.MatchString(out) || windowNotFound.MatchString(errOut):
+		return apierr.KindConflict
 	}
 	return apierr.KindUnavailable
 }
