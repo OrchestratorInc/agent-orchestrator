@@ -2,12 +2,16 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // branchStateWriter is the narrow store write for observed branch facts.
@@ -149,12 +153,26 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 	root := rec.Metadata.WorkspacePath
 	var state domain.SessionBranchState
 	if base != "" {
-		commits, ok := gitRevListCount(ctx, root, base+".."+local)
+		behind, commits, ok := gitBaseDivergence(ctx, root, base, local)
 		if !ok {
 			// A failed read is not evidence that nothing was committed.
 			return nil
 		}
 		state.Commits = commits
+		state.Behind = behind
+		// Conflicts need both sides to have moved since they split.
+		// merge-tree --write-tree needs git 2.38; an older git (or any other
+		// failure) leaves conflicts unreported instead of dropping every fact.
+		if commits > 0 && behind > 0 {
+			state.Conflicts, _ = gitMergeConflicts(ctx, root, base, local)
+		}
+	}
+	if state.Commits > 0 {
+		commit, ok := gitLastCommit(ctx, root, local)
+		if !ok {
+			return nil
+		}
+		state.LastCommit = commit
 	}
 	switch remote {
 	case "":
@@ -272,6 +290,59 @@ func readGitHead(root string) (commonDir, branch, head string, ok bool) {
 		return filepath.Clean(commonDir), branch, "", ok
 	}
 	return filepath.Clean(commonDir), "", text, text != ""
+}
+
+// gitBaseDivergence counts, in one git process, the commits only base has
+// (behind) and the commits only head has (ahead).
+func gitBaseDivergence(ctx context.Context, root, base, head string) (behind, ahead int, ok bool) {
+	out, err := gitWorkspaceOutput(ctx, root, "rev-list", "--left-right", "--count", base+"..."+head)
+	if err != nil {
+		return 0, 0, false
+	}
+	left, right, found := strings.Cut(strings.TrimSpace(out), "\t")
+	if !found {
+		return 0, 0, false
+	}
+	behind, errBehind := strconv.Atoi(left)
+	ahead, errAhead := strconv.Atoi(right)
+	return behind, ahead, errBehind == nil && errAhead == nil
+}
+
+// gitLastCommit reads the SHA, subject, and committer time of rev.
+func gitLastCommit(ctx context.Context, root, rev string) (domain.SessionBranchCommit, bool) {
+	out, err := gitWorkspaceOutput(ctx, root, "log", "-1", "--format=%H%x1f%s%x1f%cI", rev, "--")
+	if err != nil {
+		return domain.SessionBranchCommit{}, false
+	}
+	parts := strings.SplitN(strings.TrimSpace(out), "\x1f", 3)
+	if len(parts) != 3 {
+		return domain.SessionBranchCommit{}, false
+	}
+	at, err := time.Parse(time.RFC3339, parts[2])
+	if err != nil {
+		return domain.SessionBranchCommit{}, false
+	}
+	// UTC so a JSON round trip compares equal and skips a no-op write.
+	return domain.SessionBranchCommit{SHA: parts[0], Subject: parts[1], CommittedAt: at.UTC()}, true
+}
+
+// gitMergeConflicts reports whether merging head into base would conflict;
+// ok is false when git could not tell. merge-tree --write-tree merges in
+// memory and touches neither the index nor the worktree; it exits 1 when the
+// merge has conflicts.
+func gitMergeConflicts(ctx context.Context, root, base, head string) (bool, bool) {
+	cmd := aoprocess.CommandContext(ctx, "git", "--no-pager", "--no-optional-locks", "-c", "core.hooksPath="+os.DevNull, "-C", root,
+		"merge-tree", "--write-tree", "--name-only", "--no-messages", base, head)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	err := cmd.Run()
+	if err == nil {
+		return false, true
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return true, true
+	}
+	return false, false
 }
 
 func gitRevListCount(ctx context.Context, root, rangeSpec string) (int, bool) {
