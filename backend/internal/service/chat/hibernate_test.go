@@ -656,7 +656,13 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 		NewID: func() string { return fmt.Sprintf("relay-wake-%d", nextID.Add(1)) },
 	})
 	t.Cleanup(func() { _ = wakeService.Stop(context.Background(), testSession) })
+	releaseWake := make(chan struct{})
 	wakeService.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
+		select {
+		case <-releaseWake:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		rec, found, err := h.st.GetSession(ctx, id)
 		if err != nil || !found || rec.HibernatedAt == nil {
 			return fmt.Errorf("read hibernated session: found=%v, marker=%v, err=%w", found, rec.HibernatedAt, err)
@@ -672,9 +678,19 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 		return err
 	})
 
+	// The relay returns while the wake is still blocked: a caller holding the
+	// session's input lease must not wait on the resume that needs it drained.
 	turnID, err := wakeService.RelayChatTurnWithID(ctx, testSession, "CI failed; fix it", "ci-nudge-1")
 	if err != nil || turnID == "" {
 		t.Fatalf("RelayChatTurnWithID = %q, %v", turnID, err)
+	}
+	if got := resumed.sentTexts(); len(got) != 0 {
+		t.Fatalf("relay reached the provider before the wake finished: %v", got)
+	}
+	close(releaseWake)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(resumed.sentTexts()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	if resumeConfig.ProviderConversationID != old.ProviderConversationID() {
 		t.Fatalf("native resume id = %q, want %q", resumeConfig.ProviderConversationID, old.ProviderConversationID())

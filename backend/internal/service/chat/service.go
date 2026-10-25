@@ -2778,16 +2778,38 @@ func (s *Service) relayChatTurn(
 	text, clientMessageID string,
 	options ports.MessageDeliveryOptions,
 ) (string, error) {
-	controller, release, err := s.workingController(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	defer release()
 	msg := s.resolveSteerSender(ctx, ports.ChatUserMessage{
 		Text: text, ClientMessageID: clientMessageID,
 		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,
 		Origin: domain.MessageOriginAutomation, AuthoredByUser: options.AuthoredByUser,
 	})
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if record.HibernatedAt != nil {
+		// Queue and wake in the background, as a user's send does. Waking here
+		// would hold the caller through the provider start, and a caller holding
+		// the session's input lease (a lifecycle nudge) deadlocks with the
+		// resume, which waits for that lease to drain.
+		turn, err := s.queueWithoutController(ctx, record, msg)
+		if err == nil {
+			if turn.ID != "" {
+				s.startBackgroundWake(id)
+			}
+			return turn.ID, nil
+		}
+		if !errors.Is(err, ErrNotProvisioning) {
+			return "", err
+		}
+		// The store refused a stale queue append: the session woke after the
+		// read, so its controller takes the message.
+	}
+	controller, release, err := s.workingController(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	turn, err := controller.Send(ctx, msg)
 	if err != nil {
 		return "", err
