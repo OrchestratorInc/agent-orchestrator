@@ -118,11 +118,13 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 	// The naming call is its own provider process. It starts once this
 	// session's provider is up and has its prompt, so it does not compete with
 	// that start for CPU; the branch is kept private from here until it settles.
-	if taskNamingApplies(in.cfg) {
-		m.setBranchNaming(id, true)
-	}
 	var taskName func() generatedTaskName
 	cancelNaming := context.CancelFunc(func() {})
+	if taskNamingApplies(in.cfg) {
+		m.setBranchNaming(id, true)
+		// Until naming starts, a failed start settles the flag itself.
+		cancelNaming = func() { m.setBranchNaming(id, false) }
+	}
 	namingHandedOff := false
 	defer func() {
 		if !namingHandedOff {
