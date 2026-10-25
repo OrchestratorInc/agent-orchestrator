@@ -566,6 +566,13 @@ func TestCallRefusesActionsWithoutATarget(t *testing.T) {
 		"run_steps pixel step":       {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "click", "args": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
 		"run_steps type into focus":  {"run_steps", map[string]any{"app": "WhatsApp", "steps": []any{map[string]any{"type_text": map[string]any{"text": "hi"}}}}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
 		"run_steps desktop scope":    {"run_steps", map[string]any{"steps": []any{map[string]any{"press_key": map[string]any{"key": "a", "scope": "desktop"}}}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		// A step is checked as the tool the driver runs it as.
+		"run_steps type alias into focus": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"tool": "type", "args": map[string]any{"text": "hi"}}}}, "COMPUTER_USE_TEXT_TARGET_REQUIRED"},
+		"run_steps press alias pixel":     {"run_steps", map[string]any{"steps": []any{map[string]any{"press": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"run_steps triple_click pixel":    {"run_steps", map[string]any{"steps": []any{map[string]any{"Triple_Click": map[string]any{"x": 1, "y": 1}}}}, "COMPUTER_USE_WINDOW_REQUIRED"},
+		"run_steps keypress desktop":      {"run_steps", map[string]any{"steps": []any{map[string]any{"keypress": map[string]any{"key": "a", "scope": "desktop"}}}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"run_steps key name desktop":      {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "Down", "args": map[string]any{"scope": "desktop"}}}}, "COMPUTER_USE_DESKTOP_SCOPE_DISABLED"},
+		"run_steps unknown step":          {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"launch_app": map[string]any{"bundle_id": "com.apple.calculator"}}}}, "COMPUTER_USE_STEP_UNSUPPORTED"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := s.Call(context.Background(), CallRequest{Tool: tc.tool, Arguments: tc.arguments})
@@ -587,17 +594,21 @@ func TestCallAllowsTargetedActions(t *testing.T) {
 		tool      string
 		arguments map[string]any
 	}{
-		"click by token":            {"click", map[string]any{"element_token": "s1:2"}},
-		"pixel click in window":     {"click", map[string]any{"pid": 7, "window_id": 9, "x": 275, "y": 351}},
-		"pixel click via target":    {"click", map[string]any{"target": map[string]any{"kind": "window", "pid": 7, "window_id": 9}, "x": 1, "y": 1}},
-		"type into token":           {"type_text", map[string]any{"element_token": "s1:2", "text": "hi"}},
-		"type at field pixel":       {"type_text", map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5, "text": "hi"}},
-		"key to app":                {"press_key", map[string]any{"pid": 7, "key": "f", "modifiers": []any{"cmd"}}},
-		"overlay cursor":            {"run_steps", map[string]any{"steps": []any{map[string]any{"move_cursor": map[string]any{"x": 1, "y": 1}}}}},
-		"window read":               {"get_window_state", map[string]any{"pid": 7, "window_id": 9}},
-		"run_steps batch window":    {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"click": map[string]any{"x": 1, "y": 1}}}}},
-		"run_steps type by name":    {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "type_text", "args": map[string]any{"app": "WhatsApp", "role": "textfield", "name": "Search", "text": "Nihal"}}}}},
-		"run_steps check-only step": {"run_steps", map[string]any{"steps": []any{map[string]any{"expect": []any{map[string]any{"text": "Nihal"}}}}}},
+		"click by token":                {"click", map[string]any{"element_token": "s1:2"}},
+		"pixel click in window":         {"click", map[string]any{"pid": 7, "window_id": 9, "x": 275, "y": 351}},
+		"pixel click via target":        {"click", map[string]any{"target": map[string]any{"kind": "window", "pid": 7, "window_id": 9}, "x": 1, "y": 1}},
+		"type into token":               {"type_text", map[string]any{"element_token": "s1:2", "text": "hi"}},
+		"type at field pixel":           {"type_text", map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5, "text": "hi"}},
+		"key to app":                    {"press_key", map[string]any{"pid": 7, "key": "f", "modifiers": []any{"cmd"}}},
+		"overlay cursor":                {"run_steps", map[string]any{"steps": []any{map[string]any{"move_cursor": map[string]any{"x": 1, "y": 1}}}}},
+		"window read":                   {"get_window_state", map[string]any{"pid": 7, "window_id": 9}},
+		"run_steps batch window":        {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"click": map[string]any{"x": 1, "y": 1}}}}},
+		"run_steps type by name":        {"run_steps", map[string]any{"steps": []any{map[string]any{"tool": "type_text", "args": map[string]any{"app": "WhatsApp", "role": "textfield", "name": "Search", "text": "Nihal"}}}}},
+		"run_steps check-only step":     {"run_steps", map[string]any{"steps": []any{map[string]any{"expect": []any{map[string]any{"text": "Nihal"}}}}}},
+		"run_steps type alias by token": {"run_steps", map[string]any{"steps": []any{map[string]any{"type": map[string]any{"element_token": "s1:2", "text": "hi"}}}}},
+		"run_steps press by token":      {"run_steps", map[string]any{"steps": []any{map[string]any{"press": map[string]any{"element_token": "s1:2"}}}}},
+		"run_steps key name in window":  {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"tool": "down"}}}},
+		"run_steps reads between steps": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"get_window_state": map[string]any{}}, map[string]any{"click": map[string]any{"element_token": "s1:2"}}, map[string]any{"zoom": map[string]any{}}, map[string]any{"take_screenshot": map[string]any{}}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := s.Call(context.Background(), CallRequest{Tool: tc.tool, Arguments: tc.arguments}); err != nil {

@@ -25,6 +25,14 @@ func TestCallRefusesForegroundDelivery(t *testing.T) {
 		"run_steps step":      {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "foreground"})},
 		"run_steps batch":     {"run_steps", map[string]any{"pid": 7, "window_id": 9, "delivery_mode": "foreground", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
 		"foreground fallback": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "foreground_fallback": true, "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
+		// The driver reads delivery_mode in any letter case, and the older
+		// dispatch field as delivery_mode.
+		"direct any case":          {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "escape", "delivery_mode": "Foreground"}},
+		"direct dispatch":          {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "escape", "dispatch": "foreground"}},
+		"run_steps step case":      {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "FOREGROUND"})},
+		"run_steps step dispatch":  {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "dispatch": "foreground"})},
+		"run_steps batch dispatch": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "dispatch": "Foreground", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
+		"run_steps alias step":     {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"tool": "key", "args": map[string]any{"key": "end", "delivery_mode": "foreground"}}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := s.Call(context.Background(), CallRequest{Tool: tc.tool, Arguments: tc.arguments})

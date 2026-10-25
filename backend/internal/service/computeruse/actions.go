@@ -34,24 +34,92 @@ var pixelArguments = []string{"x", "y", "from_x", "from_y", "to_x", "to_y"}
 // stepKeys are run_steps step fields that are not the step's tool.
 var stepKeys = map[string]bool{"tool": true, "args": true, "wait_for": true, "expect": true, "timeout_ms": true}
 
+// stepAliases are the step tool names run_steps runs as another tool, as Cua
+// Driver's batch planner rewrites them. AO checks a step as the tool it runs.
+var stepAliases = map[string]string{
+	"press": "press_key", "key": "press_key", "keypress": "press_key",
+	"type": "type_text", "set": "set_value",
+	"hover": "move_cursor", "mouse_move": "move_cursor",
+}
+
+// keyStepNames are key names run_steps runs as a press_key of that key when
+// a step uses one as its tool ({"tool": "down"}).
+var keyStepNames = map[string]bool{
+	"return": true, "enter": true, "tab": true, "escape": true, "esc": true,
+	"space": true, "backspace": true, "up": true, "down": true, "left": true,
+	"right": true, "home": true, "end": true, "pageup": true, "pagedown": true,
+}
+
+// readSteps are the window reads run_steps skips between actions or takes as
+// its end-of-batch read; the driver also reads any step named for a screenshot.
+var readSteps = map[string]bool{
+	"get_window_state": true, "get_desktop_state": true, "get_accessibility_tree": true,
+	"get_browser_state": true, "list_windows": true, "verify_state": true, "zoom": true,
+}
+
+// pressTargets are the arguments that make a press step, with no key, a
+// click of that element.
+var pressTargets = []string{"element_token", "element_index", "role", "name", "label", "x"}
+
 // checkActions refuses an action call, or any step of a run_steps batch, that
 // would act outside a named window or type into an unnamed field.
 func checkActions(tool string, arguments map[string]any) error {
 	if tool != "run_steps" {
 		return checkAction(tool, arguments, nil, 0)
 	}
-	if arguments["delivery_mode"] == "foreground" || arguments["foreground_fallback"] == true {
+	if foreground(arguments) || arguments["foreground_fallback"] == true {
 		return actionRefused("COMPUTER_USE_FOREGROUND_DISABLED", tool, 0, foregroundRefusal)
 	}
 	steps, _ := arguments["steps"].([]any)
 	for index, raw := range steps {
 		step, _ := raw.(map[string]any)
-		stepTool, stepArguments := stepAction(step)
+		name, stepArguments := stepAction(step)
+		stepTool, known := batchTool(name, stepArguments)
+		if !known {
+			return actionRefused("COMPUTER_USE_STEP_UNSUPPORTED", name, index+1,
+				"AO checks every step before the driver runs it and does not know this tool. Use one of: "+batchableList+".")
+		}
 		if err := checkAction(stepTool, stepArguments, arguments, index+1); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// batchableList names the action tools a run_steps step may use.
+const batchableList = "click, double_click, right_click, set_value, type_text, press_key, hotkey, scroll, drag, move_cursor"
+
+// batchTool is the tool a run_steps step runs as, after the driver's
+// rewrites, and whether AO knows it. A step with no tool only waits or checks.
+func batchTool(name string, arguments map[string]any) (string, bool) {
+	lower := strings.ToLower(name)
+	switch {
+	case name == "" || actionTools[name] || readSteps[name]:
+		return name, true
+	case strings.Contains(lower, "screenshot"):
+		return "screenshot", true
+	case name == "press" && !has(arguments, "key") && hasAny(arguments, pressTargets...):
+		return "click", true
+	case stepAliases[name] != "":
+		return stepAliases[name], true
+	case lower == "triple_click":
+		return "click", true
+	case keyStepNames[lower]:
+		return "press_key", true
+	}
+	return name, false
+}
+
+// foreground reports whether arguments ask for foreground delivery in any
+// form the driver accepts: delivery_mode in any letter case, or the older
+// dispatch field it still reads as delivery_mode.
+func foreground(arguments map[string]any) bool {
+	for _, key := range []string{"delivery_mode", "dispatch"} {
+		if mode, ok := arguments[key].(string); ok && strings.EqualFold(mode, "foreground") {
+			return true
+		}
+	}
+	return false
 }
 
 // stepAction reads a step written {tool, args} or {<tool>: args}.
@@ -78,7 +146,7 @@ func checkAction(tool string, arguments, batch map[string]any, step int) error {
 	if !actionTools[tool] {
 		return nil
 	}
-	if arguments["delivery_mode"] == "foreground" {
+	if foreground(arguments) {
 		return actionRefused("COMPUTER_USE_FOREGROUND_DISABLED", tool, step, foregroundRefusal)
 	}
 	if arguments["scope"] == "desktop" || targetKind(arguments) == "desktop" {
