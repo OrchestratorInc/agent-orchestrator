@@ -10,7 +10,7 @@ test("@P0 unclicked Cloud Staged default and review progress survive polling and
 	await page.getByRole("button", { name: "Collapse staged.ts", exact: true }).click();
 	await page.getByRole("button", { name: "Agent adds unstaged file" }).click();
 	await expect(page.getByRole("button", { name: /^Unstaged/ })).toBeVisible({ timeout: 10_000 });
-	for (const label of ["Maximize files", "Minimize files"]) {
+	for (const label of ["Maximize", "Return to panel"]) {
 		await expect(page.getByRole("button", { name: /^Staged/ })).toHaveAttribute("aria-pressed", "true");
 		await expect(page.getByText("1 of 3 viewed")).toBeVisible();
 		await expect(page.getByRole("button", { name: "Expand staged.ts", exact: true })).toBeVisible();
@@ -23,19 +23,19 @@ test("@P0 unclicked Cloud Staged default and review progress survive polling and
 test("@P0 Cloud deferred diffs, commit browser, All files and filter survive maximize", async ({ page }) => {
 	await page.getByRole("button", { name: "Expand package-lock.json", exact: true }).click();
 	await page.getByRole("button", { name: "Load diff", exact: true }).click();
-	await page.getByRole("button", { name: "Maximize files" }).click();
+	await page.getByRole("button", { name: "Maximize" }).click();
 	await expect(page.getByRole("button", { name: "Collapse package-lock.json", exact: true })).toBeVisible();
 	await expect(page.getByRole("button", { name: "Load diff", exact: true })).toBeHidden();
 	await page.getByRole("button", { name: /^Commits/ }).click();
 	await page.getByRole("textbox", { name: "Filter files" }).fill("Previous");
-	await page.getByRole("button", { name: "Minimize files" }).click();
+	await page.getByRole("button", { name: "Return to panel" }).click();
 	await expect(page.getByRole("button", { name: /^Commits/ })).toHaveAttribute("aria-expanded", "true");
 	await expect(page.getByRole("button", { name: /Previous work/ })).toBeVisible();
 	await page.getByRole("textbox", { name: "Filter files" }).fill("");
 	await page.getByRole("tab", { name: "Files", exact: true }).click();
 	await page.getByRole("treeitem", { name: /staged.ts/ }).click();
 	await page.getByRole("textbox", { name: "Filter files" }).fill("staged");
-	await page.getByRole("button", { name: "Maximize files" }).click();
+	await page.getByRole("button", { name: "Maximize" }).click();
 	await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
 	await expect(page.getByRole("textbox", { name: "Filter files" })).toHaveValue("staged");
 	await page.getByRole("textbox", { name: "Filter files" }).fill("");
@@ -48,6 +48,6 @@ test("@P0 Cloud falls back to main when the active sibling is no longer checked 
 	await page.getByRole("button", { name: "Remove sibling checkout" }).click();
 	await expect(page.getByRole("tab", { name: "tools", exact: true })).toBeDisabled({ timeout: 10_000 });
 	await expect(page.getByRole("tab", { name: "main", exact: true })).toHaveAttribute("aria-selected", "true");
-	await page.getByRole("button", { name: "Maximize files" }).click();
+	await page.getByRole("button", { name: "Maximize" }).click();
 	await expect(page.getByRole("tab", { name: "main", exact: true })).toHaveAttribute("aria-selected", "true");
 });
