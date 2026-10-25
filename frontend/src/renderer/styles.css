@@ -6094,7 +6094,7 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
  *      card or button reads one step up from whatever sits behind it.
  *   3. Floating surfaces (menus, popovers, tooltips, dialogs) restore the
  *      solid theme values so they stay legible above the material.
- * The terminal keeps its own opaque plate. */
+ * Terminal canvases are clear too, showing the same shell tint. */
 
 /* Solid copies, resolved on :root where the theme declares them. :root raises
  * specificity past the theme catalog's :root[data-style-theme] blocks. */
@@ -6114,6 +6114,9 @@ html:root[data-window-translucent="true"] {
 html[data-window-translucent="true"] body {
 	--color-bg-primary: transparent;
 	--color-bg-sidebar: transparent;
+	--color-bg-terminal: transparent;
+	--color-bg-terminal-opaque: transparent;
+	--term-bg: transparent;
 	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
 	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
 	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
@@ -6138,6 +6141,9 @@ html[data-window-translucent="true"] :is(
 	--color-bg-secondary: var(--solid-bg-secondary);
 	--color-bg-tertiary: var(--solid-bg-tertiary);
 	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
 	--muted: var(--solid-muted);
 	--secondary: var(--solid-secondary);
 	--accent: var(--solid-accent);
