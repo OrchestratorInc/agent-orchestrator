@@ -1945,7 +1945,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								className={cn("h-full min-h-0", fileTabs.activePath && "invisible pointer-events-none")}
 								inert={fileTabs.activePath ? true : undefined}
 							>
-							{showChatSurface && session?.cloud && (routedTerminalTarget.kind === "worker" || routedTerminalTarget.kind === "reviewer") && !reviewerChatId ? (
+							{/* Every Cloud Chat target stays on the Cloud surface: the local one
+							    asks this machine's daemon, which has never heard of a Cloud
+							    session and answers "session not found". */}
+							{showChatSurface && session?.cloud && !reviewerChatId ? (
 								<CloudSessionChatSurface
 									controllerTransitioning={interfaceUi.controllerTransitioning}
 									headerActions={sessionHeaderActions}
@@ -1959,6 +1962,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
 									onSelectChat={selectSessionTerminal}
+									shellTerminals={shellTerminals}
+									shellTarget={routedTerminalTarget.kind === "shell" ? routedTerminalTarget : undefined}
+									onSelectShellTerminal={selectShellTerminal}
+									onCloseShellTerminal={closeShellTerminalByHandle}
+									onRenameShellTerminal={renameShellTerminalByHandle}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}

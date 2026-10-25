@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent } from "../../lib/cloud-cp";
@@ -577,6 +578,11 @@ export function CloudSessionChatSurface({
 	onOpenReviewerTerminal,
 	reviewerTarget,
 	onSelectChat,
+	shellTerminals,
+	shellTarget,
+	onSelectShellTerminal,
+	onCloseShellTerminal,
+	onRenameShellTerminal,
 	daemonReady,
 	theme,
 	auxiliaryTabOrder,
@@ -591,6 +597,13 @@ export function CloudSessionChatSurface({
 	/** The selected reviewer pane, if any. */
 	reviewerTarget?: Extract<TerminalTarget, { kind: "reviewer" }>;
 	onSelectChat?: () => void;
+	/** This session's sandbox shells, shown as tabs beside the chat as in local sessions. */
+	shellTerminals?: ShellTerminal[];
+	/** The selected shell pane, if any. */
+	shellTarget?: Extract<TerminalTarget, { kind: "shell" }>;
+	onSelectShellTerminal?: (handleId: string) => void;
+	onCloseShellTerminal?: (handleId: string) => void;
+	onRenameShellTerminal?: (handleId: string, title: string) => void;
 	daemonReady?: boolean;
 	theme?: "light" | "dark";
 	auxiliaryTabOrder?: string[];
@@ -941,6 +954,11 @@ export function CloudSessionChatSurface({
 			onOpenReviewerTerminal={onOpenReviewerTerminal}
 			reviewerTarget={reviewerTarget}
 			onSelectChat={onSelectChat}
+			shellTerminals={shellTerminals}
+			shellTarget={shellTarget}
+			onSelectShellTerminal={onSelectShellTerminal}
+			onCloseShellTerminal={onCloseShellTerminal}
+			onRenameShellTerminal={onRenameShellTerminal}
 			daemonReady={daemonReady}
 			theme={theme}
 			auxiliaryTabOrder={auxiliaryTabOrder}
