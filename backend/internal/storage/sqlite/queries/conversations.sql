@@ -524,6 +524,43 @@ UPDATE conversations
 SET active_branch_id = ?, updated_at = ?
 WHERE id = ?;
 
+-- Intake a session queued before its fresh provider existed belongs to that
+-- provider's scope, so native replay can correlate it after a restart. Rows
+-- move with their turn; dispatched or rolled-back turns stay where they are.
+-- name: MoveUndispatchedTurnMessagesToBranch :exec
+UPDATE conversation_messages
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_messages.branch_id = sqlc.arg(parent_branch_id)
+  AND conversation_messages.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = sqlc.arg(conversation_id)
+        AND intake.branch_id = sqlc.arg(parent_branch_id)
+        AND intake.handled_by_session_id = sqlc.arg(session_id)
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  );
+
+-- name: MoveUndispatchedTurnActivitiesToBranch :exec
+UPDATE conversation_activities
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_activities.branch_id = sqlc.arg(parent_branch_id)
+  AND conversation_activities.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = sqlc.arg(conversation_id)
+        AND intake.branch_id = sqlc.arg(parent_branch_id)
+        AND intake.handled_by_session_id = sqlc.arg(session_id)
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  );
+
+-- name: MoveUndispatchedTurnsToBranch :exec
+UPDATE conversation_turns
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND branch_id = sqlc.arg(parent_branch_id)
+  AND handled_by_session_id = sqlc.arg(session_id)
+  AND state = 'queued' AND provider_turn_id = '' AND rolled_back_at IS NULL;
+
 -- The next turn's provider choices. Written only when the user picks something,
 -- so NULL keeps meaning "use whatever the conversation was started with".
 -- NOTE: keep these comments ASCII. sqlc locates its star-expansion edits by byte

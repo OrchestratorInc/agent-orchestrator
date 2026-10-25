@@ -109,6 +109,7 @@ logged as `msg = "activity event"` with `activity_kind` and its attributes under
 | `sandbox.paused` / `sandbox.resuming` | compute stopped / restore started | `desired_state`, `reason` |
 | `session.resume_requested` | user resumed a session | `observed_state` |
 | `worker.disconnected` | heartbeat timeout repair | `reason`, `last_seen_ago_ms` |
+| `worker.relaunched` | a launched worker never checked in within its check-in window and was relaunched with a fresh ticket (once per startup) | `reason` `never_checked_in`, `epoch` (the abandoned launch), `launched_ago_ms`, `redeemed`, `checkin_timeout_ms`, `startup_attempts` |
 | `sandbox.terminated` | startup ceiling parked the session | `code`, `ceiling_ms`, `customer_owned` |
 | `worker.git_grant_failed` | worker could not get repo credentials | `code`, `error` |
 | `coder.connection_validated` | BYO Coder connection saved/tested | `result` ok/rejected, `reason`, `error`, `coder_host`, `connection_id` |
@@ -286,7 +287,10 @@ workspace_id: <workspace id>
 the worker with `setsid`; the `cause` shows the last 1 KB of bootstrap
 terminal output; attrs carry `worker_user` and `checkout_reuse`). A failure
 after `worker_install` succeeded (no heartbeat, `worker_never_started`) is on
-the worker side: read its log. With `reuseExistingCheckout`, the worker log
+the worker side: read its log. AO relaunches such a worker once, with a fresh
+bootstrap ticket, when its check-in window (`AO_CLOUD_WORKER_CHECKIN_TIMEOUT`,
+default 12 minutes from the launch) closes; a `worker.relaunched` event marks
+it, and the session parks when the relaunched worker's window closes too. With `reuseExistingCheckout`, the worker log
 says which checkout it adopted (`checkout reuse: ...`), any stash it made for
 uncommitted changes, or why it cloned into `<root>/repository` instead.
 

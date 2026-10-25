@@ -239,6 +239,67 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
 	});
 
+	it("offers only the approval modes the selected model runs, and shows and sends the mode that runs after a model switch", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ model: "opus", models: [
+			{ id: "opus", displayName: "Opus", default: true, approvalModes: ["default", "accept-edits", "auto", "bypass-permissions"] },
+			{ id: "haiku", displayName: "Haiku", default: false, approvalModes: ["default", "accept-edits", "bypass-permissions"] },
+		] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().configOptions?.find((option: { id: string }) => option.id === "model")?.currentValue).toBe("opus"));
+		act(() => props().onChooseSettings({ approvalMode: "auto" }, "approvalMode"));
+		expect(props().approvalModes).toEqual(["default", "accept-edits", "auto", "bypass-permissions"]);
+		expect(props().snapshot.settings.approvalMode).toBe("auto");
+		expect(props().approvalModeLimits).toBeUndefined();
+
+		// Haiku cannot run Auto-approve: it is not offered, and the composer
+		// shows the mode the turn runs instead, never a more permissive one.
+		act(() => props().onChooseConfigOption("model", { value: "haiku" }));
+		expect(props().approvalModes).toEqual(["default", "accept-edits", "bypass-permissions"]);
+		expect(props().snapshot.settings.approvalMode).toBe("accept-edits");
+		expect(props().approvalModeLimits).toEqual({ model: "Haiku", unavailable: ["auto"], requested: "auto" });
+		await props().onSend("haiku turn", [], "haiku-1");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "haiku turn", model: "haiku", mode: "trusted", approvalMode: "accept-edits",
+		}, { idempotencyKey: "haiku-1" });
+
+		// The pick is kept, so a model that runs it runs it again.
+		act(() => props().onChooseConfigOption("model", { value: "opus" }));
+		expect(props().snapshot.settings.approvalMode).toBe("auto");
+		expect(props().approvalModeLimits).toBeUndefined();
+		await props().onSend("opus turn", [], "opus-1");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "opus turn", model: "opus", mode: "trusted", approvalMode: "auto",
+		}, { idempotencyKey: "opus-1" });
+	});
+
+	it("shows the worker's notice of an approval mode the turn's model does not offer", () => {
+		const turnId = "11111111-1111-4111-8111-111111111111";
+		const activity = (sequence: number, value: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", payload: { turnId, attempt: 1, activity: value }, createdAt: "2026-10-01T00:00:00Z",
+		});
+		const items = toSnapshot({ ...session, provider: "claude-code" }, [
+			{ sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId, attempt: 1 }, createdAt: "2026-10-01T00:00:00Z" },
+			activity(2, { id: "approval-mode-substituted", kind: "system", status: "completed",
+				summary: "Auto-approve isn't available for Haiku; using Accept edits.",
+				detail: { event: "approval_mode.substituted", requestedApprovalMode: "auto", approvalMode: "accept-edits" } }),
+			// Any other worker system row is not shown: it could name a page to open.
+			activity(3, { id: "page", kind: "system", status: "completed", summary: "page", detail: { event: "render", render: { id: "x" } } }),
+		]).items;
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			kind: "activity", turnId, activityKind: "system", status: "completed",
+			summary: "Auto-approve isn't available for Haiku; using Accept edits.", detail: { event: "approval_mode.substituted" },
+		});
+	});
+
 	it("shows a failed Setup the way a failed local Chat start does, and Retry asks the worker again", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
@@ -584,6 +645,7 @@ describe("CloudSessionChatSurface", () => {
 			cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 			cloudMocks.listChatModels.mockReset()
 				.mockRejectedValueOnce(new CloudCpError("The worker did not answer in time.", { status: 504, code: "TRANSPORT_TIMEOUT" }))
+				.mockRejectedValueOnce(new CloudCpError("The worker did not complete the request in time.", { status: 504, code: "WORKER_TIMEOUT" }))
 				.mockResolvedValue({ models: [{ id: "codex-test", displayName: "Codex Test", default: true }] });
 			const first = render(
 				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -592,8 +654,11 @@ describe("CloudSessionChatSurface", () => {
 			);
 			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1));
 			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
-			await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+			// Both timeout codes (the queued request expired, or the control plane's
+			// own wait ran out) are asked again.
+			await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
 			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toHaveLength(1));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(3);
 			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
 			first.unmount();
 

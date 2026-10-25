@@ -85,9 +85,13 @@ import {
 } from "./shared/daemon-startup-status";
 import { toggleAppDevTools } from "./main/app-devtools";
 import { attachAppShortcuts } from "./main/app-shortcuts";
+import { relayScrollPhases } from "./main/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
+	QUIT_CONFIRM_REQUEST_CHANNEL,
+	QUIT_CONFIRM_RESULT_CHANNEL,
+	type QuitConfirmRequest,
 	SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL,
 	SET_TERMINAL_FOCUSED_CHANNEL,
 	type KeybindingOverrides,
@@ -95,6 +99,7 @@ import {
 import { createTrayController, type TrayController } from "./main/tray";
 import { createTrayLifecycle, isTrayEnabled } from "./main/tray-lifecycle";
 import { createDesktopQuitController } from "./main/desktop-quit";
+import { createQuitConfirmController } from "./main/quit-confirm";
 import {
 	TRAY_RENDERER_READY_CHANNEL,
 	TRAY_SET_ATTENTION_STATE_CHANNEL,
@@ -393,6 +398,25 @@ const desktopQuit = createDesktopQuitController({
 		}
 	},
 	hideDock: () => app.dock?.hide(),
+	quit: () => app.quit(),
+});
+// macOS app menu Quit. ⌘Q asks the shell to confirm; with no visible window
+// there is nowhere to show the dialog, so the shortcut quits directly.
+const quitConfirm = createQuitConfirmController({
+	canConfirm: () => {
+		const shell = getShellWebContents();
+		return Boolean(mainWindow?.isVisible() && !mainWindow.isMinimized() && shell && !shell.isDestroyed());
+	},
+	requestConfirm: () => {
+		const shell = getShellWebContents();
+		shell?.focus();
+		// Mirrors desktopQuit.handleBeforeQuit: with the tray up, quitting only
+		// closes the window, and the dialog says so.
+		const request: QuitConfirmRequest = {
+			keepsRunning: trayController !== null && !browserQuitRequested && !isUpdateRestartRequested(),
+		};
+		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
+	},
 	quit: () => app.quit(),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
@@ -859,9 +883,13 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
+	relayScrollPhases(shellWebContents);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
+		quitConfirm.reset();
 	});
+	// A reload drops any open quit dialog, so the next ⌘Q should ask again.
+	shellWebContents.on("did-start-loading", () => quitConfirm.reset());
 
 	// On Windows the app paints its own title bar (WindowTitlebar), so the native
 	// menu bar is hidden (autoHideMenuBar above). The role-based menu is still
@@ -886,7 +914,7 @@ async function createWindowInternal(): Promise<void> {
 					void host.toggleDevToolsForLastFocused().then((state) => {
 						if (!state) fallback();
 					}).catch(fallback);
-				}),
+				}, { appName: app.name, onQuit: quitConfirm.menuQuit }),
 			),
 		);
 	} else if (process.platform === "linux") {
@@ -2610,6 +2638,11 @@ ipcMain.on("browser:overlay", (event, open: unknown) => {
 
 ipcMain.on(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, (_event, enabled: unknown) => {
 	closeShellTerminalShortcutEnabled = enabled === true;
+});
+
+ipcMain.on(QUIT_CONFIRM_RESULT_CHANNEL, (event, confirmed: unknown) => {
+	if (event.sender !== getShellWebContents() || typeof confirmed !== "boolean") return;
+	quitConfirm.resolve(confirmed);
 });
 
 ipcMain.on(SET_TERMINAL_FOCUSED_CHANNEL, (event, focused: unknown, handlesFontSize: unknown) => {

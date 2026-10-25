@@ -1,6 +1,5 @@
 import userEvent from "@testing-library/user-event";
-import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
-import type { ReactElement } from "react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import {
@@ -11,15 +10,7 @@ import {
 	chatFixtureThreadError,
 } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-	return {
-		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
-	};
-}
+import { renderChat as render } from "../../test/render-chat";
 
 // The surface-level wiring: which snapshot fields produce which chrome, and — the part
 // that is easy to get wrong — which combinations stay quiet.
@@ -111,6 +102,41 @@ describe("plan", () => {
 		rerender(<ChatWorkspace snapshot={after} />);
 
 		expect(screen.getByLabelText("Run the backend tests — done")).toBeInTheDocument();
+	});
+
+	// Claude keeps one task list for the session and re-sends it into every later turn.
+	// Those are copies of one list, so only the latest turn's copy is current.
+	it("shows a list that spans turns once, on the latest turn that carries it", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const spanning: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan:
+					turn.id === "turn-1"
+						? {
+								spansTurns: true,
+								steps: current.steps.map((step) => ({ ...step, status: "pending" as const })),
+							}
+						: { ...current, spansTurns: true },
+			})),
+		};
+		render(<ChatWorkspace snapshot={spanning} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+	});
+
+	it("keeps a separate plan on each turn when the plans are per turn", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const perTurn: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({
+				...turn,
+				plan: turn.id === "turn-1" ? { steps: [{ text: "Read the store", status: "completed" }] } : current,
+			})),
+		};
+		render(<ChatWorkspace snapshot={perTurn} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
 	});
 
 	// A plan whose turn AO never correlated — one from before this controller started.

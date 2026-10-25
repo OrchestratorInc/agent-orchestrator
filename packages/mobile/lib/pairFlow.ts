@@ -2,6 +2,7 @@ import { configForEndpoint } from "./connect";
 import type { ServerConfig } from "./config";
 import type { Endpoint } from "./endpoints";
 import type { Host } from "./hosts";
+import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 import { isLegacyPairingCode, parsePairingCode } from "./pairingCode";
 import type { RaceOutcome } from "./race";
 
@@ -27,11 +28,14 @@ export type PairDeps = {
 	race: (endpoints: Endpoint[], expectedHostId: string) => Promise<RaceOutcome>;
 	/** Proves the winning endpoint actually serves us, with our credential. */
 	verify: (config: ServerConfig) => Promise<void>;
-	/** New pairings are not persisted until the user confirms a readable name. */
-	chooseName: (suggested: string) => Promise<string | null>;
+	/** New pairings are not persisted until the user confirms a readable name.
+	 * The icon is offered alongside it, starting from the machine's default. */
+	chooseName: (suggested: string, appearance: MachineAppearance, hostId: string) => Promise<MachineNameChoice | null>;
 	saveHost: (host: Host) => Promise<void>;
 	setActiveHost: (id: string) => Promise<void>;
 };
+
+export type MachineNameChoice = { name: string; appearance: MachineAppearance };
 
 export type PairOptions = {
 	/** Existing identity and name when refreshing one saved pairing. */
@@ -74,21 +78,25 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 		return { ok: false, reason: "verify-failed", endpoint: outcome.endpoint, ...(status === undefined ? {} : { status }) };
 	}
 
+	const hostId = offer.hostId || outcome.hostId;
 	let name = options.repairHost?.name.trim() ?? "";
+	let appearance = options.repairHost?.appearance;
 	if (!name) {
-		const chosen = await deps.chooseName(offer.name || outcome.endpoint.host);
+		const suggested = offer.name || outcome.endpoint.host;
+		const chosen = await deps.chooseName(suggested, appearance ?? machineAppearance({ id: hostId, name: suggested }), hostId);
 		if (chosen === null) return { ok: false, reason: "cancelled" };
-		name = chosen.trim();
+		name = chosen.name.trim();
 		if (!name) return { ok: false, reason: "name-required" };
+		appearance = chosen.appearance;
 	}
 
 	const host: Host = {
 		// A v1 code carries no identity, but we have just spoken to the machine
 		// and it told us who it is, so adopt that now rather than leaving it
 		// unverified until the next connect.
-		id: offer.hostId || outcome.hostId,
+		id: hostId,
 		name,
-		...(options.repairHost?.appearance ? { appearance: options.repairHost.appearance } : {}),
+		...(appearance ? { appearance } : {}),
 		platform: offer.platform,
 		endpoints: offer.endpoints,
 		token: offer.token,

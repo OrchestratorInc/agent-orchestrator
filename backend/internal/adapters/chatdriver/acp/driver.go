@@ -137,6 +137,10 @@ type Config struct {
 	// HistoryUserChunkIsMessage makes each id-less replayed user chunk its own
 	// prompt, for an agent that replays a user message as one chunk (pi-acp).
 	HistoryUserChunkIsMessage bool
+	// PlansSpanTurns marks the agent's ACP plan as one list kept for the whole
+	// session (claude-agent-acp's task list), re-sent into later turns, rather
+	// than a plan for the turn it arrives in.
+	PlansSpanTurns bool
 	// QuickStop marks a provider whose stop gains nothing from waiting (it never
 	// reacts to stdin closing): a short session/close wait, then a quick signal.
 	QuickStop bool
@@ -732,6 +736,7 @@ func (d *Driver) initialize(
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
+	conv.plansSpanTurns = d.cfg.PlansSpanTurns
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {
 		state := proc.acpState

@@ -9,10 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 )
@@ -42,6 +44,22 @@ const (
 	// terminal to open, checking every agentTicketPoll.
 	agentTicketWait = 8 * time.Second
 	agentTicketPoll = 250 * time.Millisecond
+	// terminalRelayGapMaxWait bounds how long a client's live output waits on
+	// a sequence gap when it cannot see the durable mirror's progress (the
+	// worker stream ended or moved to another replica). Normally a gap is
+	// skipped as soon as the mirror has finished with it and the replay log
+	// still lacks it, however far behind the mirror runs.
+	terminalRelayGapMaxWait = 10 * time.Second
+	// terminalRepaintInterval limits how often one attachment asks the
+	// terminal's program to redraw over output it skipped.
+	terminalRepaintInterval = 5 * time.Second
+	// terminalClientRepaintInterval bounds repaints a client asks for after
+	// its screen reflowed, so a panel being toggled cannot flood the program.
+	terminalClientRepaintInterval = time.Second
+	// terminalSlowWrite is how long one output write to a client may take
+	// before it is logged, at most every terminalSlowWriteLogInterval.
+	terminalSlowWrite            = 2 * time.Second
+	terminalSlowWriteLogInterval = 10 * time.Second
 )
 
 var errTerminalProcessUnavailable = errors.New("terminal process unavailable")
@@ -238,13 +256,14 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		readResult <- s.readTerminalInput(ctx, connection, terminal, &writeMu)
 	}()
+	progress := &terminalWriteProgress{}
 	writeResult := make(chan error, 1)
 	go func() {
-		writeResult <- s.writeTerminalOutput(ctx, connection, terminal, after, structured, &writeMu)
+		writeResult <- s.writeTerminalOutputProgress(ctx, connection, terminal, after, structured, &writeMu, progress)
 	}()
 	pingResult := make(chan error, 1)
 	go func() {
-		pingResult <- keepTerminalAlive(ctx, connection)
+		pingResult <- keepTerminalAlive(ctx, connection, progress)
 	}()
 
 	// closeSource records which stream ended the socket. A browser terminal that
@@ -295,10 +314,16 @@ func (s *Server) connectTerminal(w http.ResponseWriter, r *http.Request) {
 // start, and the cycle repeated (a reconnect storm that garbles the terminal).
 // Tolerate a few consecutive misses so a transient write-stall does not kill a
 // live connection; a genuinely dead socket still closes after a few intervals.
-func keepTerminalAlive(ctx context.Context, connection *websocket.Conn) error {
+//
+// A program flooding its terminal keeps that mutex busy for as long as the
+// flood lasts, so every ping misses even though the client is reading. A miss
+// therefore only counts when no output write completed since the previous
+// ping: completed writes prove the client is alive, while a dead client
+// blocks the writer too and is still closed after terminalPingMaxFailures.
+func keepTerminalAlive(ctx context.Context, connection *websocket.Conn, progress *terminalWriteProgress) error {
 	ticker := time.NewTicker(terminalPingInterval)
 	defer ticker.Stop()
-	consecutiveFailures := 0
+	liveness := terminalLiveness{progress: progress}
 	for {
 		select {
 		case <-ctx.Done():
@@ -307,19 +332,55 @@ func keepTerminalAlive(ctx context.Context, connection *websocket.Conn) error {
 			pingCtx, cancel := context.WithTimeout(ctx, terminalPingTimeout)
 			err := connection.Ping(pingCtx)
 			cancel()
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				consecutiveFailures++
-				if consecutiveFailures >= terminalPingMaxFailures {
-					return err
-				}
-				continue
+			if err != nil && ctx.Err() != nil {
+				return ctx.Err()
 			}
-			consecutiveFailures = 0
+			if liveness.dead(err == nil) {
+				return err
+			}
 		}
 	}
+}
+
+// terminalWriteProgress counts output writes a client has accepted, so the
+// keepalive can tell a busy socket from a dead one.
+type terminalWriteProgress struct {
+	writes atomic.Int64
+}
+
+func (p *terminalWriteProgress) wrote() {
+	if p != nil {
+		p.writes.Add(1)
+	}
+}
+
+func (p *terminalWriteProgress) count() int64 {
+	if p == nil {
+		return 0
+	}
+	return p.writes.Load()
+}
+
+// terminalLiveness decides, one ping at a time, when a client is dead.
+type terminalLiveness struct {
+	progress *terminalWriteProgress
+	seen     int64
+	misses   int
+}
+
+// dead records one ping result and reports whether the socket should close:
+// terminalPingMaxFailures consecutive misses with no output write completing
+// in between.
+func (l *terminalLiveness) dead(answered bool) bool {
+	writes := l.progress.count()
+	progressed := writes != l.seen
+	l.seen = writes
+	if answered || progressed {
+		l.misses = 0
+		return false
+	}
+	l.misses++
+	return l.misses >= terminalPingMaxFailures
 }
 
 func (s *Server) refreshTerminalInteraction(ctx context.Context, terminal domain.TerminalSession) {
@@ -364,6 +425,9 @@ func (s *Server) readTerminalInput(
 	writeMu *sync.Mutex,
 ) error {
 	operate := terminalScope(terminal.Scopes, "terminal:operate")
+	resizes := newTerminalResizes()
+	go s.deliverTerminalResizes(ctx, terminal, resizes)
+	var clientRepaintAt time.Time
 	for {
 		_, data, err := connection.Read(ctx)
 		if err != nil {
@@ -381,6 +445,10 @@ func (s *Server) readTerminalInput(
 			Data    string `json:"data,omitempty"`
 			Columns uint16 `json:"columns,omitempty"`
 			Rows    uint16 `json:"rows,omitempty"`
+			// Repaint marks a resize back to the size the program already has,
+			// sent after the client's screen reflowed at sizes in between (a
+			// burst of panel toggles): the program redraws for the client.
+			Repaint bool `json:"repaint,omitempty"`
 		}
 		if json.Unmarshal(data, &message) == nil {
 			if message.Type == "resize" {
@@ -400,12 +468,10 @@ func (s *Server) readTerminalInput(
 					}
 					continue
 				}
-				if err := retryTerminalRequest(ctx, func() error {
-					return s.store.QueueTerminalResize(
-						ctx, terminal, message.Columns, message.Rows,
-					)
-				}); err != nil {
-					return err
+				resizes.request(message.Columns, message.Rows)
+				if message.Repaint && time.Since(clientRepaintAt) >= terminalClientRepaintInterval {
+					clientRepaintAt = time.Now()
+					s.requestTerminalRepaint(terminal, "client reflowed")
 				}
 				continue
 			}
@@ -448,6 +514,97 @@ func (s *Server) readTerminalInput(
 	}
 }
 
+// terminalResizes holds the newest size one client asked for. Delivery runs
+// apart from the input loop, so keystrokes never wait behind a resize, and a
+// burst of resizes (a dragged side panel) collapses to the latest size while
+// an earlier one is still in flight: each delivered resize costs the program a
+// full redraw.
+type terminalResizes struct {
+	mu      sync.Mutex
+	columns uint16
+	rows    uint16
+	pending bool
+	wake    chan struct{}
+}
+
+func newTerminalResizes() *terminalResizes {
+	return &terminalResizes{wake: make(chan struct{}, 1)}
+}
+
+func (r *terminalResizes) request(columns, rows uint16) {
+	r.mu.Lock()
+	r.columns, r.rows, r.pending = columns, rows, true
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (r *terminalResizes) take() (uint16, uint16, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pending := r.pending
+	r.pending = false
+	return r.columns, r.rows, pending
+}
+
+// deliverTerminalResizes sends each coalesced size to the worker in order:
+// straight down its stream when this replica holds it (the path keystrokes
+// take), otherwise through the durable queue. A size that cannot be queued
+// is dropped; the next resize or reattach sends a current one.
+func (s *Server) deliverTerminalResizes(
+	ctx context.Context,
+	terminal domain.TerminalSession,
+	resizes *terminalResizes,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-resizes.wake:
+		}
+		columns, rows, ok := resizes.take()
+		if !ok {
+			continue
+		}
+		if s.terminalStreamEnabled && s.terminalStreams != nil && s.terminalStreams.pushControl(
+			terminal.ID, worker.TerminalStreamFrame{Type: "resize", Columns: columns, Rows: rows},
+		) {
+			continue
+		}
+		if err := retryTerminalRequest(ctx, func() error {
+			return s.store.QueueTerminalResize(ctx, terminal, columns, rows)
+		}); err != nil && ctx.Err() == nil && s.logger != nil {
+			s.logger.Warn("queue terminal resize", "error", err, "terminal_id", terminal.ID)
+		}
+	}
+}
+
+// requestTerminalRepaint asks the terminal's program to redraw: this client
+// skipped output (the replay log's head was pruned, or frames were lost), or
+// the client's screen reflowed at sizes the program never saw. A full-screen program repaints its whole screen; a line-mode shell
+// only loses the skipped scrollback. It is best effort and never blocks the
+// output path.
+func (s *Server) requestTerminalRepaint(terminal domain.TerminalSession, reason string) {
+	if s.logger != nil {
+		s.logger.Info("requesting terminal repaint",
+			"terminal_id", terminal.ID, "kind", terminal.Kind, "reason", reason)
+	}
+	if s.terminalStreamEnabled && s.terminalStreams != nil && s.terminalStreams.pushControl(
+		terminal.ID, worker.TerminalStreamFrame{Type: "repaint"},
+	) {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.store.QueueTerminalRepaint(ctx, terminal); err != nil && s.logger != nil {
+			s.logger.Debug("queue terminal repaint", "error", err, "terminal_id", terminal.ID)
+		}
+	}()
+}
+
 func retryTerminalRequest(ctx context.Context, operation func() error) error {
 	deadline := time.NewTimer(terminalReadyTimeout)
 	defer deadline.Stop()
@@ -480,6 +637,33 @@ func (s *Server) writeTerminalOutput(
 	structured bool,
 	writeMu *sync.Mutex,
 ) error {
+	return s.writeTerminalOutputProgress(ctx, connection, terminal, after, structured, writeMu, nil)
+}
+
+// writeTerminalOutputProgress is writeTerminalOutput that counts each output
+// write the client accepted in progress (which may be nil).
+func (s *Server) writeTerminalOutputProgress(
+	ctx context.Context,
+	connection *websocket.Conn,
+	terminal domain.TerminalSession,
+	after int64,
+	structured bool,
+	writeMu *sync.Mutex,
+	progress *terminalWriteProgress,
+) error {
+	var slowWriteLoggedAt time.Time
+	// wrote records an output write the client accepted, and logs (at most
+	// every terminalSlowWriteLogInterval) one that took terminalSlowWrite or
+	// longer: a client or network that stops reading is otherwise invisible.
+	wrote := func(started time.Time, sequence int64) {
+		progress.wrote()
+		if took := time.Since(started); took >= terminalSlowWrite && s.logger != nil &&
+			time.Since(slowWriteLoggedAt) >= terminalSlowWriteLogInterval {
+			slowWriteLoggedAt = time.Now()
+			s.logger.Info("terminal client write slow",
+				"terminal_id", terminal.ID, "sequence", sequence, "took_ms", took.Milliseconds())
+		}
+	}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	startupDeadline := time.NewTimer(terminalReadyTimeout)
@@ -511,6 +695,15 @@ func (s *Server) writeTerminalOutput(
 	replayComplete := false
 	startingSent := false
 	ready := false
+	// skipped notes output this client will never see (a pruned replay head or
+	// a sequence gap); the program is then asked to repaint, at most once per
+	// terminalRepaintInterval.
+	skipped := false
+	var repaintedAt time.Time
+	var gapSince time.Time
+	// gapChecked notes that the replay log was read again after the mirror
+	// finished with the current gap; a gap still open after that is lost.
+	gapChecked := false
 	// Poll once to establish state and replay existing output. Once relay mode
 	// is live, only the ticker/NOTIFY fallback asks Postgres again; a hot output
 	// frame must not wait behind a database round trip.
@@ -549,7 +742,11 @@ func (s *Server) writeTerminalOutput(
 				}
 			}
 			for _, frame := range frames {
+				if frame.Sequence != after+1 {
+					skipped = true
+				}
 				var err error
+				started := time.Now()
 				writeMu.Lock()
 				if structured {
 					err = writeTerminalMessage(ctx, connection, terminalServerMessage{
@@ -567,7 +764,10 @@ func (s *Server) writeTerminalOutput(
 				if err != nil {
 					return err
 				}
+				wrote(started, frame.Sequence)
 				after = frame.Sequence
+				gapSince = time.Time{}
+				gapChecked = false
 			}
 			if structured && ready && !replayComplete {
 				writeMu.Lock()
@@ -579,6 +779,11 @@ func (s *Server) writeTerminalOutput(
 				}
 				writeMu.Unlock()
 				replayComplete = true
+			}
+			if skipped && state == "open" && time.Since(repaintedAt) >= terminalRepaintInterval {
+				skipped = false
+				repaintedAt = time.Now()
+				s.requestTerminalRepaint(terminal, "skipped output")
 			}
 			if state == "failed" {
 				return errTerminalProcessUnavailable
@@ -596,16 +801,42 @@ func (s *Server) writeTerminalOutput(
 			}
 		case frame := <-live:
 			// A direct frame uses the same sequence that the ordered durable
-			// mirror will commit. Never jump a gap: the next durable replay pass
-			// fills it, preserving the terminal's byte order after a saturated
-			// live-client buffer.
+			// mirror will commit. A gap (a saturated live-client buffer, or a
+			// lost frame) is left to the durable replay pass, which fills it in
+			// byte order. The gap is skipped, with a repaint, only once it can
+			// no longer fill: the mirror has finished with every frame before
+			// this one and a fresh read of the log still lacks them. A mirror
+			// running seconds behind under a flood is waited for, not skipped.
 			if frame.sequence <= after {
 				continue
 			}
 			if frame.sequence != after+1 {
+				if gapSince.IsZero() {
+					gapSince = time.Now()
+				}
+				mirrored, known := s.terminalStreams.mirroredThrough(terminal.ID)
+				passed := known && mirrored >= frame.sequence-1
+				if !passed && time.Since(gapSince) < terminalRelayGapMaxWait {
+					pollDurable = true
+					continue
+				}
+				if passed && !gapChecked {
+					gapChecked = true
+					pollDurable = true
+					continue
+				}
+				if s.logger != nil {
+					s.logger.Info("terminal live output skipped a gap",
+						"terminal_id", terminal.ID, "after", after, "sequence", frame.sequence,
+						"mirrored", mirrored, "mirror_known", known,
+						"waited_ms", time.Since(gapSince).Milliseconds())
+				}
+				skipped = true
 				pollDurable = true
-				continue
 			}
+			gapSince = time.Time{}
+			gapChecked = false
+			started := time.Now()
 			writeMu.Lock()
 			var writeErr error
 			if structured {
@@ -620,6 +851,7 @@ func (s *Server) writeTerminalOutput(
 			if writeErr != nil {
 				return writeErr
 			}
+			wrote(started, frame.sequence)
 			after = frame.sequence
 			if s.logger != nil {
 				s.logger.Debug("terminal relay output delivered",

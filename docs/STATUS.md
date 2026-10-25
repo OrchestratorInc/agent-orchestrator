@@ -251,7 +251,7 @@ surface (`npm run sqlc`, `npm run api`).
 - Pairing uses v2 endpoint offers and host identity verification, with optional
   managed cloudflared remote access and Tailscale secure pairing. The primary
   listener remains loopback-only. Direct LAN transport remains plaintext.
-- Paired-device push, mute/unpair controls, supported macOS keep-awake, and
+- Paired-device push, device removal, supported macOS keep-awake, and
   mobile review/reviewer screens.
 
 ## In flight / not yet a runtime feature

@@ -17,9 +17,9 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
-import { SettingsPane, SettingsProvider } from "../components/SettingsDialog";
+import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
-import { KeyboardShortcutsSettingsDialog } from "../components/settings/KeyboardShortcutsSettingsDialog";
+import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
@@ -29,7 +29,8 @@ import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
 import { SidebarProvider } from "../components/ui/sidebar";
-import { TitlebarNav } from "../components/TitlebarNav";
+import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
+import { SwipeNavigation } from "../components/SwipeNavigation";
 import { WindowTitlebar } from "../components/WindowTitlebar";
 import { preloadXtermTerminal, TerminalCacheProvider } from "../components/TerminalPane";
 import { scheduleIdle } from "../lib/idle";
@@ -48,6 +49,7 @@ import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
+import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -289,6 +291,8 @@ function ShellLayout() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
+	const canGoForward = useCanGoForward();
+	const settingsPage = useSettingsPage();
 	const matchRoute = useMatchRoute();
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp();
@@ -323,6 +327,7 @@ function ShellLayout() {
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const sidebarDragStripRef = useRef<HTMLDivElement>(null);
+	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
@@ -362,7 +367,7 @@ function ShellLayout() {
 	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
 	const isFullScreen = useWindowFullScreen();
-	useWindowZoomFactor();
+	const windowZoomFactor = useWindowZoomFactor();
 	// Drag is on immediately for a normal windowed launch. After leaving fullscreen,
 	// wait for the pad/height transition so the growing strip cannot steal clicks.
 	const [trafficLightDragActive, setTrafficLightDragActive] = useState(isMac);
@@ -390,15 +395,14 @@ function ShellLayout() {
 	// Seeded to the current value so a mount never opens a terminal unasked.
 	const handledShellNonceRef = useRef(newShellTerminalNonce);
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
-	const [isKeyboardShortcutsSettingsOpen, setIsKeyboardShortcutsSettingsOpen] = useState(false);
 	const customizeKeyboardShortcuts = useCallback(() => {
 		setIsKeyboardShortcutsOpen(false);
-		setIsKeyboardShortcutsSettingsOpen(true);
+		useUiStore.getState().openGlobalSettings("shortcuts", { preserveProject: true });
 	}, []);
 	const routeParams = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const routeParamsRef = useRef(routeParams);
 	routeParamsRef.current = routeParams;
-	const remoteHostsEnabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const { status: accountStatus, session: cloudAccount } = useCloudSession();
 	useEffect(() => {
 		if ((!remoteHostsEnabled || accountStatus === "unauthenticated") && routeParams.hostId) void navigate({ to: "/", replace: true });
@@ -628,10 +632,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			);
 		}, PROVISIONING_TIMEOUT_MS);
 		try {
-			void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", {
-				project_id: workspace.id,
-				source,
-			});
 			const {
 				data: spawnData,
 				error: spawnError,
@@ -708,6 +708,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			void captureRendererEvent(`ao.renderer.${source}_succeeded`, { project_id: workspace.id });
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
+			useSidebarOrderStore.getState().moveProjectToTop(workspace.id);
 			updateWorkspaces((current) => [workspace, ...current.filter((item) => item.id !== workspace.id)]);
 			setOrchestratorStartupError(workspace.id, null);
 			setProjectProvisioning(workspace.id, true);
@@ -731,9 +732,13 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				operation: "project_add",
 				surface: "project_board",
 			});
-			void captureRendererEvent("ao.renderer.project_add_requested");
+			const reportFailure = (code: string | undefined) => captureProjectAddFailed(
+				(event, properties) => { void captureRendererEvent(event, properties); },
+				code,
+			);
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
+				reportFailure("DAEMON_NOT_READY");
 				throw new Error(status.message || "AO daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects", {
@@ -743,6 +748,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					clonePreparationId: input.clonePreparationId,
 					config: createProjectConfig(input),
 				},
+			}).catch((requestError: unknown) => {
+				reportFailure("REQUEST_FAILED");
+				throw requestError;
 			});
 			if (error) {
 				const failure = new Error(apiErrorMessage(error)) as Error & {
@@ -790,14 +798,18 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						return;
 					}
 				}
+				reportFailure(failure.code);
 				void captureRendererException(failure, {
 					source: "project-add",
 					operation: "project_add",
 					surface: "project_board",
-					});
-					throw failure;
+				});
+				throw failure;
 			}
-			if (!data?.project) throw new Error("Project creation returned no project");
+			if (!data?.project) {
+				reportFailure("NO_PROJECT");
+				throw new Error("Project creation returned no project");
+			}
 			await completeProjectCreation(data.project, input, "project_add");
 		},
 		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
@@ -817,9 +829,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				operation: "project_clone",
 				surface: "project_board",
 			});
-			void captureRendererEvent("ao.renderer.project_clone_requested");
+			const reportFailure = (code: string | undefined) => {
+				void captureRendererEvent("ao.renderer.project_clone_failed", { error_code: code || "unknown" });
+			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
+				reportFailure("DAEMON_NOT_READY");
 				throw new Error(status.message || "AO daemon is not ready.");
 			}
 			const { data, error } = await apiClient.POST("/api/v1/projects/clone", {
@@ -829,6 +844,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					destinationParent: input.destinationParent,
 					config: createProjectConfig(input),
 				},
+			}).catch((requestError: unknown) => {
+				// A clone the user cancelled is not a failure.
+				if (!input.signal?.aborted) reportFailure("REQUEST_FAILED");
+				throw requestError;
 			});
 			if (error) {
 				const failure = new Error(apiErrorMessage(error)) as Error & {
@@ -839,6 +858,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				failure.code = apiErrorCode(error);
 				failure.details = apiErrorDetails(error);
 				failure.requestId = apiErrorRequestId(error);
+				reportFailure(failure.code);
 				void captureRendererException(failure, {
 					source: "project-clone",
 					operation: "project_clone",
@@ -846,7 +866,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				});
 				throw failure;
 			}
-			if (!data?.project) throw new Error("Project clone returned no project");
+			if (!data?.project) {
+				reportFailure("NO_PROJECT");
+				throw new Error("Project clone returned no project");
+			}
 			await completeProjectCreation(data.project, input, "project_clone");
 		},
 		[completeProjectCreation],
@@ -1228,6 +1251,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// ⌘/ toggles: a second press closes the sheet.
 	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
 
+	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
+	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
+	const [quitKeepsRunning, setQuitKeepsRunning] = useState(false);
+	useEffect(
+		() =>
+			aoBridge.app.onQuitConfirmRequest(({ keepsRunning }) => {
+				setQuitKeepsRunning(keepsRunning);
+				setIsQuitConfirmOpen(true);
+			}),
+		[],
+	);
+	const resolveQuitConfirm = useCallback((confirmed: boolean) => {
+		setIsQuitConfirmOpen(false);
+		aoBridge.app.resolveQuitConfirm(confirmed);
+	}, []);
+
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
 	// dragging a folder into the open window.
@@ -1337,7 +1376,19 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// Rendering the sidebar with an empty query while the home outlet shows its
 	// loader creates a visible two-stage launch and can make the home page flash
 	// before the project list arrives.
-	if (isStartupLoading) return <DaemonStartupLoader />;
+	// ⌘Q can arrive at any time, including during startup or a daemon
+	// reconnect, so the quit confirm renders outside the readiness gate.
+	const quitConfirmDialog = (
+		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
+	);
+	if (isStartupLoading) {
+		return (
+			<>
+				<DaemonStartupLoader />
+				{quitConfirmDialog}
+			</>
+		);
+	}
 
 	return (
 		<ShellProvider
@@ -1354,7 +1405,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						className="dialog-overlay pointer-events-none flex items-center justify-center"
 						data-testid="folder-drop-overlay"
 					>
-						<div className="relative isolate flex w-[min(420px,calc(100vw-48px))] flex-col items-center gap-3 rounded-welcome-panel border border-dashed border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] p-8 text-center shadow-[var(--shadow-import-modal)]">
+						<div className="relative isolate flex w-[min(420px,calc(100vw-48px))] flex-col items-center gap-3 rounded-welcome-panel border border-dashed border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] p-8 text-center shadow-[var(--shadow-import-modal)]">
 							<span className="grid size-11 place-items-center rounded-xl bg-[var(--color-bg-import-chip)] text-[var(--color-text-import-muted)]">
 								<FolderPlus className="size-5" aria-hidden="true" />
 							</span>
@@ -1368,14 +1419,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				<GlobalToast />
 				<RestartToUpdateDialog />
 				<TelemetryConsentRenewalDialog />
+				{quitConfirmDialog}
 				<KeyboardShortcutsDialog
 					open={isKeyboardShortcutsOpen}
 					onOpenChange={setIsKeyboardShortcutsOpen}
 					onCustomize={customizeKeyboardShortcuts}
-				/>
-				<KeyboardShortcutsSettingsDialog
-					open={isKeyboardShortcutsSettingsOpen}
-					onOpenChange={setIsKeyboardShortcutsSettingsOpen}
 				/>
 				<TerminalCacheProvider
 					daemonReady={daemonStatus.state === "ready"}
@@ -1429,7 +1477,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			      cluster above a full-height sidebar; Windows hangs the sidebar
 			      below its custom titlebar. */}
 					<Sidebar
-						hideEdgeBorder={isHomeRoute}
 						underTopbar={isMac || isWindows || isLinux}
 						topbarOffset={isWindows ? "titlebar" : hideShellTopbar ? "trafficLights" : "toolbar"}
 						onCloneProject={cloneProject}
@@ -1454,7 +1501,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 						remoteFailedHostIds={remoteFailedHostIds}
 					/>
 					<main className={cn("flex min-w-0 flex-1 flex-col overflow-x-hidden", !sidebarHasLayout && "sidebar-hidden")}>
-						<div className="relative min-h-0 flex-1 overflow-x-hidden">
+						<div className="relative min-h-0 flex-1 overflow-x-hidden" ref={centerPaneRef}>
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								hideShellTopbar={hideShellTopbar}
@@ -1465,6 +1512,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								startingSteps={startingSteps}
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
 							/>
+							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
+								canGoBack: !isHomeRoute && router.history.canGoBack(),
+								canGoForward,
+								back: () => router.history.back(),
+								forward: () => router.history.forward(),
+							}} />
 						</div>
 						</main>
 					</div>
@@ -1518,6 +1571,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					<TitlebarNav
 						historyLocked={isHomeRoute}
 						isFullScreen={isFullScreen}
+						zoomFactor={windowZoomFactor}
 					/>
 				</SidebarProvider>
 				<OrchestratorReplacementDialog

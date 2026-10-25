@@ -157,6 +157,7 @@ func parseCodexModelList(raw json.RawMessage) ([]worker.ChatModel, string, error
 		model := worker.ChatModel{
 			ID: id, DisplayName: name, Description: entry.Description,
 			Default: entry.IsDefault, DefaultEffort: entry.DefaultEffort,
+			ApprovalModes: append([]string(nil), codexApprovalModes...),
 		}
 		for _, effort := range entry.Efforts {
 			if effort.ReasoningEffort != "" {

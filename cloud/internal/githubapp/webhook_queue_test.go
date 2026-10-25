@@ -115,6 +115,10 @@ func (s *drainStore) ClaimGitHubWebhook(context.Context, string, time.Time) (dom
 	return delivery, nil
 }
 
+func (s *drainStore) PruneGitHubWebhooks(context.Context, time.Time, int) (int64, error) {
+	return 0, nil
+}
+
 // GitHubInstallationRoutes stands in for processing: no routes, so the
 // delivery is retried, after a short hold that makes concurrency observable.
 func (s *drainStore) GitHubInstallationRoutes(context.Context, int64) ([]domain.GitHubInstallationRoute, error) {
@@ -173,5 +177,42 @@ func TestWebhookWorkersIdleOnAnEmptyQueue(t *testing.T) {
 	// Each worker claims once, finds nothing, and waits a full poll interval.
 	if claims := store.claims.Load(); claims > 8 {
 		t.Fatalf("%d claims in 300ms on an empty queue; workers are spinning", claims)
+	}
+}
+
+type pruneStore struct {
+	Store
+	batches []int64
+	calls   int
+	before  time.Time
+	limit   int
+}
+
+func (s *pruneStore) PruneGitHubWebhooks(_ context.Context, before time.Time, limit int) (int64, error) {
+	s.before, s.limit = before, limit
+	s.calls++
+	if s.calls > len(s.batches) {
+		return 0, nil
+	}
+	return s.batches[s.calls-1], nil
+}
+
+func TestPruneWebhooksDeletesInBatchesUntilAShortOne(t *testing.T) {
+	store := &pruneStore{batches: []int64{webhookPruneBatch, webhookPruneBatch, 7}}
+	service := &Service{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	before := time.Now().Add(-webhookRetention)
+	service.pruneWebhooks(context.Background(), before)
+	if store.calls != 3 {
+		t.Fatalf("prune calls = %d, want 3 (two full batches, then a short one)", store.calls)
+	}
+	if !store.before.Equal(before) || store.limit != webhookPruneBatch {
+		t.Fatalf("prune before = %v, limit = %d", store.before, store.limit)
+	}
+}
+
+func TestWebhookRetentionCoversTheOpenedPullRequestLookBack(t *testing.T) {
+	// RecentOpenedPullRequestWebhooks replays opened webhooks from the last 7 days.
+	if webhookRetention <= 7*24*time.Hour {
+		t.Fatalf("webhookRetention = %v, must outlast the 7-day opened look-back", webhookRetention)
 	}
 }

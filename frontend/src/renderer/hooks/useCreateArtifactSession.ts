@@ -45,7 +45,6 @@ export function useCreateArtifactSession() {
 		async (projectId?: string, cloudOrgId?: string) => {
 			const scope = cloudOrgId ? "cloud" : projectId ? "project" : "standalone";
 			setPending(true);
-			void captureRendererEvent("ao.renderer.artifact_create_requested", { scope });
 			try {
 				if (cloudOrgId && projectId) {
 					const { project } = await cloudClient.getProject(cloudOrgId, projectId);

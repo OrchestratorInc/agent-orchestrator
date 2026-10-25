@@ -381,6 +381,12 @@ type terminalProcess struct {
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
 	outputID atomic.Int64
+	// outputMu keeps output publication in cursor order across the stream and
+	// its HTTP fallback, including resends of unacknowledged stream frames.
+	outputMu sync.Mutex
+	// sizeMu serializes PTY size changes so a repaint's nudge cannot restore a
+	// size that a concurrent resize just replaced.
+	sizeMu sync.Mutex
 	// input tracks whether the interactive agent takes the turns the worker types
 	// into it (agent terminals only; see agent_input.go).
 	input agentInput
@@ -956,7 +962,10 @@ func (s *Supervisor) handle(
 	case "terminal.resize":
 		var input worker.TerminalCommand
 		err = decodePayload(request.Payload, &input)
-		if err == nil {
+		if err == nil && input.Repaint && input.Columns == 0 && input.Rows == 0 {
+			err = s.repaintTerminal(input.TerminalID)
+			response = map[string]bool{"repainted": err == nil}
+		} else if err == nil {
 			err = s.resizeTerminal(input)
 			response = map[string]bool{"resized": err == nil}
 		}
@@ -1255,13 +1264,7 @@ func (s *Supervisor) copyTerminalOutput(
 				clearPreviousDisplay = false
 			}
 			id := terminal.outputID.Add(1)
-			if stream := terminal.stream.Load(); stream != nil && stream.sendOutput(id, data) {
-				// Sent over the persistent stream. The control plane acknowledges it
-				// after its durable mirror has accepted the same sequence.
-			} else if outputErr := s.Control.PublishTerminalOutput(ctx, terminalID, id, data); outputErr != nil &&
-				ctx.Err() == nil {
-				s.Logger.Warn("publish terminal output", "error", outputErr, "terminal_id", terminalID)
-			}
+			s.publishTerminalOutput(ctx, terminalID, terminal, id, data)
 		}
 		if err != nil {
 			return
@@ -1336,10 +1339,56 @@ func (s *Supervisor) resizeTerminal(input worker.TerminalCommand) error {
 	if terminal == nil {
 		return errors.New("terminal is not open")
 	}
+	terminal.sizeMu.Lock()
+	defer terminal.sizeMu.Unlock()
 	return pty.Setsize(terminal.pty, &pty.Winsize{
 		Cols: input.Columns,
 		Rows: input.Rows,
 	})
+}
+
+// terminalRepaintNudge is how long a repaint holds the off-by-one width
+// before restoring the real one, so a program that reads the size some time
+// after the signal sees a change rather than a size it may treat as unchanged.
+const terminalRepaintNudge = 50 * time.Millisecond
+
+// repaintTerminal makes the terminal's program redraw its screen, for a viewer
+// whose replay skipped output. A program redraws on SIGWINCH, but neither the
+// kernel nor dtach signals a resize to the size the PTY already has, so the
+// width steps one column away and back. A full-screen program repaints; a
+// line-mode shell at most redraws its prompt.
+func (s *Supervisor) repaintTerminal(terminalID string) error {
+	if terminalID == "" {
+		return errors.New("invalid terminal repaint request")
+	}
+	s.mu.Lock()
+	if s.agentStarting && terminalID == s.AgentTerminalID {
+		// The agent has not drawn anything yet; its first frame is complete.
+		s.mu.Unlock()
+		return nil
+	}
+	terminal := s.terminals[terminalID]
+	s.mu.Unlock()
+	if terminal == nil {
+		return errors.New("terminal is not open")
+	}
+	terminal.sizeMu.Lock()
+	defer terminal.sizeMu.Unlock()
+	size, err := pty.GetsizeFull(terminal.pty)
+	if err != nil {
+		return err
+	}
+	nudged := *size
+	if nudged.Cols > 1 {
+		nudged.Cols--
+	} else {
+		nudged.Cols++
+	}
+	if err := pty.Setsize(terminal.pty, &nudged); err != nil {
+		return err
+	}
+	time.Sleep(terminalRepaintNudge)
+	return pty.Setsize(terminal.pty, size)
 }
 
 // flushReadyAgentTerminal delivers the input and viewport collected while the
