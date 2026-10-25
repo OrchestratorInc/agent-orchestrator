@@ -117,8 +117,12 @@ if (typeof window !== "undefined") {
 	installLocalStorage();
 	// A test can spy on the getter and return a Storage that has no clear().
 	// The next file's beforeEach calls clear(). Put the stub back first.
+	// Fresh stub per test: an async continuation from the previous test can
+	// resolve after its teardown and write into the live storage (observed as
+	// the TaskComposer picker showing the previous test's catalog under
+	// full-suite load) — a fresh object keeps straggler writes in the dead one.
 	beforeEach(() => {
-		if (typeof window.localStorage?.clear !== "function") installLocalStorage();
+		installLocalStorage();
 	});
 
 	HTMLCanvasElement.prototype.getContext = (() => ({})) as unknown as typeof HTMLCanvasElement.prototype.getContext;
