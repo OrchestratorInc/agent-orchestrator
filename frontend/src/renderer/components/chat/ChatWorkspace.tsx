@@ -128,7 +128,7 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
-	FromOrchestrator,
+	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
 	OrchestratorReply,
@@ -143,6 +143,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
+import { AutomationMessage } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -4748,7 +4749,11 @@ function TimelineItem({
 				/>
 			);
 		}
-		return <FromOrchestrator item={item}><OriginMessage message={item} /></FromOrchestrator>;
+		return (
+			<FromAgent item={item}>
+				<AutomationMessage message={item} fallback={<OriginMessage message={item} />} />
+			</FromAgent>
+		);
 	}
 	if (item.activityKind === "approval") {
 		// Pending approval owns the composer. Keeping it in the grouping model still
@@ -4770,9 +4775,9 @@ function TimelineItem({
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
 		return (
-			<FromOrchestrator item={item}>
+			<FromAgent item={item}>
 				<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
-			</FromOrchestrator>
+			</FromAgent>
 		);
 	}
 	// A plan whose turn AO never correlated — one from before this controller

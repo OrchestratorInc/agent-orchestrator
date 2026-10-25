@@ -6,6 +6,7 @@ import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
+import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import {
 	chatFixture,
@@ -3265,12 +3266,12 @@ describe("automation reports", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
-		expect(screen.getByText("1 annotation on Example")).toBeInTheDocument();
-		expect(screen.getByText("Make this clearer.")).toBeInTheDocument();
+		const feedback = screen.getByTestId("your-action");
+		expect(feedback).toHaveTextContent("Example");
+		expect(feedback).toHaveTextContent("Make this clearer.");
 	});
 
-	it("renders browser annotation transport as a compact feedback card", () => {
+	it("renders browser annotation transport as the user's feedback, without its transport details", () => {
 		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
 		const message: ConversationMessage = {
 			...source,
@@ -3296,10 +3297,9 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 </browser_annotations>`,
 		};
 
-		render(<OriginMessage message={message} />);
+		render(<AutomationMessage message={message} fallback={null} />);
 
-		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
-		expect(screen.getByText("1 annotation on Google")).toBeInTheDocument();
+		expect(screen.getByText("Google")).toBeInTheDocument();
 		expect(screen.getByText("2 visual changes")).toBeInTheDocument();
 		expect(screen.getByText("div.badge")).toBeInTheDocument();
 		expect(screen.getByText("New")).toBeInTheDocument();

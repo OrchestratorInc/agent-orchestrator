@@ -42,7 +42,6 @@ import {
 	Keyboard,
 	ListChecks,
 	Loader2,
-	MousePointer2,
 	Pencil,
 	Plug,
 	Shuffle,
@@ -116,10 +115,6 @@ import {
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
-import {
-	parseBrowserAnnotationMessage,
-	type ParsedBrowserAnnotationMessage,
-} from "../../../shared/browser-annotations";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -838,11 +833,6 @@ export function HumanMessage({
  */
 export function OriginMessage({ message }: { message: ConversationMessage }) {
 	const [expanded, setExpanded] = useState(false);
-	const browserAnnotations = parseBrowserAnnotationMessage(message.text);
-	if (browserAnnotations) {
-		return <BrowserAnnotationOrigin message={message} annotations={browserAnnotations} />;
-	}
-
 	const senderSessionId = message.senderSessionId?.trim();
 	const senderProjectId = message.senderProjectId?.trim();
 	const senderLabel = message.senderDisplayName?.trim() || senderSessionId;
@@ -904,52 +894,6 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
 			{expanded ? "Hide report" : "Show full report"}
 		</button>
-	);
-}
-
-function BrowserAnnotationOrigin({
-	message,
-	annotations,
-}: {
-	message: ConversationMessage;
-	annotations: ParsedBrowserAnnotationMessage;
-}) {
-	const count = annotations.items.length;
-	return (
-		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-				<MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
-				<span>Browser feedback</span>
-				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(message.createdAt)}</span>
-			</div>
-			<p className="text-sm text-foreground">
-				{count} annotation{count === 1 ? "" : "s"} on {annotations.pageTitle}
-			</p>
-			<div className="mt-2 space-y-1.5">
-				{annotations.items.map((item) => (
-					<div key={item.number} className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
-						<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-logo-accent text-micro font-semibold text-white">
-							{item.number}
-						</span>
-						<div className="min-w-0">
-							<p className="truncate text-foreground">
-								{item.comment ||
-									(item.kind === "adjustment"
-										? `${item.changes.length} visual change${item.changes.length === 1 ? "" : "s"}`
-										: "Comment")}
-							</p>
-							{item.target ? <p className="truncate text-foreground">{item.target}</p> : null}
-							{item.text ? <p className="truncate">{item.text}</p> : null}
-						</div>
-					</div>
-				))}
-			</div>
-			{annotations.screenshotCount > 0 ? (
-				<p className="mt-2 text-xs text-muted-foreground">
-					{annotations.screenshotCount} reference screenshot{annotations.screenshotCount === 1 ? "" : "s"}
-				</p>
-			) : null}
-		</div>
 	);
 }
 

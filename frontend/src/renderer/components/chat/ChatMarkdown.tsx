@@ -444,6 +444,22 @@ function MermaidFence({ code }: { code: string }) {
 		: diagram;
 }
 
+/**
+ * A workspace file named outside markdown: opens in Files at the line when this
+ * chat can find it, as an inline code path does; otherwise plain text.
+ */
+export function FileReference({ path, line, className, children }: { path: string; line?: number; className?: string; children: ReactNode }) {
+	const { openFile, workspacePaths } = useContext(OpenChatLink);
+	const filePath = openFile ? findWorkspaceFilePath(path, workspacePaths) : undefined;
+	if (!filePath || !openFile) return <span className={className} title={path}>{children}</span>;
+	const target = workspaceFileOpenTarget(path, filePath);
+	return (
+		<button type="button" className={className} title={path} onClick={() => (line ? openFile(target, line) : openFile(target))}>
+			{children}
+		</button>
+	);
+}
+
 /** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
 export function useChatLinkWorkspaces() {
 	const { sessionLinkHostId, sessionLinkSourceKind } = useContext(OpenChatLink);
