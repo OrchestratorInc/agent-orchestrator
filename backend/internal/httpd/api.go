@@ -269,12 +269,20 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
+				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
 						pattern == "/api/v1/projects/clone/prepare" {
 						clone.ServeHTTP(w, req)
+						return
+					}
+					// A run_steps batch may run for the driver's full 60 s before
+					// its step report and closing window read, and an action is
+					// followed by its own read: either outlasts the REST budget.
+					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
+						computerUse.ServeHTTP(w, req)
 						return
 					}
 					// A spawn, an orchestrator start or a restore runs the project's
