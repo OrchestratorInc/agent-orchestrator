@@ -43,7 +43,8 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 });
 
 import { NativeHeaderButton as AndroidHeaderButton } from "./native-header-button.android";
-import { NativeHeaderButton as IOSHeaderButton } from "./native-header-button.ios";
+import { GLASS_CIRCLE_SIZE, NativeHeaderButton as IOSHeaderButton } from "./native-header-button.ios";
+import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -103,6 +104,10 @@ describe("NativeHeaderButton on iOS", () => {
 
 		const group = root.findByType("Group" as never);
 		expect(modifierNames(group.props.modifiers)).toEqual(["frame", "glassCircle", "onTapGesture", "accessibilityAddTraits", "accessibilityLabel", "accessibilityIdentifier"]);
+		// The whole circle takes the tap, so it is the touch target.
+		expect(GLASS_CIRCLE_SIZE).toBe(touchTarget);
+		expect((group.props.modifiers as Modifier[])[0].args).toEqual([{ width: touchTarget, height: touchTarget }]);
+		expect(root.findByType("Host" as never).props.style).toEqual({ width: touchTarget, height: touchTarget });
 		expect(root.findByType("Image" as never).props.systemName).toBe("chevron.backward");
 		expect(root.findAllByType("Circle" as never)).toHaveLength(0);
 	});

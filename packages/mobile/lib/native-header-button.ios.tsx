@@ -13,7 +13,7 @@ import {
 import { glassCircle } from "./glass";
 import { nativeHeaderGlyphs, type NativeHeaderButtonProps } from "./native-header-button.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { iconSize } from "./tokens";
+import { iconSize, touchTarget } from "./tokens";
 
 export type { NativeHeaderButtonIcon, NativeHeaderButtonProps } from "./native-header-button.types";
 
@@ -23,8 +23,9 @@ export type { NativeHeaderButtonIcon, NativeHeaderButtonProps } from "./native-h
 // did not constrain the material behind it.
 //
 // So the material is ours now, drawn on a Group we size, with the gesture on the
-// same group. Geometry comes from this file, not from the control's content.
-export const GLASS_CIRCLE_SIZE = 44;
+// same group. Geometry comes from this file, not from the control's content, and
+// the size is the touch target: the whole circle is what takes the tap.
+export const GLASS_CIRCLE_SIZE = touchTarget;
 const GLYPH_SIZE = iconSize.lg;
 const BADGE_SIZE = 8;
 
