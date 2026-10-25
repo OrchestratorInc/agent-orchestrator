@@ -1019,6 +1019,8 @@ export function CloudSessionChatSurface({
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
 			sessionTitle={session.title}
+			// The tab renames the session as a local Chat tab does; its name comes from the cloud session list.
+			onSessionRenamed={() => queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey })}
 			reviewerTerminal={reviewerTerminal}
 			onOpenReviewerTerminal={onOpenReviewerTerminal}
 			reviewerTarget={reviewerTarget}

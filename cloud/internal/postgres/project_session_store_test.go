@@ -230,6 +230,39 @@ func TestCreateSessionStartsInTheRequestedInterface(t *testing.T) {
 	}
 }
 
+// Renaming changes only the display name, and works whatever the agent's
+// permission mode, as a local rename does.
+func TestRenameSession(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET mode = 'read-only' WHERE id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := store.RenameSession(ctx, principal, fixture.orgID, fixture.sessionID, "Fix the login page")
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	read, err := store.GetSession(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.DisplayName != "Fix the login page" || read.DisplayName != "Fix the login page" {
+		t.Fatalf("display name = %q / %q", renamed.DisplayName, read.DisplayName)
+	}
+	var audits int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_audit_events WHERE action = 'session.renamed' AND resource_id = $1`, fixture.sessionID).Scan(&audits); err != nil || audits != 1 {
+		t.Fatalf("rename audit events = %d, err %v", audits, err)
+	}
+	// The project orchestrator keeps its role as its name, as locally.
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET kind = 'orchestrator' WHERE id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RenameSession(ctx, principal, fixture.orgID, fixture.sessionID, "Other"); !errors.Is(err, ErrOrchestratorRename) {
+		t.Fatalf("orchestrator rename = %v, want ErrOrchestratorRename", err)
+	}
+}
+
 func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()

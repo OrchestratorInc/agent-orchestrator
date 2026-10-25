@@ -652,6 +652,7 @@ func New(options Options) *Server {
 			router.Get("/coder-templates/{templateId}/parameters", server.getCoderTemplateParameters)
 			router.Post("/coder-templates/{templateId}/parameters/evaluate", server.evaluateCoderTemplateParameters)
 			router.Get("/sessions/{sessionId}", server.getSession)
+			router.Patch("/sessions/{sessionId}", server.updateSession)
 			router.Patch("/sessions/{sessionId}/preferences", server.updateSessionPreferences)
 			router.Patch("/sessions/{sessionId}/auto-inject-ci", server.setCloudSessionAutoInjectCI)
 			router.Patch("/sessions/{sessionId}/auto-inject-review", server.setCloudSessionAutoInjectReview)

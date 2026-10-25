@@ -415,7 +415,8 @@ export interface paths {
         delete: operations["deleteSession"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** @description Renames the session, as the local daemon's PATCH /api/v1/sessions/{sessionId} does. The project orchestrator cannot be renamed (ORCHESTRATOR_RENAME_UNSUPPORTED). */
+        patch: operations["updateSession"];
         trace?: never;
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition": {
@@ -3028,6 +3029,10 @@ export interface components {
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
         };
+        UpdateSessionInput: {
+            /** @description The session's new name; surrounding whitespace is trimmed. */
+            displayName: string;
+        };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
             autoReviewEnabled?: boolean;
@@ -4429,6 +4434,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionInput"];
+            };
+        };
+        responses: {
+            /** @description Session renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
                 };
             };
             default: components["responses"]["Error"];

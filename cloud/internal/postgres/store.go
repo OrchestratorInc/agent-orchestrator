@@ -16,6 +16,9 @@ var (
 	ErrConflict      = errors.New("conflict")
 	ErrInvalid       = errors.New("invalid")
 	ErrInvalidBranch = errors.New("invalid session branch")
+	// ErrOrchestratorRename refuses renaming a project orchestrator, which the
+	// desktop always shows by its role, as the local daemon refuses it.
+	ErrOrchestratorRename = errors.New("the project orchestrator cannot be renamed")
 	// ErrBranchInUse refuses a requested session branch a live session of the
 	// project already works on (BranchRefusedError carries which one).
 	ErrBranchInUse          = errors.New("session branch in use")
