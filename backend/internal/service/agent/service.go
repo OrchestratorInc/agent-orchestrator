@@ -375,6 +375,9 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 			if inputsChecking && cached.Catalog.RefreshState == "" {
 				cached.Catalog.RefreshState = "refreshing"
 			}
+			if !s.readyForModelUpdate(agentID) {
+				cached.Catalog = missingAgentModelCatalog(cached.Catalog, agentID)
+			}
 			return cached.Catalog, nil
 		}
 		return s.firstModelCatalog(ctx, agentID, projectID)
@@ -822,10 +825,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			fallback = cached.Catalog
 		}
 		fallback.BinaryVersion = version
-		fallback.Stale = true
-		fallback.WarningCode = ports.ModelCatalogWarningNotInstalled
-		fallback.Warning = fmt.Sprintf("%s: %s", item.Manifest.Name, ports.ErrAgentBinaryNotFound)
-		return fallback, nil
+		return missingAgentModelCatalog(fallback, item.Manifest.Name), nil
 	}
 	if mode == modelLoadRefresh || inputsChanged || explicitlyInvalidated {
 		cached.RetryCount = 0
@@ -960,6 +960,16 @@ func (s *Service) keepCatalogUntilSignIn(ctx context.Context, agentName string, 
 	if err := s.saveCatalog(ctx, cached.ProjectID, catalog, generation, 0); err != nil {
 		catalog.Warning = appendCacheWarning(catalog.Warning)
 	}
+	return catalog
+}
+
+// missingAgentModelCatalog keeps saved model choices while explaining why they
+// cannot currently be discovered or used on this host. This is a read overlay:
+// readiness recovery must not leave a persisted missing-install warning behind.
+func missingAgentModelCatalog(catalog ports.AgentModelCatalog, agentName string) ports.AgentModelCatalog {
+	catalog.Stale = true
+	catalog.WarningCode = ports.ModelCatalogWarningNotInstalled
+	catalog.Warning = fmt.Sprintf("%s: %s", agentName, ports.ErrAgentBinaryNotFound)
 	return catalog
 }
 
