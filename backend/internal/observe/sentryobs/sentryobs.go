@@ -6,8 +6,8 @@
 //
 // It is a no-op until a DSN is configured (AO_SENTRY_DSN), and deny-by-default
 // on privacy: no PII, no server name, no request data, no breadcrumbs, and
-// local paths are scrubbed from messages and stack frames before send. Transient
-// conditions (503 SERVICE_UNAVAILABLE) are deliberately NOT captured — they are
+// dynamic error text and stack paths are removed before send. Transient
+// conditions (503 SERVICE_UNAVAILABLE) are deliberately not captured. They are
 // retryable contention, not faults, and would drown the signal.
 package sentryobs
 
@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,25 +34,9 @@ var captureGate = struct {
 }{}
 
 var (
-	homePath = regexp.MustCompile(`/(?:Users|home)/[^\r\n"']+`)
-	winPath  = regexp.MustCompile(`[A-Za-z]:\\[^\r\n"']+|\\\\[^\r\n"']+`)
+	safeErrorCode   = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,79}$`)
+	safeFingerprint = regexp.MustCompile(`^[0-9a-f]{16}$`)
 )
-
-func scrub(s string) string {
-	return winPath.ReplaceAllStringFunc(homePath.ReplaceAllStringFunc(s, scrubPath), scrubPath)
-}
-
-func scrubPath(path string) string {
-	for _, marker := range []string{" failed", " denied", " error", " no such file"} {
-		if i := strings.Index(path, marker); i >= 0 {
-			return "[redacted-path]" + path[i:]
-		}
-	}
-	if i := strings.Index(path, ": "); i >= 0 {
-		return "[redacted-path]" + path[i+1:]
-	}
-	return "[redacted-path]"
-}
 
 // Config configures the daemon Sentry client.
 type Config struct {
@@ -92,7 +75,7 @@ func Init(cfg Config) error {
 		SampleRate:    rate,
 		Transport:     transport,
 		// PII is off by default; BeforeSend additionally clears ServerName and
-		// Request and scrubs local paths, so no environment leaks regardless.
+		// Request and replaces title text, so raw error details are not sent.
 		// Deny-by-default: scrub the event before it leaves the process.
 		BeforeSend: func(event *sentry.Event, _ *sentry.EventHint) *sentry.Event {
 			return scrubEvent(event)
@@ -164,19 +147,95 @@ func Drain(ctx context.Context) error {
 }
 
 func scrubEvent(event *sentry.Event) *sentry.Event {
-	event.Message = scrub(event.Message)
+	// Error strings can contain project names, session IDs, repository paths,
+	// provider output, or panic values. Sentry derives issue titles from these
+	// fields, so path matching alone cannot make them safe.
+	label := "daemon error"
+	switch event.Tags["operation"] {
+	case "http_request_panic":
+		label = "http handler panic"
+	case "http_request":
+		label = "HTTP server error"
+	}
+	if code := event.Tags["error_code"]; safeErrorCode.MatchString(code) {
+		label += " (" + code + ")"
+	}
+	event.Message = label
 	event.ServerName = "" // never leak the machine hostname
 	event.Request = nil   // no URLs/headers/cookies
+	event.Contexts = nil
+	event.Transaction = ""
+	event.Logger = ""
+	event.Breadcrumbs = nil
+	event.Threads = nil
+	event.Modules = nil
+	event.Attachments = nil
+	event.Spans = nil
+	event.DebugMeta = nil
+	event.User = sentry.User{}
+	for _, fingerprint := range event.Fingerprint {
+		if !safeFingerprint.MatchString(fingerprint) {
+			event.Fingerprint = nil
+			break
+		}
+	}
+	for key, value := range event.Tags {
+		if !safeSentryTag(key, value) {
+			delete(event.Tags, key)
+		}
+	}
 	for i := range event.Exception {
-		event.Exception[i].Value = scrub(event.Exception[i].Value)
+		event.Exception[i].Type = label
+		event.Exception[i].Value = label
+		event.Exception[i].Module = ""
+		event.Exception[i].Mechanism = nil
 		if st := event.Exception[i].Stacktrace; st != nil {
 			for j := range st.Frames {
-				st.Frames[j].AbsPath = scrub(st.Frames[j].AbsPath)
-				st.Frames[j].Filename = scrub(st.Frames[j].Filename)
+				frame := st.Frames[j]
+				st.Frames[j] = sentry.Frame{
+					Function: frame.Function,
+					Module:   frame.Module,
+					Lineno:   frame.Lineno,
+					Colno:    frame.Colno,
+					InApp:    frame.InApp,
+				}
 			}
 		}
 	}
 	return event
+}
+
+func safeSentryTag(key, value string) bool {
+	switch key {
+	case "platform":
+		return value == "daemon"
+	case "component":
+		return value == "httpd"
+	case "operation":
+		return value == "http_request" || value == "http_request_panic"
+	case "method":
+		switch value {
+		case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+			return true
+		}
+	case "status":
+		return len(value) == 3 && value[0] == '5' && value != "503" && value[1] >= '0' && value[1] <= '9' && value[2] >= '0' && value[2] <= '9'
+	case "category":
+		return value == "http_5xx"
+	case "error_kind":
+		switch value {
+		case "internal", "invalid", "not_found", "conflict", "forbidden", "too_many_requests", "not_implemented", "unavailable":
+			return true
+		}
+	case "panic_kind":
+		return value == "error" || value == "string" || value == "other"
+	case "error_code":
+		return safeErrorCode.MatchString(value)
+	case "install_id":
+		id := installID.Load()
+		return id != nil && value != "" && value == *id
+	}
+	return false
 }
 
 // ShouldCaptureStatus reports whether an HTTP status is a genuine server fault
@@ -203,9 +262,8 @@ func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fi
 	})
 }
 
-// CapturePanic captures a recovered panic with its Go stack (as scrubbed extra)
-// at fatal level. No-op when disabled.
-func CapturePanic(ctx context.Context, recovered any, stack string, tags map[string]string, fingerprint string) {
+// CapturePanic captures a recovered panic at fatal level. No-op when disabled.
+func CapturePanic(ctx context.Context, recovered any, _ string, tags map[string]string, fingerprint string) {
 	if ctx.Err() != nil || !enterCapture() {
 		return
 	}
@@ -213,9 +271,6 @@ func CapturePanic(ctx context.Context, recovered any, stack string, tags map[str
 	sentry.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(sentry.LevelFatal)
 		applyTags(scope, tags)
-		if stack != "" {
-			scope.SetContext("runtime", sentry.Context{"go_stack": scrub(stack)})
-		}
 		if fingerprint != "" {
 			scope.SetFingerprint([]string{fingerprint})
 		}

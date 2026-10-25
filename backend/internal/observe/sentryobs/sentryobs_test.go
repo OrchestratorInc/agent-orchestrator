@@ -2,30 +2,14 @@ package sentryobs
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 )
-
-func TestScrubRedactsLocalPaths(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		// A trailing ':' is part of the matched path run (it must be, for C:\...),
-		// so it is redacted along with the path.
-		"open /Users/alice/secret/notes.md: no such file":             "open [redacted-path] no such file",
-		"read /home/bob/ao/worktree/x.go failed":                      "read [redacted-path] failed",
-		`stat C:\Users\carol\AppData\ao\db failed`:                    "stat [redacted-path] failed",
-		"open /Users/dave/Library/Mobile Documents/report.md: denied": "open [redacted-path] denied",
-		"no paths here": "no paths here",
-	}
-	for in, want := range cases {
-		if got := scrub(in); got != want {
-			t.Fatalf("scrub(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
 
 func TestShouldCaptureStatus(t *testing.T) {
 	t.Parallel()
@@ -110,15 +94,17 @@ func TestScrubEventStripsPathsAndContext(t *testing.T) {
 		Message:    "failed at /Users/dave/ao/main.go",
 		ServerName: "daves-macbook.local",
 		Request:    &sentry.Request{URL: "http://127.0.0.1:3001/api/v1/x"},
+		Contexts:   map[string]sentry.Context{"runtime": {"go_stack": "secret stack argument"}},
+		Tags:       map[string]string{"path": "/tmp/private-repo", "operation": "http_request"},
 		Exception: []sentry.Exception{{
 			Value: "open /home/eve/ws/file: denied",
 			Stacktrace: &sentry.Stacktrace{Frames: []sentry.Frame{
-				{AbsPath: "/Users/dave/ao/backend/internal/x.go", Filename: "/Users/dave/ao/backend/internal/x.go"},
+				{Function: "safeFunction", Lineno: 42, AbsPath: "/Users/dave/ao/backend/internal/x.go", Filename: "/Users/dave/ao/backend/internal/x.go", ContextLine: "secret source", Vars: map[string]interface{}{"secret": "value"}},
 			}},
 		}},
 	}
 	out := scrubEvent(event)
-	if out.Message != "failed at [redacted-path]" {
+	if out.Message != "HTTP server error" {
 		t.Fatalf("message not scrubbed: %q", out.Message)
 	}
 	if out.ServerName != "" {
@@ -127,12 +113,72 @@ func TestScrubEventStripsPathsAndContext(t *testing.T) {
 	if out.Request != nil {
 		t.Fatal("request context not dropped")
 	}
-	if out.Exception[0].Value != "open [redacted-path] denied" {
+	if out.Exception[0].Value != "HTTP server error" || out.Exception[0].Type != "HTTP server error" {
 		t.Fatalf("exception value not scrubbed: %q", out.Exception[0].Value)
 	}
 	f := out.Exception[0].Stacktrace.Frames[0]
-	if f.AbsPath != "[redacted-path]" || f.Filename != "[redacted-path]" {
+	if f.AbsPath != "" || f.Filename != "" || f.ContextLine != "" || len(f.Vars) != 0 || f.Function != "safeFunction" || f.Lineno != 42 {
 		t.Fatalf("frame paths not scrubbed: %+v", f)
+	}
+	if len(out.Contexts) != 0 || len(out.Tags) != 1 {
+		t.Fatalf("dynamic context or tag survived: contexts=%+v tags=%+v", out.Contexts, out.Tags)
+	}
+}
+
+func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 3)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+
+	const secret = "PrivateProjectOrSession_Z9"
+	tags := map[string]string{
+		"component": "httpd", "operation": "http_request", "method": "GET",
+		"status": "500", "error_kind": "internal", "error_code": "INTERNAL_ERROR",
+		"path": "/api/v1/projects/" + secret, "request_id": secret,
+	}
+	for _, err := range []error{
+		fmt.Errorf("get project %s: storage failed", secret),
+		fmt.Errorf("get session %s: repo %s failed", secret, secret),
+		fmt.Errorf("open /tmp/%s/worktree: access denied", secret),
+	} {
+		CaptureHTTPError(context.Background(), err, tags, "0123456789abcdef")
+	}
+	for i := 0; i < 3; i++ {
+		event := <-transport.events
+		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != event.Message || event.Exception[0].Type != event.Message {
+			t.Fatalf("unsafe title fields: message=%q exception=%+v", event.Message, event.Exception)
+		}
+		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || len(event.Exception[0].Stacktrace.Frames) == 0 {
+			t.Fatalf("diagnostics lost: %+v", event)
+		}
+		if event.Fingerprint[0] != "0123456789abcdef" {
+			t.Fatalf("fingerprint lost: %+v", event.Fingerprint)
+		}
+		if _, ok := event.Tags["path"]; ok {
+			t.Fatalf("dynamic route leaked: %+v", event.Tags)
+		}
+		if _, ok := event.Tags["request_id"]; ok {
+			t.Fatalf("untrusted request id leaked: %+v", event.Tags)
+		}
+		encoded, marshalErr := event.MarshalJSON()
+		if marshalErr != nil || strings.Contains(string(encoded), secret) {
+			t.Fatalf("sensitive value in outbound event: %s, marshal error: %v", encoded, marshalErr)
+		}
+	}
+
+	CapturePanic(context.Background(), "panic in "+secret, "goroutine 1 [running]:\n/tmp/"+secret+"/main.go:10", map[string]string{
+		"component": "httpd", "operation": "http_request_panic", "panic_kind": "string", "path": "/" + secret,
+	}, "fedcba9876543210")
+	event := <-transport.events
+	if event.Message != "http handler panic" || event.Exception[0].Value != event.Message || event.Exception[0].Type != event.Message {
+		t.Fatalf("unsafe panic title: %+v", event)
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("sensitive panic value in outbound event: %s, marshal error: %v", encoded, err)
 	}
 }
 
