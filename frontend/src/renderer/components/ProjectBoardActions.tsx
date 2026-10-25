@@ -4,7 +4,6 @@ import { Plus } from "lucide-react";
 import type { ProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { getAgentActivityView } from "../lib/session-presentation";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
-import { OrchestratorActivityIndicator } from "./OrchestratorActivityIndicator";
 import { OrchestratorIcon } from "./icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -39,7 +38,6 @@ export function ProjectBoardActions({ actions, placement, quiet = false, cloud =
 					>
 						<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 						<span data-compact-label={header ? "" : undefined}>{busyLabel ?? t("shell.orchestrator")}</span>
-						{orchestrator ? <OrchestratorActivityIndicator session={orchestrator} /> : null}
 					</TopbarButton>
 				</span>
 			</TooltipTrigger>
