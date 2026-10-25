@@ -67,7 +67,7 @@ func checkActions(tool string, arguments map[string]any) error {
 	if tool != "run_steps" {
 		return checkAction(tool, arguments, nil, 0)
 	}
-	if foreground(arguments) || arguments["foreground_fallback"] == true {
+	if foreground(arguments) || foregroundFallback(arguments) {
 		return actionRefused("COMPUTER_USE_FOREGROUND_DISABLED", tool, 0, foregroundRefusal)
 	}
 	steps, _ := arguments["steps"].([]any)
@@ -108,6 +108,14 @@ func batchTool(name string, arguments map[string]any) (string, bool) {
 		return "press_key", true
 	}
 	return name, false
+}
+
+// foregroundFallback reports whether run_steps may retry a refused step with
+// foreground input. Only an absent field or boolean false is let through: the
+// driver turns a string such as "true" or " TRUE " into true before running.
+func foregroundFallback(arguments map[string]any) bool {
+	value, set := arguments["foreground_fallback"]
+	return set && value != nil && value != false
 }
 
 // foreground reports whether arguments ask for foreground delivery in any

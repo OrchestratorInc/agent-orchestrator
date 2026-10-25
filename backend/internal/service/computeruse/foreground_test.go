@@ -25,6 +25,8 @@ func TestCallRefusesForegroundDelivery(t *testing.T) {
 		"run_steps step":      {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "foreground"})},
 		"run_steps batch":     {"run_steps", map[string]any{"pid": 7, "window_id": 9, "delivery_mode": "foreground", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
 		"foreground fallback": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "foreground_fallback": true, "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
+		// The driver coerces a boolean string to the boolean before running.
+		"foreground fallback string": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "foreground_fallback": " TRUE ", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
 		// The driver reads delivery_mode in any letter case, and the older
 		// dispatch field as delivery_mode.
 		"direct any case":          {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "escape", "delivery_mode": "Foreground"}},
@@ -47,6 +49,9 @@ func TestCallRefusesForegroundDelivery(t *testing.T) {
 	}
 	if _, err := s.Call(context.Background(), CallRequest{Tool: "press_key", Arguments: map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "background"}}); err != nil {
 		t.Fatalf("background delivery: %v", err)
+	}
+	if _, err := s.Call(context.Background(), CallRequest{Tool: "run_steps", Arguments: map[string]any{"pid": 7, "window_id": 9, "foreground_fallback": false, "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}}); err != nil {
+		t.Fatalf("fallback turned off: %v", err)
 	}
 }
 
