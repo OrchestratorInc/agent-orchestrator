@@ -347,7 +347,7 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
 		expect(await within(page).findByText("Cached model")).toBeInTheDocument();
 		if (source === "database") expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", {
-			params: { path: { agent: "codex" }, query: { projectId: undefined, catalogOnly: true } },
+			params: { path: { agent: "codex" }, signal: expect.any(AbortSignal), query: { projectId: undefined, role: undefined, catalogOnly: true } },
 		});
 		expect(within(page).queryByText("Loading models…")).toBeNull();
 		await act(async () => {

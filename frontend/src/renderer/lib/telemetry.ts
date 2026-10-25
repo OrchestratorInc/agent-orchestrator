@@ -744,6 +744,12 @@ export async function sanitizeRendererProperties(
 			if (properties?.field === "status" || properties?.field === "activity") safe.field = properties.field;
 			if (properties?.reason === "missing" || properties?.reason === "unrecognized") safe.reason = properties.reason;
 			break;
+		case "ao.renderer.project_add_failed":
+		case "ao.renderer.project_clone_failed":
+			if (typeof properties?.error_code === "string" && (/^[A-Z0-9_]+$/.test(properties.error_code) || properties.error_code === "unknown")) {
+				safe.error_code = properties.error_code;
+			}
+			break;
 		case "ao.renderer.update_failed":
 		case "ao.renderer.update_downloaded":
 		case "ao.renderer.update_unsupported":

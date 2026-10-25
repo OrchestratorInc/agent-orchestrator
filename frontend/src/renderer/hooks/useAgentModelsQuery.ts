@@ -2,7 +2,7 @@ import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { foldClaudeAliasDefault } from "../lib/agent-model-choices";
-import { cacheAgentModels, readCachedAgentModels, withCachedModelUsage } from "../lib/agent-model-cache";
+import { cacheAgentModels, clearCachedAgentModels, readCachedAgentModels, withCachedModelUsage } from "../lib/agent-model-cache";
 import { modelCatalogScope } from "../lib/cloud-agents";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
@@ -55,6 +55,7 @@ async function requestAgentModels(
 						query: { ...query, revalidate: mode === "revalidate" || undefined, ...(catalogOnly ? { catalogOnly: true } : {}) },
 					},
 				});
+	signal?.throwIfAborted();
 	if (result.error) throw new Error(apiErrorMessage(result.error));
 	const catalog = result.data as AgentModelCatalog;
 	const normalized = agentId === "claude-code" ? { ...catalog, models: foldClaudeAliasDefault(catalog.models) } : catalog;
@@ -73,6 +74,9 @@ export function agentModelsQueryOptions(agentId: string, scope: string, hostId?:
 	return queryOptions<AgentModelCatalog>({
 		// Both read the shared daemon catalog; only task responses add recency.
 		queryKey: catalogOnly ? [...key, "catalog"] as const : key,
+		// Eager on purpose: the fork diverges from upstream #6898's lazy form —
+		// TaskComposer's picker-timing test depends on the read happening at
+		// options-build time. Revisit when more of #6898/#7049 is ported.
 		initialData: role ? undefined : readCachedAgentModels(agentId, catalogScope, hostId),
 		initialDataUpdatedAt: 0,
 		queryFn: async ({ client, signal }): Promise<AgentModelCatalog> => {
@@ -140,9 +144,14 @@ export function modelCatalogAuthIssue(catalog: Pick<AgentModelCatalog, "warning"
  * revalidation results keyed off it, so mounted pickers re-read the daemon.
  * Call after anything that can change what the agent's login allows.
  */
-export function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: string, hostId?: string): Promise<unknown> {
+export async function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: string, hostId?: string): Promise<unknown> {
+	const queryKey = hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId);
+	// Cancel inactive catalog reads too, so the next task read cannot dedupe
+	// onto a request made before the login changed.
+	await queryClient.cancelQueries({ queryKey });
+	clearCachedAgentModels(agentId, hostId);
 	return Promise.all([
-		queryClient.invalidateQueries({ queryKey: hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId) }),
+		queryClient.invalidateQueries({ queryKey }),
 		queryClient.invalidateQueries({
 			predicate: ({ queryKey: [root, first, second] }) => {
 				if (root !== "agent-model-revalidation") return false;

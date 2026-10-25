@@ -35,7 +35,7 @@ describe("cached model loading", () => {
 			expect(observer.getCurrentResult().isFetching).toBe(true);
 			expect(observer.getCurrentResult().isPending).toBe(false);
 			expect(apiClient.GET).toHaveBeenNthCalledWith(1, "/api/v1/agents/{agent}/models", {
-				params: { path: { agent: "codex" }, query: { projectId: undefined, catalogOnly: true } },
+				params: { path: { agent: "codex" }, signal: expect.any(AbortSignal), query: { projectId: undefined, role: undefined, catalogOnly: true } },
 			});
 			const enriched = { ...catalog, models: [{ ...catalog.models[0], lastUsedAt: "2026-10-18T01:00:00Z" }] };
 			finish({ data: enriched });
