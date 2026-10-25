@@ -286,6 +286,8 @@
 	--size-topbar-control: 28px;
 	--gap-topbar-control: var(--space-1);
 	--size-toolbar: var(--size-topbar-primary);
+	/* Controls center above the shared header's one-pixel bottom divider. */
+	--size-topbar-content: calc(var(--size-toolbar) - 1px);
 	/* Top offset for the Win/Linux browser and files pop-outs.
 	   Distinct from --size-toolbar (36px). */
 	--size-shell-topbar: 56px;
