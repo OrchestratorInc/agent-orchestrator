@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -38,6 +39,23 @@ func TestSearchWorkspaceContentRanksBestLinePerFile(t *testing.T) {
 		t.Fatalf("paths = %v, want %v", paths, want)
 	}
 	if hits[0].Line != 2 || hits[0].Text != "export function \x02closePalette\x03() {}" {
+		t.Fatalf("best line = %#v", hits[0])
+	}
+}
+
+func TestSearchWorkspaceContentCommonTermReachesLaterFiles(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	// Without the per-file limit, this first file exhausts the output budget
+	// before git grep reaches the better declaration in frontend/.
+	writeWorkspaceFile(t, repo, "backend/gen/repeated.go", strings.Repeat("// error "+strings.Repeat("x", 64)+"\n", 10_000))
+	writeWorkspaceFile(t, repo, "frontend/error.ts", "// error handling\n// another error\nexport function handleError() {}\n")
+	svc := workspaceReviewService(t, repo)
+
+	paths, hits := searchContentPaths(t, svc, "error")
+	if want := []string{"frontend/error.ts", "backend/gen/repeated.go"}; !slices.Equal(paths, want) {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+	if hits[0].Line != 3 || hits[0].Text != "export function handle\x02Error\x03() {}" {
 		t.Fatalf("best line = %#v", hits[0])
 	}
 }

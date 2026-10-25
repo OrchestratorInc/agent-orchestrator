@@ -282,6 +282,7 @@ beforeEach(() => {
 			restartingProjectIds: new Set(),
 			settingsModal: null,
 			workspaceFileOpenRequest: null,
+			chatMessageFocusRequest: null,
 		});
 	});
 });
@@ -458,6 +459,56 @@ describe("CommandPalette content search", () => {
 		fireEvent.click(await screen.findByText("Palette cleanup", {}, { timeout: 2_000 }));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "w-fix" } });
 		expect(useUiStore.getState().chatMessageFocusRequest).toMatchObject({ sessionId: "w-fix", messageId: "msg-1", text: "we should close the palette on Escape" });
+	});
+
+	it("hides chat hits without a loaded session instead of guessing a route", async () => {
+		mockSearch([], [], [
+			chatHit,
+			{ ...chatHit, messageId: "missing", sessionId: "removed", title: "Removed session hit" },
+			{ ...chatHit, messageId: "unbound", sessionId: undefined, title: "Unbound conversation hit" },
+		]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search projects/i), { target: { value: "close palette" } });
+		await screen.findByText("Palette cleanup", {}, { timeout: 2_000 });
+		expect(screen.queryByText("Removed session hit")).not.toBeInTheDocument();
+		expect(screen.queryByText("Unbound conversation hit")).not.toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["remote", "cloud"])("does not open a local chat hit in a %s session with the same ID", async (location) => {
+		const localSession = ctx.workspaces[0].sessions[0];
+		const originalSessions = ctx.workspaces[1].sessions;
+		ctx.workspaces[1].sessions = [{ ...localSession, id: "local-result", workspaceId: "proj-2" }];
+		if (location === "remote") ctx.workspaces[0].hostId = "other-host";
+		else ctx.workspaces[0].kind = "cloud";
+		try {
+			mockSearch([], [], [chatHit, { ...chatHit, messageId: "local", sessionId: "local-result", title: "Local chat hit" }]);
+			renderPalette();
+			act(() => useUiStore.getState().setCommandPaletteOpen(true));
+			fireEvent.change(await screen.findByPlaceholderText(/search projects/i), { target: { value: "close palette" } });
+			await screen.findByText("Local chat hit", {}, { timeout: 2_000 });
+			expect(screen.queryByText("Palette cleanup")).not.toBeInTheDocument();
+		} finally {
+			ctx.workspaces[1].sessions = originalSessions;
+		}
+	});
+
+	it.each([
+		["/workspace/search/content", "Unable to search file contents."],
+		["/api/v1/conversations/search", "Unable to search chats."],
+	])("shows errors from %s only for the current query", async (failedPath, message) => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockImplementation(async (path: string) => path.endsWith(failedPath)
+			? { error: {} }
+			: { data: { results: [], truncated: false } });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search projects/i);
+		fireEvent.change(input, { target: { value: "close palette" } });
+		expect(await screen.findByRole("alert", {}, { timeout: 2_000 })).toHaveTextContent(message);
+		fireEvent.change(input, { target: { value: "new query" } });
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
 	it("keeps a control that names every word above content that mentions them", async () => {

@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -159,5 +160,95 @@ func TestSearchConversationMessagesIgnoresEmptyQuery(t *testing.T) {
 		if got := searchMessageIDs(t, s, query); len(got) != 0 {
 			t.Fatalf("%q = %v", query, got)
 		}
+	}
+}
+
+func TestSearchConversationMessagesUsesSelectedConversationBeforeCandidateLimit(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	// More stale matches than the candidate page must not hide a hit in the
+	// project conversation that SelectConversationBySession actually returns.
+	for i := range 40 {
+		created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
+			ID: fmt.Sprintf("stale-message-%d", i), Origin: domain.MessageOriginHuman, Text: "needle",
+			ClientMessageID: fmt.Sprintf("stale-client-%d", i),
+		}, fmt.Sprintf("stale-turn-%d", i), testNow)
+		if err != nil || !created {
+			t.Fatalf("append stale message %d: created=%v err=%v", i, created, err)
+		}
+	}
+	project, err := s.CreateConversation(ctx, "project-search", domain.ConversationScopeProject, session.ProjectID, session.ID, testNow.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := searchMessageIDs(t, s, "needle"); len(got) != 0 {
+		t.Fatalf("superseded conversation is still searchable: %v", got)
+	}
+	created, err := s.AppendUserMessage(ctx, project.ID, session.ID, "generation-root", domain.ConversationMessage{
+		ID: "project-message", Origin: domain.MessageOriginHuman, Text: "needle", ClientMessageID: "project-client",
+	}, "project-turn", testNow.Add(2*time.Minute))
+	if err != nil || !created {
+		t.Fatalf("append project message: created=%v err=%v", created, err)
+	}
+	hits, err := s.SearchConversationMessages(ctx, "needle")
+	if err != nil || len(hits) != 1 || hits[0].MessageID != "project-message" || hits[0].SessionID != string(session.ID) || hits[0].ProjectID != string(session.ProjectID) {
+		t.Fatalf("selected conversation hits = %#v err=%v", hits, err)
+	}
+}
+
+func TestSearchConversationMessagesRoutesReviewerHitsToTheirWorker(t *testing.T) {
+	ctx := context.Background()
+	s, session, _ := seededChatConversation(t)
+	review := domain.Review{
+		ID: "search-review", SessionID: session.ID, ProjectID: session.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: testNow, UpdatedAt: testNow,
+	}
+	if err := s.UpsertReview(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.CreateReviewConversation(ctx, "search-review-conversation", review.ID, session.ProjectID, session.ID, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "review-provider", "review-generation", testNow); err != nil || !claimed {
+		t.Fatalf("claim reviewer: claimed=%v err=%v", claimed, err)
+	}
+	created, err := s.AppendReviewUserMessage(ctx, conversation.ID, session.ID, review.ID, "review-generation", domain.ConversationMessage{
+		ID: "review-search-message", Text: "searchable reviewer passage", Origin: domain.MessageOriginHuman,
+	}, "review-search-turn", testNow)
+	if err != nil || !created {
+		t.Fatalf("append reviewer message: created=%v err=%v", created, err)
+	}
+	hits, err := s.SearchConversationMessages(ctx, "reviewer passage")
+	if err != nil || len(hits) != 1 || hits[0].ReviewID != review.ID || hits[0].SessionID != string(session.ID) || hits[0].ProjectID != string(session.ProjectID) {
+		t.Fatalf("reviewer hits = %#v err=%v", hits, err)
+	}
+	// Reviewer Chat remains reachable even when the worker uses a terminal.
+	session.Mode = domain.SessionModeTUI
+	if err := s.UpdateSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if got := searchMessageIDs(t, s, "reviewer passage"); !slices.Equal(got, []string{"review-search-message"}) {
+		t.Fatalf("reviewer of a terminal worker = %v", got)
+	}
+	if changed, err := s.SetReviewInterfaceMode(ctx, review.ID, domain.ReviewerInterfaceTUI, testNow.Add(time.Minute)); err != nil || !changed {
+		t.Fatalf("switch reviewer to terminal: changed=%v err=%v", changed, err)
+	}
+	if got := searchMessageIDs(t, s, "reviewer passage"); len(got) != 0 {
+		t.Fatalf("terminal reviewer has no Chat transcript for hits: %v", got)
+	}
+
+}
+
+func TestSearchConversationMessagesHidesSessionChatInTerminalMode(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	seedBranchTurns(t, s, session, conversation)
+	session.Mode = domain.SessionModeTUI
+	if err := s.UpdateSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if got := searchMessageIDs(t, s, "prompt"); len(got) != 0 {
+		t.Fatalf("terminal session has no Chat transcript for hits: %v", got)
 	}
 }

@@ -167,12 +167,12 @@ export function CommandPalette() {
 	const contentTarget = activeFileTarget && !activeFileTarget.cloudOrgId ? activeFileTarget : undefined;
 	const contentSearchEnabled = searchQueryReady && (view.mode === "root" || view.mode === "file-search") && Boolean(contentTarget);
 	const contentSearchQuery = useQuery({
-		...commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchFilesError")),
+		...commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError")),
 		enabled: contentSearchEnabled,
 	});
 	const chatSearchEnabled = searchQueryReady && view.mode === "root";
 	const chatSearchQuery = useQuery({
-		...commandPaletteChatSearchQueryOptions(normalizedFileQuery, t("command.searchFilesError")),
+		...commandPaletteChatSearchQueryOptions(normalizedFileQuery, t("command.searchChatsError")),
 		enabled: chatSearchEnabled,
 	});
 
@@ -280,9 +280,17 @@ export function CommandPalette() {
 			: [],
 		[contentTarget, contentSearchEnabled, contentSearchQuery.data],
 	);
+	const findLocalChatWorkspace = useCallback(
+		(sessionId: string | undefined) => workspaces.find((workspace) =>
+			!workspace.hostId && workspace.kind !== "cloud"
+			&& workspace.sessions.some((session) => session.id === sessionId && !session.hostId && !session.cloud)),
+		[workspaces],
+	);
 	const chatItems = useMemo(
-		() => chatSearchEnabled && chatSearchQuery.data ? buildChatSearchCommands(chatSearchQuery.data.results, t) : [],
-		[chatSearchEnabled, chatSearchQuery.data, t],
+		() => chatSearchEnabled && chatSearchQuery.data
+			? buildChatSearchCommands(chatSearchQuery.data.results.filter((hit) => findLocalChatWorkspace(hit.sessionId)), t)
+			: [],
+		[chatSearchEnabled, chatSearchQuery.data, findLocalChatWorkspace, t],
 	);
 
 	const groups = useMemo(() => {
@@ -615,14 +623,13 @@ export function CommandPalette() {
 					break;
 				}
 				case "open-chat-message": {
-					if (action.sessionId) {
-						const workspace = workspaces.find((candidate) => !candidate.hostId
-							&& candidate.sessions.some((session) => session.id === action.sessionId));
-						navigateToTarget(sessionRoute(workspace?.id ?? action.projectId ?? STANDALONE_WORKSPACE_ID, action.sessionId));
-						useUiStore.getState().requestChatMessageFocus(action.sessionId, action.messageId, action.text, action.reviewId);
-					} else if (action.projectId) {
-						navigateToTarget({ to: "/projects/$projectId", params: { projectId: action.projectId } });
+					const workspace = findLocalChatWorkspace(action.sessionId);
+					if (!workspace || !action.sessionId) {
+						setError(t("command.chatSessionUnavailable"));
+						break;
 					}
+					navigateToTarget(sessionRoute(workspace.id, action.sessionId));
+					useUiStore.getState().requestChatMessageFocus(action.sessionId, action.messageId, action.text, action.reviewId);
 					closePalette();
 					break;
 				}
@@ -667,7 +674,7 @@ export function CommandPalette() {
 				setPendingId(null);
 			}
 		},
-		[navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[findLocalChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -757,6 +764,17 @@ export function CommandPalette() {
 	const fileSearchError = fileSearchActive && fileSearchSettled && fileSearchQuery.error
 		? (fileSearchQuery.error instanceof Error ? fileSearchQuery.error.message : t("command.searchFilesError"))
 		: null;
+	const contentSearchError = contentSearchEnabled && fileSearchSettled && contentSearchQuery.error
+		? (contentSearchQuery.error instanceof Error ? contentSearchQuery.error.message : t("command.searchContentError"))
+		: null;
+	const chatSearchError = chatSearchEnabled && fileSearchSettled && chatSearchQuery.error
+		? (chatSearchQuery.error instanceof Error ? chatSearchQuery.error.message : t("command.searchChatsError"))
+		: null;
+	const searchErrors = [
+		{ id: "files", message: fileSearchError },
+		{ id: "content", message: contentSearchError },
+		{ id: "chats", message: chatSearchError },
+	].filter((searchError) => searchError.message);
 
 	return (
 		<>
@@ -877,11 +895,11 @@ export function CommandPalette() {
 									{error}
 								</div>
 							)}
-							{fileSearchError && (
-								<div role="alert" className="mx-1 mb-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-									{fileSearchError}
+							{searchErrors.map((searchError) => (
+								<div key={searchError.id} role="alert" className="mx-1 mb-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+									{searchError.message}
 								</div>
-							)}
+							))}
 							{view.mode === "file-search" && fileSearchQuery.isFetching && fileItems.length > 0 && (
 								<div role="status" className="px-3 py-1 text-xs text-muted-foreground">{t("command.searchFilesLoading")}</div>
 							)}

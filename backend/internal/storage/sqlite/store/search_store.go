@@ -14,14 +14,26 @@ import (
 // the query as typed, phrase ?3, first) or, when a query is too common to rank
 // cheaply, newest first. It keeps the ones the transcript shows:
 // the SelectConversationMessages rule (active branch path; rolled-back,
-// promoted and cancelled turns hidden). Snippets are built only for those, with
+// promoted and cancelled turns hidden), and only the conversation currently
+// selected for a session/reviewer can produce a navigable hit. Snippets have
 // matches wrapped in \x02 and \x03. Hand-written: sqlc cannot parse rowid or
 // FTS5.
 const searchConversationMessagesSQL = `
 WITH RECURSIVE hits AS MATERIALIZED (
-    SELECT rowid AS message_rowid, %[1]s AS score
+    SELECT conversation_messages_fts.rowid AS message_rowid, %[1]s AS score
     FROM conversation_messages_fts
+    JOIN conversation_messages AS candidate ON candidate.rowid = conversation_messages_fts.rowid
+    JOIN conversations AS owner ON owner.id = candidate.conversation_id
+    LEFT JOIN review AS owner_review ON owner_review.id = owner.current_review_id
+    JOIN sessions AS owner_session ON owner_session.id = COALESCE(owner.current_session_id, owner_review.session_id)
     WHERE conversation_messages_fts MATCH ?1
+      AND ((owner.current_review_id IS NOT NULL AND owner_review.interface_mode = 'chat' AND owner_review.is_archived = 0)
+        OR (owner.current_review_id IS NULL AND owner_session.session_mode = 'chat' AND owner.id = (
+            SELECT current.id FROM conversations AS current
+            WHERE current.current_session_id = owner_session.id
+            ORDER BY current.scope = 'project' DESC, current.created_at DESC, current.id DESC
+            LIMIT 1
+        )))
     ORDER BY %[2]s
     LIMIT ?2
 ), active_path(conversation_id, branch_id, max_sequence) AS (
@@ -46,16 +58,17 @@ SELECT message.id,
        (SELECT snippet(conversation_messages_fts, 0, char(2), char(3), '…', 24)
         FROM conversation_messages_fts
         WHERE conversation_messages_fts MATCH ?1 AND rowid = hits.message_rowid),
-       COALESCE(conversation.session_id, conversation.current_session_id, review.session_id, ''),
-       COALESCE(conversation.project_id, ''),
-       COALESCE(conversation.review_id, ''),
+       COALESCE(conversation.current_session_id, review.session_id, ''),
+       COALESCE(session.project_id, ''),
+       COALESCE(conversation.current_review_id, ''),
        COALESCE(NULLIF(conversation.applied_title, ''), conversation.provider_title, '')
 FROM hits
 JOIN conversation_messages AS message ON message.rowid = hits.message_rowid
 JOIN active_path AS path
   ON path.conversation_id = message.conversation_id AND path.branch_id = message.branch_id
 JOIN conversations AS conversation ON conversation.id = message.conversation_id
-LEFT JOIN review ON review.id = conversation.review_id
+LEFT JOIN review ON review.id = conversation.current_review_id
+JOIN sessions AS session ON session.id = COALESCE(conversation.current_session_id, review.session_id)
 LEFT JOIN conversation_turns AS turn ON turn.id = message.turn_id
 WHERE (path.max_sequence IS NULL OR message.sequence <= path.max_sequence)
   AND (message.turn_id IS NULL OR turn.id IS NULL OR (
@@ -65,10 +78,10 @@ ORDER BY hits.score`
 
 var (
 	searchMessagesByRelevanceSQL = fmt.Sprintf(searchConversationMessagesSQL,
-		"rank - 1e6 * (rowid IN (SELECT rowid FROM conversation_messages_fts WHERE conversation_messages_fts MATCH ?3))", "score")
+		"conversation_messages_fts.rank - 1e6 * (conversation_messages_fts.rowid IN (SELECT rowid FROM conversation_messages_fts WHERE conversation_messages_fts MATCH ?3))", "score")
 	// FTS5 walks rowids in reverse and stops at the limit; bm25 would score
 	// every match first.
-	searchMessagesByRecencySQL = fmt.Sprintf(searchConversationMessagesSQL, "-rowid", "rowid DESC")
+	searchMessagesByRecencySQL = fmt.Sprintf(searchConversationMessagesSQL, "-conversation_messages_fts.rowid", "conversation_messages_fts.rowid DESC")
 )
 
 const (

@@ -1022,15 +1022,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
-	// A palette hit in this session's reviewer chat opens that chat; its
-	// transcript then scrolls to the message (useChatMessageFocus).
-	const focusReviewId = useUiStore((state) => {
+	// Reveal the requested transcript before it scrolls to the palette hit.
+	const chatFocusRequest = useUiStore((state) => {
 		const request = state.chatMessageFocusRequest;
-		return request?.reviewId && request.sessionId === uiSessionId ? request.reviewId : undefined;
+		return request?.sessionId === uiSessionId ? request : undefined;
 	});
 	useEffect(() => {
-		if (focusReviewId) selectReviewerChat(focusReviewId);
-	}, [focusReviewId, selectReviewerChat]);
+		if (chatFocusRequest?.reviewId) selectReviewerChat(chatFocusRequest.reviewId);
+		else if (chatFocusRequest && session?.mode === "chat") selectSessionTerminal();
+	}, [chatFocusRequest, session?.mode, selectReviewerChat, selectSessionTerminal]);
 	const openCenterFile = useCallback(
 		(path: string, options?: FileOpenOptions) => {
 			const filePath = path;

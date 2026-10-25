@@ -20,7 +20,7 @@ describe("palette registry", () => {
 		const regular = buildSettingsCommands(t, { developerMode: false, diagnostics: false }).map((item) => item.id);
 		const developer = buildSettingsCommands(t, { developerMode: true, diagnostics: true }).map((item) => item.id);
 		expect(regular).toContain("setting:accounts");
-		expect(regular).not.toContain("setting:remote-hosts");
+		expect(regular).toContain("setting:remote-hosts");
 		expect(regular).not.toContain("setting:diagnostics");
 		expect(developer).not.toContain("setting:accounts");
 		expect(developer).toContain("setting:remote-hosts");

@@ -129,8 +129,6 @@ function sectionVisible(section: GlobalSettingsSection, { developerMode, diagnos
 	switch (section) {
 		case "agents":
 			return !developerMode;
-		case "remoteHosts":
-			return developerMode;
 		case "diagnostics":
 			return developerMode && diagnostics;
 		default:

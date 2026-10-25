@@ -16,8 +16,8 @@ import (
 
 const (
 	workspaceContentResults = 8
-	// git grep is stopped once it has printed this much: a query this common
-	// is not specific enough for the rest to matter.
+	// Bound output as well as matches per file so common queries cannot
+	// consume unbounded memory before ranking.
 	workspaceContentOutputLimit = 512 << 10
 	workspaceContentTimeout     = 5 * time.Second
 	workspaceContentWindow      = 160
@@ -121,9 +121,10 @@ func grepWorkspaceRoots(ctx context.Context, roots []workspaceGrepRoot, terms []
 }
 
 // grepWorkspace runs git grep over tracked and untracked, non-ignored text
-// files. all=true requires every term on the line.
+// files, ranking among the first three matching lines in each file.
+// all=true requires every term on the line.
 func grepWorkspace(ctx context.Context, root workspaceGrepRoot, terms []string, all bool) ([]WorkspaceContentHit, error) {
-	args := []string{"grep", "--null", "--line-number", "--ignore-case", "--fixed-strings", "-I", "--no-color"}
+	args := []string{"grep", "--null", "--line-number", "--ignore-case", "--fixed-strings", "-I", "--no-color", "--max-count=3"}
 	if root.noIndex {
 		args = append(args, "--no-index", "--exclude-standard")
 	} else {
