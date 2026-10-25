@@ -1,5 +1,5 @@
 import { Feather } from "./icons";
-import { createContext, memo, useContext, useEffect, useRef, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, type ReactNode } from "react";
 import {
 	Animated,
 	Image,
@@ -30,26 +30,31 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import MASCOT from "../assets/mascot.png";
 
 /**
- * The app's breathing loop, in one place.
+ * The one breathing clock every consumer shares.
  *
- * "Working" is the only state that moves, and it moves the same way wherever it
- * appears: a slow opacity pulse. Returns the animated value to drive it, or
- * `undefined` when the loop must not run — which is every state that is not
- * working, and everything at all under Reduce Motion.
+ * A loop per consumer starts wherever that consumer happened to mount, so the
+ * working dots in one list pulse out of step and the list shimmers. One value
+ * driven by one loop keeps every dot, lamp and label rising and falling
+ * together. The loop runs while anyone holds it and stops with the last holder.
  *
- * The setting is consumed here rather than at the call sites, so honouring it
- * once fixes every consumer — status dots, the connection lamp, project rows —
- * without touching any of them.
+ * Created on first use rather than at import, so loading this module never
+ * touches `Animated`.
  */
-export function useBreathing(enabled: boolean): Animated.Value | undefined {
-	const pulse = useRef(new Animated.Value(1)).current;
-	const reduceMotion = useReducedMotion();
-	const animate = shouldBreathe(reduceMotion, enabled);
-	useEffect(() => {
-		// Deliberately not a zero duration: a zero-length loop is a busy loop, so
-		// the animation must not start at all.
-		if (!animate) return;
-		const loop = Animated.loop(
+let breathValue: Animated.Value | undefined;
+let breathLoop: Animated.CompositeAnimation | undefined;
+let breathHolders = 0;
+
+function sharedBreath(): Animated.Value {
+	breathValue ??= new Animated.Value(1);
+	return breathValue;
+}
+
+/** Keeps the shared loop running until the returned release is called. */
+function holdBreath(): () => void {
+	breathHolders += 1;
+	if (breathHolders === 1) {
+		const pulse = sharedBreath();
+		breathLoop = Animated.loop(
 			Animated.sequence([
 				Animated.timing(pulse, {
 					toValue: 0.35,
@@ -63,20 +68,48 @@ export function useBreathing(enabled: boolean): Animated.Value | undefined {
 				}),
 			]),
 		);
-		loop.start();
-		return () => {
-			loop.stop();
-			// Leave it at full opacity; a stopped loop otherwise freezes mid-fade,
-			// which reads as a rendering bug rather than a resting state.
-			pulse.setValue(1);
-		};
-	}, [animate, pulse]);
-	return animate ? pulse : undefined;
+		breathLoop.start();
+	}
+	return () => {
+		breathHolders -= 1;
+		if (breathHolders > 0) return;
+		breathLoop?.stop();
+		breathLoop = undefined;
+		// Leave it at full opacity; a stopped loop otherwise freezes mid-fade,
+		// which reads as a rendering bug rather than a resting state.
+		breathValue?.setValue(1);
+	};
+}
+
+/**
+ * The app's breathing loop, in one place.
+ *
+ * "Working" is the only state that moves, and it moves the same way wherever it
+ * appears: a slow opacity pulse, in step everywhere. Returns the shared animated
+ * value to drive it, or `undefined` when the loop must not run — which is every
+ * state that is not working, and everything at all under Reduce Motion.
+ *
+ * The setting is consumed here rather than at the call sites, so honouring it
+ * once fixes every consumer — status dots, the connection lamp, project rows —
+ * without touching any of them.
+ */
+export function useBreathing(enabled: boolean): Animated.Value | undefined {
+	const reduceMotion = useReducedMotion();
+	const animate = shouldBreathe(reduceMotion, enabled);
+	useEffect(() => {
+		// Deliberately not a zero duration: a zero-length loop is a busy loop, so
+		// the animation must not start at all.
+		if (!animate) return;
+		return holdBreath();
+	}, [animate]);
+	// Handed out before the effect holds the loop, so a dot mounting into a list
+	// that is already breathing joins the current phase on its first frame.
+	return animate ? sharedBreath() : undefined;
 }
 
 // A gently breathing dot - the only motion in the UI, reserved for "working".
-// Memoized so an unrelated parent re-render doesn't tear down and restart the
-// Animated loop (which causes a visible flicker and per-tick allocations).
+// Every breathing dot follows the shared clock above, so a list of working rows
+// pulses as one. Memoized so an unrelated parent re-render skips the dots.
 export const Dot = memo(function Dot({
 	color,
 	size = 9,
