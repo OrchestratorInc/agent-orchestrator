@@ -62,11 +62,12 @@ function isLoopbackRedirect(redirectUri: string): boolean {
 // "open Agent Orchestrator?" prompt is attributed to our own domain (aoagents.dev)
 // instead of the opaque WorkOS AuthKit subdomain.
 //
-// A development build can't use the ao-app:// deep link (macOS routes it to the
-// installed app, not the unpackaged Electron binary), so it falls back to a
-// loopback callback server — the standard desktop-OAuth pattern — for zero-setup
-// sign-in. AO_CLOUD_AUTH_REDIRECT overrides either default (e.g. to point a
-// packaged build at a staging bounce page).
+// A development build doesn't claim ao-app:// by default (see
+// registerCloudProtocol): owning it would take the scheme away from the
+// installed app. It signs in through a loopback callback server instead, the
+// standard desktop-OAuth pattern, with zero setup. AO_CLOUD_AUTH_REDIRECT
+// overrides either default (e.g. to point a packaged build at a staging bounce
+// page).
 const DEFAULT_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
 const REDIRECT_URI =
   process.env.AO_CLOUD_AUTH_REDIRECT?.trim() ||
@@ -637,20 +638,32 @@ export async function showCloudSignInFailure(error: unknown): Promise<void> {
   });
 }
 
+// registerCloudProtocol makes this build the ao-app:// handler, or gives the
+// scheme up when it shouldn't hold it. Must run before app.whenReady().
+//
+// A development build signing in through the loopback redirect never needs
+// ao-app://, and claiming it takes the scheme from the installed app: macOS
+// ignores the path/args below and binds it to the stock node_modules
+// Electron.app, Windows points it at a worktree script, and the installed app's
+// sign-in callbacks and billing return links then land in the wrong process. So
+// such a build only releases the scheme, which also repairs a machine where an
+// earlier dev run took it. A development build pointed at a deep-link redirect
+// (AO_CLOUD_AUTH_REDIRECT set to a bounce page or ao-app://callback) does need
+// the scheme, and claims it like the packaged app.
 export function registerCloudProtocol(): void {
-  // macOS ignores the path/args below and binds the scheme to the running
-  // bundle. For a dev build that is the stock node_modules Electron.app, which
-  // would steal ao-app:// from the installed app and open a blank Electron
-  // window on every deep link. Dev builds sign in via the loopback redirect,
-  // so they never need the scheme.
-  if (process.platform === "darwin" && !app.isPackaged) return;
-  if (process.defaultApp && process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient("ao-app", process.execPath, [
-      path.resolve(process.argv[1]),
-    ]);
+  // A dev build is launched as `electron <app dir>`; Windows ties the scheme to
+  // that exact command, so every call below names it.
+  const devApp: [path?: string, args?: string[]] =
+    process.defaultApp && process.argv.length >= 2
+      ? [process.execPath, [path.resolve(process.argv[1])]]
+      : [];
+  if (!app.isPackaged && useLoopbackRedirect) {
+    if (app.isDefaultProtocolClient("ao-app", ...devApp)) {
+      app.removeAsDefaultProtocolClient("ao-app", ...devApp);
+    }
     return;
   }
-  app.setAsDefaultProtocolClient("ao-app");
+  app.setAsDefaultProtocolClient("ao-app", ...devApp);
 }
 
 export function installCloudIPC(

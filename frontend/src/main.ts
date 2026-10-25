@@ -473,8 +473,9 @@ protocol.registerSchemesAsPrivileged([
 	},
 ]);
 
-// Register ao-app:// as the deep-link protocol for WorkOS auth callbacks.
-// Must run before app.whenReady().
+// Claim (or, for a loopback dev build, release) the ao-app:// deep-link
+// protocol used by WorkOS auth callbacks and billing returns; see
+// registerCloudProtocol. Must run before app.whenReady().
 registerCloudProtocol();
 if (!app.requestSingleInstanceLock()) {
 	app.exit(0);

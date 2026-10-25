@@ -43,6 +43,8 @@ vi.mock("@workos-inc/node", () => ({
 
 vi.mock("electron", () => ({
   app: {
+    isDefaultProtocolClient: vi.fn(() => false),
+    removeAsDefaultProtocolClient: vi.fn(),
     setAsDefaultProtocolClient: vi.fn(),
     // These tests exercise the packaged deep-link (ao-app://) sign-in flow;
     // unpackaged builds default to a loopback redirect instead.
@@ -66,12 +68,10 @@ import {
   handleCloudDeepLink,
   installCloudIPC,
   readAuthStore,
-  registerCloudProtocol,
   showCloudSignInFailure,
   signOutCloud,
   writeAuthStore,
 } from "./cloud-auth";
-import { app } from "electron";
 
 describe("native WorkOS authentication", () => {
   let dataDir: string;
@@ -526,36 +526,79 @@ describe("native WorkOS authentication", () => {
   });
 });
 
+// registerCloudProtocol decides on every platform alike, so these tests vary
+// how the build was launched and where it signs in, not process.platform.
 describe("registerCloudProtocol", () => {
-  const platform = process.platform;
+  const argv = process.argv;
+  const defaultApp = process.defaultApp;
+  const devScript = path.resolve("/worktree/frontend");
 
-  afterEach(() => {
-    Object.defineProperty(process, "platform", { value: platform });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    const { app } = await import("electron");
     (app as { isPackaged: boolean }).isPackaged = true;
-    vi.mocked(app.setAsDefaultProtocolClient).mockClear();
+    process.argv = argv;
+    (process as { defaultApp?: boolean }).defaultApp = defaultApp;
   });
 
-  function setPlatform(value: NodeJS.Platform): void {
-    Object.defineProperty(process, "platform", { value });
+  // Loads cloud-auth fresh, since it picks its sign-in redirect once at import
+  // from app.isPackaged and AO_CLOUD_AUTH_REDIRECT. The electron mock itself
+  // survives resetModules, so its calls are cleared here. A dev build is
+  // launched as `electron <app dir>`, which sets process.defaultApp.
+  async function load(options: { isPackaged: boolean; redirect?: string; ownsScheme?: boolean }) {
+    vi.resetModules();
+    vi.stubEnv("AO_CLOUD_AUTH_REDIRECT", options.redirect ?? "");
+    (process as { defaultApp?: boolean }).defaultApp = !options.isPackaged;
+    process.argv = options.isPackaged ? [process.execPath] : [process.execPath, devScript];
+    const { app } = await import("electron");
+    vi.clearAllMocks();
+    (app as { isPackaged: boolean }).isPackaged = options.isPackaged;
+    vi.mocked(app.isDefaultProtocolClient).mockReturnValue(options.ownsScheme ?? false);
+    const { registerCloudProtocol } = await import("./cloud-auth");
+    return { app, registerCloudProtocol };
   }
 
-  it("does not let an unpackaged macOS build claim ao-app://", () => {
-    setPlatform("darwin");
-    (app as { isPackaged: boolean }).isPackaged = false;
+  it("claims ao-app:// for the packaged app", async () => {
+    const { app, registerCloudProtocol } = await load({ isPackaged: true });
+    registerCloudProtocol();
+    expect(app.setAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app");
+    expect(app.removeAsDefaultProtocolClient).not.toHaveBeenCalled();
+  });
+
+  it("keeps a loopback dev build from claiming ao-app://", async () => {
+    const { app, registerCloudProtocol } = await load({ isPackaged: false });
+    registerCloudProtocol();
+    expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+    expect(app.removeAsDefaultProtocolClient).not.toHaveBeenCalled();
+  });
+
+  it("hands ao-app:// back when an earlier dev run took it", async () => {
+    const { app, registerCloudProtocol } = await load({ isPackaged: false, ownsScheme: true });
+    registerCloudProtocol();
+    // Windows only matches (and removes) the registration for this exact
+    // executable and script.
+    expect(app.isDefaultProtocolClient).toHaveBeenCalledWith("ao-app", process.execPath, [devScript]);
+    expect(app.removeAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app", process.execPath, [devScript]);
+    expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+  });
+
+  it("treats a localhost override like the loopback default", async () => {
+    const { app, registerCloudProtocol } = await load({
+      isPackaged: false,
+      redirect: "http://localhost:4000/callback",
+    });
     registerCloudProtocol();
     expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
   });
 
-  it("registers ao-app:// for the packaged macOS app", () => {
-    setPlatform("darwin");
+  it.each([
+    ["a bounce page", "https://staging.aoagents.dev/app/auth/return"],
+    ["the deep link itself", "ao-app://callback"],
+  ])("claims ao-app:// for a dev build signing in through %s", async (_name, redirect) => {
+    const { app, registerCloudProtocol } = await load({ isPackaged: false, redirect });
     registerCloudProtocol();
-    expect(app.setAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app");
-  });
-
-  it("still registers unpackaged builds off macOS", () => {
-    setPlatform("win32");
-    (app as { isPackaged: boolean }).isPackaged = false;
-    registerCloudProtocol();
-    expect(app.setAsDefaultProtocolClient).toHaveBeenCalled();
+    // Windows launches this checkout's script with the dev Electron binary.
+    expect(app.setAsDefaultProtocolClient).toHaveBeenCalledWith("ao-app", process.execPath, [devScript]);
   });
 });
