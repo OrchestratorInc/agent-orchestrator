@@ -471,7 +471,10 @@ type Manager struct {
 	statusVerificationLimit     time.Duration
 	startupChatRetryDelays      []time.Duration
 	agentOpMu                   sync.Mutex
-	agentOperations             map[domain.SessionID]agentOperationKind
+	agentOperations             map[domain.SessionID]agentOperationHolder
+	// operationStaleAfter bounds how long an exclusive operation may hold a
+	// session before later callers reap it as stale; zero uses the default.
+	operationStaleAfter time.Duration
 	// launchStartWait bounds the wait to see a new supervised launch alive.
 	launchStartWait           time.Duration
 	interfaceRecoveryMu       sync.Mutex
@@ -900,7 +903,7 @@ func New(d Deps) *Manager {
 		codexOperationGate:             defaultCodexOperationGate(d.CodexOperationGate),
 		backgroundContext:              d.BackgroundContext,
 		startupBackgroundReconcileDone: make(chan struct{}),
-		agentOperations:                make(map[domain.SessionID]agentOperationKind),
+		agentOperations:                make(map[domain.SessionID]agentOperationHolder),
 		launchStartWait:                3 * time.Second,
 		inputLeases:                    make(map[domain.SessionID]int),
 		inputDrained:                   make(map[domain.SessionID]chan struct{}),
@@ -3195,9 +3198,9 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 	defer ticker.Stop()
 	for {
 		m.agentOpMu.Lock()
-		operation := m.agentOperations[id]
+		holder := m.agentOperations[id]
 		m.agentOpMu.Unlock()
-		if operation == agentOperationHibernate || operation == agentOperationResume {
+		if holder.kind == agentOperationHibernate || holder.kind == agentOperationResume {
 			select {
 			case <-waitCtx.Done():
 				return waitCtx.Err()
@@ -3218,11 +3221,14 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 		_, err = m.ResumeAgentWithMode(ctx, id)
 		if errors.Is(err, ErrResumeInProgress) {
 			m.agentOpMu.Lock()
-			operation = m.agentOperations[id]
+			holder = m.agentOperations[id]
 			m.agentOpMu.Unlock()
-			if operation == agentOperationHibernate || operation == agentOperationResume {
+			if holder.kind == agentOperationHibernate || holder.kind == agentOperationResume {
 				continue
 			}
+			// Another kind of operation (a reconcile probe, a restore) held the
+			// session; say which, so the refusal is actionable instead of bare.
+			return fmt.Errorf("wake chat %s: %w (%s)", id, err, (&AgentOperationBusyError{Kind: holder.kind, StartedAt: holder.startedAt}).Error())
 		}
 		return err
 	}
@@ -6470,9 +6476,9 @@ func safeRelPath(rel string) (string, error) {
 	return clean, nil
 }
 
-// scriptStepMinute is the unit of a Setup or Cleanup step's time limit; tests
+// scriptStepUnit is the unit of a Setup or Cleanup step's time limit; tests
 // shorten it.
-var scriptStepMinute = time.Minute
+var scriptStepUnit = time.Minute
 
 // scriptStepTimeout is the command a Setup or Cleanup step runs and its time
 // limit: the one its first line sets (domain.ScriptStepMinutes), else
@@ -6482,7 +6488,7 @@ func scriptStepTimeout(step string, fallbackMinutes int) (string, time.Duration)
 	if minutes == 0 {
 		minutes = fallbackMinutes
 	}
-	return command, time.Duration(minutes) * scriptStepMinute
+	return command, time.Duration(minutes) * scriptStepUnit
 }
 
 // runPostCreate runs each post-create command in the workspace via the platform
@@ -6517,7 +6523,7 @@ func runPostCreate(ctx context.Context, workspacePath, sourcePath string, comman
 
 // stepMinutes says a step's time limit in minutes ("1 minute", "30 minutes").
 func stepMinutes(timeout time.Duration) string {
-	if minutes := int(timeout / scriptStepMinute); minutes != 1 {
+	if minutes := int(timeout / scriptStepUnit); minutes != 1 {
 		return strconv.Itoa(minutes) + " minutes"
 	}
 	return "1 minute"

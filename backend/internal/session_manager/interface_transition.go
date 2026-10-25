@@ -1722,17 +1722,17 @@ func (m *Manager) recoverInterfaceTransitions(ctx context.Context, transitionID 
 		// Rebuild this session's input/reaper fence before serving or restoring
 		// anything. An ambiguous target quarantines only its own session.
 		m.agentOpMu.Lock()
-		operation := m.agentOperations[transition.SessionID]
-		if operation != "" && operation != agentOperationInterfaceRecovery {
+		holder := m.agentOperations[transition.SessionID]
+		if holder.kind != "" && holder.kind != agentOperationInterfaceRecovery {
 			if m.deferredInterfaceRecovery == nil {
 				m.deferredInterfaceRecovery = make(map[domain.SessionID]string)
 			}
 			m.deferredInterfaceRecovery[transition.SessionID] = transition.ID
 			m.agentOpMu.Unlock()
-			m.logger.Info("interface transition: recovery deferred behind exclusive operation", "sessionID", transition.SessionID, "operation", operation)
+			m.logger.Info("interface transition: recovery deferred behind exclusive operation", "sessionID", transition.SessionID, "operation", holder.kind)
 			continue
 		}
-		m.agentOperations[transition.SessionID] = agentOperationInterfaceRecovery
+		m.agentOperations[transition.SessionID] = agentOperationHolder{kind: agentOperationInterfaceRecovery, startedAt: m.clock()}
 		delete(m.deferredInterfaceRecovery, transition.SessionID)
 		drained := m.inputDrained[transition.SessionID]
 		m.agentOpMu.Unlock()
