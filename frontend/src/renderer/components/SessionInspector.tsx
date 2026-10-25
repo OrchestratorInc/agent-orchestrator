@@ -1,3 +1,4 @@
+import { BrowserIcon } from "./icons";
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,7 +30,6 @@ import {
 	ArrowUpRight,
 	GitPullRequest,
 	GitMerge,
-	Globe,
 	Info,
 	Play,
 	Loader2,
@@ -142,13 +142,7 @@ const VIEW_DEFS: {
 	{
 		id: "browser",
 		labelKey: "inspector.browser",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<circle cx="12" cy="12" r="9" />
-				<line x1="3" y1="12" x2="21" y2="12" />
-				<path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
-			</svg>
-		),
+		icon: <BrowserIcon aria-hidden="true" />,
 	},
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
 	{
@@ -1052,7 +1046,7 @@ function ArtifactSummaryCard({
 				type="button"
 			>
 				{artifact.kind === "html" ? (
-					<Globe aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				) : (
 					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}

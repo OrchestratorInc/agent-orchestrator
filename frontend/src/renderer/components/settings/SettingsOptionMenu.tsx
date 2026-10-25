@@ -156,9 +156,20 @@ export function SettingsOptionMenu<T extends string>({
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
 								onFocus={onHighlight ? () => onHighlight(option.value) : undefined}
+								// Hovering off the options (or into the search box) ends the
+								// preview; moving to another option hands it straight over.
+								onBlur={
+									onHighlight
+										? (event) => {
+												const next = event.relatedTarget;
+												if (next instanceof Element && next.closest('[role="menuitem"]')) return;
+												onHighlight(null);
+											}
+										: undefined
+								}
 								className={cn(
 									SETTINGS_MENU_ITEM,
-									option.value === value && "border-settings-menu bg-settings-menu-selected text-settings-title",
+									option.value === value && "bg-interactive-active text-foreground",
 									menuItemClassName,
 								)}
 							>

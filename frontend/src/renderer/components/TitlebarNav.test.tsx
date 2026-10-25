@@ -49,4 +49,20 @@ describe("TitlebarNav", () => {
 		expect(history?.hasAttribute("aria-hidden")).toBe(open);
 		if (!open) expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
 	});
+
+	it("nudges the sidebar re-clamp when fullscreen or zoom moves the brand", () => {
+		const onResize = vi.fn();
+		window.addEventListener("resize", onResize);
+		const { rerender } = render(<TitlebarNav />);
+		expect(onResize).toHaveBeenCalledTimes(1);
+		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(2);
+		rerender(<TooltipProvider><TitlebarNav zoomFactor={1.25} /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(3);
+		// No brand to fit while the sidebar is closed.
+		useUiStore.setState({ isSidebarOpen: false });
+		rerender(<TooltipProvider><TitlebarNav isFullScreen zoomFactor={1.25} /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(3);
+		window.removeEventListener("resize", onResize);
+	});
 });

@@ -1,0 +1,81 @@
+---
+title: はじめに
+description: Agent Orchestrator でできること、使いどころ、最初に読むページを紹介します。
+translatedFrom: 9a6abb44a136
+---
+
+Orchestrator は、AI コーディングエージェントを監督するためのデスクトップアプリです。ワーカーごとに分離されたワークスペースを用意し、会話やターミナルをいつでも開ける状態に保ち、Git の作業をプルリクエスト、CI、レビュー、マージコンフリクトと結び付けます。
+
+コードを書くのはエージェントです。Orchestrator は、プロジェクトとセッションの管理、作業の追跡、指示の送信、変更のレビュー、ブラウザプレビューの表示を手助けします。
+
+<Callout type="info" title="最短の始め方">
+	デスクトップアプリをダウンロードし、リポジトリを追加して、小さなセッションを 1 つ始めます。[インストール](/installation)、続いて[クイックスタート](/quickstart)を参照してください。
+</Callout>
+
+<span id="what-ao-helps-you-do" />
+<span id="what-orchestrator-helps-you-do" />
+## Orchestrator でできること
+
+- 複数のコーディングエージェントを、ファイル、ブランチ、プルリクエストが混ざらないように並行して実行する。
+- セッションごとに、ネイティブのターミナル UI か構造化された Chat を選ぶ。
+- アクティビティ、CI、レビューのフィードバック、マージ可否をデスクトップアプリから追う。
+- 追加の指示を適切なワーカーに送る。
+- レビュー担当のエージェントを実行し、求められた変更をワーカーに戻す。
+- セッションのローカルアプリを、その Chat やターミナルの横でプレビューする。
+- Automations で定期的な作業をスケジュールし、Cues でプロジェクトの指示やシェルコマンドを再利用する。
+- Connect Mobile を通じて、モバイルのコンパニオンアプリから状況を確認し、応答する。
+
+Orchestrator が最も力を発揮するのは、各ワーカーに明確でレビューしやすい成果があるときです。たとえば、範囲の絞られたバグ修正、機能追加、リファクタリング、テスト、ドキュメントの更新、レビュー後の対応などです。
+
+<span id="the-basic-loop" />
+## 基本の流れ
+
+```text
+add project -> start session -> isolated worktree -> pull request -> CI/review -> merge -> cleanup
+```
+
+セッションは、デスクトップアプリまたは任意の CLI から作成します。Orchestrator は選択したエージェントのインターフェースを起動し、保存されたアクティビティとプルリクエストのデータを組み合わせて、セッションの状態を表示します。
+
+<span id="chat-and-terminal-ui" />
+## Chat と Terminal UI
+
+各セッションで一度に有効になるエージェントのインターフェースは 1 つです。
+
+| インターフェース | 向いている用途 |
+| --- | --- |
+| **Chat** | 構造化されたメッセージ、アクティビティ、承認、プラン、使用量、会話履歴。 |
+| **Terminal UI** | エージェントのハーネスが持つ、ネイティブの対話型ターミナル。 |
+
+Chat に対応しているかどうかは、ハーネスとそのインストール済みバージョンによって異なります。[エージェントの機能一覧](/plugins/agents#chat-versus-terminal-ui)を参照してください。対応するセッションは、セッションやワークツリーを変えずにインターフェースを切り替えられます。どの切り替えができるかは UI に表示されます。
+
+<span id="where-local-data-lives" />
+## ローカルデータの保存場所
+
+<span id="local-by-design" />
+
+デスクトップアプリは `127.0.0.1` 上で Go のバックグラウンドサービスを動かし、ローカル API を通じてやり取りします。Orchestrator は、アプリのデータとワークツリーのメタデータを、既定で `~/.ao` に保存します。ほとんどの連携は、すでにコンピューターにあるコーディングエージェントとソース管理の認証情報を使います。Orchestrator は外部のエージェントやその認証情報を同梱しません。Unreal Agent は、macOS と Linux で使える Chat 専用の組み込みアダプターです。
+
+Connect Mobile は、接続パスワードで保護された、オプトインの別のリスナーです。ローカルでのペアリングと安全なリモートペアリングについては、[Connect Mobile](/configuration/remote-access) を参照してください。
+
+このマニュアルは、最新の安定版リリース [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3)（2026 年 10 月 1 日公開）に合わせて確認しています。`main` にある新しい操作は、このリリースと異なる場合があります。新しい操作を使う前に、[変更履歴](/changelog)とリリースノートを確認してください。
+
+クラウドセッションは、アカウントのアクセス要件がある別のサービスです。設定方法は [Cloud ガイド](/guides/cloud)を参照してください。
+
+<span id="supported-agents" />
+## 対応エージェント
+
+Orchestrator は、Claude Code、Codex、Cursor、Aider、OpenCode、Droid、Kimi Code、GitHub Copilot などのコーディングエージェントに対応しています。ワーカー、Chat、レビュー担当の各役割への対応状況はエージェントによって異なります。詳しくは[エージェント一覧](/plugins/agents)を確認してください。Cloud で使える[プロバイダー](/guides/cloud#before-you-start)はこれより少なくなります。
+
+GitHub と GitLab は、ソース管理の監視と Issue の取り込みに使えます。取り込みはオプトインで、Issue トラッカーに対しては読み取り専用です。Linear と、旧来の Node プラグインパッケージには対応していません。
+
+<span id="where-to-go-next" />
+## 次に読むページ
+
+<Cards>
+	<Card title="インストール" description="デスクトップアプリをダウンロードし、使っているツールと接続します。" href="/installation" />
+	<Card title="クイックスタート" description="1 つのワーカーセッションを、タスクからプルリクエストまで進めます。" href="/quickstart" />
+	<Card title="ダッシュボード" description="デスクトップのボード、セッションビュー、Chat、ターミナル、インスペクターを紹介します。" href="/dashboard" />
+	<Card title="Cloud セッション" description="アカウントで Cloud が使える場合に、リモートプロジェクトを設定します。" href="/guides/cloud" />
+	<Card title="アーキテクチャ" description="Go デーモン、Electron アプリ、ストレージ、セッションのモードを理解します。" href="/architecture" />
+	<Card title="トラブルシューティング" description="デスクトップ、デーモン、エージェント、セッションのよくある問題を解決します。" href="/troubleshooting" />
+</Cards>

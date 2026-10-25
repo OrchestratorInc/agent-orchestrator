@@ -44,6 +44,10 @@ import (
 )
 
 type fakeSessionService struct {
+	// lastListFilter is the filter the controller parsed; listPage, when set,
+	// replaces the page built from sessions so a test can pin the wire shape.
+	lastListFilter             sessionsvc.ListFilter
+	listPage                   *sessionsvc.ListPage
 	workspaceSnapshotInput     sessionsvc.WorkspaceSelectionRevisionInput
 	workspaceSnapshotFilter    string
 	cleanupPending             bool
@@ -261,6 +265,15 @@ func (f *fakeSessionService) List(_ context.Context, filter sessionsvc.ListFilte
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+func (f *fakeSessionService) ListPage(ctx context.Context, filter sessionsvc.ListFilter) (sessionsvc.ListPage, error) {
+	f.lastListFilter = filter
+	if f.listPage != nil {
+		return *f.listPage, nil
+	}
+	sessions, err := f.List(ctx, filter)
+	return sessionsvc.ListPage{Sessions: sessions}, err
 }
 
 func (f *fakeSessionService) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -1063,6 +1076,61 @@ func TestSessionsAPI_StartInterfaceTransitionDefaultsOmittedHistoryPolicyToStric
 	mustJSON(t, body, &response)
 	if response.Transition.HistoryPolicy != domain.SessionInterfaceTransitionHistoryStrict {
 		t.Fatalf("response history policy = %q, want strict", response.Transition.HistoryPolicy)
+	}
+}
+
+// A phone polls only live workers and pages the archive when it is opened. The
+// paging query reaches the service intact, and the page's cursor and the
+// archive's size are on the wire only when there is something to report.
+func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.listPage = &sessionsvc.ListPage{
+		Sessions:   []domain.Session{svc.sessions["ao-1"]},
+		NextCursor: "next-page",
+		Archived:   &sessionsvc.ArchiveSummary{Total: 3, ByProject: map[domain.ProjectID]int{"ao": 2, "": 1}},
+	}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?active=true&kind=worker&limit=50&cursor=abc", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if f := svc.lastListFilter; f.Active == nil || !*f.Active || f.Kind != domain.KindWorker || f.Limit != 50 || f.Cursor != "abc" {
+		t.Fatalf("filter = %+v, want active worker page of 50 after abc", f)
+	}
+	var page struct {
+		Sessions   []sessionBody `json:"sessions"`
+		NextCursor string        `json:"nextCursor"`
+		Archived   *struct {
+			Total     int            `json:"total"`
+			ByProject map[string]int `json:"byProject"`
+		} `json:"archived"`
+	}
+	mustJSON(t, body, &page)
+	if len(page.Sessions) != 1 || page.NextCursor != "next-page" {
+		t.Fatalf("page = %d sessions, cursor %q", len(page.Sessions), page.NextCursor)
+	}
+	if page.Archived == nil || page.Archived.Total != 3 || page.Archived.ByProject["ao"] != 2 || page.Archived.ByProject[""] != 1 {
+		t.Fatalf("archived = %+v, want 3 (ao 2, standalone 1)", page.Archived)
+	}
+
+	svc.listPage = nil
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/sessions", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if strings.Contains(string(body), "nextCursor") || strings.Contains(string(body), "\"archived\"") {
+		t.Fatalf("unpaged list carries paging fields: %s", body)
+	}
+}
+
+func TestSessionsAPI_ListRejectsBadPagingQuery(t *testing.T) {
+	srv := newSessionTestServer(t, newFakeSessionService())
+	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc"} {
+		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?"+query, "")
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_QUERY") {
+			t.Fatalf("GET sessions?%s = %d %s, want 400 INVALID_QUERY", query, status, body)
+		}
 	}
 }
 

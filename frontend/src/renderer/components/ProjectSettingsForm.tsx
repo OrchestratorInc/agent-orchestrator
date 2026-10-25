@@ -175,9 +175,6 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	useEnsureAgentReadiness({ hostId });
 	const persist = async (values: ProjectSettingsDraft): Promise<SettingsSaveResult> => {
 		const savedKey = JSON.stringify(values);
-		void captureRendererEvent("ao.renderer.settings_save_requested", {
-			project_id: projectId,
-		});
 		const displayName = values.displayName.trim();
 		const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, ...sharedAgentConfig } = config.agentConfig ?? {};
 		const existingReviewer = config.reviewers?.[0];

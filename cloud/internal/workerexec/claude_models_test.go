@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -84,6 +86,71 @@ func TestCloudClaudeModesComeFromAdapter(t *testing.T) {
 	got := claudeModesFromOptions(nil, modes)
 	if len(got) != 2 || got[1] != "plan" {
 		t.Fatalf("lost native Plan capability: %v", got)
+	}
+}
+
+// The catalog reports, per model, the approval modes Claude ACP offers for it:
+// the session's own model from its options, every other model from the
+// options the adapter advertises once the discovery session switches to it.
+// Claude ACP offers auto only where the model supports it, so Haiku lists no
+// auto. The session is put back on its own model afterwards.
+func TestClaudeCatalogReportsApprovalModesPerModelFromACPOptions(t *testing.T) {
+	agent := &claudeModelAgent{modeSpyAgent: modeSpyAgent{selected: make(chan acp.SessionModeId, 1)}}
+	conn := claudeTestConnection(t, agent)
+	options := claudeTestOptions("opus")
+	models, current, _ := claudeModelsFromOptions(options)
+	probeClaudeApprovalModes(context.Background(), conn, "session-1", models, current, options, nil)
+	byID := map[string][]string{}
+	for _, model := range models {
+		byID[model.ID] = model.ApprovalModes
+	}
+	if got, want := byID["opus"], []string{"default", "accept-edits", "auto", "bypass-permissions"}; !slices.Equal(got, want) {
+		t.Fatalf("opus approval modes = %v, want %v", got, want)
+	}
+	if got, want := byID["haiku"], []string{"default", "accept-edits", "bypass-permissions"}; !slices.Equal(got, want) {
+		t.Fatalf("haiku approval modes = %v, want %v", got, want)
+	}
+	if got, want := agent.models(), []string{"haiku", "opus"}; !slices.Equal(got, want) {
+		t.Fatalf("model switches = %v, want a probe of haiku and a return to opus", got)
+	}
+
+	// A model whose probe fails, and every other model of a session without a
+	// mode option, are unknown rather than guessed: the client keeps offering
+	// what the session allows.
+	failing := []worker.ChatModel{{ID: "opus"}, {ID: "haiku"}}
+	claudeApprovalModesByModel(failing, "opus", options, nil, func(string) ([]acp.SessionConfigOption, error) {
+		return nil, fmt.Errorf("adapter went away")
+	})
+	if failing[0].ApprovalModes == nil || failing[1].ApprovalModes != nil {
+		t.Fatalf("failed probe = %+v, want opus known and haiku unknown", failing)
+	}
+	modes := &acp.SessionModeState{AvailableModes: []acp.SessionMode{{Id: "default"}, {Id: "acceptEdits"}}}
+	unprobed := []worker.ChatModel{{ID: "opus"}, {ID: "haiku"}}
+	claudeApprovalModesByModel(unprobed, "opus", nil, modes, func(model string) ([]acp.SessionConfigOption, error) {
+		t.Fatalf("probed %s without a mode option", model)
+		return nil, nil
+	})
+	if !slices.Equal(unprobed[0].ApprovalModes, []string{"default", "accept-edits"}) || unprobed[1].ApprovalModes != nil {
+		t.Fatalf("modes without a mode option = %+v", unprobed)
+	}
+}
+
+// An older desktop ignores the field, and a catalog from an older worker has
+// none: approvalModes is omitted when unknown.
+func TestChatModelApprovalModesAreOptionalOnTheWire(t *testing.T) {
+	raw, err := json.Marshal(worker.ChatModel{ID: "opus", DisplayName: "Opus"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "approvalModes") {
+		t.Fatalf("unknown approval modes were sent: %s", raw)
+	}
+	var model worker.ChatModel
+	if err := json.Unmarshal([]byte(`{"id":"haiku","displayName":"Haiku","default":false,"approvalModes":["default","accept-edits"]}`), &model); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(model.ApprovalModes, []string{"default", "accept-edits"}) {
+		t.Fatalf("approval modes = %v", model.ApprovalModes)
 	}
 }
 
