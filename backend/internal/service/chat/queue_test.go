@@ -106,6 +106,10 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 
 func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	h, provider := steerHarness(t)
+	// The fake provider never settles the cut turn on its own, so shorten the
+	// settle wait the promotion rides out.
+	restoreSettleWait := chatsvc.SetQueuedTurnSettleWait(50 * time.Millisecond)
+	defer restoreSettleWait()
 	ctx := context.Background()
 	originalMessage := ports.ChatUserMessage{
 		Text: "original", ClientMessageID: "queue-original", Origin: domain.MessageOriginHuman,
@@ -185,8 +189,10 @@ func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
 		t.Fatalf("retry after controller teardown: %v", err)
 	}
-	calls := provider.steers()
-	if len(calls) != 1 || calls[0].msg.Text != "updated" || len(calls[0].msg.Content) != 2 || calls[0].msg.Content[0].Data != "b2xk" || calls[0].msg.Content[1].Data != "bmV3" {
-		t.Fatalf("provider must receive the edited text and attachments exactly once: %+v", calls)
+	// The promotion dispatches the edited queued turn as a real turn, not a
+	// mid-turn steer; the harness's first message accounts for send one.
+	sent := provider.sentMessages()
+	if len(sent) != 2 || sent[1].Text != "updated" || len(sent[1].Content) != 2 || sent[1].Content[0].Data != "b2xk" || sent[1].Content[1].Data != "bmV3" {
+		t.Fatalf("provider must receive the edited text and attachments exactly once: %+v", sent)
 	}
 }
