@@ -66,7 +66,7 @@ vi.mock("../../lib/bridge", () => ({
 			setCloseShellTerminalShortcutEnabled: vi.fn(),
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
-			// ShellTopbar subscribes to the open-orchestrator shortcut on mount.
+			// The board and session actions subscribe to the open-orchestrator shortcut.
 			onShortcut: () => () => undefined,
 		},
 		clipboard: { writeText: clipboardWriteMock },

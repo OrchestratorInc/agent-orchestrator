@@ -30,6 +30,7 @@ import { OrchestratorIcon } from "./icons";
 import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { isMacPlatform } from "../lib/platform";
+import { PageTopbarActions } from "./PageTopbar";
 import { TopbarActionError, TopbarButton } from "./TopbarButton";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
@@ -95,160 +96,157 @@ export function SessionTopbarActions({
 	const openBoard = () => void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
 
 	return (
-		<div className="contents">
-			<div
-				className="workspace-topbar-actions flex shrink-0 items-center"
-				data-compact-actions={compactActions ? "true" : "false"}
-				data-testid="workspace-topbar-actions"
-			>
-				{isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
-						{isOrchestrator ? (
-							<>
-								{sessionAction ? (
-									<div className="inline-flex shrink-0 items-center" style={noDragStyle}>
-										{sessionAction}
-									</div>
-								) : null}
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex" style={noDragStyle}>
-											<TopbarButton
-												aria-label={t("shell.newTask")}
-												className="topbar-control--labeled"
-												data-priority="primary"
-												disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
-												onClick={openNewTask}
-												variant="accent"
-											>
-												<Plus className="size-icon-md" aria-hidden="true" />
-												<span data-compact-label>{t("newTask.task")}</span>
-											</TopbarButton>
-										</span>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">{t("shell.newTask")}</TooltipContent>
-								</Tooltip>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<TopbarButton
-											aria-label={t("shell.openKanban")}
-											disabled={startingOrchestrator}
-											className="topbar-control--labeled"
-											data-priority="secondary"
-											onClick={openBoard}
-											style={noDragStyle}
-											variant="feature"
-										>
-											<LayoutDashboard className="size-icon-md" aria-hidden="true" />
-											<span data-compact-label>{t("shell.openKanban")}</span>
-										</TopbarButton>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">{t("shell.openKanban")}</TooltipContent>
-								</Tooltip>
-							</>
-						) : null}
-						{/* Open-in-editor leads the session actions: it is the only
-						    non-destructive one, and it must sit left of Kill. Kept outside
-						    the local-actions group because Electron main independently
-						    reports whether this session has a live workspace. Cloud sessions
-						    have no local workspace to hand off to an editor: the local daemon
-						    has never heard of them, so querying it just surfaces its 404 as a
-						    confusing "Unknown session" error (see workspace.ts's `kind` doc). */}
-						{session && !hostId && project?.kind !== CLOUD_PROJECT_KIND ? (
-							// Keyed per session so a stale launch error does not carry over
-							// when switching sessions. The prefix keeps it distinct from the
-							// kill button's key: identical sibling keys make React duplicate
-							// the nodes.
-							<TopbarOpenEditorButton
-								key={`open-workspace-${session.id}`}
-								sessionId={session.id}
-								projectId={session.workspaceId}
-								sessionCreatedAt={session.createdAt}
-								sessionTerminated={session.isTerminated}
-								style={noDragStyle}
-							/>
-						) : null}
-						{/* A bring-your-own Coder session names the workspace it runs in, so
-						    the customer can find it in their own Coder. */}
-						{session?.cloud?.coderWorkspaceUrl ? (
-							<CoderWorkspaceTopbarButton
-								key={`coder-workspace-${session.id}`}
-								url={session.cloud.coderWorkspaceUrl}
-								style={noDragStyle}
-							/>
-						) : null}
-						{/* Cues run from the topbar into the selected session. */}
-						{session && supportsLocalCues ? (
+		<PageTopbarActions
+			data-compact-actions={compactActions ? "true" : "false"}
+			data-testid="workspace-topbar-actions"
+		>
+			{isOrchestrator ? <ProjectTerminationFeedback projectId={projectId} hostId={hostId} /> : null}
+			{isOrchestrator ? (
+				<>
+					{sessionAction ? (
+						<div className="inline-flex shrink-0 items-center" style={noDragStyle}>
+							{sessionAction}
+						</div>
+					) : null}
+					<Tooltip>
+						<TooltipTrigger asChild>
 							<span className="inline-flex" style={noDragStyle}>
-								<CueRunMenu
-									projectId={session.workspaceId}
-									sessionId={session.id}
-									disabled={!sessionCueTargetAvailable(session)}
-								/>
+								<TopbarButton
+									aria-label={t("shell.newTask")}
+									className="topbar-control--labeled"
+									data-priority="primary"
+									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
+									onClick={openNewTask}
+									variant="accent"
+								>
+									<Plus className="size-icon-md" aria-hidden="true" />
+									<span data-compact-label>{t("newTask.task")}</span>
+								</TopbarButton>
 							</span>
-						) : null}
-						{/* Local worker actions share one tight control group. Navigation
-						    remains a separate visual target in the outer top-bar row. */}
-						{!isOrchestrator &&
-							(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
-							<div
-								className="inline-flex shrink-0 items-center gap-1"
-								data-testid="session-local-actions"
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("shell.newTask")}</TooltipContent>
+					</Tooltip>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<TopbarButton
+								aria-label={t("shell.openKanban")}
+								disabled={startingOrchestrator}
+								className="topbar-control--labeled"
+								data-priority="secondary"
+								onClick={openBoard}
 								style={noDragStyle}
+								variant="feature"
 							>
-								{sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
-								{session && !session.cloud && sessionIsActive(session) ? (
-									<TopbarArchiveButton
-										key={session.id}
-										session={session}
-										orchestratorId={orchestrator?.id}
-										onKilled={(workspaceId) => {
-											const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) ?? [];
-											const fullWorkspace = workspaces.find((w: WorkspaceSummary) => w.id === workspaceId);
-											const nextRoute = resolveNextNavigationAfterSessionKill(fullWorkspace, session.id);
-											if (nextRoute.target === "session") {
-												void navigate(sessionNavigateTarget(workspaceId, nextRoute.sessionId, hostId));
-												return;
-											}
-											if (workspaceId === STANDALONE_WORKSPACE_ID) {
-												void navigate({ to: "/" });
-												return;
-											}
-											void navigate(projectNavigateTarget(workspaceId, hostId));
-										}}
-									/>
-								) : null}
-							</div>
-						) : null}
-						{!isOrchestrator && supportsProjectActions ? (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<span className="inline-flex" style={noDragStyle}>
-										<TopbarButton
-											aria-label={t("shell.openOrchestrator")}
-											className="topbar-control--labeled -mr-1"
-											data-priority="secondary"
-											disabled={isSpawning || isProjectRestarting || isProvisioning}
-											onClick={() => void openOrchestrator()}
-											variant="primary"
-										>
-											<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
-											<span data-compact-label>{t("shell.orchestrator")}</span>
-										</TopbarButton>
-									</span>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">{orchestratorTooltip}</TooltipContent>
-							</Tooltip>
-						) : null}
-				{/* The pinned controls are owned by SessionView so they stay at the
-				    window's right edge. Reserve their width only when the rail is closed. */}
-				{startingOrchestrator ? null : <div
-					className="session-pinned-actions-reserve"
-					data-state={isInspectorOpen ? "collapsed" : "expanded"}
-					data-testid="session-pinned-actions-reserve"
-					aria-hidden="true"
-				/>}
-			</div>
-		</div>
+								<LayoutDashboard className="size-icon-md" aria-hidden="true" />
+								<span data-compact-label>{t("shell.openKanban")}</span>
+							</TopbarButton>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">{t("shell.openKanban")}</TooltipContent>
+					</Tooltip>
+				</>
+			) : null}
+			{/* Open-in-editor leads the session actions: it is the only
+			    non-destructive one, and it must sit left of Kill. Kept outside
+			    the local-actions group because Electron main independently
+			    reports whether this session has a live workspace. Cloud sessions
+			    have no local workspace to hand off to an editor: the local daemon
+			    has never heard of them, so querying it just surfaces its 404 as a
+			    confusing "Unknown session" error (see workspace.ts's `kind` doc). */}
+			{session && !hostId && project?.kind !== CLOUD_PROJECT_KIND ? (
+				// Keyed per session so a stale launch error does not carry over
+				// when switching sessions. The prefix keeps it distinct from the
+				// kill button's key: identical sibling keys make React duplicate
+				// the nodes.
+				<TopbarOpenEditorButton
+					key={`open-workspace-${session.id}`}
+					sessionId={session.id}
+					projectId={session.workspaceId}
+					sessionCreatedAt={session.createdAt}
+					sessionTerminated={session.isTerminated}
+					style={noDragStyle}
+				/>
+			) : null}
+			{/* A bring-your-own Coder session names the workspace it runs in, so
+			    the customer can find it in their own Coder. */}
+			{session?.cloud?.coderWorkspaceUrl ? (
+				<CoderWorkspaceTopbarButton
+					key={`coder-workspace-${session.id}`}
+					url={session.cloud.coderWorkspaceUrl}
+					style={noDragStyle}
+				/>
+			) : null}
+			{/* Cues run from the topbar into the selected session. */}
+			{session && supportsLocalCues ? (
+				<span className="inline-flex" style={noDragStyle}>
+					<CueRunMenu
+						projectId={session.workspaceId}
+						sessionId={session.id}
+						disabled={!sessionCueTargetAvailable(session)}
+					/>
+				</span>
+			) : null}
+			{/* Local worker actions share one tight control group. Navigation
+			    remains a separate visual target in the outer top-bar row. */}
+			{!isOrchestrator &&
+				(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
+				<div
+					className="inline-flex shrink-0 items-center gap-1"
+					data-testid="session-local-actions"
+					style={noDragStyle}
+				>
+					{sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
+					{session && !session.cloud && sessionIsActive(session) ? (
+						<TopbarArchiveButton
+							key={session.id}
+							session={session}
+							orchestratorId={orchestrator?.id}
+							onKilled={(workspaceId) => {
+								const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) ?? [];
+								const fullWorkspace = workspaces.find((w: WorkspaceSummary) => w.id === workspaceId);
+								const nextRoute = resolveNextNavigationAfterSessionKill(fullWorkspace, session.id);
+								if (nextRoute.target === "session") {
+									void navigate(sessionNavigateTarget(workspaceId, nextRoute.sessionId, hostId));
+									return;
+								}
+								if (workspaceId === STANDALONE_WORKSPACE_ID) {
+									void navigate({ to: "/" });
+									return;
+								}
+								void navigate(projectNavigateTarget(workspaceId, hostId));
+							}}
+						/>
+					) : null}
+				</div>
+			) : null}
+			{!isOrchestrator && supportsProjectActions ? (
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<span className="inline-flex" style={noDragStyle}>
+							<TopbarButton
+								aria-label={t("shell.openOrchestrator")}
+								className="topbar-control--labeled -mr-1"
+								data-priority="secondary"
+								disabled={isSpawning || isProjectRestarting || isProvisioning}
+								onClick={() => void openOrchestrator()}
+								variant="primary"
+							>
+								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
+								<span data-compact-label>{t("shell.orchestrator")}</span>
+							</TopbarButton>
+						</span>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">{orchestratorTooltip}</TooltipContent>
+				</Tooltip>
+			) : null}
+			{/* The pinned controls are owned by SessionView so they stay at the
+			    window's right edge. Reserve their width only when the rail is closed. */}
+			{startingOrchestrator ? null : <div
+				className="session-pinned-actions-reserve"
+				data-state={isInspectorOpen ? "collapsed" : "expanded"}
+				data-testid="session-pinned-actions-reserve"
+				aria-hidden="true"
+			/>}
+		</PageTopbarActions>
 	);
 }
 
