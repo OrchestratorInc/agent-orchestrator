@@ -25,6 +25,13 @@ describe("Shiki streaming grammar state", () => {
 		expect(flatten({ type: "root", children: lines.flatMap((line) => line.tokens) })).toBe(source);
 	});
 
+	it("preserves mixed source line endings when highlighting and streaming", async () => {
+		const source = "/*\r\nmixed\rend */\nconst value = 1;\r";
+		expect(flatten(engine.highlight("javascript", source))).toBe(source);
+		const lines = await engine.createStream("javascript")(source);
+		expect(flatten({ type: "root", children: lines.flatMap((line) => line.tokens) })).toBe(source);
+	});
+
 	it("keeps independently streamed grammar states separate", async () => {
 		const comment = engine.createStream("javascript");
 		const normal = engine.createStream("javascript");

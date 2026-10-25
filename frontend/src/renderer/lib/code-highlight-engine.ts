@@ -80,7 +80,7 @@ export async function createEngine() {
 	});
 	return {
 		highlight(language: GrammarName, code: string): Root {
-			const { tokens } = highlighter.codeToTokens(code, { lang: language, theme: "ao" });
+			const { tokens } = highlighter.codeToTokens(code.replace(/\r\n|\r/g, "\n"), { lang: language, theme: "ao" });
 			return { type: "root", children: codeLines(tokens, code).flatMap((line) => line.tokens) };
 		},
 		createStream(language: GrammarName) {
