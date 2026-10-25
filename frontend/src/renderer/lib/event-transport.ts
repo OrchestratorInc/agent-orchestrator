@@ -1,11 +1,11 @@
-import type { InfiniteData, QueryClient, QueryKey } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { aoBridge } from "./bridge";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, refreshRemoteConversation } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -17,7 +17,6 @@ import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
-import type { ConversationSnapshot } from "../types/conversation";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -62,12 +61,6 @@ const CDC_EVENT_TYPES = [
  * because a single user action can emit a burst of CDC events.
  */
 export function createEventTransport(queryClient: QueryClient): EventTransport {
-	// A cached local chat whose controller is ready or working; one still starting
-	// up has no event of its own to say it became ready.
-	const conversationSettled = (sessionId: string) => {
-		const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId))?.pages[0]?.controller.state;
-		return state === "ready" || state === "busy";
-	};
 	return {
 		connect() {
 			let healthAttempt = 0;
@@ -429,7 +422,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							// chat is ready or working, an id-only update (usage bookkeeping,
 							// cleanup facts, agent-switch rows) changes nothing in it, and
 							// refetching for each one reloaded its whole page every few seconds.
-							if (!idOnlySessionUpdate || !conversationSettled(decoded.sessionId)) {
+							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
 								pendingConversationSessions.add(decoded.sessionId);
 							}
 							pendingEditorHandoffSessions.add(decoded.sessionId);

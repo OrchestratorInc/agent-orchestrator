@@ -399,6 +399,15 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	});
 }
 
+/**
+ * A cached local chat whose controller is ready or working. Such a chat learns
+ * every change through events; one still starting up or waking does not.
+ */
+export function conversationSettled(queryClient: QueryClient, sessionId: string): boolean {
+	const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId))?.pages[0]?.controller.state;
+	return state === "ready" || state === "busy";
+}
+
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
 	return infiniteQueryOptions({
 		queryKey: conversationQueryKey(sessionId, hostId),
@@ -477,8 +486,10 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
+		// A live refresh may be in flight; cancelling it would drop the newest
+		// page for good. The older page then loads on the next scroll or click.
 		loadOlder: () => {
-			void query.fetchNextPage();
+			void query.fetchNextPage({ cancelRefetch: false });
 		},
 	};
 }
