@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // Steering: guidance delivered into a turn that is already running.
@@ -44,9 +46,6 @@ var (
 	// ErrTurnNotQueued reports a selected source that has already dispatched,
 	// settled, or been claimed by another promotion.
 	ErrTurnNotQueued = errors.New("turn is not queued")
-	// ErrPromotionUncertain prevents automatic redelivery after the provider may
-	// have accepted guidance but AO could not durably record the result.
-	ErrPromotionUncertain = errors.New("queued turn promotion delivery is uncertain")
 	// ErrSteerDeliveryUncertain means AO reserved an idempotency handle but cannot
 	// prove whether the provider accepted it. Reusing the handle is safe and must
 	// never contact the provider again; inventing a fresh handle is not.
@@ -95,12 +94,19 @@ func (s *Service) resolveSteerSender(ctx context.Context, msg ports.ChatUserMess
 	return msg
 }
 
-// PromoteQueuedTurnResult attributes a durable queue item to the running turn
-// that absorbed it.
+// PromoteQueuedTurnResult reports what one queued-turn steer did: which turn it
+// cut (when one was running) and the provider turn now running the promoted
+// message.
 type PromoteQueuedTurnResult struct {
-	SourceTurnID   string
+	// SourceTurnID is the durable queued turn the caller addressed.
+	SourceTurnID string
+	// InterruptedTurnID is the provider turn the steer cancelled, or "" when
+	// nothing was running and the request was a plain promotion.
+	InterruptedTurnID string
+	// ProviderTurnID is the provider turn dispatching the promoted message. Empty
+	// only when a concurrent dispatch claimed the agent between the cut and the
+	// promotion, leaving the source queued behind it.
 	ProviderTurnID string
-	ActivityID     string
 }
 
 // maxSteerSummaryRunes bounds the one-line label a steer lands on the timeline
@@ -181,8 +187,14 @@ func (s *Service) SteerOrSend(
 	return controller.SteerOrSend(ctx, msg, recoverOnly)
 }
 
-// PromoteQueuedTurn delivers one already queued turn into the active turn. The
-// daemon reads the queued content; callers identify it but cannot replace it.
+// PromoteQueuedTurn delivers one already queued turn now: the running turn is
+// cancelled and marked interrupted, and the addressed message starts as the next
+// turn. The daemon reads the queued content; callers identify it but cannot
+// replace it.
+//
+// Every chat driver gets the same cancel-then-send semantics through the shared
+// interrupt seam, so unlike mid-turn Steer this is not capability-gated. When
+// nothing is running, the request degrades to a plain promotion.
 func (s *Service) PromoteQueuedTurn(
 	ctx context.Context,
 	id domain.SessionID,
@@ -195,9 +207,6 @@ func (s *Service) PromoteQueuedTurn(
 	if err != nil {
 		return PromoteQueuedTurnResult{}, err
 	}
-	if _, ok := controller.steerer(); !ok {
-		return PromoteQueuedTurnResult{}, ErrSteerUnsupported
-	}
 	return controller.PromoteQueuedTurn(ctx, turnID)
 }
 
@@ -209,111 +218,184 @@ func (c *Controller) steerer() (ports.ChatSteerer, bool) {
 	return steerer, ok && c.Capabilities().Has(ports.ChatCapabilitySteer)
 }
 
-// PromoteQueuedTurn reserves a durable queue item, asks the provider to absorb
-// it, then records the destination and retires the source as one store operation.
+// queuedTurnSettleWait bounds how long a queued-turn steer waits for the turn it
+// cancelled to settle. A variable so tests can shorten it.
+var queuedTurnSettleWait = 10 * time.Second
+
+// PromoteQueuedTurn cuts the running turn and immediately dispatches the
+// addressed queued turn as the next one.
+//
+// The sequence is cancel, settle, promote. Cutting first is what makes this
+// different from mid-turn Steer: the interrupted turn keeps its partial output in
+// the timeline and settles `interrupted`, and the queued message becomes its own
+// real turn rather than guidance absorbed into work the user just abandoned.
+//
+// Like Interrupt, the provider boundary is crossed WITHOUT holding the dispatch
+// lock: the projection goroutine takes the same lock to commit the interrupted
+// completion, and waiting under the lock would deadlock that handoff. The queue
+// is never cancelled — only the running turn is cut — so the remaining queued
+// messages dispatch behind the promoted one as usual.
+//
+// When the running turn settles on its own before the cancel lands, the request
+// degrades to a plain promotion: the interrupt refusal is the provider saying the
+// work already ended, and the drain dispatches the addressed message.
 func (c *Controller) PromoteQueuedTurn(
 	ctx context.Context,
 	turnID string,
 ) (PromoteQueuedTurnResult, error) {
-	steerer, ok := c.steerer()
-	if !ok {
-		return PromoteQueuedTurnResult{}, ErrSteerUnsupported
-	}
 	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
 	if c.handoffActive() {
+		c.sendMu.Unlock()
 		return PromoteQueuedTurnResult{}, ErrControllerHandoff
 	}
-
 	source, err := c.store.TurnByID(ctx, turnID)
 	if err != nil {
+		c.sendMu.Unlock()
 		return PromoteQueuedTurnResult{}, err
 	}
 	if source.ConversationID != c.conversation.ID {
+		c.sendMu.Unlock()
 		return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %s", domain.ErrNoConversationTurn, turnID)
 	}
 	if source.State != domain.TurnStateQueued {
+		c.sendMu.Unlock()
 		return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %s", ErrTurnNotQueued, turnID)
 	}
-
-	target, ok := c.awaitAcknowledgedTurn(ctx)
-	if !ok {
-		return PromoteQueuedTurnResult{}, ErrNoActiveTurn
-	}
-	queued, err := c.store.ReserveQueuedTurnForPromotion(ctx, c.conversation.ID, turnID, c.now())
-	if err != nil {
-		return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %s: %w", ErrTurnNotQueued, turnID, err)
-	}
-	release := func() {
-		if releaseErr := c.store.ReleaseQueuedTurnPromotion(
-			context.WithoutCancel(ctx), c.conversation.ID, turnID); releaseErr != nil {
-			c.log.Error("failed to release queued turn promotion", "turn", turnID, "error", releaseErr)
+	// Only the user's own queued messages are steerable. The queued-message read
+	// enforces both queued state and human origin, so an automation item — which
+	// follows the queue it was given — is refused here without touching the
+	// provider or the queue order.
+	if _, err := c.store.QueuedTurnMessage(ctx, c.conversation.ID, turnID); err != nil {
+		c.sendMu.Unlock()
+		if errors.Is(err, store.ErrQueuedTurnNotAvailable) {
+			return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %s", ErrTurnNotQueued, turnID)
 		}
-	}
-	if queued.Origin != domain.MessageOriginHuman {
-		release()
-		return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %s", ErrTurnNotQueued, turnID)
-	}
-	settleUncertain := func(cause error) error {
-		// A transport error commonly cancels the request context after the provider
-		// may already have accepted the steer. The durable safety transition must
-		// survive that cancellation or the source remains visibly queued forever.
-		settleCtx := context.WithoutCancel(ctx)
-		if settleErr := c.store.SettleTurnByID(
-			settleCtx, turnID, domain.TurnStateFailed, ErrPromotionUncertain.Error(), c.now()); settleErr != nil {
-			c.log.Error("failed to settle uncertain queued turn promotion",
-				"turn", turnID, "cause", cause, "error", settleErr)
-		}
-		return fmt.Errorf("%w: %w", ErrPromotionUncertain, cause)
+		return PromoteQueuedTurnResult{}, err
 	}
 
-	var content []ports.ChatContent
-	if queued.DeliveryContentJSON != "" {
-		if err := json.Unmarshal([]byte(queued.DeliveryContentJSON), &content); err != nil {
-			release()
-			return PromoteQueuedTurnResult{}, fmt.Errorf("decode queued chat content: %w", err)
+	// Head the queue before releasing the dispatch lock. The settlement drain and
+	// any racing natural completion must find this turn first, or a different
+	// queued message would go out under this request's answer.
+	if err := c.prioritizeQueuedTurn(ctx, turnID); err != nil {
+		c.sendMu.Unlock()
+		return PromoteQueuedTurnResult{}, err
+	}
+
+	interrupted, ok := c.awaitAcknowledgedTurn(ctx)
+	cut := ""
+	if ok {
+		c.sendMu.Unlock()
+		err := c.conv.Interrupt(ctx, interrupted)
+		if err != nil && !errors.Is(err, ports.ErrChatNoActiveTurn) {
+			return PromoteQueuedTurnResult{}, fmt.Errorf(
+				"interrupt turn %s for queued steer: %w", interrupted, err)
+		}
+		if err == nil {
+			// The cancel succeeded; only now may the response claim an interruption.
+			cut = interrupted
+		}
+		// Whether the cancel was accepted or answered "nothing active" — a turn
+		// that settled on its own in the race window — its completion may still be
+		// in flight. Waiting for it is what keeps the promotion behind the settle
+		// instead of racing it.
+		if !c.awaitTurnSettled(ctx, interrupted) {
+			// The provider never settled the turn. Durable state is what the
+			// timeline renders, so reconcile the rows the same way Stop does and
+			// let its drain dispatch the promoted turn. A zero cutoff keeps the
+			// queue: only the cut turn is interrupted.
+			c.sendMu.Lock()
+			providerTurnIDs, listErr := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
+			if listErr != nil {
+				c.sendMu.Unlock()
+				return PromoteQueuedTurnResult{}, fmt.Errorf(
+					"check running turns after steer cancel: %w", listErr)
+			}
+			if err := c.reconcileDurableTurnsLocked(ctx, interrupted, providerTurnIDs, time.Time{}); err != nil {
+				return PromoteQueuedTurnResult{}, err
+			}
+			c.sendMu.Unlock()
+		}
+	} else {
+		c.sendMu.Unlock()
+	}
+	return c.dispatchPromotedTurn(ctx, turnID, cut)
+}
+
+// prioritizeQueuedTurn moves turnID to the head of the durable queue, keeping the
+// relative order of everything else. Callers hold sendMu, so the queue cannot
+// change between the queued-state validation and the rewrite.
+func (c *Controller) prioritizeQueuedTurn(ctx context.Context, turnID string) error {
+	order, err := c.store.QueuedTurnOrder(ctx, c.conversation.ID)
+	if err != nil {
+		return fmt.Errorf("read queued turn order: %w", err)
+	}
+	if len(order) == 0 || order[0] == turnID {
+		return nil
+	}
+	reordered := make([]string, 0, len(order))
+	reordered = append(reordered, turnID)
+	for _, id := range order {
+		if id != turnID {
+			reordered = append(reordered, id)
 		}
 	}
-	msg := ports.ChatUserMessage{
-		Text: queued.Text, Content: content, Origin: queued.Origin,
-		ClientMessageID: queued.ClientMessageID,
+	if len(reordered) != len(order) {
+		// The turn left the queue between validation and the reorder; the queue
+		// moved underneath a request that no longer describes it.
+		return fmt.Errorf("%w: %s", ErrTurnNotQueued, turnID)
 	}
-	ref, err := steerer.Steer(ctx, target, msg)
-	if err != nil {
-		classified := classify(err)
-		switch {
-		case errors.Is(err, ports.ErrChatNoSteerableTurn):
-			release()
-			return PromoteQueuedTurnResult{}, ErrNoActiveTurn
-		case errors.Is(err, ports.ErrChatTurnNotSteerable):
-			release()
-			return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %w", ErrTurnNotSteerable, err)
-		case errors.Is(err, ports.ErrChatSteerContentUnsupported):
-			release()
-			return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %w", ErrSteerContentUnsupported, err)
-		case errors.Is(classified, ErrProviderRefused):
-			release()
-			return PromoteQueuedTurnResult{}, classified
-		default:
-			return PromoteQueuedTurnResult{}, settleUncertain(
-				fmt.Errorf("steer queued turn %s: %w", turnID, err))
+	if err := c.store.ReorderQueuedTurns(ctx, c.conversation.ID, reordered); err != nil {
+		return fmt.Errorf("prioritize queued turn %s: %w", turnID, err)
+	}
+	return nil
+}
+
+// awaitTurnSettled waits for the named turn to leave the controller's ownership,
+// which the interrupted completion commits. It gives up on the deadline, the
+// request context, or the controller stopping — whichever comes first — so a
+// provider that accepted the cancel but never settled cannot hang the request.
+func (c *Controller) awaitTurnSettled(ctx context.Context, turn string) bool {
+	deadline := time.Now().Add(queuedTurnSettleWait)
+	for {
+		c.mu.Lock()
+		pending := c.pendingTurnID
+		c.mu.Unlock()
+		if pending != turn {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.stopped:
+			return false
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	landed := ref.ProviderTurnID
-	if landed == "" {
-		landed = target
+}
+
+// dispatchPromotedTurn drains the queue — which now heads with the addressed
+// turn — and reports where the promotion landed. The drain is a no-op when a
+// racing dispatch already claimed the agent, in which case the source turn is
+// still queued behind whatever went out first. `cut` is the provider turn the
+// cancel stopped, or "" when nothing was interrupted.
+func (c *Controller) dispatchPromotedTurn(
+	ctx context.Context,
+	turnID, cut string,
+) (PromoteQueuedTurnResult, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if err := c.drainLocked(ctx, true); err != nil {
+		return PromoteQueuedTurnResult{}, err
 	}
-	activityID := c.newID()
-	activity, err := makeSteerActivity(activityID, msg, turnID)
+	promoted, err := c.store.TurnByID(ctx, turnID)
 	if err != nil {
-		return PromoteQueuedTurnResult{}, settleUncertain(err)
-	}
-	if err := c.store.CompleteQueuedTurnPromotion(
-		ctx, c.conversation.ID, turnID, landed, activity, c.now()); err != nil {
-		return PromoteQueuedTurnResult{}, settleUncertain(err)
+		return PromoteQueuedTurnResult{}, err
 	}
 	return PromoteQueuedTurnResult{
-		SourceTurnID: turnID, ProviderTurnID: landed, ActivityID: activityID,
+		SourceTurnID: turnID, InterruptedTurnID: cut, ProviderTurnID: promoted.ProviderTurnID,
 	}, nil
 }
 
@@ -469,7 +551,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, nil
 	}
 	activityID := c.newID()
-	activity, err := makeSteerActivity(activityID, msg, "")
+	activity, err := makeSteerActivity(activityID, msg)
 	if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, err)
 	}
@@ -677,7 +759,7 @@ func (c *Controller) recordSteer(
 	msg ports.ChatUserMessage,
 ) (string, error) {
 	id := c.newID()
-	activity, err := makeSteerActivity(id, msg, "")
+	activity, err := makeSteerActivity(id, msg)
 	if err != nil {
 		return "", err
 	}
@@ -691,7 +773,6 @@ func (c *Controller) recordSteer(
 func makeSteerActivity(
 	id string,
 	msg ports.ChatUserMessage,
-	sourceTurnID string,
 ) (domain.ConversationActivity, error) {
 	detail := map[string]any{
 		"event":  "steer",
@@ -709,9 +790,6 @@ func makeSteerActivity(
 	}
 	if msg.ClientMessageID != "" {
 		detail["clientMessageId"] = msg.ClientMessageID
-	}
-	if sourceTurnID != "" {
-		detail["sourceTurnId"] = sourceTurnID
 	}
 	if len(msg.Content) > 0 {
 		detail["content"] = msg.Content

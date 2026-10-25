@@ -24,11 +24,13 @@ type steerOrSendService interface {
 	SteerOrSend(context.Context, domain.SessionID, ports.ChatUserMessage, bool) (chatsvc.SteerOrSendResult, error)
 }
 
-// PromoteQueuedTurnResponse reports where one durable queued turn landed.
+// PromoteQueuedTurnResponse reports what one queued-turn steer did: the turn it
+// interrupted (when one was running) and the provider turn now running the
+// promoted message.
 type PromoteQueuedTurnResponse struct {
-	SourceTurnID   string `json:"sourceTurnId"`
-	ProviderTurnID string `json:"providerTurnId"`
-	ActivityID     string `json:"activityId"`
+	SourceTurnID      string `json:"sourceTurnId"`
+	InterruptedTurnID string `json:"interruptedTurnId"`
+	ProviderTurnID    string `json:"providerTurnId"`
 }
 
 func (c *ConversationsController) steerOrSend(w http.ResponseWriter, r *http.Request) {
@@ -149,8 +151,8 @@ func (c *ConversationsController) promoteQueuedTurn(w http.ResponseWriter, r *ht
 		return
 	}
 	envelope.WriteJSON(w, http.StatusAccepted, PromoteQueuedTurnResponse{
-		SourceTurnID: result.SourceTurnID, ProviderTurnID: result.ProviderTurnID,
-		ActivityID: result.ActivityID,
+		SourceTurnID: result.SourceTurnID, InterruptedTurnID: result.InterruptedTurnID,
+		ProviderTurnID: result.ProviderTurnID,
 	})
 }
 
@@ -159,10 +161,6 @@ func writeQueuedTurnSteerError(w http.ResponseWriter, r *http.Request, err error
 	case errors.Is(err, chatsvc.ErrTurnNotQueued):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_TURN_NOT_QUEUED", "that message is no longer queued", nil)
-	case errors.Is(err, chatsvc.ErrPromotionUncertain):
-		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
-			"CHAT_PROMOTION_UNCERTAIN",
-			"the provider may have received this guidance; it will not be queued again automatically", nil)
 	default:
 		writeSteerError(w, r, err)
 	}

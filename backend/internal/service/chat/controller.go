@@ -95,9 +95,7 @@ type Store interface {
 	RecordRateLimits(ctx context.Context, conversationID string, limits domain.ConversationRateLimits) error
 
 	NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error)
-	ReserveQueuedTurnForPromotion(ctx context.Context, conversationID, turnID string, now time.Time) (domain.QueuedTurn, error)
-	ReleaseQueuedTurnPromotion(ctx context.Context, conversationID, turnID string) error
-	CompleteQueuedTurnPromotion(ctx context.Context, conversationID, sourceTurnID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
+	QueuedTurnOrder(ctx context.Context, conversationID string) ([]string, error)
 	SteerDelivery(ctx context.Context, conversationID, clientMessageID string) (domain.ConversationSteerDelivery, bool, error)
 	ReserveSteerDelivery(ctx context.Context, conversationID, clientMessageID, requestJSON string, now time.Time) (domain.ConversationSteerDelivery, bool, error)
 	CompleteSteerDelivery(ctx context.Context, conversationID, clientMessageID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error

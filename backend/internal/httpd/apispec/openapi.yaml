@@ -17954,7 +17954,7 @@ components:
       type: object
     PromoteQueuedTurnResponse:
       properties:
-        activityId:
+        interruptedTurnId:
           type: string
         providerTurnId:
           type: string
@@ -17962,8 +17962,8 @@ components:
           type: string
       required:
       - sourceTurnId
+      - interruptedTurnId
       - providerTurnId
-      - activityId
       type: object
     ProviderSwitchRequest:
       properties:

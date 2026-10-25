@@ -64,7 +64,7 @@ func TestMakeSteerActivitySenderMetadata(t *testing.T) {
 	withSender, err := makeSteerActivity("activity-1", ports.ChatUserMessage{
 		Text: "[from worker-1] guidance", Origin: domain.MessageOriginHuman,
 		SenderSessionID: "worker-1", SenderProjectID: "project-1", SenderDisplayName: "Backend worker",
-	}, "")
+	})
 	if err != nil {
 		t.Fatalf("makeSteerActivity with sender: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestMakeSteerActivitySenderMetadata(t *testing.T) {
 		}
 	}
 
-	withoutSender, err := makeSteerActivity("activity-2", ports.ChatUserMessage{Text: "guidance"}, "")
+	withoutSender, err := makeSteerActivity("activity-2", ports.ChatUserMessage{Text: "guidance"})
 	if err != nil {
 		t.Fatalf("makeSteerActivity without sender: %v", err)
 	}

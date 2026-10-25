@@ -770,19 +770,24 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				localEchos={localEchos}
 				onStageAttachments={stageAttachments}
 				nativeImages={can(renderSnapshot, "images")}
-				// Gated on what the daemon advertises, so the control is never drawn for a
-				// harness that cannot steer. The refusal check stays as a backstop: it
-				// covers the window before the controller reports, and it is the last word
-				// afterwards, since the capability is a property of the driver.
-				onSteer={can(renderSnapshot, "steer") && !commands.steerUnsupported ? commands.steer : undefined}
+				// onSteer is deliberately NOT capability-gated: besides mid-turn
+				// steering it also enables the queued-card "Steer" (interrupt-and-send),
+				// which works on every chat driver. The mid-turn affordance keeps its
+				// own gate through showSteerButton below, so a harness without the
+				// steering capability still gets queued-card Steer but never a mid-turn
+				// steer control. The refusal check stays as a backstop for the mid-turn
+				// path: it covers the window before the controller reports, and it is
+				// the last word afterwards, since the capability is a property of the
+				// driver.
+				onSteer={commands.steer}
+				showSteerButton={can(renderSnapshot, "steer") && !commands.steerUnsupported}
 				sendPending={commands.sendPending}
 				steerPending={commands.steerPending}
 				steerRefusal={commands.steerRefusal}
-				onPromoteQueuedTurn={
-					can(renderSnapshot, "steer") && !commands.steerUnsupported
-						? commands.promoteQueuedTurn
-						: undefined
-				}
+				// Steer on a queued card is interrupt-and-send — the shared cancel
+				// seam every chat driver has — so it is not gated on the mid-turn
+				// steer capability.
+				onPromoteQueuedTurn={commands.promoteQueuedTurn}
 				onEditQueuedTurn={commands.editQueuedTurn}
 				onCancelQueuedTurn={commands.cancelQueuedTurn}
 				onReorderQueuedTurns={commands.reorderQueuedTurns}

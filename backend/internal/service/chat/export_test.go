@@ -18,6 +18,14 @@ func SetRenderMeasureTimeout(timeout time.Duration) (restore func()) {
 	return func() { renderMeasureTimeout = previous }
 }
 
+// SetQueuedTurnSettleWait shortens how long a queued-turn steer waits for the
+// cancelled turn to settle, for tests, and returns a restore function.
+func SetQueuedTurnSettleWait(limit time.Duration) (restore func()) {
+	previous := queuedTurnSettleWait
+	queuedTurnSettleWait = limit
+	return func() { queuedTurnSettleWait = previous }
+}
+
 // WaitRenderMeasures waits for the background measures PublishRender started.
 func (s *Service) WaitRenderMeasures() { s.renderMeasures.Wait() }
 
