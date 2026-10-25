@@ -150,8 +150,12 @@ export const iconSize = {
 	xxl: 28,
 } as const;
 
-/** The minimum tappable square, from the HIG. */
-export const touchTarget = 44;
+/**
+ * The minimum tappable square: 44pt on iOS (HIG), 48dp on Android (Material 3).
+ * Size a control's hit area with it, never its picture: a glyph or avatar that
+ * borrows it grows on Android with the target.
+ */
+export { touchTarget } from "./platformTokens";
 
 /**
  * The inset every sheet body shares. The native sheet draws its own top

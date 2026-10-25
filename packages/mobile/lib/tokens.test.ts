@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { fontScaleCap, microLabel, radius, space, type } from "./tokens";
+import { touchTarget as androidTouchTarget } from "./platformTokens.android";
+import { fontScaleCap, microLabel, radius, space, touchTarget, type } from "./tokens";
 
 // These tests are a regression fence, not a description of taste. A scale that
 // stops ascending has been edited carelessly, and the anchors below are the
@@ -28,6 +29,15 @@ describe("radius scale", () => {
 
 	it("keeps the card radius at the value cardShell already uses", () => {
 		expect(radius.md).toBe(12);
+	});
+});
+
+describe("touch target", () => {
+	// vitest resolves the base file, which is what iOS gets; Metro swaps in the
+	// .android file on Android, so that one is read directly.
+	it("meets the HIG on iOS and Material 3 on Android", () => {
+		expect(touchTarget).toBe(44);
+		expect(androidTouchTarget).toBe(48);
 	});
 });
 

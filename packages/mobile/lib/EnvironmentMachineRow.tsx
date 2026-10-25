@@ -52,6 +52,10 @@ type Props = {
 	onEditorStateChange?: (editor: EnvironmentEditorState | null, hostId: string) => void;
 };
 
+// The whole summary row is the button; the avatar is only its picture, so it
+// keeps one size on both platforms instead of following `touchTarget`.
+const SUMMARY_AVATAR_SIZE = 44;
+
 function editableEndpointIndex(host: Host, activeConfig?: ServerConfig): number {
 	const activeIndex = activeConfig?.hostId === host.id
 		? host.endpoints.findIndex((endpoint) => endpoint.host === activeConfig.host && endpoint.port === Number(activeConfig.httpPort) && endpoint.secure === Boolean(activeConfig.secure))
@@ -267,7 +271,7 @@ export function EnvironmentMachineRow({ host, activeConfig, isDefault, expanded,
 				style={({ pressed }) => [styles.header, pressed && styles.pressed]}
 			>
 				{/* The draft only previews inside the editor; Cancel must leave the saved icon. */}
-				<MachineAvatar appearance={editing ? appearance : machineAppearance(host)} size={touchTarget} />
+				<MachineAvatar appearance={editing ? appearance : machineAppearance(host)} size={SUMMARY_AVATAR_SIZE} />
 				<View style={styles.machineCopy}>
 					<View style={styles.machineNameRow}>
 						<Text style={styles.machineName} numberOfLines={1}>{host.name}</Text>
