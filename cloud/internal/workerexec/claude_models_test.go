@@ -99,7 +99,8 @@ func TestClaudeCatalogReportsApprovalModesPerModelFromACPOptions(t *testing.T) {
 	conn := claudeTestConnection(t, agent)
 	options := claudeTestOptions("opus")
 	models, current, _ := claudeModelsFromOptions(options)
-	probeClaudeApprovalModes(context.Background(), conn, "session-1", models, current, options, nil)
+	claudeProbes = &claudeProbeCache{}
+	probeClaudeApprovalModes(context.Background(), conn, "adapter", "session-1", models, current, options, nil)
 	byID := map[string][]string{}
 	for _, model := range models {
 		byID[model.ID] = model.ApprovalModes
@@ -112,6 +113,25 @@ func TestClaudeCatalogReportsApprovalModesPerModelFromACPOptions(t *testing.T) {
 	}
 	if got, want := agent.models(), []string{"haiku", "opus"}; !slices.Equal(got, want) {
 		t.Fatalf("model switches = %v, want a probe of haiku and a return to opus", got)
+	}
+
+	// The next catalog request on this worker reuses the probe: no model is
+	// switched, so the catalog costs what it did before probing existed.
+	again, _, _ := claudeModelsFromOptions(options)
+	probeClaudeApprovalModes(context.Background(), conn, "adapter", "session-1", again, current, options, nil)
+	if got, want := agent.models(), []string{"haiku", "opus"}; !slices.Equal(got, want) {
+		t.Fatalf("model switches after a repeat request = %v, want none beyond %v", got, want)
+	}
+	for _, model := range again {
+		if model.ID == "haiku" && !slices.Equal(model.ApprovalModes, []string{"default", "accept-edits", "bypass-permissions"}) {
+			t.Fatalf("cached haiku approval modes = %v", model.ApprovalModes)
+		}
+	}
+	// Another adapter (an upgraded Claude Code) is probed afresh.
+	other, _, _ := claudeModelsFromOptions(options)
+	probeClaudeApprovalModes(context.Background(), conn, "upgraded adapter", "session-1", other, current, options, nil)
+	if got := len(agent.models()); got != 4 {
+		t.Fatalf("model switches for a new adapter = %v, want a fresh probe", agent.models())
 	}
 
 	// A model whose probe fails, and every other model of a session without a
