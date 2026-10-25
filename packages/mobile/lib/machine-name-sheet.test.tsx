@@ -6,6 +6,7 @@ const fixtures = vi.hoisted(() => ({
 	params: { suggested: "Studio Mac", resultKey: "", symbol: "laptop" } as { suggested: string; resultKey: string; symbol?: string; hostId?: string },
 	back: vi.fn(),
 	impact: vi.fn(async () => {}),
+	androidHaptic: vi.fn(async () => {}),
 	theme: new Proxy({}, { get: () => "#000000" }),
 	hosts: [] as { id: string; name: string; appearance?: { symbol: string } }[],
 }));
@@ -18,6 +19,7 @@ vi.mock("@expo/ui/community/bottom-sheet", () => ({ default: "BottomSheet", Bott
 vi.mock("expo-haptics", () => ({
 	impactAsync: fixtures.impact, ImpactFeedbackStyle: { Light: "light" },
 	selectionAsync: vi.fn(async () => {}), notificationAsync: vi.fn(async () => {}), NotificationFeedbackType: {},
+	performAndroidHapticsAsync: fixtures.androidHaptic, AndroidHaptics: { Virtual_Key: "virtual-key" },
 }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
@@ -38,6 +40,7 @@ beforeEach(() => {
 	fixtures.hosts = [];
 	fixtures.back.mockClear();
 	fixtures.impact.mockClear();
+	fixtures.androidHaptic.mockClear();
 	resetSheetResults();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
@@ -72,12 +75,16 @@ it.each(["android", "ios"])("shows a text-only Save machine button on %s and sav
 	expect(takeSheetResult(fixtures.params.resultKey)).toBeUndefined();
 });
 
-it.each(["android", "ios"])("plays one light haptic when opened on %s, not when typing", (platform) => {
+it.each([
+	["android", "androidHaptic", "virtual-key"],
+	["ios", "impact", "light"],
+] as const)("plays one light haptic when opened on %s, not when typing", (platform, channel, effect) => {
 	fixtures.platform.OS = platform;
 	open();
-	expect(fixtures.impact).toHaveBeenCalledExactlyOnceWith("light");
+	expect(fixtures[channel]).toHaveBeenCalledExactlyOnceWith(effect);
 	act(() => input().props.onChangeText("Another name"));
-	expect(fixtures.impact).toHaveBeenCalledTimes(1);
+	expect(fixtures[channel]).toHaveBeenCalledTimes(1);
+	expect(fixtures[channel === "impact" ? "androidHaptic" : "impact"]).not.toHaveBeenCalled();
 });
 
 it("uses a content-sized Android sheet without fixed snap points or a stretching form", () => {
