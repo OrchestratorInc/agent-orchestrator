@@ -360,9 +360,9 @@ describe("SessionTopbarActions orchestrator actions", () => {
 	});
 
 	it.each([
-		["active", "Working", "bg-status-working", true],
-		["waiting_input", "Input Needed", "bg-status-needs-you", false],
-	] as const)("shows %s orchestrator activity on the project board", (state, label, tone, pulses) => {
+		["active", "Working"],
+		["waiting_input", "Input Needed"],
+	] as const)("shows %s orchestrator activity on the project board", (state, label) => {
 		renderBoardActions([
 			{
 				...orchestrator,
@@ -371,11 +371,8 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		]);
 
 		const button = screen.getByRole("button", { name: `Orchestrator, ${label}` });
-		const indicator = button.querySelector("span.size-dot-sm") as HTMLElement;
-		expect(indicator).toHaveAttribute("aria-hidden", "true");
-		expect(indicator).toHaveClass(tone);
-		expect(indicator).toHaveClass(pulses ? "animate-status-pulse" : "size-dot-sm");
-		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
+		const indicator = button.querySelector("span.size-dot-sm");
+		expect(indicator).toBeNull();
 	});
 
 	it("opens an exited orchestrator at once and shows a rejected resume request", async () => {
