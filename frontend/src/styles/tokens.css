@@ -382,14 +382,12 @@
 	--radius-command-palette: 12px;
 	--radius-command-item: 6px;
 	--shadow-command-palette: var(--shadow-popover);
-	/* Overlay edge: one step above ordinary hairlines so a transient layer
-	 * (menu, popover, dialog, toast) separates from content without a drawn frame. */
-	--color-border-overlay: color-mix(in oklch, var(--foreground) 10%, transparent);
-	/* Overlay shadow: short-range and neutral. Black, not --background, so it
+	/* Overlay edge: a faint edge so a transient layer (menu, popover, dialog,
+	 * toast) separates from content without a drawn frame. */
+	--color-border-overlay: color-mix(in oklch, var(--foreground) 6%, transparent);
+	/* Overlay shadow: a barely-there lift. Black, not --background, so it
 	 * reads on a graphite canvas. */
-	--shadow-popover:
-		0 1px 2px oklch(0 0 0 / 24%),
-		0 8px 24px -6px oklch(0 0 0 / 40%);
+	--shadow-popover: 0 4px 12px -4px oklch(0 0 0 / 14%);
 	--size-command-palette: 720px;
 	--size-command-palette-top: 14vh;
 	--size-command-palette-list-max: 420px;
@@ -781,10 +779,8 @@
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);
 	--shadow-command-palette: var(--shadow-popover);
-	--color-border-overlay: var(--border);
-	--shadow-popover:
-		0 1px 2px color-mix(in oklch, var(--foreground) 6%, transparent),
-		0 8px 24px -6px color-mix(in oklch, var(--foreground) 14%, transparent);
+	--color-border-overlay: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--shadow-popover: 0 4px 12px -4px color-mix(in oklch, var(--foreground) 5%, transparent);
 
 	/* Welcome / import radius alias */
 	--color-border-welcome-panel: var(--border);
