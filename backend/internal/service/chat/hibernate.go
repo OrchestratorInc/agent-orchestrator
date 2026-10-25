@@ -16,9 +16,9 @@ const chatHibernateGrace = 30 * time.Second
 
 // chatIdleBeforeHibernate is how long a quiet provider stays parked, prompt
 // cache and all, before idle hibernation may stop it. Most follow-ups arrive
-// within a few minutes; stopping the process after 30 s made each of them pay
-// a full cold start for a few hundred megabytes of memory saved.
-const chatIdleBeforeHibernate = 3 * time.Minute
+// within a minute or two; stopping the process after 30 s made each of them
+// pay a full cold start for a few hundred megabytes of memory saved.
+const chatIdleBeforeHibernate = 90 * time.Second
 
 type wakeRun struct {
 	done chan struct{}
