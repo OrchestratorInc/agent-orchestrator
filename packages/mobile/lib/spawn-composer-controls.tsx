@@ -1,8 +1,9 @@
 import { Button, Host, Picker } from "@expo/ui";
 import { StyleSheet, View } from "react-native";
+import { AppSymbol } from "./AppSymbol";
 import { useThemeState } from "./ThemeProvider";
 import type { SpawnComposerControlsProps } from "./spawn-composer-controls.types";
-import { space } from "./tokens";
+import { radius, space, touchTarget } from "./tokens";
 
 export function SpawnComposerControls({
 	hosts,
@@ -41,11 +42,17 @@ export function SpawnComposerControls({
 				</Host>
 			</View>
 			<View style={styles.rail}>
+				{/* The universal Button takes no accessibility label, so each glyph
+				    carries its button's name. */}
 				<Host style={styles.iconHost} colorScheme={scheme}>
-					<Button label="🖼" variant="text" onPress={onChoosePhoto} style={styles.iconButton} />
+					<Button variant="text" onPress={onChoosePhoto} style={styles.iconButton}>
+						<AppSymbol name="photo" accessibilityLabel="Choose photo" />
+					</Button>
 				</Host>
 				<Host style={styles.iconHost} colorScheme={scheme}>
-					<Button label="📎" variant="text" onPress={onChooseFile} style={styles.iconButton} />
+					<Button variant="text" onPress={onChooseFile} style={styles.iconButton}>
+						<AppSymbol name="attach" accessibilityLabel="Choose file" />
+					</Button>
 				</Host>
 				<Host style={styles.menuHost} colorScheme={scheme}>
 					<Picker selectedValue={harness} onValueChange={onSelectHarness} appearance="menu">
@@ -71,8 +78,8 @@ const styles = StyleSheet.create({
 	destinationRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs },
 	destinationHost: { flex: 1, minWidth: 0, height: 36 },
 	rail: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.xs },
-	iconHost: { width: 44, height: 44 },
-	iconButton: { width: 44, height: 44, borderRadius: 20 },
+	iconHost: { width: touchTarget, height: touchTarget },
+	iconButton: { width: touchTarget, height: touchTarget, borderRadius: radius.xl },
 	menuHost: { flex: 1, minWidth: 0, height: 44 },
 	spawnHost: { width: "100%", height: 44 },
 	spawnButton: { width: "100%", height: 44, borderRadius: 16 },

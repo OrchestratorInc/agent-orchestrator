@@ -1,8 +1,22 @@
 import { Button, Host } from "@expo/ui";
+import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolName, PlatformSymbol } from "./symbols";
 import { useThemeState } from "./ThemeProvider";
-import { radius } from "./tokens";
+import { iconSize, radius, touchTarget } from "./tokens";
 
 export type NativeHeaderButtonIcon = "menu" | "bell" | "close" | "check" | "back" | "more" | "add" | "trash";
+
+const glyphs: Record<NativeHeaderButtonIcon, AppSymbolName | PlatformSymbol> = {
+	// The drawer opener is the only header glyph the registry does not carry.
+	menu: { ios: "line.3.horizontal", android: "menu" },
+	bell: "notifications",
+	close: "close",
+	check: "checkmark",
+	back: "back",
+	more: "moreHorizontal",
+	add: "add",
+	trash: "delete",
+};
 
 export function NativeHeaderButton({
 	icon,
@@ -15,14 +29,17 @@ export function NativeHeaderButton({
 }) {
 	const { scheme } = useThemeState();
 	return (
-		<Host style={{ width: 44, height: 44 }} colorScheme={scheme}>
+		<Host style={{ width: touchTarget, height: touchTarget }} colorScheme={scheme}>
 			<Button
-				label={icon === "menu" ? "☰" : icon === "close" ? "×" : icon === "check" ? "✓" : icon === "back" ? "‹" : icon === "add" ? "+" : icon === "trash" ? "🗑" : "◉"}
 				onPress={onPress}
 				variant="outlined"
 				testID={`header-${icon}`}
-				style={{ width: 44, height: 44, borderRadius: radius.pill}}
-			/>
+				style={{ width: touchTarget, height: touchTarget, borderRadius: radius.pill }}
+			>
+				{/* The universal Button takes no accessibility label, so the glyph,
+				    its only content, carries the control's name. */}
+				<AppSymbol name={glyphs[icon]} size={iconSize.lg} accessibilityLabel={label} />
+			</Button>
 		</Host>
 	);
 }
