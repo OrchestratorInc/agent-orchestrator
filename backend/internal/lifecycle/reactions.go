@@ -46,8 +46,7 @@ type ReviewResult struct {
 }
 
 // ApplyReviewBatch reacts to one reviewer CLI submission after the review
-// service has decided which current-head changes-requested results are
-// deliverable.
+// service has decided which current-head results are deliverable.
 func (m *Manager) ApplyReviewBatch(ctx context.Context, workerID domain.SessionID, batchID string, results []ReviewResult) (ReviewDeliveryOutcome, error) {
 	if batchID == "" || len(results) == 0 {
 		return ReviewDeliveryNoop, nil
@@ -69,7 +68,20 @@ func (m *Manager) ApplyReviewBatch(ctx context.Context, workerID domain.SessionI
 		return results[i].RunID < results[j].RunID
 	})
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "[AO reviewer] AO's internal code reviewer submitted %d review(s) requesting changes.\n", len(results))
+	// Mixed batches keep the changes-requested framing: those need action, and
+	// each section below still names its own verdict. The header counts only
+	// the runs that actually request changes.
+	requested := 0
+	for _, r := range results {
+		if r.Verdict == domain.VerdictChangesRequested {
+			requested++
+		}
+	}
+	if requested == 0 {
+		fmt.Fprintf(&msg, "[AO reviewer] AO's internal code reviewer approved %d review(s). AO's approval is not a GitHub approval and never authorizes merging.\n", len(results))
+	} else {
+		fmt.Fprintf(&msg, "[AO reviewer] AO's internal code reviewer submitted %d review(s) requesting changes.\n", requested)
+	}
 	var sigParts []string
 	for i, r := range results {
 		fmt.Fprintf(&msg, "\nReview %d\nPR: %s\nVerdict: %s", i+1, domain.SanitizeControlChars(r.PRURL), domain.SanitizeControlChars(string(r.Verdict)))

@@ -731,24 +731,55 @@ func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 	}
 }
 
-func TestSubmitBatchApprovedOnlySendsNothing(t *testing.T) {
+func TestSubmitApprovedDeliversOnceThenStaysSilent(t *testing.T) {
 	st := &fakeStore{
 		ok:  true,
-		run: domain.ReviewRun{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
-		batchRuns: []domain.ReviewRun{
-			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
-			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
-		},
-		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2"}},
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+	}
+	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
+	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return time.Unix(100, 0).UTC() }))
+
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "ship it", nil)
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if run.Status != domain.ReviewRunDelivered || run.DeliveredAt == nil || !run.DeliveredAt.Equal(time.Unix(100, 0).UTC()) {
+		t.Fatalf("approved run not stamped delivered: %+v", run)
+	}
+	if reducer.batchCalls != 1 || st.markCalls != 1 {
+		t.Fatalf("first approved submit must deliver exactly once: batchCalls=%d markCalls=%d", reducer.batchCalls, st.markCalls)
+	}
+	if len(reducer.gotBatch) != 1 || reducer.gotBatch[0].Verdict != domain.VerdictApproved || reducer.gotBatch[0].Body != "review approved: pr1, head sha1 up to date" {
+		t.Fatalf("reducer saw wrong result: %+v", reducer.gotBatch)
+	}
+
+	// A replay of the delivered run must not emit a second feedback message.
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "ship it", nil); err != nil {
+		t.Fatalf("resubmit: %v", err)
+	}
+	if reducer.batchCalls != 1 || st.markCalls != 1 {
+		t.Fatalf("retry re-emitted: batchCalls=%d markCalls=%d", reducer.batchCalls, st.markCalls)
+	}
+}
+
+func TestSubmitApprovedAutoInjectOffStaysSilent(t *testing.T) {
+	disabled := false
+	st := &fakeStore{
+		ok:                      true,
+		sessionAutoInjectReview: &disabled,
+		run:                     domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+		prs:                     []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
 	}
 	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
 	svc := New(nil, st, WithLifecycleReducer(reducer))
 
-	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "ship it", nil); err != nil {
-		t.Fatalf("Submit: %v", err)
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "ship it", nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if reducer.batchCalls != 0 || st.markCalls != 0 {
-		t.Fatalf("approved-only batch should not deliver: batchCalls=%d markCalls=%d", reducer.batchCalls, st.markCalls)
+	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview || reducer.batchCalls != 0 || st.markCalls != 0 {
+		t.Fatalf("disabled approved review = %+v reducerCalls=%d markCalls=%d", run, reducer.batchCalls, st.markCalls)
 	}
 }
 

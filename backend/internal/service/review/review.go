@@ -1210,7 +1210,7 @@ func (s *Service) deliverableRuns(ctx context.Context, workerID domain.SessionID
 	}
 	deliverable := make([]domain.ReviewRun, 0, len(runs))
 	for _, run := range runs {
-		if run.Status != domain.ReviewRunComplete || run.Verdict != domain.VerdictChangesRequested || run.DeliveredAt != nil || !run.AutoInjectReview {
+		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil || !run.AutoInjectReview {
 			continue
 		}
 		if currentHeads[run.PRURL] != run.TargetSHA {
@@ -1241,8 +1241,12 @@ func reviewResults(workerID domain.SessionID, runs []domain.ReviewRun) []lifecyc
 
 // reviewFeedbackBody renders the worker-facing review text: the reviewer's
 // summary body followed by the inline findings, so findings survive in worker
-// feedback even though the provider holds the anchored copies.
+// feedback even though the provider holds the anchored copies. An approved run
+// carries no findings, so it delivers as a short factual receipt instead.
 func reviewFeedbackBody(run domain.ReviewRun) string {
+	if run.Verdict == domain.VerdictApproved {
+		return fmt.Sprintf("review approved: %s, head %s up to date", run.PRURL, run.TargetSHA)
+	}
 	if len(run.Findings) == 0 {
 		return run.Body
 	}
