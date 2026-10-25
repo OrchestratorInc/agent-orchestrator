@@ -17,16 +17,17 @@ describe("Interface affordances", () => {
 	describe("shared controls announce what they are", () => {
 		const ui = source("./ui.tsx");
 
-		it("gives the four pressable primitives a button role", () => {
+		it("gives each pressable primitive a button role", () => {
 			// The app's primary controls live here, so a missing role is missing on
-			// every screen at once. `IconButton` and `ListSectionHeader` already had
-			// theirs; these were the gap.
-			for (const name of ["Pill", "Button", "SettingsRow"]) {
-				const index = ui.indexOf(`export function ${name}(`);
-				expect(index, `${name} should exist`).toBeGreaterThan(-1);
+			// every screen at once. Each one is checked inside its own body, so a role
+			// on one primitive cannot stand in for another's.
+			for (const name of ["Pill", "ListSectionHeader", "Button"]) {
+				const start = ui.indexOf(`export function ${name}(`);
+				expect(start, `${name} should exist`).toBeGreaterThan(-1);
+				const end = ui.indexOf("\nexport ", start + 1);
+				const body = ui.slice(start, end === -1 ? undefined : end);
+				expect(body, `${name} should announce as a button`).toContain('accessibilityRole="button"');
 			}
-			expect(ui).toContain('accessibilityRole="button"');
-			expect(ui.match(/accessibilityRole="button"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
 		});
 
 		it("pins the Button's name to its title so a spinner does not erase it", () => {

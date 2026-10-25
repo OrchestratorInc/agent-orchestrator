@@ -15,7 +15,7 @@ describe("spacing scale", () => {
 		expect(new Set(steps).size).toBe(steps.length);
 	});
 
-	it("keeps the card gutter at the value cardShell already uses", () => {
+	it("keeps the card gutter at 12", () => {
 		expect(space.md).toBe(12);
 	});
 });
@@ -27,7 +27,7 @@ describe("radius scale", () => {
 		expect(new Set(steps).size).toBe(steps.length);
 	});
 
-	it("keeps the card radius at the value cardShell already uses", () => {
+	it("keeps the card radius at 12", () => {
 		expect(radius.md).toBe(12);
 	});
 });
