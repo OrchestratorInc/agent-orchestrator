@@ -2918,26 +2918,20 @@ export function Timeline({
 		});
 	}, [minimapEnabled, uiSessionId]);
 	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
-	const retryableTurns = useMemo(() => {
-		// A steer can split one logical turn into several visual groups. Its prompt
-		// still makes the final failed group retryable, even when it is in an earlier one.
-		const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
-			item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
-				? [item.turnId]
-				: [],
-		));
-		return new Map(
-			snapshot.turns
-				.filter(
-					(turn) =>
-						turn.state === "failed" &&
-						Boolean(turn.providerTurnId) &&
-						!consumedRetrySources.has(turn.id) &&
-						(humanPromptTurnIds.has(turn.id) || Boolean(turn.usageLimit && turn.hasHumanPrompt)),
-				)
-				.map((turn) => [turn.id, turn]),
-		);
-	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
+	const retryableTurns = useMemo(
+		() =>
+			new Set(
+				snapshot.turns
+					.filter(
+						(turn) =>
+							turn.state === "failed" &&
+							Boolean(turn.providerTurnId) &&
+							!consumedRetrySources.has(turn.id),
+					)
+					.map((turn) => turn.id),
+			),
+		[snapshot.turns, consumedRetrySources],
+	);
 
 	useEffect(() => {
 		pinnedRef.current = pinned;
@@ -3908,7 +3902,7 @@ export function Timeline({
 							group.turnId &&
 							retryControl &&
 							retryableTurns.has(group.turnId) &&
-								group.outcome?.state === "failed"
+							groupHasHumanPrompt(group)
 								? {
 										onRetry: () => {
 											void Promise.resolve(retryTurn(group.turnId as string)).catch(

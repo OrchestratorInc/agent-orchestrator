@@ -2268,7 +2268,7 @@ describe("ChatWorkspace timeline", () => {
 						...chatFixtureEmpty, latestSequence: 1,
 						items: [{
 							kind: "activity", id: "switch-1", sequence: 1, revision: 1, activityKind: "system", status: "completed",
-							summary: "Switched provider", detail: { event: "provider_switch", sourceHarness: "codex", targetHarness: "claude-code" },
+							summary: "Switched provider", detail: { event: "provider_switch" },
 							createdAt: "2026-08-08T00:00:00Z",
 						}],
 					}}

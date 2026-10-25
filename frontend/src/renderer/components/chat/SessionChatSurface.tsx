@@ -233,6 +233,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		snapshot?.controller?.state === "busy" || commands.busy || acceptedLocalWorkPending;
 	const hasRunningTurn = Boolean(snapshot?.turns.some((turn) => turn.state === "running"));
 	const queuedTurnCount = snapshot?.turns.filter((turn) => turn.state === "queued").length ?? 0;
+	const queryClient = useQueryClient();
 	// After a daemon restart the daemon reattaches surviving Chats on its own, and
 	// that reattach emits no change event. The session's recovery check settling
 	// on "ready" is the signal to refresh the controller state this view shows.

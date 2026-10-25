@@ -443,7 +443,8 @@ export interface SystemEventDetail {
 		| "artifact"
 		| "workspace.setup"
 		| "workspace.script.run"
-		| "account.switched";
+		| "account.switched"
+		| "provider_switch";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */

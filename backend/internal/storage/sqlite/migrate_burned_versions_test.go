@@ -219,8 +219,8 @@ var shippedMigrations = map[int64]string{
 	// can never renumber them onto a number upstream will claim. See
 	// migrate_fork_reserved_range_test.go for why.
 	20261020173311321: "20261020173311321_preview_poll_sessions.sql",
-	20261022172135178: "20261022172135178_report_emitted_at.sql",
-	20261022172135179: "20261022172135179_review_run_current_head_lookup.sql",
+	20261022172135180: "20261022172135180_report_emitted_at.sql",
+	20261022172135181: "20261022172135181_review_run_current_head_lookup.sql",
 	9001:              "9001_add_user_config.sql",
 	9006:              "9006_session_provider_stamp.sql",
 	9011:              "9011_gateway_entries.sql",

@@ -49,7 +49,7 @@ describe("cached model loading", () => {
 
 	it("shows Settings' catalog for the same scope while the DB read fails", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		client.setQueryData(agentModelsQueryOptions("codex", "", undefined, true).queryKey, catalog);
+		client.setQueryData(agentModelsQueryOptions("codex", "", undefined, undefined, true).queryKey, catalog);
 		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("daemon unavailable"));
 		const options = agentModelsQueryOptions("codex", "");
 		await expect(client.fetchQuery({ ...options, retry: false })).rejects.toThrow("daemon unavailable");
@@ -196,7 +196,7 @@ describe("cached model loading", () => {
 		cacheAgentModels({ ...catalog, models: [{ ...catalog.models[0], lastUsedAt }] }, "codex", "");
 		vi.mocked(apiClient.GET).mockResolvedValueOnce({ data: catalog } as never);
 		const client = new QueryClient();
-		await client.fetchQuery(agentModelsQueryOptions("codex", "", undefined, true));
+		await client.fetchQuery(agentModelsQueryOptions("codex", "", undefined, undefined, true));
 		expect(readCachedAgentModels("codex", "")?.models[0].lastUsedAt).toBe(lastUsedAt);
 		client.clear();
 	});
@@ -286,7 +286,7 @@ describe("cached model loading", () => {
 
 	it("keeps a stale Settings catalog visible when its background read fails", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const settingsOptions = agentModelsQueryOptions("codex", "", undefined, true);
+		const settingsOptions = agentModelsQueryOptions("codex", "", undefined, undefined, true);
 		client.setQueryData(settingsOptions.queryKey, catalog);
 		await client.invalidateQueries({ queryKey: settingsOptions.queryKey });
 		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("daemon unavailable"));
@@ -303,7 +303,7 @@ describe("cached model loading", () => {
 	])("does not borrow a catalog from a different scope: %j", async ({ agent, project, host }) => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		cacheAgentModels({ ...catalog, agentId: agent }, agent, project, host);
-		client.setQueryData(agentModelsQueryOptions(agent, project, host, true).queryKey, catalog);
+		client.setQueryData(agentModelsQueryOptions(agent, project, host, undefined, true).queryKey, catalog);
 		vi.mocked(apiClient.GET).mockRejectedValueOnce(new Error("DB read failed"));
 		const options = agentModelsQueryOptions("codex", "");
 		await expect(client.fetchQuery({ ...options, retry: false })).rejects.toThrow("DB read failed");

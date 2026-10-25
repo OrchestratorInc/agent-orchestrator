@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cacheAgentModels } from "../lib/agent-model-cache";
 
 const h = vi.hoisted(() => ({
 	delete: vi.fn(),
