@@ -168,6 +168,8 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const navigationGestures = useUiStore((state) => state.navigationGestures);
+	const setNavigationGestures = useUiStore((state) => state.setNavigationGestures);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 
@@ -234,6 +236,16 @@ export function GeneralSettingsSection({
 						onChange={(next) => {
 							void setLocale(next);
 						}}
+					/>
+				</SettingsRow>
+			</SettingsSection>
+
+			<SettingsSection title={t("settings.navigation")} grouped>
+				<SettingsRow label={t("settings.navigationGestures")} description={t("settings.navigationGesturesHint")}>
+					<Switch
+						aria-label={t("settings.navigationGestures")}
+						checked={navigationGestures}
+						onCheckedChange={setNavigationGestures}
 					/>
 				</SettingsRow>
 			</SettingsSection>

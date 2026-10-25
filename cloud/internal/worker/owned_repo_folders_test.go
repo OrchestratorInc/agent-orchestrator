@@ -162,7 +162,10 @@ func TestCleanupSkipsTheStepsOfARepositoryFolderThatIsNotAOs(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		output, err := exec.Command(filepath.Join(dataDir, CleanupHookFile)).CombinedOutput()
+		// Exercise ownership decisions through the hook's declared interpreter.
+		// Direct exec of a freshly written fixture can fail with ETXTBSY on Linux;
+		// executable-hook dispatch is covered separately in project_scripts_test.go.
+		output, err := exec.Command("sh", filepath.Join(dataDir, CleanupHookFile)).CombinedOutput()
 		if err != nil {
 			t.Fatalf("owned %v: hook: %v (%s)", owned, err, output)
 		}
@@ -224,7 +227,7 @@ func TestSetupAndCleanupNameARefusedFolderAlike(t *testing.T) {
 	if err := WriteCleanupHook(cleanupData, commands, workspace, scriptEnvironment(workspace)); err != nil {
 		t.Fatal(err)
 	}
-	output, err := exec.Command(filepath.Join(cleanupData, CleanupHookFile)).CombinedOutput()
+	output, err := exec.Command("sh", filepath.Join(cleanupData, CleanupHookFile)).CombinedOutput()
 	if err != nil {
 		t.Fatalf("hook: %v (%s)", err, output)
 	}

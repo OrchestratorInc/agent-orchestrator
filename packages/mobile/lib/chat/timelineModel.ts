@@ -312,6 +312,52 @@ export function activityNodesRunning(nodes: ActivityNode[]): boolean {
 	return nodes.some((node) => node.activity.status === "running" || activityNodesRunning(node.children));
 }
 
+export function summarizeActivities(activities: ConversationActivity[]): string {
+	let reads = 0;
+	let searches = 0;
+	let vcs = 0;
+	let commands = 0;
+	let tools = 0;
+	let reviews = 0;
+	let plans = 0;
+	let actions = 0;
+	for (const activity of activities) {
+		if (activity.activityKind === "ao_action") { actions++; continue; }
+		if (activity.activityKind === "mcp_tool") { tools++; continue; }
+		if (activity.activityKind === "auto_review") { reviews++; continue; }
+		if (activity.activityKind === "plan") { plans++; continue; }
+		switch (commandCategory(activity.detail?.command ?? activity.summary)) {
+			case "read": reads++; break;
+			case "search": searches++; break;
+			case "vcs": vcs++; break;
+			default: commands++;
+		}
+	}
+	const parts: string[] = [];
+	if (reads) parts.push(`${reads} ${reads === 1 ? "file" : "files"}`);
+	if (searches) parts.push(`${searches} ${searches === 1 ? "search" : "searches"}`);
+	if (vcs) parts.push(`${vcs} git ${vcs === 1 ? "check" : "checks"}`);
+	if (commands) parts.push(`${commands} ${commands === 1 ? "command" : "commands"}`);
+	if (tools) parts.push(`${tools} tool ${tools === 1 ? "call" : "calls"}`);
+	if (reviews) parts.push(`${reviews} auto-${reviews === 1 ? "decision" : "decisions"}`);
+	if (plans) parts.push("updated plan");
+	if (actions) parts.push(`${actions} ${actions === 1 ? "action" : "actions"}`);
+	const verb = reads || searches ? "Explored" : actions && parts.length === 1 ? "Performed" : "Ran";
+	return `${verb} ${parts.length ? parts.join(", ") : `${activities.length} steps`}`;
+}
+
+function commandCategory(text: string): "read" | "search" | "vcs" | "run" {
+	const head = text.trim().split(/\s+/, 1)[0] ?? "";
+	const binary = head.slice(head.lastIndexOf("/") + 1);
+	if (READ_COMMANDS.has(binary)) return "read";
+	if (SEARCH_COMMANDS.has(binary)) return "search";
+	if (binary === "git" || binary === "gh") return "vcs";
+	return "run";
+}
+
+const READ_COMMANDS = new Set(["cat", "sed", "nl", "head", "tail", "bat", "less", "more", "wc", "jq"]);
+const SEARCH_COMMANDS = new Set(["rg", "grep", "find", "fd", "ls", "tree", "glob", "ag"]);
+
 function activityCycle(node: ActivityNode, parent: ActivityNode, byProvider: Map<string, ActivityNode>): boolean {
 	const visited = new Set<ActivityNode>([node]);
 	let current: ActivityNode | undefined = parent;

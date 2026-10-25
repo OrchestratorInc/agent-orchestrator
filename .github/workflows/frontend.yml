@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   mac-update-helper:
     # Keep this on Intel to exercise the x64 release target natively while
@@ -131,6 +135,14 @@ jobs:
       - name: Install docs dependencies
         run: npm ci --prefix src/docs
 
+      # Re-extracts the docs catalogs, then fails if any locale is missing a
+      # translation for a string in the source.
+      - name: Check docs translations
+        run: npm run check:i18n --prefix src/docs
+
+      - name: Test docs
+        run: npm test --prefix src/docs
+
       - name: Build docs
         run: npm run build --prefix src/docs
 
@@ -144,6 +156,23 @@ jobs:
         env:
           AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
         run: npx vitest run
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Verify terminal origin boundary in real Electron
+        working-directory: backend
+        run: |
+          # Keep lazy-download output out of the executable-path capture.
+          node ../frontend/node_modules/electron/install.js
+          AO_MUX_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestMuxOriginElectron$' ./internal/httpd
+
+      - name: Verify daemon browser boundary in real Electron
+        working-directory: backend
+        run: |
+          AO_BOUNDARY_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestBrowserBoundaryElectron$' ./internal/httpd
 
       - name: Run guarded-navigation browser integration
         run: npm run test:browser-postcondition-integration

@@ -115,7 +115,7 @@ export type AgentBrowserRuntimeOptions = {
 
 export type AgentBrowserJSONResult = Record<string, unknown>;
 
-export type AgentBrowserBridge = Pick<AgentBrowserCDPBridge, "start" | "close">;
+export type AgentBrowserBridge = Pick<AgentBrowserCDPBridge, "start" | "close" | "reconcileTargets">;
 
 export type NativeProcessRunner = (
 	binaryPath: string,
@@ -188,6 +188,7 @@ export class AgentBrowserRuntime {
 		const runtime = await this.ensureSession(sessionId, provider);
 		await this.touchRuntimeRoot();
 		const environment = this.environment(runtime);
+		runtime.bridge.reconcileTargets();
 		// The native daemon can expire and be recreated independently while this
 		// AO session runtime remains alive. Its replacement starts streaming by
 		// default, so reassert the input-surface policy immediately before every
@@ -223,8 +224,47 @@ export class AgentBrowserRuntime {
 		signal?: AbortSignal,
 	): Promise<AgentBrowserJSONResult> {
 		const nativeArgs = nativeArgumentsForAction(action, args);
+		const requestedTabId = action === "tab-select" || action === "tab-close"
+			? optionalStringValue(args.tabId)
+			: undefined;
+		if (action === "tab-close" && requestedTabId) {
+			if (this.disposed) throw runtimeError("AGENT_BROWSER_RUNTIME_CLOSED", "Browser automation runtime is closed");
+			if (signal?.aborted) throw runtimeError("AGENT_BROWSER_CANCELLED", "agent-browser command was cancelled");
+			if (!provider.listTargets().some((target) => target.id === requestedTabId)) {
+				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Unable to resolve AO browser tab ${requestedTabId}`);
+			}
+			// A native daemon restart can renumber tabs between list and close.
+			// Close the exact AO-owned target, then notify an existing daemon.
+			await provider.closeTarget(requestedTabId);
+			this.sessions.get(sessionId)?.bridge.reconcileTargets();
+			return { tabId: requestedTabId, targetId: requestedTabId, closed: true, untrustedExternalContent: true };
+		}
+		if (requestedTabId) {
+			// AO target IDs and the native daemon's sequential tab IDs have
+			// independent lifetimes. Resolve by CDP identity for every selection.
+			const listed = await this.run(sessionId, ["tab", "list", "--json"], provider, signal);
+			const tabs = parseAgentBrowserJSON(listed.stdout).tabs;
+			const matches = Array.isArray(tabs)
+				? tabs.filter((tab) => isRecord(tab) && tab.targetId === requestedTabId)
+				: [];
+			const tab = matches.length === 1 ? matches[0] : undefined;
+			if (!isRecord(tab) || typeof tab.tabId !== "string" || !/^t[1-9]\d*$/.test(tab.tabId)) {
+				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Unable to resolve AO browser tab ${requestedTabId}`);
+			}
+			nativeArgs[nativeArgs.length - 1] = tab.tabId;
+		}
 		const result = await this.run(sessionId, [...nativeArgs, "--json"], provider, signal);
-		return parseAgentBrowserJSON(result.stdout);
+		const parsed = parseAgentBrowserJSON(result.stdout);
+		if (requestedTabId && parsed.targetId !== requestedTabId) {
+			throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Browser automation did not target AO tab ${requestedTabId}`);
+		}
+		if (action === "tab-new" || action === "tab-select" || action === "tab-close") {
+			if (typeof parsed.targetId !== "string" || !parsed.targetId) {
+				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", "Browser automation returned no tab target identity");
+			}
+			parsed.tabId = parsed.targetId;
+		}
+		return parsed;
 	}
 
 	private nativeAnnotations(stdout: string): { annotations?: unknown[]; boundary?: unknown } | undefined {

@@ -1670,6 +1670,97 @@ func (q *Queries) MoveConversationTurns(ctx context.Context, arg MoveConversatio
 	return err
 }
 
+const moveUndispatchedTurnActivitiesToBranch = `-- name: MoveUndispatchedTurnActivitiesToBranch :exec
+UPDATE conversation_activities
+SET branch_id = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND conversation_activities.branch_id = ?3
+  AND conversation_activities.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = ?2
+        AND intake.branch_id = ?3
+        AND intake.handled_by_session_id = ?4
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  )
+`
+
+type MoveUndispatchedTurnActivitiesToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+func (q *Queries) MoveUndispatchedTurnActivitiesToBranch(ctx context.Context, arg MoveUndispatchedTurnActivitiesToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnActivitiesToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
+}
+
+const moveUndispatchedTurnMessagesToBranch = `-- name: MoveUndispatchedTurnMessagesToBranch :exec
+UPDATE conversation_messages
+SET branch_id = ?1
+WHERE conversation_messages.conversation_id = ?2
+  AND conversation_messages.branch_id = ?3
+  AND conversation_messages.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = ?2
+        AND intake.branch_id = ?3
+        AND intake.handled_by_session_id = ?4
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  )
+`
+
+type MoveUndispatchedTurnMessagesToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+// Intake a session queued before its fresh provider existed belongs to that
+// provider's scope, so native replay can correlate it after a restart. Rows
+// move with their turn; dispatched or rolled-back turns stay where they are.
+func (q *Queries) MoveUndispatchedTurnMessagesToBranch(ctx context.Context, arg MoveUndispatchedTurnMessagesToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnMessagesToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
+}
+
+const moveUndispatchedTurnsToBranch = `-- name: MoveUndispatchedTurnsToBranch :exec
+UPDATE conversation_turns
+SET branch_id = ?1
+WHERE conversation_id = ?2
+  AND branch_id = ?3
+  AND handled_by_session_id = ?4
+  AND state = 'queued' AND provider_turn_id = '' AND rolled_back_at IS NULL
+`
+
+type MoveUndispatchedTurnsToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+func (q *Queries) MoveUndispatchedTurnsToBranch(ctx context.Context, arg MoveUndispatchedTurnsToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnsToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
+}
+
 const nextConversationSequence = `-- name: NextConversationSequence :one
 UPDATE conversations
 SET latest_sequence = latest_sequence + 1, updated_at = ?
@@ -4147,6 +4238,23 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 		&i.ActiveLineage,
 	)
 	return i, err
+}
+
+const selectSessionForActivityProviderItem = `-- name: SelectSessionForActivityProviderItem :one
+SELECT current_session_id
+FROM conversations
+JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
+WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
+  AND current_session_id IS NOT NULL
+LIMIT 1
+`
+
+func (q *Queries) SelectSessionForActivityProviderItem(ctx context.Context, providerItemID string) (*domain.SessionID, error) {
+	row := q.db.QueryRowContext(ctx, selectSessionForActivityProviderItem, providerItemID)
+	var current_session_id *domain.SessionID
+	err := row.Scan(&current_session_id)
+	return current_session_id, err
 }
 
 const selectVerifiedAuthenticationTurn = `-- name: SelectVerifiedAuthenticationTurn :one

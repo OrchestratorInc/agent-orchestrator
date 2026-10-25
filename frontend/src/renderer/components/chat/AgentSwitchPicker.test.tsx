@@ -56,7 +56,7 @@ function open(pending?: PendingAgentSwitch, terminal = false, harness = "claude-
 
 describe("AgentModelPicker", () => {
 	beforeEach(() => {
-		useUiStore.setState({ developerMode: true });
+		useUiStore.setState({ developerMode: false });
 		unavailableGet.mockReset().mockResolvedValue({ data: { agents: [] }, error: undefined });
 		window.localStorage.clear();
 	});
@@ -231,12 +231,11 @@ describe("AgentModelPicker", () => {
 		expect(onPendingChange).not.toHaveBeenCalled();
 	});
 
-	it("offers no other agent outside Developer Mode", async () => {
-		useUiStore.setState({ developerMode: false });
+	it("offers other agents with Developer Mode off", async () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		expect(screen.queryByRole("menuitem", { name: /Agent.*Claude Code/ })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /Agent.*Claude Code/ })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /Model.*Opus/ })).toBeInTheDocument();
 	});
 });
