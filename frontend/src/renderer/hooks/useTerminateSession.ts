@@ -120,7 +120,6 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 		mutationKey: terminateSessionMutationKey,
 		mutationFn: async (session: TerminateSessionRequest) => {
 			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
-			void captureRendererEvent("ao.renderer.session_kill_requested", { project_id: session.workspaceId });
 
 			return terminateSession(queryClient, session);
 		},

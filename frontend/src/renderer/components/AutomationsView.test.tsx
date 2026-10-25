@@ -161,7 +161,7 @@ describe("AutomationsView", () => {
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 
 		const funnel = { project_id: "demo", schedule_preset: "daily", prompt_length_bucket: "xs" };
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_requested", funnel);
+		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.automation_create_requested", expect.anything());
 		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_succeeded", funnel);
 		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.automation_create_failed", expect.anything());
 	});

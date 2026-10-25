@@ -35,8 +35,7 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 
 		fireEvent.keyDown(window, { key: "j", code: "KeyJ", ctrlKey: true });
 
-		const toast = await screen.findByRole("status");
-		expect(toast).toHaveTextContent("Shortcut updated");
+		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Shortcut updated"));
 		expect(useKeybindingsStore.getState().overrides["new-session"]).toEqual([
 			{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
 		]);
