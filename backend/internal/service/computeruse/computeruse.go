@@ -413,7 +413,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		saved.adopt(screenshot)
 	}
 	s.rememberReads(arguments["session"], result)
-	flagUnrendered(result)
+	flagUnrendered(tool, arguments, result)
 	noteForegroundAdvice(result)
 	noteWebTextAdvice(tool, result)
 	if observedTools[tool] {

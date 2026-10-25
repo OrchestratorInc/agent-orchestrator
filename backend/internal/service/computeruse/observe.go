@@ -140,7 +140,7 @@ func (s *Service) observeAfter(ctx context.Context, binary string, saved *savedI
 	saved.adopt(screenshot)
 	if fields, ok := state.(map[string]any); ok {
 		s.rememberSnapshot(session, fields)
-		flagUnrenderedRead(fields)
+		flagUnrenderedRead(fields, true)
 	}
 	output["observation"] = map[string]any{"tool": "get_window_state", "ok": true, "state": state}
 	return output
@@ -230,26 +230,53 @@ const blankShare = 0.98
 // flagUnrendered adds render_warning to the window reads in a call's result:
 // a get_window_state result, or run_steps' observation. The driver reports
 // such a read as ok, and an agent otherwise retries it, a screenshot each time.
-func flagUnrendered(result any) {
+func flagUnrendered(tool string, arguments map[string]any, result any) {
+	tree := treeRequested(tool, arguments)
 	state, _ := result.(map[string]any)
-	flagUnrenderedRead(state)
+	flagUnrenderedRead(state, tree)
 	observation, _ := state["observation"].(map[string]any)
 	observed, _ := observation["state"].(map[string]any)
-	flagUnrenderedRead(observed)
+	flagUnrenderedRead(observed, tree)
 }
 
-func flagUnrenderedRead(state map[string]any) {
+// flagUnrenderedRead flags one window read. tree is whether the read walked
+// the accessibility tree; a screenshot-only read's element_count is 0 by
+// design, so only its screenshot is checked.
+func flagUnrenderedRead(state map[string]any, tree bool) {
 	if state == nil || state["snapshot_id"] == nil && state["screenshot_file_path"] == nil {
 		return
 	}
 	// A read cut short by max_elements is small because it was asked to be;
 	// only its screenshot can say whether the window painted.
 	elements, counted := state["element_count"].(float64)
-	sparse := counted && elements < minRenderedElements && state["truncated"] != true
+	sparse := tree && counted && elements < minRenderedElements && state["truncated"] != true
 	path, _ := state["screenshot_file_path"].(string)
 	if sparse || (path != "" && blankScreenshot(path)) {
 		state["render_warning"] = renderWarning
 	}
+}
+
+// treeRequested reports whether a call's window read walks the accessibility
+// tree: include_accessibility_tree:false reads only the screenshot. run_steps'
+// end read takes the field from observe, and otherwise from a get_window_state
+// step, which the driver merges into observe as the end read.
+func treeRequested(tool string, arguments map[string]any) bool {
+	if tool != "run_steps" {
+		return arguments["include_accessibility_tree"] != false
+	}
+	observe, _ := arguments["observe"].(map[string]any)
+	if value, set := observe["include_accessibility_tree"]; set {
+		return value != false
+	}
+	steps, _ := arguments["steps"].([]any)
+	for _, raw := range steps {
+		step, _ := raw.(map[string]any)
+		name, stepArguments := stepAction(step)
+		if name == "get_window_state" && stepArguments["include_accessibility_tree"] == false {
+			return false
+		}
+	}
+	return true
 }
 
 // blankScreenshot reports whether nearly every sampled pixel of a screenshot
