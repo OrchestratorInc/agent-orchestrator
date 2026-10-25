@@ -126,11 +126,26 @@
 
 <br />
 
-### 휴대폰에서 에이전트를 관리하세요
+### Orchestrator for Mobile
 
-LAN 또는 Tailscale로 모바일 앱을 데스크톱과 페어링하세요. 에이전트가 사용자를 필요로 하면 알림을 받고, 답장하거나 작업을 시작하거나 터미널을 열 수 있습니다.
+데스크톱에서 실행 중인 에이전트를 휴대폰으로 제어하세요. [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) 또는 [Android](https://play.google.com/store/apps/details?id=aoagents.dev)용 앱을 설치하세요. **Settings → Connect Mobile**의 QR 코드를 스캔해 데스크톱과 페어링하세요. 집 Wi-Fi에서도, 외부에서도 작동합니다.
+
+- **알림 받기.** 에이전트에게 질문이 있거나 승인이 필요하면 푸시 알림이 옵니다.
+- **답하기.** 채팅으로 답하거나, 요청을 승인하거나, 에이전트의 터미널을 여세요.
+- **작업 시작.** 새 워커를 만들고 에이전트와 모델을 고르세요.
+- **리뷰.** 풀 리퀘스트와 리뷰어 결과를 확인하세요.
 
 <img src="../docs/assets/readme/site/mobile.jpg" alt="어떤 메일 제공업체를 사용할지 묻는 에이전트와 휴대폰에서 보낸 답장을 보여주는 모바일 앱" width="100%" />
+
+### Cloud Agents
+
+워커를 내 컴퓨터가 아닌 호스팅된 작업 공간에서 실행하세요. **Clone to the cloud**를 선택하고 GitHub 저장소를 고르면 시작됩니다.
+
+- **계속 실행.** 노트북을 덮어도 작업이 계속됩니다.
+- **진행 상황 확인.** 데스크톱 앱에서 채팅, 파일, 터미널을 여세요.
+- **내 컴퓨터에는 아무것도 없음.** 코드, 워크트리, 에이전트가 모두 클라우드에 있습니다.
+
+설정 방법은 [Cloud 가이드](https://docs.orchestrator.inc/guides/cloud)를 참고하세요.
 
 ## 설치
 

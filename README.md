@@ -126,11 +126,26 @@ Worker, Chat, and reviewer support differ by agent; the [agent setup guides](htt
 
 <br />
 
-### Your fleet from your phone
+### Orchestrator for Mobile
 
-Pair the mobile app with your desktop over LAN or Tailscale. Get notified when an agent needs you, then reply, start a task, or open its terminal.
+Control the agents running on your desktop from your phone. Install the app for [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) or [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Scan the QR code in **Settings → Connect Mobile** to pair it with your desktop. It works on your home Wi-Fi and away from home.
+
+- **Get alerts.** A push notification tells you when an agent has a question or needs approval.
+- **Reply.** Answer in chat, approve the request, or open the agent's terminal.
+- **Start work.** Create a new worker and pick its agent and model.
+- **Review.** Check pull requests and reviewer results.
 
 <img src="docs/assets/readme/site/mobile.jpg" alt="The mobile app showing an agent asking which mail provider to use and the reply sent from the phone" width="100%" />
+
+### Cloud Agents
+
+Run workers in hosted workspaces instead of on your machine. Choose **Clone to the cloud** and pick a GitHub repository to start.
+
+- **Keep running.** Tasks keep going with your laptop closed.
+- **Follow along.** Open the chat, files, and terminal from the desktop app.
+- **Nothing on your machine.** The code, worktrees, and agents all live in the cloud.
+
+See the [Cloud guide](https://docs.orchestrator.inc/guides/cloud) for setup.
 
 ## Install
 

@@ -126,11 +126,26 @@ La prise en charge des modes worker, Chat et relecteur varie selon l'agent ; les
 
 <br />
 
-### Votre flotte depuis votre téléphone
+### Orchestrator for Mobile
 
-Associez l'application mobile à votre ordinateur via le réseau local ou Tailscale. Recevez une notification lorsqu'un agent a besoin de vous, puis répondez, lancez une tâche ou ouvrez son terminal.
+Pilotez depuis votre téléphone les agents qui tournent sur votre ordinateur. Installez l'application pour [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) ou [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Scannez le QR code dans **Settings → Connect Mobile** pour l'associer à votre ordinateur. Elle fonctionne sur le Wi-Fi de la maison comme en déplacement.
+
+- **Alertes.** Une notification push vous prévient quand un agent a une question ou attend une approbation.
+- **Réponses.** Répondez dans le chat, approuvez la demande ou ouvrez le terminal de l'agent.
+- **Nouveau travail.** Créez un worker et choisissez son agent et son modèle.
+- **Revue.** Consultez les pull requests et les résultats du relecteur.
 
 <img src="../docs/assets/readme/site/mobile.jpg" alt="L'application mobile montrant un agent qui demande quel fournisseur de messagerie utiliser et la réponse envoyée depuis le téléphone" width="100%" />
+
+### Cloud Agents
+
+Exécutez des workers dans des espaces de travail hébergés plutôt que sur votre machine. Choisissez **Clone to the cloud** puis un dépôt GitHub pour commencer.
+
+- **Toujours actif.** Les tâches continuent, même ordinateur portable fermé.
+- **Suivi en direct.** Ouvrez le chat, les fichiers et le terminal depuis l'application de bureau.
+- **Rien sur votre machine.** Le code, les worktrees et les agents se trouvent entièrement dans le cloud.
+
+Consultez le [guide Cloud](https://docs.orchestrator.inc/guides/cloud) pour la configuration.
 
 ## Installation
 

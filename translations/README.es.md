@@ -126,11 +126,26 @@ La compatibilidad como worker, en Chat y como revisor varía según el agente; l
 
 <br />
 
-### Tu flota desde el móvil
+### Orchestrator for Mobile
 
-Vincula la aplicación móvil con tu escritorio por LAN o Tailscale. Recibe un aviso cuando un agente te necesite y responde, inicia una tarea o abre su terminal.
+Controla desde el teléfono los agentes que se ejecutan en tu escritorio. Instala la aplicación para [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) o [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Escanea el código QR en **Settings → Connect Mobile** para vincularla con tu escritorio. Funciona en el Wi-Fi de casa y fuera de ella.
+
+- **Recibe avisos.** Una notificación push te avisa cuando un agente tiene una pregunta o necesita aprobación.
+- **Responde.** Contesta en el chat, aprueba la solicitud o abre la terminal del agente.
+- **Inicia trabajo.** Crea un nuevo worker y elige su agente y modelo.
+- **Revisa.** Consulta los pull requests y los resultados del revisor.
 
 <img src="../docs/assets/readme/site/mobile.jpg" alt="La aplicación móvil muestra a un agente que pregunta qué proveedor de correo usar y la respuesta enviada desde el teléfono" width="100%" />
+
+### Cloud Agents
+
+Ejecuta workers en espacios de trabajo alojados en lugar de en tu máquina. Elige **Clone to the cloud** y un repositorio de GitHub para empezar.
+
+- **Sigue funcionando.** Las tareas continúan con el portátil cerrado.
+- **Síguelo de cerca.** Abre el chat, los archivos y la terminal desde la aplicación de escritorio.
+- **Nada en tu máquina.** El código, los worktrees y los agentes viven en la nube.
+
+Consulta la [guía de Cloud](https://docs.orchestrator.inc/guides/cloud) para configurarlo.
 
 ## Instalación
 

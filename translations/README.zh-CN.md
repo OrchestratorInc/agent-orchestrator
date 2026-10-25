@@ -126,11 +126,26 @@
 
 <br />
 
-### 用手机管理你的智能体队伍
+### Orchestrator for Mobile
 
-通过局域网或 Tailscale 将移动应用与桌面端配对。智能体需要你时会收到通知，随后即可回复、启动任务或打开其终端。
+用手机操控在桌面端运行的智能体。安装适用于 [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) 或 [Android](https://play.google.com/store/apps/details?id=aoagents.dev) 的应用，在 **Settings → Connect Mobile** 中扫描二维码即可与桌面端配对。在家里的 Wi-Fi 和外出时都能使用。
+
+- **接收提醒**：智能体有问题或需要批准时，会收到推送通知。
+- **回复**：在聊天中回答、批准请求，或打开智能体的终端。
+- **开始工作**：创建新的工作者，并选择其智能体和模型。
+- **评审**：查看拉取请求和评审者结果。
 
 <img src="../docs/assets/readme/site/mobile.jpg" alt="移动应用中，一个智能体询问要使用哪家邮件服务商，以及从手机发送的回复" width="100%" />
+
+### Cloud Agents
+
+让工作者在托管的工作区中运行，而不是在你的机器上。选择 **Clone to the cloud** 并挑选一个 GitHub 仓库即可开始。
+
+- **持续运行**：合上笔记本，任务也会继续。
+- **随时跟进**：在桌面应用中打开聊天、文件和终端。
+- **本机不留任何东西**：代码、工作树和智能体全部在云端。
+
+设置方法请参阅 [Cloud 指南](https://docs.orchestrator.inc/guides/cloud)。
 
 ## 安装
 
