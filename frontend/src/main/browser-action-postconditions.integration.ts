@@ -71,7 +71,9 @@ async function testCancelledTrustedClick(): Promise<void> {
 					const result = await debuggerApi.sendCommand(method, params);
 					if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && cancelOnPress) controller.abort();
 					if (cancelOnMove && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" && params.buttons === 1 && Number(params.x) >= 150) {
-						valueAtCancel = await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value");
+						const value = await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value");
+						assert.ok(typeof value === "number");
+						valueAtCancel = value;
 						await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.cancelled = true");
 						controller.abort();
 					}
