@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -250,5 +251,53 @@ func TestSearchConversationMessagesHidesSessionChatInTerminalMode(t *testing.T) 
 	}
 	if got := searchMessageIDs(t, s, "prompt"); len(got) != 0 {
 		t.Fatalf("terminal session has no Chat transcript for hits: %v", got)
+	}
+}
+
+func TestSearchConversationMessagesFiltersHiddenTranscriptBeforeCandidateLimit(t *testing.T) {
+	for _, hidden := range []string{"edited branch", "rolled-back turns"} {
+		t.Run(hidden, func(t *testing.T) {
+			ctx := context.Background()
+			s, session, conversation := seededChatConversation(t)
+			// Short hidden messages rank above this longer visible message. There
+			// are more of them than the candidate page, so filtering afterwards
+			// would return no hits even though the transcript contains a match.
+			created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
+				ID: "visible-message", Origin: domain.MessageOriginHuman, Text: "needle " + strings.Repeat("context ", 100),
+				ClientMessageID: "visible-client",
+			}, "visible-turn", testNow)
+			if err != nil || !created {
+				t.Fatalf("append visible message: created=%v err=%v", created, err)
+			}
+			for i := range 40 {
+				created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
+					ID: fmt.Sprintf("hidden-message-%d", i), Origin: domain.MessageOriginHuman, Text: "needle",
+					ClientMessageID: fmt.Sprintf("hidden-client-%d", i),
+				}, fmt.Sprintf("hidden-turn-%d", i), testNow.Add(time.Minute))
+				if err != nil || !created {
+					t.Fatalf("append hidden message %d: created=%v err=%v", i, created, err)
+				}
+			}
+			if hidden == "edited branch" {
+				branch := domain.ConversationBranch{
+					ID: "search-edit", ConversationID: conversation.ID, ParentBranchID: conversation.ActiveBranchID,
+					ForkAfterSequence: 1,
+				}
+				if err := s.CreateAndActivateConversationBranch(ctx, session.ID, branch, "search-edit-generation", testNow.Add(2*time.Minute)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if discarded, err := s.RollbackTurns(ctx, conversation.ID, "hidden-turn-0", testNow.Add(2*time.Minute)); err != nil || discarded != 40 {
+					t.Fatalf("roll back hidden turns: discarded=%d err=%v", discarded, err)
+				}
+			}
+			messages, err := s.ConversationMessages(ctx, conversation.ID)
+			if err != nil || len(messages) != 1 || messages[0].ID != "visible-message" {
+				t.Fatalf("visible transcript = %#v err=%v", messages, err)
+			}
+			if got := searchMessageIDs(t, s, "needle"); !slices.Equal(got, []string{"visible-message"}) {
+				t.Fatalf("visible search hit starved by hidden matches: %v", got)
+			}
+		})
 	}
 }

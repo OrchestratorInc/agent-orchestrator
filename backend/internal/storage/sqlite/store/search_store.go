@@ -16,14 +16,16 @@ import (
 // the SelectConversationMessages rule (active branch path; rolled-back,
 // promoted and cancelled turns hidden), and only the conversation currently
 // selected for a session/reviewer can produce a navigable hit. Snippets have
-// matches wrapped in \x02 and \x03. Hand-written: sqlc cannot parse rowid or
-// FTS5.
+// matches wrapped in \x02 and \x03. Visibility is checked before the candidate
+// limit; each match walks only its own conversation lineage. Hand-written:
+// sqlc cannot parse rowid or FTS5.
 const searchConversationMessagesSQL = `
-WITH RECURSIVE hits AS MATERIALIZED (
+WITH hits AS MATERIALIZED (
     SELECT conversation_messages_fts.rowid AS message_rowid, %[1]s AS score
     FROM conversation_messages_fts
     JOIN conversation_messages AS candidate ON candidate.rowid = conversation_messages_fts.rowid
     JOIN conversations AS owner ON owner.id = candidate.conversation_id
+    LEFT JOIN conversation_turns AS candidate_turn ON candidate_turn.id = candidate.turn_id
     LEFT JOIN review AS owner_review ON owner_review.id = owner.current_review_id
     JOIN sessions AS owner_session ON owner_session.id = COALESCE(owner.current_session_id, owner_review.session_id)
     WHERE conversation_messages_fts MATCH ?1
@@ -34,25 +36,29 @@ WITH RECURSIVE hits AS MATERIALIZED (
             ORDER BY current.scope = 'project' DESC, current.created_at DESC, current.id DESC
             LIMIT 1
         )))
+      AND (candidate.turn_id IS NULL OR candidate_turn.id IS NULL OR (
+          candidate_turn.rolled_back_at IS NULL AND candidate_turn.promoted_to_turn_id IS NULL AND candidate_turn.state <> 'cancelled'
+      ))
+      AND EXISTS (
+          WITH RECURSIVE candidate_path(branch_id, max_sequence) AS (
+              SELECT owner.active_branch_id, CAST(NULL AS INTEGER)
+              UNION ALL
+              SELECT branch.parent_branch_id,
+                     CASE
+                         WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+                         WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+                         ELSE path.max_sequence
+                     END
+              FROM candidate_path AS path
+              JOIN conversation_branches AS branch ON branch.id = path.branch_id
+              WHERE branch.parent_branch_id IS NOT NULL
+          )
+          SELECT 1 FROM candidate_path
+          WHERE branch_id = candidate.branch_id
+            AND (max_sequence IS NULL OR candidate.sequence <= max_sequence)
+      )
     ORDER BY %[2]s
     LIMIT ?2
-), active_path(conversation_id, branch_id, max_sequence) AS (
-    SELECT conversations.id, conversations.active_branch_id, CAST(NULL AS INTEGER)
-    FROM conversations
-    WHERE conversations.id IN (
-        SELECT message.conversation_id FROM hits
-        JOIN conversation_messages AS message ON message.rowid = hits.message_rowid
-    )
-    UNION ALL
-    SELECT path.conversation_id, branch.parent_branch_id,
-           CASE
-               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
-               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
-               ELSE path.max_sequence
-           END
-    FROM active_path AS path
-    JOIN conversation_branches AS branch ON branch.id = path.branch_id
-    WHERE branch.parent_branch_id IS NOT NULL
 )
 SELECT message.id,
        (SELECT snippet(conversation_messages_fts, 0, char(2), char(3), '…', 24)
@@ -64,16 +70,9 @@ SELECT message.id,
        COALESCE(NULLIF(conversation.applied_title, ''), conversation.provider_title, '')
 FROM hits
 JOIN conversation_messages AS message ON message.rowid = hits.message_rowid
-JOIN active_path AS path
-  ON path.conversation_id = message.conversation_id AND path.branch_id = message.branch_id
 JOIN conversations AS conversation ON conversation.id = message.conversation_id
 LEFT JOIN review ON review.id = conversation.current_review_id
 JOIN sessions AS session ON session.id = COALESCE(conversation.current_session_id, review.session_id)
-LEFT JOIN conversation_turns AS turn ON turn.id = message.turn_id
-WHERE (path.max_sequence IS NULL OR message.sequence <= path.max_sequence)
-  AND (message.turn_id IS NULL OR turn.id IS NULL OR (
-      turn.rolled_back_at IS NULL AND turn.promoted_to_turn_id IS NULL AND turn.state <> 'cancelled'
-  ))
 ORDER BY hits.score`
 
 var (
@@ -88,7 +87,7 @@ const (
 	// Past this many matches a query is too common to rank by relevance.
 	chatSearchRankLimit = 2000
 	chatSearchResults   = 8
-	// Matches read past the page: some fall on edited-away branches or repeat.
+	// Matches read past the page: providers may repeat the same passage.
 	chatSearchCandidates = 4 * chatSearchResults
 )
 
