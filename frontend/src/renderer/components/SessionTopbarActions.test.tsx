@@ -289,7 +289,7 @@ describe("SessionTopbarActions embedded actions", () => {
 		expect(screen.queryByText("ao/sess-1")).toBeNull();
 		expect(screen.queryByText("Working")).toBeNull();
 		const localActions = screen.getByTestId("session-local-actions");
-		expect(localActions).toHaveClass("gap-1");
+		expect(localActions).toHaveClass("gap-(--gap-topbar-control)");
 		expect(localActions).not.toHaveClass("gap-px", "mr-0.5");
 		expect(localActions.contains(screen.getByRole("button", { name: "New terminal" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Session option" }))).toBe(true);
@@ -413,7 +413,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		const kanbanButton = screen.getByRole("button", { name: "Open Kanban" });
 		expect(kanbanButton).toHaveTextContent("Open Kanban");
 		expect(kanbanButton).toHaveClass("topbar-control--action");
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("bg-raised");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("bg-interactive-hover/50");
 		await userEvent.click(kanbanButton);
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId",

@@ -1,7 +1,7 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
-const topbarActionClass = "border-0 bg-raised text-foreground hover:bg-interactive-active data-[state=open]:bg-interactive-active aria-pressed:bg-interactive-active";
+const topbarActionClass = "border-0 bg-interactive-hover/50 text-foreground hover:bg-interactive-hover data-[state=open]:bg-interactive-active aria-pressed:bg-interactive-active";
 
 const topbarButtonVariants = cva(
 	"topbar-control topbar-control--disabled-affordance inline-flex items-center transition-[transform,filter,background-color,color,border-color] duration-fast ease-out active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",

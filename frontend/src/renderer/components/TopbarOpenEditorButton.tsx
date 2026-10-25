@@ -163,7 +163,7 @@ export function TopbarOpenEditorButton({
 				</TopbarActionError>
 			) : null}
 			<div
-				className="inline-flex items-center gap-0 rounded-md bg-raised transition-colors hover:bg-interactive-active data-[state=open]:bg-interactive-active"
+				className="inline-flex items-center gap-0 rounded-md bg-interactive-hover/50 transition-colors hover:bg-interactive-hover data-[state=open]:bg-interactive-active"
 				data-state={menuOpen ? "open" : "closed"}
 				style={style}
 			>

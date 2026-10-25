@@ -284,6 +284,7 @@
 	--size-topbar-primary: 36px;
 	--size-topbar-secondary: 36px;
 	--size-topbar-control: 28px;
+	--gap-topbar-control: var(--space-1);
 	--size-toolbar: var(--size-topbar-primary);
 	/* Top offset for the Win/Linux browser and files pop-outs.
 	   Distinct from --size-toolbar (36px). */

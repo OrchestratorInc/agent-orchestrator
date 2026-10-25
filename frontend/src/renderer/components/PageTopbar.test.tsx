@@ -39,7 +39,7 @@ describe("SessionTabsTopbar", () => {
 		const region = screen.getByTestId("session-terminal-region");
 		expect(region).toHaveClass("session-topbar-titlebar-clearance-mac");
 		expect(region).toHaveStyle({ width: "320px" });
-		expect(screen.getByTestId("session-action-region")).toHaveClass("pl-2", "pr-3");
+		expect(screen.getByTestId("session-action-region")).toHaveClass("session-topbar-actions");
 		expect(within(region).getByRole("tablist")).toBeInTheDocument();
 	});
 
