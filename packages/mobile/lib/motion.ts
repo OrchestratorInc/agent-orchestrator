@@ -78,16 +78,7 @@ export const CROSSFADE_MS = 140;
 export const PAGE_SLIDE_MS = 200;
 /** A status colour changing on a rail or dot. */
 export const TINT_MS = 200;
-/**
- * A board row moving between sections — pinned, or promoted by a delivery event.
- *
- * Still the longest of the three, because this one is meant to be *followed*:
- * the point is to see which row moved and where it went. Kept tight all the same —
- * folding a section moves a whole run of rows, and the eye reads the destination
- * long before a longer curve would have finished.
- */
-export const ROW_MOVE_MS = 170;
-/** A row arriving in or leaving a section. Shorter, so it never outlasts the move. */
+/** A row arriving or leaving. Shorter than `LAYOUT_MS`, so it never outlasts the move beside it. */
 export const ROW_ENTER_MS = 120;
 
 export type MotionDurations = {
