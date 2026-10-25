@@ -218,6 +218,23 @@ func TestTriageRedactionCompleteValuesAndHomes(t *testing.T) {
 	}
 }
 
+func TestTriageRedactionEscapedQuotedValues(t *testing.T) {
+	for _, input := range []string{
+		`err="token=\"private value\""`,
+		`err="{\"detail\":\"token=\\\"private value\\\"\"}" next=ok`,
+		`err="password=\"private`,
+		`token=\\private`,
+	} {
+		got := redactTriage(input, "")
+		if strings.Contains(got, "private") || !strings.Contains(got, "[redacted-secret]") {
+			t.Errorf("%q => %q", input, got)
+		}
+	}
+	if got := redactTriage(`err="token=\"private\" status=ok"`, ""); got != `err="token=\"[redacted-secret]\" status=ok"` {
+		t.Fatal(got)
+	}
+}
+
 func TestTriageRejectsSymlinkedParent(t *testing.T) {
 	deps, _, state := triageTestDeps(t)
 	external := t.TempDir()

@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -246,6 +248,7 @@ func TestTriageLogMessages(t *testing.T) {
 		{"panic and fatal", "panic: runtime failed\nfatal error: concurrent map writes\nFATAL daemon stopped", []string{"daemon stopped", "error: concurrent map writes", "runtime failed"}},
 		{"deduplicated by message", "level=ERROR msg=\"launch failed\" error=old\nlevel=WARN msg=\"launch failed\" error=new", []string{"launch failed: new"}},
 		{"empty error", "level=WARN msg=\"launch failed\" error=\"\"", []string{"launch failed"}},
+		{"slog err", `level=ERROR msg="background session reconciliation on boot failed" err="database disk image is malformed"`, []string{"background session reconciliation on boot failed: database disk image is malformed"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := triageLogMessages(tc.logs); !reflect.DeepEqual(got, tc.want) {
@@ -311,6 +314,26 @@ func TestTriageLogEvidence(t *testing.T) {
 				t.Fatal(draft)
 			}
 		})
+	}
+}
+
+func TestTriageSnapshotRedactsNestedLogValues(t *testing.T) {
+	deps, _, dir := triageTestDeps(t)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	logger.Error("github sync failed", "err", `{"detail":"token=\"SENTINELPRIVATEVALUE\""}`)
+	logger.Error("background session reconciliation on boot failed", "err", "database disk image is malformed")
+	if err := os.WriteFile(filepath.Join(dir, "daemon.log"), logs.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, draft, _ := (&commandContext{deps: deps.withDefaults()}).triageSnapshot(context.Background(), dir, dir, filepath.Join(dir, "running.json"))
+	for _, text := range []string{snapshot, draft} {
+		if strings.Contains(text, "SENTINELPRIVATEVALUE") {
+			t.Fatalf("secret leaked: %s", text)
+		}
+		if !strings.Contains(text, "database disk image is malformed") {
+			t.Errorf("err detail missing: %s", text)
+		}
 	}
 }
 
