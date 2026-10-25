@@ -59,6 +59,19 @@ export function loudNotificationsEnabled(value: string | undefined): boolean {
 }
 
 /**
+ * Whether `AO_DISABLE_TRAY_NOTIFICATIONS` mutes this install's OS notification
+ * surface (fork convention: `1`/`true` enables the mute, any other value —
+ * including unset — keeps signaling). Main reads the env once at startup; the
+ * mute covers OS toasts, sounds, dock/taskbar attention and badges, and the
+ * tray attention count, while in-app feeds and the tray icon itself (Show /
+ * Quit menu) stay untouched.
+ */
+export function trayNotificationsDisabled(value: string | undefined): boolean {
+	const normalized = value?.trim().toLowerCase();
+	return normalized === "1" || normalized === "true";
+}
+
+/**
  * Whether this notification type should play the sound and flash the
  * Windows/Linux taskbar. Quiet mode signals for every human-feedback type;
  * loud mode restores the narrower upstream actionable set.

@@ -199,6 +199,7 @@ import {
 	shouldSignalAttention,
 	shouldToast,
 	toastSilent,
+	trayNotificationsDisabled,
 } from "./shared/notification-signals";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
@@ -413,6 +414,12 @@ let soundNotificationsEnabled = DEFAULT_UI_SETTINGS.soundNotificationsEnabled;
 // into the upstream loud behavior. Read once at startup, shared with the
 // renderer over IPC (the sandboxed renderer cannot read the env itself).
 const notificationsLoud = loudNotificationsEnabled(process.env.AO_NO_QUIET_NOTIFICATIONS);
+// Kill switch (fork) for the OS notification surface: AO_DISABLE_TRAY_NOTIFICATIONS=1
+// mutes toasts, sounds, dock/taskbar attention and badges, and the tray
+// attention count. In-app feeds keep recording events, and the tray icon with
+// its Show/Quit menu stays (it owns the quit/restore flow). Read once at
+// startup; no hot toggle.
+const trayNotificationsOff = trayNotificationsDisabled(process.env.AO_DISABLE_TRAY_NOTIFICATIONS);
 
 // Plays the bundled notification sound through the renderer (main has no
 // audio output). `shell.beep()` is only the fallback for when no shell is
@@ -2997,6 +3004,7 @@ ipcMain.handle(
 	"notifications:show",
 	(_event, notification: { id: string; title: string; body?: string; type?: string; watched?: boolean }) => {
 		if (!notification.id || !mainWindow) return;
+		if (trayNotificationsOff) return;
 		// Quiet by default: only human-feedback events may signal at all. Routine
 		// notifications stay in the renderer's feed; no toast, sound, or bounce.
 		// Loud mode (AO_NO_QUIET_NOTIFICATIONS) restores the upstream behavior.
@@ -3109,6 +3117,7 @@ if (!app.isPackaged) {
 
 ipcMain.handle("notifications:setBadge", (_event, count: number) => {
 	if (!mainWindow) return { error: "no mainWindow" };
+	if (trayNotificationsOff) return { ok: true };
 	const n = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 	if (process.platform === "darwin") {
 		const dock = app.dock;
@@ -3139,7 +3148,12 @@ ipcMain.handle("notifications:setBadge", (_event, count: number) => {
 	return { ok: true };
 });
 
-ipcMain.on(TRAY_SET_ATTENTION_STATE_CHANNEL, (event, state) => trayLifecycle.handleSetAttentionState(event, state));
+// The attention state only drives the tray's count/tooltip surface; dropping it
+// keeps the icon and its Show/Quit menu working while the flag is set.
+ipcMain.on(TRAY_SET_ATTENTION_STATE_CHANNEL, (event, state) => {
+	if (trayNotificationsOff) return;
+	trayLifecycle.handleSetAttentionState(event, state);
+});
 
 ipcMain.on(TRAY_RENDERER_READY_CHANNEL, (event) => {
 	trayLifecycle.handleRendererReady(event);
