@@ -3394,7 +3394,7 @@ html.sidebar-reordering * {
 
 /* Override the unlayered form-control font reset for primary topbar actions. */
 .topbar-control--primary {
-	font-weight: 800;
+	font-weight: 600;
 }
 
 .workspace-topbar-actions .topbar-control:active:not(:disabled) {
