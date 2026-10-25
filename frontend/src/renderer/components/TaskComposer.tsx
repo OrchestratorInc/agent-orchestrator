@@ -677,7 +677,8 @@ export function TaskComposer({
 				// is advisory: the project-aware launch path remains authoritative.
 				// It refreshes the readiness snapshot in the background rather than
 				// holding the launch for a CLI probe that can take seconds.
-				void ensureAgentReadiness([selectedAgent], "launch", hostId)
+				void Promise.resolve()
+					.then(() => ensureAgentReadiness([selectedAgent], "launch", hostId))
 					.then((readiness) => cacheAgentReadiness(queryClient, readiness, hostId))
 					.catch(() => {});
 			}
