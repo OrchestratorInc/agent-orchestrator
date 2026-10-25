@@ -12,7 +12,27 @@ packaged_app="${repo_root}/frontend/out/Agent Orchestrator-darwin-arm64/${app_na
 installed_app="/Applications/${app_name}"
 codesign_identity="AO-Local-CodeSign"
 
-printf '==> building ao CLI\n'
+# Pin node to an nvm-managed LTS before anything invokes npm or forge: brew
+# node 26 silently truncates `electron-forge package` (exit 0, empty out/, the
+# breakage only surfaces later at ditto). A rewrite of this script dropped the
+# pin once (2026-10-25) and the build "succeeded" with no app bundle —
+# frontend/src/main/rebuild-script-pin.test.ts guards this block textually;
+# keep selector and test in sync.
+nvm_dir="${NVM_DIR:-${HOME}/.nvm}"
+node_dir=""
+for candidate in "${nvm_dir}"/versions/node/v20.* "${nvm_dir}"/versions/node/v22.*; do
+	if [[ -x "${candidate}/bin/node" ]]; then
+		node_dir="${candidate}"
+		break
+	fi
+done
+if [[ -z "${node_dir}" ]]; then
+	printf '!! nvm node v20/v22 not found under %s — brew/system node silently breaks forge package; install an nvm LTS.\n' "${nvm_dir}" >&2
+	exit 1
+fi
+export PATH="${node_dir}/bin:${PATH}"
+
+printf '==> building ao CLI (node: %s)\n' "${node_dir}"
 bash "${script_dir}/daemon-build.sh"
 
 printf '==> packaging %s (bundles the same daemon)\n' "${app_name}"
