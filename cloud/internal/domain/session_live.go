@@ -56,3 +56,21 @@ type SessionLiveState struct {
 	// ChatSettings: the session's owner may, everyone else only sees them.
 	CanConfigure bool
 }
+
+// SessionParticipant is one person in a shared session as the board shows
+// them: its creator and everyone a share link let in, whether or not they have
+// it open.
+type SessionParticipant struct {
+	UserID string
+	// Name is the display name, never an email address.
+	Name string
+	// Role is "owner" for the session's creator, "member" for another member
+	// of its organization who has it open, else the share grant's "editor" or
+	// "viewer".
+	Role string
+	// Present reports a live stream open on the session now.
+	Present bool
+	// State is "working" while they hold the composer, "waiting" while they
+	// are in line for it, otherwise "idle".
+	State string
+}

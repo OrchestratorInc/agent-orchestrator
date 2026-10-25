@@ -1237,6 +1237,41 @@ paths:
                     $ref: "#/components/schemas/SessionChatSettings"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/session-participants:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listSessionParticipants
+      tags: [Sessions]
+      description: Who is in each of the named sessions that someone has shared, for a board. Sessions the caller may not open, or that nobody has shared, are left out. Reading this does not make the caller present in any session.
+      parameters:
+        - name: sessionId
+          in: query
+          required: false
+          description: A session to describe; repeat for each, at most 100.
+          schema:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+              format: uuid
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: The shared sessions among those asked for, in the order asked.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SharedSessionParticipants"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -6440,6 +6475,39 @@ components:
             $ref: "#/components/schemas/SessionViewer"
         composer:
           $ref: "#/components/schemas/ComposerLeaseState"
+    SharedSessionParticipants:
+      type: object
+      additionalProperties: false
+      required: [sessionId, participants]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        participants:
+          type: array
+          description: The session's creator first, then each person a share link let in, in the order they joined, then any other organization member who has it open.
+          items:
+            $ref: "#/components/schemas/SessionParticipant"
+    SessionParticipant:
+      type: object
+      additionalProperties: false
+      required: [userId, name, role, present, state]
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+          description: Display name, never an email address.
+        role:
+          type: string
+          enum: [owner, member, editor, viewer]
+        present:
+          type: boolean
+          description: Whether they have the session open now.
+        state:
+          type: string
+          enum: [working, waiting, idle]
+          description: working while they hold the composer, waiting while in line for it, otherwise idle.
     SessionChatSettings:
       type: object
       additionalProperties: false
