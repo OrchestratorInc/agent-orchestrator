@@ -196,6 +196,27 @@ type WorkspaceStartupEvent struct {
 	Code    string `json:"code,omitempty"`
 	Message string `json:"message,omitempty"`
 	Detail  string `json:"detail,omitempty"`
+	// Startup, on a worker's first ready report, says how long it took.
+	Startup *WorkspaceStartupTimings `json:"startup,omitempty"`
+}
+
+// Checkout sources of WorkspaceStartupTimings.Checkout.
+const (
+	CheckoutFromSnapshot = "snapshot" // a project snapshot's baked checkout
+	CheckoutCloned       = "clone"    // cloned at startup
+	CheckoutExisting     = "existing" // the session's own, from an earlier worker
+	CheckoutNone         = "none"     // a standalone session
+)
+
+// WorkspaceStartupTimings are milliseconds since the worker process started
+// at which it reached each startup phase, and where its checkout came from.
+type WorkspaceStartupTimings struct {
+	ConnectedMS int64  `json:"connectedMs"`
+	CheckoutMS  int64  `json:"checkoutMs"`
+	SetupMS     int64  `json:"setupMs"`
+	Checkout    string `json:"checkout"`
+	SelfUpdated bool   `json:"selfUpdated,omitempty"`
+	FirstStart  bool   `json:"firstStart,omitempty"`
 }
 
 // SessionScriptEnvironment is the AO_* environment a Setup or Cleanup command

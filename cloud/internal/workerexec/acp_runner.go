@@ -88,82 +88,35 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	if !ok {
 		return errors.New("Cloud approval control is unavailable")
 	}
-	path, args, env, err := acpLaunch(ctx, turn, command)
-	if err != nil {
-		return err
-	}
-	process := exec.CommandContext(ctx, path, args...)
-	configureProviderProcess(process)
-	process.Dir = command.Dir
-	process.Env = mergedEnvironment(env)
-	stdin, err := process.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := process.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	var stderr lockedBuffer
-	process.Stderr = &stderr
-	if err := process.Start(); err != nil {
-		return fmt.Errorf("start ACP agent: %w", err)
-	}
-	defer func() { _ = stopProviderProcess(process); _ = process.Wait() }()
-	client := &cloudACPClient{control: control, turn: turn, cursorMode: command.CursorMode, publish: publish}
-	conn := acp.NewClientSideConnection(client, stdin, stdout)
-	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	initialized, err := conn.Initialize(handshakeCtx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber})
-	if err != nil {
-		return fmt.Errorf("initialize ACP agent: %w: %s", err, boundedError(stderr.String()))
-	}
-	var meta map[string]any
-	if turn.Harness == "claude-code" && command.SystemPrompt != "" {
-		meta = map[string]any{"systemPrompt": map[string]any{
-			"type": "preset", "preset": "claude_code", "append": command.SystemPrompt,
-		}}
-	}
-	// Claude opens the sibling checkouts as additional directories, so it
-	// loads their CLAUDE.md as a terminal's --add-dir does. An agent that does
-	// not advertise the capability keeps the settings' directory access only.
-	var additionalDirectories []string
-	if turn.Harness == "claude-code" && initialized.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil {
-		additionalDirectories = command.AdditionalDirectories
-	}
-	var sessionID acp.SessionId
-	var configOptions []acp.SessionConfigOption
-	var modes *acp.SessionModeState
-	if turn.AgentSessionID != "" {
-		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
-		if loadErr != nil {
-			var requestErr *acp.RequestError
-			// The CLI builder's missing-transcript check only changes CLI args;
-			// ACP must resolve the original durable identity with the provider.
-			// Only an explicit missing Claude session permits a replacement.
-			if turn.Harness != "claude-code" || !errors.As(loadErr, &requestErr) || requestErr.Code != -32002 {
-				return fmt.Errorf("restore ACP session: %w", loadErr)
-			}
-		} else {
-			sessionID = acp.SessionId(turn.AgentSessionID)
-			configOptions, modes = loaded.ConfigOptions, loaded.Modes
-		}
-	}
-	if sessionID == "" {
-		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}})
-		if createErr != nil {
-			return fmt.Errorf("create ACP session: %w: %s", createErr, boundedError(stderr.String()))
-		}
-		sessionID = created.SessionId
-		configOptions, modes = created.ConfigOptions, created.Modes
-		if err := identity(string(sessionID)); err != nil {
+	// A Claude agent prewarmed for exactly this launch has already paid the
+	// process start and handshake; otherwise start one now.
+	agent := s.takeWarmACP(ctx, turn, command)
+	if agent == nil {
+		var err error
+		if agent, err = startACP(ctx, control, turn, command); err != nil {
 			return err
 		}
 	}
-	if err := configureACPSession(ctx, conn, sessionID, turn, command.CursorMode, configOptions, modes, publish); err != nil {
+	defer agent.close()
+	// A prewarmed agent was started under the controller's context, not this
+	// turn's, so the turn's cancellation must stop it explicitly.
+	defer context.AfterFunc(ctx, agent.close)()
+	agent.client.bind(turn, command.CursorMode, publish)
+	if agent.sessionID == "" {
+		if err := agent.openSession(ctx, turn, command); err != nil {
+			return err
+		}
+	}
+	if agent.created {
+		if err := identity(string(agent.sessionID)); err != nil {
+			return err
+		}
+	}
+	conn, sessionID, client, stderr := agent.conn, agent.sessionID, agent.client, agent.stderr
+	if err := configureACPSession(ctx, conn, sessionID, turn, command.CursorMode, agent.configOptions, agent.modes, publish); err != nil {
 		return err
 	}
-	active := &acpSession{conn: conn, sessionID: sessionID, turnID: turn.ID, steering: acpSteeringSupported(initialized.Meta)}
+	active := &acpSession{conn: conn, sessionID: sessionID, turnID: turn.ID, steering: acpSteeringSupported(agent.initialized.Meta)}
 	if publisher, ok := s.Control.(capabilityPublisher); ok {
 		if err := publisher.PublishTurnCapabilities(ctx, turn.ID, turn.Attempt, active.steering); err != nil {
 			return err
@@ -182,11 +135,116 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 	// The LoadSession/NewSession handshake above is complete, so any replayed
 	// history has already been dropped; record from here on — this turn's output.
 	client.live.Store(true)
-	_, err = conn.Prompt(ctx, acp.PromptRequest{SessionId: sessionID, Prompt: []acp.ContentBlock{{Text: &acp.ContentBlockText{Type: "text", Text: turn.Prompt}}}})
+	_, err := conn.Prompt(ctx, acp.PromptRequest{SessionId: sessionID, Prompt: []acp.ContentBlock{{Text: &acp.ContentBlockText{Type: "text", Text: turn.Prompt}}}})
 	if err != nil {
 		return fmt.Errorf("ACP prompt: %w: %s", err, boundedError(stderr.String()))
 	}
 	return nil
+}
+
+// startedACP is an ACP agent process past its initialize handshake, with or
+// without its session yet. A turn starts one, or takes one prewarmed for it.
+type startedACP struct {
+	process       *exec.Cmd
+	conn          *acp.ClientSideConnection
+	client        *cloudACPClient
+	stderr        *lockedBuffer
+	initialized   acp.InitializeResponse
+	sessionID     acp.SessionId
+	created       bool // a new session, whose identity the turn publishes
+	configOptions []acp.SessionConfigOption
+	modes         *acp.SessionModeState
+	cleanup       func()
+	closeOnce     sync.Once
+}
+
+// startACP launches the turn's ACP agent and completes its initialize
+// handshake. The process lives until close or until ctx ends.
+func startACP(ctx context.Context, control approvalControl, turn worker.Turn, command Command) (*startedACP, error) {
+	path, args, env, err := acpLaunch(ctx, turn, command)
+	if err != nil {
+		return nil, err
+	}
+	process := exec.CommandContext(ctx, path, args...)
+	configureProviderProcess(process)
+	process.Dir = command.Dir
+	process.Env = mergedEnvironment(env)
+	stdin, err := process.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := process.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	agent := &startedACP{process: process, stderr: &lockedBuffer{}, client: &cloudACPClient{control: control}}
+	process.Stderr = agent.stderr
+	if err := process.Start(); err != nil {
+		return nil, fmt.Errorf("start ACP agent: %w", err)
+	}
+	agent.conn = acp.NewClientSideConnection(agent.client, stdin, stdout)
+	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	agent.initialized, err = agent.conn.Initialize(handshakeCtx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber})
+	if err != nil {
+		agent.close()
+		return nil, fmt.Errorf("initialize ACP agent: %w: %s", err, boundedError(agent.stderr.String()))
+	}
+	return agent, nil
+}
+
+// openSession restores the turn's conversation, or creates one when it has
+// none or (Claude only) the provider no longer has it.
+func (a *startedACP) openSession(ctx context.Context, turn worker.Turn, command Command) error {
+	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	var meta map[string]any
+	if turn.Harness == "claude-code" && command.SystemPrompt != "" {
+		meta = map[string]any{"systemPrompt": map[string]any{
+			"type": "preset", "preset": "claude_code", "append": command.SystemPrompt,
+		}}
+	}
+	// Claude opens the sibling checkouts as additional directories, so it
+	// loads their CLAUDE.md as a terminal's --add-dir does. An agent that does
+	// not advertise the capability keeps the settings' directory access only.
+	var additionalDirectories []string
+	if turn.Harness == "claude-code" && a.initialized.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil {
+		additionalDirectories = command.AdditionalDirectories
+	}
+	if turn.AgentSessionID != "" {
+		loaded, loadErr := a.conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
+		if loadErr != nil {
+			var requestErr *acp.RequestError
+			// The CLI builder's missing-transcript check only changes CLI args;
+			// ACP must resolve the original durable identity with the provider.
+			// Only an explicit missing Claude session permits a replacement.
+			if turn.Harness != "claude-code" || !errors.As(loadErr, &requestErr) || requestErr.Code != -32002 {
+				return fmt.Errorf("restore ACP session: %w", loadErr)
+			}
+		} else {
+			a.sessionID = acp.SessionId(turn.AgentSessionID)
+			a.configOptions, a.modes = loaded.ConfigOptions, loaded.Modes
+			return nil
+		}
+	}
+	created, createErr := a.conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}})
+	if createErr != nil {
+		return fmt.Errorf("create ACP session: %w: %s", createErr, boundedError(a.stderr.String()))
+	}
+	a.sessionID, a.created = created.SessionId, true
+	a.configOptions, a.modes = created.ConfigOptions, created.Modes
+	return nil
+}
+
+// close stops the agent process and runs the launch's cleanup, once.
+func (a *startedACP) close() {
+	a.closeOnce.Do(func() {
+		_ = stopProviderProcess(a.process)
+		_ = a.process.Wait()
+		if a.cleanup != nil {
+			a.cleanup()
+		}
+	})
 }
 
 func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, []string, map[string]string, error) {
@@ -547,6 +605,13 @@ type cloudACPClient struct {
 	published map[string]string
 }
 
+// bind points the client at the turn it serves. A prewarmed agent's client
+// is bound only once its turn arrives; binding always precedes live.Store,
+// which publishes these fields to the connection's goroutines.
+func (c *cloudACPClient) bind(turn worker.Turn, cursorMode string, publish func(Output) error) {
+	c.turn, c.cursorMode, c.publish = turn, cursorMode, publish
+}
+
 func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.SessionNotification) error {
 	if !c.live.Load() {
 		return nil
@@ -686,7 +751,9 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 	cancelled := acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeCancelled()}
-	if ctx.Err() != nil || c.turn.Mode == "read-only" {
+	// Nothing is approved before the turn's prompt: the client is not bound
+	// to a turn (a prewarmed agent) until then.
+	if ctx.Err() != nil || !c.live.Load() || c.turn.Mode == "read-only" {
 		return cancelled, nil
 	}
 	if selected, ok := automaticACPDecision(c.turn, c.cursorMode, request); ok {

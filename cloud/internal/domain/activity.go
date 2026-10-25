@@ -28,6 +28,10 @@ const (
 	ActivityWorkerRelaunched   = "worker.relaunched"
 	ActivityGitGrantFailed     = "worker.git_grant_failed"
 
+	// ActivityWorkspaceReady carries how long a worker took to connect, check
+	// out and run Setup, and where its checkout came from.
+	ActivityWorkspaceReady = "workspace.ready"
+
 	ActivityBootstrapStage  = "bootstrap.stage"
 	ActivityBootstrapFailed = "bootstrap.failed"
 

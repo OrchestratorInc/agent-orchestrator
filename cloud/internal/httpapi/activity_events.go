@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 // sandboxReadinessStore is the optional store capability behind the
@@ -88,5 +89,28 @@ func (s *Server) recordWorkerReady(
 	s.activity.Record(r.Context(), domain.ActivityEvent{
 		OrgID: orgID, SessionID: sessionID, Kind: domain.ActivitySandboxReady,
 		Provider: readiness.Provider, Attrs: ready,
+	})
+}
+
+// recordWorkspaceReady records a worker's startup timings. They are the
+// worker's own report, so only well-formed values are kept.
+func (s *Server) recordWorkspaceReady(r *http.Request, claims worker.Claims, startup worker.WorkspaceStartupTimings) {
+	if s.activity == nil {
+		return
+	}
+	attrs := map[string]any{"epoch": claims.Epoch, "first_start": startup.FirstStart, "self_updated": startup.SelfUpdated}
+	for name, value := range map[string]int64{
+		"connected_ms": startup.ConnectedMS, "checkout_ms": startup.CheckoutMS, "setup_ms": startup.SetupMS,
+	} {
+		if value >= 0 && value <= (24*time.Hour).Milliseconds() {
+			attrs[name] = value
+		}
+	}
+	switch startup.Checkout {
+	case worker.CheckoutFromSnapshot, worker.CheckoutCloned, worker.CheckoutExisting, worker.CheckoutNone:
+		attrs["checkout"] = startup.Checkout
+	}
+	s.activity.Record(r.Context(), domain.ActivityEvent{
+		OrgID: claims.OrgID, SessionID: claims.SessionID, Kind: domain.ActivityWorkspaceReady, Attrs: attrs,
 	})
 }

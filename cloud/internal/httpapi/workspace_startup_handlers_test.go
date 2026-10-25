@@ -86,3 +86,33 @@ func TestWorkerEventRecordsAndClearsWorkspaceStartupError(t *testing.T) {
 		t.Fatalf("refused payloads reached the store: %+v", store)
 	}
 }
+
+// A worker's first ready report carries its startup timings, recorded as the
+// workspace.ready activity with only well-formed values kept.
+func TestWorkerReadyReportRecordsStartupTimings(t *testing.T) {
+	t.Parallel()
+	captured := &capturedActivity{}
+	srv := testServer(&workspaceStartupStore{})
+	srv.activity = startRecorder(t, captured, 16)
+	rec := httptest.NewRecorder()
+	srv.workerEvent(rec, workerRequest(t, http.MethodPost, "/worker/events",
+		`{"type":"workspace.startup","payload":{"status":"ready","startup":{"connectedMs":420,"checkoutMs":1530,`+
+			`"setupMs":-5,"checkout":"snapshot","firstStart":true}}}`, "worker:event"))
+	if rec.Code >= 300 {
+		t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
+	}
+	var ready domain.ActivityEvent
+	for _, event := range captured.waitFor(t, domain.ActivityWorkspaceReady) {
+		if event.Kind == domain.ActivityWorkspaceReady {
+			ready = event
+		}
+	}
+	if ready.SessionID != testOrchestratorID || ready.Attrs["connected_ms"] != int64(420) ||
+		ready.Attrs["checkout_ms"] != int64(1530) || ready.Attrs["checkout"] != "snapshot" ||
+		ready.Attrs["first_start"] != true {
+		t.Fatalf("workspace.ready = %+v", ready)
+	}
+	if _, ok := ready.Attrs["setup_ms"]; ok {
+		t.Fatalf("a negative duration was recorded: %+v", ready.Attrs)
+	}
+}

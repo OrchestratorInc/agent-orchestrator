@@ -21,7 +21,12 @@ func TestCloudPromptProviderHelper(t *testing.T) {
 	if os.Getenv("AO_PROMPT_TEST") != "1" {
 		return
 	}
-	capture, err := os.Create(os.Getenv("AO_PROMPT_CAPTURE"))
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if os.Getenv("AO_PROMPT_CAPTURE_APPEND") == "1" {
+		// Several agents share the capture (prewarm tests).
+		flags = os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	}
+	capture, err := os.OpenFile(os.Getenv("AO_PROMPT_CAPTURE"), flags, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +57,7 @@ func TestCloudPromptProviderHelper(t *testing.T) {
 			root = parent
 		}
 	}
-	if err := record.Encode(map[string]any{"args": os.Args, "cursorRules": cursorRules, "env": map[string]string{
+	if err := record.Encode(map[string]any{"pid": os.Getpid(), "args": os.Args, "cursorRules": cursorRules, "env": map[string]string{
 		"AO_PULL_REQUEST_SOCKET":     os.Getenv("AO_PULL_REQUEST_SOCKET"),
 		"AO_REVIEW_SOCKET":           os.Getenv("AO_REVIEW_SOCKET"),
 		"AO_CLOUD_WORKER_API_URL":    os.Getenv("AO_CLOUD_WORKER_API_URL"),
@@ -69,10 +74,12 @@ func TestCloudPromptProviderHelper(t *testing.T) {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params map[string]any  `json:"params"`
+			PID    int             `json:"pid,omitempty"`
 		}
 		if err := input.Decode(&request); err != nil {
 			return
 		}
+		request.PID = os.Getpid()
 		if err := record.Encode(request); err != nil {
 			t.Fatal(err)
 		}

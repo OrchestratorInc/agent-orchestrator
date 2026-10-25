@@ -607,6 +607,11 @@ func (s *Supervisor) startChat(ctx context.Context) error {
 	s.iface.current = InterfaceChat
 	s.iface.mu.Unlock()
 	go func() {
+		// The agent's own start does not need the workspace, so it overlaps
+		// the checkout and Setup instead of following them.
+		if prewarmer, ok := s.ChatRunner.(interface{ Prewarm(context.Context) }); ok {
+			prewarmer.Prewarm(runCtx)
+		}
 		if ready := s.ChatWorkspaceReady; ready != nil {
 			select {
 			case <-runCtx.Done():
