@@ -396,13 +396,13 @@ describe("ChatWorkspace steering", () => {
 		expect(screen.queryByText("Queue")).not.toBeInTheDocument();
 		expect(
 			within(screen.getByTestId("queued-message-queued-1")).getAllByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		).toHaveLength(1);
 
 		await userEvent.click(
 			within(screen.getByTestId("queued-message-queued-2")).getByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		);
 		expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-2");
@@ -543,14 +543,40 @@ describe("ChatWorkspace steering", () => {
 		expect(within(dock).queryByText("Queue")).not.toBeInTheDocument();
 		expect(
 			within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		).toBeInTheDocument();
 		expect(
 			within(screen.getByTestId("queued-message-queued-2")).getByRole("button", {
-				name: "Steer this queued message into the running turn",
+				name: "Send this queued message now, interrupting the running turn",
 			}),
 		).toBeInTheDocument();
+	});
+
+	// Queued-turn steer is interrupt-and-send, which rides the shared cancel seam
+	// every chat driver has — so it is offered even when the harness cannot take
+	// mid-turn guidance.
+	it("offers steer on the queued card for a harness that cannot steer mid-turn", async () => {
+		const base = withQueuedMessages();
+		const snapshot = {
+			...base,
+			capabilities: (base.capabilities ?? []).filter((capability) => capability !== "steer"),
+		};
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatWorkspace
+				snapshot={snapshot}
+				onSteer={vi.fn()}
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
+
+		const button = within(screen.getByTestId("queued-message-queued-1")).getByRole("button", {
+			name: "Send this queued message now, interrupting the running turn",
+		});
+		expect(button).toBeInTheDocument();
+		await userEvent.click(button);
+		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
 	});
 
 	it("does not show delivery indicators in the composer for a running turn without a pending approval", () => {
