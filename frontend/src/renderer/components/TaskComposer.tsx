@@ -563,6 +563,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// A login problem behind the catalog warning gets a plain-language notice
 	// with the fix in place. A cloud task never runs on this computer's login,
 	// so its composer never asks for it.
+	const modelNotInstalled = !isCloudProject && revalidationWarning === undefined && localCatalog?.warningCode === "not_installed";
 	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
@@ -809,14 +810,19 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			preserveProject: true,
 		});
 	}, [hostId, isCloudProject, openGlobalSettings, selectedAgent]);
+	const modelIssue = modelNotInstalled ? "not_installed" : modelAuthIssue;
 	const modelWarning = isCloudProject
 		? cloudModelWarning ?? (localCatalogForCloud ? modelWarningText : undefined)
-		: modelAuthIssue ? (
+		: modelIssue ? (
 		<ModelCatalogNotice
 			agentLabel={selectedAgentLabel}
-			issue={modelAuthIssue}
+			issue={modelIssue}
 			detail={modelWarningText}
 			onLogin={startAgentLogin}
+			onInstall={() => openGlobalSettings("harness", {
+				focusAgentId: selectedAgent, ...(hostId ? { hostId } : {}),
+				harnessView: "local", preserveProject: true,
+			})}
 			onRetry={refreshSelectedModels}
 		/>
 	) : modelWarningText;
