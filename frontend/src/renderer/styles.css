@@ -3421,7 +3421,7 @@ html.sidebar-reordering * {
 }
 
 .workspace-topbar-actions .topbar-control--primary {
-	height: calc(var(--size-topbar-control) - 2px);
+	height: calc(var(--size-topbar-control) - 4px);
 }
 
 .workspace-topbar-actions .topbar-control:active:not(:disabled) {
