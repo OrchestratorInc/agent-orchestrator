@@ -37,6 +37,8 @@ import {
 } from "../../lib/chat-draft-boundary";
 import { renderChat as render } from "../../test/render-chat";
 
+vi.mock("../NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const renameSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 let restoreTimelineGeometry: (() => void) | undefined;
 

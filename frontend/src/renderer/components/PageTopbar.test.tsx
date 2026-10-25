@@ -1,6 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PageTopbar, PageTopbarTitle, SessionTabsTopbar } from "./PageTopbar";
+
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 describe("PageTopbar", () => {
 	it("renders the lead and right-aligned actions in one responsive container", () => {
@@ -17,10 +19,11 @@ describe("PageTopbar", () => {
 		expect(within(screen.getByTestId("workspace-topbar-actions")).getByRole("button", { name: "New task" })).toBeInTheDocument();
 	});
 
-	it("omits the action cluster when a page has no actions", () => {
+	it("keeps notifications visible when a page has no actions", () => {
 		render(<PageTopbar lead={<PageTopbarTitle>Archive</PageTopbarTitle>} />);
 
-		expect(screen.queryByTestId("workspace-topbar-actions")).not.toBeInTheDocument();
+		expect(within(screen.getByTestId("workspace-topbar-actions")).getByRole("button", { name: "Notifications" })).toBeVisible();
+		expect(screen.getAllByRole("button", { name: "Notifications" })).toHaveLength(1);
 	});
 });
 
@@ -43,9 +46,10 @@ describe("SessionTabsTopbar", () => {
 		expect(within(region).getByRole("tablist")).toBeInTheDocument();
 	});
 
-	it("drops the action region when the strip is rendered fullscreen", () => {
+	it("keeps global notifications when fullscreen hides session actions", () => {
 		render(<SessionTabsTopbar actions={<button type="button">Archive</button>} hideActions tabs={<div role="tablist" />} />);
 
-		expect(screen.queryByTestId("session-action-region")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
 	});
 });

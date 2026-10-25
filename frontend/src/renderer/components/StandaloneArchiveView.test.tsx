@@ -10,6 +10,8 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const {
 	navigateMock,
 	postMock,

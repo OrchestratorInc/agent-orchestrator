@@ -251,7 +251,7 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	useEnsureAgentReadiness: vi.fn(),
 }));
 
-vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null }));
+vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null, NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
 vi.mock("../components/SessionTopbarActions", () => ({ SessionTopbarActions: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({

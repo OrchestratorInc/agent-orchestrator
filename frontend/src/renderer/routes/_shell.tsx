@@ -21,6 +21,7 @@ import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/S
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
+import { PageTopbar } from "../components/PageTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
@@ -1424,7 +1425,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	if (isStartupLoading) {
 		return (
 			<>
-				<DaemonStartupLoader />
+				<div className="flex h-full min-h-0 flex-col"><PageTopbar /><DaemonStartupLoader /></div>
 				{quitConfirmDialog}
 			</>
 		);
