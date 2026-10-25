@@ -13320,8 +13320,12 @@ components:
           - string
         provider:
           type: string
+        requiresVersion:
+          type: string
         supportsFast:
           type: boolean
+        unavailableReason:
+          type: string
       required:
       - id
       - label

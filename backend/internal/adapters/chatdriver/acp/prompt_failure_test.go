@@ -115,7 +115,7 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 				Harness:      domain.HarnessClaudeCode,
 				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-				PromptResponseFailure: func(response acpsdk.PromptResponse) error {
+				PromptResponseFailure: func(response acpsdk.PromptResponse, _ string) error {
 					return promptResponseFailure(response.Meta)
 				},
 				OnAuthRejected: func() {
@@ -228,7 +228,7 @@ func TestPromptFailureLetsTurnSettlementCloseActiveRetry(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			conv := &conversation{
 				activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
-				promptResponseFailure: func(response acpsdk.PromptResponse) error { return promptResponseFailure(response.Meta) },
+				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
 			}
 			_, ok := conv.sessionFailureEvent("turn-1", "", testPromptFailureMeta(map[string]any{
 				"id": tc.incident, "severity": "warning", "title": "Retrying",
@@ -288,7 +288,7 @@ func TestRetryEpisodesKeepRecoveredDiagnosticsAndReplayIdentity(t *testing.T) {
 	for range 2 { // Replaying the same host events reconstructs the same row IDs.
 		conv := &conversation{
 			activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
-			promptResponseFailure: func(response acpsdk.PromptResponse) error { return promptResponseFailure(response.Meta) },
+			promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
 		}
 		meta := testPromptFailureMeta(map[string]any{"id": "reused-incident", "severity": "warning", "title": "Retrying"})
 		first, _ := conv.sessionFailureEvent("turn-1", "host:1", meta)
@@ -328,7 +328,7 @@ func TestACPReplayedPromptFailure(t *testing.T) {
 			conv := &conversation{
 				activeTurn: "durable-turn", events: make(chan ports.ChatEvent, 16),
 				log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
-				promptResponseFailure: func(response acpsdk.PromptResponse) error { return promptResponseFailure(response.Meta) },
+				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
 			}
 			if replay {
 				payload, err := json.Marshal(map[string]any{"eventId": "host:1", "result": response})

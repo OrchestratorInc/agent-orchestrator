@@ -1405,7 +1405,16 @@ function ChatWorkspaceContent({
 	// Claude Code compacts at the window picked for it, well before its model's full context.
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
 	const stableUsage = useStableValue(snapshot.usage);
-	const stableModelReroute = useStableValue(snapshot.modelReroute);
+	// A reroute describes the model it was recorded against; once the user picks a
+	// different model it no longer says anything about the next turn.
+	const currentModelReroute =
+		snapshot.modelReroute &&
+		(!snapshot.modelReroute.fromModel ||
+			!snapshot.settings.model ||
+			snapshot.modelReroute.fromModel === snapshot.settings.model)
+			? snapshot.modelReroute
+			: undefined;
+	const stableModelReroute = useStableValue(currentModelReroute);
 	const stablePendingApproval = useStableValue(pendingApproval);
 	const stablePendingUserInput = useStableValue(pendingUserInput);
 	const composerSettings = useMemo(
