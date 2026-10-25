@@ -106,6 +106,10 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 
 func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	h, provider := steerHarness(t)
+	// The fake provider never settles the cut turn on its own, so shorten the
+	// settle wait the promotion rides out.
+	restoreSettleWait := chatsvc.SetQueuedTurnSettleWait(50 * time.Millisecond)
+	defer restoreSettleWait()
 	ctx := context.Background()
 	originalMessage := ports.ChatUserMessage{
 		Text: "original", ClientMessageID: "queue-original", Origin: domain.MessageOriginHuman,

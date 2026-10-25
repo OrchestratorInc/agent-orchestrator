@@ -55,6 +55,7 @@ const {
 	conversationCommandState: {
 		busy: false,
 		send: vi.fn(),
+		steer: vi.fn(),
 		chooseSettings: vi.fn(),
 		pendingAcceptedTurnId: undefined as string | undefined,
 		acknowledgeAcceptedTurn: vi.fn(),
@@ -98,6 +99,8 @@ const sideMocks = vi.hoisted(() => ({
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
+	workspaceOnSteer: undefined as unknown,
+	workspaceShowSteerButton: undefined as unknown,
 }));
 vi.mock("./IndependentSideChats", () => ({
 	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
@@ -175,6 +178,8 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget,
 			onAddToSideChat,
 			onSend,
+			onSteer,
+			showSteerButton,
 			composerNotice,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
@@ -195,10 +200,14 @@ vi.mock("./ChatWorkspace", async () => {
 			promptSuggestion?: { id: string; text: string };
 			snapshot: Pick<ConversationSnapshot, "sessionId" | "harness" | "settings">;
 			shellTarget?: { handleId: string };
+			onSteer?: unknown;
+			showSteerButton?: boolean;
 		}) => {
 			sideMocks.workspaceSend = onSend;
 			sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
+			sideMocks.workspaceOnSteer = onSteer;
+			sideMocks.workspaceShowSteerButton = showSteerButton;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -284,6 +293,7 @@ beforeEach(() => {
 	conversationState.isLoadingOlder = false;
 	conversationState.loadOlder = vi.fn();
 	conversationCommandState.send = vi.fn().mockResolvedValue({});
+	conversationCommandState.steer = vi.fn().mockResolvedValue({});
 	conversationCommandState.busy = false;
 	conversationCommandState.pendingAcceptedTurnId = undefined;
 	conversationCommandState.acknowledgeAcceptedTurn.mockReset();
@@ -1412,5 +1422,24 @@ describe("selection side-chat operation ownership", () => {
 		view.unmount();
 		await act(async()=>{resolve({id:"old-side"});await expect(request).rejects.toThrow("no longer active");});
 		expect(sideMocks.show).not.toHaveBeenCalled();
+	});
+});
+
+describe("SessionChatSurface queued-card steer gating", () => {
+	it("hands ChatWorkspace an ungated onSteer even without the steer capability", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), capabilities: [] };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		// The queued-card Steer (interrupt-and-send) works on every chat driver,
+		// so the callback must arrive regardless of the steering capability.
+		expect(typeof sideMocks.workspaceOnSteer).toBe("function");
+		// The mid-turn steer affordance stays capability-gated.
+		expect(sideMocks.workspaceShowSteerButton).toBe(false);
+	});
+
+	it("shows the mid-turn steer affordance when the capability is advertised", () => {
+		conversationState.snapshot = { ...snapshotFor(session.id), capabilities: ["steer"] };
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(typeof sideMocks.workspaceOnSteer).toBe("function");
+		expect(sideMocks.workspaceShowSteerButton).toBe(true);
 	});
 });

@@ -556,7 +556,7 @@ describe("ChatWorkspace steering", () => {
 
 		expect(within(row).getByRole("button", { name: "Delete queued message" })).toBeVisible();
 		await userEvent.click(within(row).getAllByRole("button", {
-			name: "Steer this queued message into the running turn",
+			name: "Send this queued message now, interrupting the running turn",
 		})[0]!);
 		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-annotation"));
 	});
@@ -603,9 +603,9 @@ describe("ChatWorkspace steering", () => {
 		expect(older).toHaveAttribute("data-testid", "queued-message-queued-older");
 		expect(newer).toHaveAttribute("data-testid", "queued-message-queued-newer");
 
-		await userEvent.click(within(newer).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		await userEvent.click(within(newer).getAllByRole("button", { name: "Send this queued message now, interrupting the running turn" })[0]!);
 		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-newer");
-		await userEvent.click(within(older).getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!);
+		await userEvent.click(within(older).getAllByRole("button", { name: "Send this queued message now, interrupting the running turn" })[0]!);
 		expect(onPromoteQueuedTurn).toHaveBeenLastCalledWith("queued-older");
 	});
 
