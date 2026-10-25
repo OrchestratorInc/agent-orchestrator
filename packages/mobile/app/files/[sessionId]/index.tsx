@@ -89,7 +89,7 @@ function SessionFilesContent() {
 						keyExtractor={(file) => file.path}
 						ListHeaderComponent={header}
 						stickySectionHeadersEnabled={false}
-						contentContainerStyle={{ paddingBottom: review.comments.length ? 96 : space.xxl }}
+						contentContainerStyle={{ flexGrow: 1, paddingBottom: review.comments.length ? 96 : space.xxl }}
 						refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={t.textTertiary} />}
 						renderSectionHeader={({ section }) => (
 							<View style={styles.sectionHead}>
@@ -236,7 +236,7 @@ function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: st
 				keyExtractor={(item) => item.path}
 				keyboardShouldPersistTaps="handled"
 				ListHeaderComponent={<>{header}{searchBox}</>}
-				contentContainerStyle={{ paddingBottom: bottomInset }}
+				contentContainerStyle={{ flexGrow: 1, paddingBottom: bottomInset }}
 				ItemSeparatorComponent={() => <View style={styles.divider} />}
 				renderItem={({ item }) => <PathRow path={item.path} status={item.status} onPress={() => onOpen(item.path, item.status !== "unmodified")} />}
 				ListEmptyComponent={searching ? null : <EmptyState icon="search" title="No matching files" message={`Nothing in this worktree matches “${query.trim()}”.`} />}
@@ -250,7 +250,7 @@ function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: st
 			keyExtractor={(item) => item.path}
 			keyboardShouldPersistTaps="handled"
 			ListHeaderComponent={<>{header}{searchBox}{breadcrumb}</>}
-			contentContainerStyle={{ paddingBottom: bottomInset }}
+			contentContainerStyle={{ flexGrow: 1, paddingBottom: bottomInset }}
 			ItemSeparatorComponent={() => <View style={styles.divider} />}
 			renderItem={({ item }) => item.type === "dir" ? (
 				<Pressable

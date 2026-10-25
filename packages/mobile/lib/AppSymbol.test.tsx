@@ -136,9 +136,9 @@ describe("AppSymbol on Android", () => {
 	});
 
 	it("falls back to the symbol view for a one-off name outside the registry", () => {
-		const renderer = render(<AndroidSymbol name={{ ios: "tray.2", android: "inbox" }} />);
+		const renderer = render(<AndroidSymbol name={{ ios: "tray.2", android: "move_to_inbox" }} />);
 
-		expect(symbolView(renderer).props.name).toEqual({ ios: "tray.2", android: "inbox" });
+		expect(symbolView(renderer).props.name).toEqual({ ios: "tray.2", android: "move_to_inbox" });
 		expect(renderer.root.findAllByType("Text" as never)).toHaveLength(0);
 	});
 });

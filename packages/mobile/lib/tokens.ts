@@ -148,6 +148,8 @@ export const iconSize = {
 	lg: 20,
 	xl: 24,
 	xxl: 28,
+	/** The large glyph an empty state leads with. */
+	hero: 48,
 } as const;
 
 /**

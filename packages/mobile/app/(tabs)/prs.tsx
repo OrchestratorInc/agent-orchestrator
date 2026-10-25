@@ -139,7 +139,7 @@ export default function PRsScreen() {
 					ref={scrollRef}
 					sections={sections}
 					keyExtractor={({ pr, session }) => `${session.hostId}:${session.projectId}#${pr.number}`}
-					contentContainerStyle={{ paddingBottom: 110 }}
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: 110 }}
 					stickySectionHeadersEnabled={false}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
 					renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}

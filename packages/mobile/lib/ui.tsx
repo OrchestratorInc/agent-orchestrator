@@ -536,19 +536,41 @@ export function SheetScreen({
 	);
 }
 
+/**
+ * A screen or list with nothing to show, laid out as iOS's
+ * `ContentUnavailableView` and the M3 pattern both are: a large glyph in the
+ * secondary colour standing on its own, a title, a line of explanation, and the
+ * action that fixes it.
+ *
+ * Drawn in React Native on both platforms. SwiftUI's `ContentUnavailableView`
+ * needs iOS 17 (the app supports 16.4, where it draws nothing), cannot set the
+ * app's typeface, and has no action slot; a native view would also have to be
+ * measured inside every flexible container this sits in.
+ *
+ * It fills a flex parent and centres in it, and otherwise takes the height of
+ * its content, so a list gives it room with `contentContainerStyle={{ flexGrow: 1 }}`.
+ */
 export function EmptyState({
 	icon = "inbox",
 	title,
 	message,
 	action,
 	pulse = false,
+	visual,
+	iconColor,
 }: {
-	icon?: keyof typeof Feather.glyphMap;
+	/** A chrome glyph; Lucide names draw as their system symbol. */
+	icon?: ChromeIcon;
 	title: string;
 	message?: string;
+	/** A `Button`, or several: they stack, centred, under the message. */
 	action?: ReactNode;
 	/** Breathe the icon, for a state that is waiting on something. */
 	pulse?: boolean;
+	/** Drawn in place of the icon: a mascot, a machine's avatar, a spinner. */
+	visual?: ReactNode;
+	/** The glyph's colour. Secondary text unless the state means something, like a failure. */
+	iconColor?: string;
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
@@ -558,12 +580,10 @@ export function EmptyState({
 	const enter = useEnterTransition(space.xxs);
 	return (
 		<Animated.View style={[s.empty, enter]}>
-			<View style={s.emptyIcon}>
-				<Animated.View style={breathing ? { opacity: breathing } : undefined}>
-					<Feather name={icon} size={24} color={t.textTertiary} />
-				</Animated.View>
-			</View>
-			<Text maxFontSizeMultiplier={fontScaleCap.body} style={s.emptyTitle}>
+			<Animated.View style={[s.emptyVisual, breathing ? { opacity: breathing } : undefined]}>
+				{visual ?? <ChromeGlyph icon={icon} size={iconSize.hero} color={iconColor ?? t.textSecondary} />}
+			</Animated.View>
+			<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.body} style={s.emptyTitle}>
 				{title}
 			</Text>
 			{message ? (
@@ -571,7 +591,7 @@ export function EmptyState({
 					{message}
 				</Text>
 			) : null}
-			{action ? <View style={{ marginTop: space.lg }}>{action}</View> : null}
+			{action ? <View style={s.emptyActions}>{action}</View> : null}
 		</Animated.View>
 	);
 }
@@ -732,32 +752,21 @@ const makeStyles = (t: Theme) =>
 			flex: 1,
 			alignItems: "center",
 			justifyContent: "center",
-			padding: space.huge,
-			minHeight: 320,
+			paddingHorizontal: space.xxxl,
+			paddingVertical: space.huge,
 		},
-		emptyIcon: {
-			width: 64,
-			height: 64,
-			borderRadius: 16,
-			backgroundColor: t.bgElevated,
-			borderWidth: 1,
-			borderColor: t.borderSubtle,
-			alignItems: "center",
-			justifyContent: "center",
-			marginBottom: space.lg,
-		},
-		emptyTitle: { fontFamily: "Geist_600SemiBold",
+		emptyVisual: { marginBottom: space.lg },
+		emptyTitle: {
+			...type.title3,
 			color: t.textPrimary,
-			fontSize: type.body.fontSize,
-			fontWeight: "600",
 			textAlign: "center",
 		},
-		emptyMsg: { fontFamily: "Geist_400Regular",
+		emptyMsg: {
+			...type.subheadline,
 			color: t.textSecondary,
-			fontSize: type.footnote.fontSize,
-			lineHeight: type.footnote.lineHeight,
 			textAlign: "center",
 			marginTop: space.sm,
 			maxWidth: 300,
 		},
+		emptyActions: { marginTop: space.xl, alignItems: "center", gap: space.sm },
 	});

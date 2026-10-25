@@ -101,7 +101,7 @@ export default function ProjectsScreen() {
 					sections={sections}
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"
-					contentContainerStyle={{ paddingBottom: insets.bottom + 92 }}
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: insets.bottom + 92 }}
 					stickySectionHeadersEnabled={false}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
 					renderSectionHeader={({ section }) => (

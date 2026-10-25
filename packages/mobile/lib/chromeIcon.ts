@@ -25,8 +25,24 @@ const lucideSymbols: Partial<Record<FeatherIconName, PlatformSymbol>> = {
 	plus: symbols.add,
 	x: symbols.close,
 	check: symbols.checkmark,
+	"check-circle": symbols.checkCircle,
 	"list-tree": { ios: "list.bullet.indent", android: "account_tree" },
 	link: { ios: "link", android: "link" },
+	"message-circle": symbols.chat,
+	"file-diff": symbols.diff,
+	"alert-triangle": symbols.warning,
+	"alert-circle": symbols.error,
+	"wifi-off": symbols.offline,
+	unplug: symbols.disconnected,
+	moon: symbols.idle,
+	monitor: symbols.desktop,
+	"monitor-smartphone": symbols.devices,
+	// The connection failures each keep a glyph of their own, so a rejected
+	// password does not look like a machine that is simply out of range.
+	"monitor-off": { ios: "desktopcomputer.trianglebadge.exclamationmark", android: "desktop_access_disabled" },
+	"monitor-cog": { ios: "exclamationmark.octagon", android: "report" },
+	"route-off": { ios: "point.topleft.down.curvedto.point.bottomright.up", android: "route" },
+	"download-cloud": symbols.update,
 };
 
 // Own keys only: a name such as `constructor` would otherwise find the

@@ -469,7 +469,7 @@ export function WorkerBoardList({
 					keyExtractor={boardRowKey}
 					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
-					contentContainerStyle={{ paddingBottom: contentBottomInset }}
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: contentBottomInset }}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} tintColor={t.accent} />}

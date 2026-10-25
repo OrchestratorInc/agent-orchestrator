@@ -87,6 +87,17 @@ export const symbols = {
 	error: { ios: "exclamationmark.circle", android: "error" },
 	offline: { ios: "wifi.slash", android: "wifi_off" },
 	history: { ios: "clock", android: "history" },
+	timer: { ios: "timer", android: "timer" },
+
+	// Empty states and machines
+	inbox: { ios: "tray", android: "inbox" },
+	desktop: { ios: "desktopcomputer", android: "desktop_windows" },
+	devices: { ios: "laptopcomputer.and.iphone", android: "devices" },
+	server: { ios: "server.rack", android: "dns" },
+	// A machine the phone cannot reach: the plug, pulled.
+	disconnected: { ios: "powerplug", android: "power_off" },
+	idle: { ios: "moon.zzz", android: "bedtime" },
+	diff: { ios: "plus.forwardslash.minus", android: "difference" },
 
 	// Composer
 	mic: { ios: "mic", android: "mic" },
