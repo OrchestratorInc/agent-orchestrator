@@ -144,7 +144,12 @@ fi
 #    одну строку shippedMigrations в migrate_burned_versions_test.go —
 #    авто-разрешаем фиксером; остальные — стоп: список файлов с типом каждого,
 #    решение по каждому вручную).
-FIXER="$HOME/bin/ao-fix-migration-collision.sh"
+# FIXER резолвится из репо (runnable на CI-раннере, где ~/bin нет; ~/bin —
+# симлинк на local/toolbox на машине владельца).
+FIXER="$REPO_ROOT/local/toolbox/ao-fix-migration-collision.sh"
+if [ ! -f "$FIXER" ]; then
+  FIXER="$HOME/bin/ao-fix-migration-collision.sh"
+fi
 export GIT_EDITOR=true   # чтобы merge-коммит не открывал редактор
 
 # Классификация subject'а апстрим-коммита: take — типизированный fix(...)/fix:,

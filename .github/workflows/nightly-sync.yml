@@ -63,6 +63,7 @@ jobs:
           git remote set-url origin https://github.com/Untrivial-ai/agent-orchestrator.git
           git fetch origin main
           git remote add fork https://github.com/axisrow/agent-orchestrator.git
+          git fetch fork main
           git status -sb
 
       - name: Run fixes-only sync
