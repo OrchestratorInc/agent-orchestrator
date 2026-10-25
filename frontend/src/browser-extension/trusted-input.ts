@@ -133,8 +133,8 @@ export class TrustedInput {
 		});
 		waiters.add(opened);
 		const held = new HeldInput();
-		const captures = (action: "track" | "release") => this.chrome.scripting.executeScript({
-			target: { tabId, allFrames: true }, func: mouseCapture, args: [action], world: "ISOLATED",
+		const captures = (action: "track" | "observed" | "release", pointerIds: number[] = []) => this.chrome.scripting.executeScript({
+			target: { tabId, allFrames: true }, func: mouseCapture, args: [action, pointerIds], world: "ISOLATED",
 		});
 		try {
 			if (events.some(([method, params]) => method === "Input.dispatchMouseEvent" && params.type === "mousePressed")) {
@@ -146,8 +146,13 @@ export class TrustedInput {
 				if (paceMs > 0 && params.type === "mouseMoved") await abortableSleep(paceMs + Math.random() * paceMs, signal).catch(() => undefined);
 				if (signal?.aborted) {
 					await held.release(send, async () => {
-						const results = await captures("release");
-						if (!results.some((result) => result.result === true) || results.some((result) => result.result !== true && result.result !== "idle")) {
+						const observed = await captures("observed");
+						const ids = observed.flatMap(({ result }) => typeof result === "number" && Number.isInteger(result) ? [result] : []);
+						if (ids.length === 0 || observed.some(({ result }) => result !== "idle" && !(typeof result === "number" && Number.isInteger(result)))) {
+							throw new Error("Cannot identify held mouse pointer");
+						}
+						const results = await captures("release", ids);
+						if (results.length === 0 || results.some((result) => result.result !== true)) {
 							throw new Error("Cannot verify mouse capture cleanup");
 						}
 					}).catch(() => undefined);

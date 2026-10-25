@@ -30,4 +30,11 @@ describe("keyEvents", () => {
 		expect(() => keyEvents("Hyper+a")).toThrow(expect.objectContaining({ code: "INVALID_ARGUMENT" }));
 		expect(() => keyEvents("")).toThrow(expect.objectContaining({ code: "INVALID_ARGUMENT" }));
 	});
+
+	it("uses the full editing chord for redo and excludes Alt shortcuts", () => {
+		expect(keyEvents("Meta+Shift+Z").find((event) => event.key === "Z")?.commands).toEqual(["redo"]);
+		expect(keyEvents("Control+Shift+Z").find((event) => event.key === "Z")?.commands).toEqual(["redo"]);
+		expect(keyEvents("Meta+Alt+Z").every((event) => event.commands === undefined)).toBe(true);
+		expect(keyEvents("Meta+Shift+A").every((event) => event.commands === undefined)).toBe(true);
+	});
 });

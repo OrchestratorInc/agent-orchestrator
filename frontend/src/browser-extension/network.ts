@@ -4,6 +4,7 @@
 
 import { sanitizeBrowserURL } from "../shared/browser-sanitize";
 import type { ChromeApi, WebRequestDetails } from "./chrome-api";
+import type { SessionTabRegistry } from "./sessions";
 
 export const MAX_NETWORK_REQUESTS = 200;
 
@@ -39,7 +40,13 @@ export class NetworkCapture {
 	private readonly captures = new Map<string, Capture>();
 	private listening = false;
 
-	constructor(private readonly chrome: ChromeApi) {}
+	constructor(private readonly chrome: ChromeApi, private readonly sessions: SessionTabRegistry) {
+		sessions.onOwnershipChanged(() => {
+			for (const [sessionId, capture] of this.captures) {
+				if (sessions.ownerOf(capture.chromeTabId)?.session.sessionId !== sessionId) this.stop(sessionId, "ownership-lost");
+			}
+		});
+	}
 
 	private listen(): void {
 		if (this.listening) return;
@@ -51,7 +58,14 @@ export class NetworkCapture {
 	}
 
 	private captureFor(chromeTabId: number): Capture | undefined {
-		for (const capture of this.captures.values()) if (capture.active && capture.chromeTabId === chromeTabId) return capture;
+		for (const [sessionId, capture] of this.captures) {
+			if (!capture.active || capture.chromeTabId !== chromeTabId) continue;
+			if (this.sessions.ownerOf(chromeTabId)?.session.sessionId !== sessionId) {
+				this.stop(sessionId, "ownership-lost");
+				continue;
+			}
+			return capture;
+		}
 		return undefined;
 	}
 

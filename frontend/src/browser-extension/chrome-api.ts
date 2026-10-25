@@ -95,8 +95,8 @@ export type ChromeApi = {
 	};
 	scripting: {
 		executeScript(injection: { target: { tabId: number; frameIds?: number[]; allFrames?: boolean }; } & ({ files: string[] } | {
-			func: (action: "track" | "release") => boolean | "idle";
-			args: ["track" | "release"];
+			func: (action: "track" | "observed" | "release", pointerIds?: number[]) => boolean | "idle" | number;
+			args: ["track" | "observed" | "release", number[]?];
 			world: "ISOLATED";
 		})): Promise<{ result?: unknown }[]>;
 	};

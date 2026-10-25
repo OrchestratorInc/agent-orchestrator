@@ -28,7 +28,7 @@ describe("isolated mouse capture cleanup", () => {
 			return this === button && id === 47;
 		});
 		vi.spyOn(Element.prototype, "releasePointerCapture").mockImplementation(release);
-		pointerDown({ isTrusted: true, pointerType: "mouse", pointerId: 47 });
+		pointerDown({ isTrusted: true, pointerType: "mouse", pointerId: 47, buttons: 1 });
 		expect(mouseCapture("release")).toBe(true);
 		expect(release).toHaveBeenCalledWith(47);
 	});
@@ -45,6 +45,19 @@ describe("isolated mouse capture cleanup", () => {
 
 	it("refuses an unprepared document", () => {
 		expect(mouseCapture("release")).toBe(false);
+	});
+
+	it("releases another frame's observed pointer when the local observer was suppressed", () => {
+		prepare();
+		expect(mouseCapture("observed")).toBe("idle");
+		const button = document.createElement("button");
+		document.body.append(button);
+		vi.spyOn(Element.prototype, "hasPointerCapture").mockImplementation(function (this: Element, id) {
+			return this === button && id === 47;
+		});
+		const release = vi.spyOn(Element.prototype, "releasePointerCapture").mockImplementation(() => undefined);
+		expect(mouseCapture("release", [47])).toBe(true);
+		expect(release).toHaveBeenCalledExactlyOnceWith(47);
 	});
 
 	it("does not claim cleanup when no trusted mouse press was observed", () => {

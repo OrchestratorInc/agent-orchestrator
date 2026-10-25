@@ -9,6 +9,7 @@ import { BridgeError } from "./protocol";
 import { SessionTabRegistry } from "./sessions";
 import { RefRegistry } from "./snapshot";
 import { TrustedInput } from "./trusted-input";
+import { Bridge } from "./background";
 
 type Callback = (...args: never[]) => unknown;
 
@@ -64,6 +65,8 @@ class FakeChrome {
 		navError: event(),
 		debuggerEvent: event(),
 		debuggerDetach: event(),
+		requestStarted: event(),
+		requestCompleted: event(),
 	};
 	local = storage();
 	session = storage();
@@ -218,7 +221,7 @@ class FakeChrome {
 				onCompleted: self.events.navCompleted,
 				onErrorOccurred: self.events.navError,
 			},
-			webRequest: { onBeforeRequest: event(), onCompleted: event(), onErrorOccurred: event() } as never,
+			webRequest: { onBeforeRequest: self.events.requestStarted, onCompleted: self.events.requestCompleted, onErrorOccurred: event() } as never,
 			action: { setBadgeText: async () => undefined, setBadgeBackgroundColor: async () => undefined, setTitle: async () => undefined },
 		} as ChromeApi;
 	}
@@ -231,17 +234,101 @@ function setup() {
 	sessions.start();
 	const consent = new ConsentManager(chrome);
 	consent.start();
-	const executor = new Executor({ chrome, sessions, consent, trusted: new TrustedInput(chrome), network: new NetworkCapture(chrome) });
+	const executor = new Executor({ chrome, sessions, consent, trusted: new TrustedInput(chrome), network: new NetworkCapture(chrome, sessions) });
 	executor.start();
 	const run = (action: string, args: Record<string, unknown> = {}, sessionId = "s1") =>
 		executor.execute(sessionId, action, args, new AbortController().signal) as Promise<Record<string, unknown>>;
 	const approve = async (sessionId = "s1", trusted = true) => {
 		await consent.decide({ type: "ao-consent-decision", sessionId, allow: true, trusted });
 	};
-	return { fake, chrome, sessions, consent, run, approve };
+	return { fake, chrome, sessions, consent, executor, run, approve };
 }
 
 describe("Executor", () => {
+	it("revoking approval stops a click waiting for geometry before trusted dispatch", async () => {
+		const fake = new FakeChrome();
+		const chrome = fake.api();
+		const bridge = new Bridge(chrome);
+		await bridge.consent.decide({ type: "ao-consent-decision", sessionId: "s1", allow: true, trusted: true });
+		const runtime = bridge as unknown as {
+			runCommand(message: unknown): Promise<void>;
+			handleUi(message: unknown): Promise<unknown>;
+			port: { postMessage: ReturnType<typeof vi.fn> };
+		};
+		runtime.port = { postMessage: vi.fn() };
+		await runtime.runCommand({ requestId: "open", sessionId: "s1", action: "open", args: { url: "https://shop.test/" } });
+		await runtime.runCommand({ requestId: "snapshot", sessionId: "s1", action: "snapshot", args: { interactive: true } });
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		const geometry = vi.fn();
+		const original = chrome.tabs.sendMessage;
+		vi.spyOn(chrome.tabs, "sendMessage").mockImplementation(async (tabId, message, options) => {
+			const result = await original(tabId, message, options);
+			if ((message as { op?: string }).op === "geometry") {
+				geometry();
+				await gate;
+			}
+			return result;
+		});
+		const pending = runtime.runCommand({ requestId: "click", sessionId: "s1", action: "click", args: { ref: "e1" } });
+		await vi.waitFor(() => expect(geometry).toHaveBeenCalled());
+		await runtime.handleUi({ type: "ao-ui-revoke", sessionId: "s1" });
+		expect((await bridge.consent.approvals()).s1).toBeUndefined();
+		release();
+		await pending;
+		expect(runtime.port.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ requestId: "click", ok: false, error: expect.objectContaining({ code: "BROWSER_COMMAND_CANCELED" }) }));
+		expect(fake.debuggerCalls.filter((call) => call.method.startsWith("Input."))).toEqual([]);
+	});
+	it("stops capture immediately when the user reclaims a tab", async () => {
+		const { fake, run, approve, sessions } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		await run("network-start", { durationSeconds: 30 });
+		const tab = [...fake.tabs.values()][0]!;
+		const request = { tabId: tab.id!, requestId: "one", url: "https://shop.test/public", method: "GET", type: "xmlhttprequest", timeStamp: 1, frameId: 0 };
+		fake.events.requestStarted.fire(request);
+		tab.groupId = -1;
+		fake.events.tabsUpdated.fire(tab.id, { groupId: -1 }, tab);
+		await vi.waitFor(() => expect(sessions.ownerOf(tab.id!)).toBeUndefined());
+		fake.events.requestStarted.fire({ ...request, requestId: "two", url: "https://shop.test/private/records/123" });
+		fake.events.requestCompleted.fire({ ...request, statusCode: 200, timeStamp: 2 });
+		const result = await run("network-list");
+		expect(result).toMatchObject({ active: false, stopReason: "ownership-lost", requestCount: 1 });
+		expect(result.requests).toEqual([expect.objectContaining({ url: "https://shop.test/public" })]);
+		expect((result.requests as Record<string, unknown>[])[0]).not.toHaveProperty("status");
+	});
+
+	it("does not navigate when cancellation happens during policy lookup", async () => {
+		const { chrome, fake, executor, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		const controller = new AbortController();
+		const original = chrome.storage.local.get;
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => { release = resolve; });
+		vi.spyOn(chrome.storage.local, "get").mockImplementation(async (keys) => {
+			const result = await original(keys);
+			if (keys === POLICY_KEY) await gate;
+			return result;
+		});
+		const update = vi.spyOn(chrome.tabs, "update");
+		const pending = executor.execute("s1", "open", { url: "https://shop.test/done" }, controller.signal);
+		await vi.waitFor(() => expect(chrome.storage.local.get).toHaveBeenCalledWith(POLICY_KEY));
+		controller.abort();
+		release();
+		await expect(pending).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
+		expect(update).not.toHaveBeenCalled();
+		expect([...fake.tabs.values()][0]!.url).toBe("https://shop.test/");
+	});
+
+	it("selects a loaded srcdoc child with an empty element source", async () => {
+		const { fake, run, approve } = setup();
+		await approve();
+		await run("open", { url: "https://shop.test/" });
+		fake.frames = [{ frameId: 0, parentFrameId: -1, url: "https://shop.test/" }, { frameId: 1, parentFrameId: 0, url: "about:srcdoc" }];
+		fake.frameResponder = (_frameId, message) => message.op === "frameOffset" ? { src: "", name: "Embedded form" } : undefined;
+		await expect(run("frame", { target: "eFrame" })).resolves.toMatchObject({ frame: "eFrame", name: "Embedded form" });
+	});
 	beforeEach(() => {
 		vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({ left: 10, top: 20, width: 100, height: 30, right: 110, bottom: 50, x: 10, y: 20, toJSON: () => ({}) } as DOMRect);
 	});

@@ -3,7 +3,7 @@
  * ID (never assume it is 1), then release capture before cancelled input's up.
  * Kept self-contained because chrome.scripting serializes this function.
  */
-export function mouseCapture(action: "track" | "release"): boolean | "idle" {
+export function mouseCapture(action: "track" | "observed" | "release", pointerIds: number[] = []): boolean | "idle" | number {
 	const world = globalThis as unknown as {
 		aoMouseCapture?: { pointerId?: number };
 		chrome?: { dom?: { openOrClosedShadowRoot(element: Element): ShadowRoot | null } };
@@ -26,10 +26,14 @@ export function mouseCapture(action: "track" | "release"): boolean | "idle" {
 	// pointer is uncaptured. Fail closed rather than sending an activating up.
 	if (!world.aoMouseCapture) return false;
 	const id = world.aoMouseCapture.pointerId;
-	if (id === undefined) return "idle";
+	if (action === "observed") return id ?? "idle";
+	const ids = [...new Set([...pointerIds, ...(id === undefined ? [] : [id])])];
+	if (ids.length === 0) return "idle";
 	const visit = (root: Document | ShadowRoot) => {
 		for (const element of root.querySelectorAll("*")) {
-			if (element.hasPointerCapture(id)) element.releasePointerCapture(id);
+			for (const pointerId of ids) {
+				if (element.hasPointerCapture(pointerId)) element.releasePointerCapture(pointerId);
+			}
 			const shadow = (element instanceof HTMLElement ? world.chrome?.dom?.openOrClosedShadowRoot(element) : null) ?? element.shadowRoot;
 			if (shadow) visit(shadow);
 		}

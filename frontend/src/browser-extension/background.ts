@@ -39,7 +39,7 @@ export class Bridge {
 			sessions: this.sessions,
 			consent: this.consent,
 			trusted: new TrustedInput(chrome),
-			network: new NetworkCapture(chrome),
+			network: new NetworkCapture(chrome, this.sessions),
 		});
 	}
 
@@ -177,9 +177,14 @@ export class Bridge {
 			case "ao-ui-stop-all":
 				await this.stopAll();
 				return { stopped: true };
-			case "ao-ui-revoke":
-				await this.consent.revoke(String(message.sessionId ?? ""));
+			case "ao-ui-revoke": {
+				const sessionId = String(message.sessionId ?? "");
+				for (const entry of this.inFlight.values()) {
+					if (entry.sessionId === sessionId) entry.controller.abort();
+				}
+				await this.consent.revoke(sessionId);
 				return { revoked: true };
+			}
 			case "ao-ui-reconnect":
 				this.backoff = 1_000;
 				this.port?.disconnect();

@@ -41,6 +41,17 @@ describe("content operations", () => {
 		expect(input.value).toBe("old!");
 	});
 
+	it.each([["email", "me@example.test"], ["number", "123"]])("types into %s fields and emits input", (type, text) => {
+		const input = document.getElementById("email") as HTMLInputElement;
+		input.type = type;
+		input.value = "";
+		const changed = vi.fn();
+		input.addEventListener("input", changed);
+		handleContentRequest(document, registry, request("type", { ref: refFor("Email"), text }));
+		expect(input.value).toBe(text);
+		expect(changed).toHaveBeenCalledOnce();
+	});
+
 	it("selects options by value or label", () => {
 		const select = document.getElementById("country") as HTMLSelectElement;
 		expect(handleContentRequest(document, registry, request("select", { ref: refFor("Country"), value: "Japan" }))).toEqual({ value: "jp" });

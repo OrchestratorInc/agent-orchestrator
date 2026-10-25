@@ -39,11 +39,28 @@ async function testCancelledTrustedClick(): Promise<void> {
 		const debuggerApi = window.webContents.debugger;
 		let controller = new AbortController();
 		let cancelOnPress = false;
+		let cancelOnMove = false;
+		let valueAtCancel: number | undefined;
+		let unobservedChild = false;
 		const chrome = {
 			scripting: {
-				executeScript: async ({ func, args }: { func: (action: "track" | "release") => boolean | "idle"; args: ["track" | "release"] }) => [{
-					result: await window.webContents.executeJavaScriptInIsolatedWorld(999, [{ code: `(${func.toString()})(${JSON.stringify(args[0])})` }]),
-				}],
+				executeScript: async ({ func, args }: { func: (...args: never[]) => unknown; args: unknown[] }) => {
+					type FrameTree = { frame: { id: string }; childFrames?: FrameTree[] };
+					const { frameTree } = await debuggerApi.sendCommand("Page.getFrameTree") as { frameTree: FrameTree };
+					const frames = (tree: FrameTree): string[] => [tree.frame.id, ...(tree.childFrames ?? []).flatMap(frames)];
+					const results = await Promise.all(frames(frameTree).map(async (frameId) => {
+						const { executionContextId } = await debuggerApi.sendCommand("Page.createIsolatedWorld", { frameId, worldName: "ao-test-input" }) as { executionContextId: number };
+						const result = await debuggerApi.sendCommand("Runtime.evaluate", {
+							contextId: executionContextId, expression: `(${func.toString()})(...${JSON.stringify(args)})`, returnByValue: true,
+						}) as { result: { value?: unknown }; exceptionDetails?: unknown };
+						if (result.exceptionDetails) throw new Error("Isolated capture cleanup failed");
+						return { result: result.result.value };
+					}));
+					if (args[0] === "observed" && results.length > 1) {
+						unobservedChild = results.some(({ result }) => typeof result === "number") && results.some(({ result }) => result === "idle");
+					}
+					return results;
+				},
 			},
 			debugger: {
 				attach: async () => debuggerApi.attach("1.3"),
@@ -53,6 +70,11 @@ async function testCancelledTrustedClick(): Promise<void> {
 				sendCommand: async (_target: unknown, method: string, params: Record<string, unknown>) => {
 					const result = await debuggerApi.sendCommand(method, params);
 					if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && cancelOnPress) controller.abort();
+					if (cancelOnMove && method === "Input.dispatchMouseEvent" && params.type === "mouseMoved" && params.buttons === 1 && Number(params.x) >= 150) {
+						valueAtCancel = await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value");
+						await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.cancelled = true");
+						controller.abort();
+					}
 					return result;
 				},
 			},
@@ -90,6 +112,27 @@ async function testCancelledTrustedClick(): Promise<void> {
 		await window.webContents.executeJavaScript("window.events = []");
 		await input.click(1, { x: 50, y: 50 });
 		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
+		await window.loadURL(`data:text/html,${encodeURIComponent(`<!doctype html>
+			<style>html,body{margin:0}button{position:absolute;left:0;top:0;width:60px;height:60px}iframe{position:absolute;left:100px;top:100px;width:200px;height:200px;border:0}</style>
+			<button>Origin</button><iframe srcdoc='<style>html,body{margin:0;width:100%;height:100%}</style><script>
+			window.value=70;window.afterCancel=[];
+			window.addEventListener("pointermove",event=>{
+				if(!event.buttons)return;
+				event.target.setPointerCapture(event.pointerId);
+				window.value=Math.max(0,event.clientX);
+				if(window.cancelled)window.afterCancel.push(event.clientX);
+				event.stopImmediatePropagation();
+			},true);
+			</script>'></iframe>`)}`);
+		controller = new AbortController();
+		cancelOnPress = false;
+		cancelOnMove = true;
+		await assert.rejects(input.drag(1, { x: 20, y: 20 }, { x: 170, y: 170 }, false, controller.signal),
+			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
+		assert.equal(typeof valueAtCancel, "number");
+		assert.equal(unobservedChild, true, "the child's early listener must suppress AO's local pointer observer");
+		assert.equal(await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.value"), valueAtCancel);
+		assert.deepEqual(await window.webContents.mainFrame.frames[0]!.executeJavaScript("window.afterCancel"), []);
 		process.stdout.write("cancelled trusted click does not activate its target in Chromium\n");
 	} finally {
 		window.destroy();

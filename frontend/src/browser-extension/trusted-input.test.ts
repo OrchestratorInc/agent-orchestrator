@@ -16,7 +16,7 @@ function fakeDebugger() {
 		scripting: {
 			executeScript: async ({ args }: { args: string[] }) => {
 				calls.push({ method: "capture", params: { action: args[0] } });
-				return [{ result: true }];
+				return [{ result: args[0] === "observed" ? 47 : true }];
 			},
 		},
 		debugger: {
@@ -53,6 +53,25 @@ function fakeDebugger() {
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("TrustedInput cancellation", () => {
+	it("sweeps the observed pointer ID into frames whose observers saw no event", async () => {
+		const fake = fakeDebugger();
+		let swept: number[] | undefined;
+		fake.chrome.scripting.executeScript = async (injection) => {
+			if (!("args" in injection)) return [];
+			if (injection.args[0] === "observed") return [{ result: 47 }, { result: "idle" }];
+			if (injection.args[0] === "release") swept = injection.args[1];
+			return [{ result: true }, { result: true }];
+		};
+		const controller = new AbortController();
+		const release = fake.block("Input.dispatchMouseEvent", "mousePressed");
+		const click = new TrustedInput(fake.chrome).click(1, { x: 10, y: 20 }, { signal: controller.signal });
+		await tick();
+		controller.abort();
+		release();
+		await expect(click).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
+		expect(swept).toEqual([47]);
+		expect(fake.inputTypes()).toEqual(["mouseMoved", "mousePressed", "mouseMoved", "mouseReleased"]);
+	});
 	it("dispatches no click after the command is cancelled mid-movement", async () => {
 		const fake = fakeDebugger();
 		const input = new TrustedInput(fake.chrome);
@@ -90,7 +109,7 @@ describe("TrustedInput cancellation", () => {
 		const fake = fakeDebugger();
 		fake.chrome.scripting.executeScript = async (injection) => {
 			if ("args" in injection && injection.args[0] === "release") throw new Error("Frame unavailable");
-			return [{ result: true }];
+			return [{ result: "args" in injection && injection.args[0] === "observed" ? 47 : true }];
 		};
 		const input = new TrustedInput(fake.chrome);
 		const controller = new AbortController();

@@ -87,7 +87,7 @@ export function typeText(element: Element, text: string): void {
 		const end = element.selectionEnd ?? start;
 		const next = element.value.slice(0, start) + text + element.value.slice(end);
 		(nativeValueSetter(element) ?? ((value: string) => (element.value = value)))(next);
-		element.setSelectionRange?.(start + text.length, start + text.length);
+		if (element.selectionStart !== null) element.setSelectionRange(start + text.length, start + text.length);
 		dispatchInput(element, text);
 		return;
 	}

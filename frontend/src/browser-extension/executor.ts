@@ -95,6 +95,7 @@ export class Executor {
 		const approval = await this.deps.consent.ensure(sessionId);
 		const session = await this.deps.sessions.ensure(sessionId);
 		const context: Context = { sessionId, session, extras: this.extrasFor(sessionId), approval, policy: await this.policy(), signal };
+		throwIfAborted(signal);
 		return this.dispatch(context, action, args);
 	}
 
@@ -334,6 +335,7 @@ export class Executor {
 	// --- navigation and tabs ----------------------------------------------
 
 	private async waitForNavigation(tabId: number, signal: AbortSignal): Promise<boolean> {
+		throwIfAborted(signal);
 		const chrome = this.deps.chrome;
 		return new Promise<boolean>((resolve, reject) => {
 			let done = false;
@@ -366,6 +368,7 @@ export class Executor {
 	private async open(ctx: Context, url: string): Promise<unknown> {
 		this.assertAllowed(ctx.policy, url);
 		const page = await this.deps.sessions.active(ctx.session);
+		throwIfAborted(ctx.signal);
 		this.resetPageState(ctx);
 		const loaded = this.waitForNavigation(page.tabId, ctx.signal);
 		await this.deps.chrome.tabs.update(page.tabId, { url });
@@ -382,7 +385,9 @@ export class Executor {
 
 	private async tabNew(ctx: Context, url: string | undefined): Promise<unknown> {
 		if (url) this.assertAllowed(ctx.policy, url);
+		throwIfAborted(ctx.signal);
 		const created = await this.deps.sessions.createTab(ctx.session, undefined);
+		throwIfAborted(ctx.signal);
 		this.resetPageState(ctx);
 		if (url) {
 			const loaded = this.waitForNavigation(created.tabId, ctx.signal);
@@ -417,7 +422,7 @@ export class Executor {
 			const info = (await this.content(page, ctx, { op: "frameOffset", ref: target }, parentFrameId)) as { src: string; name: string };
 			const frames = (await this.deps.chrome.webNavigation.getAllFrames({ tabId: page.tabId })) ?? [];
 			const children = frames.filter((frame) => frame.parentFrameId === parentFrameId);
-			const matches = children.filter((frame) => frame.url === info.src || (info.src === "" && frame.url === "about:blank"));
+			const matches = children.filter((frame) => frame.url === info.src || (info.src === "" && inheritsParentOrigin(frame.url)));
 			if (matches.length !== 1) {
 				throw new BridgeError(
 					"FRAME_NOT_FOUND",

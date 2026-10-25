@@ -110,7 +110,9 @@ export function keyEvents(chord: string): KeyEvent[] {
 	const def = definitionFor(keyName, (bits & MODIFIER_BITS.Shift) !== 0);
 	// Text is produced only without Control/Meta/Alt, as on a real keyboard.
 	const producesText = def.text !== undefined && (bits & (MODIFIER_BITS.Control | MODIFIER_BITS.Meta | MODIFIER_BITS.Alt)) === 0;
-	const command = (bits & (MODIFIER_BITS.Control | MODIFIER_BITS.Meta)) !== 0 ? EDITING_COMMANDS[def.key.toLowerCase()] : undefined;
+	const shortcut = bits & ~MODIFIER_BITS.Shift;
+	let command = shortcut === MODIFIER_BITS.Control || shortcut === MODIFIER_BITS.Meta ? EDITING_COMMANDS[def.key.toLowerCase()] : undefined;
+	if ((bits & MODIFIER_BITS.Shift) !== 0) command = command === "undo" ? "redo" : undefined;
 	events.push({
 		type: producesText ? "keyDown" : "rawKeyDown",
 		key: def.key,

@@ -35,8 +35,13 @@ export class SessionTabRegistry {
 	private loaded?: Promise<void>;
 	/** Tabs this registry is creating; their grouping is not a user hand-off. */
 	private readonly creating = new Set<number>();
+	private readonly ownershipListeners = new Set<() => void>();
 
 	constructor(private readonly chrome: ChromeApi) {}
+
+	onOwnershipChanged(listener: () => void): void {
+		this.ownershipListeners.add(listener);
+	}
 
 	/** Restore ownership after a service-worker restart and track user changes. */
 	start(): void {
@@ -58,6 +63,7 @@ export class SessionTabRegistry {
 	}
 
 	private async save(): Promise<void> {
+		for (const listener of this.ownershipListeners) listener();
 		await this.chrome.storage.session.set({ [STORAGE_KEY]: Object.fromEntries(this.sessions) });
 	}
 
@@ -245,7 +251,11 @@ export class SessionTabRegistry {
 	private async groupRemoved(groupId: number): Promise<void> {
 		await this.load();
 		for (const session of this.sessions.values()) {
-			if (session.groupId === groupId) session.groupId = undefined;
+			if (session.groupId === groupId) {
+				session.groupId = undefined;
+				session.tabs = {};
+				session.activeTabId = undefined;
+			}
 		}
 		await this.save();
 	}
