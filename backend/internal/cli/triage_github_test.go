@@ -322,6 +322,7 @@ func TestTriageSnapshotRedactsNestedLogValues(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	logger.Error("github sync failed", "err", `{"detail":"token=\"SENTINELPRIVATEVALUE\""}`)
+	logger.Error("github sync failed again", "err", `{"detail":"{\"token\":\"SENTINELPRIVATEVALUE\"}"}`)
 	logger.Error("background session reconciliation on boot failed", "err", "database disk image is malformed")
 	if err := os.WriteFile(filepath.Join(dir, "daemon.log"), logs.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
