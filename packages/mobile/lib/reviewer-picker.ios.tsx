@@ -21,7 +21,7 @@ export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer,
 	const rowHeight = 44;
 
 	return (
-		<Host matchContents={{ vertical: true }} style={styles.host} colorScheme={scheme} seedColor={t.accent}>
+		<Host matchContents={{ vertical: true }} style={styles.host} colorScheme={scheme}>
 			<VStack alignment="leading" spacing={0} modifiers={[opacity(busy ? 0.5 : 1)]}>
 				<HStack spacing={8} modifiers={[frame({ height: rowHeight }), padding({ horizontal: 2 })]}>
 					<Text modifiers={[font({ size: 15, weight: "semibold" }), foregroundStyle(t.textPrimary)]}>Reviewer</Text>

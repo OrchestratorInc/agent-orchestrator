@@ -1,6 +1,6 @@
 import { Button, Host, Picker } from "@expo/ui";
 import { StyleSheet, View } from "react-native";
-import { useTheme, useThemeState } from "./ThemeProvider";
+import { useThemeState } from "./ThemeProvider";
 import type { SpawnComposerControlsProps } from "./spawn-composer-controls.types";
 import { space } from "./tokens";
 
@@ -24,17 +24,16 @@ export function SpawnComposerControls({
 	busy,
 	disabled,
 }: SpawnComposerControlsProps) {
-	const t = useTheme();
 	const { scheme } = useThemeState();
 	return (
 		<View style={styles.stack}>
 			<View style={styles.destinationRow}>
-				<Host style={styles.destinationHost} colorScheme={scheme} seedColor={t.accent}>
+				<Host style={styles.destinationHost} colorScheme={scheme}>
 					<Picker selectedValue={hostId ?? ""} onValueChange={onSelectHost} appearance="menu">
 						{hosts.map((host) => <Picker.Item key={host.id} label={`Run on ${host.label}`} value={host.id} />)}
 					</Picker>
 				</Host>
-				<Host style={styles.destinationHost} colorScheme={scheme} seedColor={t.accent}>
+				<Host style={styles.destinationHost} colorScheme={scheme}>
 					<Picker selectedValue={projectId ?? ""} onValueChange={onSelectProject} appearance="menu">
 						<Picker.Item label="Choose project" value="" />
 						{projects.map((project) => <Picker.Item key={project.id} label={project.label} value={project.id} />)}
@@ -42,25 +41,25 @@ export function SpawnComposerControls({
 				</Host>
 			</View>
 			<View style={styles.rail}>
-				<Host style={styles.iconHost} colorScheme={scheme} seedColor={t.accent}>
+				<Host style={styles.iconHost} colorScheme={scheme}>
 					<Button label="🖼" variant="text" onPress={onChoosePhoto} style={styles.iconButton} />
 				</Host>
-				<Host style={styles.iconHost} colorScheme={scheme} seedColor={t.accent}>
+				<Host style={styles.iconHost} colorScheme={scheme}>
 					<Button label="📎" variant="text" onPress={onChooseFile} style={styles.iconButton} />
 				</Host>
-				<Host style={styles.menuHost} colorScheme={scheme} seedColor={t.accent}>
+				<Host style={styles.menuHost} colorScheme={scheme}>
 					<Picker selectedValue={harness} onValueChange={onSelectHarness} appearance="menu">
 						{agents.map((agent) => <Picker.Item key={agent.id} label={agent.label} value={agent.id} />)}
 					</Picker>
 				</Host>
-				<Host style={styles.menuHost} colorScheme={scheme} seedColor={t.accent}>
+				<Host style={styles.menuHost} colorScheme={scheme}>
 					<Picker selectedValue={modelSelection} onValueChange={onSelectModel} appearance="menu">
 						<Picker.Item label={modelLabel} value="__auto__" />
 						{models.map((model) => <Picker.Item key={model.id} label={model.label} value={model.id} />)}
 					</Picker>
 				</Host>
 			</View>
-			<Host style={styles.spawnHost} colorScheme={scheme} seedColor={t.accent}>
+			<Host style={styles.spawnHost} colorScheme={scheme}>
 				<Button label={busy ? "Starting…" : "Start task"} variant="filled" onPress={onSpawn} disabled={disabled} style={styles.spawnButton} />
 			</Host>
 		</View>

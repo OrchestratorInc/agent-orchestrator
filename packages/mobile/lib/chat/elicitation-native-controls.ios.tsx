@@ -23,7 +23,7 @@ import { useNativeTextInput } from "../useNativeTextInput";
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	return <Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={scheme} seedColor={t.accent}>
+	return <Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={scheme}>
 		<VStack alignment="leading" spacing={0} modifiers={[frame({ maxWidth: 1000, alignment: "leading" })]}>
 			{choices.map((choice, index) => {
 				const checked = selected(choice.value);
@@ -54,7 +54,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 	const controlledText = value === undefined ? "" : String(value);
 	const text = useNativeState(controlledText);
 	const changeText = useNativeTextInput(controlledText, text, onChange);
-	return <Host style={{ width: "100%", height: 46 }} colorScheme={scheme} seedColor={t.accent}>
+	return <Host style={{ width: "100%", height: 46 }} colorScheme={scheme}>
 		<TextField
 			text={text}
 			placeholder={label}
@@ -69,6 +69,9 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 				padding({ horizontal: 14 }),
 				glassPanel(),
 				font({ size: 16 }),
+				// The caret and selection take the tint; this is the colour the app's
+				// React Native fields use for them.
+				tint(t.highlight),
 			]}
 		/>
 	</Host>;
@@ -78,7 +81,7 @@ export function ElicitationAction({ label, primary, disabled, width, onPress }: 
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const resolvedWidth = width ?? (primary ? 76 : 58);
-	return <Host style={{ width: resolvedWidth, height: 36 }} colorScheme={scheme} seedColor={t.accent}>
+	return <Host style={{ width: resolvedWidth, height: 36 }} colorScheme={scheme}>
 		<Button
 			label={label}
 			onPress={() => { haptics.tap(); onPress(); }}

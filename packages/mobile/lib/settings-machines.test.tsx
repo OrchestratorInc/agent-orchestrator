@@ -18,7 +18,8 @@ vi.mock("react-native", () => ({
 	Platform: { OS: "android" }, Pressable: "Pressable", ScrollView: "ScrollView",
 	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 }, Text: "Text", View: "View",
 }));
-vi.mock("@expo/ui", () => ({ Host: "Host", Picker: "Picker", Switch: "Switch" }));
+vi.mock("@expo/ui", () => ({ Host: "Host", Picker: "Picker", Row: "Row", Switch: "Switch" }));
+vi.mock("@expo/ui/swift-ui/modifiers", () => ({ tint: (color: string) => ({ $type: "tint", color }) }));
 vi.mock("expo-application", () => ({ nativeApplicationVersion: "1.0", nativeBuildVersion: "1" }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("expo-device", () => ({ modelName: "Phone" }));

@@ -1,5 +1,5 @@
 import { Button, Host } from "@expo/ui";
-import { useTheme, useThemeState } from "./ThemeProvider";
+import { useThemeState } from "./ThemeProvider";
 
 export type SpawnFabProps = {
 	onPress: () => void;
@@ -11,11 +11,10 @@ export type SpawnFabProps = {
  * bottom-right corner without the rest of the dock.
  */
 export function SpawnFab({ onPress, testID }: SpawnFabProps) {
-	const t = useTheme();
 	const { scheme } = useThemeState();
 
 	return (
-		<Host style={{ width: 52, height: 52 }} colorScheme={scheme} seedColor={t.accent}>
+		<Host style={{ width: 52, height: 52 }} colorScheme={scheme}>
 			<Button
 				label="+"
 				onPress={onPress}

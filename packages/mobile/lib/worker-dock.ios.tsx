@@ -57,7 +57,7 @@ export const WorkerDock = memo(function WorkerDock({
 	const visibility = workerDockVisibility(searchOpen);
 
 	return (
-		<Host style={{ flex: 1, height: 52 }} colorScheme={scheme} seedColor={t.accent}>
+		<Host style={{ flex: 1, height: 52 }} colorScheme={scheme}>
 			{/* The filter, the search field and spawn are three pieces of one dock.
 			    A single container lets the system blend their glass as they meet. */}
 			<GlassEffectContainer spacing={10}>
@@ -162,6 +162,9 @@ export const WorkerDock = memo(function WorkerDock({
 								textFieldStyle("plain"),
 								frame({ height: 48, maxWidth: 1000 }),
 								padding({ leading: 15, trailing: 4 }),
+								// The caret and selection take the tint; this is the colour the
+								// app's React Native fields use for them.
+								tint(t.highlight),
 								accessibilityIdentifier("worker-search"),
 							]}
 						/>

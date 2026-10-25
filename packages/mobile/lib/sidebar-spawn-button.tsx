@@ -1,12 +1,11 @@
 import { Button, Host } from "@expo/ui";
-import { useTheme, useThemeState } from "./ThemeProvider";
+import { useThemeState } from "./ThemeProvider";
 
 export function SidebarSpawnButton({ onPress }: { onPress: () => void }) {
-	const t = useTheme();
 	const { scheme } = useThemeState();
 
 	return (
-		<Host style={{ width: 48, height: 48 }} colorScheme={scheme} seedColor={t.accent}>
+		<Host style={{ width: 48, height: 48 }} colorScheme={scheme}>
 			<Button
 				label="+"
 				onPress={onPress}

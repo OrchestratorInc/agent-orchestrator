@@ -54,7 +54,6 @@ import { type, space } from "./tokens";
 
 
 export function SidebarNavigationShell({ children }: { children: ReactNode }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
 	const { allSessions, allProjects, hostStates, connection, config } = useApp();
@@ -227,7 +226,7 @@ export function SidebarNavigationShell({ children }: { children: ReactNode }) {
 					importantForAccessibility={open ? "yes" : "no-hide-descendants"}
 				>
 					<View style={styles.sidebarTop}>
-						<Host style={{ width: drawerWidth - 32, height: 232 }} colorScheme={scheme} seedColor={t.accent}>
+						<Host style={{ width: drawerWidth - 32, height: 232 }} colorScheme={scheme}>
 							<Column
 								alignment="start"
 								spacing={0}

@@ -7,7 +7,7 @@ export function SidebarSettingsButton({ active, onPress }: { active: boolean; on
 	const { scheme } = useThemeState();
 
 	return (
-		<Host style={{ width: 48, height: 48 }} colorScheme={scheme} seedColor={t.accent}>
+		<Host style={{ width: 48, height: 48 }} colorScheme={scheme}>
 			<Row
 				alignment="center"
 				onPress={onPress}

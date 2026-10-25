@@ -74,7 +74,7 @@ export function SpawnComposerControls({
 
 	return (
 		<View style={styles.stack}>
-			<Host style={styles.controlsHost} colorScheme={scheme} seedColor={t.accent}>
+			<Host style={styles.controlsHost} colorScheme={scheme}>
 				<VStack alignment="leading" spacing={10} modifiers={[frame({ height: 104, maxWidth: 1000 })]}>
 					<HStack spacing={8}>
 						<Menu

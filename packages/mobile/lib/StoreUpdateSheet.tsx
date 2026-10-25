@@ -1,4 +1,5 @@
 import { Button, Column, Host, Row, Spacer, Text as NativeText } from "@expo/ui";
+import { foregroundStyle, tint } from "@expo/ui/swift-ui/modifiers";
 import { Platform, StyleSheet, View } from "react-native";
 import { describePrompt } from "./storeUpdate";
 import type { Theme } from "./theme";
@@ -28,7 +29,7 @@ export function StoreUpdateSheet({
 	return (
 		<SheetScreen title="Software update" subtitle={describePrompt({ version, storeConfirmed, storeName })}>
 			<View style={styles.nativeWrap}>
-				<Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={scheme} seedColor={t.accent}>
+				<Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={scheme}>
 					<Column spacing={22} style={{ width: "100%" }}>
 						<Column spacing={8} style={{ width: "100%" }}>
 							<NativeText textStyle={{ fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" }}>A newer version of Orchestrator is ready</NativeText>
@@ -39,7 +40,9 @@ export function StoreUpdateSheet({
 						<Row alignment="center" spacing={10} style={{ width: "100%" }}>
 							<Button label="Not now" variant="text" onPress={onDismiss} style={{ width: 104, height: 46, borderRadius: 16}} />
 							<Spacer flexible />
-							<Button label={`Open ${storeName}`} variant="filled" onPress={onUpdate} style={{ width: 170, height: 46, borderRadius: 16}} />
+							{/* Filled in the app's primary-button colours, not the system blue
+							    tint: blue is the stopped-worker hue here. */}
+							<Button label={`Open ${storeName}`} variant="filled" onPress={onUpdate} style={{ width: 170, height: 46, borderRadius: 16}} modifiers={[tint(t.accent), foregroundStyle(t.onAccent)]} />
 						</Row>
 					</Column>
 				</Host>

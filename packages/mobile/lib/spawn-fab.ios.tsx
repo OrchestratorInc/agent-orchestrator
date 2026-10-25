@@ -21,7 +21,7 @@ export function SpawnFab({ onPress, testID }: SpawnFabProps) {
 	const { scheme } = useThemeState();
 
 	return (
-		<Host style={{ width: GLASS_CIRCLE_SIZE, height: 52 }} colorScheme={scheme} seedColor={t.accent}>
+		<Host style={{ width: GLASS_CIRCLE_SIZE, height: 52 }} colorScheme={scheme}>
 			<Group
 				modifiers={[
 					frame({ width: GLASS_CIRCLE_SIZE, height: GLASS_CIRCLE_SIZE }),

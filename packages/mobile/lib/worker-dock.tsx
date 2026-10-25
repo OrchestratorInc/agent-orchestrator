@@ -44,7 +44,7 @@ export const WorkerDock = memo(function WorkerDock({
 
 	return (
 		<View style={styles.row}>
-			{visibility.showControls ? <Host style={styles.actionHost} colorScheme={scheme} seedColor={t.accent}>
+			{visibility.showControls ? <Host style={styles.actionHost} colorScheme={scheme}>
 				<Button
 					label="Filters"
 					onPress={onOpenControls}
@@ -53,7 +53,7 @@ export const WorkerDock = memo(function WorkerDock({
 					style={{ width: 52, height: 52, borderRadius: 28}}
 				/>
 			</Host> : null}
-			{visibility.showSearch ? <Host style={styles.searchHost} colorScheme={scheme} seedColor={t.accent}>
+			{visibility.showSearch ? <Host style={styles.searchHost} colorScheme={scheme}>
 				{
 					<TextInput
 						value={value}
@@ -82,7 +82,7 @@ export const WorkerDock = memo(function WorkerDock({
 					/>
 				}
 			</Host> : null}
-			{visibility.showSpawn ? <Host style={styles.actionHost} colorScheme={scheme} seedColor={t.accent}>
+			{visibility.showSpawn ? <Host style={styles.actionHost} colorScheme={scheme}>
 				<Button
 					label="+"
 					onPress={onSpawn}

@@ -151,7 +151,7 @@ function ToggleRow({ label, description, value, disabled, onChange }: { label: s
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
-	return <View style={[styles.row, disabled && styles.disabled]}><Feather name="zap" size={17} color={t.textSecondary} /><View style={styles.rowCopy}><Text style={styles.rowLabel}>{label}</Text>{description ? <Text numberOfLines={2} style={styles.rowDescription}>{description}</Text> : null}</View><Host style={styles.switchHost} colorScheme={scheme} seedColor={t.accent}><NativeSwitch value={value} disabled={disabled} onValueChange={(next) => { haptics.select(); onChange(next); }} /></Host></View>;
+	return <View style={[styles.row, disabled && styles.disabled]}><Feather name="zap" size={17} color={t.textSecondary} /><View style={styles.rowCopy}><Text style={styles.rowLabel}>{label}</Text>{description ? <Text numberOfLines={2} style={styles.rowDescription}>{description}</Text> : null}</View><Host style={styles.switchHost} colorScheme={scheme}><NativeSwitch value={value} disabled={disabled} onValueChange={(next) => { haptics.select(); onChange(next); }} /></Host></View>;
 }
 
 /** A level the user moved to that the sheet has not confirmed; `write` tells a late answer from the current one. */
@@ -231,7 +231,7 @@ export function EffortSlider({ choices, selected, unplaced, disabled, onChange }
 
 	return <View style={[styles.effort, disabled && styles.disabled]}>
 		<View style={styles.effortHeader}><Feather name="activity" size={17} color={t.textSecondary} /><View style={styles.rowCopy}><Text style={styles.rowLabel}>Reasoning effort</Text><Text style={styles.rowDescription}>More effort can improve harder tasks</Text></View><Text style={styles.effortValue} testID="turn-settings-effort-value">{index < 0 ? unplaced : choices[index]?.label}</Text></View>
-		<Host key={nativeKey} style={styles.sliderHost} colorScheme={scheme} seedColor={t.accent}><Slider value={Math.max(0, index)} min={0} max={Math.max(0, choices.length - 1)} step={1} disabled={disabled} onValueChange={move} testID="turn-settings-effort" /></Host>
+		<Host key={nativeKey} style={styles.sliderHost} colorScheme={scheme}><Slider value={Math.max(0, index)} min={0} max={Math.max(0, choices.length - 1)} step={1} disabled={disabled} onValueChange={move} testID="turn-settings-effort" /></Host>
 		<View style={styles.effortLabels}>{choices.map((choice, choiceIndex) => <Text key={choice.value} style={[styles.effortLabel, choiceIndex === index && { color: t.accent }]}>{choice.tick ?? choice.label}</Text>)}</View>
 	</View>;
 }

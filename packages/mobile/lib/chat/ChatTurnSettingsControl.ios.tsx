@@ -28,7 +28,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 
 	return (
 		<View style={styles.row}>
-			<Host matchContents={{ horizontal: false, vertical: true }} ignoreSafeArea="all" style={styles.host} colorScheme={scheme} seedColor={t.accent}>
+			<Host matchContents={{ horizontal: false, vertical: true }} ignoreSafeArea="all" style={styles.host} colorScheme={scheme}>
 				<Menu
 					label={<Text modifiers={[opacity(0)]}>Turn settings</Text>}
 					modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 10, vertical: 10 }), frame({ maxWidth: 1000, minHeight: 44, alignment: "leading" }), accessibilityLabel(`Turn settings, ${label}`), disabledModifier(Boolean(disabled))]}

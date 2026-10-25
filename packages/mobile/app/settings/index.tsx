@@ -1,4 +1,5 @@
-import { Host, Picker, Switch } from "@expo/ui";
+import { Host, Picker, Row, Switch } from "@expo/ui";
+import { tint } from "@expo/ui/swift-ui/modifiers";
 import { Feather } from "../../lib/icons";
 import * as Application from "expo-application";
 import * as Clipboard from "expo-clipboard";
@@ -423,20 +424,25 @@ function AppearanceRow() {
 			label="Appearance"
 			right={
 				<View style={styles.appearancePicker}>
-					<Host matchContents={{ horizontal: true }} style={{ height: 38 }} colorScheme={scheme} seedColor={t.accent}>
-						<Picker
-							selectedValue={preference}
-							onValueChange={(value) => {
-								haptics.select();
-								setPreference(String(value) as ThemePreference);
-							}}
-							appearance="menu"
-							testID="settings-appearance"
-						>
-							<Picker.Item label="System" value="system" />
-							<Picker.Item label="Light" value="light" />
-							<Picker.Item label="Dark" value="dark" />
-						</Picker>
+					<Host matchContents={{ horizontal: true }} style={{ height: 38 }} colorScheme={scheme}>
+						{/* A menu picker draws its value in the tint, system blue on its own.
+						    Secondary text is how a grouped list shows a row's value, and how
+						    the rows around this one show theirs. */}
+						<Row alignment="center" modifiers={[tint(t.textSecondary)]}>
+							<Picker
+								selectedValue={preference}
+								onValueChange={(value) => {
+									haptics.select();
+									setPreference(String(value) as ThemePreference);
+								}}
+								appearance="menu"
+								testID="settings-appearance"
+							>
+								<Picker.Item label="System" value="system" />
+								<Picker.Item label="Light" value="light" />
+								<Picker.Item label="Dark" value="dark" />
+							</Picker>
+						</Row>
 					</Host>
 				</View>
 			}
@@ -459,7 +465,6 @@ function ColorThemeRow() {
 }
 
 function NotificationsRow() {
-	const t = useTheme();
 	const { scheme } = useThemeState();
 	const { config, connection } = useApp();
 	const [snapshot, setSnapshot] = useState<{ config: ServerConfig | null; status: PushStatus } | null>(null);
@@ -517,10 +522,9 @@ function NotificationsRow() {
 			label="Notifications"
 			disabled={toggle.disabled}
 			right={
-				// iOS uses seedColor as the SwiftUI tint, i.e. the "on" track. The dark
-				// accent is near-white, which hides the white thumb, so follow the
-				// system convention of a green track there.
-				<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={Platform.OS === "ios" ? t.green : t.accent}>
+				// No tint: the switch keeps the system's colours, the green track on
+				// iOS and the Material You scheme on Android.
+				<Host style={{ width: 54, height: 34 }} colorScheme={scheme}>
 					<Switch value={pending ?? toggle.value} disabled={toggle.disabled || pending !== null} onValueChange={onToggle} />
 				</Host>
 			}
