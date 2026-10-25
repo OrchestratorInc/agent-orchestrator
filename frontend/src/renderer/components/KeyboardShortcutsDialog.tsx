@@ -108,7 +108,7 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
 				showCloseButton={false}
-				className={cn(settingsDialogContentClass, "w-[min(1280px,calc(100vw-32px))] max-h-[calc(100svh-32px)]")}
+				className={cn(settingsDialogContentClass, "w-[min(1040px,calc(100vw-32px))] max-h-[calc(100svh-32px)]")}
 				onCloseAutoFocus={restoreFocusOnClose}
 			>
 				<div className={cn(settingsDialogHeaderClass, "flex-row flex-wrap items-center gap-3 px-4 py-2.5")}>
