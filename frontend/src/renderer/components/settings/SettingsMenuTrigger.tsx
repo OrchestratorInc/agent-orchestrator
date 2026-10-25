@@ -21,7 +21,7 @@ import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
  * border-border and rounded-lg rather than leaving both in the class list.
  */
 export const SETTINGS_MENU_SURFACE =
-	"settings-menu-surface min-w-[length:var(--size-settings-menu-min-width)] rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu";
+	"settings-menu-surface min-w-[length:var(--size-settings-menu-min-width)] rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)";
 
 /** An entry whose whole content is one label, as on the settings rows. */
 export const SETTINGS_MENU_ITEM =

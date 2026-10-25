@@ -334,7 +334,7 @@ export function AgentModelCombobox({
 						setSearch((current) => current + event.key);
 					}
 				}}
-				className={cn("settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu", menuClassName)}
+				className={cn("settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)", menuClassName)}
 			>
 				{(showSearch || showManualRefresh) && (
 					<div className="flex shrink-0 items-center gap-1">

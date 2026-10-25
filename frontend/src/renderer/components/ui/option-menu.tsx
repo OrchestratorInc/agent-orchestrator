@@ -4,7 +4,7 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 
 const SURFACE =
-	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu";
+	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)";
 
 const ROW =
 	"relative isolate flex min-w-0 cursor-default items-center gap-2.5 rounded-none px-2 py-1.5 text-control text-muted-foreground outline-none whitespace-nowrap transition-none! before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-md focus:before:bg-interactive-hover focus:text-foreground data-highlighted:before:bg-interactive-hover data-highlighted:text-foreground data-[search-active=true]:before:bg-interactive-hover data-[search-active=true]:text-foreground data-[active=true]:before:bg-interactive-hover data-[active=true]:text-foreground";
