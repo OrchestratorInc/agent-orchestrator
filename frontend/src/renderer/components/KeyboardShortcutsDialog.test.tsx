@@ -1,9 +1,16 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render as renderUi, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
 import { APP_SHORTCUTS } from "../../shared/shortcuts";
 import { shortcutLabelKeys } from "../i18n/key-maps";
 import { enMessages } from "../i18n/messages";
+import type { ReactNode } from "react";
+import { TooltipProvider } from "./ui/tooltip";
+import { useKeybindingsStore } from "../stores/keybindings-store";
+
+function render(ui: ReactNode) {
+	return renderUi(<TooltipProvider>{ui}</TooltipProvider>);
+}
 
 const ctx = vi.hoisted(() => ({ commandPaletteEnabled: true }));
 
@@ -14,6 +21,7 @@ vi.mock("../hooks/useCommandPaletteEnabled", () => ({
 describe("KeyboardShortcutsDialog", () => {
 	beforeEach(() => {
 		ctx.commandPaletteEnabled = true;
+		useKeybindingsStore.setState({ overrides: {}, loaded: true });
 	});
 
 	it("shows every shortcut grouped by purpose, with Windows/Linux keys", () => {
@@ -24,11 +32,11 @@ describe("KeyboardShortcutsDialog", () => {
 			expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
 		}
 		// Header carries the dialog's own chord.
-		expect(screen.getByLabelText("Ctrl+/")).toBeInTheDocument();
-		expect(screen.getByLabelText("Ctrl+PageUp")).toBeInTheDocument();
-		expect(screen.getByLabelText("Ctrl+PageDown")).toBeInTheDocument();
-		expect(screen.getByLabelText("Alt+←")).toBeInTheDocument();
-		expect(screen.getByLabelText("Ctrl+`")).toBeInTheDocument();
+		expect(screen.getByLabelText("Ctrl + /")).toBeInTheDocument();
+		expect(screen.getByLabelText("Ctrl + PageUp")).toBeInTheDocument();
+		expect(screen.getByLabelText("Ctrl + PageDown")).toBeInTheDocument();
+		expect(screen.getByLabelText("Alt + Left")).toBeInTheDocument();
+		expect(screen.getByLabelText("Ctrl + `")).toBeInTheDocument();
 	});
 
 	it("lists every customizable and fixed command exactly once", () => {
@@ -45,13 +53,19 @@ describe("KeyboardShortcutsDialog", () => {
 	it("uses macOS symbols in Apple's modifier order and spells them out for screen readers", () => {
 		render(<KeyboardShortcutsDialog open onOpenChange={vi.fn()} isMac />);
 
-		expect(screen.getByLabelText("Command+/")).toBeInTheDocument();
-		expect(screen.getByLabelText("Shift+Command+B")).toBeInTheDocument();
-		expect(screen.getByLabelText("Option+Shift+Command+↓")).toBeInTheDocument();
-		expect(screen.getByLabelText("Control+`")).toBeInTheDocument();
+		expect(screen.getByLabelText("Command + /")).toBeInTheDocument();
+		expect(screen.getByLabelText("Shift + Command + B")).toBeInTheDocument();
+		expect(screen.getByLabelText("Option + Shift + Command + Down")).toBeInTheDocument();
+		expect(screen.getByLabelText("Control + `")).toBeInTheDocument();
 		const inspectorRow = screen.getByText("Toggle inspector").closest("li");
 		expect(within(inspectorRow as HTMLElement).getByText("⇧")).toBeInTheDocument();
-		expect(within(inspectorRow as HTMLElement).getAllByText("⌘")).toHaveLength(2);
+		expect(within(inspectorRow as HTMLElement).getAllByText("⌘")).toHaveLength(1);
+		expect(within(inspectorRow as HTMLElement).getByText("+1")).toBeInTheDocument();
+		expect(within(inspectorRow as HTMLElement).getByRole("img", { name: "1 alternative shortcut. Choose Customize to view all bindings." })).toBeInTheDocument();
+		expect(within(inspectorRow as HTMLElement).queryByRole("img", { name: "Option + Command + B" })).not.toBeInTheDocument();
+		const indexedRow = screen.getByText("Jump to session 1–9").closest("li") as HTMLElement;
+		expect(within(indexedRow).getByRole("img", { name: "Command + 1 through 9" })).toBeInTheDocument();
+		expect(within(indexedRow).queryByText(/^\+/)).not.toBeInTheDocument();
 	});
 
 	it("lists the fixed chat, terminal and browser keys for the platform", () => {
