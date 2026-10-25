@@ -225,9 +225,8 @@ func TestSearchConversationMessagesRoutesReviewerHitsToTheirWorker(t *testing.T)
 		t.Fatalf("reviewer hits = %#v err=%v", hits, err)
 	}
 	// Reviewer Chat remains reachable even when the worker uses a terminal.
-	session.Mode = domain.SessionModeTUI
-	if err := s.UpdateSession(ctx, session); err != nil {
-		t.Fatal(err)
+	if changed, err := s.CommitSessionControllerEpoch(ctx, session.ID, domain.SessionModeChat, domain.SessionModeTUI, session.Metadata.ProviderConversationID, testNow.Add(time.Minute)); err != nil || !changed {
+		t.Fatalf("switch worker to terminal: changed=%v err=%v", changed, err)
 	}
 	if got := searchMessageIDs(t, s, "reviewer passage"); !slices.Equal(got, []string{"review-search-message"}) {
 		t.Fatalf("reviewer of a terminal worker = %v", got)
@@ -245,9 +244,8 @@ func TestSearchConversationMessagesHidesSessionChatInTerminalMode(t *testing.T) 
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
 	seedBranchTurns(t, s, session, conversation)
-	session.Mode = domain.SessionModeTUI
-	if err := s.UpdateSession(ctx, session); err != nil {
-		t.Fatal(err)
+	if changed, err := s.CommitSessionControllerEpoch(ctx, session.ID, domain.SessionModeChat, domain.SessionModeTUI, session.Metadata.ProviderConversationID, testNow.Add(time.Minute)); err != nil || !changed {
+		t.Fatalf("switch worker to terminal: changed=%v err=%v", changed, err)
 	}
 	if got := searchMessageIDs(t, s, "prompt"); len(got) != 0 {
 		t.Fatalf("terminal session has no Chat transcript for hits: %v", got)
