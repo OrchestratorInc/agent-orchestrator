@@ -118,3 +118,26 @@ f74a8ad0b1d464ee8fde75a56c6824a968af5ff6 taken fix(chat): redesign the agent que
 e65fa0b27c3a3ec6e6a81fa451ab630adcdff572 taken fix(chat): give a replacement orchestrator its own provider boundary (#7124)
 b261f3ee26d505261833635bcf9a5bb50a0b8017 skipped feat(ci): sync open issues to a contributor Project with suggested areas and owners (#6995)
 2782e4d7f6914457daa9696cd8bccd249ec5603e taken fix(telemetry): reduce duplicate and noisy product events (#6979)
+b13b9514126c936a06e2b3f692495d9a95ba420e skipped fix(mobile): keep an open Archive cheap with read-only archived rows (#7122) — mobile: владелец не пользуется
+2f4fd3694962d233263ecadea1fb3467f058b96c skipped fix(mobile): open GitHub PR links on the PR in the iOS GitHub app (#7109) — mobile: владелец не пользуется
+735d19ba0b5ec3fa1a3a73652d66b138efb9f3fc skipped fix(mobile): show the streaming cursor only on the newest reply (#7091) — mobile: владелец не пользуется
+464fa1ee943ddc2b5fd356c6b6ccb1ffe6ab9af8 skipped fix(mobile): load chat render pages on iOS over the tunnel (#7070) — mobile: владелец не пользуется
+8aa06320b5e52b376c3a561e53c28da5e07a52b9 skipped fix(mobile): match reviewer chat to sessions and keep chat composers keyboard-aware (#6989) — mobile: владелец не пользуется
+71dab5de401ce6bf1f231b2dba24505ecdf4e19c skipped fix(mobile): match the file comment composer to the session composer (#7025) — mobile: владелец не пользуется
+6de2ae1c4bb375e1dee48c5f5431028cd7a9ac57 skipped fix(mobile): use the new desktop mascot in the app (#7035) — mobile: владелец не пользуется
+9db690843dec90ed448e4f072d1d187a26baa4c7 skipped fix(mobile): connect on the first scan after allowing Local Network access (#6988) — mobile: владелец не пользуется
+59c72e8d51fcea04a4ffcbb8dcd94ceb4f144dca skipped fix(hermes): accept Homebrew bottles whose banner reads vunknown (#7132) — hermes-адаптера нет в форке (feat #6536 не берём)
+3e59b0394ff72b408def75b22a596f2dcac7efb7 taken fix(chat): isolate replacements from empty provider branches (#7187)
+6515618f108e6f9c42d62879a33ade04d144ddb4 skipped feat(chat): list session artifacts in the agent-switch handoff note (#7161)
+1a62c2c4f3cf42b57ddfd3a20a905cafcad8ef6e taken fix(shell): re-fit the sidebar after fullscreen or zoom moves the brand (#7184)
+e25ef420ab0db54cbecd612d91f54275c07b0bf1 taken fix: make terminal backgrounds follow window transparency (#7195) — union: параметр translucent апстрима + fork-комментарий #6861 адаптирован
+8de073b8631e84014df12dba6d7f0f5ca6c29b99 taken fix(chat): settle Claude checkpoints with input queued mid-turn (#6924)
+047b4a5ae51eb4fb26ee440beca1981fbbd4de69 taken fix(shortcuts): improve settings and help dialog usability (#7196) — union импортов в _shell.tsx
+5f60a9629b05fab3bcf48661d89fbc36b843430d skipped fix(ui): unify feature icons and panel expansion controls (#7199) — фикс написан поверх скипнутой переработки файловых/artifact-вью (feat #6793 и related); брать = тащить фичу
+2d22b9ac2fc4ec0aea6b7090d66c73ad58175380 skipped fix(notifications): align drawer with app design (#7200) — дизайнерская полировка drawer; конфликтует с fork-функциональностью orphan-действий (+96 дельты)
+93f8af80b107cf88cb613c6b37e9d8d15acce999 taken fix(desktop): keep a Cloud Chat session's shell tab on the Cloud surface (#7198)
+73e785b2919babfad5d4c24b1badaff02f794524 skipped fix(cloud): terminal output that never wedges, relaunch for workers that never check in, approval modes per model (#7164) — несёт фичевую машинерию cloud-chat; конфликтует с собственной fork-реализацией cloud-сурфейсов
+dcd8a632a5582e05f62a84db2258d71b80caea99 skipped fix(ui): give overlays one faint edge and make pickers match dropdown menus (#7202) — полировка поверх скипнутых #7164/#7200 и удалённого в форке AgentSwitchPicker (feat #7126 не взята)
+7361dc843404639569ae543913e5578056ca3c06 taken fix(chat): make agent question dock scrollable and bound height (#6942) (#6975)
+c771b7881dd59b0edb4a70d0a17bd04d47c2f7a3 skipped fix(acp): fail closed on rejected Cursor fast setting (#7080) — тянет shared-куски #6588/#6778 (QuickStop, StandingInstructionsBlock, netpreload); брать только вместе с реабилитированной #6588
+b259d0c2b95d2dfe4d0e9fa49ac225ab98e050b4 skipped feat(remote-hosts): make remote hosts available without Developer mode (#7152)
