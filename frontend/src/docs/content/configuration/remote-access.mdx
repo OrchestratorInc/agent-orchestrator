@@ -1,9 +1,19 @@
 ---
-title: Connect Mobile
-description: Pair your phone with AO and connect from home or through a secure remote connection.
+title: Remote access and mobile
+description: Pair the Orchestrator mobile app for iPhone, iPad, or Android with your desktop over LAN, Tailscale, or a managed HTTPS tunnel.
 ---
 
-Use **Connect Mobile** to pair the native phone app with your desktop.
+Use **Connect Mobile** to pair the native phone app with your desktop. The mobile app is a remote control: your repositories, worktrees, and coding agents keep running on your computer, and the phone talks to that computer's separate, password-protected mobile listener.
+
+## Choose how the phone connects
+
+When Connect Mobile is on, the pairing QR carries every address the desktop can currently offer. The phone tries them all and uses the first one that answers, so one QR can work at home and away.
+
+| Connection | When it works | Encryption | Setup |
+| --- | --- | --- | --- |
+| **LAN** | Phone and computer on the same trusted network. | None. Plain HTTP protected by the connection password. | Nothing extra. See [Pair on the same network](#pair-on-the-same-network). |
+| **Tailscale** | Phone and computer on the same tailnet, from any network. iPhone and iPad cannot use it. Android is allowed but not yet verified on a device. | Tailscale's WireGuard tunnel between devices. The AO request itself is plain HTTP. | Install Tailscale on both devices. See [Tailscale](#tailscale). |
+| **Managed HTTPS tunnel** | Any network, iPhone, iPad, and Android. | HTTPS to Cloudflare's edge. Cloudflare terminates TLS. | **Install cloudflared** in Connect Mobile. See the `cloudflared` steps in [Pair on the same network](#pair-on-the-same-network). |
 
 ## Pair on the same network
 
@@ -15,7 +25,7 @@ Use **Connect Mobile** to pair the native phone app with your desktop.
 
 Turning mobile access off closes the authenticated listener. Regenerating its password invalidates old pairing credentials. If the phone reports an incompatible pairing or identity contract, update both apps; current desktop pairing does not generate a legacy v1 fallback.
 
-Orchestrator manages a remote-access connector using `cloudflared`, which the macOS app includes. On Windows and Linux, if Connect Mobile says remote access is unavailable, use its **Install cloudflared** control and wait for the connector status to become ready. A LAN code can be ready first; scan the refreshed QR after the remote endpoint appears. Test once with the phone off the home Wi-Fi. A successful home-network connection alone does not prove away-from-home access. The managed connector's address can change when it restarts, so use a refreshed offer if the old endpoint stops working.
+For access away from home, Orchestrator manages a remote-access connector using `cloudflared`, which the macOS app includes. On Windows and Linux, if Connect Mobile says remote access is unavailable, use its **Install cloudflared** control and wait for the connector status to become ready. A LAN code can be ready first; scan the refreshed QR after the remote endpoint appears. Test once with the phone off the home Wi-Fi. A successful home-network connection alone does not prove away-from-home access. The managed connector's address can change when it restarts, so use a refreshed offer if the old endpoint stops working.
 
 ## Use this desktop from another machine
 
@@ -34,7 +44,7 @@ ao remote-host enable --tunnel-only
 ao remote-host status
 ```
 
-The tunnel starts asynchronously; run `status` again until an HTTPS address appears. On the other desktop, sign in to Orchestrator and open **Settings → Remote hosts → Add host**, then enter that address and connection password. Treat these details as credentials. Cloudflare terminates TLS and can read tunneled traffic; quick-tunnel addresses can change on restart.
+The tunnel starts asynchronously; run `status` again until an HTTPS address appears. On the other desktop, sign in to Orchestrator, turn on **Settings → General → Developer mode**, and open **Settings → Remote hosts → Add host**, then enter that address and connection password. Treat these details as credentials. Cloudflare terminates TLS and can read tunneled traffic; quick-tunnel addresses can change on restart.
 
 If the host already has LAN access enabled, its displayed HTTP address works only on a trusted reachable network. Use `ao remote-host enable --tunnel` to add HTTPS access while retaining that LAN listener; switching to tunnel-only mode requires disabling it first and invalidates the old password.
 
@@ -43,6 +53,16 @@ If `ao` is missing from your Mac's PATH or points to an old install, use the cur
 On macOS, **Quit / Cmd+Q** closes the desktop window and removes AO from the Dock while its tray, daemon, and enabled remote access keep running. Use the tray's **Quit AO Completely** to stop the app-owned server. The host must stay awake and reachable; closing the window does not enable remote access by itself.
 
 ## Tailscale
+
+When the computer is signed in to Tailscale, Connect Mobile adds its Tailscale address (`100.x.y.z`) to the pairing QR next to the LAN address. No AO setting is needed.
+
+These steps apply to Android only. The Android app allows unencrypted connections to this address, but this path has not been tested on a physical Android device. Confirm it with the off-Wi-Fi test in step 5 before relying on it, and use the managed HTTPS tunnel if it fails.
+
+1. Install Tailscale on the computer that runs Orchestrator and on your Android phone. Sign both in to the same tailnet.
+2. On the computer, run `tailscale ip -4` and note the `100.x.y.z` address.
+3. Open **Settings → Connect Mobile** and choose **Generate**, or reopen the panel if mobile access is already on. The QR now includes the Tailscale address.
+4. Scan the QR in the mobile app. If you enter details by hand, use the Tailscale address and the port and password shown in Connect Mobile.
+5. Test once with the phone off your home Wi-Fi and Tailscale connected on the phone.
 
 iPhones cannot connect through the current raw Tailscale endpoint. Use a managed HTTPS endpoint instead. iOS blocks cleartext requests to `100.64.0.0/10`, and the current v2 offer does not advertise Tailscale HTTPS endpoints. The current desktop panel has no connection-method selector or separate visible TLS control, and automatic TLS setup is incomplete. Android behavior for a raw Tailscale endpoint is unverified.
 
@@ -75,6 +95,9 @@ Mobile also exposes pull request, workspace review, and reviewer-run views. Push
 | --- | --- |
 | QR stays in preparation | Wait for an advertised endpoint. If there is no LAN address, reconnect the desktop to a network and reopen Connect Mobile. |
 | Works on Wi-Fi but not elsewhere | Confirm a managed HTTPS endpoint is ready, rescan the refreshed QR, and test off Wi-Fi. A plain LAN or raw Tailscale address is not an iOS remote endpoint. |
+| Tailscale address missing from the QR | Check that Tailscale is running and signed in on the computer (`tailscale ip -4` prints a `100.x` address), then reopen Connect Mobile. Tunnel-only hosts do not advertise LAN or Tailscale addresses. |
+| Tailscale address fails on iPhone or iPad | Expected for now: iOS blocks unencrypted requests to Tailscale addresses. Use the managed HTTPS tunnel. |
+| Tailscale address fails on Android | Check that Tailscale is connected on the phone and both devices are on the same tailnet. This path is not yet verified on a device; use the managed HTTPS tunnel if it still fails. |
 | Wrong computer or contract-version error | Check the computer name shown by the phone and update both apps. QR pairing checks the offered host identity before sending the password. |
 | Password rejected | Copy the current password from Connect Mobile or scan a new QR. Regeneration invalidates old credentials. Repeated wrong attempts can trigger a temporary lockout. |
 | Connection drops after sleep or full app exit | Wake the desktop and reopen Orchestrator. On supported Macs, enable keep-awake if appropriate; ordinary Quit/Cmd+Q leaves the server running, but **Quit AO Completely** stops it. Reopen the session after the network returns. |

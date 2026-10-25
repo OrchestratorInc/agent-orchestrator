@@ -50,7 +50,7 @@ Chat support depends on the harness and installed version; see the [agent capabi
 
 The desktop app runs a Go background service on `127.0.0.1` and talks to it through a local API. Orchestrator stores app data and worktree metadata under `~/.ao` by default. Most integrations use coding agents and source-control credentials already on your computer; Orchestrator does not bundle external agents or their credentials. Unreal Agent is a built-in Chat-only adapter on macOS and Linux.
 
-Connect Mobile is a separate, opt-in listener protected by a connection password. See [Connect Mobile](/configuration/remote-access) for local and secure remote pairing.
+Connect Mobile is a separate, opt-in listener protected by a connection password. See [Remote access and mobile](/configuration/remote-access) for LAN, Tailscale, and secure remote pairing.
 
 This manual is checked against the latest stable release, [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3), published 1 October 2026. Newer controls on `main` may differ from that release. Check the [changelog](/changelog) and its release notes before using a new control.
 
@@ -68,7 +68,8 @@ GitHub and GitLab provide source-control observation and issue intake. Intake is
 	<Card title="Installation" description="Download the desktop app and connect your tools." href="/installation" />
 	<Card title="Quickstart" description="Run one worker session from task to pull request." href="/quickstart" />
 	<Card title="Dashboard" description="Learn the desktop board, session view, Chat, terminal, and inspector." href="/dashboard" />
-	<Card title="Cloud sessions" description="Set up a remote project when Cloud is available for your account." href="/guides/cloud" />
+	<Card title="Remote access and mobile" description="Pair the iPhone, iPad, or Android app with your desktop." href="/configuration/remote-access" />
+	<Card title="Cloud sessions" description="Available now in the desktop app: run agents in hosted sandboxes." href="/guides/cloud" />
 	<Card title="Architecture" description="Understand the Go daemon, Electron app, storage, and session modes." href="/architecture" />
 	<Card title="Troubleshooting" description="Resolve common desktop, daemon, agent, and session problems." href="/troubleshooting" />
 </Cards>
