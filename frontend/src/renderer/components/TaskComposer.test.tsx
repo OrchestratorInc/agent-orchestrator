@@ -1927,7 +1927,10 @@ describe("TaskComposer", () => {
 			</Wrap>,
 		);
 
-		expect(await screen.findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.6 Sol");
+		// The button renders before the catalog query resolves, showing the raw
+		// saved model id; findByRole must not race the label swap on slow CI.
+		const modelButton = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(modelButton).toHaveTextContent("GPT-5.6 Sol"));
 		fireEvent.click(screen.getByTestId("agent-field"));
 
 		expect(screen.getByLabelText("Model")).not.toHaveTextContent("GPT-5.6 Sol");
