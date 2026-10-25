@@ -117,7 +117,7 @@ export function SessionTopbarActions({
 									data-priority="primary"
 									disabled={startingOrchestrator || isProjectRestarting || isProvisioning}
 									onClick={openNewTask}
-									variant="action"
+									variant="primary"
 								>
 									<Plus className="size-icon-md" aria-hidden="true" />
 									<span data-compact-label>{t("newTask.task")}</span>
@@ -228,7 +228,7 @@ export function SessionTopbarActions({
 								data-priority="secondary"
 								disabled={isSpawning || isProjectRestarting || isProvisioning}
 								onClick={() => void openOrchestrator()}
-								variant="action"
+								variant="primary"
 							>
 								<OrchestratorIcon className="size-icon-md" aria-hidden="true" />
 								<span data-compact-label>{t("shell.orchestrator")}</span>

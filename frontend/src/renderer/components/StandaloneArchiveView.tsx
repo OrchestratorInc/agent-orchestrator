@@ -101,7 +101,7 @@ export function StandaloneArchiveView() {
 						className="topbar-control--labeled"
 						onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 						type="button"
-						variant="action"
+						variant="primary"
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						{t("standalone.archive.newAgent")}
