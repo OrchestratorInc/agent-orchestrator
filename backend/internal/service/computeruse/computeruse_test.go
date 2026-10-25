@@ -785,7 +785,7 @@ func TestRunStepsObservesWithAScreenshot(t *testing.T) {
 	}
 }
 
-func TestCallDropsClickDebugImages(t *testing.T) {
+func TestCallDropsCallerImageFiles(t *testing.T) {
 	recorder := &observingDriver{}
 	s := newTestService(t, recorder.driver(), "darwin")
 	ctx := context.Background()
@@ -814,6 +814,32 @@ func TestCallDropsClickDebugImages(t *testing.T) {
 	}
 	if given["debug_image_out"] != "/etc/step.png" {
 		t.Fatalf("caller's step arguments changed: %v", given)
+	}
+
+	// A trailing get_window_state becomes the batch's end read, and its file
+	// would force a capture the batch's observe turned off.
+	read := map[string]any{"screenshot_out_file": "/etc/outside.png"}
+	steps = []any{
+		map[string]any{"click": map[string]any{"element_token": "s1:2"}},
+		map[string]any{"tool": "get_window_state", "args": read},
+		map[string]any{"get_window_state": map[string]any{"screenshot_out_file": "/etc/outside.png"}},
+	}
+	if _, err := s.Call(ctx, CallRequest{Tool: "run_steps", Arguments: map[string]any{"pid": 7, "window_id": 9, "steps": steps, "observe": map[string]any{"include_screenshot": false}}}); err != nil {
+		t.Fatalf("run_steps with reads: %v", err)
+	}
+	batch = recorder.sent[len(recorder.sent)-1]
+	sentSteps, _ = batch["steps"].([]any)
+	for index, raw := range sentSteps {
+		_, arguments := stepAction(raw.(map[string]any))
+		if has(arguments, "screenshot_out_file") {
+			t.Fatalf("step %d sent %v", index+1, raw)
+		}
+	}
+	if observe, _ := batch["observe"].(map[string]any); has(observe, "screenshot_out_file") {
+		t.Fatalf("observe = %v", observe)
+	}
+	if read["screenshot_out_file"] != "/etc/outside.png" {
+		t.Fatalf("caller's step arguments changed: %v", read)
 	}
 }
 

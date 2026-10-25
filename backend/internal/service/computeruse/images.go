@@ -84,10 +84,13 @@ func (s imageStore) prune(dir string) {
 	}
 }
 
-// dropDebugImages removes click's debug_image_out from a call and from each
-// of its steps, so no image the driver writes lands outside AO's folder. Steps
+// dropImageFiles removes click's debug_image_out from a call, and it and
+// screenshot_out_file from each of its steps, so no image the driver writes
+// lands outside AO's folder. run_steps takes a get_window_state step as its
+// end-of-batch read, and its screenshot_out_file would force a capture the
+// batch's observe turned off; prepareObserve sets AO's own file instead. Steps
 // that carry one are copied rather than changed in the caller's arguments.
-func dropDebugImages(arguments map[string]any) {
+func dropImageFiles(arguments map[string]any) {
 	delete(arguments, "debug_image_out")
 	steps, ok := arguments["steps"].([]any)
 	if !ok {
@@ -98,11 +101,12 @@ func dropDebugImages(arguments map[string]any) {
 		copied[index] = raw
 		step, _ := raw.(map[string]any)
 		tool, stepArguments := stepAction(step)
-		if !has(stepArguments, "debug_image_out") {
+		if !hasAny(stepArguments, "debug_image_out", "screenshot_out_file") {
 			continue
 		}
 		stepArguments = maps.Clone(stepArguments)
 		delete(stepArguments, "debug_image_out")
+		delete(stepArguments, "screenshot_out_file")
 		step = maps.Clone(step)
 		if _, written := step["tool"].(string); written {
 			step["args"] = stepArguments

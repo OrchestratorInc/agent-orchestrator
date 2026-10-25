@@ -350,7 +350,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	}
 	saved := &savedImages{store: s.images, scope: scope, tool: tool, images: []Image{}}
 	screenshot := saved.requestScreenshotFile(tool, arguments)
-	dropDebugImages(arguments)
+	dropImageFiles(arguments)
 	// Each `cua-driver call` is a new connection, and the driver gives each
 	// one a disposable implicit session. A pixel click or zoom needs the
 	// screenshot an earlier call took in the same session, so every call for
