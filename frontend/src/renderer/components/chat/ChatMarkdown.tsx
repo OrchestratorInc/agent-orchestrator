@@ -154,6 +154,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	muted = false,
 	className,
 	safeOrigin = false,
+	remarkPlugins,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -165,7 +166,10 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	muted?: boolean;
 	className?: string;
 	safeOrigin?: boolean;
+	/** Run after the built-in plugins; keep the array stable, a new one re-parses the text. */
+	remarkPlugins?: Options["remarkPlugins"];
 }) {
+	const plugins = useMemo(() => (remarkPlugins ? [...PLUGINS, ...remarkPlugins] : PLUGINS), [remarkPlugins]);
 	// Replies opened from history mount settled and never wrap; live ones keep the fade a
 	// beat past the end of the stream.
 	const [fading, setFading] = useState(streaming);
@@ -206,6 +210,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 						streaming={streaming && index === blocks.blocks.length - 1}
 						fading={animate && index === blocks.blocks.length - 1}
 						settledOffset={Math.max(0, settledOffset - block.start)}
+						remarkPlugins={plugins}
 					/>
 				))}
 			</div>
@@ -215,12 +220,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 
 // No wrapper DOM: list/table layout, image galleries and prose spacing keep
 // their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset }: {
+const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
 	source: string;
 	repairInline: boolean;
 	streaming: boolean;
 	fading: boolean;
 	settledOffset: number;
+	remarkPlugins: Options["remarkPlugins"];
 }) {
 	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
 		linkMode: "text-only", images: false, htmlTags: false,
@@ -229,7 +235,7 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, stream
 	const plugins = useMemo<Options["rehypePlugins"]>(() =>
 		fading ? [[rehypeStreamFade, { settledOffset }]] : undefined, [fading, settledOffset]);
 	return <StreamingProse.Provider value={streaming}>
-		<Markdown remarkPlugins={PLUGINS} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
+		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 			{repaired}
 		</Markdown>
 	</StreamingProse.Provider>;

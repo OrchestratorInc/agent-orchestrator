@@ -169,6 +169,15 @@ describe("orchestrator messages in a worker chat", () => {
 		expect(within(message).getByRole("link", { name: "Orchestrator" })).toHaveAttribute("href", "ao://sessions/proj/proj-1");
 	});
 
+	it("marks the paths in its plain prose as code and links the sessions it names", () => {
+		renderOrchestrator([sent("Compare /tmp/proj/.ao/shot.png with proj-7, then report.", "proj-1"), reply("t1", 2, "On it.")], vi.fn(), workspaces, "worker");
+
+		const message = screen.getByTestId("orchestrator-message");
+		expect(within(message).getByText("/tmp/proj/.ao/shot.png").tagName).toBe("CODE");
+		expect(within(message).getByRole("link", { name: "proj-7" })).toHaveAttribute("href", "ao://sessions/proj/proj-7");
+		expect(message).toHaveTextContent("Compare /tmp/proj/.ao/shot.png with proj-7, then report.");
+	});
+
 	it("leaves a message from any other session as it was", () => {
 		renderOrchestrator([sent("Rebased on main.", "proj-7"), reply("t1", 2, "Noted.")], vi.fn(), workspaces, "worker");
 

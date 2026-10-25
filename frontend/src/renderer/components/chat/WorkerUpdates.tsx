@@ -12,6 +12,8 @@
 import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import type { Options } from "react-markdown";
+import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
@@ -257,9 +259,19 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 	return undefined;
 }
 
+/** Agents message each other in plain prose; their paths read as code and the sessions they name link to them. */
+function usePlainReferences() {
+	const workspaces = useChatLinkWorkspaces();
+	return useMemo<Options["remarkPlugins"]>(() => {
+		const sessionProjects = new Map(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id] as const)));
+		return [[remarkPlainReferences, sessionProjects]];
+	}, [workspaces]);
+}
+
 function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const [open, setOpen] = useState(false);
 	const session = useWorkerSession(update.sessionId, update.projectId);
+	const references = usePlainReferences();
 	const index = useContext(WorkerUpdateIndexContext);
 	const { text, artifacts } = splitArtifacts(update.body);
 	const { headline, detail } = splitHeadline(text);
@@ -315,7 +327,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 			))}
 			{open ? (
 				<div className="mb-2 ml-6 mt-1 min-w-0">
-					<ChatMarkdown text={detail} muted safeOrigin className="whitespace-pre-wrap text-xs leading-relaxed" />
+					<ChatMarkdown text={detail} muted safeOrigin remarkPlugins={references} className="whitespace-pre-wrap text-xs leading-relaxed" />
 				</div>
 			) : null}
 		</div>
@@ -356,6 +368,7 @@ function OrchestratorMessage({ update, session }: { update: WorkerUpdate; sessio
 	const [open, setOpen] = useState(false);
 	const [folds, setFolds] = useState(false);
 	const body = useRef<HTMLDivElement>(null);
+	const references = usePlainReferences();
 	// Re-measured as the chat resizes, so text the fold hides always comes with a way to open it.
 	useLayoutEffect(() => {
 		const element = body.current;
@@ -384,7 +397,7 @@ function OrchestratorMessage({ update, session }: { update: WorkerUpdate; sessio
 							{t("shell.orchestrator")}
 						</SessionLabelLink>
 					) : null}
-					<ChatMarkdown text={update.body} safeOrigin />
+					<ChatMarkdown text={update.body} safeOrigin remarkPlugins={references} />
 				</div>
 			</div>
 			{folds || open ? (
