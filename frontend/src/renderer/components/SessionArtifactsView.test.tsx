@@ -353,19 +353,19 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
 		const viewer = screen.getByTestId("artifact-view");
 
-		await userEvent.click(screen.getByRole("button", { name: "Full screen" }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 
 		const overlay = screen.getByRole("dialog", { name: "notes.md" });
 		expect(overlay.parentElement).toBe(document.body);
 		expect(within(overlay).getByTestId("artifact-view")).toBe(viewer);
 		expect(overlay).toHaveFocus();
-		expect(within(overlay).getByRole("button", { name: "Exit full screen" })).toBeInTheDocument();
+		expect(within(overlay).getByRole("button", { name: "Return to panel" })).toBeInTheDocument();
 
 		await userEvent.keyboard("{Escape}");
 
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		expect(screen.getByTestId("artifact-view")).toBe(viewer);
-		expect(screen.getByRole("button", { name: "Full screen" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument();
 	});
 
 	it("covers the whole app window without taking the window itself full screen", async () => {
@@ -373,10 +373,10 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
 
-		await userEvent.click(screen.getByRole("button", { name: "Full screen" }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 
 		expect(screen.getByRole("dialog", { name: "notes.md" })).toHaveClass("fixed", "inset-0");
-		await userEvent.click(screen.getByRole("button", { name: "Exit full screen" }));
+		await userEvent.click(screen.getByRole("button", { name: "Return to panel" }));
 		expect(action).not.toHaveBeenCalled();
 		action.mockRestore();
 	});
@@ -384,7 +384,7 @@ describe("SessionArtifactsView", () => {
 	it("leaves full screen when going back to the list", async () => {
 		renderView(<SessionArtifactsView session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /notes\.md/ }));
-		await userEvent.click(screen.getByRole("button", { name: "Full screen" }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 
 		await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Back to artifacts" }));
 

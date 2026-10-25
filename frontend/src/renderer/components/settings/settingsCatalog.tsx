@@ -1,4 +1,5 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { BrowserIcon, type AppIcon } from "../icons";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -49,7 +50,7 @@ type CatalogContext = {
 
 export type SettingsCatalogItem = {
 	id: GlobalSettingsSection;
-	icon: LucideIcon;
+	icon: AppIcon;
 	label: (t: TFunction) => string;
 	visible?: (context: CatalogContext) => boolean;
 	/** Left out of the single-page "all" view; it has its own page in the nav.
@@ -90,7 +91,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 	},
 	{
 		id: "browserProfiles",
-		icon: Globe2,
+		icon: BrowserIcon,
 		label: (t) => t("settings.browserProfiles"),
 		render: (_t, titleHidden) => (
 			<>

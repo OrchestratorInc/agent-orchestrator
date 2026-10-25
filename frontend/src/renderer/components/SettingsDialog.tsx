@@ -1,4 +1,5 @@
-import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import type { AppIcon } from "./icons";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -95,7 +96,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
-		icon: LucideIcon;
+		icon: AppIcon;
 	}> = [
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
@@ -301,7 +302,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 export type SettingsNavEntry = {
 	id: string;
 	label: string;
-	icon: LucideIcon;
+	icon: AppIcon;
 	active: boolean;
 	disabled?: boolean;
 	onSelect: () => void;

@@ -264,6 +264,8 @@
 	"cloudLocalAuth.tabSignIn": "Se connecter",
 	"cloudLocalAuth.title": "Connexion locale à AO Cloud",
 	"cloudLocalAuth.working": "En cours…",
+	"common.maximize": "Agrandir",
+	"common.returnToPanel": "Retour au panneau",
 	"common.breadcrumb": "Fil d'Ariane",
 	"common.close": "Fermer",
 	"common.loading": "Chargement…",

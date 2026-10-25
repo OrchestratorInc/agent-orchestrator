@@ -227,6 +227,8 @@
 	"activity.idle": "Idle",
 	"activity.unknown": "Unknown",
 	"activity.waiting_input": "Input Needed",
+	"common.maximize": "Maximize",
+	"common.returnToPanel": "Return to panel",
 	"common.breadcrumb": "Breadcrumb",
 	"common.close": "Close",
 	"common.loading": "Loading…",

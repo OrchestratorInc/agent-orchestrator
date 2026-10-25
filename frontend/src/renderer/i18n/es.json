@@ -264,6 +264,8 @@
 	"cloudLocalAuth.tabSignIn": "Iniciar sesión",
 	"cloudLocalAuth.title": "Inicio de sesión local en AO Cloud",
 	"cloudLocalAuth.working": "Procesando…",
+	"common.maximize": "Maximizar",
+	"common.returnToPanel": "Volver al panel",
 	"common.breadcrumb": "Ruta de navegación",
 	"common.close": "Cerrar",
 	"common.loading": "Cargando…",

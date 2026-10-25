@@ -264,6 +264,8 @@
 	"cloudLocalAuth.tabSignIn": "로그인",
 	"cloudLocalAuth.title": "로컬 AO Cloud 로그인",
 	"cloudLocalAuth.working": "처리 중…",
+	"common.maximize": "최대화",
+	"common.returnToPanel": "패널로 돌아가기",
 	"common.breadcrumb": "경로",
 	"common.close": "닫기",
 	"common.loading": "불러오는 중…",

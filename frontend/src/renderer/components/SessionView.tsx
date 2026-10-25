@@ -1,5 +1,6 @@
+import { BrowserIcon } from "./icons";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe2, Loader2, PanelRight, Plus } from "lucide-react";
+import { Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
 import { motion } from "motion/react";
 import {
@@ -2188,7 +2189,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							>
 								{browserOnly ? (
 									<span className="relative inline-flex">
-										<Globe2 aria-hidden="true" className="size-icon-md" />
+										<BrowserIcon aria-hidden="true" className="size-icon-md" />
 										{!isInspectorOpen && browserUnseen ? (
 											<span
 												aria-hidden="true"
