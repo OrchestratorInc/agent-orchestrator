@@ -239,6 +239,7 @@ export function createCodeHighlightStream() {
 				const offset = reset ? 0 : committed?.source.length ?? 0;
 				if (!reset && offset === code.length) return { source: code, language, lines };
 				let response = await sendWorker({ kind: "stream", id: ++nextRequestId, streamId, offset, reset, code: code.slice(offset), language });
+				if (disposed) return undefined;
 				// Worker LRU eviction is transparent: replay once from the source.
 				let replace = reset;
 				if (response?.kind === "reset") {

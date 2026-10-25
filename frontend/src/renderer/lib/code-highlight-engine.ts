@@ -44,7 +44,7 @@ const theme = {
 		{ scope: ["constant.numeric", "constant.other", "markup.list"], settings: { foreground: "var(--color-term-yellow)" } },
 		{ scope: ["entity.name.function", "support.function", "markup.heading"], settings: { foreground: "var(--color-term-blue)" } },
 		{ scope: ["entity.name.type", "support.type", "support.class"], settings: { foreground: "var(--color-term-cyan)" } },
-		{ scope: ["variable", "entity.other.attribute-name", "markup.deleted"], settings: { foreground: "var(--color-term-red)" } },
+		{ scope: ["variable", "entity.other.attribute-name", "support.type.property-name", "markup.deleted"], settings: { foreground: "var(--color-term-red)" } },
 		{ scope: "comment", settings: { foreground: "var(--color-text-muted)", fontStyle: "italic" } },
 		{ scope: "markup.bold", settings: { fontStyle: "bold" } },
 		{ scope: "markup.italic", settings: { fontStyle: "italic" } },

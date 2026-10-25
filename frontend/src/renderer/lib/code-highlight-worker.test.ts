@@ -82,6 +82,23 @@ describe("large code worker highlighting", () => {
 		stream.dispose();
 	});
 
+	it("does not recreate a disposed stream when an in-flight append requests a replay", async () => {
+		const api = await setup();
+		const stream = api.createCodeHighlightStream();
+		const first = stream.update("const a = 1;\n", "javascript");
+		const worker = FakeWorker.instances[0];
+		const initial = worker.postMessage.mock.calls[0][0];
+		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: initial.id, lines: [] } }));
+		await first;
+		const pending = stream.update("const a = 1;\nconst b = 2;\n", "javascript");
+		const append = worker.postMessage.mock.calls[1][0];
+		stream.dispose();
+		expect(worker.postMessage).toHaveBeenLastCalledWith({ kind: "release", streamId: initial.streamId });
+		worker.onmessage!(new MessageEvent("message", { data: { kind: "reset", id: append.id } }));
+		expect(await pending).toBeUndefined();
+		expect(worker.postMessage).toHaveBeenCalledTimes(3);
+	});
+
 	it("resets stream state on edits and language changes and ignores results after disposal", async () => {
 		const api = await setup();
 		const stream = api.createCodeHighlightStream();
