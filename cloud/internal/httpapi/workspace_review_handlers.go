@@ -178,10 +178,10 @@ func (s *Server) dispatchWorkspaceReview(w http.ResponseWriter, r *http.Request,
 // adapter and probing each model's approval modes on a cold worker), longer
 // than the default request wait, so the wait covers that plus delivery.
 func (s *Server) chatModelsRequestTimeout() time.Duration {
-	return max(s.workerRequestTimeout, chatModelsRequestTimeout)
+	return max(s.workerRequestTimeout, minChatModelsRequestTimeout)
 }
 
-const chatModelsRequestTimeout = 25 * time.Second
+const minChatModelsRequestTimeout = 25 * time.Second
 
 func (s *Server) dispatchWorkspaceReviewWithin(w http.ResponseWriter, r *http.Request, kind string, input any, response any, timeout time.Duration) bool {
 	orgID, sessionID, ok := workspaceRoute(w, r)

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -99,7 +102,9 @@ func TestClaudeCatalogReportsApprovalModesPerModelFromACPOptions(t *testing.T) {
 	conn := claudeTestConnection(t, agent)
 	options := claudeTestOptions("opus")
 	models, current, _ := claudeModelsFromOptions(options)
+	saved := claudeProbes
 	claudeProbes = &claudeProbeCache{}
+	t.Cleanup(func() { claudeProbes = saved })
 	probeClaudeApprovalModes(context.Background(), conn, "adapter", "session-1", models, current, options, nil)
 	byID := map[string][]string{}
 	for _, model := range models {
@@ -138,7 +143,7 @@ func TestClaudeCatalogReportsApprovalModesPerModelFromACPOptions(t *testing.T) {
 	// mode option, are unknown rather than guessed: the client keeps offering
 	// what the session allows.
 	failing := []worker.ChatModel{{ID: "opus"}, {ID: "haiku"}}
-	claudeApprovalModesByModel(failing, "opus", options, nil, func(string) ([]acp.SessionConfigOption, error) {
+	claudeApprovalModesByModel(failing, "opus", options, nil, func(string) ([]string, error) {
 		return nil, fmt.Errorf("adapter went away")
 	})
 	if failing[0].ApprovalModes == nil || failing[1].ApprovalModes != nil {
@@ -146,7 +151,7 @@ func TestClaudeCatalogReportsApprovalModesPerModelFromACPOptions(t *testing.T) {
 	}
 	modes := &acp.SessionModeState{AvailableModes: []acp.SessionMode{{Id: "default"}, {Id: "acceptEdits"}}}
 	unprobed := []worker.ChatModel{{ID: "opus"}, {ID: "haiku"}}
-	claudeApprovalModesByModel(unprobed, "opus", nil, modes, func(model string) ([]acp.SessionConfigOption, error) {
+	claudeApprovalModesByModel(unprobed, "opus", nil, modes, func(model string) ([]string, error) {
 		t.Fatalf("probed %s without a mode option", model)
 		return nil, nil
 	})
@@ -228,5 +233,75 @@ func TestClaudeModelCatalogGivesAliasesTheirModelsEfforts(t *testing.T) {
 	}
 	if got := byID["default"].Efforts; len(got) != 0 {
 		t.Fatalf("default efforts = %v, want none without a resolvable description", got)
+	}
+}
+
+// A model's approval modes follow from the Claude Code build and the account
+// and provider it runs with, so the probe cache key changes with the adapter
+// environment and with an in-place upgrade of either executable, and an
+// entry lapses after claudeProbeTTL. Only a probe that really switched the
+// session is remembered.
+func TestClaudeProbeCacheKeyAndLifetime(t *testing.T) {
+	dir := t.TempDir()
+	adapter := filepath.Join(dir, "claude-agent-acp")
+	claude := filepath.Join(dir, "claude")
+	for _, path := range []string{adapter, claude} {
+		if err := os.WriteFile(path, []byte("v1"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := map[string]string{"ANTHROPIC_API_KEY": "one"}
+	base := claudeProbeKey(adapter, claude, env)
+	if again := claudeProbeKey(adapter, claude, map[string]string{"ANTHROPIC_API_KEY": "one"}); again != base {
+		t.Fatal("the same adapter, Claude Code and environment gave a different key")
+	}
+	if strings.Contains(base, "one") {
+		t.Fatal("the key carries a credential in clear")
+	}
+	if claudeProbeKey(adapter, claude, map[string]string{"ANTHROPIC_API_KEY": "two"}) == base {
+		t.Fatal("another credential kept the key")
+	}
+	if claudeProbeKey(adapter, claude, map[string]string{"ANTHROPIC_API_KEY": "one", "CLAUDE_CODE_USE_BEDROCK": "1"}) == base {
+		t.Fatal("another provider kept the key")
+	}
+	if err := os.WriteFile(claude, []byte("v2, upgraded in place"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if claudeProbeKey(adapter, claude, env) == base {
+		t.Fatal("an in-place Claude Code upgrade kept the key")
+	}
+
+	cache := &claudeProbeCache{}
+	start := time.Now()
+	cache.put("key", "haiku", []string{"default", "accept-edits"}, start)
+	if modes, ok := cache.get("key", "haiku", start.Add(claudeProbeTTL-time.Second)); !ok || !slices.Equal(modes, []string{"default", "accept-edits"}) {
+		t.Fatalf("fresh entry = %v %v", modes, ok)
+	}
+	if _, ok := cache.get("other key", "haiku", start); ok {
+		t.Fatal("an entry answered for another key")
+	}
+	if _, ok := cache.get("key", "haiku", start.Add(claudeProbeTTL)); ok {
+		t.Fatal("an entry outlived claudeProbeTTL")
+	}
+}
+
+// Modes read after a switch the adapter did not make describe the old model,
+// so they are neither reported nor remembered for the probed one.
+func TestClaudeProbeIgnoresASwitchThatDidNotHappen(t *testing.T) {
+	saved := claudeProbes
+	claudeProbes = &claudeProbeCache{}
+	t.Cleanup(func() { claudeProbes = saved })
+	agent := &claudeModelAgent{modeSpyAgent: modeSpyAgent{selected: make(chan acp.SessionModeId, 1)}, stuck: "opus"}
+	conn := claudeTestConnection(t, agent)
+	options := claudeTestOptions("opus")
+	models, current, _ := claudeModelsFromOptions(options)
+	probeClaudeApprovalModes(context.Background(), conn, "adapter", "session-1", models, current, options, nil)
+	for _, model := range models {
+		if model.ID == "haiku" && model.ApprovalModes != nil {
+			t.Fatalf("haiku modes = %v from a switch that stayed on opus, want unknown", model.ApprovalModes)
+		}
+	}
+	if _, ok := claudeProbes.get("adapter", "haiku", time.Now()); ok {
+		t.Fatal("a switch that did not happen was remembered")
 	}
 }
