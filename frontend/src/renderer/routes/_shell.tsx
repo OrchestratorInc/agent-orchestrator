@@ -13,7 +13,6 @@ import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
 import { NotificationRuntime } from "../components/NotificationCenter";
-import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { GlobalNewTaskDialog } from "../components/GlobalNewTaskDialog";
 import { GlobalToast } from "../components/GlobalToast";
@@ -1397,7 +1396,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />
 				<TrayRuntime />
 				{isDragActive ? (
 					<div

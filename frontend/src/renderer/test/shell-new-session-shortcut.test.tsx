@@ -250,7 +250,6 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 }));
 
 vi.mock("../components/NotificationCenter", () => ({ NotificationRuntime: () => null }));
-vi.mock("../components/HarnessUpdateNotice", () => ({ HarnessUpdateNotice: () => null }));
 vi.mock("../components/DaemonStartupLoader", () => ({
 	DaemonStartupLoader: () => <div data-testid="daemon-startup-loader" />,
 }));

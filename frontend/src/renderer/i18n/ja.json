@@ -3457,5 +3457,8 @@
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
-	"files.previousVersionAt": "Previous version at {{revision}}"
+	"files.previousVersionAt": "Previous version at {{revision}}",
+	"shell.agentUpdates": "エージェントの更新",
+	"shell.agentUpdatesAvailable_one": "{{count}} 件のエージェント更新があります",
+	"shell.agentUpdatesAvailable_other": "{{count}} 件のエージェント更新があります"
 }

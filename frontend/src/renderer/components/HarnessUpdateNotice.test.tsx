@@ -2,8 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
-import { useHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
+import { HarnessUpdatesProvider, HarnessUpdatesRailButton, HarnessUpdatesRow } from "./HarnessUpdateNotice";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { appI18n } from "../i18n";
@@ -12,10 +11,26 @@ import { TooltipProvider } from "./ui/tooltip";
 import { useUiStore } from "../stores/ui-store";
 import type { AgentReadiness } from "../hooks/useAgentReadinessQuery";
 
-function mountNotice(enabled = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })) {
-	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessUpdateNotice enabled={enabled} /></TooltipProvider></QueryClientProvider>);
+const TRIGGER = /agent updates? available/;
+
+function mountMenu(enabled = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }), rail = false) {
+	const view = render(<QueryClientProvider client={client}><TooltipProvider><HarnessUpdatesProvider enabled={enabled}>
+		{rail ? <HarnessUpdatesRailButton /> : <HarnessUpdatesRow />}
+	</HarnessUpdatesProvider></TooltipProvider></QueryClientProvider>);
 	return { client, ...view };
 }
+
+const trigger = () => screen.queryByRole("button", { name: TRIGGER });
+
+/** Opens the updates popover from the sidebar row (if it is not open already). */
+async function openMenu() {
+	const open = screen.queryByRole("dialog", { name: "Agent updates" });
+	if (open) return open;
+	await userEvent.click(await screen.findByRole("button", { name: TRIGGER }));
+	return screen.findByRole("dialog", { name: "Agent updates" });
+}
+
+const rowNames = (menu: HTMLElement) => within(menu).getAllByRole("listitem").map((row) => row.getAttribute("aria-label"));
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -43,18 +58,12 @@ function mockUpdatableStack() {
 	mockStack();
 	const original = vi.mocked(apiClient.GET).getMockImplementation()!;
 	vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
-		if (path === "/api/v1/agents/installers") return { data: { agents: ["claude-code", "codex", "cursor"].map((agentId) => ({
-			agentId, methods: [{ id: "official-installer", available: true, updateAvailable: true }],
-		})) } } as never;
 		if (path === "/api/v1/agents/auth-plans") return { data: { plans: ["claude-code", "codex", "cursor"].map((agentId) => ({ agentId, action: "login", available: true })) } } as never;
-		if (path === "/api/v1/agents/{agent}/update-advisory") return { data: {
-			status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0", maintenanceMethod: "official-installer",
-		} } as never;
 		return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 	});
 }
 
-describe("startup harness update notice", () => {
+describe("sidebar agent updates", () => {
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
 		localStorage.clear();
@@ -72,88 +81,94 @@ describe("startup harness update notice", () => {
 	});
 	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-	it("never raises the native shell, which would block the live browser page", async () => {
-		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
-		expect(notice).toHaveClass("fixed", "right-4");
+	it("shows one quiet footer row with the count, and nothing floats over the app", async () => {
+		mockStack();
+		mountMenu();
+		const row = await screen.findByRole("button", { name: "3 agent updates available" });
+		expect(row).toHaveTextContent("Agent updates3");
+		expect(row).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByRole("region")).toBeNull();
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
-	it("publishes the corner it covers while shown, so session content can keep clear of it", async () => {
-		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-			return this.classList.contains("harness-update-notice") ? new DOMRect(1004, 72, 300, 68) : new DOMRect();
-		});
-		function Probe() {
-			const rect = useHarnessUpdateNoticeRect();
-			return <output aria-label="notice rect">{rect ? `${rect.left},${rect.top},${rect.right},${rect.bottom}` : "none"}</output>;
-		}
-		render(<Probe />);
-		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
-		const { unmount } = mountNotice();
-		await screen.findByRole("region", { name: "Agent updates available" });
-		await waitFor(() => expect(screen.getByLabelText("notice rect")).toHaveTextContent("1004,72,1304,140"));
-		unmount();
-		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
+	it("opens one shared list anchored to the row", async () => {
+		mockStack();
+		mountMenu();
+		const menu = await openMenu();
+		expect(screen.getByRole("button", { name: TRIGGER })).toHaveAttribute("aria-expanded", "true");
+		expect(rowNames(menu)).toEqual(["Cursor", "Codex", "Claude Code"]);
+		expect(within(menu).getAllByText("v1.0.0")).toHaveLength(3);
+		expect(within(menu).getAllByRole("button", { name: "Update" })).toHaveLength(3);
+		expect(within(menu).getByRole("button", { name: "Update all" })).toBeEnabled();
 	});
 
-	it("keeps the app corner, hides for browser overlap, and returns after the inspector closes", async () => {
-		vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
-		let browserRect = new DOMRect();
-		const originalRect = HTMLElement.prototype.getBoundingClientRect;
-		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-			if (this.classList.contains("harness-update-notice")) return new DOMRect(964, 72, 300, 200);
-			if (this.classList.contains("workspace-topbar-container")) return new DOMRect(0, 0, 1280, 60);
-			if (this.classList.contains("browser-panel__viewport")) return browserRect;
-			return originalRect.call(this);
-		});
-		const topbar = document.createElement("div");
-		topbar.className = "workspace-topbar-container";
-		document.body.append(topbar);
-		mountNotice();
-		await screen.findByRole("region", { name: "Agent updates available" });
-		const browser = document.createElement("div");
-		browser.className = "browser-panel";
-		browser.dataset.browserNativePage = "live";
-		const viewport = document.createElement("div");
-		viewport.className = "browser-panel__viewport";
-		browser.append(viewport);
-		try {
-			for (const [left, top, visible] of [[820, 400, true], [820, 100, false], [600, 400, true], [0, 40, false]] as const) {
-				browserRect = new DOMRect(left, top, 1280 - left, 800 - top);
-				await act(async () => {
-					document.body.append(browser);
-					window.dispatchEvent(new Event("resize"));
-					await new Promise((resolve) => requestAnimationFrame(resolve));
-				});
-				await waitFor(() => {
-					const notice = screen.queryByRole("region", { name: "Agent updates available" });
-					if (!visible) { expect(notice).toBeNull(); return; }
-					expect(notice, `browser left=${left}, top=${top}`).toHaveClass("fixed", "right-4");
-					expect(notice).not.toHaveAttribute("data-browser-native-overlay");
-				});
-			}
-			await act(async () => { browser.remove(); });
-			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("fixed", "right-4"));
-		} finally {
-			browser.remove();
-			topbar.remove();
+	it("shows each row's Update as a quiet secondary button at rest, below the filled Update all", async () => {
+		mockStack();
+		mountMenu();
+		const menu = await openMenu();
+		for (const update of within(menu).getAllByRole("button", { name: "Update" })) {
+			expect(update).toHaveClass("bg-secondary");
+			expect(update).not.toHaveClass("opacity-0");
 		}
+		expect(within(menu).getByRole("button", { name: "Update all" })).not.toHaveClass("bg-secondary");
+	});
+
+	it("opens the same list from the collapsed icon rail", async () => {
+		mockStack();
+		mountMenu(true, undefined, true);
+		await userEvent.click(await screen.findByRole("button", { name: "3 agent updates available" }));
+		const menu = await screen.findByRole("dialog", { name: "Agent updates" });
+		expect(rowNames(menu)).toEqual(["Cursor", "Codex", "Claude Code"]);
+	});
+
+	it("closes when its sidebar row leaves keyboard navigation", async () => {
+		const view = mountMenu();
+		await openMenu();
+		view.rerender(<QueryClientProvider client={view.client}><TooltipProvider><HarnessUpdatesProvider enabled>
+			<HarnessUpdatesRow tabIndex={-1} />
+		</HarnessUpdatesProvider></TooltipProvider></QueryClientProvider>);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Agent updates" })).toBeNull());
+		expect(trigger()).toHaveAttribute("tabindex", "-1");
+	});
+
+	it("preserves a failed update after closing and reopening the popover", async () => {
+		vi.mocked(apiClient.POST).mockImplementation(async (path) => path === "/api/v1/agents/{agent}/install"
+			? { error: { message: "Update refused" } } as never
+			: { data: { agents: [agentReadiness("claude-code", "Claude Code")] } } as never);
+		mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Update" }));
+		expect(await screen.findByRole("alert")).toHaveTextContent("Update refused");
+		await userEvent.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Agent updates" })).toBeNull());
+		expect(trigger()).toHaveFocus();
+		const menu = await openMenu();
+		expect(within(menu).getByRole("alert")).toHaveTextContent("Update refused");
+		expect(within(menu).getByRole("button", { name: "Retry update" })).toBeEnabled();
+	});
+
+	it("hides the row when no agent has an update", async () => {
+		const { client } = mountMenu();
+		await screen.findByRole("button", { name: "1 agent update available" });
+		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "current", currentVersion: "2.1.292", latestVersion: "2.1.292" }));
+		await waitFor(() => expect(trigger()).toBeNull());
 	});
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
-		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		expect(within(notice).getByText("v2.1.291")).toBeInTheDocument();
-		expect(within(notice).getByText("v2.1.292")).toBeInTheDocument();
-		expect(within(notice).getByRole("button", { name: "Update" })).toBeEnabled();
+		mountMenu();
+		const menu = await openMenu();
+		expect(within(menu).getByText("v2.1.291")).toBeInTheDocument();
+		expect(within(menu).getByText("v2.1.292")).toBeInTheDocument();
+		expect(within(menu).getByRole("button", { name: "Update" })).toBeEnabled();
+		// A single update needs no Update all.
+		expect(within(menu).queryByRole("button", { name: "Update all" })).toBeNull();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
-	it("updates in place from the notice without opening Settings", async () => {
+	it("updates in place from the list without opening Settings", async () => {
 		const before = useUiStore.getState().settingsModal;
-		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		mountMenu();
+		const menu = await openMenu();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
 		// The click re-checks the release, then installs exactly that one here.
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
 			params: { path: { agent: "claude-code" } },
@@ -163,7 +178,7 @@ describe("startup harness update notice", () => {
 		expect(useUiStore.getState().settingsModal).toBe(before);
 	});
 
-	it("updates the collapsed notification stack once and continues after a failed start", async () => {
+	it("runs Update all once and continues after a failed start", async () => {
 		mockUpdatableStack();
 		const pending = deferred<never>();
 		const original = vi.mocked(apiClient.POST).getMockImplementation()!;
@@ -176,36 +191,23 @@ describe("startup harness update notice", () => {
 			return { data: { target: agentId, status: "installing" } } as never;
 		});
 		const before = useUiStore.getState().settingsModal;
-		mountNotice();
-		await screen.findByRole("button", { name: "Update all" });
-		// Collapsed, several updates read as one summary card.
-		expect(screen.getAllByRole("article")).toHaveLength(1);
-		expect(screen.getByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
-		await userEvent.dblClick(screen.getByRole("button", { name: "Update all" }));
+		mountMenu();
+		const menu = await openMenu();
+		await userEvent.dblClick(within(menu).getByRole("button", { name: "Update all" }));
 		await waitFor(() => expect(started).toEqual(["cursor"]));
-		expect(screen.getByRole("button", { name: "Starting updates…" })).toBeDisabled();
-		expect(within(screen.getByRole("article", { name: "Codex" })).getByRole("button", { name: "Update" })).toBeDisabled();
+		expect(within(menu).getByRole("button", { name: "Starting updates…" })).toBeDisabled();
+		expect(within(within(menu).getByRole("listitem", { name: "Codex" })).getByRole("button", { name: "Update" })).toBeDisabled();
 		await act(async () => pending.resolve({ error: { message: "Cursor update refused" } } as never));
 		await waitFor(() => expect(started).toEqual(["cursor", "codex", "claude-code"]));
-		expect(await screen.findByRole("alert")).toHaveTextContent("Cursor update refused");
+		expect(await within(menu).findByRole("alert")).toHaveTextContent("Cursor update refused");
 		expect(useUiStore.getState().settingsModal).toBe(before);
 	});
 
-	it("keeps Update all's text in the primary button colour, like Update", async () => {
+	it("excludes busy, login-required and unsupported harnesses from Update all", async () => {
 		mockUpdatableStack();
-		mountNotice();
-		const updateAll = await screen.findByRole("button", { name: "Update all" });
-		// tailwind-merge drops text-primary-foreground when given a bare custom size such as text-caption.
-		expect(updateAll.className).toContain("text-primary-foreground");
-		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
-		expect(screen.getByRole("button", { name: "Update all" }).className).toContain("text-primary-foreground");
-	});
-
-	it("excludes busy, login-required and unsupported harnesses from notification Update all", async () => {
-		mockUpdatableStack();
-		const { client } = mountNotice();
-		expect(await screen.findByRole("button", { name: "Update all" })).toBeEnabled();
+		const { client } = mountMenu();
+		const menu = await openMenu();
+		expect(within(menu).getByRole("button", { name: "Update all" })).toBeEnabled();
 		act(() => {
 			client.setQueryData(["agent-readiness"], { agents: [
 				agentReadiness("claude-code", "Claude Code"),
@@ -215,23 +217,22 @@ describe("startup harness update notice", () => {
 			client.setQueryData(installJobsQueryKey, [{ target: "cursor", status: "installing" }]);
 		});
 		// Claude Code is still eligible.
-		expect(screen.getByRole("button", { name: "Update all" })).toBeEnabled();
+		expect(within(menu).getByRole("button", { name: "Update all" })).toBeEnabled();
 		act(() => client.setQueryData(installerQueryKey, []));
-		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+		await waitFor(() => expect(trigger()).toBeNull());
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 	});
 
-	it("explains a refused update in the notice and offers a retry", async () => {
-		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+	it("explains a refused update in the list and offers a retry", async () => {
 		vi.mocked(apiClient.POST).mockImplementation(async (path) => path === "/api/v1/agents/{agent}/install"
 			? { error: { code: "INSTALL_ACTIVE", message: "An install job is already active for claude-code" } } as never
 			: { data: { agents: [agentReadiness("claude-code", "Claude Code")] } } as never);
-		vi.mocked(apiClient.GET).mockImplementation(get);
-		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
-		expect(await within(notice).findByRole("alert")).toHaveTextContent("An install job is already active");
-		expect(within(notice).getByRole("button", { name: "Retry update" })).toBeEnabled();
+		mountMenu();
+		const menu = await openMenu();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
+		expect(await within(menu).findByRole("alert")).toHaveTextContent("An install job is already active");
+		expect(within(menu).getByRole("button", { name: "Retry update" })).toBeEnabled();
+		expect(within(menu).getByRole("button", { name: "Show diagnostics" })).toBeEnabled();
 	});
 
 	it("keeps a failed update explained after a refresh reports the harness current", async () => {
@@ -247,15 +248,15 @@ describe("startup harness update notice", () => {
 			replaced = true;
 			return { data: { target: "claude-code", status: "installing" } } as never;
 		});
-		const { client } = mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		const { client } = mountMenu();
+		const menu = await openMenu();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(client.getQueryData(installJobsQueryKey)).toEqual([expect.objectContaining({ status: "installing" })]));
 		act(() => client.setQueryData(installJobsQueryKey, [{ target: "claude-code", status: "failed", error: "Post-install verification failed" }]));
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toMatchObject({ status: "current" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Post-install verification failed");
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
-		expect(screen.queryByRole("region")).toBeNull();
+		await waitFor(() => expect(trigger()).toBeNull());
 	});
 
 	it("keeps a failed update on the newer release the click-time check chose", async () => {
@@ -264,7 +265,7 @@ describe("startup harness update notice", () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/{agent}/update-advisory") {
 				if (started) return { data: { agentId: "claude-code", status: "current", currentVersion: "2.1.293", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
-				// A release published after the card was checked.
+				// A release published after the row was checked.
 				if ((options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" } } as never;
 			}
 			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
@@ -274,10 +275,10 @@ describe("startup harness update notice", () => {
 			started = true;
 			return { data: { target: "claude-code", status: "installing" } } as never;
 		});
-		const { client } = mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		expect(within(notice).getByText("v2.1.292")).toBeInTheDocument();
-		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		const { client } = mountMenu();
+		const menu = await openMenu();
+		expect(within(menu).getByText("v2.1.292")).toBeInTheDocument();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "claude-code" } }, body: { method: "official-installer", operation: "update", expectedVersion: "2.1.293" } });
 		await waitFor(() => expect(client.getQueryData(installJobsQueryKey)).toEqual([expect.objectContaining({ status: "installing" })]));
 		act(() => client.setQueryData(installJobsQueryKey, [{ target: "claude-code", status: "failed", error: "Updater failed" }]));
@@ -288,12 +289,12 @@ describe("startup harness update notice", () => {
 	});
 
 	it("stays out of the way while Settings is open", async () => {
-		mountNotice();
-		await screen.findByRole("region", { name: "Agent updates available" });
+		mountMenu();
+		await screen.findByRole("button", { name: TRIGGER });
 		act(() => useUiStore.getState().openGlobalSettings("general"));
-		expect(screen.queryByRole("region")).toBeNull();
+		expect(trigger()).toBeNull();
 		act(() => useUiStore.getState().closeSettings());
-		expect(await screen.findByRole("region", { name: "Agent updates available" })).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: TRIGGER })).toBeInTheDocument();
 	});
 
 	it("refreshes a harness whose update finished before the start request returned", async () => {
@@ -301,10 +302,10 @@ describe("startup harness update notice", () => {
 		vi.mocked(apiClient.POST).mockImplementation(async (path) => path === "/api/v1/agents/{agent}/install"
 			? { data: { target: "claude-code", status: "succeeded" } } as never
 			: { data: readiness } as never);
-		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
+		mountMenu();
+		const menu = await openMenu();
 		vi.mocked(apiClient.POST).mockClear();
-		await userEvent.click(within(notice).getByRole("button", { name: "Update" }));
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: ["claude-code"], purpose: "display" } }));
 	});
 
@@ -320,16 +321,17 @@ describe("startup harness update notice", () => {
 			if (path === "/api/v1/agents/{agent}/update-advisory") return { data: { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "homebrew", source: "homebrew", checkedAt: "2026-10-07T00:00:00Z" } } as never;
 			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
-		mountNotice();
-		const notice = await screen.findByRole("region", { name: "Agent updates available" });
-		expect(await within(notice).findByRole("button", { name: "Update" })).toBeEnabled();
+		mountMenu();
+		const menu = await openMenu();
+		expect(await within(menu).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(installerLoads).toBeGreaterThan(1);
 	});
 
 	it("waits for the daemon before starting background requests", () => {
-		mountNotice(false);
+		mountMenu(false);
 		expect(apiClient.GET).not.toHaveBeenCalled();
 		expect(apiClient.POST).not.toHaveBeenCalled();
+		expect(trigger()).toBeNull();
 	});
 
 	it("waits for ensure completion even with cached installation and update evidence", async () => {
@@ -339,62 +341,45 @@ describe("startup harness update notice", () => {
 		const readiness = { agents: [agentReadiness("claude-code", "Claude Code")] };
 		client.setQueryData(["agent-readiness"], readiness);
 		client.setQueryData(updateAdvisoryQueryKey("claude-code"), { status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "official-installer" });
-		mountNotice(true, client);
+		mountMenu(true, client);
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalled());
-		expect(screen.queryByRole("region")).toBeNull();
+		expect(trigger()).toBeNull();
 		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
 		await act(async () => pending.resolve({ data: readiness }));
-		expect(await screen.findByRole("article", { name: "Claude Code" })).toBeInTheDocument();
+		const menu = await openMenu();
+		expect(within(menu).getByRole("listitem", { name: "Claude Code" })).toBeInTheDocument();
 	});
 
 	it("does not open the gate when ensure fails", async () => {
 		vi.mocked(apiClient.POST).mockRejectedValue(new Error("readiness unavailable"));
-		const { client } = mountNotice();
+		const { client } = mountMenu();
 		await waitFor(() => expect(client.getQueryData(["agent-readiness"])).toBeDefined());
-		expect(screen.queryByRole("region")).toBeNull();
+		expect(trigger()).toBeNull();
 		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
 	});
 
 	it.each(["unknown", "configured"] as const)("does not mistake %s authentication for a required login", async (authentication) => {
-		const { client } = mountNotice();
-		await screen.findByRole("region");
+		const { client } = mountMenu();
+		const menu = await openMenu();
 		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code", { authentication })] }));
-		expect(screen.queryByRole("button", { name: "Login" })).toBeNull();
-		await userEvent.click(screen.getByRole("button", { name: "Update" }));
+		expect(within(menu).queryByRole("button", { name: "Login" })).toBeNull();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything()));
 	});
 
 	it("ranks by usage then recency, and dismissing one release keeps the others", async () => {
 		mockStack();
-		mountNotice();
-		expect(await screen.findByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
-		expect(screen.getAllByRole("article")).toHaveLength(1);
-		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
-		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss Cursor update" }));
-		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
+		mountMenu();
+		const menu = await openMenu();
+		expect(rowNames(menu)).toEqual(["Cursor", "Codex", "Claude Code"]);
+		await userEvent.click(within(menu).getByRole("button", { name: "Dismiss Cursor update" }));
+		expect(rowNames(menu)).toEqual(["Codex", "Claude Code"]);
+		expect(screen.getByRole("button", { name: "2 agent updates available" })).toBeInTheDocument();
 		expect(JSON.parse(localStorage.getItem("ao.harness-update-dismissals.v1")!)).toEqual([JSON.stringify(["local", "cursor", "2.0.0"])]);
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
-		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
-		expect(screen.queryByRole("region")).toBeNull();
-	});
-
-	it("expands and collapses the stack, with independent dismissal of expanded cards", async () => {
-		mockStack();
-		mountNotice();
-		const summary = await screen.findByRole("article", { name: "Agent updates available" });
-		expect(screen.queryByRole("article", { name: "Cursor" })).toBeNull();
-		await userEvent.click(within(summary).getByRole("button", { name: "Show all (3)" }));
-		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
-		expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
-		expect(screen.getAllByRole("article")).toHaveLength(2);
-		await userEvent.click(screen.getByRole("button", { name: "Show less" }));
-		expect(screen.getAllByRole("article")).toHaveLength(1);
-		expect(screen.getByRole("button", { name: "Show all (2)" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss all updates" }));
-		expect(screen.queryByRole("region")).toBeNull();
+		await userEvent.click(within(menu).getByRole("button", { name: "Dismiss Codex update" }));
+		expect(rowNames(menu)).toEqual(["Claude Code"]);
+		await userEvent.click(within(menu).getByRole("button", { name: "Dismiss Claude Code update" }));
+		await waitFor(() => expect(trigger()).toBeNull());
 	});
 
 	it("waits for slower advisories before choosing the top harness", async () => {
@@ -406,15 +391,14 @@ describe("startup harness update notice", () => {
 			if (path === "/api/v1/agents/{agent}/update-advisory" && agentId === "cursor") return pending.promise;
 			return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
-		const { client } = mountNotice();
+		const { client } = mountMenu();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("codex"))).toBeDefined());
-		expect(screen.queryByRole("region")).toBeNull();
+		expect(trigger()).toBeNull();
 		await act(async () => pending.resolve({ data: { status: "behind_latest", currentVersion: "1.0.0", latestVersion: "2.0.0", maintenanceMethod: "official-installer" } } as never));
-		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
-		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))[0]).toBe("Cursor");
+		expect(rowNames(await openMenu())[0]).toBe("Cursor");
 	});
 
-	it("keeps other update notices when one harness lookup fails", async () => {
+	it("keeps other updates when one harness lookup fails", async () => {
 		mockStack();
 		const original = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => {
@@ -422,31 +406,27 @@ describe("startup harness update notice", () => {
 			if (path === "/api/v1/agents/{agent}/update-advisory" && agentId === "cursor") return Promise.reject(new Error("lookup timed out"));
 			return (original as (path: string, options: unknown) => Promise<never>)(path, options);
 		});
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Show all (2)" }));
-		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
+		mountMenu();
+		expect(rowNames(await openMenu())).toEqual(["Codex", "Claude Code"]);
 	});
 
 	it("preserves only the individually dismissed releases on remount", async () => {
 		mockStack();
-		const view = mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss Cursor update" }));
+		const view = mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Dismiss Cursor update" }));
 		view.unmount();
-		mountNotice();
-		expect(await screen.findByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Show all (2)" }));
-		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
+		mountMenu();
+		expect(rowNames(await openMenu())).toEqual(["Codex", "Claude Code"]);
 	});
 
 	it("hides an update while login is required and shows it after login", async () => {
-		const { client } = mountNotice();
-		await screen.findByRole("region", { name: "Agent updates available" });
+		const { client } = mountMenu();
+		await screen.findByRole("button", { name: TRIGGER });
 		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] }));
-		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+		await waitFor(() => expect(trigger()).toBeNull());
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		act(() => client.setQueryData(["agent-readiness"], { agents: [agentReadiness("claude-code", "Claude Code")] }));
-		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(await openMenu()).getByRole("button", { name: "Update" })).toBeEnabled();
 	});
 
 	it.each([
@@ -454,18 +434,18 @@ describe("startup harness update notice", () => {
 		{ id: "official-installer", available: false, updateAvailable: true },
 		{ id: "npm", available: true, updateAvailable: true },
 	])("hides updates that require manual maintenance (%j)", async (method) => {
-		const { client } = mountNotice();
-		await screen.findByRole("region");
+		const { client } = mountMenu();
+		await screen.findByRole("button", { name: TRIGGER });
 		act(() => client.setQueryData(installerQueryKey, [{
 			agentId: "claude-code", documentationUrl: "https://code.claude.com/docs/en/setup", methods: [method],
 		}]));
-		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+		await waitFor(() => expect(trigger()).toBeNull());
 	});
 
-	it("excludes hidden harnesses from the stack count and Update all", async () => {
+	it("excludes hidden harnesses from the count and Update all", async () => {
 		mockUpdatableStack();
-		const { client } = mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
+		const { client } = mountMenu();
+		const menu = await openMenu();
 		act(() => {
 			client.setQueryData(["agent-readiness"], { agents: [
 				agentReadiness("claude-code", "Claude Code"),
@@ -478,66 +458,66 @@ describe("startup harness update notice", () => {
 				{ agentId: "cursor", methods: [{ id: "official-installer", available: true, updateAvailable: false }] },
 			]);
 		});
-		await waitFor(() => expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Claude Code"]));
-		expect(screen.queryByRole("button", { name: /Show all|Update all/ })).toBeNull();
-		await userEvent.click(screen.getByRole("button", { name: "Update" }));
+		await waitFor(() => expect(rowNames(menu)).toEqual(["Claude Code"]));
+		expect(screen.getByRole("button", { name: "1 agent update available" })).toBeInTheDocument();
+		expect(within(menu).queryByRole("button", { name: "Update all" })).toBeNull();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.objectContaining({ params: { path: { agent: "claude-code" } } })));
 	});
 
-	it.each(["/api/v1/agents/installers", "/api/v1/agents/auth-plans"] as const)("waits for %s before showing update notices", async (endpoint) => {
+	it.each(["/api/v1/agents/installers", "/api/v1/agents/auth-plans"] as const)("waits for %s before showing updates", async (endpoint) => {
 		const pending = deferred<never>();
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === endpoint
 			? pending.promise : (get as (path: string, options: unknown) => Promise<never>)(path, options));
-		const { client } = mountNotice();
+		const { client } = mountMenu();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
-		expect(screen.queryByRole("region")).toBeNull();
+		expect(trigger()).toBeNull();
 		await act(async () => pending.resolve(await (get as (path: string) => Promise<never>)(endpoint)));
-		expect(await screen.findByRole("button", { name: "Update" })).toBeEnabled();
+		expect(within(await openMenu()).getByRole("button", { name: "Update" })).toBeEnabled();
 	});
 
-	it("keeps the stack when an installer refresh fails after it rendered", async () => {
-		const { client } = mountNotice();
-		await screen.findByRole("article", { name: "Claude Code" });
+	it("keeps the list when an installer refresh fails after it rendered", async () => {
+		const { client } = mountMenu();
+		const menu = await openMenu();
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation((path, options) => path === "/api/v1/agents/installers"
 			? Promise.resolve({ error: { message: "installers unavailable" } } as never)
 			: (get as (path: string, options: unknown) => Promise<never>)(path, options));
 		await act(async () => { await client.invalidateQueries({ queryKey: installerQueryKey, exact: true }); });
 		await waitFor(() => expect(client.getQueryState(installerQueryKey)?.status).toBe("error"));
-		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
-		expect(screen.getByRole("button", { name: "View details" })).toBeEnabled();
+		expect(within(menu).getByRole("listitem", { name: "Claude Code" })).toBeInTheDocument();
+		expect(within(menu).queryByRole("button", { name: "Update" })).toBeNull();
+		expect(within(menu).getByRole("button", { name: "View details" })).toBeEnabled();
 	});
 
 	it("dismisses the shown release across remounts but shows a newer target", async () => {
-		const view = mountNotice();
-		await screen.findByRole("region", { name: "Agent updates available" });
-		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
-		expect(screen.queryByRole("region")).toBeNull();
+		const view = mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Dismiss Claude Code update" }));
+		await waitFor(() => expect(trigger()).toBeNull());
 		view.unmount();
-		const { client } = mountNotice();
+		const { client } = mountMenu();
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
-		expect(screen.queryByRole("region")).toBeNull();
+		expect(trigger()).toBeNull();
 		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" }));
-		expect(await screen.findByText("v2.1.293")).toBeInTheDocument();
+		expect(within(await openMenu()).getByText("v2.1.293")).toBeInTheDocument();
 	});
 
 	it.each(["unknown", "current"])("does not notify for %s results", async (status) => {
-		const { client } = mountNotice();
-		await screen.findByRole("region");
+		const { client } = mountMenu();
+		await screen.findByRole("button", { name: TRIGGER });
 		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status, currentVersion: "2.1.291", latestVersion: "2.1.292" }));
-		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+		await waitFor(() => expect(trigger()).toBeNull());
 	});
 });
 
-describe("harness updates while sessions run", () => {
+describe("agent updates while sessions run", () => {
 	const claudeAdvisory = { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "official-installer", source: "official-release", checkedAt: "2026-10-07T00:00:00Z" };
+	const sessionsDialog = () => screen.queryByRole("dialog", { name: /Sessions using/ });
 	let advisories: Record<string, Record<string, unknown>>;
 	let installs: Array<{ agent: string; body: Record<string, unknown> }>;
 	let installResponse: (agent: string, body: Record<string, unknown>) => unknown;
 	let jobs: Array<Record<string, unknown>>;
-
 	beforeEach(async () => {
 		await appI18n.changeLanguage("en");
 		localStorage.clear();
@@ -573,46 +553,47 @@ describe("harness updates while sessions run", () => {
 	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 	it("updates right away when no session uses the harness", async () => {
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
-		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(sessionsDialog()).toBeNull();
 	});
 
 	it("updates a harness open sessions use without asking when it keeps their release", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "safe" } };
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
-		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(sessionsDialog()).toBeNull();
 		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292" });
 	});
 
 	it("updates even when the installer replaces the release open sessions run", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "warn" } };
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
-		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(sessionsDialog()).toBeNull();
 		expect(installs[0].body).toEqual({ method: "official-installer", operation: "update", expectedVersion: "2.1.292" });
 	});
 
 	it("offers the sessions to end instead of an update that cannot run alongside them", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 2, sessionIds: ["s1", "s2"], level: "blocked" } };
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "View sessions (2)" }));
-		expect(await screen.findByRole("dialog")).toHaveTextContent("Sessions using Claude Code");
+		mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "View sessions (2)" }));
+		expect(await screen.findByRole("dialog", { name: "Sessions using Claude Code" })).toBeInTheDocument();
 		expect(installs).toHaveLength(0);
 	});
 
 	it("never offers Retry when the daemon says sessions must end first", async () => {
 		installResponse = () => ({ error: { error: "conflict", code: "HARNESS_ACTIVE", message: "end active sessions", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "blocked", starting: false } } });
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		expect(await screen.findByRole("button", { name: "View sessions (1)" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Retry update" })).toBeNull();
-		expect(screen.queryByRole("alert")).toBeNull();
-		expect(screen.getByRole("status")).toHaveTextContent("1 open session is using Claude Code.");
+		mountMenu();
+		const menu = await openMenu();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
+		expect(await within(menu).findByRole("button", { name: "View sessions (1)" })).toBeInTheDocument();
+		expect(within(menu).queryByRole("button", { name: "Retry update" })).toBeNull();
+		expect(within(menu).queryByRole("alert")).toBeNull();
+		expect(within(menu).getByRole("status")).toHaveTextContent("1 open session is using Claude Code.");
 	});
 
 	it("retries an update the daemon refused only because the harness was starting", async () => {
@@ -620,25 +601,27 @@ describe("harness updates while sessions run", () => {
 		installResponse = (agent) => starting
 			? { error: { error: "conflict", code: "HARNESS_ACTIVE", message: "starting", requestId: "r1", details: { count: 0, sessionIds: [], reviewerSessionIds: [], level: "blocked", starting: true } } }
 			: { data: { target: agent, status: "installing" } };
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		mountMenu();
+		const menu = await openMenu();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
 		starting = false;
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await userEvent.click(await within(menu).findByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(2));
-		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(sessionsDialog()).toBeNull();
 	});
 
 	it("checks again after the sessions the daemon named have been seen", async () => {
 		installResponse = () => ({ error: { error: "conflict", code: "HARNESS_ACTIVE", message: "end active sessions", requestId: "r1", details: { count: 1, sessionIds: ["s1"], reviewerSessionIds: [], level: "blocked", starting: false } } });
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
-		await userEvent.click(await screen.findByRole("button", { name: "View sessions (1)" }));
-		expect(await screen.findByRole("dialog")).toHaveTextContent("Sessions using Claude Code");
+		mountMenu();
+		const menu = await openMenu();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update" }));
+		await userEvent.click(await within(menu).findByRole("button", { name: "View sessions (1)" }));
+		expect(await screen.findByRole("dialog", { name: "Sessions using Claude Code" })).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		await waitFor(() => expect(sessionsDialog()).toBeNull());
 		installResponse = (agent) => ({ data: { target: agent, status: "installing" } });
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(2));
 	});
 
@@ -648,28 +631,30 @@ describe("harness updates while sessions run", () => {
 			codex: { ...claudeAdvisory, agentId: "codex", inUse: { liveSessions: 2, sessionIds: ["s3", "s4"], level: "blocked" } },
 			cursor: { ...claudeAdvisory, agentId: "cursor", inUse: { liveSessions: 1, sessionIds: ["s5"], level: "idle" } },
 		};
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
+		mountMenu();
+		const menu = await openMenu();
+		await userEvent.click(within(menu).getByRole("button", { name: "Update all" }));
 		await waitFor(() => expect(installs.map((install) => install.agent).sort()).toEqual(["claude-code", "cursor"]));
-		expect(screen.queryByRole("dialog")).toBeNull();
-		expect(await screen.findByText("Updating 2 · Skipped Codex (2)")).toBeInTheDocument();
+		expect(sessionsDialog()).toBeNull();
+		expect(await within(menu).findByText("Updating 2 · Skipped Codex (2)")).toBeInTheDocument();
 	});
 
 	it("explains a Windows update waiting for idle sessions and lets the user cancel it", async () => {
 		jobs = [{ target: "claude-code", status: "waiting_for_idle", startedAt: new Date().toISOString(), waitingOn: [{ sessionId: "s1", reason: "command" }] }];
-		mountNotice();
-		const status = await screen.findByText("Updating when sessions are idle");
-		expect(status).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		mountMenu();
+		const menu = await openMenu();
+		expect(await within(menu).findByText("Updating when sessions are idle")).toBeInTheDocument();
+		await userEvent.click(within(menu).getByRole("button", { name: "Cancel" }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install/cancel", { params: { path: { agent: "claude-code" } } }));
 		expect(installs).toHaveLength(0);
 	});
 
 	it("names the session a long-waiting update waits for", async () => {
 		jobs = [{ target: "claude-code", status: "waiting_for_idle", startedAt: new Date(Date.now() - 10 * 60_000).toISOString(), waitingOn: [{ sessionId: "s1", reason: "command" }] }];
-		mountNotice();
-		expect(await screen.findByText("Waiting for s1 (dev server or command running)")).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "View" }));
+		mountMenu();
+		const menu = await openMenu();
+		expect(await within(menu).findByText("Waiting for s1 (dev server or command running)")).toBeInTheDocument();
+		await userEvent.click(within(menu).getByRole("button", { name: "View" }));
 		expect(await screen.findByRole("dialog", { name: "Sessions using Claude Code" })).toBeInTheDocument();
 	});
 
@@ -678,8 +663,9 @@ describe("harness updates while sessions run", () => {
 		const post = vi.mocked(apiClient.POST);
 		const original = post.getMockImplementation() as unknown as (path: unknown, options: unknown) => Promise<never>;
 		jobs = [{ target: "claude-code", status: "installing" }];
-		mountNotice();
-		expect(await screen.findByRole("button", { name: /Updating/ })).toBeDisabled();
+		mountMenu();
+		const menu = await openMenu();
+		expect(await within(menu).findByRole("button", { name: /Updating/ })).toBeDisabled();
 		post.mockClear();
 		post.mockImplementation(async (path, options) => {
 			if (path === "/api/v1/agents/readiness/ensure") await refresh.promise;
@@ -687,7 +673,7 @@ describe("harness updates while sessions run", () => {
 		});
 		jobs = [{ target: "claude-code", status: "succeeded" }];
 		await waitFor(() => expect(post).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", expect.anything()), { timeout: 3000 });
-		// The cached advisory still says behind; the card must not offer Update again.
+		// The cached advisory still says behind; the row must not offer Update again.
 		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
 		expect(screen.getByRole("button", { name: /Updating/ })).toBeDisabled();
 		advisories["claude-code"] = { ...claudeAdvisory, status: "current", currentVersion: "2.1.292" };
@@ -698,34 +684,9 @@ describe("harness updates while sessions run", () => {
 
 	it("starts a Windows update that waits for idle sessions without asking", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "idle" } };
-		mountNotice();
-		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		mountMenu();
+		await userEvent.click(within(await openMenu()).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
-		expect(screen.queryByRole("dialog")).toBeNull();
-	});
-});
-
-describe("noticeCoversLiveBrowser", () => {
-	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], top = 72, height = 200, width = 1280) => noticeCoversLiveBrowser(browser, top, height, width);
-
-	it("returns false when no live page overlaps the app corner", () => {
-		expect(covers(null)).toBe(false);
-		expect(covers({ left: 200, top: 60, right: 700, bottom: 800 })).toBe(false);
-		expect(covers({ left: 820, top: 400, right: 1280, bottom: 800 })).toBe(false);
-	});
-
-	it.each([820, 600, 300, 0])("hides instead of moving sideways when the page starts at %ipx", (left) => {
-		expect(covers({ left, top: 100, right: 1280, bottom: 800 })).toBe(true);
-	});
-
-	it("hides when expanding the stack reaches the browser page", () => {
-		const browser = { left: 820, top: 400, right: 1280, bottom: 800 };
-		expect(covers(browser)).toBe(false);
-		expect(covers(browser, 72, 500)).toBe(true);
-	});
-
-	it("keeps the corner above the page but hides overlap in a narrow window", () => {
-		expect(covers(null, 72, 200, 280)).toBe(false);
-		expect(covers({ left: 0, top: 100, right: 280, bottom: 800 }, 72, 200, 280)).toBe(true);
+		expect(sessionsDialog()).toBeNull();
 	});
 });

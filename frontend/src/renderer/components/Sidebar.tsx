@@ -138,6 +138,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
+import { HarnessUpdatesProvider, HarnessUpdatesRailButton, HarnessUpdatesRow } from "./HarnessUpdateNotice";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { useCloudSession } from "../lib/cloud-session";
@@ -1202,6 +1203,7 @@ export function Sidebar({
 			    Footer rows share NAV_ROW height so Settings, Connect mobile,
 			    and account actions line up. Bottom spacing stays inside the
 			    footer so there is no empty strip beneath the final action. */}
+			<HarnessUpdatesProvider enabled={daemonStatus?.state === "ready"}>
 			<SidebarFooter
 				className="relative mt-auto gap-0 overflow-hidden border-t border-border-strong px-2 !py-2 transition-[padding] duration-200 ease-linear group-data-[collapsible=icon]:min-h-20 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:border-t-0 group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:!pb-2 group-data-[collapsible=icon]:!pt-1.5"
 			>
@@ -1256,6 +1258,7 @@ export function Sidebar({
 						status={updateStatus}
 						tabIndex={isCollapsed ? -1 : 0}
 					/>
+					<HarnessUpdatesRow className={FOOTER_NAV_BUTTON_CLASS} tabIndex={isCollapsed ? -1 : 0} />
 					<CloudSignInRow tabIndex={isCollapsed ? -1 : 0} />
 					<CloudAccountRow tabIndex={isCollapsed ? -1 : 0} />
 					<UpdateInstallSlide
@@ -1304,6 +1307,7 @@ export function Sidebar({
 						status={updateStatus}
 						tabIndex={isCollapsed ? 0 : -1}
 					/>
+					<HarnessUpdatesRailButton className={FOOTER_RAIL_BUTTON_CLASS} tabIndex={isCollapsed ? 0 : -1} />
 					<CloudSignInRailButton tabIndex={isCollapsed ? 0 : -1} />
 					<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
 					<Tooltip>
@@ -1344,6 +1348,7 @@ export function Sidebar({
 				</>
 				)}
 			</SidebarFooter>
+			</HarnessUpdatesProvider>
 
 			{/* useResizable owns clamp. */}
 			<ResizeHandle

@@ -24,7 +24,7 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
   <button
     aria-controls="_r_a_"
     aria-expanded="true"
-    class="group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+    class="group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
     type="button"
   >
     <svg
@@ -94,7 +94,7 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
       <button
         aria-controls="_r_b_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         type="button"
       >
         <svg
@@ -157,7 +157,7 @@ exports[`ScriptRunPanel > collapses a succeeded run in the timeline and keeps it
       <button
         aria-controls="_r_c_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         type="button"
       >
         <svg
@@ -240,7 +240,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
   <button
     aria-controls="_r_d_"
     aria-expanded="true"
-    class="group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+    class="group/script-run flex min-h-8 w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
     type="button"
   >
     <svg
@@ -313,7 +313,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
       <button
         aria-controls="_r_e_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         type="button"
       >
         <svg
@@ -376,7 +376,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
       <button
         aria-controls="_r_f_"
         aria-expanded="true"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         type="button"
       >
         <svg
@@ -514,7 +514,7 @@ exports[`ScriptRunPanel > opens a failed step with its hint, who ran it and wher
       </div>
     </li>
     <li
-      class="flex min-h-8 items-center gap-2 px-2.5 py-1 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+      class="flex min-h-8 items-center gap-2 px-2.5 py-1"
       data-status="skipped"
       data-testid="script-step"
     >
@@ -585,7 +585,7 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
     role="status"
   />
   <div
-    class="flex min-h-8 items-center gap-2 px-2.5 py-1.5 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+    class="flex min-h-8 items-center gap-2 px-2.5 py-1.5"
   >
     <svg
       aria-hidden="true"
@@ -637,7 +637,7 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
       <button
         aria-controls="_r_1_"
         aria-expanded="false"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         type="button"
       >
         <svg
@@ -700,7 +700,7 @@ exports[`ScriptRunPanel > shows a running run with the live step open, its outpu
       <button
         aria-controls="_r_2_"
         aria-expanded="true"
-        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+        class="group/script-step flex min-h-8 w-full items-center gap-2 px-2.5 py-1 text-left hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60"
         type="button"
       >
         <svg
@@ -813,7 +813,7 @@ Pulling cache
       </div>
     </li>
     <li
-      class="flex min-h-8 items-center gap-2 px-2.5 py-1 pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]"
+      class="flex min-h-8 items-center gap-2 px-2.5 py-1"
       data-status="pending"
       data-testid="script-step"
     >

@@ -3,7 +3,6 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClientEvent } from "../lib/cloud-cp";
 import { forgetControlPlaneClock, groupScriptRuns, SCRIPT_STEP_EVENT } from "../lib/cloud-script-runs";
-import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { claimQuietStepAnnouncement, ScriptRunPanel } from "./ScriptRunPanel";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -392,31 +391,6 @@ describe("ScriptRunPanel quiet step note", () => {
 		]);
 		rerender(<ScriptRunPanel run={done} />);
 		expect(screen.queryByTestId("script-step-quiet")).toBeNull();
-	});
-});
-
-describe("ScriptRunPanel beside the harness update notice", () => {
-	afterEach(() => {
-		act(() => publishHarnessUpdateNoticeRect(null));
-		vi.restoreAllMocks();
-	});
-
-	it("pads its rows so the timers stay clear of the notice, and drops the padding once it goes", () => {
-		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-			return this.dataset.testid === "script-run-panel" ? new DOMRect(404, 80, 766, 120) : new DOMRect();
-		});
-		const run = runOf({ step: 1, status: "running", command: "sleep 200", startedAt: "2026-10-18T10:00:00Z", timeoutMinutes: 5 });
-		render(<ScriptRunPanel run={run} />);
-		const panel = screen.getByTestId("script-run-panel");
-		expect(panel.style.getPropertyValue("--script-run-notice-clearance")).toBe("");
-
-		act(() => publishHarnessUpdateNoticeRect({ left: 1004, top: 72, right: 1304, bottom: 140 }));
-		expect(panel.style.getPropertyValue("--script-run-notice-clearance")).toBe("178px");
-		const timer = within(steps()[0]!).getByText("0:12");
-		expect(timer.closest("button")).toHaveClass("pr-[calc(0.625rem+var(--script-run-notice-clearance,0px))]");
-
-		act(() => publishHarnessUpdateNoticeRect(null));
-		expect(panel.style.getPropertyValue("--script-run-notice-clearance")).toBe("");
 	});
 });
 

@@ -3519,5 +3519,8 @@
 	"files.readOnlySnapshot": "This revision is read-only. Open the workspace copy to edit.",
 	"files.treeTruncated": "Some paths are not shown. Narrow the filter to find more files.",
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
-	"files.previousVersionAt": "Previous version at {{revision}}"
+	"files.previousVersionAt": "Previous version at {{revision}}",
+	"shell.agentUpdates": "Mises à jour des agents",
+	"shell.agentUpdatesAvailable_one": "{{count}} mise à jour d’agent disponible",
+	"shell.agentUpdatesAvailable_other": "{{count}} mises à jour d’agents disponibles"
 }
