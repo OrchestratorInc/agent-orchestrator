@@ -1338,7 +1338,7 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.mouseUp(log);
 		const button = screen.getByRole("button", { name: "Add to chat" });
 		expect(button).toHaveClass("shrink-0", "whitespace-nowrap", "hover:bg-interactive-hover");
-		expect(button.parentElement).toHaveClass("bg-card", "border-border", "rounded-lg", "w-max");
+		expect(button.parentElement).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-lg", "w-max");
 		fireEvent.mouseDown(button);
 		expect(selection.toString().trim()).toBe(selectedText);
 		fireEvent.click(button);

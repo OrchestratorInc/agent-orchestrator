@@ -880,7 +880,7 @@ button.settings-row-bar {
 	background-color: var(--color-bg-settings-menu);
 	padding: var(--space-2);
 	gap: var(--space-1_5);
-	box-shadow: none;
+	box-shadow: var(--shadow-popover);
 }
 
 @utility settings-agent-menu-surface {
