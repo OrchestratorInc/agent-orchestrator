@@ -475,9 +475,20 @@ func (s *Service) readingController(ctx context.Context, id domain.SessionID) (*
 	return controller, rec, release, nil
 }
 
+// errAsleep tells a caller that must not wake a session inline that the
+// session is hibernated, so it can queue instead.
+var errAsleep = errors.New("chat session is asleep")
+
 // workingController admits provider work under the start/stop gate, then
 // releases that gate so explicit Kill can interrupt a stuck provider call.
 func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*Controller, func(), error) {
+	return s.admitController(ctx, id, true)
+}
+
+// admitController is workingController. With wakeAsleep false, a hibernated
+// session returns errAsleep instead of being woken inline: the caller may hold
+// the session's input lease, which the resume waits to drain.
+func (s *Service) admitController(ctx context.Context, id domain.SessionID, wakeAsleep bool) (*Controller, func(), error) {
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	for {
 		if !gate.tryLock() {
@@ -536,6 +547,9 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 			}
 		}
 		gate.unlock()
+		if rec.HibernatedAt != nil && !wakeAsleep {
+			return nil, nil, errAsleep
+		}
 		if err := s.wakeHibernated(ctx, id); err != nil {
 			return nil, nil, err
 		}
