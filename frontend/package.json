@@ -23,7 +23,7 @@
 		"dev": "electron-forge start",
 		"dev:web": "node ./scripts/dev-web.mjs",
 		"build": "npm run package",
-		"prepackage": "npm run build:daemon && npm run build:tmux && npm run browser-runtime:prepare && npm run build:acp-runtime",
+		"prepackage": "node ./scripts/check-package-node.mjs && npm run build:daemon && npm run build:tmux && npm run browser-runtime:prepare && npm run build:acp-runtime",
 		"package": "electron-forge package",
 		"premake": "npm run build:daemon && npm run build:tmux && npm run browser-runtime:prepare && npm run build:acp-runtime",
 		"make": "electron-forge make",
