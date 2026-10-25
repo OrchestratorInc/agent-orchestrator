@@ -825,13 +825,13 @@ button.settings-row-bar {
 	display: flex;
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
-	border-radius: var(--radius-settings-row);
+	/* Same row as the action menus (menu-styles.ts): one menu rhythm app-wide. */
+	border-radius: var(--radius-md);
 	border: 1px solid transparent;
-	padding-inline: var(--space-3);
-	padding-block: var(--space-2_5);
-	font-size: var(--font-size-md);
-	line-height: var(--line-height-row);
-	color: var(--color-text-settings-row);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
+	font-size: var(--font-size-base);
+	color: var(--muted-foreground);
 }
 
 @utility settings-option-trigger {
@@ -878,21 +878,21 @@ button.settings-row-bar {
 	border-radius: var(--radius-settings-panel);
 	border: 1px solid var(--color-border-settings-menu);
 	background-color: var(--color-bg-settings-menu);
-	padding: var(--space-2);
-	gap: var(--space-1_5);
+	padding: var(--space-1);
+	gap: 1px;
 	box-shadow: var(--shadow-popover);
 }
 
 @utility settings-agent-menu-surface {
 	width: var(--size-settings-agent-menu-min-width);
 	min-width: var(--size-settings-agent-menu-min-width);
-	padding: var(--space-3);
-	gap: var(--space-2);
+	padding: var(--space-1);
+	gap: 1px;
 }
 
 @utility settings-agent-menu-item {
-	padding-inline: var(--space-4);
-	padding-block: var(--space-3);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
 }
 
 @utility settings-field-label {

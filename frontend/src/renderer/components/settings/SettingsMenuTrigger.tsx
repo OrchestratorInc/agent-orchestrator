@@ -25,7 +25,7 @@ export const SETTINGS_MENU_SURFACE =
 
 /** An entry whose whole content is one label, as on the settings rows. */
 export const SETTINGS_MENU_ITEM =
-	"settings-menu-item min-w-0 cursor-default outline-none focus:bg-settings-menu-selected focus:text-settings-title data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title";
+	"settings-menu-item min-w-0 cursor-default outline-none focus:bg-interactive-hover focus:text-foreground data-highlighted:bg-interactive-hover data-highlighted:text-foreground";
 
 /**
  * The same box for entries that carry their own layout — a name over a hint, a
@@ -34,11 +34,11 @@ export const SETTINGS_MENU_ITEM =
  * caller and can only be overridden by utility ordering.
  */
 export const SETTINGS_MENU_ROW =
-	"min-w-0 cursor-default rounded-(--radius-settings-row) px-3 py-2.5 outline-none focus:bg-settings-menu-selected focus:text-settings-title data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title";
+	"min-w-0 cursor-default rounded-md px-2 py-1.5 text-control text-muted-foreground outline-none focus:bg-interactive-hover focus:text-foreground data-highlighted:bg-interactive-hover data-highlighted:text-foreground";
 
 /** A heading inside the panel, inset to the entries rather than the panel edge. */
 export const SETTINGS_MENU_LABEL =
-	"px-3 pb-1 text-[length:var(--font-size-base)] font-normal tracking-normal text-settings-muted";
+	"px-2 py-1.5 text-micro tracking-wide text-passive";
 
 const TRIGGER = cn("group/settings-option-trigger", MENU_TRIGGER_CHROME);
 

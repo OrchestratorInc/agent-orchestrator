@@ -169,7 +169,7 @@ export function SettingsOptionMenu<T extends string>({
 								}
 								className={cn(
 									SETTINGS_MENU_ITEM,
-									option.value === value && "border-settings-menu bg-settings-menu-selected text-settings-title",
+									option.value === value && "bg-interactive-active text-foreground",
 									menuItemClassName,
 								)}
 							>

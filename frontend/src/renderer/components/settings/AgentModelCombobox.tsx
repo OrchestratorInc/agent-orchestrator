@@ -852,8 +852,8 @@ function groupModels(
 function modelItemClass(selected: boolean): string {
 	return cn(
 		"settings-menu-item min-w-0 cursor-default outline-none",
-		"focus:bg-settings-menu-selected focus:text-settings-title",
-		"data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title",
-		selected && "border-settings-menu bg-settings-menu-selected text-settings-title",
+		"focus:bg-interactive-hover focus:text-foreground",
+		"data-highlighted:bg-interactive-hover data-highlighted:text-foreground",
+		selected && "bg-interactive-active text-foreground",
 	);
 }
