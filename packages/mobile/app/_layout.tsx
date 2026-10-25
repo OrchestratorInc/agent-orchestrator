@@ -19,6 +19,7 @@ import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { LayoutGrid } from "../lib/layoutGrid";
+import { stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
@@ -181,22 +182,7 @@ function Shell() {
 			    the page mid-transition — so the theme carries our palette into the
 			    native layer instead. */}
 			<NavigationThemeProvider value={navigationTheme}>
-			<Stack
-				screenOptions={{
-					// One push animation for every page: the platform's own slide. Named
-					// rather than left to "default" so a sub-page never picks up a
-					// different presentation than the page beside it.
-					animation: "slide_from_right",
-					headerStyle: { backgroundColor: t.bgSurface },
-					// The app's tint: the system back button and every native header item
-					// draw in it, as bar buttons do in any app on either platform.
-					headerTintColor: t.accent,
-					headerTitleStyle: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
-					headerShadowVisible: false,
-					headerBackButtonDisplayMode: "minimal",
-					contentStyle: { backgroundColor: t.bgBase },
-				}}
-			>
+			<Stack screenOptions={stackScreenOptions(t)}>
 				<Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 				<Stack.Screen
 					name="settings"

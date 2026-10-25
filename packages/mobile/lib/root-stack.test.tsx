@@ -57,6 +57,36 @@ describe("root stack", () => {
 		expect(unstable_settings).toEqual({ initialRouteName: "(tabs)" });
 	});
 
+	it.each(["ios", "android"])("leaves the push transition to the system on %s", async (platform) => {
+		const renderer = await renderRoot(platform);
+		try {
+			const defaults = renderer.root.findByType("Stack" as never).props.screenOptions;
+			expect(defaults).not.toHaveProperty("animation");
+			expect(defaults.contentStyle).toEqual({ backgroundColor: "#bgBase" });
+		} finally {
+			act(() => renderer.unmount());
+		}
+	});
+
+	// No opaque slab on iOS: the bar shows the page's own background behind its
+	// controls. Android's top app bar keeps the navigation theme's card surface.
+	it("draws the iOS bar without a background of its own", async () => {
+		const ios = await renderRoot("ios");
+		try {
+			expect(ios.root.findByType("Stack" as never).props.screenOptions.headerStyle).toEqual({ backgroundColor: "transparent" });
+			expect(ios.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("headerTransparent");
+		} finally {
+			act(() => ios.unmount());
+		}
+		const android = await renderRoot("android");
+		try {
+			expect(android.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("headerStyle");
+			expect(android.root.findByType("NavigationThemeProvider" as never).props.value.colors.card).toBe("#bgSurface");
+		} finally {
+			act(() => android.unmount());
+		}
+	});
+
 	it.each(["ios", "android"])("gives every pushed page the system back button on %s", async (platform) => {
 		const renderer = await renderRoot(platform);
 		try {

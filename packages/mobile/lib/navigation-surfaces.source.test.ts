@@ -20,8 +20,11 @@ describe("navigation surfaces", () => {
 		expect(layout).toContain("card: t.bgSurface");
 	});
 
-	it("pushes sub-pages with the platform slide", () => {
-		expect(layout).toContain('animation: "slide_from_right"');
+	// Left to native-stack's default, Android runs the system's own push
+	// transition instead of a slide picked for it.
+	it("pushes sub-pages with the system transition", () => {
+		expect(layout).toContain("<Stack screenOptions={stackScreenOptions(t)}>");
+		expect(source("./stackScreenOptions.ts")).not.toMatch(/animation:/);
 	});
 
 	// The session used to render a spinner until the push animation finished, so
