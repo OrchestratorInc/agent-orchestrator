@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -446,7 +447,12 @@ func (w *workspace) ReviewSummary(ctx context.Context) (worker.WorkspaceReviewRe
 	}
 	version := reviewVersion(baseSHA, files, staged, unstaged, untracked, committed)
 	ahead, behind := w.reviewAheadBehind(ctx)
+	root, err := filepath.Abs(w.path)
+	if err != nil {
+		return worker.WorkspaceReviewResponse{}, err
+	}
 	return worker.WorkspaceReviewResponse{
+		WorkspaceRoot:    filepath.ToSlash(root),
 		WorkspaceVersion: version,
 		CompareBaseSHA:   baseSHA,
 		CompareBaseRef:   baseRef,

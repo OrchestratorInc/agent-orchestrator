@@ -14,7 +14,7 @@ import type { TerminalTarget } from "../../types/terminal";
 import type { SessionProvisionStep, WorkspaceSession } from "../../types/workspace";
 import { requestWorkspaceRetry } from "../CloudSessionStartupError";
 import { scriptRunStatusText, scriptRunTitle } from "../ScriptRunPanel";
-import { ChatWorkspace } from "./ChatWorkspace";
+import { ChatWorkspace, type ChatWorkspaceProps } from "./ChatWorkspace";
 
 type EventPayload = {
 	attempt?: unknown;
@@ -579,6 +579,8 @@ export function CloudSessionChatSurface({
 	onSelectChat,
 	daemonReady,
 	theme,
+	workspaceTabs,
+	workspaceActiveTabKey,
 	auxiliaryTabOrder,
 	onAuxiliaryTabOrderChange,
 }: {
@@ -593,6 +595,8 @@ export function CloudSessionChatSurface({
 	onSelectChat?: () => void;
 	daemonReady?: boolean;
 	theme?: "light" | "dark";
+	workspaceTabs?: ChatWorkspaceProps["workspaceTabs"];
+	workspaceActiveTabKey?: string;
 	auxiliaryTabOrder?: string[];
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	onOpenFiles?: () => void;
@@ -943,6 +947,8 @@ export function CloudSessionChatSurface({
 			onSelectChat={onSelectChat}
 			daemonReady={daemonReady}
 			theme={theme}
+			workspaceTabs={workspaceTabs}
+			workspaceActiveTabKey={workspaceActiveTabKey}
 			auxiliaryTabOrder={auxiliaryTabOrder}
 			onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 		/>

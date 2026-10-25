@@ -13,6 +13,25 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
+func TestWorkspaceReviewSummaryReportsActualWorkspaceRoot(t *testing.T) {
+	repo := newGitWorkspace(t)
+	writeWorkspaceFile(t, repo, "README.md", "base\n")
+	gitWorkspace(t, repo, "add", ".")
+	gitWorkspace(t, repo, "commit", "-m", "base")
+	w, err := openWorkspace(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	review, err := w.ReviewSummary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.WorkspaceRoot != filepath.ToSlash(repo) {
+		t.Fatalf("workspace root = %q, want %q", review.WorkspaceRoot, repo)
+	}
+}
+
 func TestWorkspaceReviewSummaryReturnsAllFilesAndCategorizedChanges(t *testing.T) {
 	repo := newGitWorkspace(t)
 	writeWorkspaceFile(t, repo, "README.md", "base\n")

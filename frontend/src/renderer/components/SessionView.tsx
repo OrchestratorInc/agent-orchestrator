@@ -80,6 +80,8 @@ import { sessionReviewsQueryKey } from "../lib/session-reviews";
 import { sessionUiKey } from "../lib/hosts";
 import { resolveSessionWorkspacePath, sessionWorkspaceFilesQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isAbsoluteFileReference, matchWorkspaceFilePath, normalizeWorkspaceFileReference } from "../lib/workspace-file-path";
+import { cloudWorkspaceFilePath } from "../lib/cloud-workspace-file-path";
+import { cloudWorkspaceReviewSummaryQueryOptions } from "../hooks/useCloudWorkspaceReview";
 import { markFileViewerPerformance } from "../lib/file-viewer-performance";
 import { filesProjectKind } from "../lib/files-review-selection";
 import { aoBridge } from "../lib/bridge";
@@ -579,6 +581,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					visibleKeys.has(key) ? nextOrder[nextIndex++]! : key,
 				);
 				while (nextIndex < nextOrder.length) mergedOrder.push(nextOrder[nextIndex++]!);
+				if (mergedOrder.length === currentOrder.length && mergedOrder.every((key, index) => key === currentOrder[index])) return current;
 				return { ...current, [uiSessionId]: mergedOrder };
 			});
 		},
@@ -1550,6 +1553,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const revealResolvedWorkspaceFile = useCallback(
 		async (rawPath: string, options?: FileOpenOptions) => {
 			const reference = normalizeWorkspaceFileReference(rawPath);
+			if (session?.cloud) {
+				if (!reference) return;
+				try {
+					const review = await queryClient.fetchQuery(cloudWorkspaceReviewSummaryQueryOptions({
+						client: cloudCpClient, baseUrl: cloudCpBaseUrl, orgId: session.cloud.orgId, sessionId,
+					}));
+					openCenterFile(cloudWorkspaceFilePath(rawPath, review), options);
+				} catch {
+					openCenterFile(reference, options);
+				}
+				return;
+			}
 			if (!isAbsoluteFileReference(reference)) {
 				const data = await fetchWorkspaceFiles();
 				openCenterFile(matchWorkspaceFilePath(rawPath, data.files ?? []), options);
@@ -1568,7 +1583,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			// so, rather than a workspace file that happens to share its name.
 			openCenterFile(reference, options);
 		},
-		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, sessionId],
+		[cloudCpBaseUrl, cloudCpClient, fetchWorkspaceFiles, hostId, openCenterFile, queryClient, revealResolvedArtifact, session?.cloud, sessionId],
 	);
 
 	const handleOpenFiles = useCallback(() => {
@@ -1577,8 +1592,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// changes, or its commits when the worktree is clean.
 		resetFilesSelection(uiSessionId);
 		prepareFilesInspector();
-		void fetchWorkspaceFiles();
-	}, [fetchWorkspaceFiles, prepareFilesInspector, resetFilesSelection, uiSessionId]);
+		if (!session?.cloud) void fetchWorkspaceFiles();
+	}, [fetchWorkspaceFiles, prepareFilesInspector, resetFilesSelection, session?.cloud, uiSessionId]);
 
 	const handleOpenReviewFile = useCallback(
 		(target: { line?: number; path: string }) => {
@@ -1952,7 +1967,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									newWorkDisabled={interfaceUi.newWorkDisabled}
 									onConversationWorkChange={interfaceUi.onConversationWorkChange}
 									onOpenFiles={browserOnly ? undefined : prepareFilesInspector}
-									onOpenFile={openCenterFile}
+									onOpenFile={handleOpenFile}
 									session={session}
 									sessionTabAction={sessionTabActions}
 									reviewerTerminal={reviewerTerminal}
@@ -1961,6 +1976,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onSelectChat={selectSessionTerminal}
 									daemonReady={hostId ? Boolean(remoteBase) : daemonStatus.state === "ready"}
 									theme={theme}
+									workspaceTabs={centerFileTabs}
+									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={resolvedAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setAuxiliaryTabOrder}
 								/>

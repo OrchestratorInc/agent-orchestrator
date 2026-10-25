@@ -66,6 +66,7 @@ type WorkspaceReviewSummary struct {
 }
 
 type WorkspaceReviewResponse struct {
+	WorkspaceRoot    string                       `json:"workspaceRoot,omitempty"`
 	WorkspaceVersion string                       `json:"workspaceVersion"`
 	CompareBaseSHA   string                       `json:"compareBaseSha,omitempty"`
 	CompareBaseRef   string                       `json:"compareBaseRef,omitempty"`
