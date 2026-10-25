@@ -143,6 +143,14 @@ Safari) with these tools only when the user explicitly asks for it, such as
 - If it is already open, do not close or restart it to add them: that closes
   the user's windows. Ask the user first, or bring it to the front when it
   reads blank, as above.
+- Text boxes in web pages, such as a post or message composer, may refuse
+  `type_text` in the background, and AO does not send foreground keys. Fill
+  the box with a `run_steps` `set_value` step and read it to check the text.
+  `set_value` sets the field directly, with no key presses, so the page may
+  not register it and could send an empty or old draft. Before anything is
+  sent or saved, tell the user and ask them to type and delete one character
+  in the field. The same applies when `type_text` reports
+  `effect: "unverifiable"`.
 
 ## Safety
 

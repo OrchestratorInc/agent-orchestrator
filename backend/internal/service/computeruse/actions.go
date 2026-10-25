@@ -112,6 +112,37 @@ const foregroundAdvice = "AO refuses delivery_mode \"foreground\". If the action
 // tree is left out: an app's own labels can mention "foreground".
 var adviceKeys = map[string]bool{"hint": true, "suggestion": true, "escalation": true, "message": true, "reason": true, "detail": true, "recommended": true}
 
+// webTextAdvice follows a type_text the driver refused or could not verify. A
+// text box in a web page, such as a browser's post composer, takes neither
+// background keys nor foreground ones (AO refuses those), and set_value fills
+// it without the input events the page listens for.
+const webTextAdvice = "If this is a text box in a web page or web-based app, it may not take typed text in the background. Fill it with a run_steps set_value step and read the field to check it. The page may not register text filled this way, so before anything is sent or saved, tell the user and ask them to type and delete one character in the field."
+
+// needsWebTextAdvice reports whether a failed call is a type_text the driver
+// refused for the field itself, not for its arguments.
+func needsWebTextAdvice(tool string, stdout, stderr []byte) bool {
+	if tool != "type_text" || driverFailureKind(stdout, stderr) != apierr.KindInvalid {
+		return false
+	}
+	code, _ := refusalCode(stdout)
+	return code != "" && code != "invalid_arguments"
+}
+
+// noteWebTextAdvice adds webTextAdvice to a type_text result the driver
+// reports as unverifiable: the field shows the text, but a web page may not
+// have seen it.
+func noteWebTextAdvice(tool string, result any) {
+	output, ok := result.(map[string]any)
+	if !ok || tool != "type_text" || output["effect"] != "unverifiable" {
+		return
+	}
+	if note, _ := output["ao_note"].(string); note != "" {
+		output["ao_note"] = note + "\n" + webTextAdvice
+		return
+	}
+	output["ao_note"] = webTextAdvice
+}
+
 // noteForegroundAdvice adds ao_note to a result whose driver advice suggests
 // foreground delivery.
 func noteForegroundAdvice(result any) {

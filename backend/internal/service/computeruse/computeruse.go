@@ -398,6 +398,9 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 		} else if strings.Contains(strings.ToLower(message), "foreground") {
 			message += "\n" + foregroundAdvice
 		}
+		if needsWebTextAdvice(tool, stdout, stderr) {
+			message += "\n" + webTextAdvice
+		}
 		return CallResult{}, apierr.New(driverFailureKind(stdout, stderr), "COMPUTER_USE_CALL_FAILED", message, map[string]any{"tool": tool})
 	}
 
@@ -412,6 +415,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	s.rememberReads(arguments["session"], result)
 	flagUnrendered(result)
 	noteForegroundAdvice(result)
+	noteWebTextAdvice(tool, result)
 	if observedTools[tool] {
 		result = s.observeAfter(ctx, binary, saved, arguments, result)
 	}

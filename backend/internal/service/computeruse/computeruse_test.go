@@ -1021,6 +1021,57 @@ func TestCallFailureStatusFollowsTheDriverAnswer(t *testing.T) {
 	}
 }
 
+// A type_text the driver refuses for the field, such as a web composer that
+// takes no background input, points the agent to set_value and its caveat;
+// one refused for its arguments does not.
+func TestRefusedTypeTextAdvisesSetValue(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tool, stdout string
+		want         bool
+	}{
+		"field refused": {tool: "type_text", stdout: `{"refusal":{"code":"background_delivery_unsupported","message":"web content refuses background delivery"},"status":"refused"}`, want: true},
+		"bad arguments": {tool: "type_text", stdout: `{"refusal":{"code":"invalid_arguments","message":"type_text: unknown argument foo"},"status":"refused"}`},
+		"window gone":   {tool: "type_text", stdout: `{"code":"window_id_not_found","pid":7,"window_id":9}`},
+		"other tool":    {tool: "click", stdout: `{"refusal":{"code":"background_delivery_unsupported","message":"refused"},"status":"refused"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			driver := &fakeDriver{daemonUp: true}
+			driver.onCall = func([]string) ([]byte, []byte, error) {
+				return []byte(tc.stdout), nil, errors.New("exit status 1")
+			}
+			_, err := newTestService(t, driver, "windows").Call(context.Background(), CallRequest{Tool: tc.tool, Arguments: map[string]any{"element_token": "s00000001:4", "text": "hi"}})
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("err = %#v, want an API error", err)
+			}
+			if got := strings.Contains(apiErr.Message, webTextAdvice); got != tc.want {
+				t.Fatalf("advice in message = %v, want %v: %q", got, tc.want, apiErr.Message)
+			}
+		})
+	}
+}
+
+// The driver reports text it typed into web content as unverifiable; the
+// result carries the same advice, since the page may not have seen it.
+func TestUnverifiableTypeTextNotesSetValueCaveat(t *testing.T) {
+	recorder := &observingDriver{}
+	s := newTestService(t, recorder.driver(), "darwin")
+	result, err := s.Call(context.Background(), CallRequest{Tool: "type_text", Arguments: map[string]any{"pid": 7, "window_id": 9, "element_token": "s00000001:4", "text": "hi"}})
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if note := result.Result.(map[string]any)["ao_note"]; note != webTextAdvice {
+		t.Fatalf("ao_note = %v, want the web text advice", note)
+	}
+	result, err = s.Call(context.Background(), CallRequest{Tool: "click", Arguments: map[string]any{"pid": 7, "window_id": 9, "x": 5, "y": 5}})
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if note, ok := result.Result.(map[string]any)["ao_note"]; ok {
+		t.Fatalf("click ao_note = %v, want none", note)
+	}
+}
+
 // deadlineDriver records how long each driver call was given.
 type deadlineDriver struct {
 	*fakeDriver
