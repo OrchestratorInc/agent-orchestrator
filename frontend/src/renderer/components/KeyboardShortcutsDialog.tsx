@@ -5,8 +5,9 @@ import {
 	shortcutBindingKeys,
 	type AppShortcutId,
 	type ShortcutCategory,
+	type ShortcutBinding,
 } from "../../shared/shortcuts";
-import { memo } from "react";
+import { memo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../i18n/key-maps";
@@ -27,7 +28,8 @@ import {
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { ShortcutKeys } from "./ShortcutKeys";
+import { ShortcutKeys, shortcutKeysDescription } from "./ShortcutKeys";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -68,6 +70,26 @@ function isMacPlatform(): boolean {
 	return platform.toLowerCase().includes("mac");
 }
 
+function BindingSummary({ bindings, isMac }: { bindings: readonly ShortcutBinding[]; isMac: boolean }) {
+	const { t } = useTranslation();
+	const [first, ...alternatives] = bindings;
+	if (!first) return <span className="text-xs text-muted-foreground">{t("shortcut.unassigned")}</span>;
+	return <span className="inline-flex shrink-0 items-center gap-1.5">
+		<ShortcutKeys keys={shortcutBindingKeys(first, isMac)} />
+		{alternatives.length > 0 ? <Tooltip>
+			<TooltipTrigger asChild>
+				<span role="img" tabIndex={0} aria-label={t("shortcut.moreBindings", { count: alternatives.length })} className="inline-flex min-h-7 items-center rounded-sm px-1 text-xs tabular-nums text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+					<span aria-hidden="true">(+{alternatives.length})</span>
+				</span>
+			</TooltipTrigger>
+			<TooltipContent className="max-w-xs">
+				<p>{t("shortcut.moreBindings", { count: alternatives.length })}</p>
+				{alternatives.map((binding, index) => <p className="mt-1 font-mono" key={`${binding.key}-${index}`}>{shortcutKeysDescription(shortcutBindingKeys(binding, isMac))}</p>)}
+			</TooltipContent>
+		</Tooltip> : null}
+	</span>;
+}
+
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
 	return (
 		<li className="flex min-h-8 flex-wrap items-center justify-between gap-x-2 gap-y-1 py-0.5">
@@ -94,6 +116,7 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 }: KeyboardShortcutsDialogProps) {
 	const { t } = useTranslation();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
+	const customizingRef = useRef(false);
 	const isCommandPaletteEnabled = useCommandPaletteEnabled();
 	const overrides = useKeybindingsStore((state) => state.overrides);
 	const paletteShortcuts: readonly AppShortcutId[] = ["command-palette", "quick-open-file"];
@@ -102,20 +125,27 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 		(shortcut) =>
 			shortcut.id !== "keyboard-shortcuts" && (!paletteShortcuts.includes(shortcut.id) || isCommandPaletteEnabled),
 	);
-	const helpBinding = effectiveShortcutBindings("keyboard-shortcuts", isMac, overrides)[0];
+	const helpBindings = effectiveShortcutBindings("keyboard-shortcuts", isMac, overrides);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(1040px,calc(100vw-32px))] max-h-[calc(100svh-32px)]")}
-				onCloseAutoFocus={restoreFocusOnClose}
+				onCloseAutoFocus={(event) => {
+					if (!customizingRef.current) { restoreFocusOnClose(event); return; }
+					customizingRef.current = false;
+					event.preventDefault();
+					// The settings page has replaced the prior surface by the time
+					// the help dialog finishes closing; focus its command search.
+					requestAnimationFrame(() => document.querySelector<HTMLInputElement>('[data-section="keyboard-shortcuts"] input[type="search"]')?.focus());
+				}}
 			>
 				<div className={cn(settingsDialogHeaderClass, "flex-row flex-wrap items-center gap-3 px-4 py-2.5")}>
 					<DialogTitle className="settings-dialog-title">{t("shortcut.dialogTitle")}</DialogTitle>
-					{helpBinding ? <ShortcutKeys keys={shortcutBindingKeys(helpBinding, isMac)} /> : null}
+					{helpBindings.length > 0 ? <BindingSummary bindings={helpBindings} isMac={isMac} /> : null}
 					{onCustomize ? (
-						<Button className="ml-auto h-8" type="button" variant="ghost" size="sm" onClick={onCustomize}>
+						<Button className="ml-auto h-8" type="button" variant="ghost" size="sm" onClick={() => { customizingRef.current = true; onCustomize(); }}>
 							{t("shortcut.customize")}
 						</Button>
 					) : null}
@@ -135,13 +165,7 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 							<Section key={category} title={shortcutCategoryLabel(category, t)}>
 								{shortcuts.map((shortcut) => (
 									<Row key={shortcut.id} label={shortcutLabel(shortcut.id, t)}>
-										{effectiveShortcutBindings(shortcut.id, isMac, overrides).map((binding, bindingIndex) => (
-											<span className="inline-flex items-center gap-2" key={`${binding.key}-${bindingIndex}`}>
-												{/* A divider keeps two alternative chords from reading as one long chord. */}
-												{bindingIndex > 0 ? <span aria-hidden="true" className="h-4 w-px bg-border" /> : null}
-												<ShortcutKeys keys={shortcutBindingKeys(binding, isMac)} />
-											</span>
-										))}
+										<BindingSummary bindings={effectiveShortcutBindings(shortcut.id, isMac, overrides)} isMac={isMac} />
 									</Row>
 								))}
 							</Section>

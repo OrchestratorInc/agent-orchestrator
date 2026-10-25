@@ -2231,6 +2231,8 @@
 	"shortcut.keyboard-shortcuts": "Show keyboard shortcuts",
 	"shortcut.model-picker": "Choose model",
 	"shortcut.modified": "Modified",
+	"shortcut.moreBindings_one": "{{count}} alternative shortcut. Choose Customize to view all bindings.",
+	"shortcut.moreBindings_other": "{{count}} alternative shortcuts. Choose Customize to view all bindings.",
 	"shortcut.movedBody": "{{binding}} moved from {{from}} to {{to}}",
 	"shortcut.new-session": "New session",
 	"shortcut.new-shell-terminal": "New terminal",
