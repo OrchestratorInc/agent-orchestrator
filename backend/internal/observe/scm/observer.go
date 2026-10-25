@@ -2169,14 +2169,19 @@ func repoFullName(repo ports.SCMRepo) string {
 
 // listedRepoAlias returns prURL rewritten to the repository name it was listed
 // under when the provider answered with another name (a renamed or transferred
-// repository), so links built from the old name resolve to the same PR.
+// repository), so links built from the old name resolve to the same PR. The
+// alias is normalized like ParseChangeRequestURL so any spelling of it matches.
 func listedRepoAlias(prURL string, repo ports.SCMRepo) string {
 	ref, err := domain.ParseChangeRequestURL(prURL)
 	listed := repoFullName(repo)
 	if err != nil || strings.EqualFold(ref.Repository, listed) {
 		return ""
 	}
-	return strings.Replace(ref.URL, "/"+ref.Repository+"/", "/"+listed+"/", 1)
+	alias, err := domain.ParseChangeRequestURL(strings.Replace(ref.URL, "/"+ref.Repository+"/", "/"+listed+"/", 1))
+	if err != nil {
+		return ""
+	}
+	return alias.URL
 }
 
 func ownerOf(full string) string {

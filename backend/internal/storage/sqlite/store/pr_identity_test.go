@@ -264,6 +264,7 @@ func TestReportedPRURLResolvesStoredURLAlias(t *testing.T) {
 		ID: "rpt_alias", SessionID: session.ID, ProjectID: session.ProjectID,
 		Outputs: []domain.ReportOutput{
 			{Kind: domain.ReportOutputPRCreated, Reference: oldURL},
+			{Kind: domain.ReportOutputPRCreated, Reference: "http://www.github.com/Old-Owner/example/pull/31/"},
 			{Kind: domain.ReportOutputPRCreated, Reference: external},
 		},
 		CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1,
@@ -271,8 +272,8 @@ func TestReportedPRURLResolvesStoredURLAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	urls, err := s.ListReportedPRURLs(ctx, session.ID)
-	if err != nil || len(urls) != 2 || urls[0] != currentURL || urls[1] != external {
-		t.Fatalf("reported PR URLs = %v, err=%v; want old-name URL resolved to %s", urls, err, currentURL)
+	if err != nil || len(urls) != 3 || urls[0] != currentURL || urls[1] != currentURL || urls[2] != external {
+		t.Fatalf("reported PR URLs = %v, err=%v; want every old-name spelling resolved to %s", urls, err, currentURL)
 	}
 }
 

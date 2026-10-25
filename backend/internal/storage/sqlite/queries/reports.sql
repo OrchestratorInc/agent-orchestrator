@@ -20,12 +20,7 @@ SELECT * FROM report_outputs WHERE report_id = ? ORDER BY position;
 SELECT * FROM reports WHERE session_id = ? ORDER BY created_at, id;
 
 -- name: ListReportedPRURLs :many
--- A URL reported under a repository's old name resolves to the tracked PR.
-SELECT CAST(COALESCE(
-    (SELECT a.canonical_url FROM pr_url_alias a WHERE a.alias_url = o.reference),
-    o.reference
-) AS TEXT) AS reference
-FROM report_outputs o
+SELECT o.reference FROM report_outputs o
 JOIN reports r ON r.id = o.report_id
 WHERE r.session_id = ? AND o.kind = 'pr_created'
 ORDER BY r.created_at, r.id, o.position;

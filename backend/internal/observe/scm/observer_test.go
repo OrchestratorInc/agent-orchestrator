@@ -1094,6 +1094,16 @@ func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
 	}
 }
 
+func TestListedRepoAliasIsNormalized(t *testing.T) {
+	listed := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "Old-Org", Name: "R", Repo: "Old-Org/R"}
+	if got := listedRepoAlias("https://github.com/NewOrg/r/pull/1", listed); got != "https://github.com/old-org/r/pull/1" {
+		t.Fatalf("alias = %q, want the normalized old-name URL", got)
+	}
+	if got := listedRepoAlias("https://github.com/old-org/r/pull/1", listed); got != "" {
+		t.Fatalf("alias = %q, want none when only the case differs", got)
+	}
+}
+
 func mustGit(t *testing.T, args ...string) {
 	t.Helper()
 	if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
