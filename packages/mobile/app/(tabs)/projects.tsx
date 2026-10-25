@@ -121,7 +121,7 @@ export default function ProjectsScreen() {
 								icon={hostStates.length > 1 ? "unplug" : failure.icon}
 								title={hostStates.length > 1 ? "No machines connected" : failure.title}
 								message={hostStates.length > 1 ? undefined : failure.hint}
-								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
+								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />}
 							/>
 						) : (
 							<EmptyState icon="folder" title="No projects" message="Add a project in Orchestrator to get started." />

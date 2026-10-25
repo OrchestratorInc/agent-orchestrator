@@ -244,11 +244,11 @@ export default function FleetScreen() {
 								message={hostStates.length > 1 ? undefined : failure.hint}
 								action={
 									<View style={styles.errorActions}>
-										<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />
+										<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />
 										{/* Re-scanning is the only fix for a rotated password, and the
 										    fastest one for a moved/renamed host — so it belongs beside
 										    Retry rather than three taps away in Settings. */}
-										<Button title="Scan" icon="maximize" onPress={() => router.push("/pair")} />
+										<Button title="Scan" icon="qrScanner" onPress={() => router.push("/pair")} />
 									</View>
 								}
 							/>

@@ -265,7 +265,7 @@ function SessionFileContent() {
 		setNotice(`Copied ${label.toLowerCase()}.`);
 	}, [chosen, label]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.navigate("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
 	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
@@ -325,7 +325,7 @@ function SessionFileContent() {
 	if (loading && !detail) {
 		body = <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Opening {name}…</Text></View>;
 	} else if (loadError && !detail) {
-		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load(false)} />} /></View>;
+		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void load(false)} />} /></View>;
 	} else if (detail && image) {
 		body = <ImageCompare detail={detail} sources={{
 			before: detail.status !== "added" && changed ? workspaceImageSource(config!, id, path, "before", detail.workspaceVersion) : undefined,

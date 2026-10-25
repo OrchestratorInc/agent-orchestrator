@@ -25,7 +25,7 @@ vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedSty
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./MachineIdentity", () => ({ MachineAvatar: "MachineAvatar" }));
 vi.mock("./hosts", () => ({ loadHosts: async () => fixtures.hosts }));
-vi.mock("./motionHooks", () => ({ usePressScale: () => ({}) }));
+vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
 vi.mock("./native-header-button", () => ({ NativeHeaderButton: "NativeHeaderButton" }));
 vi.mock("./RouteErrorBoundary", () => ({ SheetErrorBoundary: () => null }));
 

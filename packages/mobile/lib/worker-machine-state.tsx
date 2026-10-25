@@ -31,7 +31,7 @@ export function WorkerMachineState({ host, environments, onSelectEnvironment, on
 						: "Check that Orchestrator is running and this machine is reachable to load its workers."}
 			</Text>
 			<View style={styles.actions}>
-				{!connecting ? <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRetry} /> : null}
+				{!connecting ? <Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRetry} /> : null}
 				<EnvironmentPicker environments={environments} selectedEnvironmentId={host.hostId} onSelectEnvironment={onSelectEnvironment} />
 			</View>
 		</View>

@@ -320,7 +320,7 @@ export default function PairScreen() {
 				<Feather name="monitor-off" size={iconSize.xl} color={t.textTertiary} />
 				<Text style={styles.missingTitle}>Machine no longer saved</Text>
 				<Text style={styles.missingText}>Return to Settings and choose another machine.</Text>
-				<Button title="Back to Settings" variant="ghost" onPress={back} />
+				<Button title="Back to Settings" variant="secondary" onPress={back} />
 			</View>
 		);
 	}
@@ -473,7 +473,7 @@ function CameraGate({
 			) : (
 				<Button
 					title="Open settings"
-					variant="ghost"
+					variant="secondary"
 					icon="settings"
 					onPress={() => Linking.openSettings()}
 					style={{ marginTop: space.lg }}

@@ -39,7 +39,7 @@ vi.mock("./native-header-button", async () => {
 });
 vi.mock("./sidebar-navigation-context", () => ({ useOptionalSidebarNavigation: () => null }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
-vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}), usePressScale: () => ({}) }));
+vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
 vi.mock("./ThemeProvider", () => {
 	const theme = new Proxy({ fontMono: "GeistMono" }, { get: (target, property) => property in target ? target[property as keyof typeof target] : "#888" });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };

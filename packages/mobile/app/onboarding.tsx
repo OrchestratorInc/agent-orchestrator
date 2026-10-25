@@ -57,7 +57,7 @@ export default function OnboardingScreen() {
 					</Text>
 					<Button
 						title="Pair a machine"
-						icon="maximize"
+						icon="qrScanner"
 						onPress={() => router.push("/pair?from=onboarding")}
 						style={styles.cta}
 					/>

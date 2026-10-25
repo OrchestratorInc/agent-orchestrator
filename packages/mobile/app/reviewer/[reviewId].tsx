@@ -38,7 +38,7 @@ function ReviewerConversationContent() {
 
 	if (!hostMatches) return <EmptyState icon="message-circle" title="Review belongs to another machine" message="Open it from that machine's session." />;
 	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!conversation.snapshot) return <EmptyState icon="message-circle" title="Reviewer chat unavailable" message={conversation.unavailable?.message || conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void conversation.refresh()} />} />;
+	if (!conversation.snapshot) return <EmptyState icon="message-circle" title="Reviewer chat unavailable" message={conversation.unavailable?.message || conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void conversation.refresh()} />} />;
 
 	return <KeyboardAvoidingView style={[styles.screen, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
 		{conversation.unavailable?.message || conversation.error || conversation.actionError ? <Text accessibilityRole="alert" style={styles.error}>{conversation.unavailable?.message || conversation.error || conversation.actionError}</Text> : null}

@@ -187,7 +187,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 								<Text style={[styles.errorText, { marginTop: space.xs }]}>{LOCAL_NETWORK_HINT}</Text>
 								<Button
 									title="Open settings"
-									variant="ghost"
+									variant="secondary"
 									icon="settings"
 									onPress={() => Linking.openSettings()}
 									style={{ marginTop: space.sm }}

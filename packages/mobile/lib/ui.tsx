@@ -13,13 +13,16 @@ import {
 	type TextStyle,
 	type ViewStyle,
 } from "react-native";
+import { AppSymbol } from "./AppSymbol";
+import { resolveChromeIcon, type ChromeIcon } from "./chromeIcon";
 import { haptics } from "./haptics";
 import { BREATHE_MS, shouldBreathe, shouldSpin, SPIN_MS } from "./motion";
-import { useEnterTransition, usePressScale } from "./motionHooks";
+import { useEnterTransition } from "./motionHooks";
 import { NativeHeaderButton, type NativeHeaderButtonIcon } from "./native-header-button";
+import { usePressFeedback, type PressTone } from "./pressFeedback";
 import { useOptionalSidebarNavigation } from "./sidebar-navigation-context";
 import { useReducedMotion } from "./useReducedMotion";
-import { fontScaleCap, press, space, type } from "./tokens";
+import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "./tokens";
 import type { ConnStatus } from "./store";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
@@ -329,6 +332,48 @@ export function ListSectionHeader({
 	);
 }
 
+/**
+ * How much a `Button` stands out, each named for the native button it draws
+ * like:
+ *
+ *  - `primary`: the filled accent button, one per screen. iOS
+ *    `borderedProminent`, M3 `Button`.
+ *  - `secondary`: a tinted fill for an action beside the primary, or for the
+ *    one action of an empty or error state. iOS `bordered`, M3
+ *    `FilledTonalButton`.
+ *  - `ghost`: text only, for the least important action in a group. iOS
+ *    `plain`, M3 `TextButton`.
+ *  - `danger`: a red tint, for an action that destroys something.
+ *  - `success`: desktop's green merge action.
+ */
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "success";
+
+function buttonColors(t: Theme, variant: ButtonVariant): { fill: string; ink: string; ripple: PressTone } {
+	switch (variant) {
+		// `onAccent`, not a literal: near-black reads best on the dark theme's light
+		// accent, but is invisible on light mode's darker one, which needs white.
+		case "primary":
+			return { fill: t.accent, ink: t.onAccent, ripple: "onAccent" };
+		case "secondary":
+			return { fill: t.accentTint, ink: t.accent, ripple: "neutral" };
+		case "ghost":
+			return { fill: "transparent", ink: t.accent, ripple: "neutral" };
+		case "danger":
+			return { fill: t.tintRed, ink: t.red, ripple: "destructive" };
+		case "success":
+			return { fill: t.green, ink: t.bgBase, ripple: "onAccent" };
+	}
+}
+
+/**
+ * The app's text button: a capsule, as both platforms draw theirs. iOS dims it
+ * while pressed; Android ripples inside the capsule and never scales.
+ *
+ * It stays React Native rather than `@expo/ui`'s Button because the call sites
+ * lay it out as a flex child (full-width CTAs, button rows, empty-state
+ * actions), and a native button sizes itself inside a `Host` that would need
+ * measuring per button. It also needs a busy state the native one lacks.
+ */
 export function Button({
 	title,
 	onPress,
@@ -340,63 +385,62 @@ export function Button({
 }: {
 	title: string;
 	onPress: () => void;
-	/** `success` is desktop's green merge action. */
-	variant?: "primary" | "ghost" | "danger" | "success";
+	variant?: ButtonVariant;
 	loading?: boolean;
 	disabled?: boolean;
-	icon?: keyof typeof Feather.glyphMap;
+	/** A chrome glyph before the title; Lucide names draw as their system symbol. */
+	icon?: ChromeIcon;
 	style?: StyleProp<ViewStyle>;
 }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
-	const isPrimary = variant === "primary";
-	const isDanger = variant === "danger";
-	const isSuccess = variant === "success";
-	// `onAccent`, not a literal: near-black reads best on the dark theme's light
-	// accent, but is invisible on light mode's darker one, which needs white.
-	const fg = isPrimary ? t.onAccent : isDanger ? t.red : isSuccess ? t.bgBase : t.accent;
-	const pressFx = usePressScale(disabled || loading);
+	const { fill, ink, ripple } = buttonColors(t, variant);
+	const feedback = usePressFeedback("button", { tone: ripple });
+	const inactive = disabled || loading;
 	return (
-		<Animated.View style={[style, pressFx.style]}>
-			<Pressable
-				accessibilityRole="button"
-				// The label is pinned to the visible title rather than left to the child
-				// text: while a request is in flight the text is replaced by a spinner,
-				// and the control would otherwise announce with no name at all.
-				accessibilityLabel={title}
-				accessibilityState={{ disabled: disabled || loading, busy: loading }}
-				onPressIn={pressFx.onPressIn}
-				onPressOut={pressFx.onPressOut}
-				onPress={() => {
-					// Danger actions get a cautionary buzz; everything else a light tap.
-					if (isDanger) haptics.warning();
-					else haptics.tap();
-					onPress();
-				}}
-				disabled={disabled || loading}
-				style={({ pressed }) => [
-					s.btn,
-					isPrimary && s.btnPrimary,
-					!isPrimary && s.btnGhost,
-					isDanger && s.btnDanger,
-					isSuccess && s.btnSuccess,
-					(disabled || loading) && { opacity: 0.5 },
-					pressed && { opacity: press.opacity },
-				]}
-			>
-				{loading ? (
-					<ActivityIndicator color={fg} size="small" />
-				) : (
-					<View style={s.btnInner}>
-						{icon ? <Feather name={icon} size={15} color={fg} style={{ marginRight: space.xs }} /> : null}
-						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[s.btnText, { color: fg }]}>
-							{title}
-						</Text>
-					</View>
-				)}
-			</Pressable>
-		</Animated.View>
+		<Pressable
+			accessibilityRole="button"
+			// The label is pinned to the visible title rather than left to the child
+			// text: while a request is in flight the text is replaced by a spinner,
+			// and the control would otherwise announce with no name at all.
+			accessibilityLabel={title}
+			accessibilityState={{ disabled: disabled || loading, busy: loading }}
+			android_ripple={feedback.android_ripple}
+			onPress={() => {
+				// Danger actions get a cautionary buzz; everything else a light tap.
+				if (variant === "danger") haptics.warning();
+				else haptics.tap();
+				onPress();
+			}}
+			disabled={inactive}
+			style={({ pressed }) => [
+				s.btn,
+				variant === "ghost" && s.btnGhost,
+				{ backgroundColor: fill },
+				inactive && s.btnInactive,
+				pressed && feedback.pressed,
+				style,
+			]}
+		>
+			{loading ? (
+				<ActivityIndicator color={ink} size="small" />
+			) : (
+				<View style={s.btnInner}>
+					{icon ? <ChromeGlyph icon={icon} size={iconSize.md} color={ink} /> : null}
+					<Text maxFontSizeMultiplier={fontScaleCap.body} style={[s.btnText, { color: ink }]}>
+						{title}
+					</Text>
+				</View>
+			)}
+		</Pressable>
 	);
+}
+
+/** A chrome glyph from an icon prop: the system symbol, or Lucide where there is none. */
+function ChromeGlyph({ icon, size, color }: { icon: ChromeIcon; size: number; color: string }) {
+	const glyph = resolveChromeIcon(icon);
+	if (glyph.symbol) return <AppSymbol name={glyph.symbol} size={size} color={color} />;
+	return <Feather name={glyph.lucide} size={size} color={color} />;
 }
 
 // A numbered instruction row. Used by both onboarding screens: the welcome
@@ -610,22 +654,23 @@ const makeStyles = (t: Theme) =>
 			borderColor: t.bgBase,
 		},
 
+		// The platform's touch target is the floor, so a one-line button is exactly
+		// that tall and a wrapped title grows it. `overflow` keeps the Android
+		// ripple inside the capsule.
 		btn: {
-			borderRadius: 8,
-			paddingVertical: space.md,
-			paddingHorizontal: space.lg,
+			minHeight: touchTarget,
+			borderRadius: radius.pill,
+			overflow: "hidden",
+			paddingVertical: space.sm,
+			paddingHorizontal: space.xl,
 			alignItems: "center",
+			justifyContent: "center",
 		},
-		btnInner: { flexDirection: "row", alignItems: "center" },
-		btnPrimary: { backgroundColor: t.accent },
-		btnGhost: {
-			borderWidth: 1,
-			borderColor: t.borderStrong,
-			backgroundColor: t.bgElevated,
-		},
-		btnDanger: { borderColor: t.tintRed, backgroundColor: t.tintRed },
-		btnSuccess: { borderColor: t.green, backgroundColor: t.green },
-		btnText: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, fontWeight: "600" },
+		// Text only: just enough inset for the press state to frame the title.
+		btnGhost: { paddingHorizontal: space.md },
+		btnInactive: { opacity: stateOpacity.disabled },
+		btnInner: { flexDirection: "row", alignItems: "center", gap: space.xs },
+		btnText: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", textAlign: "center" },
 
 		step: {
 			flexDirection: "row",

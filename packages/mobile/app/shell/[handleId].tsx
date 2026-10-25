@@ -29,7 +29,7 @@ function ShellRouteContent() {
 						icon="terminal"
 						title="Shell belongs to another machine"
 						message="Open it from that machine's session."
-						action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />}
+						action={<Button title="Open board" icon="workers" onPress={() => router.navigate("/")} />}
 					/>
 				)}
 			</View>

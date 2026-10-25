@@ -141,7 +141,7 @@ function SessionRouteContent() {
 						icon="server"
 						title="Session belongs to another machine"
 						message="Open it from that machine's session list."
-						action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />}
+						action={<Button title="Open board" icon="workers" onPress={() => router.navigate("/")} />}
 					/>
 				</View>
 			);
@@ -152,7 +152,7 @@ function SessionRouteContent() {
 					<EmptyState
 						icon="monitor-smartphone"
 						title="No machine paired"
-						action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
+						action={<Button title="Scan pairing code" icon="qrScanner" onPress={() => router.push("/pair")} />}
 					/>
 				</View>
 			);
@@ -162,7 +162,7 @@ function SessionRouteContent() {
 					<EmptyState
 						icon="unplug"
 						title="This machine is offline"
-						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
+						action={<Button title="Open board" icon="workers" variant="secondary" onPress={() => router.navigate("/")} />}
 					/>
 				</View>
 			);
@@ -172,7 +172,7 @@ function SessionRouteContent() {
 					<EmptyState
 						icon="archive"
 						title="This session has ended"
-						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
+						action={<Button title="Open board" icon="workers" variant="secondary" onPress={() => router.navigate("/")} />}
 					/>
 				</View>
 			);
@@ -183,7 +183,7 @@ function SessionRouteContent() {
 						icon="search"
 						title="Session not found"
 						message="It may have been deleted on that machine."
-						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
+						action={<Button title="Open board" icon="workers" variant="secondary" onPress={() => router.navigate("/")} />}
 					/>
 				</View>
 			);
@@ -193,7 +193,7 @@ function SessionRouteContent() {
 					<EmptyState
 						icon="alert-circle"
 						title="Couldn't load this session"
-						action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={retry} />}
+						action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={retry} />}
 					/>
 				</View>
 			);

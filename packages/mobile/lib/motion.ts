@@ -10,7 +10,7 @@ import { duration, press, spring } from "./tokens";
  *     sliding out. Each is a number lifted from the screen that first needed it,
  *     so a change here is a visible decision rather than a drive-by edit.
  *   - **The ladders and hooks** — the duration/easing/press steps in `tokens.ts`
- *     plus the press and entrance hooks every shared control uses.
+ *     plus the entrance hook the shared controls use.
  *
  * Two rules decide everything here:
  *

@@ -57,7 +57,7 @@ function SessionFilesContent() {
 	}, [id, routeHostId, router]);
 	const openChange = useCallback((file: ChangeEntry) => openFile(file.path, "diff", file.previousPath), [openFile]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="These files belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="These files belong to another machine" message="Open them from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.navigate("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
 	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
@@ -100,9 +100,9 @@ function SessionFilesContent() {
 						renderItem={({ item }) => <ChangeRow file={item} comments={commentsByPath.get(item.path) ?? 0} onPress={openChange} />}
 						ItemSeparatorComponent={() => <View style={styles.divider} />}
 						ListEmptyComponent={error ? (
-							<EmptyState icon="alert-triangle" title="Couldn't load changes" message={error} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void refresh()} />} />
+							<EmptyState icon="alert-triangle" title="Couldn't load changes" message={error} action={<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void refresh()} />} />
 						) : (
-							<EmptyState icon="file-diff" title="No changes yet" message="When the agent edits files in this session, they show up here." action={<Button title="Browse all files" icon="list-tree" variant="ghost" onPress={() => setTab("all")} />} />
+							<EmptyState icon="file-diff" title="No changes yet" message="When the agent edits files in this session, they show up here." action={<Button title="Browse all files" icon="list-tree" variant="secondary" onPress={() => setTab("all")} />} />
 						)}
 					/>
 				)
@@ -271,7 +271,7 @@ function FileBrowser({ sessionId, header, bottomInset, onOpen }: { sessionId: st
 			ListEmptyComponent={loading ? (
 				<View style={styles.centerInline}><ActivityIndicator color={t.accent} /></View>
 			) : error ? (
-				<EmptyState icon="alert-triangle" title="Couldn't read this folder" message={error} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void loadTree(dir)} />} />
+				<EmptyState icon="alert-triangle" title="Couldn't read this folder" message={error} action={<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void loadTree(dir)} />} />
 			) : (
 				<EmptyState icon="folder" title="Empty folder" />
 			)}
