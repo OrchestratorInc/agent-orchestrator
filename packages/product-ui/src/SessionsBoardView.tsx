@@ -131,6 +131,7 @@ export type SessionsBoardGridViewProps<
 	columns: KanbanColumnView[];
 	labels: BoardColumnLabels;
 	renderSessionCard: (session: TSession) => ReactNode;
+	sessionKey?: (session: TSession) => string;
 	sessions: TSession[];
 };
 
@@ -138,6 +139,7 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 	columns,
 	labels,
 	renderSessionCard,
+	sessionKey,
 	sessions,
 }: SessionsBoardGridViewProps<TSession>) {
 	const byColumn = new Map<KanbanColumn, TSession[]>();
@@ -164,6 +166,7 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 						key={column.column}
 						labels={labels}
 						renderSessionCard={renderSessionCard}
+						sessionKey={sessionKey}
 						sessions={byColumn.get(column.column) ?? []}
 					/>
 				))}
@@ -176,11 +179,13 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 	column,
 	labels,
 	renderSessionCard,
+	sessionKey,
 	sessions,
 }: {
 	column: KanbanColumnView;
 	labels: BoardColumnLabels;
 	renderSessionCard: (session: TSession) => ReactNode;
+	sessionKey?: (session: TSession) => string;
 	sessions: TSession[];
 }) {
 	const ordered = [...sessions].sort((left, right) => {
@@ -209,7 +214,7 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 			<div className="board-scrollbar min-h-0 flex-1 overflow-y-auto pl-3 pr-2 pb-3 pt-3">
 				<div className="flex min-h-full flex-col gap-2.5">
 					{ordered.map((session) => (
-						<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
+						<Fragment key={sessionKey?.(session) ?? session.id}>{renderSessionCard(session)}</Fragment>
 					))}
 				</div>
 			</div>
@@ -221,6 +226,8 @@ export type SessionCardViewProps = {
 		action?: ReactNode;
 	/** Latest session artifacts, shown as evidence below the PRs. */
 	artifacts?: ReactNode;
+	/** Optional context row immediately above the session status. */
+	beforeStatus?: ReactNode;
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
 	branchLabel?: ReactNode;
@@ -250,6 +257,7 @@ export type SessionCardViewProps = {
 export function SessionCardView({
 	action,
 	artifacts,
+	beforeStatus,
 	branchAction,
 	branchIcon,
 	branchLabel,
@@ -388,6 +396,7 @@ export function SessionCardView({
 				</div>
 			)}
 			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
+			{beforeStatus}
 			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-3.5 py-2.5">
 				<div className="flex min-w-0 flex-1">
 					<span
@@ -618,6 +627,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	labels,
 	renderSessionCard,
 	resetKey,
+	sessionKey,
 	sessions,
 	trailing,
 }: {
@@ -629,6 +639,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	renderSessionCard: (session: TSession) => ReactNode;
 	/** Collapse and drop deferred cards when the board scope changes (e.g. projectId). */
 	resetKey?: string;
+	sessionKey?: (session: TSession) => string;
 	sessions: TSession[];
 	/** Right-aligned status in the bar, outside the toggle (e.g. memory pressure). */
 	trailing?: ReactNode;
@@ -733,7 +744,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 						role="list"
 					>
 						{sessions.map((session) => (
-							<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
+							<Fragment key={sessionKey?.(session) ?? session.id}>{renderSessionCard(session)}</Fragment>
 						))}
 					</div>
 				</motion.div>

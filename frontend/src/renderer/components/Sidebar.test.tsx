@@ -678,6 +678,52 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
 	});
 
+	it("places All sessions below Search and above Automations and opens the global board", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+		const search = screen.getByRole("button", { name: /Search/ });
+		const allSessions = screen.getByRole("button", { name: "All sessions" });
+		const automations = screen.getByRole("button", { name: "Automations" });
+		expect(search.compareDocumentPosition(allSessions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(allSessions.compareDocumentPosition(automations) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(allSessions).not.toHaveAttribute("aria-current");
+		await userEvent.click(allSessions);
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/board" });
+	});
+
+	it.each(["/board", "/board/"])("marks All sessions active when navigating to %s", (pathname) => {
+		mockLocation.pathname = pathname;
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+		expect(screen.getByRole("button", { name: "All sessions" })).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Automations" })).not.toHaveAttribute("aria-current");
+	});
+
+	it("hides All sessions before any projects or sessions exist", () => {
+		renderSidebar({ workspaces: [] });
+		expect(screen.queryByRole("button", { name: "All sessions" })).not.toBeInTheDocument();
+	});
+
+	it("hides All sessions for empty and orchestrator-only projects", () => {
+		renderSidebar({ workspaces: [
+			{ ...workspace, sessions: [] },
+			{ ...workspace, id: "orchestrator-only", sessions: [{ ...session, kind: "orchestrator" }] },
+		] });
+		expect(screen.queryByRole("button", { name: "All sessions" })).not.toBeInTheDocument();
+	});
+
+	it.each(["local", "cloud", "remote"] as const)("keeps All sessions available for archived %s workers", (scope) => {
+		const archived: WorkspaceSummary = {
+			...workspace,
+			...(scope === "cloud" ? { kind: "cloud" as const } : {}),
+			...(scope === "remote" ? { hostId: "box-a" } : {}),
+			sessions: [{ ...session, kind: "worker", status: "terminated", isTerminated: true }],
+		};
+		renderSidebar({
+			workspaces: scope === "remote" ? [] : [archived],
+			remoteWorkspaces: scope === "remote" ? [archived] : [],
+		});
+		expect(screen.getByRole("button", { name: "All sessions" })).toBeInTheDocument();
+	});
+
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
 		const user = userEvent.setup();
 		const withArtifacts: WorkspaceSummary = {

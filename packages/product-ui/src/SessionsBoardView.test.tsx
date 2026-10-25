@@ -81,6 +81,29 @@ describe("SessionsBoardView", () => {
 		lastArchiveMotionTransition.current = undefined;
 	});
 
+	it.each(["board", "archive"] as const)("keeps same-ID card state with its host when the %s reorders", async (view) => {
+		const sessions = [
+			{ ...baseSession, host: "host-a", title: "Host A task" },
+			{ ...baseSession, host: "host-b", title: "Host B task" },
+		];
+		const card = (session: typeof sessions[number]) => <input aria-label={session.title} defaultValue="" />;
+		const content = (entries: typeof sessions) => view === "board" ? (
+			<SessionsBoardGridView columns={boardKanbanColumnOrder.map((column) => getKanbanColumnView(column))}
+				labels={{ columnAria: (label) => label }} renderSessionCard={card} sessionKey={(session) => session.host} sessions={entries} />
+		) : (
+			<SessionsArchiveView labels={{ archive: "Archive", archiveAria: "Archive, 2 sessions", archivedSessions: "Archived sessions" }}
+				renderSessionCard={card} sessionKey={(session) => session.host} sessions={entries} />
+		);
+		const { rerender } = render(content(sessions));
+		if (view === "archive") fireEvent.click(screen.getByRole("button", { name: "Archive, 2 sessions" }));
+		const input = await screen.findByRole("textbox", { name: "Host A task" });
+		fireEvent.change(input, { target: { value: "Host A draft" } });
+		rerender(content([...sessions].reverse()));
+		expect(screen.getByRole("textbox", { name: "Host A task" })).toBe(input);
+		expect(screen.getByRole("textbox", { name: "Host A task" })).toHaveValue("Host A draft");
+		expect(screen.getByRole("textbox", { name: "Host B task" })).toHaveValue("");
+	});
+
 	it.each(["checking", "unavailable"] as const)("withholds provisional activity while %s", (statusReadiness) => {
 		render(<SessionCardView externalLink={ExternalLink}
 			labels={{ formatTime: () => "now", intakeIssue: (id) => id, pr: progressLabels, updatedAt: (at) => at }}

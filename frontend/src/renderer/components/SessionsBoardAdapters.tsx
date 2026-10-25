@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
+import { Archive, Check, Copy, File, Folder, GitBranch, LoaderCircle, RotateCcw } from "lucide-react";
 import type { MessageKey } from "../i18n";
 import { aoBridge } from "../lib/bridge";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -31,6 +31,7 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
+import { labelForHost } from "../lib/host-clients";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -91,6 +92,7 @@ export function BoardSessionCardAdapter({
 	onOpenArtifacts,
 	onTerminate,
 	session,
+	showWorkspace,
 }: {
 	/** Live reading of the session's process tree, for the card's resource chip. */
 	memory?: SessionMemoryReading;
@@ -102,6 +104,7 @@ export function BoardSessionCardAdapter({
 	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	showWorkspace?: boolean;
 }) {
 	return (
 		<DesktopSessionCard
@@ -112,6 +115,7 @@ export function BoardSessionCardAdapter({
 			onOpenArtifacts={onOpenArtifacts}
 			onTerminate={onTerminate}
 			session={session}
+			showWorkspace={showWorkspace}
 		/>
 	);
 }
@@ -123,6 +127,7 @@ export function ArchivedSessionCardAdapter({
 	restoreAction,
 	restoreError,
 	session,
+	showWorkspace,
 }: {
 	hideTerminatedStatus?: boolean;
 	isRestoreDisabled: boolean;
@@ -130,6 +135,7 @@ export function ArchivedSessionCardAdapter({
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
 	session: WorkspaceSession;
+	showWorkspace?: boolean;
 }) {
 	const { t } = useTranslation();
 	const branch = sessionBranchPresentation(session).branch ?? "";
@@ -156,6 +162,7 @@ export function ArchivedSessionCardAdapter({
 			footer={<ArchiveRestoreError message={restoreError} />}
 			interactive={false}
 			session={session}
+			showWorkspace={showWorkspace}
 		/>
 	);
 }
@@ -173,6 +180,7 @@ function DesktopSessionCard({
 	onOpenArtifacts,
 	onTerminate,
 	session,
+	showWorkspace,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
@@ -186,6 +194,7 @@ function DesktopSessionCard({
 	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	showWorkspace?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -199,6 +208,9 @@ function DesktopSessionCard({
 	const keepTerminateVisible = session.status === "merged";
 	const resourcePresentation = toResourcePresentation(memory, session.activity?.state === "active", memoryTone, t);
 	const translate: ProductUITranslator = (key, values) => t(key as MessageKey, values);
+	const workspaceLabel = session.hostId
+		? `${session.workspaceName} · ${labelForHost(session.hostId) ?? session.hostId}`
+		: session.workspaceName;
 
 	const terminationOverlay = showTerminate ? (
 		<Tooltip>
@@ -258,16 +270,18 @@ function DesktopSessionCard({
 					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} onOpenInspector={onOpenArtifacts} session={session} />
 				) : undefined
 			}
+			beforeStatus={showWorkspace ? (
+				<div className="flex min-w-0 items-center gap-1.5 border-t border-border px-3.5 py-1.5 text-2xs text-muted-foreground" data-testid="board-session-project">
+					<Folder aria-hidden="true" className="size-icon-2xs shrink-0" />
+					<span className="truncate" title={workspaceLabel}>{workspaceLabel}</span>
+				</div>
+			) : undefined}
 			branchAction={branchAction}
 			branchLabel={sessionBranchPresentation(session).naming ? <BranchNamingLabel /> : undefined}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
 			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
-			footer={
-				<>
-					{footer}
-				</>
-			}
+			footer={footer}
 			interactive={interactive}
 			labels={{
 				formatTime: formatTimeCompact,

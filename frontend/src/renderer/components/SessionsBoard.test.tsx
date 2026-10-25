@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	STANDALONE_WORKSPACE_ID,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
@@ -155,6 +156,63 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
+	it("shows sessions from every project and opens each in its own workspace", async () => {
+		const workers = [
+			boardSession({ id: "local", title: "Local task", status: "working", kind: "worker" }),
+			boardSession({ id: "cloud", title: "Cloud task", status: "working", kind: "worker", workspaceId: "cloud-project", workspaceName: "Cloud app", cloud: { orgId: "org-1" } }),
+			boardSession({ id: "scratch", title: "Scratch task", status: "idle", kind: "worker", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" }),
+		];
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([workers[0], boardSession({ id: "orchestrator", title: "Project orchestrator", status: "working", kind: "orchestrator" })]),
+				{ ...workspaceWithSessions([workers[1]]), id: "cloud-project", name: "Cloud app", kind: "cloud" },
+				{ ...workspaceWithSessions([workers[2]]), id: STANDALONE_WORKSPACE_ID, name: "Scratchpad", kind: "standalone" },
+			],
+			isSuccess: true, isError: false,
+		});
+		boardActionsInPanelMock.mockReturnValue(true);
+		renderBoard();
+
+		expect(screen.getByTestId("board-topbar-label")).toHaveTextContent("All sessions");
+		expect(screen.getAllByTestId("board-session-card")).toHaveLength(3);
+		expect(screen.getAllByTestId("board-session-project").map((label) => label.textContent)).toEqual(expect.arrayContaining(["radic", "Cloud app", "Scratchpad"]));
+		expect(screen.queryByText("Project orchestrator")).not.toBeInTheDocument();
+		for (const worker of workers) {
+			await userEvent.click(screen.getByRole("button", { name: worker.title, exact: true }));
+			expect(navigateMock).toHaveBeenLastCalledWith(worker.workspaceId === STANDALONE_WORKSPACE_ID
+				? { to: "/sessions/$sessionId", params: { sessionId: worker.id } }
+				: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId: worker.workspaceId, sessionId: worker.id } });
+		}
+	});
+
+	it("labels archived sessions with their project only on the global board", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [workspaceWithSessions([terminatedSession()])], isSuccess: true, isError: false });
+		renderBoard();
+		const archive = await expandArchive();
+		expect(within(archive).getByTestId("board-session-project")).toHaveTextContent("radic");
+	});
+
+	it("keeps project boards scoped and leaves project labels out of their cards", () => {
+		workspaceQueryMock.mockReturnValue({ data: [
+			workspaceWithSessions([boardSession({ id: "local", title: "Local task", status: "working" })]),
+			{ ...workspaceWithSessions([boardSession({ id: "other", title: "Other task", status: "working", workspaceId: "p2", workspaceName: "Other app" })]), id: "p2" },
+		], isSuccess: true, isError: false });
+		renderBoard("p1");
+		expect(screen.getByText("Local task")).toBeInTheDocument();
+		expect(screen.queryByText("Other task")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("board-session-project")).not.toBeInTheDocument();
+	});
+
+	it("offers a retry when all sessions could not load", async () => {
+		const refetch = vi.fn();
+		workspaceQueryMock.mockReturnValue({ data: undefined, isSuccess: false, isError: true, isFetching: false, refetch });
+		renderBoard();
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not load sessions.");
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(refetch).toHaveBeenCalledOnce();
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+	});
+
 	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);
@@ -411,7 +469,7 @@ describe("SessionsBoard", () => {
 		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("shows the Board crumb on the root board when actions live in the panel", () => {
+	it("shows the All sessions crumb on the global board when actions live in the panel", () => {
 		boardActionsInPanelMock.mockReturnValue(true);
 		workspaceQueryMock.mockReturnValue({
 			data: [
@@ -428,7 +486,7 @@ describe("SessionsBoard", () => {
 
 		renderBoard();
 
-		expect(screen.getByText("Board")).toBeInTheDocument();
+		expect(screen.getByText("All sessions")).toBeInTheDocument();
 	});
 
 	it("labels an idle session as Idle, not Working", () => {
