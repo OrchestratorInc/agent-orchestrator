@@ -6,9 +6,11 @@ import (
 )
 
 // forkReservedFloor is the first migration version reserved for fork-local
-// migrations. Upstream numbers its migrations sequentially from 1 and will not
-// reach this range, so a rebase can never make an upstream file collide with a
-// fork one.
+// migrations. Upstream's sequential numbering will not reach this range, but
+// upstream now also ships timestamp-versioned migrations that numerically sit
+// far above it, so the reservation against those is guarded by exact-collision
+// checking in TestReservedRangeIsFreeOfUpstreamMigrations rather than by the
+// floor alone.
 const forkReservedFloor int64 = 9000
 
 // forkLocalMigrations lists the migrations that exist only on this fork.
@@ -104,37 +106,49 @@ func TestForkMigrationsUseReservedRange(t *testing.T) {
 }
 
 // TestReservedRangeIsFreeOfUpstreamMigrations is the other half of the
-// contract: the reserved range only works while upstream stays out of it.
-// If upstream ever ships a migration at 9000+, the reservation must move
-// rather than silently start colliding again.
+// contract: the reservation only works while no upstream file claims a version
+// a fork-local migration already burned on live installs. Upstream used to
+// number sequentially from 1 and could never reach the fork's 9000+ range, so
+// a numeric floor was enough; it now also ships timestamp versions, so the
+// reservation is enforced as an exact-collision check against the fork-listed
+// files instead.
 func TestReservedRangeIsFreeOfUpstreamMigrations(t *testing.T) {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		t.Fatalf("read migrations dir: %v", err)
 	}
+	isFork := func(name string) bool {
+		for _, fork := range forkLocalMigrations {
+			if strings.Contains(name, fork) {
+				return true
+			}
+		}
+		return false
+	}
+	forkVersions := map[int64]string{}
 	for _, e := range entries {
-		if e.IsDir() {
+		if e.IsDir() || !isFork(e.Name()) {
 			continue
 		}
-		name := e.Name()
-		version, err := migrationFileNameVersion(name)
+		version, err := migrationFileNameVersion(e.Name())
+		if err != nil {
+			t.Fatalf("fork migration %q has no version goose can parse: %v", e.Name(), err)
+		}
+		forkVersions[version] = e.Name()
+	}
+	for _, e := range entries {
+		if e.IsDir() || isFork(e.Name()) {
+			continue
+		}
+		version, err := migrationFileNameVersion(e.Name())
 		if err != nil {
 			continue // covered by TestMigrationVersionsAreUnique
 		}
-		if version < forkReservedFloor {
-			continue
-		}
-		isFork := false
-		for _, fork := range forkLocalMigrations {
-			if strings.Contains(name, fork) {
-				isFork = true
-				break
-			}
-		}
-		if !isFork {
-			t.Errorf("migration %q occupies reserved version %d but is not listed in forkLocalMigrations. "+
-				"If upstream now ships migrations at %d+, raise forkReservedFloor; if this is a new "+
-				"fork-local migration, add it to the list.", name, version, forkReservedFloor)
+		if fork, collision := forkVersions[version]; collision {
+			t.Errorf("upstream migration %q collides with fork-local %q at version %d: "+
+				"an install that already applied the fork file silently skips the upstream one. "+
+				"Renumber the fork file to a fresh reserved version and repair live DBs instead.",
+				e.Name(), fork, version)
 		}
 	}
 }

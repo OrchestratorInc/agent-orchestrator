@@ -352,8 +352,52 @@ func TestCoordinatorSuppressesRepeatEmissionWithinEmitTTL(t *testing.T) {
 			t.Fatalf("record = %+v, want pending deferred past the emit TTL", rec)
 		}
 	}
-	if got := logs.String(); !strings.Contains(got, "report: emission suppressed within emit ttl") || strings.Count(got, "report: batch emitted") != 1 {
+	if got := logs.String(); !strings.Contains(got, "repeat suppressed until emit TTL") || strings.Count(got, "report: batch emitted") != 1 {
 		t.Fatalf("suppression evidence = %q", got)
+	}
+}
+
+func TestCoordinatorEscalatesQuietWindowAndStopsReemission(t *testing.T) {
+	// A sleeping recipient never acks, so every visible re-emission fails
+	// acceptance and returns the batch to pending. The quiet window escalates
+	// 15m -> 1h -> 6h -> stop instead of re-emitting every TTL forever (#127).
+	now := time.Date(2026, 10, 25, 8, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("sleeper", "worker", now, now, "context"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("prompt submission was not observed")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	ctx := context.Background()
+	run := func(step time.Duration) {
+		now = now.Add(step)
+		c.RunDue(ctx)
+	}
+	run(0) // emission 1 at t0
+	run(15 * time.Minute)
+	if len(delivery.submissions) != 2 {
+		t.Fatalf("submissions = %d, want 2: first TTL re-emission must stay visible", len(delivery.submissions))
+	}
+	run(time.Minute) // attempts=3: quiet window grows to 1h, batch defers silently
+	if len(delivery.submissions) != 2 {
+		t.Fatalf("submissions = %d, want 2: second cycle must stay silent", len(delivery.submissions))
+	}
+	run(59 * time.Minute) // 1h past the second emission: emission 3
+	run(time.Minute)      // attempts=5: quiet window grows to 6h
+	run(6 * time.Hour)    // emission 4
+	run(time.Minute)      // attempts=7: visible re-emissions stop for good
+	if len(delivery.submissions) != 4 {
+		t.Fatalf("submissions = %d, want 4", len(delivery.submissions))
+	}
+	for i := 0; i < 3; i++ {
+		run(6 * time.Hour)
+		if len(delivery.submissions) != 4 {
+			t.Fatalf("submissions = %d after +6h cycle %d, want 4: re-emission must be stopped", len(delivery.submissions), i+1)
+		}
+	}
+	for _, rec := range store.reports {
+		if rec.DeliveryState != domain.ReportPending {
+			t.Fatalf("record = %+v, want the batch left pending for a silent wake ack", rec)
+		}
 	}
 }
 

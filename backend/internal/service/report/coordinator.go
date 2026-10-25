@@ -102,13 +102,33 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	return &Coordinator{store: d.Store, delivery: d.Delivery, log: d.Log, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, emitTTL: d.EmitTTL, wake: make(chan struct{}, 1)}
 }
 
+// emitQuietWindow escalates that window with the batch's durable delivery
+// attempts — 15m, 1h, 6h, then no further visible re-emission. A sleeping
+// recipient never acks, so a flat TTL re-emits the same batch visibly every
+// cycle forever (fork issue #127).
+func (c *Coordinator) emitQuietWindow(attempts int64) time.Duration {
+	switch {
+	case attempts > 6:
+		return 0
+	case attempts > 4:
+		return 6 * time.Hour
+	case attempts > 2:
+		return time.Hour
+	default:
+		return c.emitTTL
+	}
+}
+
 // EmitVisible gates the batch's single visible emission inside the at-most-once
-// window: a batch already shown within the emit TTL stays silent, and the
-// marker is stamped before the emission attempt so every later failure keeps
-// the promise. Piggyback callers append context only when this returns true.
+// window: a batch already shown within its escalating quiet window stays
+// silent, and the marker is stamped before the emission attempt so every later
+// failure keeps the promise. Piggyback callers append context only when this
+// returns true.
 func (c *Coordinator) EmitVisible(ctx context.Context, batch PreparedBatch) (bool, error) {
-	if at := batch.emittedAt(); !at.IsZero() && c.now().UTC().Sub(at) < c.emitTTL {
-		return false, nil
+	if at := batch.emittedAt(); !at.IsZero() {
+		if quiet := c.emitQuietWindow(batch.MaxDeliveryAttempts()); quiet == 0 || c.now().UTC().Sub(at) < quiet {
+			return false, nil
+		}
 	}
 	if _, err := c.store.MarkReportBatchEmitted(ctx, batch.ProjectID, batch.Token, c.now().UTC()); err != nil {
 		return false, err
@@ -245,11 +265,20 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		return c.release(ctx, batch, emitErr)
 	}
 	if !visible {
-		// At-most-once on the visible channel: the batch was already shown
-		// inside the emit window, so retry silently and allow one re-emission
-		// once it expires. Ack fencing and its counters stay untouched.
-		c.log.Debug("report: emission suppressed within emit ttl", "batch", batch.IdempotencyKey(), "project", batch.ProjectID, "target", target.ID)
-		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, batch.emittedAt().Add(c.emitTTL), "report batch already emitted; repeat suppressed until emit TTL")
+		// At-most-once on the visible channel: the batch was already shown,
+		// so retry silently while the quiet window escalates toward no
+		// further re-emission. Ack fencing and its counters stay untouched.
+		// The suppression evidence is also the DB defer reason on the batch
+		// rows; this Info line keeps daemon.log greppable with the same text.
+		next := batch.emittedAt().Add(c.emitQuietWindow(batch.MaxDeliveryAttempts()))
+		if next.Before(c.now().UTC()) {
+			// Window exhausted (or the marker is stale): recheck on the plain
+			// emit cadence so a woken recipient can still settle the batch
+			// silently via its piggyback ack.
+			next = c.now().UTC().Add(c.emitTTL)
+		}
+		c.log.Info("report: batch already emitted; repeat suppressed until emit TTL", "batch", batch.IdempotencyKey(), "project", batch.ProjectID, "target", target.ID, "attempts", batch.MaxDeliveryAttempts())
+		_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, next, "report batch already emitted; repeat suppressed until emit TTL")
 		return deferErr
 	}
 	// Delivery evidence: a duplicate emission shows up as a second line with the
