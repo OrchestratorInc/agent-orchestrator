@@ -104,9 +104,8 @@ type Store interface {
 	ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error
 	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error
 	FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error
-	ReserveQueuedTurnForPromotion(ctx context.Context, conversationID, turnID string, now time.Time) (domain.QueuedTurn, error)
-	ReleaseQueuedTurnPromotion(ctx context.Context, conversationID, turnID string) error
-	CompleteQueuedTurnPromotion(ctx context.Context, conversationID, sourceTurnID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
+	QueuedTurnOrder(ctx context.Context, conversationID string) ([]string, error)
+	PromotableQueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
 	SteerDelivery(ctx context.Context, conversationID, clientMessageID string) (domain.ConversationSteerDelivery, bool, error)
 	ReserveSteerDelivery(ctx context.Context, conversationID, clientMessageID, requestJSON string, now time.Time) (domain.ConversationSteerDelivery, bool, error)
 	CompleteSteerDelivery(ctx context.Context, conversationID, clientMessageID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error

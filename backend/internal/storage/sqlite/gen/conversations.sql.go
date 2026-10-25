@@ -4356,6 +4356,54 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 	return i, err
 }
 
+const selectPromotableQueuedConversationMessage = `-- name: SelectPromotableQueuedConversationMessage :one
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user
+FROM conversation_messages
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversation_messages.conversation_id = ?
+  AND conversation_messages.turn_id = ?
+  AND conversation_messages.role = 'user'
+  AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
+  AND conversation_turns.state = 'queued'
+  AND conversation_turns.promotion_started_at IS NULL
+`
+
+type SelectPromotableQueuedConversationMessageParams struct {
+	ConversationID string
+	TurnID         sql.NullString
+}
+
+// The promotable read adds the user's own relayed automation words (Browser
+// annotations): they steer the queue like a typed message but stay non-editable.
+func (q *Queries) SelectPromotableQueuedConversationMessage(ctx context.Context, arg SelectPromotableQueuedConversationMessageParams) (ConversationMessage, error) {
+	row := q.db.QueryRowContext(ctx, selectPromotableQueuedConversationMessage, arg.ConversationID, arg.TurnID)
+	var i ConversationMessage
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.TurnID,
+		&i.Sequence,
+		&i.Revision,
+		&i.Role,
+		&i.Origin,
+		&i.Text,
+		&i.Streaming,
+		&i.ProviderItemID,
+		&i.ClientMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeliveryContentJson,
+		&i.BranchID,
+		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
+		&i.Continuation,
+		&i.AuthoredByUser,
+	)
+	return i, err
+}
+
 const selectProvisioningConversationsForSession = `-- name: SelectProvisioningConversationsForSession :many
 SELECT id, latest_sequence FROM conversations
 WHERE current_session_id = ? AND scope = 'session' AND id <> ?

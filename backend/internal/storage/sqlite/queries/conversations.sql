@@ -1255,6 +1255,19 @@ WHERE conversation_messages.conversation_id = ?
   AND conversation_turns.state = 'queued'
   AND conversation_turns.promotion_started_at IS NULL;
 
+-- The promotable read adds the user's own relayed automation words (Browser
+-- annotations): they steer the queue like a typed message but stay non-editable.
+-- name: SelectPromotableQueuedConversationMessage :one
+SELECT conversation_messages.*
+FROM conversation_messages
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversation_messages.conversation_id = ?
+  AND conversation_messages.turn_id = ?
+  AND conversation_messages.role = 'user'
+  AND (conversation_messages.origin = 'human' OR conversation_messages.authored_by_user = 1)
+  AND conversation_turns.state = 'queued'
+  AND conversation_turns.promotion_started_at IS NULL;
+
 -- Rewrite text and content together, only if the edited revision is current.
 -- name: UpdateQueuedConversationMessageText :execrows
 UPDATE conversation_messages

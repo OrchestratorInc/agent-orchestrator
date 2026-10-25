@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -13,6 +14,11 @@ import (
 )
 
 func TestQueuedEditAttachmentChanges(t *testing.T) {
+	// Promoted turns dispatch through the drain, not a mid-turn steer. The fake
+	// provider never settles the cut turn on its own, so shorten the settle wait
+	// the promotion rides out.
+	restoreSettleWait := chatsvc.SetQueuedTurnSettleWait(50 * time.Millisecond)
+	defer restoreSettleWait()
 	zero := int64(0)
 	one := int64(1)
 	tenMiB := ports.ChatContent{Type: "image", MIMEType: "image/png", Data: base64.StdEncoding.EncodeToString(make([]byte, 10<<20))}
@@ -73,9 +79,11 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 			if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, turn.ID); err != nil {
 				t.Fatal(err)
 			}
-			calls := provider.steers()
-			if len(calls) != 1 {
-				t.Fatalf("provider calls = %d", len(calls))
+			// The harness's first message accounts for send one; the promotion
+			// dispatches the edited queued turn as the second real turn.
+			sent := provider.sentMessages()
+			if len(sent) != 2 {
+				t.Fatalf("provider calls = %d", len(sent))
 			}
 			wantText, wantData := tc.text, tc.wantData
 			if tc.wantErr != nil {
@@ -84,11 +92,11 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 					wantData = append(wantData, block.Data)
 				}
 			}
-			if calls[0].msg.Text != wantText || len(calls[0].msg.Content) != len(wantData) {
-				t.Fatalf("provider got text %q and %d attachments; want %q and %d", calls[0].msg.Text, len(calls[0].msg.Content), wantText, len(wantData))
+			if sent[1].Text != wantText || len(sent[1].Content) != len(wantData) {
+				t.Fatalf("provider got text %q and %d attachments; want %q and %d", sent[1].Text, len(sent[1].Content), wantText, len(wantData))
 			}
 			for i, data := range wantData {
-				if calls[0].msg.Content[i].Data != data {
+				if sent[1].Content[i].Data != data {
 					t.Fatalf("attachment %d changed", i)
 				}
 			}
@@ -165,6 +173,11 @@ func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 			}
 		})
 	}
+	// The queued steer cuts the running turn and dispatches the edited message
+	// as its own real turn through the shared interrupt seam — the steer
+	// recorder must never be contacted.
+	restore := chatsvc.SetQueuedTurnSettleWait(50 * time.Millisecond)
+	t.Cleanup(restore)
 	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, turn.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -177,8 +190,15 @@ func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
 		t.Fatalf("retry after controller teardown: %v", err)
 	}
-	calls := provider.steers()
-	if len(calls) != 1 || calls[0].msg.Text != "updated" || len(calls[0].msg.Content) != 2 || calls[0].msg.Content[0].Data != "b2xk" || calls[0].msg.Content[1].Data != "bmV3" {
-		t.Fatalf("provider must receive the edited text and attachments exactly once: %+v", calls)
+	if calls := provider.steers(); len(calls) != 0 {
+		t.Fatalf("promotion contacted the mid-turn steer seam: %+v", calls)
+	}
+	sent := provider.sentMessages()
+	if len(sent) != 2 {
+		t.Fatalf("provider received %d messages, want the running turn then the promoted edit", len(sent))
+	}
+	last := sent[len(sent)-1]
+	if last.Text != "updated" || len(last.Content) != 2 || last.Content[0].Data != "b2xk" || last.Content[1].Data != "bmV3" {
+		t.Fatalf("provider must receive the edited text and attachments exactly once: %+v", last)
 	}
 }
