@@ -194,6 +194,12 @@ func (s *Store) CancelWorkspaceRequest(
 	})
 }
 
+// ClaimWorkerRequest claims the session's next worker request for lease. A
+// claim whose lease lapses is claimed again, up to three attempts, so a
+// request that legitimately runs longer gets a lease that covers it: a Chat
+// steer, and a model catalog, whose discovery may take its whole 20 s budget
+// on a cold worker and would otherwise be claimed again (another discovery)
+// and then failed before the control plane stops waiting.
 func (s *Store) ClaimWorkerRequest(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -236,7 +242,7 @@ func (s *Store) ClaimWorkerRequest(
 			UPDATE ao_worker_requests request
 			SET status = 'claimed',
 				attempt_count = request.attempt_count + 1,
-				lease_until = now() + CASE WHEN request.kind = 'chat.steer' THEN interval '30 seconds' ELSE $4::interval END,
+				lease_until = now() + CASE WHEN request.kind IN ('chat.steer', 'chat.models') THEN interval '30 seconds' ELSE $4::interval END,
 				updated_at = now()
 			FROM candidate
 			WHERE request.id = candidate.id
