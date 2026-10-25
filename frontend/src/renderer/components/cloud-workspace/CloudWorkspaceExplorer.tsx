@@ -6,6 +6,7 @@ import { useCloudCp } from "../../hooks/useCloudCp";
 import { cloudWorkspaceReviewSummaryQueryOptions, useCloudWorkspaceReviewEvents } from "../../hooks/useCloudWorkspaceReview";
 import { joinWorkspaceRepositoryPath, splitWorkspaceRepositoryPath, withWorkspaceRepository, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import type { WorkspaceSession } from "../../types/workspace";
+import { useUiStore } from "../../stores/ui-store";
 import { PanelMessage, RetryButton, type FileAnnotationModel } from "../WorkspaceDiffView";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -38,20 +39,23 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const { client, ready, baseUrl } = useCloudCp();
 	const orgId = session.cloud?.orgId;
 	const enabled = ready && orgId !== undefined;
-	const [showChanges, setShowChanges] = useState(true);
-	const [filter, setFilter] = useState("");
 	const [internalSplit, setInternalSplit] = useState(() => window.localStorage.getItem("ao.cloud.files.diffStyle") === "split");
 	const split = controlledSplit ?? internalSplit;
-	const [selectedPath, setSelectedPath] = useState<string | null>(null);
-	// A multi-repository session reviews and browses one repository at a time:
-	// the main one ("") or a sibling, by folder name.
-	const [repository, setRepository] = useState("");
+	const repository = useUiStore((state) => state.inspectorSessions[session.id]?.cloudReviewRepository ?? "");
+	const setRepository = useUiStore((state) => state.setCloudReviewRepository);
 	const mainSummaryQuery = useQuery({
 		...cloudWorkspaceReviewSummaryQueryOptions({ client, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled, visible: true }),
 	});
 	const repositories = mainSummaryQuery.data?.repositories ?? [];
 	const switchable = repositories.length > 1;
-	const activeRepository = switchable && repositories.some((entry) => !entry.main && entry.name === repository) ? repository : "";
+	const activeRepository = switchable && repositories.some((entry) => !entry.main && entry.present && entry.name === repository) ? repository : "";
+	const reviewUi = useUiStore((state) => state.inspectorSessions[session.id]?.cloudReviewUi?.[activeRepository]);
+	const setReviewUi = useUiStore((state) => state.setCloudReviewUi);
+	const showChanges = reviewUi?.showChanges ?? true;
+	const filter = reviewUi?.filter ?? "";
+	const selectedPath = reviewUi?.selectedPath ?? null;
+	const setShowChanges = (value: boolean) => setReviewUi(session.id, activeRepository, { showChanges: value });
+	const setFilter = (value: string) => setReviewUi(session.id, activeRepository, { filter: value });
 	const scopedClient = withWorkspaceRepository(client, activeRepository || undefined);
 	const siblingSummaryQuery = useQuery({
 		...cloudWorkspaceReviewSummaryQueryOptions({ client: scopedClient, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && activeRepository !== "", visible: true }),
@@ -60,7 +64,9 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(annotation, activeRepository || undefined), [annotation, activeRepository]);
 	useCloudWorkspaceReviewEvents({ baseUrl, orgId, sessionId: session.id, enabled });
 	useEffect(() => { window.localStorage.setItem("ao.cloud.files.diffStyle", split ? "split" : "unified"); }, [split]);
-	useEffect(() => { setFilter(""); setSelectedPath(null); setShowChanges(true); setRepository(""); }, [session.id]);
+	useEffect(() => {
+		if (mainSummaryQuery.data && repository !== activeRepository) setRepository(session.id, activeRepository);
+	}, [mainSummaryQuery.data, repository, activeRepository, session.id, setRepository]);
 	const changedFiles = useMemo(() => {
 		const data = summaryQuery.data;
 		if (!data) return [];
@@ -74,7 +80,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	// A sibling's file opens as ../<repository>/<path>, so its tab and calls stay with that repository.
 	const open = (path: string, options?: CloudFileOpenOptions) => {
 		const fullPath = joinWorkspaceRepositoryPath(activeRepository || undefined, path);
-		setSelectedPath(fullPath);
+		setReviewUi(session.id, activeRepository, { selectedPath: fullPath });
 		onOpenFile?.(fullPath, options);
 	};
 	const selectedInRepository = selectedPath === null ? null : (() => {
@@ -99,7 +105,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 					// The main checkout's folder is the provider's fixed name; label it with the repository's own.
 					const label = entry.label || entry.name;
 					const selected = value === activeRepository;
-					return <Button aria-selected={selected} className="h-6 shrink-0 px-2 font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(value); setFilter(""); }} role="tab" size="sm" title={entry.present ? entry.repository ?? label : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: label })} variant={selected ? "secondary" : "ghost"}>{label}</Button>;
+					return <Button aria-selected={selected} className="h-6 shrink-0 px-2 font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(session.id, value); setReviewUi(session.id, value, { filter: "" }); }} role="tab" size="sm" title={entry.present ? entry.repository ?? label : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: label })} variant={selected ? "secondary" : "ghost"}>{label}</Button>;
 				})}
 			</div> : null}
 			{!enabled || summaryQuery.isPending ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isError ? <PanelMessage action={<RetryButton onClick={() => void summaryQuery.refetch()} />}>{summaryQuery.error.message}</PanelMessage> : showChanges ? (

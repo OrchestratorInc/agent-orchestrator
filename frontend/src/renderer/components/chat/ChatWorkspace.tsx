@@ -3562,6 +3562,14 @@ export function Timeline({
 						scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
 					}
 				}
+			} else if (scrollerNode) {
+				// The text is not an exact match for the rendered message (a search
+				// snippet of raw Markdown, say): still bring the whole message into view.
+				const sourceRect = source.getBoundingClientRect();
+				const scrollerRect = scrollerNode.getBoundingClientRect();
+				if (sourceRect.top < scrollerRect.top || sourceRect.bottom > scrollerRect.bottom) {
+					source.scrollIntoView({ behavior: "auto", block: sourceRect.height > scrollerRect.height ? "start" : "center" });
+				}
 			}
 			annotationHighlightTimer.current = window.setTimeout(() => annotationHighlightCleanup.current?.(), 2200);
 			setAnnotationTarget(undefined);

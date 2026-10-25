@@ -115,7 +115,16 @@ const asyncChatSpawnBudget = 10 * time.Minute
 func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) {
 	id := in.record.ID
 	totalStarted := time.Now()
-	taskName, cancelNaming := m.startTaskNaming(in.cfg, in.record, in.project.Config)
+	// The naming call is its own provider process. It starts once this
+	// session's provider is up and has its prompt, so it does not compete with
+	// that start for CPU; the branch is kept private from here until it settles.
+	var taskName func() generatedTaskName
+	cancelNaming := context.CancelFunc(func() {})
+	if taskNamingApplies(in.cfg) {
+		m.setBranchNaming(id, true)
+		// Until naming starts, a failed start settles the flag itself.
+		cancelNaming = func() { m.setBranchNaming(id, false) }
+	}
 	namingHandedOff := false
 	defer func() {
 		if !namingHandedOff {
@@ -274,6 +283,7 @@ func (m *Manager) completeAsyncChatSpawn(ctx context.Context, in asyncChatSpawn)
 		return
 	}
 	m.logAsyncChatSpawnStage(id, "queue_drain", stageStarted)
+	taskName, cancelNaming = m.startTaskNaming(in.cfg, in.record, in.project.Config)
 	stageStarted = time.Now()
 	if _, err := m.setProvisionState(ctx, id, domain.SessionProvisionReady, ""); err != nil {
 		m.failAsyncChatSpawn(ctx, id, err)

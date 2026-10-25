@@ -1131,6 +1131,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search visible chat messages across conversations */
+        get: operations["searchConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cues/{cueId}": {
         parameters: {
             query?: never;
@@ -3953,6 +3970,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/workspace/search/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search the contents of visible workspace files */
+        get: operations["searchSessionWorkspaceContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/tree": {
         parameters: {
             query?: never;
@@ -5607,6 +5641,18 @@ export interface components {
             name: string;
             text?: null | string;
             uri: string;
+        };
+        ConversationSearchHitResponse: {
+            messageId: string;
+            projectId: string;
+            reviewId?: string;
+            sessionId: string;
+            /** @description A passage of the message, with each match wrapped in U+0002 and U+0003. */
+            text: string;
+            title: string;
+        };
+        ConversationSearchResponse: {
+            results: components["schemas"]["ConversationSearchHitResponse"][];
         };
         ConversationSkillResponse: {
             description?: string;
@@ -7759,6 +7805,15 @@ export interface components {
             subject: string;
             /** Format: date-time */
             timestamp: string;
+        };
+        WorkspaceContentSearchHitResponse: {
+            line: number;
+            path: string;
+            /** @description The line, with each match wrapped in U+0002 and U+0003. */
+            text: string;
+        };
+        WorkspaceContentSearchResponse: {
+            results: components["schemas"]["WorkspaceContentSearchHitResponse"][];
         };
         WorkspaceDiffDeferredResponse: {
             path: string;
@@ -11514,6 +11569,56 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    searchConversations: {
+        parameters: {
+            query: {
+                /** @description Words to find in chat messages, matched by word form. */
+                query: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSearchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -22479,6 +22584,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceFileSearchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    searchSessionWorkspaceContent: {
+        parameters: {
+            query: {
+                /** @description Words to find in file contents, case-insensitive and in any order. */
+                query: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceContentSearchResponse"];
                 };
             };
             /** @description Bad Request */

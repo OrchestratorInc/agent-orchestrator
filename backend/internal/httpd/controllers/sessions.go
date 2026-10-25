@@ -136,6 +136,7 @@ type SessionService interface {
 	ListWorkspaceSnapshotTree(ctx context.Context, id domain.SessionID, input sessionsvc.WorkspaceSelectionRevisionInput, filter string) (sessionsvc.WorkspaceTree, error)
 	GetWorkspaceCommitSelection(ctx context.Context, id domain.SessionID, view sessionsvc.WorkspaceView, commitSHAs []string, workspaceVersion string) (sessionsvc.WorkspaceCommitSelection, error)
 	SearchWorkspaceFiles(ctx context.Context, id domain.SessionID, query, cursor string, limit int) (sessionsvc.WorkspaceFileSearch, error)
+	SearchWorkspaceContent(ctx context.Context, id domain.SessionID, query string) ([]sessionsvc.WorkspaceContentHit, error)
 	ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (sessionsvc.WorkspacePathResolution, error)
 	ListWorkspaceTree(ctx context.Context, id domain.SessionID, path string) (sessionsvc.WorkspaceTree, error)
 	InvalidateWorkspaceCache(id domain.SessionID)
@@ -244,6 +245,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/workspace/diffs", c.getWorkspaceDiffs)
 	r.Get("/sessions/{sessionId}/workspace/file/revision", c.getWorkspaceFileRevision)
 	r.Get("/sessions/{sessionId}/workspace/search", c.searchWorkspaceFiles)
+	r.Get("/sessions/{sessionId}/workspace/search/content", c.searchWorkspaceContent)
 	r.Get("/sessions/{sessionId}/workspace/resolve", c.resolveWorkspacePath)
 	r.Get("/sessions/{sessionId}/workspace/tree", c.listWorkspaceTree)
 	r.Get("/sessions/{sessionId}/pr/{prNumber}/files", c.listPRFiles)
@@ -1366,6 +1368,23 @@ func (c *SessionsController) searchWorkspaceFiles(w http.ResponseWriter, r *http
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, workspaceFileSearchResponse(result))
+}
+
+func (c *SessionsController) searchWorkspaceContent(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/search/content")
+		return
+	}
+	hits, err := c.Svc.SearchWorkspaceContent(r.Context(), sessionID(r), r.URL.Query().Get("query"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	resp := WorkspaceContentSearchResponse{Results: make([]WorkspaceContentSearchHitResponse, 0, len(hits))}
+	for _, hit := range hits {
+		resp.Results = append(resp.Results, WorkspaceContentSearchHitResponse{Path: hit.Path, Line: hit.Line, Text: hit.Text})
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 // resolveWorkspacePath classifies a path from chat as a workspace file, a

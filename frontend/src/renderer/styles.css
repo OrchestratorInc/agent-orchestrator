@@ -6063,6 +6063,14 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	border-radius: 10px;
 }
 
+/* A setting a deep link opened (lib/settings-focus.ts), marked like the
+ * Harness page's focused agent. */
+.settings-focus-target {
+	background-color: var(--color-accent-weak);
+	box-shadow: inset 0 0 0 2px var(--color-accent);
+	transition: background-color 200ms, box-shadow 200ms;
+}
+
 /* The top effort level ("Ultra", "Ultracode"): a slow colour sweep on its label. */
 @keyframes ultra-sweep {
 	from { background-position: 0% 50%; }

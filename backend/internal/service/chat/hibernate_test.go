@@ -149,12 +149,13 @@ func hibernationHarnessWith(t *testing.T, state domain.TurnState, configure func
 		t.Fatalf("get session = %v, %v", found, err)
 	}
 	rec.Kind = domain.KindWorker
-	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now()}
+	// Back-date the activity rather than moving the clock: tests that parse a
+	// usage-limit reset time rely on the harness clock staying where it started.
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now().Add(-chatsvc.IdleBeforeHibernate)}
 	rec.Metadata.ProviderConversationID = conv.ProviderConversationID()
 	if err := h.st.UpdateSession(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
-	h.advance(30 * time.Second)
 	return h, conv
 }
 

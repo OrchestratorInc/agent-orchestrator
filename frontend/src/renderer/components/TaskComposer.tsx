@@ -673,12 +673,14 @@ export function TaskComposer({
 		setFallbackAction(undefined);
 		try {
 			if (!isCloudProject && selectedAgent) {
-				try {
-					cacheAgentReadiness(queryClient, await ensureAgentReadiness([selectedAgent], "launch", hostId), hostId);
-				} catch {
-					// This check lacks the selected project's cwd and environment, so it
-					// is advisory. The project-aware launch path remains authoritative.
-				}
+				// This check lacks the selected project's cwd and environment, so it
+				// is advisory: the project-aware launch path remains authoritative.
+				// It refreshes the readiness snapshot in the background rather than
+				// holding the launch for a CLI probe that can take seconds.
+				void Promise.resolve()
+					.then(() => ensureAgentReadiness([selectedAgent], "launch", hostId))
+					.then((readiness) => cacheAgentReadiness(queryClient, readiness, hostId))
+					.catch(() => {});
 			}
 			const attachmentPayloads = await toSettledPayload();
 			const submittedPreparation = taskPreparationRef.current;

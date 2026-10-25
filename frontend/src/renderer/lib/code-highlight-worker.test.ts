@@ -39,6 +39,22 @@ describe("large code worker highlighting", () => {
 		expect(api.highlightSync(code, "javascript")).toBe(await first);
 	});
 
+	it("highlights live snapshots off-thread without filling the settled cache", async () => {
+		const api = await setup();
+		const live = api.highlightStreaming(code, "javascript");
+		const duplicate = api.highlightStreaming(code, "javascript");
+		const worker = FakeWorker.instances[0];
+		expect(worker.postMessage).toHaveBeenCalledTimes(1);
+		const { id } = worker.postMessage.mock.calls[0][0];
+		const tree = createEngine().highlight("javascript", code);
+		worker.onmessage!({ data: { id, tree } } as MessageEvent);
+		expect(await live).toEqual(tree);
+		expect(await duplicate).toBe(await live);
+		expect(api.highlightSync(code, "javascript")).toBeUndefined();
+		expect(await api.highlightStreaming("x".repeat(100_001), "javascript")).toBeUndefined();
+		expect(worker.postMessage).toHaveBeenCalledTimes(1);
+	});
+
 	it("keeps text readable when workers are unsupported", async () => {
 		const api = await setup();
 		vi.stubGlobal("Worker", undefined);

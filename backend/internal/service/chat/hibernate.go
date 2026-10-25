@@ -14,6 +14,12 @@ import (
 const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
+// IdleBeforeHibernate is how long a quiet provider stays parked, prompt
+// cache and all, before idle hibernation may stop it. Most follow-ups arrive
+// within a minute or two; stopping the process after 30 s made each of them
+// pay a full cold start for a few hundred megabytes of memory saved.
+const IdleBeforeHibernate = 90 * time.Second
+
 type wakeRun struct {
 	done chan struct{}
 	err  error
@@ -194,7 +200,7 @@ func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
 // HibernateChat stops a quiescent provider without ending its AO session. A
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
-	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: chatHibernateGrace})
+	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: IdleBeforeHibernate})
 }
 
 // HibernateChatForVersionRefresh stops an idle provider that still runs a

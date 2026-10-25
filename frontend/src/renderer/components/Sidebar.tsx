@@ -88,7 +88,6 @@ import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
 import { useLatestCallback, useStableArray } from "../hooks/useStable";
-import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useShellMaybe } from "../lib/shell-context";
@@ -2685,17 +2684,15 @@ const SessionActions = memo(function SessionActions({
 	);
 });
 
-// AO account sign-in is shared by Cloud execution and developer-mode remote hosts.
+// AO account sign-in is shared by Cloud execution and remote hosts.
 function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
+	if (!configured || status !== "unauthenticated") return null;
 
 	return (
 		<button
@@ -2717,14 +2714,12 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 // Icon-rail variant for the collapsed sidebar.
 function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
+	if (!configured || status !== "unauthenticated") return null;
 
 	return (
 		<Tooltip>
@@ -2751,13 +2746,11 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 // session (the signed-in state). The sign-in entry point is CloudSignInRow.
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
 	// The plan badge is self-serve billing only; a contract org has no plan to show.
 	const billing = useCloudBilling();
 	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	if (!configured || status !== "authenticated") return null;
 	const name = accountName(session?.user);
 
 	return (
@@ -2834,10 +2827,8 @@ function AccountAvatar({ user }: { user: { displayName?: string; email?: string;
 // Icon-rail variant for collapsed sidebar.
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	if (!configured || status !== "authenticated") return null;
 
 	return (
 		<Tooltip>

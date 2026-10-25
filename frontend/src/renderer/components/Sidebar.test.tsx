@@ -660,20 +660,19 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("hides cloud account controls when the daemon reports the cloud offering off", () => {
+	it("keeps AO account controls visible for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
 		cloudSessionState.status = "authenticated";
 		cloudSessionState.session = { user: { email: "user@example.com" } };
 		renderSidebar();
 
-		expect(screen.queryByLabelText("Signed in as user@example.com")).not.toBeInTheDocument();
+		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("shows AO sign-in for developer-mode remote hosts when Cloud execution is off", () => {
+	it("shows AO sign-in for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
-		useUiStore.setState({ developerMode: true });
 		renderSidebar();
 
 		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);

@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
-import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import { useUiStore } from "../stores/ui-store";
 
@@ -157,6 +157,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			return { workspace, cloud };
 		},
 		onSuccess: async (artifactsDeleted, session) => {
+			useUiStore.getState().resetFilesSelection(sessionUiKey(session.id, session.hostId));
 			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
 			// The archive stands either way. A failed delete, or a host whose daemon
 			// predates the option, leaves the files on disk, so say so.

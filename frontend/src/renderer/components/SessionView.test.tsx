@@ -2292,6 +2292,44 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
 	});
 
+	it("reveals the primary chat for each palette hit over a file tab", async () => {
+		workerSession("sess-1").mode = "chat";
+		render(<SessionView sessionId="sess-1" />);
+		for (const messageId of ["m1", "m2"]) {
+			fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+			const filePane = await screen.findByTestId("session-file-workspace");
+			expect(filePane.closest("[inert]")).toBeNull();
+			act(() => useUiStore.getState().requestChatMessageFocus("sess-1", messageId, "flaky login"));
+			await waitFor(() => expect(filePane.closest("[inert]")).not.toBeNull());
+			expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
+		}
+		act(() => useUiStore.setState({ chatMessageFocusRequest: null }));
+	});
+
+	it("does not switch a TUI session's pane for a primary chat hit", async () => {
+		workerSession("sess-1").mode = "tui";
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		const filePane = await screen.findByTestId("session-file-workspace");
+		act(() => useUiStore.getState().requestChatMessageFocus("sess-1", "m1", "flaky login"));
+		expect(filePane.closest("[inert]")).toBeNull();
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		act(() => useUiStore.setState({ chatMessageFocusRequest: null }));
+	});
+
+	it("opens the reviewer chat a palette hit names", async () => {
+		const view = render(<SessionView sessionId="sess-1" />);
+		act(() => view.client.setQueryData(["session-reviews", "sess-1"], {
+			reviewerHandleId: "review-chat:review-1",
+			reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" },
+			reviews: [], runs: [],
+		}));
+		expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument();
+		act(() => useUiStore.getState().requestChatMessageFocus("sess-1", "m1", "flaky login", "review-1"));
+		expect(await screen.findByTestId("reviewer-chat-surface")).toHaveTextContent("review-1");
+		act(() => useUiStore.setState({ chatMessageFocusRequest: null }));
+	});
+
 	it("does not offer a new terminal for orchestrator sessions", () => {
 		render(<SessionView sessionId="sess-orch" />);
 

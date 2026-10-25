@@ -324,6 +324,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		Preview:             previewLifecycle,
 		Browser:             browserLifecycle,
 		BrowserCapabilities: browserCapabilities,
+		AgentBrowserURL:     cfg.AgentBrowserURL,
+		AgentBrowserToken:   cfg.AgentBrowserToken,
 		DataDir:             cfg.DataDir,
 		RunFilePath:         cfg.RunFilePath,
 		BackgroundContext:   ctx,

@@ -6,9 +6,7 @@
  * appeared as literal hashes, a table as a wall of pipes, a code block bracketed by
  * visible backticks.
  *
- * Two deliberate choices about what this does NOT do:
- *
- *   - Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
+ * Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
  *     files it just read, so `rehype-raw` is deliberately absent; markdown-only is
  *     the whole sanitization story and there is no schema to get wrong, with one
  *     exception: ```mermaid fences render as diagrams through `MermaidBlock`,
@@ -16,14 +14,9 @@
  *     active-content tags forbidden. Syntax
  *     highlighting keeps that property — it renders a token tree as elements
  *     rather than injecting the highlighter's HTML string.
- *   - Nothing here re-parses or re-orders content. It renders exactly the text the
- *     daemon stored, so the rendered form and the record cannot disagree. That is
- *     also why "copy as markdown" copies the stored text and not a re-serialized
- *     version of the DOM.
  *
- * Streaming is fine unstyled-first: an unclosed fence renders as a plain code
- * block with partial content, and gains its colours when the closing fence
- * arrives. See `lib/code-highlight.ts` for why it is not tokenized before then.
+ * Streaming reuses completed blocks and repairs incomplete inline formatting
+ * for display only. Copy actions continue to use the stored source.
  */
 
 import {
@@ -39,6 +32,8 @@ import {
 } from "react";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remend from "remend";
+import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { isHostLocalWebLink } from "../../lib/loopback";
@@ -180,7 +175,14 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	// reply that arrives later fades from its first character.
 	const chatOpening = useContext(ChatOpeningRef);
 	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
-	const streamingRehype = useMemo<Options["rehypePlugins"]>(() => [[rehypeStreamFade, { settledOffset }]], [settledOffset]);
+	// History stays on the single-parser path. Replies that streamed retain
+	// their chunks on completion, preserving code controls and diagram state.
+	const [parsed, setParsed] = useState(() => streaming ? splitStreamingMarkdown(text) : {
+		source: text, blocks: [{ source: text, start: 0, repairInline: false }], stableCount: 0,
+	});
+	const blocks = parsed.source === text ? parsed : splitStreamingMarkdown(text, parsed);
+	if (blocks !== parsed) setParsed(blocks);
+	const animate = fading && !prefersReducedMotion();
 	useEffect(() => {
 		if (streaming) return;
 		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
@@ -188,8 +190,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	}, [streaming]);
 
 	return (
-		<StreamingProse.Provider value={streaming}>
-			<SafeOriginContent.Provider value={safeOrigin}>
+		<SafeOriginContent.Provider value={safeOrigin}>
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
@@ -197,18 +198,41 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					className,
 				)}
 			>
-				<Markdown
-					remarkPlugins={PLUGINS}
-					rehypePlugins={fading && !prefersReducedMotion() ? streamingRehype : undefined}
-					components={COMPONENTS}
-					urlTransform={chatUrlTransform}
-				>
-					{text}
-				</Markdown>
+				{blocks.blocks.map((block, index) => (
+					<MarkdownChunk
+						key={index}
+						source={block.source}
+						repairInline={block.repairInline}
+						streaming={streaming && index === blocks.blocks.length - 1}
+						fading={animate && index === blocks.blocks.length - 1}
+						settledOffset={Math.max(0, settledOffset - block.start)}
+					/>
+				))}
 			</div>
-			</SafeOriginContent.Provider>
-		</StreamingProse.Provider>
+		</SafeOriginContent.Provider>
 	);
+});
+
+// No wrapper DOM: list/table layout, image galleries and prose spacing keep
+// their existing parent. Only the changing chunk enters react-markdown again.
+const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset }: {
+	source: string;
+	repairInline: boolean;
+	streaming: boolean;
+	fading: boolean;
+	settledOffset: number;
+}) {
+	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
+		linkMode: "text-only", images: false, htmlTags: false,
+		katex: false, setextHeadings: false, comparisonOperators: false,
+	}) : source, [source, streaming, repairInline]);
+	const plugins = useMemo<Options["rehypePlugins"]>(() =>
+		fading ? [[rehypeStreamFade, { settledOffset }]] : undefined, [fading, settledOffset]);
+	return <StreamingProse.Provider value={streaming}>
+		<Markdown remarkPlugins={PLUGINS} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
+			{repaired}
+		</Markdown>
+	</StreamingProse.Provider>;
 });
 
 /**
