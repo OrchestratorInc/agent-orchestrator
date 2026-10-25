@@ -12,7 +12,7 @@ describe("PageTopbar", () => {
 		);
 
 		const header = screen.getByRole("banner");
-		expect(header).toHaveClass("workspace-topbar-container", "center-panel-titlebar", "h-toolbar", "pr-3");
+		expect(header).toHaveClass("workspace-topbar-container", "center-panel-titlebar", "h-toolbar", "pr-(--gap-topbar-control)");
 		expect(within(header).getByRole("heading", { name: "Board" })).toBeInTheDocument();
 		expect(within(screen.getByTestId("workspace-topbar-actions")).getByRole("button", { name: "New task" })).toBeInTheDocument();
 	});
