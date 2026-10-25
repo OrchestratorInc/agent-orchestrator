@@ -1091,6 +1091,7 @@
 	"notify.openPR": "Open pull request",
 	"notify.openSessionTitle": "Open session",
 	"notify.retry": "Retry",
+	"notify.restoreArchivedPrompt": "This session was archived. Restore it?",
 	"notify.restoreUnavailable": "This session can no longer be restored.",
 	"notify.title": "Notifications",
 	"notify.unreadCount": "{{count}} unread notifications",

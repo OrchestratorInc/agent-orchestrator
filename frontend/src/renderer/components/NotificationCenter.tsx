@@ -12,11 +12,9 @@ import {
 	GitPullRequest,
 	GitPullRequestArrow,
 	GitPullRequestClosed,
-	Inbox,
 	LoaderCircle,
 	MessageSquareDiff,
 	MessageSquareDot,
-	RotateCcw,
 	X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -50,8 +48,8 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
 import { TopbarButton } from "./TopbarButton";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
@@ -668,42 +666,59 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 	return (
 		<Popover onOpenChange={setPanelOpen} open={open}>
-			<PopoverTrigger asChild>
-				<TopbarButton
-					aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
-					className="relative"
-					style={style}
-					variant="icon"
-				>
-					{unreadCount > 0 ? (
-						<BellRing className="size-icon-base fill-current text-foreground" aria-hidden="true" />
-					) : (
-						<Bell className="size-icon-base" aria-hidden="true" />
-					)}
-					{unreadCount > 0 ? (
-						<span className="pointer-events-none absolute right-px top-px grid h-3 min-w-3 place-items-center rounded-full bg-accent-strong px-0.5 font-mono text-[7px] font-semibold leading-none text-accent-foreground shadow-sm ring-1 ring-background">
-							{unreadCount > 99 ? "99+" : unreadCount}
-						</span>
-					) : null}
-				</TopbarButton>
-			</PopoverTrigger>
+			{/* Keep the drawer anchored to layout bounds while the bell scales on press. */}
+			<PopoverAnchor asChild>
+				<span className="inline-flex shrink-0">
+					<PopoverTrigger asChild>
+						<TopbarButton
+							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
+							className="relative"
+							style={style}
+							variant="icon"
+						>
+							{unreadCount > 0 ? (
+								<BellRing className="size-icon-base fill-current text-foreground" aria-hidden="true" />
+							) : (
+								<Bell className="size-icon-base" aria-hidden="true" />
+							)}
+							{unreadCount > 0 ? (
+								<span className="pointer-events-none absolute right-px top-px grid h-3 min-w-3 place-items-center rounded-full bg-accent-strong px-0.5 font-mono text-[7px] font-semibold leading-none text-accent-foreground shadow-sm ring-1 ring-background">
+									{unreadCount > 99 ? "99+" : unreadCount}
+								</span>
+							) : null}
+						</TopbarButton>
+					</PopoverTrigger>
+				</span>
+			</PopoverAnchor>
 			<PopoverContent
 				align="end"
 				aria-label={t("notify.title")}
-				className="w-notification-width max-w-[calc(100vw-1rem)] overflow-hidden rounded-panel border-border-strong p-0 shadow-xl"
-				sideOffset={8}
+				className="flex max-h-[calc(100dvh-5rem)] w-notification-width max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-lg border-border bg-popover p-0 shadow-sm [&_button]:transition-none [&_a]:transition-none"
+				sideOffset={6}
 			>
-				<div className="flex items-center justify-between gap-2 border-b border-border bg-[var(--color-overlay-subtle)] px-4 py-3.5">
-					<p className="text-subtitle font-semibold tracking-tight text-foreground">{t("notify.title")}</p>
-					<button
-						className="shrink-0 text-caption font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-						disabled={isEmpty || localLoading || clearingAll || clearAll.isPending}
-						onClick={handleClearAll}
-						type="button"
-					>
-						{t("notify.clearAll")}
-					</button>
+				<div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
+					<div className="flex min-w-0 items-center gap-2">
+						<Bell className="size-icon-md shrink-0 text-muted-foreground" aria-hidden="true" />
+						<h2 className="truncate text-control font-medium text-foreground">{t("notify.title")}</h2>
+						{!isEmpty ? (
+							<span aria-hidden="true" className="rounded-sm bg-interactive-active px-1.5 py-0.5 font-mono text-caption leading-none tabular-nums text-muted-foreground">
+								{rows.length}
+							</span>
+						) : null}
+					</div>
+					<div className="flex shrink-0 items-center gap-1">
+						<button
+							className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+							disabled={isEmpty || localLoading || clearingAll || clearAll.isPending}
+							onClick={handleClearAll}
+							type="button"
+						>
+							{clearingAll ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
+							{t("notify.clearAll")}
+						</button>
+					</div>
 				</div>
+				<TooltipProvider skipDelayDuration={0}>
 				<NotificationWorkspaceState>
 					{({ retryWorkspace, loadedRemoteSessionIds, sessionMeta, sessionsReady, terminatedIds, workspaceError }) => (
 						<>
@@ -714,7 +729,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					>
 						<span>{markReadError}</span>
 						<button
-							className="shrink-0 font-medium underline underline-offset-2 hover:text-foreground"
+							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 							onClick={retryMarkRead}
 							type="button"
 						>
@@ -732,7 +747,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					>
 						<span>{t("notify.workspaceLoadFailed")}</span>
 						<button
-							className="shrink-0 font-medium underline underline-offset-2 hover:text-foreground"
+							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 							onClick={retryWorkspace}
 							type="button"
 						>
@@ -747,7 +762,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 					>
 						<span>{t("notify.loadFailed")}</span>
 						<button
-							className="shrink-0 font-medium underline underline-offset-2 hover:text-foreground"
+							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 							onClick={() => {
 								if (localLoadFailed) void allQuery.refetch();
 								for (const host of remoteAll.hosts) {
@@ -763,14 +778,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				{(localLoadFailed || remoteLoadFailed) && isEmpty ? (
 					<NotificationEmpty icon={CircleAlert} message={t("notify.loadFailed")} />
 				) : localLoading || (remoteLoading && isEmpty) ? (
-					<NotificationEmpty icon={Inbox} message={t("notify.loading")} />
+					<NotificationEmpty icon={LoaderCircle} message={t("notify.loading")} />
 				) : isEmpty ? (
 					<NotificationEmpty icon={CheckCheck} message={t("notify.emptyAll")} />
 					) : (
 						<>
 						<div
 						aria-busy={allQuery.isFetchingNextPage || remoteLoadingEarlierHost !== null}
-						className="board-scrollbar max-h-notification-max-height overflow-y-auto overscroll-contain py-1.5"
+						className="board-scrollbar min-h-0 max-h-notification-max-height overflow-y-auto overscroll-contain"
 						onScroll={loadEarlierOnScroll}
 						role="list"
 					>
@@ -841,11 +856,11 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						{allQuery.isFetchNextPageError ? (
 							<div
 								aria-live="polite"
-								className="flex items-center justify-center gap-2 px-4 py-3 text-caption text-error"
+								className="flex items-center justify-center gap-2 border-t border-border bg-surface px-3 py-3 text-caption text-error"
 							>
 								{t("notify.earlierLoadFailed")}
 								<button
-									className="font-medium underline underline-offset-2 hover:text-foreground"
+									className="rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 									onClick={() => void allQuery.fetchNextPage()}
 									type="button"
 								>
@@ -855,7 +870,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						) : allQuery.isFetchingNextPage ? (
 							<div
 								aria-live="polite"
-								className="flex items-center justify-center gap-2 px-4 py-3 text-caption text-passive"
+								className="flex items-center justify-center gap-2 border-t border-border bg-surface px-3 py-3 text-caption text-muted-foreground"
 							>
 								<LoaderCircle className="size-icon-md animate-spin" aria-hidden="true" />
 								{t("notify.loadingEarlier")}
@@ -867,7 +882,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							if (!cursor || !host.data) return null;
 							return (
 								<button
-									className="block w-full px-4 py-2 text-center text-caption font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+									className="block w-full border-t border-border bg-surface px-3 py-3 text-center text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-50"
 									disabled={remoteLoadingEarlierHost !== null}
 									key={host.hostId}
 									onClick={() => void loadRemoteEarlier(host.hostId, cursor)}
@@ -884,6 +899,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						</>
 					)}
 				</NotificationWorkspaceState>
+				</TooltipProvider>
 			</PopoverContent>
 		</Popover>
 	);
@@ -891,8 +907,8 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 function NotificationEmpty({ icon: Icon, message }: { icon: typeof Bell; message: string }) {
 	return (
-		<div className="flex flex-col items-center gap-2.5 px-4 py-5 text-center">
-			<div className="grid size-control-xl place-items-center rounded-full border border-border bg-surface text-passive">
+		<div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+			<div className="grid size-control-xl place-items-center rounded-lg bg-surface text-muted-foreground">
 				<Icon className={cn("size-icon-base", Icon === LoaderCircle && "animate-spin")} aria-hidden="true" />
 			</div>
 			<p className="text-control text-muted-foreground">{message}</p>
@@ -952,15 +968,14 @@ const NotificationItem = memo(function NotificationItem({
 		if (canOpenSession) onOpenSession(notification);
 	};
 	return (
-		<div role="listitem">
+		<div className="border-b border-border last:border-b-0" role="listitem">
 			<div
 				className={cn(
-					"group grid grid-cols-notification items-start gap-3 px-4 py-3 text-left transition-[background-color,opacity,transform] duration-fast will-change-transform",
-					highlighted && "notification-row-enter",
+					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+					highlighted && "bg-interactive-hover",
 					canOpenSession
-						? "cursor-pointer hover:bg-interactive-hover active:scale-[0.99] active:bg-interactive-active"
+						? "cursor-pointer active:bg-interactive-active"
 						: "cursor-default",
-					!highlighted && "opacity-55 hover:opacity-80",
 				)}
 				onClick={openRow}
 				onKeyDown={(event) => {
@@ -976,19 +991,18 @@ const NotificationItem = memo(function NotificationItem({
 			>
 				<div
 					className={cn(
-						"grid size-notification-icon shrink-0 place-items-center transition-transform duration-fast group-hover:brightness-110 group-active:scale-90",
+						"flex h-5 shrink-0 items-center justify-center",
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-5" strokeWidth={2} aria-hidden="true" />
+					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
-					{/* Match the 26px icon band so the title centers with the left glyph. */}
-					<div className="flex min-h-notification-icon items-center">
+					<div className="flex min-h-5 items-start">
 						<span
 							aria-label={copy.title}
 							className={cn(
-								"min-w-0 break-words text-control leading-snug text-foreground",
+								"min-w-0 break-words text-control leading-5 text-foreground",
 								highlighted && "font-medium",
 							)}
 						>
@@ -1017,55 +1031,59 @@ const NotificationItem = memo(function NotificationItem({
 						</span>
 					</div>
 					{copy.body ? (
-						<p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-snug text-muted-foreground">
+						<p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
 							{copy.body}
 						</p>
 					) : null}
-					{hostLabel || projectName || showSessionMeta ? (
-						<p className="mt-1 flex min-w-0 items-center gap-1.5 text-caption leading-none text-passive">
-							{hostLabel ? <span className="shrink-0 font-medium text-muted-foreground">{hostLabel}</span> : null}
-							{hostLabel && (projectName || showSessionMeta) ? <span aria-hidden="true">·</span> : null}
-							{projectName ? (
-								<span className="truncate font-medium text-muted-foreground">{projectName}</span>
-							) : null}
-							{projectName && showSessionMeta ? <span aria-hidden="true">·</span> : null}
-							{showSessionMeta ? <span className="truncate">{sessionName}</span> : null}
-						</p>
+					{hostLabel || projectName || showSessionMeta || (offerRestore && sessionId) ? (
+						<div className="mt-2 flex min-w-0 flex-col items-start gap-1.5">
+						{hostLabel || projectName || showSessionMeta ? (
+							<p className="flex min-w-0 max-w-full items-center gap-1.5 text-caption leading-4 text-muted-foreground">
+								{hostLabel ? <span className="shrink-0 font-medium text-muted-foreground">{hostLabel}</span> : null}
+								{hostLabel && (projectName || showSessionMeta) ? <span aria-hidden="true">·</span> : null}
+								{projectName ? (
+									<span className="truncate font-medium text-muted-foreground">{projectName}</span>
+								) : null}
+								{projectName && showSessionMeta ? <span aria-hidden="true">·</span> : null}
+								{showSessionMeta ? <span className="truncate">{sessionName}</span> : null}
+							</p>
+						) : null}
+						{offerRestore && sessionId ? (
+							<button
+								title=""
+								className="inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-sm text-left text-muted-foreground underline underline-offset-2 transition-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+								disabled={restoreDisabled}
+								onClick={(event) => {
+									event.stopPropagation();
+									onRestore(notification);
+								}}
+								onKeyDown={(event) => event.stopPropagation()}
+								type="button"
+							>
+								{restoring ? <LoaderCircle className="size-icon-sm shrink-0 animate-spin" aria-hidden="true" /> : null}
+								<span className="text-caption leading-snug">{restoring ? t("shell.restoringSession") : t("notify.restoreArchivedPrompt")}</span>
+							</button>
+						) : null}
+						</div>
 					) : null}
 				</div>
-				{/* Time and row actions share the same icon-height band. */}
-				<div className="flex h-notification-icon shrink-0 items-center gap-1">
-					<time className="shrink-0 font-mono text-[9px] leading-none text-passive" dateTime={notification.createdAt}>
+				<div className="flex min-w-14 shrink-0 flex-col items-end gap-1">
+					<time className="flex h-5 items-center whitespace-nowrap text-caption tabular-nums text-muted-foreground" dateTime={notification.createdAt}>
 						{formatTimeCompact(notification.createdAt)}
 					</time>
-					{offerRestore && sessionId ? (
-						<Tooltip delayDuration={0}>
-							<TooltipTrigger asChild>
-								<button
-									aria-label={t("shell.restoreSession")}
-									title=""
-									className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-									disabled={restoreDisabled}
-									onClick={(event) => {
-										event.stopPropagation();
-										onRestore(notification);
-									}}
-									type="button"
-								>
-									<RotateCcw className={cn("size-icon-md", restoring && "animate-spin")} aria-hidden="true" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="top">
-								{restoring ? t("shell.restoringSession") : t("shell.restoreSession")}
-							</TooltipContent>
-						</Tooltip>
-					) : null}
-					<Tooltip delayDuration={0}>
+					<div className="flex items-center gap-0.5">
+
+					<Tooltip>
 						<TooltipTrigger asChild>
 							<button
 								aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
 								title=""
-								className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+								className={cn(
+									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
+									clearing
+										? "opacity-100 disabled:opacity-100"
+										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+								)}
 								disabled={clearDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -1083,6 +1101,7 @@ const NotificationItem = memo(function NotificationItem({
 						</TooltipTrigger>
 						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
 					</Tooltip>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -1138,15 +1157,14 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 		if (canOpenSession && projectId) onOpenSession(projectId, sessionId);
 	};
 	return (
-		<div data-notification-source="cloud" role="listitem">
+		<div className="border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
 			<div
 				className={cn(
-					"group grid grid-cols-notification items-start gap-3 px-4 py-3 text-left transition-[background-color,opacity,transform] duration-fast will-change-transform",
-					highlighted && "notification-row-enter",
+					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
+					highlighted && "bg-interactive-hover",
 					canOpenSession
-						? "cursor-pointer hover:bg-interactive-hover active:scale-[0.99] active:bg-interactive-active"
+						? "cursor-pointer active:bg-interactive-active"
 						: "cursor-default",
-					!highlighted && "opacity-55 hover:opacity-80",
 				)}
 				onClick={openRow}
 				onKeyDown={(event) => {
@@ -1162,76 +1180,79 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 			>
 				<div
 					className={cn(
-						"grid size-notification-icon shrink-0 place-items-center transition-transform duration-fast group-hover:brightness-110 group-active:scale-90",
+						"flex h-5 shrink-0 items-center justify-center",
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-5" strokeWidth={2} aria-hidden="true" />
+					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
-					{/* Match the 26px icon band so the title centers with the left glyph. */}
-					<div className="flex min-h-notification-icon items-center gap-1.5">
+					<div className="flex min-h-5 items-start gap-1.5">
 						<span
 							aria-label={notification.title}
 							className={cn(
-								"min-w-0 break-words text-control leading-snug text-foreground",
+								"min-w-0 break-words text-control leading-5 text-foreground",
 								highlighted && "font-medium",
 							)}
 						>
 							{notification.title}
 						</span>
-						<span className="shrink-0 rounded-sm border border-border px-1 py-px text-[9px] font-medium uppercase leading-none tracking-wide text-passive">
+						<span className="mt-0.5 shrink-0 rounded-sm border border-border bg-surface px-1 py-0.5 text-caption leading-none text-muted-foreground">
 							{t("notify.cloud")}
 						</span>
 					</div>
 					{notification.body ? (
-						<p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-snug text-muted-foreground">
+						<p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
 							{notification.body}
 						</p>
 					) : null}
-					{projectName || showSessionMeta ? (
-						<p className="mt-1 flex min-w-0 items-center gap-1.5 text-caption leading-none text-passive">
-							{projectName ? (
-								<span className="truncate font-medium text-muted-foreground">{projectName}</span>
-							) : null}
-							{projectName && showSessionMeta ? <span aria-hidden="true">·</span> : null}
-							{showSessionMeta ? <span className="truncate">{sessionName}</span> : null}
-						</p>
+					{projectName || showSessionMeta || (offerRestore && sessionId && projectId) ? (
+						<div className="mt-2 flex min-w-0 flex-col items-start gap-1.5">
+						{projectName || showSessionMeta ? (
+							<p className="flex min-w-0 max-w-full items-center gap-1.5 text-caption leading-4 text-muted-foreground">
+								{projectName ? (
+									<span className="truncate font-medium text-muted-foreground">{projectName}</span>
+								) : null}
+								{projectName && showSessionMeta ? <span aria-hidden="true">·</span> : null}
+								{showSessionMeta ? <span className="truncate">{sessionName}</span> : null}
+							</p>
+						) : null}
+						{offerRestore && sessionId && projectId ? (
+							<button
+								title=""
+								className="inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-sm text-left text-muted-foreground underline underline-offset-2 transition-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+								disabled={restoreDisabled}
+								onClick={(event) => {
+									event.stopPropagation();
+									onRestore(projectId, sessionId);
+								}}
+								onKeyDown={(event) => event.stopPropagation()}
+								type="button"
+							>
+								{restoring ? <LoaderCircle className="size-icon-sm shrink-0 animate-spin" aria-hidden="true" /> : null}
+								<span className="text-caption leading-snug">{restoring ? t("shell.restoringSession") : t("notify.restoreArchivedPrompt")}</span>
+							</button>
+						) : null}
+						</div>
 					) : null}
 				</div>
-				{/* Time and row actions share the same icon-height band. */}
-				<div className="flex h-notification-icon shrink-0 items-center gap-1">
-					<time className="shrink-0 font-mono text-[9px] leading-none text-passive" dateTime={notification.createdAt}>
+				<div className="flex min-w-14 shrink-0 flex-col items-end gap-1">
+					<time className="flex h-5 items-center whitespace-nowrap text-caption tabular-nums text-muted-foreground" dateTime={notification.createdAt}>
 						{formatTimeCompact(notification.createdAt)}
 					</time>
-					{offerRestore && sessionId && projectId ? (
-						<Tooltip delayDuration={0}>
-							<TooltipTrigger asChild>
-								<button
-									aria-label={t("shell.restoreSession")}
-									title=""
-									className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-									disabled={restoreDisabled}
-									onClick={(event) => {
-										event.stopPropagation();
-										onRestore(projectId, sessionId);
-									}}
-									type="button"
-								>
-									<RotateCcw className={cn("size-icon-md", restoring && "animate-spin")} aria-hidden="true" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="top">
-								{restoring ? t("shell.restoringSession") : t("shell.restoreSession")}
-							</TooltipContent>
-						</Tooltip>
-					) : null}
-					<Tooltip delayDuration={0}>
+					<div className="flex items-center gap-0.5">
+
+					<Tooltip>
 						<TooltipTrigger asChild>
 							<button
 								aria-label={t("notify.clearOne", { title: notification.title })}
 								title=""
-								className="grid size-notification-icon place-items-center rounded-md text-passive transition-colors hover:bg-interactive-active hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+								className={cn(
+									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
+									clearing
+										? "opacity-100 disabled:opacity-100"
+										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+								)}
 								disabled={clearDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -1249,6 +1270,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						</TooltipTrigger>
 						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
 					</Tooltip>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -1314,7 +1336,10 @@ function notificationIcon(type: string) {
 		case "needs_input":
 			return MessageSquareDot;
 		case "review_feedback":
+		case "review_changes_requested":
 			return MessageSquareDiff;
+		case "review_completed":
+			return CheckCheck;
 		case "ready_to_merge":
 			return GitPullRequestArrow;
 		case "agent_failed":
@@ -1332,22 +1357,22 @@ function notificationIcon(type: string) {
 	}
 }
 
-// Bare colored glyph per type (no tile). Merged uses GitHub's PR-merged purple;
-// the accent token is a near-black surface color in this theme and reads as
-// invisible, so it must not be used for a glyph.
+// Match the semantic status colors used by the board and inspector.
 function notificationIconClass(type: string): string {
 	switch (type) {
 		case "needs_input":
 		case "review_feedback":
+		case "review_changes_requested":
 			return "text-warning";
 		case "agent_failed":
 			return "text-error";
 		case "agent_completed":
 		case "pr_opened":
 		case "ready_to_merge":
+		case "review_completed":
 			return "text-success";
 		case "pr_merged":
-			return "text-[#a371f7]";
+			return "text-[var(--color-status-merged)]";
 		case "pr_closed_unmerged":
 			return "text-error";
 		default:
