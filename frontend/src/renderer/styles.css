@@ -3420,6 +3420,10 @@ html.sidebar-reordering * {
 	font-weight: 550;
 }
 
+.workspace-topbar-actions .topbar-control--primary {
+	height: calc(var(--size-topbar-control) - 2px);
+}
+
 .workspace-topbar-actions .topbar-control:active:not(:disabled) {
 	transform: scale(0.96);
 }
