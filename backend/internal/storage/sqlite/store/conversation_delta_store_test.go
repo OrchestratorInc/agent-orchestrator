@@ -2,12 +2,15 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestConversationDeltaIncludesSettledRewritesOutsideLivePage(t *testing.T) {
@@ -286,5 +289,68 @@ func TestConversationDeltaQueuedEditKeepsSequence(t *testing.T) {
 	}
 	if delta.AfterSequence == nil || len(delta.Messages) != 1 || delta.Messages[0].Text != "after" || delta.Messages[0].Sequence != before.Messages[0].Sequence || delta.Messages[0].Revision <= before.Messages[0].Revision {
 		t.Fatalf("queued edit missing: %#v", delta)
+	}
+}
+
+func TestConversationDeltaDoesNotRevivePromotedTurnMetadata(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	seedProject(t, s, "hist")
+	rec := sampleRecord("hist")
+	rec.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.CreateConversation(ctx, "conv-1", domain.ConversationScopeSession, "hist", session.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClaimChatControllerGeneration(ctx, session.ID, "gen-1"); err != nil {
+		t.Fatal(err)
+	}
+	seedToolTurn(t, s, conversation.ID, session.ID, "retired", 1, histClock)
+	seedToolTurn(t, s, conversation.ID, session.ID, "target", 0, histClock.Add(time.Second))
+	// Seed a stored activity still referring to a promoted-away source. Normal
+	// reads omit that source's metadata even though the old activity is visible.
+	db, err := sql.Open("sqlite", filepath.Join(dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := db.ExecContext(ctx, "UPDATE conversation_turns SET promoted_to_turn_id = ? WHERE id = ?", "target", "retired"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.LoadConversationSnapshotPage(ctx, conversation.ID, 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertActivity(ctx, conversation.ID, "provider-retired", domain.ConversationActivity{ID: "retired-tool-0", Kind: domain.ActivityKindCommand, Status: domain.ActivityStatusCompleted, Summary: "late correction", ProviderItemID: "retired-exec-0"}, histClock.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	delta, err := s.LoadConversationSnapshotDelta(ctx, conversation.ID, before.Conversation.LatestSequence+1, before.ChangeCursor, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta.AfterSequence == nil || len(delta.Activities) != 1 {
+		t.Fatalf("expected changed-row delta: %#v", delta)
+	}
+	fresh, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := make(map[string]bool)
+	for _, turn := range fresh.Turns {
+		visible[turn.ID] = true
+	}
+	for _, turn := range delta.Turns {
+		if !visible[turn.ID] {
+			t.Fatalf("delta revived turn %s absent from fresh snapshot", turn.ID)
+		}
 	}
 }

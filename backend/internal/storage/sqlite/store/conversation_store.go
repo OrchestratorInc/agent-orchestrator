@@ -5356,7 +5356,8 @@ func (s *Store) loadConversationSnapshotDelta(ctx context.Context, conversationI
 			return ConversationSnapshot{}, err
 		}
 		knownTurns[id] = true
-		if !conversationTurnVisibleAfterSequence(row, conv, visibleAfter) {
+		// Normal turn reads exclude retired promotion sources.
+		if row.PromotedToTurnID.Valid || !conversationTurnVisibleAfterSequence(row, conv, visibleAfter) {
 			continue
 		}
 		turn := turnToDomain(row)
