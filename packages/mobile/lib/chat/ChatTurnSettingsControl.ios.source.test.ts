@@ -7,33 +7,44 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios.tsx", import.meta.url)), "utf8");
 
-describe("iOS turn settings menu anchor", () => {
-	it("keeps a stable left-side anchor as selected labels change", () => {
-		expect(source).toContain("matchContents={{ horizontal: false, vertical: true }}");
-		expect(source).toContain('ignoreSafeArea="all"');
-		expect(source).toContain('host: { alignSelf: "flex-start", width: 220, maxWidth: "100%", height: 44 }');
-		expect(source).toContain('<View pointerEvents="none" accessibilityElementsHidden style={[styles.visibleLabel, disabled && styles.disabledLabel]}>');
-		expect(source).toContain('<RNText numberOfLines={1} style={styles.visibleText}>{label}</RNText>');
-		expect(source).toContain('accessibilityLabel(`Turn settings, ${label}`)');
+describe("iOS turn settings menu trigger", () => {
+	// The label used to be an invisible SwiftUI text in a fixed 220pt host with
+	// the visible summary drawn over it, so a tap right of 220pt did nothing.
+	it("draws the real summary as the menu's own label across the whole row", () => {
+		expect(source).toContain("<Menu key={generation} label={label} modifiers={modifiers}>");
+		expect(source).not.toContain("opacity(0)");
+		expect(source).not.toContain("width: 220");
+		expect(source).toContain('host: { alignSelf: "stretch", height: touchTarget }');
+		expect(source).toContain("frame({ maxWidth: FILL, minHeight: touchTarget, alignment: \"leading\" }), contentShape(shapes.rectangle())");
+		expect(source).toContain('accessibilityLabel(summary ? `Turn settings, ${summary}` : "Turn settings")');
+	});
+
+	it("sizes the label with Dynamic Type and marks it a pull-down", () => {
+		expect(source).toContain('font({ textStyle: "footnote", weight: "semibold" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")');
+		expect(source).toContain('<Image systemName="chevron.up.chevron.down"');
+		expect(source).not.toMatch(/font\(\{ size:/);
 	});
 });
 
-describe("iOS model setting", () => {
-	it("shows a layers symbol on the selector, but only checkmarks in its choices", () => {
-		const symbol = source.slice(source.indexOf("function settingSymbol"));
-		expect(symbol).toContain('if (row.providerKind === "model" || id.includes("model")) return "square.stack.3d.up"');
-		expect(source).toContain('systemImage={choice.selected ? "checkmark" : undefined}');
+describe("iOS turn settings choices", () => {
+	// A checkmark image on a button is not announced; a picker's choice is.
+	it("offers each setting as a picker, or a toggle when it is on/off", () => {
+		expect(source).toContain('modifiers={[pickerStyle("menu")]}');
+		expect(source).toContain("<Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>");
+		expect(source).toContain("<Toggle label={row.label}");
+		expect(source).not.toContain('systemImage={choice.selected ? "checkmark" : undefined}');
 	});
 
-	it("does not give the agent selector a model icon", () => {
-		const symbol = source.slice(source.indexOf("function settingSymbol"));
-		expect(symbol).toContain('if (id.includes("agent")) return undefined');
+	it("ends with the way into the full sheet", () => {
+		expect(source).toContain('<Button label="All turn settings" systemImage={topicSymbols.setting} onPress={onOpenFallback} />');
 	});
-});
 
-describe("iOS approvals setting", () => {
-	it("shows the complete dashed-check artwork as one image in the menu row", () => {
-		expect(source).toContain('isApprovalRow(row) ? <ApprovalRowLabel row={row} />');
+	it("shows a layers symbol on the model selector", () => {
+		expect(source).toContain('model: "square.stack.3d.up"');
+	});
+
+	it("shows the complete dashed-check artwork as one image on the approvals row", () => {
+		expect(source).toContain('if (topic === "permissions")');
 		expect(source).toContain('<Image assetName="CircleDashedCheck" />');
 	});
 });

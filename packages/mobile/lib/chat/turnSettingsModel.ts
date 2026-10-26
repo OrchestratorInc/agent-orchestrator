@@ -400,6 +400,36 @@ function controlPriority(row: TurnSettingRow): number {
 	return 10;
 }
 
+/** What a turn-settings row adjusts, for the glyph the menus draw beside it. */
+export type TurnSettingTopic = "model" | "effort" | "fast" | "permissions" | "setting";
+
+/**
+ * The row's topic, or none for an agent picker: providers class an `agent`
+ * option with models, but no glyph says "agent" without saying "model".
+ */
+export function turnSettingTopic(row: TurnSettingRow): TurnSettingTopic | undefined {
+	const id = row.id.toLowerCase();
+	if (id.includes("agent")) return undefined;
+	if (row.providerKind === "model" || id.includes("model")) return "model";
+	if (row.providerKind === "permissions" || id.includes("mode") || id.includes("approval")) return "permissions";
+	if (id.includes("effort") || id.includes("thought") || id.includes("reason")) return "effort";
+	if (id.includes("fast")) return "fast";
+	return "setting";
+}
+
+/** What picking in a row saves: a provider option by its id, or AO's own settings. */
+export type TurnSettingWrite =
+	| { kind: "option"; id: string; value: { value: string } | { enabled: boolean } }
+	| { kind: "settings"; settings: TurnSettings };
+
+/** The write for a row's choice: a select's value, or a boolean row's new state. */
+export function turnSettingWrite(settings: TurnSettings, row: TurnSettingRow, choice: string | boolean): TurnSettingWrite {
+	if (row.target.kind === "option") {
+		return { kind: "option", id: row.target.optionId, value: typeof choice === "boolean" ? { enabled: choice } : { value: choice } };
+	}
+	return { kind: "settings", settings: applyTurnSettingChoice(settings, row, String(choice)) };
+}
+
 export function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
 	if (row.target.kind !== "settings") return settings;
 	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined };

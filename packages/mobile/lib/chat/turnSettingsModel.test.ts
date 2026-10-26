@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary } from "./turnSettingsModel";
+import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary, turnSettingTopic, turnSettingWrite } from "./turnSettingsModel";
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -114,6 +114,36 @@ describe("turnSettingsRows", () => {
 			{ id: "permission_mode", name: "Permissions", category: "mode", type: "select", currentValue: "plan", choices: [{ value: "plan", name: "Plan only" }] },
 		];
 		expect(turnSettingsSummary(snapshot(), [], options)).toBe("Sonnet · Plan only");
+	});
+});
+
+describe("turn settings menus", () => {
+	const options: ChatConfigOption[] = [
+		{ id: "agent", name: "Agent", category: "model", type: "select", currentValue: "build", choices: [{ value: "build", name: "Build" }] },
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gpt", choices: [{ value: "gpt", name: "GPT" }, { value: "o3", name: "o3" }] },
+		{ id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "high", choices: [{ value: "high", name: "High" }] },
+		{ id: "fast", name: "Fast mode", type: "boolean", currentBoolean: false, choices: [] },
+		{ id: "sandbox", name: "Sandbox", type: "select", currentValue: "safe", choices: [{ value: "safe", name: "Safe" }] },
+	];
+	const rows = () => turnSettingsRows(snapshot(), [], options);
+
+	it("draws a glyph for what each row adjusts, and none for an agent picker", () => {
+		expect(rows().map((row) => [row.id, turnSettingTopic(row)])).toEqual([
+			["option:fast", "fast"],
+			["option:agent", undefined],
+			["option:model", "model"],
+			["option:effort", "effort"],
+			["approvals", "permissions"],
+			["option:sandbox", "setting"],
+		]);
+	});
+
+	it("saves a provider choice by option and AO's own by settings", () => {
+		const [fast, , model] = rows();
+		expect(turnSettingWrite({}, model, "o3")).toEqual({ kind: "option", id: "model", value: { value: "o3" } });
+		expect(turnSettingWrite({}, fast, true)).toEqual({ kind: "option", id: "fast", value: { enabled: true } });
+		const approvals = rows().find((row) => row.id === "approvals")!;
+		expect(turnSettingWrite({ model: "gpt" }, approvals, "auto")).toEqual({ kind: "settings", settings: { model: "gpt", approvalMode: "auto" } });
 	});
 });
 
