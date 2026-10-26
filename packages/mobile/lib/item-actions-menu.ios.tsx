@@ -1,35 +1,33 @@
 import { Host } from "@expo/ui";
 import { Button, Image, Menu } from "@expo/ui/swift-ui";
-import { accessibilityLabel as a11yLabel, buttonStyle, contentShape, frame, opacity, shapes, tint } from "@expo/ui/swift-ui/modifiers";
-import type { ComponentProps } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
-import { haptics } from "./haptics";
-import type { ItemActionsMenuProps } from "./item-actions-menu.types";
+import { accessibilityLabel as a11yLabel, buttonStyle, contentShape, disabled as disabledModifier, frame, shapes, tint } from "@expo/ui/swift-ui/modifiers";
+import { StyleSheet, View } from "react-native";
+import { itemActionIcons, type ItemActionsMenuProps } from "./item-actions-menu.types";
+import { Spinner } from "./Spinner";
+import { symbols } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { iconSize } from "./tokens";
-
-const SIZE = 32;
+import { iconSize, touchTarget } from "./tokens";
 
 /** A per-item "⋯" native pull-down, like desktop's per-comment and per-review menus. */
 export function ItemActionsMenu({ actions, accessibilityLabel, disabled = false, loading = false }: ItemActionsMenuProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	if (loading) return <View style={styles.slot}><ActivityIndicator size="small" color={t.accent} /></View>;
+	if (loading) return <View style={styles.slot}><Spinner /></View>;
 	if (!actions.length) return null;
 	return (
 		<Host style={styles.slot} colorScheme={scheme}>
 			<Menu
 				// The label is the hit area: sized and shaped, or only the glyph (16×5pt) takes a tap.
-				label={<Image systemName="ellipsis" size={iconSize.sm} modifiers={[frame({ width: SIZE, height: SIZE }), contentShape(shapes.rectangle())]} />}
-				modifiers={[buttonStyle("plain"), tint(t.textSecondary), frame({ width: SIZE, height: SIZE }), opacity(disabled ? 0.4 : 1), a11yLabel(accessibilityLabel)]}
+				label={<Image systemName={symbols.moreHorizontal.ios} size={iconSize.md} modifiers={[frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]} />}
+				modifiers={[buttonStyle("plain"), tint(t.textSecondary), frame({ width: touchTarget, height: touchTarget }), disabledModifier(disabled), a11yLabel(accessibilityLabel)]}
 			>
 				{actions.map((action) => (
 					<Button
 						key={action.id}
 						label={action.label}
-						systemImage={action.systemImage as ComponentProps<typeof Button>["systemImage"]}
+						systemImage={action.icon ? itemActionIcons[action.icon].ios : undefined}
 						role={action.destructive ? "destructive" : undefined}
-						onPress={() => { if (disabled) return; haptics.select(); action.onPress(); }}
+						onPress={action.onPress}
 					/>
 				))}
 			</Menu>
@@ -38,5 +36,5 @@ export function ItemActionsMenu({ actions, accessibilityLabel, disabled = false,
 }
 
 const styles = StyleSheet.create({
-	slot: { width: SIZE, height: SIZE, alignItems: "center", justifyContent: "center" },
+	slot: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 });

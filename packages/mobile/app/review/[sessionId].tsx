@@ -213,7 +213,7 @@ function ReviewDetailContent() {
 	const activity = data.reviewerActivityState;
 	const activityColor = activity === "active" ? t.orange : activity === "exited" ? statusVisual(t, "exited").color : t.textTertiary;
 	const stopActions: ItemAction[] = controls.stop && !autoReviewEnabled
-		? [{ id: "stop", label: "Stop reviewer session", systemImage: "power", destructive: true, onPress: confirmKillReviewer }]
+		? [{ id: "stop", label: "Stop reviewer session", icon: "stop", destructive: true, onPress: confirmKillReviewer }]
 		: [];
 	// The review row describes the AO review itself; merge state lives in the PR row.
 	const latestRun = review.latestRun ?? review.previousRun;
@@ -344,8 +344,8 @@ function RunRow({ run, sent, sending, disabled, onSend }: { run: ReviewRun; sent
 	const url = reviewRunUrl(run);
 	// Desktop keeps these in a per-review "⋯" menu.
 	const actions: ItemAction[] = [
-		...(url ? [{ id: "open", label: "Open on GitHub", systemImage: "arrow.up.right.square", onPress: () => void openGitHub(url) }] : []),
-		...(reviewRunSendable(run) && !sent ? [{ id: "send", label: "Send to worker", systemImage: "paperplane", onPress: onSend }] : []),
+		...(url ? [{ id: "open", label: "Open on GitHub", icon: "openExternal" as const, onPress: () => void openGitHub(url) }] : []),
+		...(reviewRunSendable(run) && !sent ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: onSend }] : []),
 	];
 	return <View style={styles.runRow}>
 		<View style={styles.runHead}>

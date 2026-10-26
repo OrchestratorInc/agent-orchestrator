@@ -290,8 +290,8 @@ function ReviewActionsContent() {
 			{externalReviews.map((item) => {
 				const id = item.reviewUrl || item.reviewerId;
 				const actions: ItemAction[] = [
-					...(item.reviewUrl ? [{ id: "open", label: "Open review", systemImage: "arrow.up.right.square", onPress: () => void openGitHub(item.reviewUrl!, { fromSheet: true }) }] : []),
-					...(item.body && !sent.has(id) ? [{ id: "send", label: "Send to worker", systemImage: "paperplane", onPress: () => void send(id, formatExternalReviewMessage(item, pr.url)) }] : []),
+					...(item.reviewUrl ? [{ id: "open", label: "Open review", icon: "openExternal" as const, onPress: () => void openGitHub(item.reviewUrl!, { fromSheet: true }) }] : []),
+					...(item.body && !sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatExternalReviewMessage(item, pr.url)) }] : []),
 				];
 				return <View key={item.reviewUrl || `${item.reviewerId}:${item.submittedAt}`} style={styles.feedbackCard}>
 					<View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{item.reviewerId}</Text><Text style={styles.feedbackVerdict}>{item.verdict.replaceAll("_", " ")}</Text><ItemActionsMenu accessibilityLabel={`Actions for ${item.reviewerId}'s review`} actions={actions} disabled={Boolean(busy)} loading={busy?.kind === "send" && busy.id === id} /></View>
@@ -349,9 +349,9 @@ function FeedbackCard({ item, resolved = false, aoOwned, sent, busy, disabled, o
 	const id = comment.url || `${reviewerId}:${comment.file}`;
 	// Desktop keeps these in a per-comment "⋯" menu rather than as buttons under every comment.
 	const actions: ItemAction[] = [
-		...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", systemImage: "arrow.up.right.square", onPress: onOpen }] : []),
-		...(!sent ? [{ id: "send", label: "Send to worker", systemImage: "paperplane", onPress: onSend }] : []),
-		...(!resolved && comment.url ? [{ id: "resolve", label: "Resolve", systemImage: "checkmark.circle", onPress: onResolve }] : []),
+		...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", icon: "openExternal" as const, onPress: onOpen }] : []),
+		...(!sent ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: onSend }] : []),
+		...(!resolved && comment.url ? [{ id: "resolve", label: "Resolve", icon: "resolve" as const, onPress: onResolve }] : []),
 	];
 	const working = (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url);
 	return <View style={styles.feedbackCard}>
