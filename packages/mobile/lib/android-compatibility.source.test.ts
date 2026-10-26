@@ -60,6 +60,7 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).not.toContain("OptionList");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
+		expect(android).not.toContain("Picker");
 		expect(android).not.toContain("Pressable");
 		expect(android).not.toContain("Feather");
 		expect(android).toContain("option.sectionBreakBefore ? <HorizontalDivider");
