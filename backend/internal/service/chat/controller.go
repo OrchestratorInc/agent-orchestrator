@@ -66,10 +66,13 @@ type Store interface {
 	CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	OpenNativeConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	CreateProjectConversationWithContextReset(ctx context.Context, id string, project domain.ProjectID, session domain.SessionID, reset domain.ConversationActivity, now time.Time) (domain.ConversationRecord, error)
+	CreateProjectConversationAdoptingQueue(ctx context.Context, id string, project domain.ProjectID, session domain.SessionID, reset domain.ConversationActivity, now time.Time) (domain.ConversationRecord, error)
 	ConversationForSession(ctx context.Context, session domain.SessionID) (domain.ConversationRecord, error)
 	ClaimChatControllerGeneration(ctx context.Context, session domain.SessionID, generation string) error
 	ClaimReviewChatController(ctx context.Context, reviewID, providerID, generation string, now time.Time) (bool, error)
 	ConversationBranch(ctx context.Context, conversationID, branchID string) (domain.ConversationBranch, error)
+	CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, settings domain.ConversationSettings, activity domain.ConversationActivity) error
+	ListTerminalTurns(ctx context.Context, id domain.SessionID) ([]domain.HandoffTurn, error)
 	ConversationEditAnchor(ctx context.Context, conversationID, replacedTurnID string) (domain.ConversationEditAnchor, error)
 	RepairIncompleteConversationEdit(ctx context.Context, sessionID domain.SessionID, conversationID string, now time.Time) (domain.ConversationBranch, bool, error)
 	CreateAndActivateConversationBranch(ctx context.Context, sessionID domain.SessionID, branch domain.ConversationBranch, generation string, now time.Time) error
@@ -221,6 +224,7 @@ type Controller struct {
 
 	conv                   ports.ChatConversation
 	store                  Store
+	continuationReader     SnapshotReader
 	activity               ActivityRecorder
 	log                    *slog.Logger
 	newID                  IDFactory
@@ -231,6 +235,10 @@ type Controller struct {
 	// sendMu serializes command dispatch so only one operation mutates the
 	// provider conversation at a time.
 	sendMu sync.Mutex
+	// A current-context copy fences dispatch, but Stop cancels it before waiting.
+	forkCancel context.CancelFunc
+	forkDone   chan struct{}
+	interrupts int
 	// configMu serializes live provider setting changes. Each response replaces
 	// the complete option catalog and updates durable next-turn settings, so
 	// concurrent writes could otherwise persist an older catalog last.
@@ -285,12 +293,17 @@ type Controller struct {
 	// Interface drain keeps dispatching accepted rows; interface interrupt and an
 	// idle branch mutation stop dispatch entirely. The target controller is not
 	// started until this controller reports quiescent and is closed.
-	handoff           controllerHandoff
-	branchHandoffDone chan struct{}
+	handoff controllerHandoff
+	// handoffInterrupted is the provider turn an interrupt-policy handoff
+	// stopped, so the move can say on that exact turn why it ended.
+	handoffInterrupted string
+	branchHandoffDone  chan struct{}
 	// preserveProviderOnStop is set before deliberate daemon detach. It prevents
 	// the closing controller from projecting a false provider exit or failing work
 	// that the detached host continues to run.
 	preserveProviderOnStop bool
+	transportInterrupted   bool
+	explicitClose          bool
 
 	// account, threadState and mcpServers are merged here before being written,
 	// because the provider reports each of them in pieces: account/updated carries
@@ -313,6 +326,11 @@ type Controller struct {
 	// writes. Reload runs outside the event pump, so c.mu alone cannot prevent an
 	// older notification write from landing after an authoritative replacement.
 	mcpPersistMu sync.Mutex
+
+	// flushRequests asks the projector to write the deltas it is batching; it
+	// closes the sent channel once that write has finished, whether or not it
+	// succeeded.
+	flushRequests chan chan struct{}
 
 	stopped  chan struct{}
 	once     sync.Once
@@ -380,6 +398,7 @@ func newController(
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
+	reader SnapshotReader,
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -389,6 +408,7 @@ func newController(
 		harness:                harness,
 		conv:                   conv,
 		store:                  store,
+		continuationReader:     reader,
 		activity:               activity,
 		log:                    log,
 		newID:                  newID,
@@ -399,6 +419,7 @@ func newController(
 		settings:               conversation.Settings,
 		mcpServers:             map[string]domain.ConversationMCPServer{},
 		mcpServerSeenRevision:  map[string]uint64{},
+		flushRequests:          make(chan chan struct{}),
 		stopped:                make(chan struct{}),
 	}
 	if conversation.ThreadState != nil {
@@ -543,7 +564,7 @@ func (c *Controller) recoverStaleProviderFailure(
 		Err:                    errors.New(staleProviderFailureMessage), //nolint:staticcheck // User-facing timeline copy is a complete sentence.
 	}
 	var settled bool
-	projected, primaryTurn, err := c.projectEventWithApply(ctx, event, func(txCtx context.Context) error {
+	projected, err := c.archive(ctx, event, func(txCtx context.Context) error {
 		var settleErr error
 		settled, settleErr = c.store.SettleStaleProviderFailure(
 			txCtx,
@@ -569,6 +590,7 @@ func (c *Controller) recoverStaleProviderFailure(
 	if err != nil || !projected {
 		return false, err
 	}
+	primaryTurn := c.applyCommittedTurnLifecycle(event)
 	c.afterProject(ctx, event, primaryTurn)
 	if terminationPending {
 		c.mu.Lock()
@@ -605,7 +627,7 @@ func (c *Controller) armProviderRecovery() bool {
 // been imported. Keeping construction and consumption separate prevents a resume
 // notification from racing ahead of the older turns it follows.
 func (c *Controller) start() {
-	go c.project()
+	go c.project(deltaFlushInterval)
 	if c.harness != domain.HarnessCodex {
 		go c.readRateLimits()
 	}
@@ -720,7 +742,7 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 		}
 		if !message.Streaming && kind != "" && message.Sequence > turnEvidence[message.TurnID].sequence {
 			turnEvidence[message.TurnID] = nativeHistoryHighWater{
-				sequence: message.Sequence, providerItemID: message.ProviderItemID, kind: kind, text: message.Text,
+				sequence: message.Sequence, providerItemID: message.ProviderItemID, kind: kind, text: nativeHistoryMessageText(message),
 			}
 		}
 		if message.Role == domain.MessageRoleUser && message.Sequence > 0 &&
@@ -913,7 +935,7 @@ func (p nativeHistoryCheckpoint) mismatches(
 			if completedTurns[turnID] && boundary.UserMessageID != "" &&
 				text.user.NativeUserMessageID == boundary.UserMessageID &&
 				nativeHistoryTextMatches(boundary.UserText, text.user.Text) &&
-				nativeHistoryTextMatches(boundary.AssistantText, text.assistant.Text) {
+				(boundary.Interrupted || nativeHistoryTextMatches(boundary.AssistantText, text.assistant.Text)) {
 				matched = true
 				break
 			}
@@ -1204,6 +1226,26 @@ type nativeHistoryTurnIndex struct {
 	ordered          []*nativeHistoryTurn
 }
 
+// nativeHistoryMessageText restores AO-owned text context for native transcript
+// matching. Public message text stays short; opaque provider IDs can change on
+// load, so reconciliation must compare the exact prompt that was dispatched.
+func nativeHistoryMessageText(message domain.ConversationMessage) string {
+	if message.Role != domain.MessageRoleUser || !message.Continuation || message.DeliveryContentJSON == "" {
+		return message.Text
+	}
+	var content []ports.ChatContent
+	if json.Unmarshal([]byte(message.DeliveryContentJSON), &content) != nil {
+		return message.Text
+	}
+	internal := make([]ports.ChatContent, 0, len(content))
+	for _, block := range content {
+		if block.Internal && block.Type == "text" {
+			internal = append(internal, block)
+		}
+	}
+	return excerptDeliveryMessage(ports.ChatUserMessage{Text: message.Text, Content: internal}).Text
+}
+
 func indexNativeHistoryTurns(
 	existingTurns []domain.ConversationTurn,
 	existingMessages []domain.ConversationMessage,
@@ -1254,10 +1296,10 @@ func indexNativeHistoryTurns(
 		if candidate == nil {
 			continue
 		}
-		candidate.messages[nativeHistoryMessageFingerprint(message.Role, message.Text)]++
+		candidate.messages[nativeHistoryMessageFingerprint(message.Role, nativeHistoryMessageText(message))]++
 		rememberProviderItem(message.ProviderItemID, candidate)
 		if message.Role == domain.MessageRoleUser && candidate.text == "" {
-			candidate.text = message.Text
+			candidate.text = nativeHistoryMessageText(message)
 			candidate.clientMessage = message.ClientMessageID
 			candidate.providerItem = message.ProviderItemID
 		}
@@ -1589,6 +1631,13 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
 
+	// Bind retries to the client request before adding durable continuation context.
+	var err error
+	msg, err = c.prepareContinuation(ctx, msg)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
+
 	now := c.now()
 	turnID := c.newID()
 	markedSending := false
@@ -1624,13 +1673,11 @@ func (c *Controller) sendLocked(
 		SenderProjectID:     msg.SenderProjectID,
 		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
+		Continuation:        msg.Continuation,
 		InteractionAt:       msg.InteractionAt,
 	}
 
-	var (
-		created bool
-		err     error
-	)
+	var created bool
 	if c.reviewID == "" {
 		created, err = c.store.AppendUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, record, turnID, now)
 	} else {
@@ -1686,6 +1733,10 @@ func (c *Controller) sendLocked(
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
+	return c.retryTurnLocked(ctx, turnID, false)
+}
+
+func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoResume bool) (domain.ConversationTurn, error) {
 	if c.handoffActive() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
@@ -1702,8 +1753,11 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 	}
 
 	prompt, err := c.store.RetryPrompt(ctx, c.conversation.ID, turnID)
-	if err != nil {
+	if errors.Is(err, domain.ErrNoConversationTurn) {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
+	}
+	if err != nil {
+		return domain.ConversationTurn{}, fmt.Errorf("read retry prompt %s: %w", turnID, err)
 	}
 	if !prompt.ActiveLineage {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryStaleBranch, turnID)
@@ -1750,9 +1804,16 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 		Origin:              prompt.Origin,
 		ClientMessageID:     key,
 		DeliveryContentJSON: prompt.DeliveryContentJSON,
+		Continuation:        prompt.Continuation,
 	}
 	var created bool
-	if c.reviewID == "" {
+	if autoResume {
+		store, ok := c.store.(usageLimitStore)
+		if !ok {
+			return domain.ConversationTurn{}, ErrUsageLimitAutoResumeInvalid
+		}
+		created, err = store.AppendAutoResumeRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
+	} else if c.reviewID == "" {
 		created, err = c.store.AppendRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, retryMessage, newTurnID, turnID, now)
 	} else {
 		created, err = c.store.AppendReviewRetryUserMessage(ctx, c.conversation.ID, c.sessionID, c.reviewID, c.generation, retryMessage, newTurnID, turnID, now)
@@ -1773,6 +1834,7 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 
 	return c.dispatch(ctx, newTurnID, ports.ChatUserMessage{
 		Text:            prompt.Text,
+		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
 		ClientMessageID: key,
@@ -1795,6 +1857,10 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 	}
 	for _, item := range content {
 		switch item.Type {
+		case "text":
+			if !item.Internal || strings.TrimSpace(item.Text) == "" {
+				return nil, fmt.Errorf("%w: text context must be AO-owned and nonempty", ErrRetryContentInvalid)
+			}
 		case "image":
 			if item.Data == "" || !strings.HasPrefix(strings.ToLower(item.MIMEType), "image/") {
 				return nil, fmt.Errorf("%w: image attachments require data and an image MIME type", ErrRetryContentInvalid)
@@ -1855,6 +1921,8 @@ func (c *Controller) turnSettings() ports.ChatTurnSettings {
 		Model:    current.Model,
 		Effort:   current.ReasoningEffort,
 		Approval: current.ApprovalMode,
+		Fast:     current.FastMode,
+		Plan:     current.PlanMode,
 	}
 }
 
@@ -2033,6 +2101,10 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 	content := make([]ports.ChatContent, 0, len(msg.Content))
 	var fallback strings.Builder
 	for _, item := range msg.Content {
+		if item.Internal && item.Type == "text" {
+			fallback.WriteString("\n\n" + item.Text)
+			continue
+		}
 		if item.Type != "excerpt" || item.Excerpt == nil {
 			content = append(content, item)
 			continue
@@ -2494,7 +2566,18 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 		}
 		return fmt.Errorf("interrupt turn %s for handoff: %w", turn, err)
 	}
+	c.mu.Lock()
+	c.handoffInterrupted = turn
+	c.mu.Unlock()
 	return nil
+}
+
+// HandoffInterruptedTurn is the provider turn the handoff's interrupt stopped,
+// or "" when it stopped none.
+func (c *Controller) HandoffInterruptedTurn() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.handoffInterrupted
 }
 
 // Interrupt cancels the in-flight turn, and with it anything queued behind it.
@@ -2518,6 +2601,16 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 //     "no active turn" would leave the user staring at a Working bar they cannot
 //     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
+	c.mu.Lock()
+	c.interrupts++
+	if c.forkCancel != nil {
+		c.forkCancel()
+	}
+	c.mu.Unlock()
+	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
+	// Commit the current batch before Stop settles the turn. The store keeps any
+	// later deltas settled while retaining text that arrives during cancellation.
+	c.flushDeltas(ctx)
 	// Stop's linearization point is the dispatch lock. A Send that acquired the
 	// lock first is existing work Stop should cancel; a Send that arrives after
 	// this point waits and is therefore post-Stop work that must survive.
@@ -2768,6 +2861,9 @@ func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
 // their historical process-close behavior. The persistent host replays detached
 // output and unresolved provider requests to the replacement controller.
 func (c *Controller) Close(ctx context.Context) error {
+	c.mu.Lock()
+	c.explicitClose = true
+	c.mu.Unlock()
 	c.once.Do(func() {
 		if preserver, ok := c.conv.(ports.ChatProviderPreserver); ok && preserver.PreservesProviderOnClose() {
 			c.mu.Lock()
@@ -2791,6 +2887,12 @@ func (c *Controller) Close(ctx context.Context) error {
 // host. Daemon shutdown uses Close so the host survives; user/session teardown
 // and controller replacement use Terminate.
 func (c *Controller) Terminate(ctx context.Context) error {
+	c.mu.Lock()
+	c.explicitClose = true
+	if c.forkCancel != nil {
+		c.forkCancel()
+	}
+	c.mu.Unlock()
 	c.once.Do(func() {
 		if terminator, ok := c.conv.(ports.ChatProviderTerminator); ok {
 			c.closeErr = terminator.Terminate()
@@ -2845,7 +2947,7 @@ func (c *Controller) Wait() { <-c.stopped }
 // project consumes the driver's normalized events and writes them down. It runs
 // until this controller's stream closes. That can mean provider termination or a
 // deliberate detach from a provider that remains alive in a persistent host.
-func (c *Controller) project() {
+func (c *Controller) project(flushInterval time.Duration) {
 	defer close(c.stopped)
 
 	// Detached from any request context: this outlives the call that started the
@@ -2853,60 +2955,10 @@ func (c *Controller) project() {
 	ctx := context.WithoutCancel(context.Background())
 	acknowledger, persistent := c.conv.(ports.ChatProviderEventAcknowledger)
 
-	for event := range c.conv.Events() {
-		c.mu.Lock()
-		preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
-		c.mu.Unlock()
-		if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
-			continue
-		}
-		// A lifecycle event and a concurrent Send must agree on whether the root
-		// conversation is busy. Holding the same lock Send/dispatch use closes the
-		// window between the durable projection and the in-memory ownership update.
-		// Provider-failure activity updates use the same lock so the durable
-		// reconnect marker and volatile ownership move in order. The watchdog's SQL
-		// compare-and-set arbitrates ordinary streamed progress without forcing
-		// every delta through this lock.
-		lifecycle := serializesTurnOwnership(event)
-		if lifecycle {
-			c.sendMu.Lock()
-		}
-		projected, primaryTurn, err := c.projectEvent(ctx, event)
-		// A terminal receipt compacts the entire prompt, so it cannot pass a
-		// failed earlier projection. Retry transient store errors in order; if
-		// still failing, detach and leave the journal for a replacement controller.
-		for attempt := 0; err != nil && persistent && attempt < 3; attempt++ {
-			time.Sleep(20 * time.Millisecond)
-			projected, primaryTurn, err = c.projectEvent(ctx, event)
-		}
-		if err == nil && persistent && event.ProviderEventID != "" {
-			err = acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID)
-		}
-		if err != nil && persistent {
-			c.log.Error("persistent chat projection stopped; provider retained for replay",
-				"session", c.sessionID, "kind", event.Kind, "error", err)
-			c.mu.Lock()
-			c.preserveProviderOnStop = true
-			c.state = ports.ChatControllerStopped
-			c.mu.Unlock()
-			if lifecycle {
-				c.sendMu.Unlock()
-			}
-			c.once.Do(func() { c.closeErr = c.conv.Close() })
-			return
-		}
-		if err != nil {
-			// A projection failure must not kill the provider stream. The store
-			// rolls the archive back with its projection, so durable state remains
-			// internally consistent and a later provider replay may retry it.
-			c.log.Error("failed to project chat event",
-				"session", c.sessionID, "kind", event.Kind, "error", err)
-		} else if projected {
-			c.afterProject(ctx, event, primaryTurn)
-		}
-		if lifecycle {
-			c.sendMu.Unlock()
-		}
+	if !pumpProviderEvents(c.conv.Events(), c.flushRequests, flushInterval, func(unit []ports.ChatEvent) bool {
+		return c.projectUnit(ctx, unit, acknowledger, persistent)
+	}) {
+		return
 	}
 
 	c.mu.Lock()
@@ -2944,6 +2996,97 @@ func (c *Controller) project() {
 	}
 }
 
+// projectUnit commits one unit from the event pump: a single event, or a run of
+// deltas for one provider item. It reports false when consumption must stop
+// because a persistent provider's projection failed.
+func (c *Controller) projectUnit(
+	ctx context.Context,
+	unit []ports.ChatEvent,
+	acknowledger ports.ChatProviderEventAcknowledger,
+	persistent bool,
+) bool {
+	event := unit[0]
+	if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped &&
+		errors.Is(event.Err, ports.ErrChatRecoveryInconclusive) {
+		// A lost attachment is not proof the persistent provider stopped. Keep
+		// its turn/request correlation and queued intake for a replacement.
+		c.mu.Lock()
+		preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
+		c.transportInterrupted = !c.explicitClose && persistentProvider && preserver.PreservesProviderOnClose()
+		c.preserveProviderOnStop = true
+		c.state = ports.ChatControllerStopped
+		suppressStoppedActivity := c.suppressStoppedActivity
+		c.mu.Unlock()
+		if !suppressStoppedActivity {
+			c.reportActivity(ctx, domain.ActivityExited, "chat.controller.disconnected", c.now())
+		}
+		return true
+	}
+	c.mu.Lock()
+	preserveWork := c.preserveProviderOnStop || c.handoff == controllerHandoffHibernate
+	c.mu.Unlock()
+	if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
+		return true
+	}
+	// A lifecycle event and a concurrent Send must agree on whether the root
+	// conversation is busy. Holding the same lock Send/dispatch use closes the
+	// window between the durable projection and the in-memory ownership update.
+	// Provider-failure activity updates use the same lock so the durable
+	// reconnect marker and volatile ownership move in order. The watchdog's SQL
+	// compare-and-set arbitrates ordinary streamed progress without forcing
+	// every delta through this lock.
+	lifecycle := serializesTurnOwnership(event)
+	if lifecycle {
+		c.sendMu.Lock()
+	}
+	project := func() (bool, bool, error) {
+		if coalescible(event) {
+			projected, err := c.projectDeltas(ctx, unit)
+			return projected, false, err
+		}
+		return c.projectEvent(ctx, event)
+	}
+	projected, primaryTurn, err := project()
+	// A terminal receipt compacts the entire prompt, so it cannot pass a
+	// failed earlier projection. Retry transient store errors in order; if
+	// still failing, detach and leave the journal for a replacement controller.
+	for attempt := 0; err != nil && persistent && attempt < 3; attempt++ {
+		time.Sleep(20 * time.Millisecond)
+		projected, primaryTurn, err = project()
+	}
+	for _, committed := range unit {
+		if err == nil && persistent && committed.ProviderEventID != "" {
+			err = acknowledger.AcknowledgeProviderEvent(ctx, committed.ProviderEventID)
+		}
+	}
+	if err != nil && persistent {
+		c.log.Error("persistent chat projection stopped; provider retained for replay",
+			"session", c.sessionID, "kind", event.Kind, "error", err)
+		c.mu.Lock()
+		c.preserveProviderOnStop = true
+		c.state = ports.ChatControllerStopped
+		c.mu.Unlock()
+		if lifecycle {
+			c.sendMu.Unlock()
+		}
+		c.once.Do(func() { c.closeErr = c.conv.Close() })
+		return false
+	}
+	if err != nil {
+		// A projection failure must not kill the provider stream. The store
+		// rolls the archive back with its projection, so durable state remains
+		// internally consistent and a later provider replay may retry it.
+		c.log.Error("failed to project chat event",
+			"session", c.sessionID, "kind", event.Kind, "error", err)
+	} else if projected {
+		c.afterProject(ctx, event, primaryTurn)
+	}
+	if lifecycle {
+		c.sendMu.Unlock()
+	}
+	return true
+}
+
 func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Time) error {
 	if c.reviewID != "" {
 		_, err := c.store.CleanupOwnedReviewControllerWork(ctx, c.reviewID, c.conversation.ID, c.generation, now)
@@ -2973,16 +3116,17 @@ func serializesTurnOwnership(event ports.ChatEvent) bool {
 // projectEvent archives one normalized provider event and applies its durable
 // projection in the same SQLite transaction.
 func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (bool, bool, error) {
-	return c.projectEventWithApply(ctx, event, func(txCtx context.Context) error {
-		return c.apply(txCtx, event)
-	})
+	projected, err := c.archive(ctx, event, func(txCtx context.Context) error { return c.apply(txCtx, event) })
+	if err != nil || !projected {
+		return projected, false, err
+	}
+	return true, c.applyCommittedTurnLifecycle(event), nil
 }
 
-func (c *Controller) projectEventWithApply(
-	ctx context.Context,
-	event ports.ChatEvent,
-	apply func(context.Context) error,
-) (bool, bool, error) {
+// archive records event in the provider archive and runs project in the same
+// transaction. It reports false without projecting when the controller
+// generation is stale or the event's native identity is already archived.
+func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project func(context.Context) error) (bool, error) {
 	record := map[string]any{
 		"kind":                   event.Kind,
 		"providerEventId":        event.ProviderEventID,
@@ -3023,6 +3167,7 @@ func (c *Controller) projectEventWithApply(
 		}
 	}
 	record["diff"] = event.Diff
+	dropEmptyArchiveFields(record)
 	if event.Input != nil {
 		record["input"] = event.Input
 	}
@@ -3031,20 +3176,14 @@ func (c *Controller) projectEventWithApply(
 	}
 	payload, err := json.Marshal(record)
 	if err != nil {
-		return false, false, fmt.Errorf("encode provider event archive: %w", err)
+		return false, fmt.Errorf("encode provider event archive: %w", err)
 	}
-	var projected bool
 	if c.reviewID != "" {
-		projected, err = c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
-			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), apply)
-	} else {
-		projected, err = c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
-			c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), apply)
+		return c.store.ProjectReviewProviderEvent(ctx, c.conversation.ID, c.sessionID,
+			c.reviewID, c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
 	}
-	if err != nil || !projected {
-		return projected, false, err
-	}
-	return true, c.applyCommittedTurnLifecycle(event), nil
+	return c.store.ProjectProviderEvent(ctx, c.conversation.ID, c.sessionID,
+		c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
 }
 
 // applyCommittedTurnLifecycle updates the controller's volatile ownership only

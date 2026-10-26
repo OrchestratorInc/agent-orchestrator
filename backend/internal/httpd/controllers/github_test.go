@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,11 +22,36 @@ func (invalidGitHubPATService) StoreOAuthToken(context.Context, string, string, 
 	return nil
 }
 func (invalidGitHubPATService) HasPAT(context.Context) bool { return true }
+
+func (invalidGitHubPATService) Login(context.Context) string { return "" }
+
 func (invalidGitHubPATService) DeletePAT(context.Context) error {
 	return nil
 }
 func (invalidGitHubPATService) ListRepos(context.Context) ([]githubpat.Repo, error) {
 	return nil, githubpat.ErrInvalidCredentials
+}
+
+type loginGitHubPATService struct {
+	invalidGitHubPATService
+	login string
+}
+
+func (s loginGitHubPATService) Login(context.Context) string { return s.login }
+
+func TestGitHubStatusReportsConnectionAndLogin(t *testing.T) {
+	for name, tc := range map[string]struct{ login, want string }{
+		"signed in": {"octocat", `{"connected":true,"login":"octocat"}`},
+		"unknown":   {"", `{"connected":true}`},
+	} {
+		router := chi.NewRouter()
+		(&GitHubController{Svc: loginGitHubPATService{login: tc.login}}).Register(router)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/github/status", nil))
+		if recorder.Code != http.StatusOK || strings.TrimSpace(recorder.Body.String()) != tc.want {
+			t.Errorf("%s: status=%d body=%s, want %s", name, recorder.Code, recorder.Body.String(), tc.want)
+		}
+	}
 }
 
 func TestGitHubListReposReportsInvalidCredentials(t *testing.T) {

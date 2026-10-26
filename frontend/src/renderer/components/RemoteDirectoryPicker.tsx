@@ -34,7 +34,7 @@ export function RemoteDirectoryPicker({ hostId, hostLabel, connected, initialPat
 	return <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
 		<Dialog.Portal>
 			<Dialog.Overlay className="dialog-overlay" />
-			<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100dvh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-xl">
+			<Dialog.Content className="fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100dvh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover text-popover-foreground shadow-(--shadow-popover)">
 				<div className="flex items-center gap-3 border-b border-border px-4 py-3">
 					<Dialog.Title className="min-w-0 flex-1 truncate text-balance text-lg font-semibold">{t("remote.directoryPicker.title", { host: hostLabel })}</Dialog.Title>
 					<Dialog.Description className="sr-only">{t("remote.directoryPicker.description")}</Dialog.Description>

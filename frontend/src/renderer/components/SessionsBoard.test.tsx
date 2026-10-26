@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -25,7 +25,6 @@ const {
 	notificationShowMock,
 	postMock,
 	workspaceQueryMock,
-	usageQueryMock,
 	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
@@ -34,7 +33,6 @@ const {
 	notificationShowMock: vi.fn(),
 	postMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
-	usageQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
@@ -60,9 +58,6 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	},
 }));
 
-vi.mock("../hooks/useSessionUsageSummaries", () => ({
-	useSessionUsageSummaries: usageQueryMock,
-}));
 
 vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 	const { pressureState } = await import("@aoagents/product-ui");
@@ -153,7 +148,6 @@ beforeEach(() => {
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
-	usageQueryMock.mockReset().mockReturnValue({ data: new Map() });
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
@@ -476,195 +470,6 @@ describe("SessionsBoard", () => {
 		expect(within(idleCard).getByText("brand-font-pipeline")).toHaveClass("font-semibold", "line-clamp-2");
 	});
 
-	it("shows coverage-aware cost with tokens on active and archived cards", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [
-				workspaceWithSessions([
-					boardSession({ id: "s-active", title: "active worker", status: "idle" }),
-					boardSession({ id: "s-empty", title: "empty worker", status: "idle" }),
-					boardSession({ id: "s-tokens", title: "tokens worker", status: "idle" }),
-					terminatedSession(),
-				]),
-			],
-			isError: false,
-			isSuccess: true,
-		});
-		usageQueryMock.mockReturnValue({
-			data: new Map([
-				[
-					"s-active",
-					{
-						estimatedCost: {
-							cachedInputNanos: 100_000_000,
-							coverage: "complete",
-							inputNanos: 540_000_000,
-							outputNanos: 600_000_000,
-							providerAttribution: "observed",
-							totalNanos: 1_240_000_000,
-						},
-						sessionId: "s-active",
-						processedTokens: 12_300,
-						totalTokens: 12_400,
-						incomplete: false,
-					},
-				],
-				[
-					"s-empty",
-					{
-						estimatedCost: null,
-						sessionId: "s-empty",
-						processedTokens: 0,
-						totalTokens: 0,
-						incomplete: false,
-					},
-				],
-				[
-					"s-tokens",
-					{
-						estimatedCost: null,
-						sessionId: "s-tokens",
-						processedTokens: 800,
-						totalTokens: 800,
-						incomplete: false,
-					},
-				],
-				[
-					"s-dead",
-					{
-						estimatedCost: {
-							cachedInputNanos: null,
-							coverage: "partial",
-							inputNanos: 5_000_000,
-							outputNanos: 15_000_000,
-							providerAttribution: "inferred",
-							totalNanos: 20_000_000,
-						},
-						sessionId: "s-dead",
-						processedTokens: 1_900,
-						totalTokens: 2_000,
-						incomplete: true,
-					},
-				],
-			]),
-		});
-
-		renderBoard("p1");
-
-		// The card shows dollar cost by default; the token count remains in the
-		// hover tooltip and accessible label.
-		const activeUsage = screen.getByText("$1.24", { selector: "span" });
-		expect(activeUsage).toHaveAttribute("aria-hidden", "true");
-		expect(screen.getByText("$1.24 · 12,300 tokens")).toHaveClass("sr-only");
-		expect(screen.queryByText(/processed/i)).not.toBeInTheDocument();
-		// Sessions without a dollar estimate stay visible if they still have
-		// token usage; sessions with no cost and no tokens still show nothing.
-		const emptyCard = screen.getByText("empty worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		expect(within(emptyCard).queryByText("Unavailable")).not.toBeInTheDocument();
-		expect(within(emptyCard).queryByText("0 tokens")).not.toBeInTheDocument();
-		const tokensOnlyCard = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		expect(within(tokensOnlyCard).getByText("800", { selector: "span" })).toHaveAttribute("aria-hidden", "true");
-		expect(within(tokensOnlyCard).getByText("800 tokens")).toHaveClass("sr-only");
-		expect(usageQueryMock).toHaveBeenCalledWith("p1", undefined);
-
-		const archive = await expandArchive();
-		expect(within(archive).getByText("$0.02")).toHaveAttribute("aria-hidden", "true");
-		expect(within(archive).getByText("$0.02 · 1,900 tokens")).toHaveClass("sr-only");
-	});
-
-	it("shows cost by default and cost plus tokens on hover without a tab stop", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [
-				workspaceWithSessions([
-					boardSession({ id: "s-keyboard", title: "keyboard worker", status: "idle" }),
-				]),
-			],
-			isError: false,
-			isSuccess: true,
-		});
-		usageQueryMock.mockReturnValue({
-			data: new Map([
-				[
-					"s-keyboard",
-					{
-						estimatedCost: {
-							cachedInputNanos: 100_000_000,
-							coverage: "complete",
-							inputNanos: 540_000_000,
-							outputNanos: 600_000_000,
-							providerAttribution: "observed",
-							totalNanos: 1_240_000_000,
-						},
-						incomplete: false,
-						sessionId: "s-keyboard",
-						processedTokens: 12_400,
-						totalTokens: 12_400,
-					},
-				],
-			]),
-		});
-
-		renderBoard("p1");
-
-		const card = screen.getByText("keyboard worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		const usage = within(card).getByText("$1.24", { selector: "span" });
-		expect(usage.tagName).toBe("SPAN");
-		// The compact text is decorative; the full label is real off-screen text
-		// rather than an aria-label on a generic span, which is not reliably
-		// exposed. The hover trigger is not a tab stop.
-		expect(usage).toHaveAttribute("aria-hidden", "true");
-		expect(within(card).getByText("$1.24 · 12,400 tokens")).toHaveClass("sr-only");
-
-		within(card).getByRole("button", { name: "keyboard worker" }).focus();
-		await userEvent.tab();
-		expect(within(card).getByRole("button", { name: "Archive keyboard worker" })).toHaveFocus();
-
-		await userEvent.hover(usage);
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("$1.24 · 12,400 tokens");
-	});
-
-	it("shows token-only usage when pricing is unavailable", async () => {
-		workspaceQueryMock.mockReturnValue({
-			data: [
-				workspaceWithSessions([
-					boardSession({ id: "s-tokens", title: "tokens worker", status: "idle" }),
-				]),
-			],
-			isError: false,
-			isSuccess: true,
-		});
-		usageQueryMock.mockReturnValue({
-			data: new Map([
-				[
-					"s-tokens",
-					{
-						estimatedCost: null,
-						incomplete: false,
-						sessionId: "s-tokens",
-						processedTokens: 12_400,
-						totalTokens: 12_400,
-					},
-				],
-			]),
-		});
-
-		sessionMemoryMock.mockReturnValue({
-			isError: false,
-			data: new Map([["s-tokens", { sessionId: "s-tokens", rssBytes: 253_755_392, processCount: 3, cpuPercent: 0, sampledAt: "", processes: [] }]]),
-		});
-
-		renderBoard("p1");
-
-		const card = screen.getByText("tokens worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		// Memory sits beside token usage, never in place of it.
-		expect(within(card).getByTestId("session-resource")).toHaveTextContent("242 MB");
-		const usage = within(card).getByText("12.4K", { selector: "span" });
-		expect(usage).toHaveAttribute("aria-hidden", "true");
-		expect(within(card).getByText("12,400 tokens")).toHaveClass("sr-only");
-
-		await userEvent.hover(usage);
-		expect(await screen.findByRole("tooltip")).toHaveTextContent("12,400 tokens");
-	});
-
 	it("styles a working card from its building lane without inferring from runtime activity", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
@@ -802,6 +607,8 @@ describe("SessionsBoard", () => {
 						title: "spawning-card-task",
 						status: "working",
 						provisionState: "provisioning",
+						branch: "ao/s-spawning/root",
+						provisionSteps: [{ id: "worktree", status: "running" }],
 						activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" },
 					}),
 				]),
@@ -813,8 +620,37 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 		const card = screen.getByText("spawning-card-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(card).getByText("Starting Claude Code…")).toBeInTheDocument();
+		expect(within(card).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(card).queryByText("ao/s-spawning/root")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Working")).not.toBeInTheDocument();
 		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
+	});
+
+	it("shows naming shimmer on a synchronous orchestrator-created worker until its worktree is ready", () => {
+		const worker = boardSession({
+			id: "s-delegated",
+			title: "Review: composer correctness",
+			status: "idle",
+			provisionState: "ready",
+			branch: undefined,
+			provisionSteps: [{ id: "worktree", status: "running" }],
+		});
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([worker])], isError: false, isSuccess: true,
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = renderBoardWithClient(queryClient, "p1");
+		const card = () => screen.getByText(worker.title).closest('[data-testid="board-session-card"]') as HTMLElement;
+		expect(within(card()).getByRole("status")).toHaveClass("chat-working-shimmer");
+		expect(within(card()).getByRole("status").textContent).not.toMatch(/…|\.\.\./);
+
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([{ ...worker, branch: "ao/composer-review/root", provisionSteps: [{ id: "worktree", status: "done" }] }])],
+			isError: false, isSuccess: true,
+		});
+		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
+		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
+		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
 	});
 
 	it("shows start failure instead of Awaiting PR on a failed card", () => {
@@ -834,34 +670,6 @@ describe("SessionsBoard", () => {
 		const card = screen.getByText("failed-setup-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(card).getByTestId("session-status")).toHaveTextContent("Start failed");
 		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
-	});
-
-	it("shows switch progress instead of the exited source on a card", () => {
-		const worker = boardSession({
-			id: "s-switching",
-			title: "switching worker",
-			status: "exited",
-			activity: {
-				state: "exited",
-				lastActivityAt: "2026-01-01T00:00:00Z",
-			},
-		});
-		worker.activeAgentSwitch = activeAgentSwitch(worker.id);
-		workspaceQueryMock.mockReturnValue({
-			data: [workspaceWithSessions([worker])],
-			isError: false,
-			isSuccess: true,
-		});
-
-		renderBoard("p1");
-
-		const card = screen.getByText("switching worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		const status = within(card).getByText("Switching to Codex").parentElement as HTMLElement;
-		expect(status).toHaveClass("text-status-working");
-		expect(status).not.toHaveAttribute("data-kanban-column");
-		expect(status.style.getPropertyValue("--session-status-tone")).toBe("");
-		expect(status.querySelector(".animate-status-pulse")).toBeNull();
-		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
 	});
 
 	it("styles legacy statuses from their status-implied Kanban columns", () => {
@@ -1814,6 +1622,10 @@ describe("SessionsBoard", () => {
 });
 
 describe("SessionsBoard artifacts", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {}, workspaceFileOpenRequest: null });
+	});
+
 	const artifact = (name: string, updatedAt: string, kind: "html" | "markdown" = "markdown") => ({
 		kind,
 		name,
@@ -1846,7 +1658,7 @@ describe("SessionsBoard artifacts", () => {
 		renderBoard("p1");
 
 		const list = await screen.findByTestId("board-session-artifacts");
-		const links = within(list).getAllByRole("button");
+		const links = within(list).getAllByRole("button", { name: /^Open artifact / });
 		expect(links.map((link) => link.textContent)).toEqual(["newest.html", "middle.md"]);
 		expect(list).toHaveTextContent("+2 more");
 
@@ -1862,6 +1674,97 @@ describe("SessionsBoard artifacts", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "p1", sessionId: "s-art" },
 		});
+	});
+
+	it.each([3, 10, 12])("expands and collapses %i artifacts in place, capped at ten", async (count) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art",
+				title: "Write the report",
+				status: "working",
+				outputType: "artifact",
+				artifactFiles: Array.from({ length: count }, (_, index) =>
+					artifact(`file-${String(index + 1).padStart(2, "0")}.md`, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const list = await screen.findByTestId("board-session-artifacts");
+		const more = within(list).getByRole("button", { name: `+${count - 2} more` });
+		expect(more).toHaveAttribute("aria-expanded", "false");
+		more.focus();
+		await userEvent.keyboard("{Enter}");
+
+		expect(more).toHaveAttribute("aria-expanded", "true");
+		expect(document.getElementById(more.getAttribute("aria-controls")!)).toBeInTheDocument();
+		expect(within(list).getAllByRole("button", { name: /^Open artifact / })).toHaveLength(Math.min(count, 10));
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+
+		if (count > 10) {
+			await userEvent.click(within(list).getByRole("button", { name: "Open in inspector" }));
+			// SessionView initializes the inspector when navigation mounts a session.
+			useUiStore.getState().initializeInspectorSession("s-art", false, true);
+			expect(useUiStore.getState().inspectorSessions["s-art"]).toMatchObject({
+				initialized: true, isOpen: true, view: "artifacts",
+			});
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+			expect(navigateMock).toHaveBeenCalledTimes(1);
+		} else {
+			expect(within(list).queryByRole("button", { name: "Open in inspector" })).not.toBeInTheDocument();
+		}
+
+		await userEvent.click(within(list).getByRole("button", { name: "Show less" }));
+		expect(within(list).getAllByRole("button", { name: /^Open artifact / })).toHaveLength(2);
+		expect(more).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it.each([1, 2])("shows %i artifacts without expansion controls", async (count) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art", title: "Write the report", status: "working", outputType: "artifact",
+				artifactFiles: Array.from({ length: count }, (_, index) => artifact(`file-${index}.md`, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+		const list = await screen.findByTestId("board-session-artifacts");
+		expect(within(list).getAllByRole("button")).toHaveLength(count);
+		expect(within(list).queryByRole("button", { name: /more|Show less|Open in inspector/ })).not.toBeInTheDocument();
+	});
+
+	it.each(["pointer", "keyboard"])("suppresses previews after expansion until intentional %s interaction", async (interaction) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art", title: "Write the report", status: "working", outputType: "artifact",
+				artifactFiles: ["a.md", "b.md", "c.md"].map((name) => artifact(name, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+		await userEvent.click(await screen.findByRole("button", { name: "+1 more" }));
+		const row = screen.getByRole("button", { name: "Open artifact c.md" });
+		fireEvent.pointerOver(row, { pointerType: "mouse", clientX: 0, clientY: 0 });
+		fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 0, clientY: 0 });
+		await act(() => new Promise((resolve) => setTimeout(resolve, 350)));
+		expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+
+		if (interaction === "pointer") {
+			fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 10, clientY: 10 });
+			expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+			await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+			fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 20, clientY: 20 });
+			await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+			expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+		} else {
+			fireEvent.focus(row);
+		}
+		expect(await screen.findByRole("status", { name: "c.md" })).toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("orders artifacts with equal or unparseable timestamps by path", () => {
@@ -1919,20 +1822,6 @@ function boardSession(
 		kanbanColumn: toKanbanColumn(undefined, overrides.status),
 		updatedAt: "2026-01-01T00:00:00Z",
 		prs: [],
-		...overrides,
-	};
-}
-
-function activeAgentSwitch(
-	sessionId: string,
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: `switch-${sessionId}`,
-		state: "starting_target",
-		targetHarness: "codex",
 		...overrides,
 	};
 }

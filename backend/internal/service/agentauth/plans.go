@@ -22,7 +22,8 @@ var plans = []Plan{
 	plan("opencode", ActionLogin, "Log in to OpenCode", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://github.com/anomalyco/opencode"),
 	plan("opencode-v2", ActionLogin, "Log in to OpenCode 2", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://opencode.ai/v2/docs"),
 	plan("mimo-code", ActionLogin, "Log in to MiMo Code", []string{"mimo", "auth", "login"}, "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code"),
-	documentationPlan("aider", ActionSetup, "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
+	documentationPlan("memcode", "Set up memcode", "Configure a native endpoint and provider credentials before launching AO", "https://github.com/memcode-ai/memcode"),
+	documentationPlan("aider", "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
 	copilotLoginPlan(),
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
 	kimiLoginPlan(),
@@ -47,7 +48,7 @@ var plans = []Plan{
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
 	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
-	documentationPlan("unreal-agent", ActionSetup, "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
+	documentationPlan("unreal-agent", "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
 	// DeepSeek Harness has no login subcommand — credentials are records in its
 	// own store (~/.dsh/.credentials.yaml) — but the web profile serves the
 	// Models page that writes them, which is the route a failed run names
@@ -57,6 +58,7 @@ var plans = []Plan{
 	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
+	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
@@ -130,8 +132,8 @@ func copilotLoginPlan() Plan {
 	return p
 }
 
-func documentationPlan(agentID string, action Action, title, guidance, docs string) Plan {
-	p := plan(agentID, action, title, nil, guidance, docs)
+func documentationPlan(agentID, title, guidance, docs string) Plan {
+	p := plan(agentID, ActionSetup, title, nil, guidance, docs)
 	p.LaunchMode = LaunchDocumentation
 	return p
 }
@@ -152,7 +154,10 @@ var planByAgentID = func() map[string]Plan {
 }()
 
 func plan(agentID string, action Action, title string, command []string, guidance, docs string) Plan {
+	logout := logoutCommand(agentID)
 	return Plan{
+		LogoutCommand:    strings.Join(logout, " "),
+		logoutCommand:    logout,
 		AgentID:          agentID,
 		Action:           action,
 		LaunchMode:       LaunchTerminal,
@@ -161,5 +166,28 @@ func plan(agentID string, action Action, title string, command []string, guidanc
 		DocumentationURL: docs,
 		command:          command,
 		title:            title,
+	}
+}
+
+// Only documented CLI subcommands belong here. An absent entry explicitly
+// means unsupported; do not infer logout from login or delete credential files.
+func logoutCommand(agentID string) []string {
+	switch agentID {
+	case "claude-code":
+		return []string{"claude", "auth", "logout"}
+	case "codex":
+		return []string{"codex", "logout"}
+	case "cursor":
+		return []string{"cursor-agent", "logout"}
+	case "opencode", "opencode-v2":
+		return []string{"opencode", "auth", "logout"}
+	case "amp":
+		return []string{"amp", "logout"}
+	case "auggie":
+		return []string{"auggie", "logout"}
+	case "devin":
+		return []string{"devin", "auth", "logout"}
+	default:
+		return nil
 	}
 }

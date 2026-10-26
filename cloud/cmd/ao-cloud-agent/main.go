@@ -14,10 +14,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,6 +51,21 @@ type session struct {
 	RuntimeConnected bool          `json:"runtimeConnected"`
 	IsTerminated     bool          `json:"isTerminated"`
 	PRs              []pullRequest `json:"prs"`
+	// The artifact fields are present while cloud artifacts are on.
+	ArtifactCount      *int       `json:"artifactCount,omitempty"`
+	ArtifactsUpdatedAt *time.Time `json:"artifactsUpdatedAt,omitempty"`
+	// ArtifactFiles names the most recently changed files, at most ten;
+	// ArtifactFilesTruncated is set when the worker has more.
+	ArtifactFiles          []artifactFile `json:"artifactFiles,omitempty"`
+	ArtifactFilesTruncated bool           `json:"artifactFilesTruncated,omitempty"`
+}
+
+// artifactFile is one committed file in a worker's artifact directory.
+type artifactFile struct {
+	Path      string    `json:"path"`
+	Kind      string    `json:"kind"`
+	Size      int64     `json:"size"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type pullRequest struct {
@@ -79,6 +94,10 @@ func run(args []string) error {
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		printUsage(os.Stdout)
 		return nil
+	}
+	// The browser runs beside the agent and needs no control-plane credential.
+	if args[0] == "browser" {
+		return runBrowser(args[1:])
 	}
 	apiURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_API_URL")), "/")
 	tokenFile := strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_TOKEN_FILE"))
@@ -138,12 +157,13 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 	if os.Getenv(worker.ReviewTerminalEnv) == "1" {
 		return nil
 	}
-	// A completed turn (Stop) is the event that drives durable-restore
-	// checkpointing: poke the worker's checkpoint bridge so it captures the
-	// transcript and any uncommitted work. Event-driven, best-effort, and
-	// fire-and-forget so a completed turn never waits on git or the network.
-	if args[1] == "stop" {
-		pokeCheckpoint(ctx)
+	// A turn end (Stop, or StopFailure when an API error ended it after it
+	// edited files) drives durable-restore checkpointing: poke the worker's
+	// checkpoint bridge so it captures the transcript and any uncommitted
+	// work. Event-driven, best-effort, and fire-and-forget so a turn end never
+	// waits on git or the network.
+	if args[1] == "stop" || args[1] == "stop-failure" {
+		worker.PokeCheckpoint(ctx, os.Getenv("AO_CHECKPOINT_SOCKET"))
 	}
 	payload, err := io.ReadAll(io.LimitReader(input, maxHookPayload+1))
 	if err != nil || len(payload) > maxHookPayload {
@@ -154,11 +174,20 @@ func runHook(ctx context.Context, c *client, args []string, input io.Reader) err
 		return nil
 	}
 	activity.SourceInterface = strings.TrimSpace(os.Getenv("AO_CLOUD_SOURCE_INTERFACE"))
-	if activity.SourceInterface == "tui" && activity.Event == "stop" && activity.State != "" {
+	if activity.SourceInterface == "tui" && activity.State == contract.ActivityIdle &&
+		(activity.Event == "stop" || activity.Event == "stop-failure" || activity.Event == "interrupt") {
 		// Keep the provider's native idle proof beside the worker. The durable
 		// control-plane projection can lag terminal input and is not a safe
 		// handoff fence on its own.
 		_ = worker.RecordTUIStop(strings.TrimSpace(os.Getenv("AO_DATA_DIR")), hookAt)
+	}
+	if activity.Harness == "claude-code" && activity.SourceInterface == "tui" && activity.AgentSessionID != "" {
+		// The worker follows the terminal Claude's transcript for interrupts.
+		// /clear or /resume moves that process to another conversation, and
+		// CLAUDE_PID tells the terminal's process from a headless claude the
+		// agent runs from a tool (it shares this environment and these hooks).
+		_ = worker.RecordClaudeConversation(strings.TrimSpace(os.Getenv("AO_DATA_DIR")),
+			strings.TrimSpace(os.Getenv("CLAUDE_PID")), activity.AgentSessionID, hookAt)
 	}
 	if activity.Harness == "codex" && activity.Event == "stop" && activity.LatestAssistantUpdate == "" {
 		activity.LatestAssistantUpdate = latestCodexAssistantMessage(
@@ -253,38 +282,10 @@ func hookNotificationID(values ...string) string {
 	return hex.EncodeToString(hash[:16])
 }
 
-// pokeCheckpoint signals the worker's checkpoint bridge (a unix socket at
-// AO_CHECKPOINT_SOCKET) that a turn completed, so it captures a durable-restore
-// checkpoint. It is fire-and-forget: any failure (no socket, worker down) is
-// ignored so a completed turn is never delayed or broken by capture.
-func pokeCheckpoint(ctx context.Context) {
-	socket := os.Getenv("AO_CHECKPOINT_SOCKET")
-	if socket == "" {
-		return
-	}
-	httpClient := &http.Client{
-		Timeout: 2 * time.Second,
-		Transport: &http.Transport{
-			DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(dialCtx, "unix", socket)
-			},
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://localhost/checkpoint", nil)
-	if err != nil {
-		return
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return
-	}
-	_ = resp.Body.Close()
-}
-
 func runSpawn(ctx context.Context, c *client, args []string) error {
 	flags := flag.NewFlagSet("spawn", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
-	var harness, name, prompt, mode, providerConnection string
+	var harness, name, prompt, mode, branch, providerConnection string
 	// Empty by default so the control plane can fill in the project's configured
 	// worker agent (config.worker.agent); an explicit value here still wins.
 	flags.StringVar(&harness, "harness", "", "agent harness (default: the project's configured worker agent)")
@@ -292,6 +293,10 @@ func runSpawn(ctx context.Context, c *client, args []string) error {
 	flags.StringVar(&name, "name", "", "child display name")
 	flags.StringVar(&prompt, "prompt", "", "initial child prompt")
 	flags.StringVar(&mode, "mode", "trusted", "standard or trusted")
+	flags.StringVar(
+		&branch, "branch", "",
+		"git branch for the worker; one that already exists on the remote is continued (default: a new branch)",
+	)
 	flags.StringVar(
 		&providerConnection, "sandbox-provider-connection", "",
 		"sandbox provider connection id",
@@ -312,6 +317,9 @@ func runSpawn(ctx context.Context, c *client, args []string) error {
 	}
 	body := map[string]any{
 		"harness": harness, "displayName": name, "prompt": prompt, "mode": mode,
+	}
+	if branch = strings.TrimSpace(branch); branch != "" {
+		body["branch"] = branch
 	}
 	if providerConnection != "" {
 		body["sandboxProviderConnectionId"] = providerConnection
@@ -351,12 +359,12 @@ func runList(ctx context.Context, c *client, args []string) error {
 		return nil
 	}
 	out := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(out, "ID\tNAME\tHARNESS\tBRANCH\tSTATUS\tCONNECTED\tPR")
+	fmt.Fprintln(out, "ID\tNAME\tHARNESS\tBRANCH\tSTATUS\tCONNECTED\tPR\tARTIFACTS")
 	for _, child := range items {
 		fmt.Fprintf(
-			out, "%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
+			out, "%s\t%s\t%s\t%s\t%s\t%t\t%s\t%s\n",
 			child.ID, child.DisplayName, child.Harness, child.Branch, child.Status,
-			child.RuntimeConnected, pullRequestSummary(child.PRs),
+			child.RuntimeConnected, pullRequestSummary(child.PRs), artifactSummary(child.ArtifactFiles, artifactCount(child)),
 		)
 	}
 	return out.Flush()
@@ -395,6 +403,32 @@ func listChildren(ctx context.Context, c *client, includeTerminated bool) ([]ses
 	}
 	fmt.Fprintln(os.Stderr, "ao: worker list truncated after 500 entries")
 	return items, nil
+}
+
+// artifactSummary renders the row's ARTIFACTS column: up to two file paths
+// and how many more the worker has in total, e.g. "report.html, notes.md (+3)".
+func artifactSummary(files []artifactFile, count int) string {
+	if len(files) == 0 {
+		return "-"
+	}
+	const shown = 2
+	paths := make([]string, 0, shown)
+	for _, file := range files[:min(shown, len(files))] {
+		paths = append(paths, file.Path)
+	}
+	summary := strings.Join(paths, ", ")
+	if more := max(count, len(files)) - len(paths); more > 0 {
+		summary += fmt.Sprintf(" (+%d)", more)
+	}
+	return summary
+}
+
+// artifactCount is the worker's total artifact files, or 0 when not reported.
+func artifactCount(child session) int {
+	if child.ArtifactCount == nil {
+		return 0
+	}
+	return *child.ArtifactCount
 }
 
 // pullRequestSummary renders the row's PR column, e.g. "#12 ci:failing".
@@ -488,7 +522,7 @@ func runClaimPullRequest(ctx context.Context, c *client, args []string) error {
 		ctx,
 		http.MethodPost,
 		"/worker/pull-requests/claim",
-		worker.ClaimPullRequestRequest{Reference: strings.TrimSpace(args[0])},
+		worker.ClaimPullRequestRequest{Reference: pullRequestReference(ctx, strings.TrimSpace(args[0]))},
 		true,
 		&response,
 	); err != nil {
@@ -499,6 +533,58 @@ func runClaimPullRequest(ctx context.Context, c *client, args []string) error {
 	}
 	fmt.Printf("claimed PR #%d %s\n", response.Number, response.HTMLURL)
 	return nil
+}
+
+// pullRequestReference turns a bare pull request number into the pull
+// request's URL on the repository checked out in the working directory, so
+// `ao claim-pr 12` run in one of the session's additional repositories claims
+// that repository's pull request rather than the main repository's. It does so
+// only when that repository is one of the session's (worker.SessionRepositoriesEnv);
+// a URL, a number in any other checkout (a fork, say) or a worker that does not
+// list its repositories sends the reference as given, which the control plane
+// resolves against the main repository.
+func pullRequestReference(ctx context.Context, reference string) string {
+	number := strings.TrimPrefix(reference, "#")
+	if _, err := strconv.Atoi(number); err != nil {
+		return reference
+	}
+	output, err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		return reference
+	}
+	fullName, ok := githubFullName(strings.TrimSpace(string(output)))
+	if !ok || !sessionRepository(os.Getenv(worker.SessionRepositoriesEnv), fullName) {
+		return reference
+	}
+	return "https://github.com/" + fullName + "/pull/" + number
+}
+
+// sessionRepository reports whether fullName is in the comma-separated list.
+func sessionRepository(list, fullName string) bool {
+	for _, entry := range strings.Split(list, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" && strings.EqualFold(entry, fullName) {
+			return true
+		}
+	}
+	return false
+}
+
+// githubFullName extracts owner/name from a GitHub https or ssh remote URL.
+func githubFullName(remote string) (string, bool) {
+	path := ""
+	switch {
+	case strings.HasPrefix(remote, "git@github.com:"):
+		path = strings.TrimPrefix(remote, "git@github.com:")
+	case strings.HasPrefix(remote, "https://github.com/"):
+		path = strings.TrimPrefix(remote, "https://github.com/")
+	default:
+		return "", false
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.Trim(path, "/"), ".git"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", false
+	}
+	return parts[0] + "/" + parts[1], true
 }
 
 // runReview starts AO's reviewer on this session's open pull requests, the
@@ -596,16 +682,21 @@ func newIdempotencyKey() string {
 
 func printUsage(out io.Writer) {
 	fmt.Fprintln(out, `AO Cloud orchestration commands:
-  ao spawn --name NAME --prompt TEXT [--agent AGENT] [--mode standard|trusted]
-    (--agent defaults to the project's configured worker agent)
+  ao spawn --name NAME --prompt TEXT [--agent AGENT] [--mode standard|trusted] [--branch BRANCH]
+    (--agent defaults to the project's configured worker agent; --branch
+    continues a branch that already exists on the remote, and fails with
+    branch_in_use while another live worker holds it)
   ao list [--json] [--all]
   ao send SESSION_ID MESSAGE
   ao report MESSAGE
   ao kill SESSION_ID
   ao claim-pr NUMBER_OR_URL
   ao review trigger
+  ao browser COMMAND [ARGS...]
+    (agent-browser commands: open, snapshot, click, fill, screenshot, ...; the
+    person sees and can use the same pages in AO's Browser panel)
 
-All commands are authenticated through the control plane. spawn/list/send/kill
-require an orchestrator session; report requires an orchestrator parent. Child
-workers never connect directly to one another.`)
+All commands except browser are authenticated through the control plane.
+spawn/list/send/kill require an orchestrator session; report requires an
+orchestrator parent. Child workers never connect directly to one another.`)
 }

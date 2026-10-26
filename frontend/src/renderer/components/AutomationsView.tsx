@@ -348,7 +348,6 @@ function AutomationFormDialog({
 					schedule_preset: schedule.preset,
 					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
 				};
-		if (funnel) void captureRendererEvent("ao.renderer.automation_create_requested", funnel);
 		try {
 			await onSubmit({
 				// Kind is not a form choice: automations are workers, and editing

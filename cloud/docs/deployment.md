@@ -17,7 +17,8 @@ AWS_PROFILE=ao-cloud ./scripts/deploy-staging.sh
 
 The offering a deploy rolls out (served providers, the default provider, the
 capability gate, default organization capabilities and billing, paywalled
-features, and both idle-pause thresholds) is checked in at
+features, both idle-pause thresholds, and the
+[Coder rollout flags](#coder-rollout-flags)) is checked in at
 `scripts/offering/staging.env` and `scripts/offering/production.env`. Staging
 serves `coder,freestyle` with `coder` as the default; NodeOps is retired and no
 longer a default. A variable set in the deploying shell overrides the file,
@@ -73,6 +74,8 @@ creates new task-definition revisions; it never mutates an older image tag.
 - CloudWatch log group: `/ao-cloud/staging/control-plane` (30-day retention)
 - ECR repositories: `ao-cloud-control-plane` and `ao-cloud-worker` (immutable
   tags, 30-image retention)
+- tenant artifact bucket: `ao-cloud-staging-tenant-artifacts` (see
+  [Session artifacts](#session-artifacts))
 
 The ALB probes `/readyz`, which checks both draining state and database
 connectivity. Deployment scripts set one desired task and, by default,
@@ -124,6 +127,83 @@ by the Freestyle secret, the task that ran before the deploy, the task now
 running, or any task definition the staging or production service is running
 or rolling to. If any of those cannot be read it deletes nothing, and a failed
 prune never fails the deploy.
+
+## Session artifacts
+
+Session artifacts (`AO_CLOUD_ARTIFACTS`, see
+[control-plane.md](control-plane.md#session-artifacts)) need one private,
+versioned bucket per environment: `ao-cloud-staging-tenant-artifacts` and
+`ao-cloud-production-tenant-artifacts`. They hold customer files and are
+separate from the `ao-cloud-<environment>-artifacts` buckets of worker
+binaries; the deploy validation rejects those names.
+
+Create the bucket in the service's region with public access blocked, bucket
+owner enforced, SSE-S3 encryption, versioning, a policy that refuses requests
+without TLS, and a lifecycle rule. The control plane's sweeper deletes
+uncommitted and replaced versions itself; the lifecycle rule is the backstop:
+it expires noncurrent versions after 30 days, removes delete markers with no
+versions left, and aborts incomplete multipart uploads after a day.
+
+```bash
+B=ao-cloud-staging-tenant-artifacts
+R=eu-north-1
+aws s3api create-bucket --bucket $B --region $R \
+  --create-bucket-configuration LocationConstraint=$R \
+  --object-ownership BucketOwnerEnforced
+aws s3api put-public-access-block --bucket $B \
+  --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api put-bucket-encryption --bucket $B --server-side-encryption-configuration \
+  '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+aws s3api put-bucket-versioning --bucket $B \
+  --versioning-configuration Status=Enabled
+aws s3api put-bucket-policy --bucket $B --policy '{"Version":"2012-10-17","Statement":[{
+  "Sid":"DenyInsecureTransport","Effect":"Deny","Principal":"*","Action":"s3:*",
+  "Resource":["arn:aws:s3:::'$B'","arn:aws:s3:::'$B'/*"],
+  "Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}'
+aws s3api put-bucket-lifecycle-configuration --bucket $B \
+  --lifecycle-configuration '{"Rules":[{"ID":"expire-old-versions","Status":"Enabled","Filter":{},
+  "NoncurrentVersionExpiration":{"NoncurrentDays":30},
+  "Expiration":{"ExpiredObjectDeleteMarker":true},
+  "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}'
+```
+
+Give the control plane's ECS **task role** (not the execution role) access to
+that bucket only: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`,
+`s3:DeleteObject`, `s3:DeleteObjectVersion` (the sweeper deletes by version),
+and `s3:AbortMultipartUpload` on `arn:aws:s3:::<bucket>/*`, and
+`s3:ListBucket`, `s3:ListBucketVersions`, and `s3:ListBucketMultipartUploads` on
+`arn:aws:s3:::<bucket>`. Without `s3:ListBucket`, a missing version reads as 403
+instead of 404, so a stale commit and a removed file both become server
+errors. Credentials come from the task role; nothing is stored in a secret.
+
+The offering files set the deploy values: `AO_CLOUD_ARTIFACTS` (`0` or `1`),
+`AO_CLOUD_ARTIFACT_BUCKET`, and `AO_CLOUD_ARTIFACT_REGION`.
+`AO_CLOUD_ARTIFACT_ENDPOINT` is for a local S3-compatible server and is
+rejected in a hosted task. With the flag on, the control plane refuses to start
+without the bucket, the region, or `AO_CLOUD_PROVIDER_SECRET_KEY` (artifact
+links are signed with a key derived from it), and `deploy-staging.sh` and
+`promote-production.sh` stop unless the bucket exists with versioning enabled
+and the service's task role may use it (checked with
+`iam simulate-principal-policy`, so the deploying identity needs
+`iam:SimulatePrincipalPolicy`). `promote-production.sh` also refuses `1` in
+production until staging serves artifacts. Migration 00084 runs with the flag
+off.
+
+Rollout: deploy with `AO_CLOUD_ARTIFACTS=0`, deploy the worker and desktop
+releases, then turn staging on by committing `AO_CLOUD_ARTIFACTS=1` to
+`scripts/offering/staging.env`; a value set only in the deploying shell is
+reverted by the next deploy. Check that an artifact session's HTML file and
+the image it references open, that an edit adds a version, and that after the
+session is archived and restored its files open again. Repeat for production.
+
+The desktop frames artifacts from the control-plane origins it was built
+with (staging, production, and `AO_CLOUD_CONTROL_PLANE_URL` at build time). A
+packaged build pointed at another control plane at runtime cannot frame its
+HTML artifacts.
+
+Locally, `npm run cloud:local` runs MinIO with the bucket
+`ao-cloud-local-tenant-artifacts`; start it with `AO_CLOUD_ARTIFACTS=1`.
 
 ## Monitoring
 
@@ -194,8 +274,9 @@ each configured provider's environment-scoped secret.
 `stripe` is optional. When it exists it must hold `secret_key`,
 `webhook_secret`, and `price_ids` (a plan-to-`price_` map, as an object or a
 JSON string), and may hold `portal_configuration` (`bpc_...`) and
-`exempt_orgs_created_before` (RFC 3339: organizations created earlier are never
-billed). Production refuses a test key and staging refuses a live key. Only a
+`exempt_orgs_created_before` (RFC 3339: organizations created earlier keep
+paywalled features without a plan; they still need a plan for billed sandboxes,
+see "Who pays" below). Production refuses a test key and staging refuses a live key. Only a
 `ResourceNotFoundException` turns billing off; any other lookup error (expired
 credentials, a missing permission, throttling) fails the deploy, so billing is
 never switched off by accident. When the secret is removed, the next deploy
@@ -257,6 +338,63 @@ It does not reverse database migrations.
 
 Schema migrations must remain backward-compatible with the previous API
 revision so that rolling deploys and application rollback are safe.
+
+### Rolling back past user-scoped GitHub connections
+
+Migration 00081 lets a GitHub organization member who is not an owner connect
+an installation user-scoped: only the repositories they can access. Releases
+from before it sync every connection with the installation's whole repository
+list, so after a code-only rollback their next sync would grant those members
+every repository in the installation. Before rolling back to such a release,
+revoke the user-scoped connections with the migration role (the role that owns
+the tables; it is subject to forced RLS, hence `NO FORCE`), in one transaction:
+
+```sql
+BEGIN;
+ALTER TABLE ao_github_installations NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE ao_github_repository_grants NO FORCE ROW LEVEL SECURITY;
+UPDATE ao_github_repository_grants grant_row
+SET revoked_at = now(), revoke_reason = 'github_user_scope_rolled_back'
+FROM ao_github_installations installation
+WHERE installation.org_id = grant_row.org_id
+  AND installation.id = grant_row.installation_id
+  AND installation.access_scope = 'user'
+  AND grant_row.revoked_at IS NULL;
+UPDATE ao_github_installations
+SET status = 'disconnected', disconnected_at = now(), updated_at = now()
+WHERE access_scope = 'user' AND status <> 'disconnected';
+ALTER TABLE ao_github_repository_grants FORCE ROW LEVEL SECURITY;
+ALTER TABLE ao_github_installations FORCE ROW LEVEL SECURITY;
+COMMIT;
+```
+
+The 00081 Down migration runs the same statements. Members reconnect once the
+newer release is back.
+
+### Coder rollout flags
+
+Two settings in each offering file (`true` or `false`) gate Coder session
+data an older control plane cannot read, so the release that introduced them
+stays a safe rollback target:
+
+- `AO_CLOUD_CODER_READABLE_NAMES`: new Coder sessions get the readable
+  `<prefix>-o-<id>` (orchestrator) and `<prefix>-w-<word>-<id>` (worker)
+  workspace names, stored on the session's sandbox profile. Off, new sessions
+  keep the `<prefix>-<id>` name every release computes. A stored name is read
+  either way, so turning the flag off never loses a workspace.
+- `AO_CLOUD_CODER_WORKER_WORKING_FOLDER`: a session whose worker runs as the
+  dedicated `ao-worker` user checks its repository out in the project's working
+  folder (for example `~/work/alice`). Off, those sessions keep the durable
+  root's `repository` folder. A folder already stamped on a session is honored
+  either way.
+
+A release from before these settings computes the legacy workspace name and
+ignores the working folder, so after a rollback to it the sessions created with
+the flags on would lose their workspace or checkout. Staging runs both on.
+Production keeps both off: turn them on in production one release after this
+one ships, so the previous release (the rollback target) can read stored names
+and honors stored working folders. A control plane that is not hosted
+(development, test) turns both on unless they are set.
 
 ## Production promotion
 
@@ -397,10 +535,12 @@ traffic only from the environment's task group.
 
 ### Authentication and callback readiness
 
-Desktop WorkOS login uses PKCE and the custom `ao-app://callback` redirect. The
-public API hostname is therefore not a WorkOS login callback: the desktop app
-only needs its Cloud client base URL changed to the environment's HTTPS
-hostname. Access-token verification and user synchronization are stateless
+Desktop WorkOS login uses PKCE. The installed app's WorkOS redirect is the
+control plane's `/app/auth/return` page, which hands the code to the app
+through the `ao-app://callback` deep link; development builds return to a
+loopback callback (`http://127.0.0.1:3000/callback`) instead. Beyond that
+page, the desktop app only needs its Cloud client base URL changed to the
+environment's HTTPS hostname. Access-token verification and user synchronization are stateless
 across API replicas, with durable identity and organization state in PostgreSQL.
 No ALB stickiness is required.
 
@@ -470,19 +610,35 @@ referenced secret never starts, and the deploy rolls back. Register the producti
 
 ### 2. WorkOS organization metadata
 
-With `AO_CLOUD_CAPABILITY_GATED_PROVIDERS=coder,freestyle`, an organization
-can use a gated provider only when its WorkOS metadata `capabilities` lists it;
-organizations without the key get `AO_CLOUD_DEFAULT_ORG_CAPABILITIES`
-(`freestyle`).
+Coder and Freestyle are open to every organization, Coder customers
+(`capabilities=coder`) included. Each organization picks
+its default in the desktop's Settings (General, Cloud; admins only), and a new project
+records that default (`config.sandboxProvider`), so changing it later moves no
+existing project. Any other provider listed in
+`AO_CLOUD_CAPABILITY_GATED_PROVIDERS` still needs a WorkOS `capabilities` entry
+of the same name; organizations without the key get
+`AO_CLOUD_DEFAULT_ORG_CAPABILITIES` (`freestyle`).
 
-- B2B (contract) organizations: `capabilities=coder` and `billing=contract`.
-  Set this on every production organization that uses Coder today **before**
-  promoting the gated release, or it loses cloud sessions.
-- The internal organization (dogfood): `capabilities=coder,freestyle` and
-  `billing=contract`, in both WorkOS environments, so the team exercises both
-  providers and is never billed.
-- B2C self-serve organizations need nothing: they get the defaults and
-  `self_serve` billing.
+Who pays, once billing is enabled:
+
+- Freestyle needs a plan for every organization: contract, internal and
+  grandfathered ones included.
+- Coder needs a plan (the same plans and limits as Freestyle) unless the
+  organization's metadata has `capabilities=coder`. A billed Coder session
+  idle-pauses on the Freestyle threshold
+  (`AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD`) so it stops using plan minutes
+  when quiet; an unbilled one keeps Coder's keep-warm behavior.
+- Whether a session is billed is decided when it starts and kept for its
+  lifetime; a worker an orchestrator spawns inherits the orchestrator's.
+
+Metadata:
+
+- Organizations that use Coder: `capabilities=coder`. They start on Coder, run
+  it free, and see the bring-your-own Coder settings page; Freestyle stays on
+  offer to them, on a plan, so they also see plans to buy. `billing=contract`
+  no longer exempts anything from sandbox billing; it only keeps paywalled
+  features without a plan.
+- B2C self-serve organizations need nothing: they start on Freestyle.
 
 Staging and production share one WorkOS environment (the same API key), so
 metadata set for a staging test is live for that organization in production too.
@@ -500,11 +656,13 @@ that before testing a change.
 ### 3. Rollout order
 
 1. Staging: set the internal organization's metadata in WorkOS, then
-   `deploy-staging.sh` (staging.env gates `coder,freestyle`). Verify a
-   `capabilities=coder` organization gets Coder, an organization without
-   metadata gets Freestyle only, and `/me` `offering` matches.
+   `deploy-staging.sh`. Verify a `capabilities=coder` organization defaults to
+   Coder, sees the Coder settings page and is still offered Freestyle on a plan,
+   an organization without metadata defaults to Freestyle and is offered both
+   providers, and `/me` `offering` matches.
 2. Billing in staging: with `ao-cloud/staging/stripe` present, verify Checkout,
-   the webhook, and that a `billing=contract` organization is never charged.
+   the webhook, that Coder is free for a `capabilities=coder` organization, and
+   that Freestyle, and Coder without the capability, need a plan.
 3. Production metadata: tag every existing B2B organization and the internal
    organization in WorkOS (step 2).
 4. Clear the worker image scan: the promotion refuses non-allowlisted
@@ -518,9 +676,13 @@ that before testing a change.
    set `AO_CLOUD_SANDBOX_PROVIDERS=coder,freestyle` in
    `scripts/offering/production.env`, and promote again.
 7. Billing in production: create `ao-cloud/production/stripe` and promote
-   again. Organizations created before `exempt_orgs_created_before` stay
-   exempt.
+   again. Before that, list organizations running Freestyle without a plan
+   (contract, internal and grandfathered ones included): their running
+   Freestyle sessions pause within a minute of billing going live, so comp
+   them a plan first if they should keep running. When billing is already
+   live, the release that makes Freestyle paid for everyone is the moment
+   they pause: list and comp them before deploying it.
 
-Rollback: set `AO_CLOUD_CAPABILITY_GATED_PROVIDERS=` (empty) in the promoting
-shell and promote again to open every served provider to every organization,
-or use `rollback-release.sh` for the previous task definition.
+Rollback: use `rollback-release.sh` for the previous task definition. Emptying
+`AO_CLOUD_CAPABILITY_GATED_PROVIDERS` only opens providers other than Coder and
+Freestyle; it never makes Coder free (that takes `capabilities=coder`).

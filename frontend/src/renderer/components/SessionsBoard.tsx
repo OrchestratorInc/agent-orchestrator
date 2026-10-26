@@ -26,10 +26,6 @@ import {
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
-import {
-	useSessionUsageSummaries,
-	type SessionUsageSummary,
-} from "../hooks/useSessionUsageSummaries";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -49,7 +45,7 @@ import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAct
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
-import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { useShellMaybe } from "../lib/shell-context";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { ProjectTerminationFeedback } from "./ShellTopbar";
@@ -69,8 +65,6 @@ type SessionsBoardProps = {
 	hostId?: string;
 };
 
-type UsageBySession = ReadonlyMap<string, SessionUsageSummary>;
-const emptyUsageBySession: UsageBySession = new Map();
 
 // Live merged sessions remain in-flow. A terminated runtime is archived even
 // when its SCM outcome remains `merged`, which is exactly what the daemon's
@@ -100,7 +94,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const columns: KanbanColumnView[] = boardKanbanColumnOrder.map((column) => getKanbanColumnView(column, t));
 	const localWorkspaceQuery = useWorkspaceQuery();
 	const remoteProjectQuery = useRemoteProjectQuery(hostId ?? "", projectId ?? "");
-	const liveUsageBySession = useSessionUsageSummaries(projectId, hostId).data ?? emptyUsageBySession;
 	// Evaluated at render so platform mocks in tests can flip the in-panel chrome.
 	const boardActionsInPanel = usesBoardActionsInPanel();
 	/** Bell lives in the board action row when the shell topbar does not host it. */
@@ -117,20 +110,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const sessions = !hostId && usesPreviewWorkspaceData && demoWorkspaceId && liveSessions.length === 0
 		? demoBoardSessions(demoWorkspaceId)
 		: liveSessions;
-	const usageBySession = !hostId && usesPreviewWorkspaceData
-		? new Map<string, SessionUsageSummary>(
-				sessions.map((session, index) => [
-						session.id,
-						liveUsageBySession.get(session.id) ?? {
-							estimatedCost: null,
-							sessionId: session.id,
-							processedTokens: [18_400, 46_700, 12_900, 81_200, 3_100][index % 5],
-							totalTokens: 100_000,
-							incomplete: false,
-					},
-				]),
-			)
-		: liveUsageBySession;
 	const orchestrator = projectId ? newestActiveOrchestrator(workspaces[0]?.sessions ?? []) : undefined;
 	const projectActions = useProjectOrchestratorAction({
 		projectId,
@@ -198,6 +177,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}, [navigate, hostId]);
 	const openSessionArtifact = useCallback((session: WorkspaceSession, path: string) => {
 		useUiStore.getState().requestWorkspaceFileOpen(session.id, path, hostId, "artifact");
+		openSession(session);
+	}, [openSession, hostId]);
+	const openSessionArtifacts = useCallback((session: WorkspaceSession) => {
+		const uiKey = sessionUiKey(session.id, hostId);
+		useUiStore.getState().initializeInspectorSession(uiKey, Boolean(session.previewUrl), true);
+		useUiStore.getState().setInspectorView(uiKey, "artifacts");
+		useUiStore.getState().setInspectorOpen(uiKey, true);
 		openSession(session);
 	}, [openSession, hostId]);
 
@@ -290,7 +276,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 
 			{/* Reserve only the collapsed archive bar. Expanded archive overlays the
 			    board so lane height (and Needs You scrollbars) stay stable. */}
-			<div className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}>
+			<div
+				className={cn("min-h-0 flex-1 overflow-hidden", hasArchive && archiveToggleOffsetClassName)}
+				style={hasArchive ? { clipPath: "inset(0 0 var(--sessions-archive-height, 58px) 0)" } : undefined}
+			>
 				{projectId && health.state !== "ok" && (!hostId || connected && (health.state !== "missing" || hasConfiguredOrchestratorAgent(workspace))) ? (
 					<div className="mx-3 my-3 flex items-center gap-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
 						<AlertTriangle className="size-icon-base shrink-0 text-warning" aria-hidden="true" />
@@ -340,9 +329,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								memoryTone={chipToneOf(session)}
 								onOpen={() => openSession(session)}
 								onOpenArtifact={(path) => openSessionArtifact(session, path)}
-								onTerminate={!hostId || connected ? () => terminateSession.mutate(session) : undefined}
+								onOpenArtifacts={() => openSessionArtifacts(session)}
+								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
 								session={session}
-								usage={usageBySession.get(session.id)}
 							/>
 						)}
 						sessions={boardSessions}
@@ -357,7 +346,6 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					scopeKey={scopeKey}
 					connected={!hostId || connected}
 					sessions={archived}
-					usageBySession={usageBySession}
 				/>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
@@ -376,14 +364,12 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 	scopeKey,
 	connected,
 	sessions,
-	usageBySession,
 }: {
 	activeScopeRef: React.MutableRefObject<string>;
 	hostId?: string;
 	scopeKey: string;
 	connected: boolean;
 	sessions: WorkspaceSession[];
-	usageBySession: UsageBySession;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -462,7 +448,6 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 						restoreAction={(event) => void restoreArchivedSession(event, session)}
 						restoreError={restoreErrors[session.id]}
 						session={session}
-						usage={usageBySession.get(session.id)}
 					/>
 				)}
 				resetKey={scopeKey}

@@ -8,7 +8,7 @@ trigger: "Using the ao CLI inside an AO Cloud sandbox: spawning, listing, messag
 
 `ao` inside a cloud sandbox is a thin client over the AO control plane. It is a
 different, smaller CLI than the desktop `ao`: there is no `ao session`,
-`ao project`, `ao status`, `ao preview`, or `ao browser` here. Every command is
+`ao project`, `ao status`, or `ao preview` here. Every command is
 `ao help` for the authoritative list.
 
 | Command | What it does | Who can run it | Details |
@@ -20,6 +20,7 @@ different, smaller CLI than the desktop `ao`: there is no `ao session`,
 | `report` | Send a message to the orchestrator that spawned this session | Workers with an orchestrator parent | [commands/orchestration.md](commands/orchestration.md) |
 | `claim-pr` | Attach an existing pull request to this session | Any session | [commands/pull-requests.md](commands/pull-requests.md) |
 | `review trigger` | Start AO's reviewer on this session's open pull requests | Any session | [commands/pull-requests.md](commands/pull-requests.md) |
+| `browser` | Run agent-browser commands (open, snapshot, click, fill, screenshot, ...) in a browser the person sees and can use in AO's Browser panel | Sandboxes with a browser | `ao help` |
 
 ## Conventions
 

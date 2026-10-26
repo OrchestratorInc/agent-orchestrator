@@ -1,11 +1,15 @@
 # Product telemetry
 
 Orchestrator.inc collects limited product-usage and reliability data to learn which parts of
-the app are useful and whether releases are working as expected. Orchestrator.inc does not
-attach an email address. Some events include a GitHub project owner or an
-authenticated username, so they can identify an account. Other events use a
-random installation identifier to group activity. Telemetry is not wholly
-anonymous.
+the app are useful and whether releases are working as expected. If you sign in
+to AO Cloud, Orchestrator.inc sends the email address of that account to PostHog
+as a person property at sign-in and subsequent signed-in launches, along with
+your AO Cloud user ID and GitHub username.
+Without an AO Cloud sign-in, no email address is sent. Some events include a
+GitHub project owner or an authenticated username, so they can identify an
+account. Desktop and daemon events include a random installation identifier
+to group activity even when the event uses an account ID as `distinct_id`.
+Telemetry is not wholly anonymous.
 
 Remote telemetry is enabled in production desktop and mobile releases. A
 packaged desktop release also enables telemetry for the daemon it starts.
@@ -35,8 +39,22 @@ Orchestrator.inc sends structured events in a few broad categories:
   input
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available
-- A random installation identifier and one-way hashes of project or session
-  identifiers when an event needs them
+- If you are signed in to AO Cloud: your AO Cloud user ID on every
+  desktop and daemon event, and a PostHog person profile holding your email
+  address, AO Cloud user ID, and GitHub username. The email is set at sign-in
+  and subsequent signed-in launches from the AO Cloud account itself. It is
+  never read from git config and is not attached to individual events. See
+  "Signing in to AO Cloud" below
+- Your GitHub username, when Orchestrator.inc can resolve the account signed in
+  to its GitHub integration, on every desktop and daemon event (previously only
+  session-start events)
+- Desktop onboarding progress, such as viewing, completing, or leaving the
+  welcome and GitHub sign-in steps, and a one-time install event on first run
+- The Orchestrator.inc version on every daemon event
+- A random `install_id` on every desktop and daemon event, the phone's own
+  stored `install_id` when available, and a `paired_install_id` on phone events
+  while its desktop identity is known,
+  and one-way hashes of project or session identifiers when an event needs them
 - Coarse mobile-app usage, such as pairing, reconnecting, completing onboarding,
   opening a notification, or using a core action
 - Coarse geographic location (country, and where available region and city),
@@ -70,9 +88,8 @@ It also records these events when you create an automation:
 | Event | When it is sent | Automation-specific properties |
 | --- | --- | --- |
 | `ao.renderer.automation_create_opened` | You open the create dialog | None |
-| `ao.renderer.automation_create_requested` | You submit a form that passes local validation | `project_id_hash`, `schedule_preset`, `prompt_length_bucket` |
-| `ao.renderer.automation_create_succeeded` | The create request succeeds | The same properties as the request event |
-| `ao.renderer.automation_create_failed` | The create request fails | The same properties as the request event |
+| `ao.renderer.automation_create_succeeded` | The create request succeeds | `project_id_hash`, `schedule_preset`, `prompt_length_bucket` |
+| `ao.renderer.automation_create_failed` | The create request fails | The same properties as the success event |
 
 These events also include the standard installation and environment information
 described above. The project identifier is hashed before transmission.
@@ -96,7 +113,6 @@ also records these events when you start an artifact session from that page:
 
 | Event | When it is sent | Artifact-specific properties |
 | --- | --- | --- |
-| `ao.renderer.artifact_create_requested` | You pick the Scratchpad or a project in the Create artifact menu | `scope` |
 | `ao.renderer.artifact_create_succeeded` | The session starts | `scope` |
 | `ao.renderer.artifact_create_failed` | Starting the session fails | `scope` |
 
@@ -107,8 +123,8 @@ The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.
 Editing an existing automation does not emit these creation events. Closing the
 create dialog or failing local validation does not emit a separate event.
-Orchestrator.inc uses the creation events to understand completion and abandonment
-of the create flow and which schedule presets people choose.
+Orchestrator.inc uses the outcome events to understand which schedule presets
+people choose and whether creation succeeds.
 
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
@@ -122,10 +138,12 @@ Product telemetry is designed not to include:
 - Shell command arguments, command history, or environment variables
 - Repository names, project names, branch names, or plain-text file paths
 - API keys, access tokens, passwords, or other credentials
-- Names or email addresses
+- Names, or email addresses other than the one on your signed-in AO Cloud
+  account (invitee emails are never sent)
 
-The two explicit account fields are the GitHub owner segment and your
-authenticated GitHub username. Both are described under "What Orchestrator.inc sends". The
+The explicit account fields are the GitHub owner segment, your authenticated
+GitHub username, and, only if you sign in to AO Cloud, your AO Cloud user ID and
+email address. Both are described under "What Orchestrator.inc sends". The
 owner segment is limited to the owning organization or account and never
 includes the repository, path, or URL. Orchestrator.inc does not intentionally send other
 account identity fields, but PostHog can associate related events when they
@@ -140,9 +158,21 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
 
 - Orchestrator.inc generates a random installation identifier on first run. It is stored at
   `~/.ao/data/telemetry_install_id` (or under `AO_DATA_DIR`) and does not encode
-  a personal account. Because Orchestrator.inc uses it to group events, events from that
-  installation may be associated with the GitHub handle sent on a session-start
-  event.
+  a personal account. Desktop and daemon events include it as `install_id`, even
+  when the PostHog `distinct_id` changes at sign-in, sign-out, or reset. It
+  persists across those transitions and process restarts. A paired phone uses
+  its own `distinct_id` and installation identifier, and includes the desktop
+  identifier as `paired_install_id`
+  only after its authenticated identity request succeeds. Pairing changes clear
+  the old value until the new desktop responds. These properties allow events
+  from the same installation to be associated across accounts and with the
+  GitHub handle sent on a session-start event.
+  On upgrade from a build that used the desktop account as the phone's PostHog
+  identity, the phone resets that SDK identity once before sending new events.
+  Its stored phone installation identifier is retained.
+  While signed in, the daemon reports under the AO Cloud user ID. On sign-out
+  or account switch, its anonymous `distinct_id` changes to avoid attributing
+  new anonymous events to the previous person.
 - Project and session identifiers included in telemetry are one-way hashed.
   Hashing hides the plain text but still allows related events to be grouped.
 - Absolute local paths and local application URLs detected in desktop events
@@ -151,100 +181,91 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
+- Remote HTTP 5xx events are not sampled. The minute rollup and the daily
+  rate limit bound them, and real HTTP 500 responses also go to the existing
+  gated Sentry capture once. The local diagnostic stream keeps every
+  occurrence. CLI usage errors are one event per command path and error kind
+  per install per completed UTC day, with `command_path`, `error_kind`, and
+  `count`. At most 20 of those events are sent per day. The minute rate limit
+  does not apply to this event, because each one is already a summary. Paths
+  that are not a known `ao` command are reported as `other`. No raw arguments
+  are included. Each event is stamped at the last millisecond of that UTC day.
+  The on-disk summary is removed on opt-out and when the install ID is retired.
+- Renderer API errors are not sampled. A daemon-unavailable report is skipped
+  while the daemon is still starting. HTTP 409 responses are dropped only for
+  `POST /api/v1/sessions/:id/workspace/diffs`,
+  `GET /api/v1/sessions/:id/conversation/config-options`,
+  `GET /api/v1/sessions/:id/conversation/models`, and
+  `GET /api/v1/sessions/:id/conversation/skills`. Codex
+  account management being unwired, and an already-closed shell terminal, are
+  not analytics events. An expired GitHub token still reports. A Codex login
+  terminal failure is `CODEX_LOGIN_TERMINAL_UNAVAILABLE`. An incomplete Codex
+  account setup is `CODEX_ACCOUNT_SETUP_INCOMPLETE`. Both still report on the
+  account routes. The account event stream stays open for setup-incomplete
+  and for account management that is not wired in this process, so those
+  conditions do not reconnect in a loop. A failed project add emits
+  `ao.renderer.project_add_failed` with `error_code`. A failed project clone
+  emits `ao.renderer.project_clone_failed` with `error_code`. The code is the
+  daemon's API error code, or `DAEMON_NOT_READY`, `REQUEST_FAILED` or
+  `NO_PROJECT` when the request never reached a usable response. A clone the
+  user cancels emits nothing.
+- An updater failure streak emits one `ao.renderer.update_failed` until a
+  successful download of that target, or a successful check for a check-phase
+  streak, clears it. Retries in the streak do not emit again. Each install
+  also emits one `ao.renderer.update_failures_daily` event, with the UTC day
+  and failure count, after that day ends. A rejected capture leaves the streak
+  unsent. A restart keeps the open streak.
+- `ao.review.triggered` counts a newly created or restarted run and does not
+  include a `reused` property. Reused sweeps are not events, and
+  `trigger_failed` is no longer a subset of `triggered`. The series breaks on
+  the merge of this change. Issue #4665 previously counted every attempt.
 - Session recording is disabled in the desktop and mobile apps. Orchestrator.inc does not
   automatically record screens, clicks, or touches.
-- Person profiles are off for every event except the session-start event that
-  carries your GitHub handle. That one event sets a person property so activity
-  can be grouped by GitHub username, and clears build details (version,
-  platform, surface, build mode) that older Orchestrator.inc versions stored on the profile;
-  other events do not set a person profile. Project-add events still carry the
-  GitHub owner segment described above, so this is not an anonymity guarantee.
+- Person profiles are off for anonymous events. A profile is created when a
+  GitHub username is first resolved (one update that sets the username and
+  clears build details older versions stored on the profile) and when you sign
+  in to AO Cloud (your email, AO Cloud user ID, and GitHub username). After an
+  AO Cloud sign-in, desktop and daemon events are linked to that profile. A
+  paired phone retains its own identity and reports the Cloud ID as an event
+  property. Project-add events still carry the GitHub owner segment
+  described above, so this is not an anonymity guarantee.
 
 Separately from remote telemetry, the daemon can keep a local copy of
 operational events in Orchestrator.inc's SQLite database. While local telemetry is active, Orchestrator.inc
 periodically prunes records older than 30 days. This data stays under `~/.ao` on
 your machine.
 
-## Agent-switch failure reporting (staged, production disabled)
+## Signing in to AO Cloud
 
-Orchestrator.inc contains a separate, consent-gated reliability path for asynchronous
-agent-switch failures. It is intentionally failure-only: a successful switch,
-an expected validation rejection, an idempotent replay, a stale callback, or a
-transient condition that is proven recovered creates no failure receipt, no
-outbox payload, and no Sentry event.
+When you sign in to AO Cloud, the desktop app calls PostHog `identify` with your
+AO Cloud user ID as the identity and sets three person properties:
+`email`, `ao_cloud_user_id`, and `github_login`. The initial anonymous
+`distinct_id` is merged into that identity on first sign-in. Later signed-in
+daemon events use the AO Cloud user ID directly. A paired phone keeps its own
+identity and carries the Cloud user ID only as an event property. Account fields
+on events are the user ID and, once resolved, the
+GitHub username (as `ao_cloud_user_id` and `github_actor`). The installation
+properties described above are also event fields. The email is a person
+property only. It comes from the AO Cloud
+account you signed in with and is never read from git config. The daemon and the
+mobile app never receive your email; they receive only the user ID. Signing out
+stops attributing new desktop events to you. Only the production WorkOS sign-in
+is identified.
 
-When enabled in a future release, an eligible failure event is limited to a
-closed set of operational fields. It includes:
-
-- Event ID and occurrence time.
-- Bounded title, level, environment, platform, operating system, release, and
-  channel.
-- Report kind, subsystem, classifier callsite, durable phase, failure point,
-  broad error or fault code, execution and session mode, source and target
-  harness, target-start mode, runtime backend, call outcome, ownership,
-  compensation, user impact, elapsed-time bucket, and tri-state source-stop,
-  target-owner, and recovery-gate facts.
-
-The local outbox schema and envelope versions are not exported as event fields.
-Eligible semantic and process events may attach a bounded, sanitized stack with
-repository-relative filenames, line numbers, packages, and function names.
-Panic events require those sanitized frames but never include the panic value.
-
-The event never contains prompts, conversation content, terminal output,
-commands, provider payloads, repository or branch names, local paths, runtime
-handles, native identities, switch/session/project identifiers, raw errors, or
-panic values. Local identifiers used to decide whether a frontend failure is
-still current are stripped before event construction.
-
-Eligible daemon events are stored in a dedicated local delivery outbox before
-network delivery. Every pending, leased, delivered, or discarded payload row
-has a hard seven-day expiry. An already-consented payload is intentionally
-independent of the switch foreign key, so deleting the switch or session does
-not delete that payload before its TTL. Separate payload-free receipts prevent
-the same incident from being enrolled again. Terminal/run receipts remain for
-seven days; an unresolved receipt may remain while its switch remains
-unresolved and, after resolution, is retained for seven more days. Receipts
-contain only the minimum local deduplication facts and are never sent remotely.
-
-Opting in does not backfill old terminal switch history. It may enroll the
-current state of an unresolved recovery marker as a new incident at opt-in time,
-so Orchestrator.inc can report a problem that is still affecting the user without exporting a
-pre-consent occurrence timestamp. Delivery is at-least-once: if the provider
-accepts an event but its response is lost, Orchestrator.inc may retry the same event ID. This
-can produce more than one provider occurrence, while the stable fingerprint
-groups the occurrences into one issue.
-
-The required opt-out sequence is:
-
-1. Electron main closes and drains its sender.
-2. The daemon closes and drains its delivery gate.
-3. Main durably writes the disabled consent generation.
-4. The daemon rereads that generation, mirrors it, and purges every pending,
-   leased, delivered, or discarded outbox payload.
-5. Main purges its local transport cache and renderer queue.
-
-Only then may the UI acknowledge the change. If the daemon is unavailable or
-any cleanup cannot be proven, the UI reports `cleanup_pending` rather than
-claiming completion. Payload-free receipts remain solely to prevent a later
-duplicate enrollment. A provider may already have accepted a request that was
-in flight before cancellation. Orchestrator.inc cannot recall data already received by the
-provider.
-
-This path uses Sentry as the intended processor. Like any remote endpoint,
-Sentry receives connection metadata such as the source IP address even though
-Orchestrator.inc does not place an IP address in the event body. The Sentry organization's IP
-storage/scrubbing setting, data residency, retention, and automatic-context
-settings have not yet received the required dated privacy approval. The
-production feature flag therefore remains disabled and Orchestrator.inc does not initialize
-this agent-switch Sentry sender in production. Windows fails closed: event
-consent is treated as disabled and an enable acknowledgement is rejected until
-a tested native write-through replacement satisfies the policy-file durability
-contract.
+AO Cloud itself reports a few server-side events for signed-in users, currently
+`invite.sent` (organization role and a hash of the organization ID, never the
+invitee's email). Event names for pricing, checkout, and subscriptions are
+reserved with fixed property allowlists but nothing sends them yet. These
+server-side events are off unless the AO Cloud operator configures PostHog and
+are not controlled by the desktop opt-out below, which cannot reach the hosted
+service. Contact us to have an account's data removed.
 
 ## Sharing your GitHub handle
 
-Orchestrator.inc resolves the GitHub account signed in to its GitHub integration and includes
-that username on session-start events. It is sent both as the event property
+Orchestrator.inc resolves the GitHub account signed in to its GitHub integration (at
+daemon start, and again in the desktop app shortly after launch) and includes
+that username on desktop and daemon events as `github_actor`, and on the PostHog
+person as `github_actor` and `github_login`. It is sent both as the event property
 `github_actor` and as a PostHog person property on Orchestrator.inc's shared installation
 person, which lets us group product activity by GitHub username and reach out to
 active users for feedback. Other events from the same installation can be
@@ -253,16 +274,29 @@ associated with that person in PostHog.
 Orchestrator.inc only sends the handle when the signed-in account is a personal (human)
 account; it never sends an organization or a bot token, and if no GitHub token is
 available it sends nothing. The handle is part of product telemetry and has no
-separate switch: turning telemetry off (see below) stops it, because the
-session-start event that carries it is then never sent. Anything already stored
-in PostHog from earlier events is not deleted retroactively.
+separate switch: turning telemetry off (see below) stops it. Anything already
+stored in PostHog from earlier events is not deleted retroactively.
 
 ## Turn desktop and daemon telemetry off
 
-The desktop General Settings page includes an **Event reporting** control for
-the staged agent-switch reliability path. The environment-variable controls
-below continue to govern the existing desktop/daemon product-telemetry paths.
-Set all three variables in the environment used to launch Orchestrator.inc:
+The simplest way is **Settings > General > Privacy > Share usage analytics**.
+Turning it off stops PostHog analytics in the desktop interface, the daemon, and
+any paired phone, and resets the PostHog identity in the desktop app so no
+identity (user ID, email, GitHub username) stays in the client. It takes effect
+immediately and is remembered across restarts (it is a marker file,
+`telemetry_opt_out`, next to the installation identifier). A paired phone picks
+it up the next time it connects and keeps it until a paired desktop that has
+analytics on tells it otherwise. Turning it back on resumes sending; the desktop
+interface uses a fresh anonymous identifier until the next restart. Data already
+sent to PostHog is not deleted.
+
+The **Share error events** control on the same page covers error diagnostics
+only: the daemon's Sentry capture of 5xx errors and panics. The
+daemon tags these error events with the same `install_id` when the installation
+identifier is available. If it cannot be read, consented error reporting
+continues without that tag. The tag does not include email or local paths. The
+environment-variable controls below also govern the desktop/daemon
+product-telemetry paths, for example in managed environments. Set all three variables in the environment used to launch Orchestrator.inc:
 
 ```bash
 export AO_TELEMETRY_RENDERER=off
@@ -282,15 +316,14 @@ Finder or Dock.
 If you run the daemon without the desktop app, event capture and remote export
 are already off unless you enable them.
 
-These environment variables do not control the mobile app. The current
-production mobile app does not provide an in-app telemetry opt-out. Turning
-desktop or daemon product telemetry off stops new collection there; it does not
+These environment variables do not control the mobile app; the in-app switch
+above does, through a paired desktop. A phone that was never paired to a desktop
+has no in-app opt-out. Turning
+desktop or daemon product telemetry off does not
 delete events already sent to PostHog, remove the local installation identifier,
 or delete existing local product-telemetry records. Automatic deletion of those
 local records older than 30 days resumes if daemon event capture is enabled
-again. The separate Event reporting opt-out follows the purge sequence above:
-it deletes agent-switch outbox payloads but retains the durable switch/failure
-state required for product recovery and payload-free deduplication receipts.
+again.
 
 ## Questions or corrections
 

@@ -103,18 +103,16 @@ beforeEach(() => {
 		"box-a": { hostId: "box-a", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-a")] },
 		"box-b": { hostId: "box-b", id: "shared", name: "Todo App", path: "/todo", orchestratorAgent: "opencode", sessions: [worker("box-b", "Fix billing")] },
 	};
-	mocks.remoteGet.mockImplementation(async (_hostId: string, path: string) => path === "/api/v1/usage/sessions"
-		? { data: { sessions: [] } } : { data: { prs: [] } });
+	mocks.remoteGet.mockResolvedValue({ data: { prs: [] } });
 	mocks.remotePost.mockResolvedValue({ data: {}, error: undefined });
 });
 
-it("renders the shared board with host-scoped data, usage, PRs, actions, and navigation", async () => {
+it("renders the shared board with host-scoped data, PRs, actions, and navigation", async () => {
 	const { showHost } = renderBoard("box-a");
 	expect(screen.getByTestId("board")).toHaveAttribute("data-host-id", "box-a");
 	expect(screen.getByText("Fix login")).toBeVisible();
 	expect(screen.queryByText("Local worker")).toBeNull();
 	expect(screen.queryByTestId("daemon-startup-loader")).toBeNull();
-	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-a", "/api/v1/usage/sessions", expect.anything()));
 	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-a", "/api/v1/sessions/{sessionId}/pr", expect.anything()));
 	fireEvent.click(screen.getByRole("button", { name: "Fix login" }));
 	expect(mocks.navigate).toHaveBeenCalledWith({
@@ -124,7 +122,6 @@ it("renders the shared board with host-scoped data, usage, PRs, actions, and nav
 	showHost("box-b");
 	expect(screen.getByText("Fix billing")).toBeVisible();
 	expect(screen.queryByText("Fix login")).toBeNull();
-	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-b", "/api/v1/usage/sessions", expect.anything()));
 	await waitFor(() => expect(mocks.remoteGet).toHaveBeenCalledWith("box-b", "/api/v1/sessions/{sessionId}/pr", expect.anything()));
 	expect(mocks.localGet).not.toHaveBeenCalled();
 });

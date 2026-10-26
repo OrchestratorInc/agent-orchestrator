@@ -71,6 +71,13 @@ describe("side delivery draft ownership", () => {
 		return { ...hook, sending };
 	}
 
+	it("keeps existing sides accessible while creation is unsupported", async () => {
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false, true, undefined, undefined, false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await expect(hook.result.current.create()).rejects.toThrow("does not support resumable side chats");
+		expect(post).not.toHaveBeenCalled();
+	});
+
 	it("preserves a reference added while acceptance is pending", async () => {
 		const hook = await beginSend();
 		act(() =>

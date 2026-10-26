@@ -42,6 +42,7 @@ var claudeActivityHooks = []activityHook{
 	{"PostToolUseFailure", "post-tool-use-failure", ""},
 	{"PermissionRequest", "permission-request", ""},
 	{"Stop", "stop", ""},
+	{"StopFailure", "stop-failure", ""},
 	{"Notification", "notification", ""},
 	{"SessionEnd", "session-end", ""},
 }
@@ -51,6 +52,8 @@ var codexActivityHooks = []activityHook{
 	{"UserPromptSubmit", "user-prompt-submit", ""},
 	{"PermissionRequest", "permission-request", ""},
 	{"Stop", "stop", ""},
+	// Codex 0.150+ only. Older releases (AO installs 0.147) ignore it; the
+	// worker reports their interrupts from the rollout's turn_aborted.
 	{"Interrupt", "interrupt", ""},
 }
 
@@ -147,6 +150,7 @@ func installCursorActivityHooks(binary, workspace string) error {
 	}); err != nil {
 		return fmt.Errorf("install Cursor activity hooks: %w", err)
 	}
+	excludeFromGit(workspace, ".cursor/hooks.json")
 	return nil
 }
 

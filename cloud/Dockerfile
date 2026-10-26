@@ -4,6 +4,7 @@ ARG BUILDPLATFORM
 ARG TARGETOS=linux
 ARG TARGETARCH
 ARG EXPAT_BUILD_IMAGE=debian:trixie-slim
+ARG BROTLI_BUILD_IMAGE=debian:trixie-slim
 
 FROM --platform=${BUILDPLATFORM} golang:1.27.1-bookworm AS build
 ARG TARGETOS
@@ -58,9 +59,46 @@ RUN dpkg-source -x expat_2.9.0-1.dsc source && \
     cc -Wall -Wextra -Werror expat-buffer-bounds.c -lexpat -o /out/expat-buffer-bounds && \
     /out/expat-buffer-bounds
 
+# Trixie has no fix for CVE-2026-111497 yet. Rebuild Debian's pinned Brotli
+# 1.1.0 source on Trixie with upstream's decoder fix, the only change in
+# upstream 1.1.1, and version the package 1.1.1 to match that release.
+# Remove this stage once Trixie's libbrotli1 includes the upstream fix.
+FROM ${BROTLI_BUILD_IMAGE} AS brotli-build
+WORKDIR /build
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+        build-essential cmake debhelper fakeroot && \
+    rm -rf /var/lib/apt/lists/*
+ADD --checksum=sha256:39b06802a852629132d549a7f7449dee7f435e801706714a4bc2ea2f15b28f36 \
+    https://deb.debian.org/debian/pool/main/b/brotli/brotli_1.1.0-2.dsc ./
+ADD --checksum=sha256:10973f4b4199eafa1d5735ef661ddb2ec2f97319ee9fd1824d4aabe08cff5265 \
+    https://deb.debian.org/debian/pool/main/b/brotli/brotli_1.1.0.orig.tar.gz ./
+ADD --checksum=sha256:3d913a3740bcad9a294007575a6beb1846beadbd62b44fb2bf9fdaeddea3236f \
+    https://deb.debian.org/debian/pool/main/b/brotli/brotli_1.1.0-2.debian.tar.xz ./
+ADD --checksum=sha256:d6f962509000223def7062958229bd08457e5e032e7ed0d1d94fb790b054b1fc \
+    https://github.com/google/brotli/commit/0ed4268a4401abcb4472096340477cf4af7d1a2b.patch?full_index=1 \
+    ./0ed4268a44-detect-invalid-stream-earlier.patch
+RUN dpkg-source -x brotli_1.1.0-2.dsc source && \
+    cd source && \
+    mv /build/0ed4268a44-detect-invalid-stream-earlier.patch debian/patches/ && \
+    echo 0ed4268a44-detect-invalid-stream-earlier.patch >> debian/patches/series && \
+    { printf '%s\n' \
+        'brotli (1.1.1-0+ao1) trixie; urgency=high' \
+        '' \
+        '  * Apply upstream commit 0ed4268a44 (CVE-2026-111497).' \
+        '' \
+        ' -- Agent Orchestrator <root@localhost>  Fri, 23 Oct 2026 00:00:00 +0000' \
+        '' && cat debian/changelog; } > debian/changelog.new && \
+    mv debian/changelog.new debian/changelog && \
+    dpkg-buildpackage -b -us -uc -Pnopython --jobs=2 && \
+    cd /build && \
+    test "$(dpkg-deb -f libbrotli1_1.1.1-0+ao1_*.deb Version)" = 1.1.1-0+ao1 && \
+    mkdir /out && \
+    cp libbrotli1_1.1.1-0+ao1_*.deb /out/libbrotli1.deb
+
 FROM node:22-trixie-slim AS worker
 ARG TARGETARCH
-ARG CLAUDE_CODE_VERSION=2.1.228
+ARG CLAUDE_CODE_VERSION=2.1.287
 ARG CODEX_VERSION=0.147.0
 ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
 # OpenCode v2 ships as a NEW package, @opencode/cli (v1 was opencode-ai, whose
@@ -114,10 +152,45 @@ RUN case "${TARGETARCH}" in \
         | tar --strip-components=1 -xzf - -C "/opt/cursor-agent/${CURSOR_AGENT_VERSION}" && \
     ln -s "/opt/cursor-agent/${CURSOR_AGENT_VERSION}/cursor-agent" /usr/local/bin/cursor-agent && \
     cursor-agent --version
+# The agent browser ao-worker starts on first use: headless Chromium, fonts that
+# render CJK, Arabic and Devanagari pages instead of boxes, and the agent-browser
+# CLI. Only the local Docker provider runs sessions in this image, so
+# compose.yaml sets AGENT_BROWSER=1; hosted sessions run in the Coder and
+# Freestyle images, and leaving Chromium out keeps its CVEs out of the published
+# worker scan. agent-browser version and sha256 pins: keep in lockstep with
+# frontend/scripts/prepare-agent-browser.mjs.
+ARG AGENT_BROWSER=0
+RUN if [ "${AGENT_BROWSER}" != 1 ]; then exit 0; fi && \
+    apt-get update && \
+    apt-get install --yes --no-install-recommends \
+        chromium \
+        fonts-liberation \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
+        fonts-noto-core && \
+    rm -rf /var/lib/apt/lists/* && \
+    chromium --version && \
+    agent_browser_version=0.38.1 && \
+    case "${TARGETARCH}" in \
+        amd64) agent_browser_target=linux-x64 \
+            agent_browser_sha256=5100149a1903211c889de4e545bf36d90803740cea4f99aa22651649f9205ea1 ;; \
+        arm64) agent_browser_target=linux-arm64 \
+            agent_browser_sha256=937b315ee0761e8a62f7950ddcfef9b3d3d8e8d5eb9c9d2bf9e23e5725664511 ;; \
+        *) echo "unsupported agent-browser architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl --fail --location --silent --show-error -o /usr/local/bin/agent-browser \
+        "https://github.com/vercel-labs/agent-browser/releases/download/v${agent_browser_version}/agent-browser-${agent_browser_target}" && \
+    echo "${agent_browser_sha256}  /usr/local/bin/agent-browser" | sha256sum -c - && \
+    chmod 0755 /usr/local/bin/agent-browser && \
+    agent-browser --version
 RUN --mount=type=bind,from=expat-build,source=/out,target=/tmp/expat-fix \
     dpkg -i /tmp/expat-fix/libexpat1.deb && \
     /tmp/expat-fix/expat-buffer-bounds && \
     test "$(dpkg-query -W -f='${Version}' libexpat1)" = 2.9.0-1
+RUN --mount=type=bind,from=brotli-build,source=/out,target=/tmp/brotli-fix \
+    dpkg -i /tmp/brotli-fix/libbrotli1.deb && \
+    test "$(dpkg-query -W -f='${Version}' libbrotli1)" = 1.1.1-0+ao1 && \
+    curl --version | grep -q brotli
 COPY --from=build --chown=ao-worker:ao-worker /out/ao-worker /ao-worker
 COPY --from=build --chown=ao-worker:ao-worker /out/ao /usr/local/bin/ao
 USER ao-worker

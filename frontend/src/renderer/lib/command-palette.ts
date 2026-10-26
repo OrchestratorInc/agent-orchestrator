@@ -1,3 +1,4 @@
+import { sessionBranchPresentation } from "./session-branch";
 import type { TFunction } from "i18next";
 import {
 	attentionZone,
@@ -20,8 +21,12 @@ import {
 	type PRReviewState,
 } from "./session-reviews";
 import { appI18n, type MessageKey } from "../i18n";
+import type { components } from "../../api/schema";
+import type { AppShortcutId } from "../../shared/shortcuts";
+import type { GlobalSettingsSection } from "../stores/ui-store";
+import { renderedSnippetText } from "./chat-annotation-navigation";
 
-export type CommandGroupId = "current" | "attention" | "files" | "projects" | "sessions" | "prs" | "global";
+export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
 
 export type NavigateTarget =
 	| { to: "/" }
@@ -53,7 +58,10 @@ export type CommandAction =
 	| { kind: "open-orchestrator"; projectId: string }
 	| { kind: "open-session-actions"; sessionId: string }
 	| { kind: "open-file-search"; projectId: string; target?: WorkspaceFileSearchTarget }
-	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string }
+	| { kind: "open-workspace-file"; target: WorkspaceFileSearchTarget; path: string; line?: number }
+	| { kind: "open-chat-message"; sessionId?: string; projectId?: string; reviewId?: string; messageId: string; text: string }
+	| { kind: "open-settings-section"; section: GlobalSettingsSection; /** Visible label of the row to land on. */ focus?: string }
+	| { kind: "run-shortcut"; shortcut: AppShortcutId }
 	| { kind: "resume-session"; projectId: string; sessionId: string }
 	| { kind: "copy-branch"; branch: string }
 	| { kind: "open-pr"; url: string }
@@ -72,6 +80,10 @@ export type CommandItem = {
 	searchOnly?: boolean;
 	zone?: AttentionZone;
 	action?: CommandAction;
+	/** A matched line shown under the title, with the matched spans marked. */
+	snippet?: { text: string; highlights: { start: number; end: number }[]; code?: boolean };
+	/** Rows the daemon found by content: already matched, ranked by matchScore's content tier. */
+	contentMatch?: boolean;
 };
 
 export type CommandPaletteContext = {
@@ -90,15 +102,18 @@ export type CommandPaletteContext = {
 	reviewStatesBySessionId?: Readonly<Record<string, PRReviewState[]>>;
 };
 
-export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "projects", "sessions", "prs", "global"];
+export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
 
 const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
 	current: "command.group.current",
 	attention: "command.group.attention",
 	files: "command.group.files",
+	content: "command.group.content",
+	messages: "command.group.messages",
 	projects: "command.group.projects",
 	sessions: "command.group.sessions",
 	prs: "command.group.prs",
+	settings: "command.group.settings",
 	global: "command.group.global",
 };
 
@@ -113,6 +128,12 @@ export const commandGroupLabel: Record<CommandGroupId, string> = {
 	get files() {
 		return appI18n.t(commandGroupLabelKeys.files);
 	},
+	get content() {
+		return appI18n.t(commandGroupLabelKeys.content);
+	},
+	get messages() {
+		return appI18n.t(commandGroupLabelKeys.messages);
+	},
 	get projects() {
 		return appI18n.t(commandGroupLabelKeys.projects);
 	},
@@ -121,6 +142,9 @@ export const commandGroupLabel: Record<CommandGroupId, string> = {
 	},
 	get prs() {
 		return appI18n.t(commandGroupLabelKeys.prs);
+	},
+	get settings() {
+		return appI18n.t(commandGroupLabelKeys.settings);
 	},
 	get global() {
 		return appI18n.t(commandGroupLabelKeys.global);
@@ -192,8 +216,8 @@ export function buildFileSessionCommands(
 		id: `file-session:${workspace.hostId ?? "local"}:${session.id}`,
 		group: "sessions",
 		title: session.title,
-		subtitle: `${session.branch || workspace.name} · ${session.displayStatus || session.status}`,
-		keywords: [session.branch ?? "", workspace.name, session.displayStatus ?? "", session.status],
+		subtitle: `${sessionBranchPresentation(session).branch || workspace.name} · ${session.displayStatus || session.status}`,
+		keywords: [sessionBranchPresentation(session).branch ?? "", workspace.name, session.displayStatus ?? "", session.status],
 		action: {
 			kind: "open-file-search",
 			projectId: workspace.id,
@@ -226,6 +250,62 @@ export function buildWorkspaceFileCommands(
 	});
 }
 
+type WorkspaceContentHit = components["schemas"]["WorkspaceContentSearchHitResponse"];
+type ConversationSearchHit = components["schemas"]["ConversationSearchHitResponse"];
+
+/** Splits daemon search text, whose matches are wrapped in \x02 and \x03, into text and spans. */
+function markedSnippet(marked: string, code?: boolean): NonNullable<CommandItem["snippet"]> {
+	const highlights: { start: number; end: number }[] = [];
+	let text = "";
+	for (const [index, part] of marked.split(/[\x02\x03]/).entries()) {
+		if (index % 2 === 1) highlights.push({ start: text.length, end: text.length + part.length });
+		text += part;
+	}
+	return { text, highlights, ...(code ? { code } : {}) };
+}
+
+/** One row per file: its best matching line, opened at that line. */
+export function buildContentSearchCommands(
+	target: WorkspaceFileSearchTarget,
+	hits: readonly WorkspaceContentHit[],
+): CommandItem[] {
+	return hits.map((hit) => {
+		const { basename, directory } = workspacePathParts(hit.path);
+		return {
+			id: `content:${target.hostId ?? "local"}:${target.sessionId}:${hit.path}`,
+			group: "content",
+			title: `${basename}:${hit.line}`,
+			subtitle: directory,
+			contentMatch: true,
+			snippet: markedSnippet(hit.text, true),
+			action: { kind: "open-workspace-file", target, path: hit.path, line: hit.line },
+		};
+	});
+}
+
+/** One row per chat message, opened scrolled to it. */
+export function buildChatSearchCommands(hits: readonly ConversationSearchHit[], t: TFunction = appI18n.t): CommandItem[] {
+	return hits.map((hit) => {
+		const snippet = markedSnippet(hit.text);
+		return {
+			id: `message:${hit.messageId}`,
+			group: "messages",
+			title: hit.title || t("command.chatFallback"),
+			subtitle: hit.reviewId ? t("terminal.reviewer") : undefined,
+			contentMatch: true,
+			snippet,
+			action: {
+				kind: "open-chat-message",
+				...(hit.sessionId ? { sessionId: hit.sessionId } : {}),
+				...(hit.projectId ? { projectId: hit.projectId } : {}),
+				...(hit.reviewId ? { reviewId: hit.reviewId } : {}),
+				messageId: hit.messageId,
+				text: renderedSnippetText(snippet.text.replace(/^…|…$/g, "")),
+			},
+		};
+	});
+}
+
 function sessionCommand(
 	workspace: WorkspaceSummary,
 	session: WorkspaceSession,
@@ -237,7 +317,7 @@ function sessionCommand(
 		title: session.title,
 		subtitle: workspace.name,
 		zone: attentionZone(session),
-		keywords: [workspace.name, session.branch ?? "", session.issueId ?? ""],
+		keywords: [workspace.name, sessionBranchPresentation(session).branch ?? "", session.issueId ?? ""],
 		action: { kind: "open-session-actions", sessionId: session.id },
 	};
 }
@@ -248,6 +328,7 @@ export function buildSessionActions(
 	t: TFunction = appI18n.t,
 ): CommandItem[] {
 	const items: CommandItem[] = [];
+	const branch = sessionBranchPresentation(session).branch;
 
 	items.push({
 		id: `session-action:jump:${session.id}`,
@@ -268,14 +349,14 @@ export function buildSessionActions(
 		});
 	}
 
-	if (session.branch && !isOrchestratorSession(session) && !isSyntheticBranch(session)) {
+	if (branch && !isOrchestratorSession(session) && !isSyntheticBranch(session)) {
 		items.push({
 			id: `session-action:copy-branch:${session.id}`,
 			group: "current",
 			title: t("command.copyBranch"),
-			subtitle: session.branch,
-			keywords: ["branch", "git", session.branch, session.title],
-			action: { kind: "copy-branch", branch: session.branch },
+			subtitle: branch,
+			keywords: ["branch", "git", branch, session.title],
+			action: { kind: "copy-branch", branch },
 		});
 	}
 
@@ -366,7 +447,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 		});
 	}
 
-	const currentBranch = currentSession?.branch;
+	const currentBranch = sessionBranchPresentation(currentSession).branch;
 	if (currentSession && currentBranch && !isOrchestratorSession(currentSession) && !isSyntheticBranch(currentSession)) {
 		items.push({
 			id: "current-copy-branch",
@@ -430,7 +511,7 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 					String(pr.number),
 					pr.url,
 					session.title,
-					session.branch ?? "",
+					sessionBranchPresentation(session).branch ?? "",
 					workspace.name,
 					pr.state,
 				];
@@ -548,9 +629,32 @@ function isSubsequence(query: string, haystack: string): boolean {
 	return i === query.length;
 }
 
+/**
+ * Content rows rank below any name that holds every typed word, so "hide
+ * sidebar" runs Toggle sidebar instead of opening a file that mentions it, and
+ * above loose fuzzy name matches. Among content rows, the share of typed words
+ * the snippet marks puts an exact chat sentence above a file matching one word.
+ */
+function contentMatchScore(q: string, item: CommandItem): number {
+	const words = q.split(/\s+/).filter((word) => word.length > 1);
+	const snippet = item.snippet;
+	if (!snippet || words.length === 0) return 200;
+	const marked = snippet.highlights.map(({ start, end }) => snippet.text.slice(start, end).toLowerCase());
+	const covered = words.filter((word) => marked.some((span) => span.includes(word) || word.startsWith(span))).length;
+	return 200 + Math.round((60 * covered) / words.length);
+}
+
+/** A typed word of 4+ letters missing at most two letters of a word in text: "sidbar" for "sidebar". */
+function nearMissIn(word: string, text: string): boolean {
+	if (word.length < 4) return false;
+	return text.split(/[^\p{L}\p{N}]+/u).some((candidate) =>
+		candidate[0] === word[0] && candidate.length >= word.length && candidate.length - word.length <= 2 && isSubsequence(word, candidate));
+}
+
 export function matchScore(query: string, item: CommandItem): number {
 	const q = query.trim().toLowerCase();
 	if (!q) return 1;
+	if (item.contentMatch) return contentMatchScore(q, item);
 	const title = item.title.toLowerCase();
 	const extras = [item.subtitle ?? "", ...(item.keywords ?? [])].join(" ").toLowerCase();
 
@@ -563,6 +667,13 @@ export function matchScore(query: string, item: CommandItem): number {
 	if (titleIdx === 0) return 1000;
 	if (titleIdx > 0) return 800 - titleIdx;
 	if (extras.includes(q)) return 500;
+	// Every word somewhere, in any order: "add codex account", "hide sidebar",
+	// "toggle sidbar".
+	const words = q.split(/\s+/);
+	const inTitle = (word: string) => title.includes(word) || nearMissIn(word, title);
+	if (words.length > 1 && words.every((word) => inTitle(word) || extras.includes(word) || nearMissIn(word, extras))) {
+		return 300 + Math.round((100 * words.filter(inTitle).length) / words.length);
+	}
 	if (isSubsequence(q, title)) return 200;
 	if (isSubsequence(q, extras)) return 100;
 	return 0;

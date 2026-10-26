@@ -128,17 +128,25 @@ type Session struct {
 	// terminal on it and re-attach to the live agent instead of clinging to the
 	// dead epoch's exited terminal. 0 when no worker has ever connected.
 	WorkerEpoch int64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// RequestedOutput is the deliverable the session was created for: empty
+	// for the ordinary task flow, RequestedOutputArtifact for a file.
+	RequestedOutput string
+	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
+	OutputType string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // CoderWorkspaceRef is the non-secret identity of one session's Coder
-// workspace: the deployment origin, the owning Coder user and the project's
-// workspace name prefix (empty for the default ao-<id> name).
+// workspace: the deployment origin, the owning Coder user, the project's
+// workspace name prefix (empty for the default ao-<id> name) and the
+// workspace name AO stored when it created the session (empty for sessions
+// created before names were stored, whose name is computed from the prefix).
 type CoderWorkspaceRef struct {
 	BaseURL    string
 	Owner      string
 	NamePrefix string
+	Name       string
 }
 
 // Status derives the session's display status from runtime and pull request facts.
@@ -170,8 +178,22 @@ type CreateSession struct {
 	Model           string
 	ReasoningEffort string
 	DeniedCommands  []string
-	Interface       SessionInterface
-	Provider        string
+	// Interface is the interface the caller explicitly requested; empty
+	// resolves through StartInterface at create.
+	Interface SessionInterface
+	// DefaultInterface is the user's default session interface the session was
+	// created with. It resolves this session's interface (StartInterface) and
+	// is stored with the session's agent config (agent_config.defaultInterface)
+	// for the workers an orchestrator spawns, which resolve theirs from it as
+	// local spawns resolve from the daemon's default. Omitted when empty so the
+	// idempotency payload of a create without it is unchanged.
+	DefaultInterface SessionInterface `json:",omitempty"`
+	// Branch is the session's git branch. Empty means a generated
+	// <prefix>/<short id>; a named branch that already exists on the remote is
+	// continued from its commits. Omitted when empty so the idempotency payload
+	// of every other create is unchanged.
+	Branch   string `json:",omitempty"`
+	Provider string
 	// SandboxConnectionID names a bring-your-own provider credential. It is
 	// empty for sandboxes that run on the platform's own account.
 	SandboxConnectionID string
@@ -187,6 +209,17 @@ type CreateSession struct {
 	// orchestrator, a standalone worker, or a worker created for a project that
 	// has no active orchestrator.
 	ParentSessionID string
+	// CoderCapability: the caller's organization holds the coder capability
+	// (WorkOS metadata capabilities=coder), so its Coder sessions are not
+	// billed. Set by the HTTP layer, which owns the capability rule; a worker
+	// an orchestrator spawns inherits its parent's billing instead. It is read
+	// from a cache, so it stays out of the create's idempotency payload: a
+	// retry after the cache changed still replays the first create.
+	CoderCapability bool `json:"-"`
+	// RequestedOutput is empty or RequestedOutputArtifact. It is omitted from
+	// the idempotency payload when empty, so a create stored before the field
+	// existed still replays.
+	RequestedOutput string `json:",omitempty"`
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to
@@ -207,8 +240,9 @@ type ProjectCoderConfig struct {
 	Size          string    `json:"size,omitempty"`
 	StartupScript string    `json:"startupScript,omitempty"`
 	ExtraRepos    []RepoRef `json:"extraRepos,omitempty"`
-	// WorkspaceNamePrefix names new Coder workspaces <prefix>-<short session
-	// id>. Empty keeps the default ao-<id>.
+	// WorkspaceNamePrefix starts new Coder workspace names
+	// (<prefix>-o-<id> or <prefix>-w-<word>-<id>, see CoderWorkspaceName).
+	// Empty uses "ao".
 	WorkspaceNamePrefix string `json:"workspaceNamePrefix,omitempty"`
 	// Parameters are the project's values for the chosen template's
 	// coder_parameter inputs, keyed by parameter name. Values are strings as
@@ -237,6 +271,39 @@ func ValidateCoderWorkspaceNamePrefix(prefix string) error {
 		return errors.New("Coder workspace name prefix must be 1-20 lowercase letters, digits, or single hyphens, starting with a letter")
 	}
 	return nil
+}
+
+// CoderWorkspaceNamePrefixFor derives a workspace name prefix from a project
+// name: lower-cased, every run of other characters a single hyphen, starting
+// with a letter, at most MaxCoderWorkspaceNamePrefix characters, so it
+// always passes ValidateCoderWorkspaceNamePrefix. A name with no letters gives
+// "ao", the default prefix.
+func CoderWorkspaceNamePrefixFor(projectName string) string {
+	var slug strings.Builder
+	hyphen := false
+	for _, character := range strings.ToLower(projectName) {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9' && slug.Len() > 0:
+			if hyphen && slug.Len() > 0 {
+				slug.WriteByte('-')
+			}
+			hyphen = false
+			slug.WriteRune(character)
+		default:
+			hyphen = true
+		}
+		if slug.Len() >= MaxCoderWorkspaceNamePrefix {
+			break
+		}
+	}
+	prefix := strings.TrimRight(slug.String(), "-")
+	if len(prefix) > MaxCoderWorkspaceNamePrefix {
+		prefix = strings.TrimRight(prefix[:MaxCoderWorkspaceNamePrefix], "-")
+	}
+	if prefix == "" || ValidateCoderWorkspaceNamePrefix(prefix) != nil {
+		return "ao"
+	}
+	return prefix
 }
 
 // DecodeProjectCoderConfig extracts the coder dev-kit config from a project's
@@ -358,6 +425,18 @@ type OrgCoderConfig struct {
 	// applies with the workspace worker user, where it defaults to true;
 	// normalization pins it to false for the ao-worker user.
 	ReuseExistingCheckout *bool `json:"reuseExistingCheckout,omitempty"`
+	// WorkingDirectory names the directory a session works in: an absolute
+	// path, or one under the workspace user's home ("~/" or "$HOME/"), which
+	// may contain {repo} for the repository name, for example ~/work/{repo}.
+	// An existing checkout of the session repository there is adopted, a
+	// missing directory gets a fresh clone, and anything else fails the
+	// checkout. It replaces the ReuseExistingCheckout search and requires the
+	// workspace worker user.
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	// ProtectSecretFiles stops the coding agent's own file tools from reading
+	// or editing secret environment files (.env, .env.*). It defaults to true;
+	// normalization makes the effective value explicit.
+	ProtectSecretFiles *bool `json:"protectSecretFiles,omitempty"`
 }
 
 // Bounds for OrgCoderConfig.StartupTimeoutSeconds.

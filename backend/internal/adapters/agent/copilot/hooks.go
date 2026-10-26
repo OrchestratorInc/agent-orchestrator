@@ -119,6 +119,15 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
+// PrepareSwitchTarget trusts the workspace before a terminal switch hands
+// Copilot its note: nobody is at the terminal to answer the "Confirm folder
+// trust" dialog that would otherwise hold it. A new task leaves that question
+// to the user, so the user's config is written only here. It is best-effort: a
+// config AO cannot write leaves Copilot to ask.
+func (p *Plugin) PrepareSwitchTarget(ctx context.Context, workspacePath string) {
+	_ = EnsureWorkspaceTrusted(ctx, workspacePath)
+}
+
 func installCopilotHooks(workspacePath string) error {
 	hooksPath := copilotHooksPath(workspacePath)
 	file, err := readCopilotHooks(hooksPath)

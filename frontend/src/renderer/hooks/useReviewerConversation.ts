@@ -42,7 +42,8 @@ export function useReviewerConversation(reviewId: string | undefined, hostId?: s
 		error: query.error ? apiErrorMessage(query.error) : undefined,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
-		loadOlder: () => void query.fetchNextPage(),
+		// Never cancel a live refresh in flight; see useConversation.
+		loadOlder: () => void query.fetchNextPage({ cancelRefetch: false }),
 	};
 }
 
