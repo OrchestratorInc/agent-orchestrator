@@ -407,11 +407,16 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 // headers within a round trip or two even on 3G; not getting them means the
 // path is gone, and the caller should race other endpoints.
 const REQUEST_TIMEOUT_MS = 12000;
-// Once a successful response's headers arrive, the body gets at least this long.
-// A 70 KB board poll needs ~1.5 s at 50 KB/s and much longer on a congested
-// link. Charging the download against the header timeout turned a slow body
-// into "unreachable", which re-raced the endpoints and reloaded everything.
-export const RESPONSE_BODY_TIMEOUT_MS = 60_000;
+// Once a successful response's headers arrive, the body is timed by progress,
+// not by size. A 70 KB board poll needs ~1.5 s at 50 KB/s and much longer on a
+// congested link; charging the download against the header timeout turned a
+// slow body into "unreachable", which re-raced the endpoints and reloaded
+// everything. A path that dies mid-body stops delivering bytes, so the body
+// fails once no bytes arrive for this long.
+export const RESPONSE_BODY_STALL_MS = 15_000;
+// The cap on a whole body that keeps trickling. Only a pathological link gets
+// near it; a dead one is caught by the stall timeout.
+export const RESPONSE_BODY_TIMEOUT_MS = 120_000;
 const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
 // A cold agent resume spawns the chat host and reloads the transcript; the
@@ -459,6 +464,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		controller.signal.addEventListener("abort", rejectAbort);
 	});
 	let timer = setTimeout(cancel, timeoutMs);
+	let stallTimer: ReturnType<typeof setTimeout> | undefined;
 	let received: Response | undefined;
 	let bodyText = "";
 	try {
@@ -474,15 +480,35 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...(init?.headers ?? {}),
 				},
 			});
-			// An error envelope is tiny, so only a successful body earns more time.
-			if (received.ok) {
-				clearTimeout(timer);
-				timer = setTimeout(cancel, Math.max(timeoutMs, RESPONSE_BODY_TIMEOUT_MS));
-			}
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
-			bodyText = await received.text();
+			// An error envelope is tiny, so it stays under the header timeout.
+			if (!received.ok) {
+				bodyText = await received.text();
+				return;
+			}
+			clearTimeout(timer);
+			timer = setTimeout(cancel, Math.max(timeoutMs, RESPONSE_BODY_TIMEOUT_MS));
+			const stallMs = Math.max(timeoutMs, RESPONSE_BODY_STALL_MS);
+			stallTimer = setTimeout(cancel, stallMs);
+			// On iOS and Android the global fetch is expo/fetch (Expo's runtime
+			// installs it), whose body streams, as the event stream relies on. A
+			// fetch without a readable body is bounded by the overall cap alone.
+			if (!received.body) {
+				bodyText = await received.text();
+				return;
+			}
+			const reader = received.body.getReader();
+			const decoder = new TextDecoder();
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				bodyText += decoder.decode(value, { stream: true });
+				clearTimeout(stallTimer);
+				stallTimer = setTimeout(cancel, stallMs);
+			}
+			bodyText += decoder.decode();
 		})()]);
 	} catch (e) {
 		// Leaving a screen/host is not a connectivity failure. The poll owner
@@ -501,6 +527,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		}
 	} finally {
 		clearTimeout(timer);
+		clearTimeout(stallTimer);
 		init?.signal?.removeEventListener("abort", cancel);
 		controller.signal.removeEventListener("abort", rejectAbort);
 	}

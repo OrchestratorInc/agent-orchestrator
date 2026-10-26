@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { ApiError, apiRequest, getSessions, RESPONSE_BODY_TIMEOUT_MS } from "./api";
+import { ApiError, apiRequest, getSessions, RESPONSE_BODY_STALL_MS, RESPONSE_BODY_TIMEOUT_MS } from "./api";
 import { UnreachableError } from "./connectionError";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
@@ -13,12 +13,46 @@ function stalledResponse(status = 200) {
 	return new Response(new ReadableStream({ start() {} }), { status });
 }
 
-it("bounds a successful response whose headers arrive but body stalls", async () => {
-	vi.mocked(fetch).mockResolvedValue(stalledResponse());
+function streamingResponse() {
+	let push!: (chunk: string) => void;
+	let close!: () => void;
+	const res = new Response(new ReadableStream({
+		start(controller) {
+			push = (chunk) => controller.enqueue(new TextEncoder().encode(chunk));
+			close = () => controller.close();
+		},
+	}));
+	return { res, push: (chunk: string) => push(chunk), close: () => close() };
+}
+
+it("fails a successful response once its body stops arriving", async () => {
+	const body = streamingResponse();
+	vi.mocked(fetch).mockResolvedValue(body.res);
 	let failure: unknown;
 	void apiRequest(config, "/api/v1/sessions", undefined, 100).catch((error) => { failure = error; });
-	await vi.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS);
+	await vi.advanceTimersByTimeAsync(1);
+	body.push('{"sessions":');
+	await vi.advanceTimersByTimeAsync(RESPONSE_BODY_STALL_MS - 1);
+	expect(failure).toBeUndefined();
+	await vi.advanceTimersByTimeAsync(1);
 	expect(failure).toBeInstanceOf(UnreachableError);
+	expect(failure).toMatchObject({ reason: "timeout" });
+});
+
+it("lets a trickling body run until the overall cap", async () => {
+	const body = streamingResponse();
+	vi.mocked(fetch).mockResolvedValue(body.res);
+	let failure: unknown;
+	void apiRequest(config, "/api/v1/sessions", undefined, 100).catch((error) => { failure = error; });
+	const step = RESPONSE_BODY_STALL_MS - 1_000;
+	let elapsed = 0;
+	while (elapsed + step < RESPONSE_BODY_TIMEOUT_MS) {
+		await vi.advanceTimersByTimeAsync(step);
+		elapsed += step;
+		body.push(" ");
+		expect(failure).toBeUndefined();
+	}
+	await vi.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS - elapsed);
 	expect(failure).toMatchObject({ reason: "timeout" });
 });
 
