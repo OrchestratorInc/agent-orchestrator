@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { haptics } from "../../../lib/haptics";
-import { hostedProjectKey, hostedProjectSections, type HostedProjectRow } from "../../../lib/hostedRows";
+import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
 import { StaleBanner } from "../../../lib/StaleBanner";
@@ -13,7 +13,6 @@ import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../../lib/useOrchestratorLauncher";
 import { useBoardFailure } from "../../../lib/useBoardFailure";
-import { useTabScrollToTop } from "../../../lib/useTabScrollToTop";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { space } from "../../../lib/tokens";
 import { Button, EmptyState, ListSectionHeader } from "../../../lib/ui";
@@ -42,7 +41,6 @@ export default function ProjectsScreen() {
 		: notificationsUnread;
 	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
-	const listRef = useTabScrollToTop<SectionList<HostedProjectRow>>();
 	const sections = useMemo(
 		() => hostedProjectSections(hostStates),
 		[hostStates],
@@ -92,7 +90,6 @@ export default function ProjectsScreen() {
 				</TabPageScroll>
 			) : (
 				<SectionList
-					ref={listRef}
 					sections={sections}
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"

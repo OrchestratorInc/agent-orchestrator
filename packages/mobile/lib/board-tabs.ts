@@ -1,3 +1,6 @@
+import { boardZoneOf } from "./agentsView";
+import type { DashboardSession } from "./api";
+
 /**
  * The board's tabs, in tab-bar order.
  *
@@ -21,4 +24,15 @@ export type BoardTabName = BoardTab["name"];
  */
 export function boardTitle(tab: string | undefined): string {
 	return (boardTabs.find(({ name }) => name === tab) ?? boardTabs[0]).title;
+}
+
+/**
+ * The Workers tab's badge: how many workers are waiting on a person.
+ *
+ * Only the number someone would open the app for. A total would be decoration,
+ * since the board already says how many workers exist, and a badge that never
+ * drops to zero stops being read. Ended workers are not waiting on anyone.
+ */
+export function workersNeedingYou(sessions: readonly DashboardSession[]): number {
+	return sessions.filter((session) => !session.isTerminated && session.status !== "terminated" && boardZoneOf(session) === "needs_you").length;
 }

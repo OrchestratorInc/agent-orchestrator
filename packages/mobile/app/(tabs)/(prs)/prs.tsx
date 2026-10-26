@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import type { Theme } from "../../../lib/theme";
 import { haptics } from "../../../lib/haptics";
@@ -12,10 +11,10 @@ import { collectPRs, prLifecycle, prListSections, type PRListFilter } from "../.
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
-import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../../lib/usePRSummaries";
+import { PR_SUMMARY_REUSE_MS, usePRSummaries, type PRSummarySession } from "../../../lib/usePRSummaries";
 import { useBoardFailure } from "../../../lib/useBoardFailure";
-import { useTabScrollToTop } from "../../../lib/useTabScrollToTop";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
+import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { Button, EmptyState, ListSectionHeader } from "../../../lib/ui";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { space } from "../../../lib/tokens";
@@ -24,6 +23,9 @@ import type { HostedSession } from "../../../lib/hostedRows";
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
 type Filter = PRListFilter;
+
+const DOCK_HEIGHT = 52;
+const NO_SUMMARY_TARGETS: PRSummarySession[] = [];
 
 // Drafts are open PRs — they belong in the Open bucket even though the card
 // labels them "draft". Before, `state` had already folded draft into "open", so
@@ -37,7 +39,7 @@ const inBucket = (filter: Filter, life: ReturnType<typeof prLifecycle>) => {
 export default function PRsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const insets = useSafeAreaInsets();
+	const tabBarInset = useTabBarInset();
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<{ hostId?: string; projectId?: string }>();
 	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId } = useApp();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
@@ -61,8 +63,6 @@ export default function PRsScreen() {
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
 
-	const scrollRef = useTabScrollToTop<SectionList>();
-
 	// Grouped around the user's next action, matching the Workers board rather
 	// than presenting a flat stream in daemon order.
 	const filtered = useMemo(() => prs.filter(({ pr }) => inBucket(filter, prLifecycle(pr))), [prs, filter]);
@@ -75,15 +75,23 @@ export default function PRsScreen() {
 		const config = configForHost(session.hostId);
 		return config ? [{ config, sessionId: session.id }] : [];
 	}), [filtered, configForHost]);
-	const summaries = usePRSummaries(summaryTargets);
-	const lastSummaryRefresh = useRef(Date.now());
+	// Every tab mounts with the board, so the details wait for this tab's first
+	// visit instead of loading behind Workers at launch.
+	const [visited, setVisited] = useState(false);
+	const summaries = usePRSummaries(visited ? summaryTargets : NO_SUMMARY_TARGETS);
+	const lastSummaryRefresh = useRef(0);
 	useFocusEffect(useCallback(() => {
+		if (!visited) {
+			lastSummaryRefresh.current = Date.now();
+			setVisited(true);
+			return;
+		}
 		// Retained tabs should not keep old detail indefinitely, nor restart N
-		// requests on every quick sidebar switch.
+		// requests on every quick tab switch.
 		if (Date.now() - lastSummaryRefresh.current < PR_SUMMARY_REUSE_MS) return;
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
-	}, [summaries.reload]));
+	}, [visited, summaries.reload]));
 	const failure = useBoardFailure();
 
 	const onRefresh = async () => {
@@ -106,6 +114,8 @@ export default function PRsScreen() {
 		);
 	}
 
+	// The filter floats just above the tab bar.
+	const dockBottom = Math.max(tabBarInset, space.md);
 	const counts = {
 		open: prs.filter((p) => inBucket("open", prLifecycle(p.pr))).length,
 		merged: prs.filter((p) => prLifecycle(p.pr) === "merged").length,
@@ -132,11 +142,11 @@ export default function PRsScreen() {
 				</TabPageScroll>
 			) : (
 				<SectionList
-					ref={scrollRef}
 					sections={sections}
 					keyExtractor={({ pr, session }) => `${session.hostId}:${session.projectId}#${pr.number}`}
 					contentInsetAdjustmentBehavior="automatic"
-					contentContainerStyle={{ flexGrow: 1, paddingBottom: 110 }}
+					// iOS insets the list by the tab bar already; it pads only for the filter.
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: dockBottom - tabBarInset + DOCK_HEIGHT + space.xxl }}
 					stickySectionHeadersEnabled={false}
 					ListHeaderComponent={listHeader}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
@@ -172,7 +182,7 @@ export default function PRsScreen() {
 				/>
 			)}
 
-			<View style={[styles.dock, { bottom: Math.max(insets.bottom, 12) }]}>
+			<View style={[styles.dock, { bottom: dockBottom }]}>
 				<PRFilterDock filter={filter} counts={counts} onChange={setFilter} />
 			</View>
 			<BoardHeaderItems unread={notificationsUnread} />
@@ -188,7 +198,7 @@ const makeStyles = (t: Theme) =>
 			position: "absolute",
 			left: 16,
 			right: 16,
-			height: 52,
+			height: DOCK_HEIGHT,
 			flexDirection: "row",
 			alignItems: "center",
 			justifyContent: "center",

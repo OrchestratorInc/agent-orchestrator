@@ -59,7 +59,6 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ scheme: "dark" }),
 	useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme),
 }));
-vi.mock("./useTabScrollToTop", () => ({ useTabScrollToTop: () => ({ current: null }) }));
 vi.mock("./ui", async () => {
 	const React = await import("react");
 	return {

@@ -9,13 +9,13 @@ const fixture = vi.hoisted(() => ({
 	cardRenders: [] as string[], params: {} as { hostId?: string; projectId?: string },
 	configForHost: vi.fn(() => ({ host: "ao.test", httpPort: "3011", muxPort: "3011", password: "test" })),
 	summaries: new Map<string, SessionPRSummary>(),
-	reload: vi.fn(), focus: undefined as (() => void) | undefined,
+	reload: vi.fn(), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
 	theme: new Proxy({}, { get: () => "#888888" }),
 }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	return {
-		ActivityIndicator: "ActivityIndicator", RefreshControl: "RefreshControl", View: "View", Text: "Text",
+		ActivityIndicator: "ActivityIndicator", RefreshControl: "RefreshControl", View: "View", Text: "Text", Platform: { OS: "ios" },
 		StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
 		Pressable: ({ children, ...props }: { children?: React.ReactNode; accessibilityRole?: string; accessibilityLabel?: string }) => {
 			if (props.accessibilityRole === "button" && props.accessibilityLabel?.includes("Pull request")) fixture.cardRenders.push(props.accessibilityLabel);
@@ -51,9 +51,11 @@ vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}) }));
-vi.mock("./useTabScrollToTop", () => ({ useTabScrollToTop: () => undefined }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
-vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries: () => ({ summaryFor: (_config: unknown, id: string) => fixture.summaries.get(id), reload: fixture.reload }) }));
+vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries: (targets: unknown[]) => {
+	fixture.summaryTargets.push(targets);
+	return { summaryFor: (_config: unknown, id: string) => fixture.summaries.get(id), reload: fixture.reload };
+} }));
 vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
 
 import PRsScreen from "../app/(tabs)/(prs)/prs";
@@ -75,11 +77,20 @@ beforeEach(() => {
 		projects: [], projectsKnown: true, orchestrators: [], orchestratorId: null, stats: {}, lastSyncAt: 0,
 	}));
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
-	fixture.reload.mockClear(); fixture.focus = undefined;
+	fixture.reload.mockClear(); fixture.focus = undefined; fixture.summaryTargets = [];
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-it("revalidates retained PR details on a later visit but not on rapid sidebar switches", () => {
+// Every tab mounts with the board, and the details are a request per worker.
+it("waits for the tab's first visit before loading PR details", () => {
+	act(() => { renderer = create(<PRsScreen />); });
+	expect(fixture.summaryTargets.at(-1)).toEqual([]);
+	act(() => fixture.focus?.());
+	expect(fixture.summaryTargets.at(-1)).toHaveLength(2);
+	expect(fixture.reload).not.toHaveBeenCalled();
+});
+
+it("revalidates retained PR details on a later visit but not on rapid tab switches", () => {
 	const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
 	act(() => { renderer = create(<PRsScreen />); });
 	act(() => fixture.focus?.());

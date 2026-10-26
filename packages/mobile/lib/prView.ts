@@ -81,7 +81,7 @@ export type PRLifecycle = "draft" | "open" | "merged" | "closed";
 export type PRListFilter = "open" | "merged" | "all";
 export type PRListItem = { pr: DashboardPR; session: DashboardSession };
 export type PRListSectionKey = "ready" | "attention" | "review" | "draft" | "merged" | "closed";
-export type PRListSection = { key: PRListSectionKey; label: string; data: PRListItem[] };
+export type PRListSection<T extends PRListItem = PRListItem> = { key: PRListSectionKey; label: string; data: T[] };
 
 /** Lifecycle state, reading `isDraft` — which the card has never rendered. */
 export function prLifecycle(pr: DashboardPR): PRLifecycle {
@@ -111,7 +111,7 @@ const PR_LIST_SECTIONS: readonly { key: PRListSectionKey; label: string }[] = [
 	{ key: "closed", label: "Closed" },
 ];
 
-export function prListSections(items: PRListItem[], filter: PRListFilter): PRListSection[] {
+export function prListSections<T extends PRListItem>(items: T[], filter: PRListFilter): PRListSection<T>[] {
 	const allowed = (key: PRListSectionKey) => {
 		if (filter === "open") return key !== "merged" && key !== "closed";
 		if (filter === "merged") return key === "merged";

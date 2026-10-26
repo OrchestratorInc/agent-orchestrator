@@ -1,9 +1,8 @@
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../../lib/haptics";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
@@ -12,8 +11,8 @@ import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
-import { useTabScrollToTop } from "../../../lib/useTabScrollToTop";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
+import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
@@ -44,7 +43,7 @@ export default function FleetScreen() {
 	const styles = useThemedStyles(makeStyles);
 
 	const router = useRouter();
-	const insets = useSafeAreaInsets();
+	const tabBarInset = useTabBarInset();
 	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
@@ -106,7 +105,7 @@ export default function FleetScreen() {
 	// turns over when the keyboard has *finished* moving, so anything positioned
 	// from it arrives late — see `workerDockLift`.
 	const keyboardAnimation = useReanimatedKeyboardAnimation();
-	const listRef = useTabScrollToTop<FlatList<BoardRow>>();
+	const listRef = useRef<FlatList<BoardRow>>(null);
 
 	const projectSessions = useMemo(
 		() => filterWorkersByEnvironmentAndProject(allSessions, workerEnvironmentId, workerProjectId, allProjects),
@@ -170,13 +169,13 @@ export default function FleetScreen() {
 		finally { setRefreshing(false); }
 	}, [refreshAll, refreshHost, selectedHost?.hostId]);
 
-	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, insets.bottom, keyboardVisible);
+	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, tabBarInset, keyboardVisible);
 	// `progress`, not the animated `height`: that value is the keyboard's frame
 	// origin, which is negative while the keyboard is up (the library's own
 	// avoiding view negates it before use). Feeding it to a `max(…, 0)` produced a
 	// lift of exactly nothing, which parked the search field under the keyboard.
 	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardHeight, insets.bottom) }],
+		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardHeight, tabBarInset) }],
 	}));
 
 	if (!configured && hostStates.length === 0) {
@@ -224,7 +223,8 @@ export default function FleetScreen() {
 					query={query}
 					identityKey={boardIdentityKey}
 					listRef={listRef}
-					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom)}
+					// iOS insets the list by the tab bar already; it pads only for the dock.
+					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom) - tabBarInset}
 					contentInsetAdjustmentBehavior="automatic"
 					refreshing={refreshing}
 					onRefresh={onRefresh}
