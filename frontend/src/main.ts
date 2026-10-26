@@ -307,7 +307,8 @@ const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
 const telemetryIdentity = new TelemetryIdentityController(
 	desktopDataDir,
 	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
-	(url, init) => net.fetch(url, init),
+	// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
+	(url, init) => fetch(url, init),
 	(optedOut) => {
 		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
 	},
@@ -372,7 +373,8 @@ let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
 const awakeDownloads = createAwakeDownloadBridge({
  baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
- request: (url, init) => net.fetch(url, init),
+ // Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
+ request: (url, init) => fetch(url, init),
 });
 app.once("will-quit", () => awakeDownloads.dispose());
 
@@ -1274,7 +1276,8 @@ async function fetchDesktopSessionPath(
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
 	try {
-		const response = await net.fetch(
+		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
+		const response = await fetch(
 			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/${route}`,
 			{ signal: controller.signal },
 		).catch((error: unknown) => {
