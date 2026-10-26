@@ -168,3 +168,56 @@ func TestRingConcurrent(t *testing.T) {
 
 	wg.Wait()
 }
+
+// A full-screen TUI never prints a newline. Once its partial line is large,
+// everything before the latest screen clear goes: replay paints the same
+// screen from the clear onwards.
+func TestRingDropsPartialBeforeScreenClear(t *testing.T) {
+	r := NewRing()
+	r.Append([]byte("$ agent\n"))
+	r.Append([]byte(strings.Repeat("\x1b[Hold frame", partialTrimBytes/8)))
+	// The clear arrives split across two chunks.
+	r.Append([]byte("\x1b["))
+	r.Append([]byte("2J\x1b[Hnew frame"))
+
+	got := string(r.Replay())
+	if want := "$ agent\n\x1b[2J\x1b[Hnew frame"; got != want {
+		t.Fatalf("Replay = %q (len %d), want %q", got[:min(len(got), 80)], len(got), want)
+	}
+}
+
+// Below the trim threshold the partial line is kept whole, clears included.
+func TestRingKeepsSmallPartialAcrossClear(t *testing.T) {
+	r := NewRing()
+	r.Append([]byte("a\x1b[2Jb"))
+	if got := string(r.Replay()); got != "a\x1b[2Jb" {
+		t.Fatalf("Replay = %q", got)
+	}
+}
+
+// A program that never clears is still bounded, and replay starts on an
+// escape so it does not open inside a sequence.
+func TestRingCapsPartialWithoutClear(t *testing.T) {
+	r := NewRing()
+	frame := []byte("\x1b[1;1H\x1b[38;5;245mrow\x1b[0m\r")
+	for r.partialLen() <= maxPartialBytes-len(frame) {
+		r.Append(frame)
+	}
+	r.Append(frame)
+	got := r.Replay()
+	if len(got) > maxPartialBytes {
+		t.Fatalf("Replay len = %d, want <= %d", len(got), maxPartialBytes)
+	}
+	if len(got) == 0 || got[0] != 0x1b {
+		t.Fatalf("Replay starts with %q, want ESC", got[:min(len(got), 8)])
+	}
+	if !strings.HasSuffix(string(got), string(frame)) {
+		t.Fatal("Replay lost the newest frame")
+	}
+}
+
+func (r *Ring) partialLen() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.partial)
+}
