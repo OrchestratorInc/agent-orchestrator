@@ -173,6 +173,35 @@ describe("card shape", () => {
 	});
 });
 
+describe("timeline rows", () => {
+	const styles = source.slice(source.indexOf("const makeStyles"));
+
+	it("are touch targets that press the platform's way", () => {
+		for (const row of ["activityRow", "runSummary", "subagentHeader", "planHeader", "fileRowTap", "originMore"]) expect(styles).toMatch(new RegExp(`\\n\\t+${row}: \\{[^}]*minHeight: touchTarget`));
+		expect(source.match(/usePressFeedback\("row"\)/g)?.length).toBeGreaterThanOrEqual(11);
+		expect(source).not.toContain("press.opacity");
+		// The status row keeps the startup header's height; slop makes up the target.
+		expect(source).toContain("hitSlop={foldable ? (touchTarget - STATUS_ROW_HEIGHT) / 2 : undefined}");
+	});
+
+	it("show work in progress with the system spinner", () => {
+		expect(source).not.toContain("<ActivityIndicator");
+	});
+
+	// The status row matches the startup checklist header it hands off to.
+	it("set nothing below 13pt but the status row", () => {
+		expect(styles).not.toContain("type.caption2");
+		expect(styles.match(/type\.caption1/g)).toEqual(["type.caption1"]);
+		expect(styles).toMatch(/turnState: \{[^}]*type\.caption1\.fontSize/);
+	});
+
+	it("draw a file list's bullets beside the selectable path", () => {
+		const fileList = source.slice(source.indexOf("function FileList"), source.indexOf("function printable"));
+		expect(fileList).toContain("<View style={styles.fileBullet} />");
+		expect(fileList).not.toContain("•");
+	});
+});
+
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");

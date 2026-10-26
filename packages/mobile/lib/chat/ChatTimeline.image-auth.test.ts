@@ -38,6 +38,7 @@ Module._load = function(name, parent, main) {
   if (name === "react-native-safe-area-context") return { useSafeAreaInsets: () => ({ top: 0 }) };
   if (name === "../ThemeProvider") return { useTheme: () => ({}), useThemedStyles: () => ({}) };
   if (name === "../haptics" || name === "./haptics") return { haptics: { tap: () => {} } };
+  if (name === "../pressFeedback") return { usePressFeedback: () => ({}) };
   if (name === "../icons" || name === "./icons") return { Feather: "Feather" };
   if (name === "./messageAttachments") return attachmentHelpers;
   if (name !== "react" && name !== "react/jsx-runtime") return new Proxy({}, { get: (_, key) => key === "__esModule" ? true : () => null });

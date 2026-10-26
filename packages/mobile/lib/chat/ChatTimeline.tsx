@@ -4,7 +4,6 @@ import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-	ActivityIndicator,
 	Alert,
 	FlatList,
 	Image,
@@ -82,7 +81,7 @@ import {
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { iconSize, press, radius, type, space, touchTarget } from "../tokens";
+import { iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
@@ -498,7 +497,7 @@ function CopyResponseButton({ text }: { text: string }) {
 function SystemSignal({ icon, title, detail, danger }: { icon: keyof typeof Feather.glyphMap; title: string; detail?: unknown; danger?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={[styles.systemSignal, danger && { borderColor: t.red }]}><Feather name={icon} size={15} color={danger ? t.red : t.textTertiary} /><View style={{ flex: 1 }}><Text style={[styles.systemTitle, danger && { color: t.red }]}>{title}</Text>{detail ? <Text style={styles.systemDetail}>{String(detail)}</Text> : null}</View></View>;
+	return <View style={[styles.systemSignal, danger && { borderColor: t.red }]}><Feather name={icon} size={iconSize.sm} color={danger ? t.red : t.textTertiary} /><View style={{ flex: 1 }}><Text style={[styles.systemTitle, danger && { color: t.red }]}>{title}</Text>{detail ? <Text style={styles.systemDetail}>{String(detail)}</Text> : null}</View></View>;
 }
 
 /**
@@ -527,24 +526,27 @@ function StagedAttachments({ sessionId, paths, spaced }: { sessionId: string; pa
 function StagedAttachment({ name, source, tileSize }: { name: string; source?: AttachmentImageSource; tileSize: number }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	// The image covers the tile, so the ripple has to draw over it.
+	const tileFeedback = usePressFeedback("button", { foreground: true });
+	const chipFeedback = usePressFeedback("button");
 	// The failure belongs to the load that failed, so a reconnect to another address
 	// or a rotated password retries on its own; tapping the chip retries in place.
 	const [failedLoad, setFailedLoad] = useState<AttachmentImageSource>();
 	const [viewerOpen, setViewerOpen] = useState(false);
 	if (!source) {
-		return <View style={styles.attachmentChip}><Feather name="file-text" size={12} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
+		return <View style={styles.attachmentChip}><Feather name="file-text" size={iconSize.xs} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
 	}
 	if (!isSameAttachmentLoad(failedLoad, source)) {
 		// Cover-cropping a square reads as a deliberate thumbnail; the viewer shows the whole image.
 		return <>
-			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => setViewerOpen(true)} style={[styles.attachmentTile, { width: tileSize, height: tileSize }]}>
+			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => setViewerOpen(true)} android_ripple={tileFeedback.android_ripple} style={({ pressed }) => [styles.attachmentTile, { width: tileSize, height: tileSize }, pressed && tileFeedback.pressed]}>
 				<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
 			</Pressable>
 			<ImageViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
 	}
-	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={6} onPress={() => setFailedLoad(undefined)} style={styles.attachmentChip}>
-		<Feather name="refresh-cw" size={12} color={t.textTertiary} />
+	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={space.md} onPress={() => setFailedLoad(undefined)} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
+		<Feather name="refresh-cw" size={iconSize.xs} color={t.textTertiary} />
 		<Text numberOfLines={1} style={styles.attachmentName}>{name}</Text>
 		<Text style={styles.attachmentRetry}>Tap to retry</Text>
 	</Pressable>;
@@ -563,12 +565,13 @@ function deliveryCopy(state?: string): string | undefined {
 function OriginMessage({ message }: { message: Extract<ConversationItem, { kind: "message" }> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("button");
 	const long = message.text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
+		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
 		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
-		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.originMore}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
+		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.originMore, pressed && feedback.pressed]}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
 }
 
@@ -606,6 +609,7 @@ function ActivityRow({ activity }: { activity: ConversationActivity }) {
 function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const detail = activity.detail ?? {};
 	const output = commandOutputText(detail.output ?? detail.result ?? detail.error ?? detail.patchOutput);
 	const [openOverride, setOpenOverride] = useState<boolean | null>(null);
@@ -619,13 +623,14 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				accessibilityState={expandable ? { expanded: open } : undefined}
 				disabled={!expandable}
 				onPress={() => setOpenOverride(!open)}
-				style={styles.activityRow}
+				android_ripple={feedback.android_ripple}
+				style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}
 			>
-				<Feather name={meta.icon} size={12} color={meta.color(t)} />
+				<Feather name={meta.icon} size={iconSize.xs} color={meta.color(t)} />
 				<Text numberOfLines={open ? undefined : 2} style={[styles.activitySummary, activity.status === "failed" && { color: t.red }]}>
 					{meta.prefix ? `${meta.prefix} ` : ""}{detail.command || detail.toolName || activity.summary}
 				</Text>
-				{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : null}
+				{activity.status === "running" ? <Spinner size={iconSize.sm} color={t.orange} /> : null}
 				{activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : null}
 				{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 			</Pressable>
@@ -647,23 +652,24 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 function TerminalInput({ text, truncated }: { text: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailHeading}>Agent typed</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
+	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.detailHeading}>Agent typed</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
 }
 
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(activity.status === "failed");
 	const detail = activity.detail ?? {};
 	const failed = activity.status === "failed" || detail.success === false || Boolean(detail.error);
 	const body = detail.arguments !== undefined || detail.result !== undefined || Boolean(detail.error || detail.progress);
 	return <View style={styles.activityWrap}>
-		<Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.activityRow}>
-			<Feather name="tool" size={12} color={failed ? t.red : t.textSecondary} />
+		<Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}>
+			<Feather name="tool" size={iconSize.xs} color={failed ? t.red : t.textSecondary} />
 			<Text style={[styles.server, failed && { color: t.red }]}>{detail.server ?? detail.namespace ? `${detail.server ?? detail.namespace}/` : ""}</Text>
 			<Text numberOfLines={1} style={[styles.activitySummary, failed && { color: t.red }]}>{detail.toolName || activity.summary}</Text>
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
-			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <FoldChevron open={open} color={t.textTertiary} /> : null}
+			{activity.status === "running" ? <Spinner size={iconSize.sm} color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 		</Pressable>
 		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailHeading}>Progress</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
 	</View>;
@@ -678,12 +684,13 @@ function JsonPayload({ label, value }: { label: string; value: unknown }) {
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(false);
 	const detail = activity.detail ?? {};
 	const denied = String(detail.status ?? "").toLowerCase().includes("den");
 	const paths = reviewPaths(detail.files);
 	const body = Boolean(detail.rationale || detail.command || detail.cwd || detail.host || detail.decisionSource || paths.length);
-	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.activityRow}><Feather name={denied ? "shield-off" : "shield"} size={12} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{sentenceCase(detail.riskLevel)}</Text> : null}{body ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
+	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}><Feather name={denied ? "shield-off" : "shield"} size={iconSize.xs} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{sentenceCase(detail.riskLevel)}</Text> : null}{body ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
 }
 
 function FileChangeActivity({ activity }: { activity: ConversationActivity }) {
@@ -694,19 +701,21 @@ function FileChangeActivity({ activity }: { activity: ConversationActivity }) {
 function ExpandableFileList({ title, files, fallbackPatch, fallbackPatchTruncated, live }: { title: string; files: ReturnType<typeof fileChanges>; fallbackPatch?: string; fallbackPatchTruncated?: boolean; live?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [openOverride, setOpenOverride] = useState<boolean | null>(null);
 	const open = openOverride ?? Boolean(live && (fallbackPatch || files.some((file) => file.patch)));
 	const expandable = files.length > 0 || Boolean(fallbackPatch);
-	return <View><Pressable disabled={!expandable} accessibilityRole={expandable ? "button" : undefined} accessibilityState={expandable ? { expanded: open } : undefined} onPress={() => setOpenOverride(!open)} style={styles.activityRow}><Feather name="edit-3" size={12} color={t.accent} /><Text numberOfLines={2} style={styles.activitySummary}>{title}</Text>{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open ? <View style={styles.activityDetail}>{files.map((file) => <FileChangeRow key={`${file.oldPath ?? ""}:${file.path}`} file={file} live={live} />)}{fallbackPatch ? <PatchBlock patch={fallbackPatch} truncated={fallbackPatchTruncated} /> : null}</View> : null}</View>;
+	return <View><Pressable disabled={!expandable} accessibilityRole={expandable ? "button" : undefined} accessibilityState={expandable ? { expanded: open } : undefined} onPress={() => setOpenOverride(!open)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}><Feather name="edit-3" size={iconSize.xs} color={t.accent} /><Text numberOfLines={2} style={styles.activitySummary}>{title}</Text>{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open ? <View style={styles.activityDetail}>{files.map((file) => <FileChangeRow key={`${file.oldPath ?? ""}:${file.path}`} file={file} live={live} />)}{fallbackPatch ? <PatchBlock patch={fallbackPatch} truncated={fallbackPatchTruncated} /> : null}</View> : null}</View>;
 }
 
 function FileChangeRow({ file, live }: { file: ReturnType<typeof fileChanges>[number]; live?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(Boolean(live && file.patch));
 	const hasPatch = Boolean(file.patch);
 	const mark = file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : "M";
-	return <View><Pressable disabled={!hasPatch} accessibilityRole={hasPatch ? "button" : undefined} accessibilityState={hasPatch ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.fileRow}><Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{mark}</Text><Text selectable numberOfLines={2} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text><Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>{hasPatch ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && file.patch ? <PatchBlock patch={file.patch} truncated={file.patchTruncated} /> : null}</View>;
+	return <View><Pressable disabled={!hasPatch} accessibilityRole={hasPatch ? "button" : undefined} accessibilityState={hasPatch ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.fileRow, hasPatch && styles.fileRowTap, pressed && feedback.pressed]}><Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{mark}</Text><Text selectable numberOfLines={2} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text><Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>{hasPatch ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && file.patch ? <PatchBlock patch={file.patch} truncated={file.patchTruncated} /> : null}</View>;
 }
 
 function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }) {
@@ -718,19 +727,28 @@ function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }
 function PlanActivity({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(activity.status === "running");
 	const steps = activity.detail?.steps ?? [];
 	return <View style={styles.planCard}><Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
-			style={styles.planHeader}
 			onPress={() => setOpen((value) => !value)}
-			><Feather name="list" size={12} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><FoldChevron open={open} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} style={styles.planStep}><Feather name={step.status === "completed" ? "check-circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
+			android_ripple={feedback.android_ripple}
+			style={({ pressed }) => [styles.planHeader, pressed && feedback.pressed]}
+			><Feather name="list" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><FoldChevron open={open} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} accessible accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}><PlanStepGlyph status={step.status} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
+}
+
+/** A plan step's state as a glyph, so it never rests on colour alone. */
+function PlanStepGlyph({ status }: { status: string }) {
+	const t = useTheme();
+	return <Feather name={status === "completed" ? "check-circle" : status === "in_progress" ? "disc" : "circle"} size={iconSize.sm} color={status === "completed" ? t.green : status === "in_progress" ? t.orange : t.textFaint} />;
 }
 
 function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [override, setOverride] = useState<boolean | null>(null);
 	const hierarchy = activityHierarchy(activities);
 	if (activities.length === 1 && hierarchy[0]?.children.length === 0) return <ActivityRow activity={activities[0]} />;
@@ -744,12 +762,13 @@ function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
 			onPress={() => setOverride(!open)}
-			style={styles.runSummary}
+			android_ripple={feedback.android_ripple}
+			style={({ pressed }) => [styles.runSummary, pressed && feedback.pressed]}
 		>
 			<Text style={styles.runText}>{summarizeActivities(activities)}</Text>
 			{failed ? <Text style={styles.runFailed}>{failed} failed</Text> : null}
 			{cancelled ? <Text style={styles.runStopped}>{cancelled} stopped</Text> : null}
-			{running ? <ActivityIndicator size="small" color={t.textTertiary} /> : null}
+			{running ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : null}
 			<FoldChevron open={open} color={t.textTertiary} />
 		</Pressable>
 		{open ? <View style={styles.runDetail}>{hierarchy.map((node) => <ActivityTree key={node.activity.id} node={node} />)}</View> : null}
@@ -757,13 +776,13 @@ function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
 }
 
 function ActivityTree({ node }: { node: ActivityNode }) {
-	const styles = useThemedStyles(makeStyles);
 	return <View><ActivityRow activity={node.activity} />{node.children.length ? <NestedAgentRun nodes={node.children} /> : null}</View>;
 }
 
 function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(false);
 	const count = countActivityNodes(nodes);
 	const running = activityNodesRunning(nodes);
@@ -773,11 +792,12 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 			accessibilityLabel={`${open ? "Hide" : "Show"} subagent work, ${count} ${count === 1 ? "step" : "steps"}`}
 			accessibilityState={{ expanded: open }}
 			onPress={() => setOpen((value) => !value)}
-			style={styles.subagentHeader}
+			android_ripple={feedback.android_ripple}
+			style={({ pressed }) => [styles.subagentHeader, pressed && feedback.pressed]}
 		>
-			<Feather name="git-branch" size={12} color={t.textTertiary} />
+			<Feather name="git-branch" size={iconSize.xs} color={t.textTertiary} />
 			<Text style={styles.subagentLabel}>Subagent · {count} {count === 1 ? "step" : "steps"}</Text>
-			{running ? <ActivityIndicator size="small" color={t.textTertiary} /> : null}
+			{running ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : null}
 			<FoldChevron open={open} color={t.textTertiary} />
 		</Pressable>
 		{open ? nodes.map((child) => <ActivityTree key={child.activity.id} node={child} />) : null}
@@ -792,6 +812,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const running = turn.state === "running";
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	useEffect(() => {
@@ -813,13 +834,17 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 					: workingDuration ? `Working · ${workingDuration}` : "Working";
 	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
 	// One element throughout, so the spinner can leave and the label slide into
-	// its place when the turn settles instead of the whole row remounting.
+	// its place when the turn settles instead of the whole row remounting. The row
+	// keeps the startup checklist header's height, so the slop is what makes the
+	// settled toggle a full touch target.
 	return <Pressable
 		accessibilityRole={foldable ? "button" : undefined}
 		accessibilityState={foldable ? { expanded: open } : undefined}
 		disabled={!foldable}
 		onPress={onToggle}
-		style={styles.statusRow}
+		hitSlop={foldable ? (touchTarget - STATUS_ROW_HEIGHT) / 2 : undefined}
+		android_ripple={feedback.android_ripple}
+		style={({ pressed }) => [styles.statusRow, pressed && feedback.pressed]}
 	>
 		{running ? <StatusSpinner><Spinner size={iconSize.xs} color={t.textTertiary} /></StatusSpinner> : null}
 		<StatusLabel>{text}</StatusLabel>
@@ -882,6 +907,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 function TurnPlan({ turn }: { turn: ConversationTurn }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(turn.state === "running");
 	const done = turn.plan?.steps.filter((step) => step.status === "completed").length ?? 0;
 	return (
@@ -889,10 +915,11 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 			<Pressable
 				accessibilityRole="button"
 				accessibilityState={{ expanded: open }}
-				style={styles.planHeader}
 				onPress={() => setOpen((value) => !value)}
+				android_ripple={feedback.android_ripple}
+				style={({ pressed }) => [styles.planHeader, pressed && feedback.pressed]}
 				>
-				<Feather name="list" size={12} color={t.textTertiary} />
+				<Feather name="list" size={iconSize.xs} color={t.textTertiary} />
 				<Text style={styles.planTitle}>Plan</Text>
 				{turn.state === "running" ? <Text style={styles.planLive}>Still changing</Text> : null}
 				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
@@ -900,8 +927,8 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 			</Pressable>
 			{open ? <View style={styles.planBody}>
 				{turn.plan?.explanation ? <Text style={styles.detailCopy}>{turn.plan.explanation}</Text> : null}
-				{turn.plan?.steps.map((step, index) => <View key={index} accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
-					<Feather name={step.status === "completed" ? "check-circle" : step.status === "in_progress" ? "circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} />
+				{turn.plan?.steps.map((step, index) => <View key={index} accessible accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
+					<PlanStepGlyph status={step.status} />
 					<Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text>
 					<Text style={styles.planStepState}>{sentenceCase(step.status.replace("_", " "))}</Text>
 				</View>)}
@@ -913,6 +940,8 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
+	const reviewFeedback = usePressFeedback("button");
 	const files = useFilesNavigation();
 	const [open, setOpen] = useState(false);
 	const changed = turn.diff?.files ?? [];
@@ -924,25 +953,27 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 				accessibilityRole="button"
 				accessibilityState={{ expanded: open }}
 				accessibilityLabel={`${changed.length} changed ${changed.length === 1 ? "file" : "files"}, ${additions} lines added, ${deletions} removed`}
-				style={[styles.planHeader, styles.changedToggle]}
 				onPress={() => setOpen((value) => !value)}
+				android_ripple={feedback.android_ripple}
+				style={({ pressed }) => [styles.planHeader, styles.changedToggle, pressed && feedback.pressed]}
 				>
-				<Feather name="file-text" size={12} color={t.textTertiary} />
+				<Feather name="file-text" size={iconSize.xs} color={t.textTertiary} />
 				<Text numberOfLines={1} style={[styles.planTitle, styles.changedTitle]}>{files ? `${changed.length} ${changed.length === 1 ? "file" : "files"}` : `${changed.length} changed ${changed.length === 1 ? "file" : "files"}`}</Text>
-				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>Growing</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
-				<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{additions}</Text>
-				<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{deletions}</Text>
+				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>Growing</Text><Spinner size={iconSize.sm} color={t.textTertiary} /></> : null}
+				<Text style={[styles.changedStat, { color: t.green }]}>+{additions}</Text>
+				<Text style={[styles.changedStat, { color: t.red }]}>−{deletions}</Text>
 				<FoldChevron open={open} color={t.textTertiary} />
 			</Pressable>
 			{files ? <Pressable
 				accessibilityRole="button"
 				accessibilityLabel="Review changes"
 				accessibilityHint="Opens every changed file in this session"
-				hitSlop={6}
+				hitSlop={(touchTarget - REVIEW_PILL_HEIGHT) / 2}
 				onPress={() => files.openChanges()}
-				style={({ pressed }) => [styles.changedReview, pressed && { opacity: press.opacity }]}
+				android_ripple={reviewFeedback.android_ripple}
+				style={({ pressed }) => [styles.changedReview, pressed && reviewFeedback.pressed]}
 			>
-				<Feather name="file-diff" size={12} color={t.textPrimary} />
+				<AppSymbol name="diff" size={iconSize.sm} color={t.textPrimary} />
 				<Text style={styles.changedReviewText}>Review</Text>
 			</Pressable> : null}
 		</View>
@@ -960,7 +991,8 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 					accessibilityLabel={`${file.path}, ${file.status}, ${file.additions} added, ${file.deletions} removed`}
 					accessibilityHint="Opens the diff"
 					onPress={() => files.openFile(file.path, file.oldPath)}
-					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && { opacity: press.opacity }]}
+					android_ripple={feedback.android_ripple}
+					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && feedback.pressed]}
 				>{row}</Pressable>
 				: <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>{row}</View>;
 		})}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>{files ? "This turn changed more files than Orchestrator lists here. Review changes shows all of them." : "This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff."}</Text> : null}</View> : null}
@@ -991,7 +1023,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 	const command = activity.detail?.command ?? activity.summary;
 	if (pending && handledBelow) return <RequestEcho title={presentation.title} detail={command} />;
 	if (!pending) return <View style={styles.approvalResolved}>
-		<Feather name={presentation.icon} size={12} color={t.textFaint} />
+		<Feather name={presentation.icon} size={iconSize.xs} color={t.textFaint} />
 		<Text style={styles.approvalResolvedLabel}>{presentation.title}</Text>
 		<Text selectable numberOfLines={1} style={styles.approvalResolvedCommand}>{command}</Text>
 	</View>;
@@ -999,7 +1031,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 		<View style={styles.approvalStatus}><View style={styles.approvalDot} /><Text style={styles.approvalStatusText}>{presentation.title}</Text></View>
 		{activity.detail?.reason ? <Text selectable style={styles.requestCopy}>{activity.detail.reason}</Text> : null}
 		<View style={styles.approvalCommandSurface}>
-			<Feather name="terminal" size={12} color={t.textTertiary} />
+			<Feather name="terminal" size={iconSize.xs} color={t.textTertiary} />
 			<Text selectable style={styles.requestCommand}>{command}</Text>
 		</View>
 		{activity.detail?.cwd ? <LabelValue label="cwd" value={activity.detail.cwd} /> : null}
@@ -1130,7 +1162,7 @@ function CompactionMarker({ activity }: { activity: ConversationActivity }) {
 	const styles = useThemedStyles(makeStyles);
 	const after = activity.detail?.tokensAfter;
 	const window = activity.detail?.contextWindow;
-	return <View style={styles.compaction}><Feather name="archive" size={12} color={t.textFaint} /><Text style={styles.compactionText}>History compacted{activity.detail?.tokensReclaimed ? ` · −${formatTokens(activity.detail.tokensReclaimed)}` : ""}{after && window ? ` · ${Math.round((after / window) * 100)}% full` : ""}</Text></View>;
+	return <View style={styles.compaction}><Feather name="archive" size={iconSize.xs} color={t.textFaint} /><Text style={styles.compactionText}>History compacted{activity.detail?.tokensReclaimed ? ` · −${formatTokens(activity.detail.tokensReclaimed)}` : ""}{after && window ? ` · ${Math.round((after / window) * 100)}% full` : ""}</Text></View>;
 }
 
 function ErrorActivity({ activity }: { activity: ConversationActivity }) {
@@ -1140,7 +1172,7 @@ function ErrorActivity({ activity }: { activity: ConversationActivity }) {
 	// usage-limit text as both summary and detail.error — so rendering each in
 	// turn printed one failure twice inside this card. Same rule as the renderer.
 	const { headline, detail } = providerErrorCopy(activity);
-	return <View style={[styles.errorCard, { borderColor: t.tintRed }]}><Feather name="alert-triangle" size={15} color={t.red} /><View style={{ flex: 1 }}><Text style={styles.errorTitle}>{headline}</Text>{detail ? <Text selectable style={styles.errorCopy}>{detail}</Text> : null}</View></View>;
+	return <View style={[styles.errorCard, { borderColor: t.tintRed }]}><Feather name="alert-triangle" size={iconSize.sm} color={t.red} /><View style={{ flex: 1 }}><Text style={styles.errorTitle}>{headline}</Text>{detail ? <Text selectable style={styles.errorCopy}>{detail}</Text> : null}</View></View>;
 }
 
 function EmptyConversation({ controller }: { controller: string }) {
@@ -1150,7 +1182,7 @@ function EmptyConversation({ controller }: { controller: string }) {
 
 function LabelValue({ label, value }: { label: string; value: string }) { const styles = useThemedStyles(makeStyles); return <View style={styles.labelValue}><Text style={styles.detailLabel}>{label}</Text><Text selectable style={styles.detailValue}>{value}</Text></View>; }
 function CodeOutput({ value }: { value: string }) { const styles = useThemedStyles(makeStyles); return <Pressable onLongPress={() => { void Clipboard.setStringAsync(value); haptics.success(); }}><Text selectable style={styles.output}>{value}</Text></Pressable>; }
-function FileList({ files }: { files: unknown[] }) { const styles = useThemedStyles(makeStyles); return <View style={styles.fileBody}>{files.map((file, index) => <Text key={index} selectable style={styles.filePath}>• {typeof file === "string" ? file : printable(file)}</Text>)}</View>; }
+function FileList({ files }: { files: unknown[] }) { const styles = useThemedStyles(makeStyles); return <View style={styles.fileBody}>{files.map((file, index) => <View key={index} style={styles.fileListRow}><View style={styles.fileBullet} /><Text selectable style={styles.filePath}>{typeof file === "string" ? file : printable(file)}</Text></View>)}</View>; }
 
 function printable(value: unknown): string {
 	if (value === null || value === undefined) return "";
@@ -1205,6 +1237,11 @@ function activityMeta(activity: ConversationActivity): { icon: keyof typeof Feat
 
 function elapsed(start?: string, end?: string): string | undefined { if (!start || !end) return undefined; const ms = Date.parse(end) - Date.parse(start); if (!Number.isFinite(ms) || ms < 0) return undefined; const seconds = Math.round(ms / 1000); return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
 function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
+/** The turn status row's height, the same as the startup checklist header it replaces. */
+const STATUS_ROW_HEIGHT = 34;
+/** The Review pill's drawn height; its hit slop makes up the rest of a touch target. */
+const REVIEW_PILL_HEIGHT = 32;
+
 const makeStyles = (t: Theme) => {
 	// Every card in the timeline has one shape: the card radius, and the
 	// divider's width for its edge.
@@ -1223,7 +1260,7 @@ const makeStyles = (t: Theme) => {
 		userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: radius.xl, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
 		quotedBubble: { width: "88%" },
 		userText: { fontFamily: "Geist_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
-		delivery: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.caption2.fontSize },
+		delivery: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.footnote.fontSize },
 		attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
 		attachmentsSpaced: { marginTop: space.sm },
 		attachmentTile: { overflow: "hidden", borderRadius: radius.sm, backgroundColor: t.bgColumn },
@@ -1231,84 +1268,87 @@ const makeStyles = (t: Theme) => {
 		// alignSelf keeps a chip its own height next to a tile: the row container's
 		// default stretch would otherwise blow it up to the tile's 104/160px.
 		attachmentChip: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, borderWidth: rowDividerWidth, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
-		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
-		attachmentRetry: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption2.fontSize, fontWeight: "600" },
+		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize },
+		attachmentRetry: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		originMessage: { marginVertical: space.sm, borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.sm, gap: space.xxs },
 		originHeader: { flexDirection: "row", alignItems: "center", gap: space.xxs },
-		originLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+		originLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		originText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
-		originMore: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xxs },
-		originMoreText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption2.fontSize, fontWeight: "600" },
+		originMore: { alignSelf: "flex-start", minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
+		originMoreText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		steerBubble: { backgroundColor: t.bgSubtle },
-		steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.hair },
+		steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
 		assistantRow: { paddingVertical: space.lg },
-		sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.xxs },
+		sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
 		responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
 		// The glyph lines up with the reply's left edge. The target reaches into the
 		// row's bottom padding rather than up over the text, where a long press selects.
 		copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: touchTarget, height: touchTarget, marginLeft: -(touchTarget - iconSize.md) / 2, marginBottom: -space.md },
 		systemSignal: { ...card, marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderColor: t.borderDefault, backgroundColor: t.bgSurface, padding: space.sm },
-		systemTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-		systemDetail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: space.hair },
+		systemTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		systemDetail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
 		activityWrap: { paddingVertical: space.hair },
-		activityRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
+		activityRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
 		activitySummary: { flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
-		server: { color: t.textTertiary, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
-		activityProgress: { fontFamily: "Geist_400Regular", maxWidth: "28%", color: t.textFaint, fontSize: type.caption2.fontSize },
-		activityStopped: { fontFamily: "Geist_600SemiBold", color: t.textFaint, fontSize: type.caption2.fontSize, fontWeight: "600" },
+		server: { color: t.textTertiary, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
+		activityProgress: { fontFamily: "Geist_400Regular", maxWidth: "28%", color: t.textFaint, fontSize: type.footnote.fontSize },
+		activityStopped: { fontFamily: "Geist_600SemiBold", color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		activityDetail: { marginLeft: space.xl, marginBottom: space.xs, borderLeftWidth: rowDividerWidth, borderLeftColor: t.borderSubtle, paddingLeft: space.md, gap: space.xs },
 		terminalInput: { gap: space.xxs },
 		terminalInputTitle: { flexDirection: "row", alignItems: "center", gap: space.xxs },
-		reviewDecision: { fontFamily: "Geist_600SemiBold", color: t.green, fontSize: type.caption2.fontSize, fontWeight: "600" },
-		risk: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.caption2.fontSize, fontWeight: "600" },
-		reviewRationale: { fontFamily: "Geist_400Regular", color: t.textPrimary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+		reviewDecision: { fontFamily: "Geist_600SemiBold", color: t.green, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		risk: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		reviewRationale: { fontFamily: "Geist_400Regular", color: t.textPrimary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		runWrap: { paddingVertical: space.hair },
-		runSummary: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
-		runText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textTertiary, fontSize: type.caption1.fontSize },
-		runFailed: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.caption2.fontSize, fontWeight: "600" },
-		runStopped: { fontFamily: "Geist_600SemiBold", color: t.textFaint, fontSize: type.caption2.fontSize, fontWeight: "600" },
+		runSummary: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
+		runText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textTertiary, fontSize: type.footnote.fontSize },
+		runFailed: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		runStopped: { fontFamily: "Geist_600SemiBold", color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		runDetail: { ...card, marginBottom: space.xs, borderColor: t.borderSubtle, backgroundColor: t.bgSubtle, paddingHorizontal: space.sm, paddingVertical: space.hair },
 		subagent: { marginLeft: space.xl, marginBottom: space.xxs, borderLeftWidth: rowDividerWidth, borderLeftColor: t.borderStrong, paddingLeft: space.sm },
-		subagentHeader: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
-		subagentLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textFaint, fontSize: type.caption2.fontSize },
+		subagentHeader: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
+		subagentLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize },
 		detailCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		labelValue: { flexDirection: "row", gap: space.sm },
-		detailLabel: { width: 30, color: t.textFaint, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
+		detailLabel: { minWidth: space.huge, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
 		// Names a block of detail: what the agent typed, a tool's arguments or result.
 		detailHeading: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		detailValue: { flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
-		output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
+		detailValue: { flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
+		output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 		turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
 		turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
 		// Full width with a rule under it, matching the desktop's Working / Worked
 		// rows and the setup checklist header, so the line holds through the handoff.
-		statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
+		statusRow: { minHeight: STATUS_ROW_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 		turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
-		turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
+		turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "right" },
 		// The glyph lines up with the reply's right edge; the target reaches past it.
 		rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginRight: -(touchTarget - iconSize.md) / 2 },
 		planCard: { ...card, backgroundColor: t.bgSurface, borderColor: t.borderDefault, overflow: "hidden" },
-		planHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
+		planHeader: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
 		changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
 		changedToggle: { flex: 1, minWidth: 0 },
 		changedTitle: { flexShrink: 1 },
-		changedReview: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: radius.pill, backgroundColor: t.bgElevatedHover, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
-		changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, color: t.textPrimary },
-		planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-		planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, fontWeight: "600" },
-		planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
+		changedReview: { minHeight: REVIEW_PILL_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: radius.pill, backgroundColor: t.bgElevatedHover, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
+		changedStat: { fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
+		changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize, color: t.textPrimary },
+		planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
 		planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
 		planStep: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
-		planStepText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-		planStepState: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
+		planStepText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		planStepState: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 		planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 		fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 		fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
-		fileRowTap: { minHeight: 36 },
-		fileMark: { width: 13, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, fontWeight: "600" },
-		filePath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		fileStat: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
+		fileRowTap: { minHeight: touchTarget },
+		fileListRow: { flexDirection: "row", alignItems: "flex-start", gap: space.xs },
+		fileBullet: { width: 4, height: 4, marginTop: (type.footnote.lineHeight - 4) / 2, borderRadius: radius.pill, backgroundColor: t.textTertiary },
+		fileMark: { width: 13, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		filePath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		fileStat: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
 		approvalRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.lg, gap: space.md },
 		approvalStatus: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		approvalDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: t.amber },
@@ -1316,35 +1356,35 @@ const makeStyles = (t: Theme) => {
 		approvalCommandSurface: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md },
 		approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.xxs, paddingTop: space.none },
 		approvalResolved: { minHeight: 38, marginVertical: space.sm, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.hair },
-		approvalResolvedLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-		approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
+		approvalResolvedLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
 		requestCard: { ...card, marginVertical: space.sm, backgroundColor: t.bgSurface, borderColor: t.borderDefault, padding: space.md, gap: space.md },
 		requestCardResolved: { backgroundColor: t.bgSubtle },
 		requestCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		inputRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.xl, gap: space.md },
 		inputRequestStatus: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		inputRequestDot: { width: 7, height: 7, borderRadius: radius.pill },
-		inputRequestStatusText: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "600" },
+		inputRequestStatusText: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		inputActions: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.hair, paddingTop: space.hair },
-		requestCommand: { flex: 1, color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+		requestCommand: { flex: 1, color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		form: { gap: space.sm },
 		field: { gap: space.xs },
-		inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+		inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		inputQuestion: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
-		inputLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-		inputHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+		inputLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		inputHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md },
 		switchLabel: { flex: 1 },
 		// The system switch's own footprint, as Settings hosts it.
 		switchHost: { width: 54, height: 34 },
 		urlBox: { backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm },
-		urlText: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		validation: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+		urlText: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		validation: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		compaction: { alignSelf: "center", flexDirection: "row", alignItems: "center", gap: space.xs, marginVertical: space.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.pill, backgroundColor: t.bgSubtle },
-		compactionText: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
+		compactionText: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 		errorCard: { ...card, marginVertical: space.sm, flexDirection: "row", gap: space.sm, backgroundColor: t.tintRed, padding: space.md },
-		errorTitle: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.caption1.fontSize, fontWeight: "600" },
-		errorCopy: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+		errorTitle: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		errorCopy: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		empty: { paddingVertical: 90, alignItems: "center", paddingHorizontal: space.xxl },
 		emptyMascot: { marginBottom: space.lg },
 		emptyTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600" },
