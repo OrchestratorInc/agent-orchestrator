@@ -7,47 +7,29 @@ import Activity from "lucide-react-native/icons/activity";
 import CircleAlert from "lucide-react-native/icons/circle-alert";
 import TriangleAlert from "lucide-react-native/icons/triangle-alert";
 import Archive from "lucide-react-native/icons/archive";
-import Bell from "lucide-react-native/icons/bell";
 import Check from "lucide-react-native/icons/check";
 import CircleCheck from "lucide-react-native/icons/circle-check";
 import Circle from "lucide-react-native/icons/circle";
 import Clock from "lucide-react-native/icons/clock";
-import Cloud from "lucide-react-native/icons/cloud";
-import Code from "lucide-react-native/icons/code";
-import Command from "lucide-react-native/icons/command";
 import Copy from "lucide-react-native/icons/copy";
 import CornerDownRight from "lucide-react-native/icons/corner-down-right";
 import Delete from "lucide-react-native/icons/delete";
 import Disc from "lucide-react-native/icons/disc";
 import CloudDownload from "lucide-react-native/icons/cloud-download";
 import PenLine from "lucide-react-native/icons/pen-line";
-import Eye from "lucide-react-native/icons/eye";
 import File from "lucide-react-native/icons/file";
 import FileText from "lucide-react-native/icons/file-text";
 import FileDiff from "lucide-react-native/icons/file-diff";
 import ListTree from "lucide-react-native/icons/list-tree";
 import Folder from "lucide-react-native/icons/folder";
-import Flag from "lucide-react-native/icons/flag";
 import GitBranch from "lucide-react-native/icons/git-branch";
 import GitMerge from "lucide-react-native/icons/git-merge";
 import GitPullRequest from "lucide-react-native/icons/git-pull-request";
 import Globe from "lucide-react-native/icons/globe";
-import Grid2x2 from "lucide-react-native/icons/grid-2x2";
-import Image from "lucide-react-native/icons/image";
-import Inbox from "lucide-react-native/icons/inbox";
-import Info from "lucide-react-native/icons/info";
-import Italic from "lucide-react-native/icons/italic";
 import KeyRound from "lucide-react-native/icons/key-round";
-import Laptop from "lucide-react-native/icons/laptop";
 import Link from "lucide-react-native/icons/link";
 import List from "lucide-react-native/icons/list";
-import LoaderCircle from "lucide-react-native/icons/loader-circle";
-import Map from "lucide-react-native/icons/map";
-import Menu from "lucide-react-native/icons/menu";
 import MessageCircle from "lucide-react-native/icons/message-circle";
-import MessageSquare from "lucide-react-native/icons/message-square";
-import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";
-import Mic from "lucide-react-native/icons/mic";
 import CircleMinus from "lucide-react-native/icons/circle-minus";
 import Monitor from "lucide-react-native/icons/monitor";
 import MonitorCog from "lucide-react-native/icons/monitor-cog";
@@ -57,10 +39,7 @@ import RouteOff from "lucide-react-native/icons/route-off";
 import Timer from "lucide-react-native/icons/timer";
 import Unplug from "lucide-react-native/icons/unplug";
 import Moon from "lucide-react-native/icons/moon";
-import Palette from "lucide-react-native/icons/palette";
-import Paperclip from "lucide-react-native/icons/paperclip";
 import Pin from "lucide-react-native/icons/pin";
-import Play from "lucide-react-native/icons/play";
 import Plus from "lucide-react-native/icons/plus";
 import Power from "lucide-react-native/icons/power";
 import Radio from "lucide-react-native/icons/radio";
@@ -73,17 +52,10 @@ import Shield from "lucide-react-native/icons/shield";
 import ShieldOff from "lucide-react-native/icons/shield-off";
 import Shuffle from "lucide-react-native/icons/shuffle";
 import Smartphone from "lucide-react-native/icons/smartphone";
-import Square from "lucide-react-native/icons/square";
-import Table from "lucide-react-native/icons/table";
 import Terminal from "lucide-react-native/icons/terminal";
 import Wrench from "lucide-react-native/icons/wrench";
-import Trash from "lucide-react-native/icons/trash";
-import Type from "lucide-react-native/icons/type";
-import Underline from "lucide-react-native/icons/underline";
-import User from "lucide-react-native/icons/user";
 import WifiOff from "lucide-react-native/icons/wifi-off";
 import X from "lucide-react-native/icons/x";
-import OctagonX from "lucide-react-native/icons/octagon-x";
 import { useTheme } from "./ThemeProvider";
 
 /**
@@ -98,57 +70,36 @@ export const glyphs = {
 	"alert-circle": CircleAlert,
 	"alert-triangle": TriangleAlert,
 	"archive": Archive,
-	"bell": Bell,
 	"check": Check,
 	"check-circle": CircleCheck,
 	"circle": Circle,
 	"clock": Clock,
-	"cloud": Cloud,
-	"code": Code,
-	"command": Command,
 	"copy": Copy,
 	"corner-down-right": CornerDownRight,
 	"delete": Delete,
 	"disc": Disc,
 	"download-cloud": CloudDownload,
 	"edit-3": PenLine,
-	"eye": Eye,
 	"file": File,
 	"file-text": FileText,
 	"file-diff": FileDiff,
 	"folder": Folder,
-	"flag": Flag,
 	"git-branch": GitBranch,
 	"git-merge": GitMerge,
 	"git-pull-request": GitPullRequest,
 	"globe": Globe,
-	"grid": Grid2x2,
-	"image": Image,
-	"inbox": Inbox,
-	"info": Info,
-	"italic": Italic,
 	"key": KeyRound,
-	"laptop": Laptop,
 	"link": Link,
 	"list": List,
 	"list-tree": ListTree,
-	"loader": LoaderCircle,
-	"map": Map,
-	"menu": Menu,
 	"message-circle": MessageCircle,
-	"message-square": MessageSquare,
-	"message-square-plus": MessageSquarePlus,
-	"mic": Mic,
 	"minus-circle": CircleMinus,
 	"monitor": Monitor,
 	"monitor-cog": MonitorCog,
 	"monitor-off": MonitorOff,
 	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
-	"palette": Palette,
-	"paperclip": Paperclip,
 	"pin": Pin,
-	"play": Play,
 	"plus": Plus,
 	"power": Power,
 	"radio": Radio,
@@ -162,19 +113,12 @@ export const glyphs = {
 	"shield-off": ShieldOff,
 	"shuffle": Shuffle,
 	"smartphone": Smartphone,
-	"square": Square,
-	"table": Table,
 	"terminal": Terminal,
 	"tool": Wrench,
 	"timer": Timer,
-	"trash": Trash,
-	"type": Type,
-	"underline": Underline,
 	"unplug": Unplug,
-	"user": User,
 	"wifi-off": WifiOff,
 	"x": X,
-	"x-octagon": OctagonX,
 } as const;
 
 export type FeatherIconName = keyof typeof glyphs;

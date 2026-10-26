@@ -54,7 +54,6 @@ describe("Android native compatibility boundaries", () => {
 	// its own button, rather than an inline list that replaced the controls.
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
-		const icons = source("./icons.tsx");
 		expect(android).toContain('from "@expo/ui/jetpack-compose"');
 		expect(android).toContain("<DropdownMenu expanded={expanded} onDismissRequest={onDismiss}");
 		expect(android).not.toContain("OptionList");
@@ -66,8 +65,6 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).toContain("option.sectionBreakBefore ? <HorizontalDivider");
 		expect(android).toContain('project?.icon === "message-square-plus" ? materialDrawable("add_comment") : materialDrawable("folder")');
 		expect(android).toContain("chipColorFor(harness)");
-		expect(icons).toContain('import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";');
-		expect(icons).toContain('"message-square-plus": MessageSquarePlus');
 	});
 
 	// The attachment chooser is the same pull-down menu on both platforms, so
