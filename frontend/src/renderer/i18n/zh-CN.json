@@ -2343,6 +2343,7 @@
 	"files.imageAfter": "变更后",
 	"files.imageDimensions": "{{width}} × {{height}}",
 	"files.imagePreviewFailed": "无法加载图片预览。",
+	"files.emptyTable": "此文件没有任何行。",
 	"files.imageAlt": "{{file}} 的{{side}}版本",
 	"files.diffTruncated": "差异预览已截断。",
 	"files.contentTruncated": "渲染预览已截断。",

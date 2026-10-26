@@ -12,14 +12,14 @@ function highlightRegistry(): { Highlight?: new (...ranges: Range[]) => unknown;
 	return { Highlight: api.Highlight, registry: api.CSS?.highlights };
 }
 
-/** The selected range and its text when it lies in a rendered markdown body or PDF page inside container. */
+/** The selected range and its text when it lies in a rendered markdown body, table, or PDF page inside container. */
 function renderedSelection(container: HTMLElement): { quote: string; range: Range } | null {
 	const selection = window.getSelection();
 	if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
 	const range = selection.getRangeAt(0);
 	const node = range.commonAncestorContainer;
 	const element = node instanceof Element ? node : node.parentElement;
-	const body = element?.closest(".markdown-body, [data-pdf-document]");
+	const body = element?.closest(".markdown-body, [data-selection-feedback]");
 	if (!body || !container.contains(body)) return null;
 	const quote = selection.toString().trim();
 	return quote ? { quote, range: range.cloneRange() } : null;

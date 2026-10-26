@@ -2277,6 +2277,7 @@
 	"files.imageAfter": "変更後",
 	"files.imageDimensions": "{{width}} × {{height}}",
 	"files.imagePreviewFailed": "画像のプレビューを読み込めませんでした。",
+	"files.emptyTable": "このファイルには行がありません。",
 	"files.imageAlt": "{{file}} の{{side}}バージョン",
 	"files.diffTruncated": "diff プレビューは切り詰められました。",
 	"files.contentTruncated": "レンダリングされたプレビューは切り詰められました。",

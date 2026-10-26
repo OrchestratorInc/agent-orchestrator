@@ -2315,6 +2315,7 @@
 	"files.imageAfter": "Depois",
 	"files.imageDimensions": "{{width}} × {{height}}",
 	"files.imagePreviewFailed": "Não foi possível carregar a pré-visualização da imagem.",
+	"files.emptyTable": "Este arquivo não tem linhas.",
 	"files.imageAlt": "Versão “{{side}}” de {{file}}",
 	"files.diffTruncated": "Pré-visualização do diff truncada.",
 	"files.contentTruncated": "Pré-visualização renderizada truncada.",

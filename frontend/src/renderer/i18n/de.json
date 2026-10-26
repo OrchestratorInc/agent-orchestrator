@@ -2277,6 +2277,7 @@
 	"files.imageAfter": "Nachher",
 	"files.imageDimensions": "{{width}} × {{height}}",
 	"files.imagePreviewFailed": "Bildvorschau konnte nicht geladen werden.",
+	"files.emptyTable": "Diese Datei enthält keine Zeilen.",
 	"files.imageAlt": "Version „{{side}}“ von {{file}}",
 	"files.diffTruncated": "Diff-Vorschau gekürzt.",
 	"files.contentTruncated": "Gerenderte Vorschau gekürzt.",

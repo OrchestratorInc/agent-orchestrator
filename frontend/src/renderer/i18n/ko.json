@@ -2277,6 +2277,7 @@
 	"files.imageAfter": "변경 후",
 	"files.imageDimensions": "{{width}} × {{height}}",
 	"files.imagePreviewFailed": "이미지 미리보기를 불러오지 못했습니다.",
+	"files.emptyTable": "이 파일에는 행이 없습니다.",
 	"files.imageAlt": "{{file}}의 {{side}} 버전",
 	"files.diffTruncated": "diff 미리보기가 잘렸습니다.",
 	"files.contentTruncated": "렌더링된 미리보기가 잘렸습니다.",

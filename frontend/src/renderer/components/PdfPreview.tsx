@@ -81,7 +81,7 @@ export function PdfPreview({ onError, path, src }: { onError: () => void; path: 
 			{!loaded ? (
 				<PanelMessage>{t("files.loading")}</PanelMessage>
 			) : width > 0 ? (
-				<div className="flex flex-col items-center" data-pdf-document="" style={{ gap: PAGE_GAP }}>
+				<div className="flex flex-col items-center" data-selection-feedback="" style={{ gap: PAGE_GAP }}>
 					{loaded.sizes.map((size, index) => (
 						<PdfPage key={index} pageNumber={index + 1} pdf={loaded.pdf} pdfjs={loaded.pdfjs} root={scrollRef} scale={Math.min(width / size.width, MAX_SCALE)} size={size} />
 					))}

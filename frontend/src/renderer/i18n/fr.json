@@ -2315,6 +2315,7 @@
 	"files.imageAfter": "Après",
 	"files.imageDimensions": "{{width}} × {{height}}",
 	"files.imagePreviewFailed": "Impossible de charger l'aperçu de l'image.",
+	"files.emptyTable": "Ce fichier ne contient aucune ligne.",
 	"files.imageAlt": "Version « {{side}} » de {{file}}",
 	"files.diffTruncated": "Aperçu du diff tronqué.",
 	"files.contentTruncated": "Aperçu rendu tronqué.",

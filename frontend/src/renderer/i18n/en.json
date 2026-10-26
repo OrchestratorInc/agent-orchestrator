@@ -2632,6 +2632,7 @@
 	"files.imageAfter": "After",
 	"files.imageDimensions": "{{width}} × {{height}}",
 	"files.imagePreviewFailed": "Image preview could not be loaded.",
+	"files.emptyTable": "This file has no rows.",
 	"files.imageAlt": "{{side}} version of {{file}}",
 	"files.diffTruncated": "Diff preview truncated.",
 	"files.contentTruncated": "Rendered preview truncated.",

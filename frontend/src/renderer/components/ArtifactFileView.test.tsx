@@ -35,6 +35,7 @@ vi.mock("./ReadOnlyFileView", () => ({
 	),
 }));
 
+vi.mock("./chat/MermaidBlock", () => ({ MermaidBlock: ({ code }: { code: string }) => <figure aria-label="Mermaid diagram">{code}</figure> }));
 vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
 vi.mock("pdfjs-dist", () => ({
 	GlobalWorkerOptions: {},
@@ -474,5 +475,55 @@ describe("ArtifactFileView", () => {
 		expect(message).toContain("Cite the source");
 		expect(message).toContain("- Selected text: Revenue grew 12% quarter over quarter.");
 		expect(message).toContain("- Path: report.pdf");
+	});
+
+	it("opens a CSV artifact as a table that sorts by a clicked column", async () => {
+		fetchMock.mockResolvedValue(new Response("name,count\nbeta,10\nalpha,9\n", { status: 200 }));
+
+		renderWithQuery(<ArtifactFileView artifactName="usage.csv" path="usage.csv" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		const table = await screen.findByRole("table");
+		const firstColumn = () => Array.from(table.querySelectorAll("tbody tr")).map((row) => row.firstElementChild?.textContent);
+		expect(firstColumn()).toEqual(["beta", "alpha"]);
+		const count = screen.getByRole("columnheader", { name: "count" });
+		expect(count).toHaveClass("text-right");
+
+		await userEvent.click(screen.getByRole("button", { name: "count" }));
+		expect(count).toHaveAttribute("aria-sort", "ascending");
+		expect(firstColumn()).toEqual(["alpha", "beta"]);
+		await userEvent.click(screen.getByRole("button", { name: "count" }));
+		expect(firstColumn()).toEqual(["beta", "alpha"]);
+		await userEvent.click(screen.getByRole("button", { name: "count" }));
+		expect(count).toHaveAttribute("aria-sort", "none");
+	});
+
+	it("sends feedback on a table cell selected in a CSV artifact", async () => {
+		fetchMock.mockResolvedValue(new Response("name,count\nalpha,9\n", { status: 200 }));
+		postMock.mockResolvedValue({ data: { status: "ok" } });
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+
+		renderWithQuery(<ArtifactFileView artifactName="usage.csv" path="usage.csv" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		const cell = await screen.findByRole("cell", { name: "alpha" });
+		const range = document.createRange();
+		range.selectNodeContents(cell);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(cell);
+
+		const textbox = await screen.findByRole("textbox", { name: "Feedback for usage.csv · selected text" });
+		await userEvent.type(textbox, "Rename this");
+		await userEvent.click(screen.getByRole("button", { name: "Send feedback" }));
+
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(postMock.mock.calls[0][1].body.message as string).toContain("- Selected text: alpha");
+	});
+
+	it("opens a Mermaid artifact as its diagram", async () => {
+		fetchMock.mockResolvedValue(new Response("graph TD\n  A-->B\n", { status: 200 }));
+
+		renderWithQuery(<ArtifactFileView artifactName="flow.mmd" path="flow.mmd" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		expect(await screen.findByRole("figure", { name: "Mermaid diagram" })).toHaveTextContent("graph TD A-->B");
 	});
 });
