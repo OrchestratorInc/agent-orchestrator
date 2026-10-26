@@ -226,6 +226,7 @@ function Shell() {
 				    swipes it away; the page titles the bar with its own name. */}
 				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page" }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files" }} />
+				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder" }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File" }} />
 				<Stack.Screen
 					name="spawn"

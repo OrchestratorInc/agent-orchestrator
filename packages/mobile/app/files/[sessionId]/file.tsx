@@ -304,7 +304,7 @@ function SessionFileContent() {
 				onPress={() => { void Clipboard.setStringAsync(path); haptics.success(); setNotice("Path copied."); }}
 				style={styles.pathPress}
 			>
-				<FileTypeIcon path={path} status={detail && changed ? detail.status : undefined} size={18} />
+				<FileTypeIcon path={path} status={detail && changed ? detail.status : undefined} />
 				<Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="head" style={styles.pathText}>
 					{dir ? <Text style={styles.pathDir}>{`${dir}/`}</Text> : null}
 					<Text style={styles.pathName}>{name}</Text>

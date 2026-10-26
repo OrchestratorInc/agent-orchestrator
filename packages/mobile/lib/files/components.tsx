@@ -43,31 +43,35 @@ export function statusColor(status: WorkspaceFileStatus, t: Theme): string {
 /** Desktop's status letters (lib/workspace-file-status.ts), so a status reads the same in both apps. */
 const STATUS_LETTER: Record<WorkspaceFileStatus, string> = { added: "A", deleted: "D", modified: "M", renamed: "R", unmodified: "" };
 
+/** The square every file and folder glyph sits in, so names line up down a list. */
+export const FILE_ICON_SLOT = 28;
+const FILE_GLYPH = 22;
+
 /**
  * A file as editors show it: the logo of its type (the same Symbols icons
  * desktop draws), with desktop's status letter — A, M, D, R in its colour — at
  * the bottom right. Decorative: every row that uses it already names the file
  * and its status.
  */
-export const FileTypeIcon = memo(function FileTypeIcon({ path, status, size = 22 }: { path: string; status?: WorkspaceFileStatus; size?: number }) {
+export const FileTypeIcon = memo(function FileTypeIcon({ path, status }: { path: string; status?: WorkspaceFileStatus }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const xml = useMemo(() => fileIconSvg(path), [path]);
 	const badge = status && status !== "unmodified" ? status : undefined;
 	return (
-		<View accessible={false} importantForAccessibility="no-hide-descendants" style={[styles.typeIcon, { width: size + 6, height: size + 4 }]}>
-			<SvgXml xml={xml} width={size} height={size} opacity={status === "deleted" ? 0.55 : 1} />
+		<View accessible={false} importantForAccessibility="no-hide-descendants" style={styles.typeIcon}>
+			<SvgXml xml={xml} width={FILE_GLYPH} height={FILE_GLYPH} opacity={status === "deleted" ? 0.55 : 1} />
 			{badge ? <Text maxFontSizeMultiplier={1} style={[styles.statusLetter, { color: statusColor(badge, t) }]}>{STATUS_LETTER[badge]}</Text> : null}
 		</View>
 	);
 });
 
-export const FolderTypeIcon = memo(function FolderTypeIcon({ name, size = 22 }: { name: string; size?: number }) {
+export const FolderTypeIcon = memo(function FolderTypeIcon({ name }: { name: string }) {
 	const styles = useThemedStyles(makeStyles);
 	const xml = useMemo(() => folderIconSvg(name), [name]);
 	return (
-		<View accessible={false} importantForAccessibility="no-hide-descendants" style={[styles.typeIcon, { width: size + 4, height: size + 4 }]}>
-			<SvgXml xml={xml} width={size} height={size} />
+		<View accessible={false} importantForAccessibility="no-hide-descendants" style={styles.typeIcon}>
+			<SvgXml xml={xml} width={FILE_GLYPH} height={FILE_GLYPH} />
 		</View>
 	);
 });
@@ -85,39 +89,6 @@ export function LineCounts({ additions, deletions, binary }: { additions: number
 		</Text>
 	);
 }
-
-// ---- Changed-file row -------------------------------------------------------------
-
-export const ChangeRow = memo(function ChangeRow({ file, comments, onPress }: { file: ChangeEntry; comments: number; onPress: (file: ChangeEntry) => void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const { name, dir } = splitPath(file.path);
-	const badges = file.sections.filter((section) => section !== "unstaged" && section !== "committed").map((section) => sectionLabel[section]);
-	const detail = [file.previousPath ? `from ${file.previousPath}` : dir, ...badges].filter(Boolean).join(" · ");
-	return (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityLabel={`${changeAccessibilityLabel(file)}${comments ? `, ${plural(comments, "queued comment")}` : ""}`}
-			accessibilityHint="Opens the diff"
-			onPress={() => { haptics.tap(); onPress(file); }}
-			style={({ pressed }) => [styles.fileRow, pressed && { backgroundColor: t.bgElevatedHover }]}
-		>
-			<FileTypeIcon path={file.path} status={file.status} />
-			<View style={styles.fileRowText}>
-				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.body} style={[styles.fileName, file.status === "deleted" && styles.fileNameDeleted]}>{name}</Text>
-				{detail ? <Text numberOfLines={1} ellipsizeMode="head" maxFontSizeMultiplier={fontScaleCap.body} style={styles.fileDir}>{detail}</Text> : null}
-			</View>
-			{comments ? (
-				<View style={styles.commentCount}>
-					<Feather name="message-square" size={iconSize.xs} color={t.textSecondary} />
-					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.commentCountText}>{comments}</Text>
-				</View>
-			) : null}
-			<LineCounts additions={file.additions} deletions={file.deletions} binary={file.binary} />
-			<Feather name="chevron-right" size={iconSize.sm} color={t.textFaint} />
-		</Pressable>
-	);
-});
 
 // ---- Diff lines ---------------------------------------------------------------------
 
@@ -475,17 +446,10 @@ export function ReviewTray({
 // ---- Styles ------------------------------------------------------------------------
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	typeIcon: { alignItems: "center", justifyContent: "center" },
-	statusLetter: { position: "absolute", right: -3, bottom: -3, fontFamily: t.fontMono, fontSize: 10, lineHeight: 12, fontWeight: "700" },
-	counts: { fontFamily: t.fontMono, fontSize: type.caption1.fontSize, color: t.textSecondary },
+	typeIcon: { width: FILE_ICON_SLOT, height: FILE_ICON_SLOT, alignItems: "center", justifyContent: "center" },
+	statusLetter: { position: "absolute", right: -2, bottom: -2, fontFamily: t.fontMono, fontSize: 10, lineHeight: 12, fontWeight: "700" },
+	counts: { fontFamily: t.fontMono, fontSize: type.footnote.fontSize, color: t.textSecondary },
 
-	fileRow: { minHeight: touchTarget + space.sm, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm },
-	fileRowText: { flex: 1, minWidth: 0 },
-	fileName: { ...type.subheadline, fontFamily: font.medium, color: t.textPrimary },
-	fileNameDeleted: { color: t.textSecondary, textDecorationLine: "line-through" },
-	fileDir: { ...type.footnote, color: t.textTertiary },
-	commentCount: { flexDirection: "row", alignItems: "center", gap: space.hair },
-	commentCountText: { fontFamily: font.medium, fontSize: type.caption2.fontSize, color: t.textSecondary },
 
 	line: { flexDirection: "row", alignItems: "flex-start", minHeight: CODE_LINE_HEIGHT, paddingRight: space.lg },
 	lineSelected: { backgroundColor: t.accentTint, borderLeftWidth: 3, borderLeftColor: t.accent },
