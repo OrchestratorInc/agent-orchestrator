@@ -445,9 +445,9 @@ describe("OpenCode single-read catalogs", () => {
 		}
 	});
 
-	// What event-transport does for every catalog event.
+	// What event-transport does for a catalog change event.
 	const catalogEvent = (client: QueryClient, agentId: string) => {
-		discardPendingAgentModelReads(["agent-models", agentId]);
+		discardPendingAgentModelReads(["agent-models", agentId], { reread: true });
 		return client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
 	};
 
@@ -574,6 +574,38 @@ describe("OpenCode single-read catalogs", () => {
 			finishOld({ data: old });
 			finishNew({ data: fresh });
 			await prefetch;
+			client.clear();
+		}
+	});
+
+	it.each(["opencode", "opencode-v2"])("publishes a slow %s read that outlasts several fallback polls", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const catalog: AgentModelCatalog = { agentId, models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const finish: Array<(value: { data: AgentModelCatalog }) => void> = [];
+		vi.mocked(apiClient.GET).mockImplementation((() => new Promise((resolve) => { finish.push(resolve); })) as never);
+		// What event-transport does on each 2 s fallback poll: no catalog change.
+		const poll = () => {
+			discardPendingAgentModelReads(["agent-models", agentId]);
+			void client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
+		};
+		const observer = new QueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			poll(); poll(); poll();
+			finish[0]({ data: catalog });
+			// The first poll's invalidate event restarts the read once.
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			// Later polls during the retry must let it finish.
+			poll(); poll(); poll();
+			finish[1]({ data: catalog });
+			await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(catalog));
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(catalog.models);
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+		} finally {
+			for (const resolve of finish) resolve({ data: catalog });
+			unsubscribe();
 			client.clear();
 		}
 	});
