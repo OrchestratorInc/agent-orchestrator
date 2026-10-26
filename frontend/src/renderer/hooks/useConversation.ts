@@ -14,6 +14,7 @@ import {
 	type InfiniteData,
 	type QueryClient,
 	infiniteQueryOptions,
+	queryOptions,
 	useInfiniteQuery,
 	useIsMutating,
 	useMutation,
@@ -383,10 +384,28 @@ export interface ConversationQueryResult {
 
 async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
-		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
+		// Settled tool rows arrive as previews; an opened row reads its full body
+		// through conversationActivityQueryOptions. Daemons without previews ignore this.
+		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE, activityDetail: "preview" } },
 	});
 	if (error) throw error;
 	return toSnapshot(data as WireSnapshot);
+}
+
+/** One activity's full row, for a row the page sent as a preview. */
+export function conversationActivityQueryOptions(sessionId: string, activity: Pick<ConversationActivity, "id" | "revision">, hostId?: string) {
+	return queryOptions({
+		queryKey: [...(hostId ? ["remote-conversation-activity", hostId] : ["conversation-activity"]), sessionId, activity.id, activity.revision] as const,
+		queryFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation/activities/{activityId}", {
+				params: { path: { sessionId, activityId: activity.id } },
+			});
+			if (error) throw error;
+			return toActivity(data as WireActivity);
+		},
+		// Keyed by revision, so a cached row is never stale.
+		staleTime: Infinity,
+	});
 }
 
 /** Refresh only the live page; refetching an infinite query downloads all older history. */
@@ -2002,7 +2021,10 @@ function toActivity(wire: WireActivity): ConversationActivity {
 		revision: wire.revision,
 		activityKind: wire.activityKind as ActivityKind,
 		status: wire.status as ActivityStatus,
-		summary: wire.summary,
+		// A preview page sends a summary that equals the command empty.
+		summary: wire.summary || (typeof detail.command === "string" ? detail.command : ""),
+		detailOmitted: wire.detailOmitted || undefined,
+		detailBytes: wire.detailBytes || undefined,
 		requestId: wire.requestId,
 		providerItemId: wire.providerItemId,
 		// The provider's own offered decisions, carried through the detail payload.

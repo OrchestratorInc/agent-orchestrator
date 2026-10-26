@@ -81,6 +81,7 @@ import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, S
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
 import { LatticeLoader } from "./LatticeLoader";
+import { type FullActivity, FullActivityBody } from "./FullActivity";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
@@ -1444,6 +1445,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const hasFileBody =
 		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
 	const hasBody = Boolean(
+		activity.detailOmitted ||
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
@@ -1581,40 +1583,49 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						{compactSummary &&
+						{/* The header reads the preview; the opened body reads the full row. */}
+						<FullActivityBody activity={activity}>
+						{(full) => {
+						const bodyDetail = full.activity.detail;
+						const bodyFiles = fileChangeFiles(full.activity);
+						return full.pending ? (
+							<ActivityDetailPending full={full} />
+						) : compactSummary &&
 						activity.activityKind === "command" &&
-						(detail?.command || detail?.output || detail?.terminalInput) ? (
-							<CommandExploreBody activity={activity} />
+						(bodyDetail?.command || bodyDetail?.output || bodyDetail?.terminalInput) ? (
+							<CommandExploreBody activity={full.activity} />
 						) : (
 							<div className="flex flex-col gap-1.5 px-1 pb-1 pt-0.5">
 						{/* One file: open straight onto its patch. Listing the same
 						    basename again under "Edited name" is noise. */}
-						{files.length === 1 && fileChangePatch(files[0]) ? (
-							<Patch patch={fileChangePatch(files[0])!} truncated={files[0].patchTruncated} />
+						{bodyFiles.length === 1 && fileChangePatch(bodyFiles[0]) ? (
+							<Patch patch={fileChangePatch(bodyFiles[0])!} truncated={bodyFiles[0].patchTruncated} />
 						) : null}
-						{files.length > 1 ? <FileChangeList files={files} /> : null}
-						{!isFileChange && detail?.command ? (
+						{bodyFiles.length > 1 ? <FileChangeList files={bodyFiles} /> : null}
+						{!isFileChange && bodyDetail?.command ? (
 							// Said explicitly rather than implied by the label: "Ran command"
 							// alone never tells the reader what ran, and the collapsed row
 							// deliberately keeps only the category.
 							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
-								{detail.command}
+								{bodyDetail.command}
 							</pre>
 						) : null}
-						{!isFileChange && (detail?.reason || detail?.text) ? (
+						{!isFileChange && (bodyDetail?.reason || bodyDetail?.text) ? (
 							<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
-								{detail.reason ?? detail.text}
+								{bodyDetail.reason ?? bodyDetail.text}
 							</p>
 						) : null}
-						{!isFileChange && detail?.terminalInput ? (
+						{!isFileChange && bodyDetail?.terminalInput ? (
 							<TerminalInput
-								text={detail.terminalInput}
-								truncated={detail.terminalInputTruncated}
+								text={bodyDetail.terminalInput}
+								truncated={bodyDetail.terminalInputTruncated}
 							/>
 						) : null}
-						{!isFileChange && detail?.output ? <CommandOutput activity={activity} /> : null}
+						{!isFileChange && bodyDetail?.output ? <CommandOutput activity={full.activity} /> : null}
 							</div>
-						)}
+						);
+						}}
+						</FullActivityBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -1779,6 +1790,26 @@ function CommandOutput({
 				</p>
 			) : null}
 		</>
+	);
+}
+
+/** An opened row whose full body is still on its way, or failed to arrive. */
+function ActivityDetailPending({ full }: { full: FullActivity }) {
+	if (full.failed) {
+		return (
+			<p role="alert" className="flex items-center gap-2 px-1 py-1 text-caption text-muted-foreground">
+				Could not load the details.
+				<button type="button" onClick={full.retry} className="text-foreground underline-offset-2 hover:underline">
+					Retry
+				</button>
+			</p>
+		);
+	}
+	return (
+		<p role="status" className="flex items-center gap-1.5 px-1 py-1 text-caption text-muted-foreground/70">
+			<Loader2 aria-hidden="true" className="size-3 animate-spin" />
+			Loading details…
+		</p>
 	);
 }
 
@@ -2087,6 +2118,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
 	const hasBody = Boolean(
+			activity.detailOmitted ||
 			detail?.arguments !== undefined ||
 			detail?.result !== undefined ||
 			detail?.content !== undefined ||
@@ -2148,30 +2180,38 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
+						<FullActivityBody activity={activity}>
+						{(full) => {
+						const bodyDetail = full.pending ? undefined : full.activity.detail;
+						return (
 						<div className="flex flex-col gap-2 pb-2.5">
-					{detail?.error ? (
+					{full.pending ? <ActivityDetailPending full={full} /> : null}
+					{bodyDetail?.error ? (
 						<p className="border border-destructive/30 bg-background px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
-							{detail.error}
+							{bodyDetail.error}
 						</p>
 					) : null}
-					{detail?.arguments !== undefined ? (
-						<JsonPayload label="Arguments" value={detail.arguments} />
+					{bodyDetail?.arguments !== undefined ? (
+						<JsonPayload label="Arguments" value={bodyDetail.arguments} />
 					) : null}
-					{detail?.result !== undefined ? (
-						<JsonPayload label="Result" value={detail.result} />
+					{bodyDetail?.result !== undefined ? (
+						<JsonPayload label="Result" value={bodyDetail.result} />
 					) : null}
-					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
-					{detail?.progress ? (
+					{bodyDetail?.content !== undefined ? <ToolContent value={bodyDetail.content} /> : null}
+					{bodyDetail?.progress ? (
 						<div className="flex flex-col gap-1">
 							<span className="text-caption text-muted-foreground/70">
 								Progress
 							</span>
 							<pre className="scrollbar-none max-h-40 overflow-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-muted-foreground">
-								{detail.progress}
+								{bodyDetail.progress}
 							</pre>
 						</div>
 					) : null}
 						</div>
+						);
+						}}
+						</FullActivityBody>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -2350,7 +2390,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const Icon = denied ? ShieldX : ShieldCheck;
 	const paths = reviewedPaths(activity);
 	const hasBody = Boolean(
-		detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
+		activity.detailOmitted || detail?.rationale || detail?.command || detail?.cwd || detail?.host || paths.length,
 	);
 
 	return (
@@ -2406,6 +2446,10 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 			</button>
 
 			{open && hasBody ? (
+				<FullActivityBody activity={activity}>
+				{(full) => {
+				const bodyDetail = full.pending ? undefined : full.activity.detail;
+				return (
 				<div className="flex flex-col gap-2 px-[11px] pb-2.5">
 					{/* Said in full rather than implied by the label: "auto-approved" alone
 					    leaves it ambiguous whether the user set something up that did this. */}
@@ -2414,16 +2458,17 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 							? "The agent asked to do this and the provider declined on your behalf. You were not asked."
 							: "The agent asked to do this and the provider allowed it on your behalf. You were not asked."}
 					</p>
-					{detail?.rationale ? (
+					{full.pending ? <ActivityDetailPending full={full} /> : null}
+					{bodyDetail?.rationale ? (
 						<p className="rounded border border-border bg-background px-2.5 py-1.5 text-xs leading-relaxed text-foreground">
-							{detail.rationale}
+							{bodyDetail.rationale}
 						</p>
 					) : null}
 					<dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-caption leading-relaxed">
-						{detail?.command ? (
+						{bodyDetail?.command ? (
 							<>
 								<dt className="text-muted-foreground/70">command</dt>
-								<dd className="min-w-0 break-all text-foreground">{detail.command}</dd>
+								<dd className="min-w-0 break-all text-foreground">{bodyDetail.command}</dd>
 							</>
 						) : null}
 						{detail?.cwd ? (
@@ -2464,6 +2509,9 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 						) : null}
 					</dl>
 				</div>
+				);
+				}}
+				</FullActivityBody>
 			) : null}
 		</div>
 	);
