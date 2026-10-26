@@ -74,8 +74,14 @@ describe("project page", () => {
 	it("goes back to Projects with the system back button", () => {
 		expect(page).toContain('useBoardTabBeneath("(projects)");');
 		expect(page).not.toContain("HeaderIconButton");
-		expect(page).not.toContain("dismissTo(");
 		expect(page).not.toContain("backOr(");
+	});
+
+	// Navigating to a tab from a pushed page stacks a second board over the first;
+	// going back down to the one beneath does not.
+	it("returns to the Projects board beneath it rather than pushing another", () => {
+		expect(page).toContain('onPress={() => router.dismissTo("/projects")}');
+		expect(page).not.toContain('router.navigate("/projects")');
 	});
 
 	it("shows its machine as a trailing header item", () => {

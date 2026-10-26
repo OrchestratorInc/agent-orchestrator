@@ -1,11 +1,12 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
+import { Spinner } from "../../lib/Spinner";
 import { StaleBanner } from "../../lib/StaleBanner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
@@ -117,20 +118,22 @@ function ProjectScreenContent() {
 			{!hostMatches ? (
 				loading && !config ? (
 					<View style={styles.center}>
-						<ActivityIndicator color={t.accent} />
+						<Spinner color={t.accent} accessibilityLabel="Loading project" />
 					</View>
 				) : (
 					<EmptyState
 						icon="server"
 						title="Project belongs to another machine"
 						message="Open it from that machine's project list."
-						action={<Button title="Open projects" icon="folder" onPress={() => router.navigate("/projects")} />}
+						// Back down to the board already beneath this page: navigating from
+						// here would stack a second board on top of it.
+						action={<Button title="Open projects" icon="folder" onPress={() => router.dismissTo("/projects")} />}
 					/>
 				)
 			) : !row ? (
 				loading ? (
 					<View style={styles.center}>
-						<ActivityIndicator color={t.accent} />
+						<Spinner color={t.accent} accessibilityLabel="Loading project" />
 					</View>
 				) : connection !== "open" ? (
 					<EmptyState icon="wifi-off" title="Machine offline" message="This project loads once the app reconnects." />
