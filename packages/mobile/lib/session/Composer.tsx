@@ -1,18 +1,26 @@
-import { Feather } from "../icons";
 import { Pressable, StyleSheet, TextInput, View } from "react-native";
+import { AppSymbol } from "../AppSymbol";
+import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
+import { COMPOSER_RADIUS } from "../chat/composerStyles";
 import { MicKey } from "../voice/MicKey";
 import type { VoiceMode, VoiceState } from "../voice/types";
+import { usePressFeedback } from "../pressFeedback";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import type { Theme } from "../theme";
 import { haptics } from "../haptics";
 import type { SendTarget } from "./sendRoute";
-import { iconSize, press, space, type } from "../tokens";
+import { RouteToggle } from "./RouteToggle";
+import { font, iconSize, space, stateOpacity, touchTarget, type } from "../tokens";
 
 // One field, one send button. The normal route sends a message to the agent; the
 // terminal route is an explicit escape hatch for prompts that need a literal
 // character, and the session screen auto-engages it when the daemon reports a
 // blocked permission prompt (see sendRoute.ts).
+//
+// Drawn as the chat composer is — one capsule with the glass behind it on iOS 26,
+// the elevated fill elsewhere, and touch-target controls — so the two screens of
+// one session do not type into two different-looking fields.
 export function Composer({
 	value,
 	onChangeText,
@@ -40,123 +48,115 @@ export function Composer({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
+	const iconFeedback = usePressFeedback("icon");
+	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const canSend = !!value.trim() && !sending;
+	const toTerminal = target === "terminal";
 
 	return (
 		<View style={styles.bar}>
-			<View style={styles.field}>
-				<TextInput
-					style={styles.input}
-					value={value}
-					onChangeText={onChangeText}
-					placeholder={target === "terminal" ? "Send to terminal…" : "Message the agent…"}
-					placeholderTextColor={t.textFaint}
-					multiline
-					keyboardAppearance={scheme}
-					{...textSelectionColors(t)}
-					// No autoFocus: the bar is always mounted now, so focusing on mount
-					// would pop the keyboard over the terminal every time the screen opens.
-				/>
-				{!targetLocked ? <Pressable
-					accessibilityRole="button"
-					accessibilityLabel={target === "terminal" ? "Switch to chat" : "Switch to terminal"}
-					accessibilityState={{ selected: target === "terminal" }}
-					onPress={() => { haptics.select(); onTargetChange(target === "terminal" ? "agent" : "terminal"); }}
-					hitSlop={6}
-					style={({ pressed }) => [
-						styles.routeToggle,
-						target === "terminal" && styles.routeToggleActive,
-						pressed && { opacity: press.opacity },
-					]}
-				>
-					<Feather
-						name={target === "terminal" ? "message-square" : "terminal"}
-						size={iconSize.sm}
-						color={target === "terminal" ? t.textTertiary : t.accent}
+			<View style={styles.pill}>
+				<ComposerGlass radius={COMPOSER_RADIUS} />
+				<View style={styles.row}>
+					{!targetLocked ? (
+						<RouteToggle
+							on={toTerminal}
+							onChange={(on) => {
+								haptics.select();
+								onTargetChange(on ? "terminal" : "agent");
+							}}
+						/>
+					) : null}
+					<TextInput
+						style={styles.input}
+						accessibilityLabel={toTerminal ? "Text for the terminal" : "Message the agent"}
+						value={value}
+						onChangeText={onChangeText}
+						placeholder={toTerminal ? "Send to terminal…" : "Message the agent…"}
+						placeholderTextColor={t.textFaint}
+						multiline
+						keyboardAppearance={scheme}
+						{...textSelectionColors(t)}
+						// No autoFocus: the bar is always mounted now, so focusing on mount
+						// would pop the keyboard over the terminal every time the screen opens.
 					/>
-				</Pressable> : null}
-				{/* Only offered while there is a keyboard to dismiss, instead of a
-				    permanent toggle that claimed to hide a keyboard it did not own. */}
-				{keyboardVisible ? (
+					{/* Only offered while there is a keyboard to dismiss, instead of a
+					    permanent toggle that claimed to hide a keyboard it did not own. */}
+					{keyboardVisible ? (
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Hide keyboard"
+							onPress={onDismissKeyboard}
+							android_ripple={iconFeedback.android_ripple}
+							style={({ pressed }) => [styles.control, pressed && iconFeedback.pressed]}
+						>
+							<AppSymbol name="keyboardDismiss" size={iconSize.lg} color={t.textSecondary} />
+						</Pressable>
+					) : null}
+					<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+					{/* No haptic of its own: the screen confirms the send, or its failure,
+					    once it knows which happened. */}
 					<Pressable
 						accessibilityRole="button"
-						accessibilityLabel="Hide keyboard"
-						onPress={() => { haptics.tap(); onDismissKeyboard(); }}
-						hitSlop={8}
-						style={({ pressed }) => [styles.dismiss, pressed && { opacity: press.opacity }]}
+						accessibilityLabel="Send"
+						accessibilityState={{ disabled: !canSend }}
+						disabled={!canSend}
+						onPress={onSend}
+						android_ripple={sendFeedback.android_ripple}
+						style={({ pressed }) => [styles.control, styles.send, !canSend && styles.disabled, pressed && sendFeedback.pressed]}
 					>
-						<Feather name="chevron-down" size={iconSize.sm} color={t.textTertiary} />
+						<AppSymbol name="send" size={iconSize.lg} color={t.onAccent} weight="semibold" />
 					</Pressable>
-				) : null}
+				</View>
 			</View>
-
-			<MicKey state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
-
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel="Send"
-				disabled={!canSend}
-				onPress={() => { haptics.tap(); onSend(); }}
-				style={({ pressed }) => [styles.send, !canSend && { opacity: 0.35 }, pressed && { opacity: press.opacity }]}
-			>
-				<Feather name="send" size={iconSize.md} color={t.onAccent} />
-			</Pressable>
 		</View>
 	);
 }
 
-const CONTROL_SIZE = 40;
+// Single-line text sits centred in a touch-target-tall field, and the field
+// grows to about four lines before it scrolls, so a long prompt can't swallow
+// the terminal above it.
+const LINE_HEIGHT = type.subheadline.lineHeight;
+const FIELD_MAX_HEIGHT = 4 * LINE_HEIGHT + (touchTarget - LINE_HEIGHT);
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-	bar: {
-		flexDirection: "row",
-		alignItems: "flex-end",
-		gap: space.xs,
-		paddingHorizontal: space.sm,
-		paddingTop: space.hair,
-		paddingBottom: space.xs,
-	},
-	field: {
-		flex: 1,
-		flexDirection: "row",
-		alignItems: "flex-end",
-		minHeight: CONTROL_SIZE,
-		// Caps growth at roughly four lines so a long prompt can't swallow the
-		// terminal above it.
-		maxHeight: 108,
-		borderRadius: 12, borderCurve: "continuous",
-		borderWidth: 1,
-		borderColor: t.borderDefault,
-		backgroundColor: t.bgElevated,
-		paddingLeft: space.md,
-		paddingRight: space.xxs,
-	},
-	input: { fontFamily: "Geist_400Regular",
-		flex: 1,
-		color: t.textPrimary,
-		fontSize: type.subheadline.fontSize,
-		paddingTop: space.sm,
-		paddingBottom: space.sm,
-		maxHeight: 106,
-	},
-	dismiss: { width: 28, height: CONTROL_SIZE, alignItems: "center", justifyContent: "center" },
-	routeToggle: {
-		width: CONTROL_SIZE,
-		height: CONTROL_SIZE,
-		alignItems: "center",
-		justifyContent: "center",
-		borderRadius: 8, borderCurve: "continuous",
-	},
-	routeToggleActive: { backgroundColor: t.accentTint },
-	// Rounded square at the same radius as the mic, so the two read as a pair and
-	// match the field beside them rather than being the only circles in the dock.
-	send: {
-		width: CONTROL_SIZE,
-		height: CONTROL_SIZE,
-		borderRadius: 12, borderCurve: "continuous",
-		backgroundColor: t.accent,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-});
+		bar: {
+			paddingHorizontal: space.md,
+			paddingTop: space.xs,
+			paddingBottom: space.xs,
+		},
+		// The fill goes transparent where the glass layer draws behind it: an opaque
+		// pill under a material is the one arrangement that turns glass grey.
+		pill: {
+			paddingHorizontal: space.xxs,
+			paddingVertical: space.xxs,
+			borderRadius: COMPOSER_RADIUS,
+			borderCurve: "continuous",
+			backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated,
+		},
+		// Bottom-aligned, so the controls stay put while the field grows above them.
+		row: { flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
+		input: {
+			flex: 1,
+			minHeight: touchTarget,
+			maxHeight: FIELD_MAX_HEIGHT,
+			paddingHorizontal: space.xs,
+			paddingVertical: (touchTarget - LINE_HEIGHT) / 2,
+			fontFamily: font.regular,
+			fontSize: type.subheadline.fontSize,
+			lineHeight: LINE_HEIGHT,
+			color: t.textPrimary,
+			textAlignVertical: "top",
+		},
+		control: {
+			width: touchTarget,
+			height: touchTarget,
+			borderRadius: touchTarget / 2,
+			overflow: "hidden",
+			alignItems: "center",
+			justifyContent: "center",
+		},
+		send: { backgroundColor: t.accent },
+		disabled: { opacity: stateOpacity.disabled },
+	});

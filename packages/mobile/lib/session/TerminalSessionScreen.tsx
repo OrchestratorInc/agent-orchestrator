@@ -1581,10 +1581,12 @@ const makeStyles = (t: Theme) =>
 	transitionNoticeTextFailed: { color: t.red },
 	transitionNoticeActions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xs },
 	termWrap: { flex: 1, backgroundColor: t.bgBase },
+	// The page's own surface, as under the chat composer: the composer's
+	// elevated fill and the keys' tonal fill both need it to stand apart from.
 	dock: {
-		borderTopWidth: 1,
+		borderTopWidth: rowDividerWidth,
 		borderTopColor: t.borderSubtle,
-		backgroundColor: t.bgSurface,
+		backgroundColor: t.bgBase,
 	},
 	// The size of the button it stands in for, so the items beside it hold still.
 	headerSpinner: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },

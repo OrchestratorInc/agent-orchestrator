@@ -32,6 +32,7 @@ export const materialDrawableNames = [
 	"settings",
 	"smartphone",
 	"tab",
+	"terminal",
 	"vertical_align_top",
 	"wrap_text",
 ] as const satisfies readonly AndroidSymbol[];

@@ -28,6 +28,7 @@ const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	settings: require("../assets/icons/settings.xml"),
 	smartphone: require("../assets/icons/smartphone.xml"),
 	tab: require("../assets/icons/tab.xml"),
+	terminal: require("../assets/icons/terminal.xml"),
 	vertical_align_top: require("../assets/icons/vertical_align_top.xml"),
 	wrap_text: require("../assets/icons/wrap_text.xml"),
 };
