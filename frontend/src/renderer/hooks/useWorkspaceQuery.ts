@@ -155,6 +155,7 @@ export function patchWorkspaceSession(
 ): boolean {
 	let patched = false;
 	let archiveMembershipChanged = false;
+	let detailWorkspace: WorkspaceSummary | undefined;
 	queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current) => {
 		if (!current) return current;
 		const projectId = session.projectId || STANDALONE_WORKSPACE_ID;
@@ -169,6 +170,9 @@ export function patchWorkspaceSession(
 			.some(([, rows]) => rows?.some((candidate) => candidate.id === session.id));
 		archiveMembershipChanged = activeOnly && (session.isTerminated === true ? previous !== undefined : wasArchived);
 		const row = session.projectId ? toWorkspaceSession(session, project) : toLocalWorkspaceSession(session, project.id, project.name);
+		if (queryClient.getQueryData(["session", session.id]) !== undefined) {
+			detailWorkspace = { ...project, sessions: [row] };
+		}
 		const next = current.map((workspace) => {
 			if (workspace.id !== projectId) {
 				return workspace.sessions.some((candidate) => candidate.id === session.id)
@@ -185,6 +189,10 @@ export function patchWorkspaceSession(
 		patched = true;
 		return applyOptimisticSessionKills(next) ?? next;
 	});
+	if (detailWorkspace) {
+		const detail = applyOptimisticSessionKills([detailWorkspace])![0].sessions[0];
+		queryClient.setQueryData(["session", session.id], detail);
+	}
 	if (archiveMembershipChanged) {
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
 		void queryClient.invalidateQueries({ queryKey: ["archived-sessions"] }, { cancelRefetch: false });

@@ -1015,6 +1015,17 @@ describe("patchWorkspaceSession", () => {
 		expect(invalidate).not.toHaveBeenCalled();
 		client.clear();
 	});
+	it("patches an existing ended-session detail without reinserting it or reading a list", () => {
+		const client = new QueryClient();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 1, sessions: [] }]);
+		client.setQueryData(["session", row.id], toWorkspaceSession(row, { id: "p", name: "Project" }));
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: true, displayName: "Updated archive" })).toBe(true);
+		expect(client.getQueryData(["session", row.id])).toMatchObject({ title: "Updated archive", isTerminated: true, status: "terminated" });
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toEqual([]);
+		expect(invalidate).not.toHaveBeenCalled();
+		client.clear();
+	});
 	it("does not create a live standalone group for an ended row in an active-only snapshot", () => {
 		const client = new QueryClient();
 		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 0, sessions: [] }]);
@@ -1026,10 +1037,12 @@ describe("patchWorkspaceSession", () => {
 		const { trackOptimisticSessionKill, clearOptimisticSessionKill } = await import("./optimistic-session-kills");
 		const client = new QueryClient();
 		client.setQueryData(workspaceQueryKey, []);
+		client.setQueryData(["session", row.id], toWorkspaceSession(row, { id: "p", name: "Project" }));
 		trackOptimisticSessionKill(row.id);
 		try {
 			expect(patchWorkspaceSession(client, { ...row, projectId: "" })).toBe(true);
 			expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0]).toMatchObject({ id: row.id, isTerminated: true, status: "terminated" });
+			expect(client.getQueryData(["session", row.id])).toMatchObject({ id: row.id, isTerminated: true, status: "terminated" });
 		} finally { clearOptimisticSessionKill(row.id); client.clear(); }
 	});
 });
