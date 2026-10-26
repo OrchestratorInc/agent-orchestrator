@@ -52,8 +52,8 @@ describe("Settings presentation", () => {
 			// names it in the history of a page opened over it.
 			expect(settings.headerShown).toBe(false);
 			expect(settings.title).toBe("Settings");
-			// Nothing stops a swipe for the whole flow; an open editor holds the
-			// sheet still on its own (app/settings/environments.tsx).
+			// Nothing stops a swipe for the whole flow; a machine page holds the
+			// sheet still on its own (app/settings/machine/[id]/edit.tsx and index.tsx).
 			expect(settings.gestureEnabled).toBeUndefined();
 			if (platform === "android") {
 				// A full-screen page with a top app bar and the system back, not a

@@ -30,8 +30,8 @@ import { sheetCornerRadius } from "../lib/tokens";
 
 // Sheet routes, and how tall each is allowed to be.
 //
-// The two scrolling lists need a real height to scroll within, so they take
-// explicit detents — `fitToContents` cannot measure a scroll view. The theme
+// A sheet that scrolls needs a real height to scroll within, so it takes
+// explicit detents — `fitToContents` cannot measure a scroll view. The usage
 // sheet renders a plain view, so it wraps its content exactly.
 //
 // Input sheets are registered separately below so their heights can respond to
@@ -200,7 +200,8 @@ function Shell() {
 				/>
 				{/* Settings holds a stack of its own, whose pages draw the native
 				    headers. On iOS it is a full-height sheet that swipes away like any
-				    other; Environments holds it still while a machine editor is open.
+				    other; a machine's edit page holds it still while it has unsaved
+				    changes, and a save or forget in flight holds it too.
 				    On Android it is a full-screen page with a top app bar and the
 				    system back: a bottom sheet holding a stack of pages is not a
 				    Material pattern. */}

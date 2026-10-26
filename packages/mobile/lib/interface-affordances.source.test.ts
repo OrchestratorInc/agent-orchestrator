@@ -63,7 +63,7 @@ describe("Interface affordances", () => {
 		const browser = source("./preview/BrowserLivePane.tsx");
 		const terminal = source("./session/TerminalSessionScreen.tsx");
 
-		it("leaves browser chrome to the dedicated mobile-browser UI", () => {
+		it("labels the app reload and asks for a URL through the native prompt, not a field in the pane", () => {
 			expect(preview).toContain('accessibilityLabel="Reload app preview"');
 			expect(browser).not.toContain("TextInput");
 			expect(browser).not.toContain('placeholder="Enter a URL"');
