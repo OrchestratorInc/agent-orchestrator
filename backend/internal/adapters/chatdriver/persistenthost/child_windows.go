@@ -26,8 +26,8 @@ func configureProviderProcess(cmd *exec.Cmd) {
 
 // startProviderProcess puts the suspended bridge in a kill-on-close Job Object
 // before its first instruction can spawn descendants. The host is not in the
-// job. Closing it after Run's child.Wait requests termination of descendants
-// whose bridge already exited without interrupting host cleanup.
+// job. Closing it before Run's final child.Wait terminates descendants whose
+// bridge already exited, releasing inherited pipes so host cleanup can finish.
 func startProviderProcess(cmd *exec.Cmd) (func(), error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {

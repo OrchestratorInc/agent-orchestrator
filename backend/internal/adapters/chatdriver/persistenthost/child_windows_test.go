@@ -49,6 +49,9 @@ func TestWindowsProviderBridge(t *testing.T) {
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestWindowsProviderGrandchild$")
 	child.Env = append(os.Environ(), "AO_WINDOWS_JOB_GRANDCHILD=1")
+	// Keep the host's stderr-copy pipe open after the bridge exits. The job
+	// must reap descendants before exec.Cmd.Wait can finish draining stderr.
+	child.Stderr = os.Stderr
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
