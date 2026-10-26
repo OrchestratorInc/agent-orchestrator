@@ -5,7 +5,7 @@ import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
 
 const swipeable = vi.hoisted(() => ({ close: vi.fn() }));
 // The full-swipe pan's callbacks and settings, captured from its builder.
-const watch = vi.hoisted(() => ({ handlers: {} as Record<string, (event?: any) => void>, enabled: true }));
+const watch = vi.hoisted(() => ({ handlers: {} as Record<string, (event?: any, success?: boolean) => void>, enabled: true }));
 const haptics = vi.hoisted(() => ({ armed: vi.fn() }));
 
 vi.mock("react-native", () => ({
@@ -20,7 +20,7 @@ vi.mock("react-native-gesture-handler", () => {
 			activeOffsetX: () => self,
 		};
 		for (const method of ["onStart", "onUpdate", "onEnd", "onFinalize"]) {
-			self[method] = (callback: (event?: any) => void) => { watch.handlers[method] = callback; return self; };
+			self[method] = (callback: (event?: any, success?: boolean) => void) => { watch.handlers[method] = callback; return self; };
 		}
 		return self;
 	};
@@ -79,9 +79,11 @@ const drag = (translationX: number) => {
 	act(() => watch.handlers.onStart());
 	act(() => watch.handlers.onUpdate({ translationX }));
 };
-const release = () => {
-	act(() => watch.handlers.onEnd());
-	act(() => watch.handlers.onFinalize());
+// Gesture Handler ends an active pan with success true when the finger lifts,
+// and false when the system or another handler cancels it.
+const release = (success = true) => {
+	act(() => watch.handlers.onEnd({}, success));
+	act(() => watch.handlers.onFinalize({}, success));
 };
 
 it("does not build the rail's controls behind a resting row but keeps the rail measurable", () => {
@@ -169,6 +171,18 @@ it("does not archive a drag that only opens the rail, or one carried back before
 	release();
 	drag(-300);
 	act(() => watch.handlers.onUpdate({ translationX: -100 }));
+	release();
+	expect(onAction).not.toHaveBeenCalled();
+});
+
+it("does not archive an armed drag that is cancelled instead of released", () => {
+	const onAction = vi.fn();
+	mount({ onAction });
+	drag(-300);
+	release(false);
+	expect(onAction).not.toHaveBeenCalled();
+	// Disarmed by the cancel, the next drag starts over.
+	drag(-150);
 	release();
 	expect(onAction).not.toHaveBeenCalled();
 });

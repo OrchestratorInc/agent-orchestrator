@@ -98,8 +98,10 @@ export function WorkerRowInteraction({
 					armed.value = next;
 					if (next) scheduleOnRN(arm);
 				})
-				.onEnd(() => {
-					if (armed.value) scheduleOnRN(fullSwipe);
+				// Only a finger lifted while armed archives. A drag the system or
+				// another handler cancels ends here too, with success false.
+				.onEnd((_event, success) => {
+					if (success && armed.value) scheduleOnRN(fullSwipe);
 				})
 				.onFinalize(() => {
 					armed.value = false;
