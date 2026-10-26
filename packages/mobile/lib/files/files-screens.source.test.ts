@@ -79,6 +79,13 @@ describe("the file viewer", () => {
 		expect(file).not.toContain("TOOLBAR_HEIGHT");
 	});
 
+	// iOS shows "3 of 12" beside the folder; a long folder gives way, not the place.
+	it("keeps the file's place readable beside a long folder path", () => {
+		expect(file).toMatch(/style=\{styles\.metaPlace\}>\{dir \? `\$\{place\} · ` : place\}<\/Text>/);
+		expect(file).toContain("metaPlace: { flexShrink: 0,");
+		expect(file).toMatch(/ellipsizeMode="head" style=\{styles\.metaText\}>\{`\$\{dir\}\/`\}<\/Text>/);
+	});
+
 	it("drops the tap-to-copy path bar for the header menu's Copy path", () => {
 		expect(file).not.toContain("pathPress");
 		expect(file).not.toContain("Copy path`");

@@ -357,17 +357,15 @@ function SessionFileContent() {
 	// changes, which Android's toolbar shows instead.
 	const place = STEP_IN_HEADER && canStep ? stepLabel : "";
 	const counts = detail && changed ? <LineCounts additions={detail.additions} deletions={detail.deletions} binary={detail.binary} /> : null;
+	const where = [place ? `Changed file ${place}` : "", dir ? `in ${dir}` : ""].filter(Boolean).join(", ");
+	// The place keeps its width and only the folder gives way, from its head,
+	// so a deep path never hides which of the changes this is.
 	const metaRow = place || dir || counts ? (
 		<View style={styles.metaRow}>
-			<Text
-				accessibilityLabel={[place ? `Changed file ${place}` : "", dir ? `in ${dir}` : ""].filter(Boolean).join(", ") || undefined}
-				maxFontSizeMultiplier={fontScaleCap.chrome}
-				numberOfLines={1}
-				ellipsizeMode="head"
-				style={styles.metaText}
-			>
-				{[place, dir ? `${dir}/` : ""].filter(Boolean).join(" · ")}
-			</Text>
+			<View accessible={Boolean(where)} accessibilityLabel={where || undefined} style={styles.metaWhere}>
+				{place ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.metaPlace}>{dir ? `${place} · ` : place}</Text> : null}
+				{dir ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="head" style={styles.metaText}>{`${dir}/`}</Text> : null}
+			</View>
 			{counts}
 		</View>
 	) : null;
@@ -535,6 +533,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, padding: space.xxl, backgroundColor: t.bgBase },
 	meta: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.md, gap: space.sm, borderBottomWidth: rowDividerWidth, borderColor: t.borderSubtle, backgroundColor: t.bgBase },
 	metaRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+	metaWhere: { flex: 1, flexDirection: "row", alignItems: "center" },
+	metaPlace: { flexShrink: 0, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textTertiary },
 	metaText: { flex: 1, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textTertiary },
 	stepCount: { ...type.footnote, fontFamily: font.medium, color: t.textSecondary, paddingHorizontal: space.sm },
 	renamed: { ...type.footnote, color: t.blue },
