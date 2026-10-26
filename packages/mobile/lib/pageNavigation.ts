@@ -5,7 +5,7 @@ import { Platform } from "react-native";
 // Routes the root stack presents as a sheet or modal (app/_layout.tsx). A page
 // pushed while one of these is in the stack is presented inside it, so a review
 // opened from a push tap or a sheet action landed as a bottom sheet.
-const PRESENTED_ROUTES = new Set(["spawn", "pair"]);
+const PRESENTED_ROUTES = new Set(["spawn", "pair", "render"]);
 
 // Settings is a sheet only on iOS. Android pushes it as a page, so a page
 // opened from it goes on top like any other push.

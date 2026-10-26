@@ -20,6 +20,15 @@ describe("opening pages outside sheets", () => {
 		for (const name of ["sheets/review-actions", "spawn", "pair"]) expect(isPresentedRoute(name, "android")).toBe(true);
 	});
 
+	// The rendered-page viewer is a modal on both platforms, so a review opened
+	// from a push tap while it is up replaces it rather than landing inside it.
+	it("dismisses the rendered-page viewer before pushing", () => {
+		for (const os of ["ios", "android"]) {
+			expect(isPresentedRoute("render", os)).toBe(true);
+			expect(presentedRouteDepth(["(tabs)", "session/[id]", "render"], os)).toBe(1);
+		}
+	});
+
 	it("reads the running platform by default", () => {
 		expect(isPresentedRoute("settings")).toBe(true);
 		expect(presentedRouteDepth(["(tabs)", "settings", "notifications"])).toBe(2);
