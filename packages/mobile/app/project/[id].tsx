@@ -14,7 +14,6 @@ import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
-import { backOr } from "../../lib/backNavigation";
 import { hostedRowKey } from "../../lib/hostedRows";
 import { SpawnFab } from "../../lib/spawn-fab";
 import { workerDockRestingBottom, workerListBottomInset } from "../../lib/worker-dock-layout";
@@ -92,9 +91,11 @@ function ProjectScreenContent() {
 					<HeaderIconButton
 						icon="back"
 						label="Back"
-						// A deep link can open this page as the only screen in the stack, with
-						// nothing beneath it to go back to. Land on Projects instead.
-						onPress={() => backOr(router, "/projects")}
+						// Back always lands on Projects. A deep link opens this page over a
+						// board that has not picked a tab, and a plain back would show Workers.
+						// dismissTo pops to that board and selects the tab; navigate would
+						// push a second board on top instead.
+						onPress={() => router.dismissTo("/projects")}
 					/>
 				}
 				right={<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />}

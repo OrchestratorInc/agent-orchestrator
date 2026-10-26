@@ -51,6 +51,13 @@ describe("project page", () => {
 		expect(page).toContain("navigation.setOptions({ title })");
 	});
 
+	// A deep link opens this page over a board still on Workers. Popping to the
+	// board and selecting Projects is the same back either way it was opened.
+	it("goes back to Projects", () => {
+		expect(page).toContain('onPress={() => router.dismissTo("/projects")}');
+		expect(page).not.toContain("backOr(");
+	});
+
 	// Reuses the board rather than copying it, so the two cannot drift.
 	it("lists workers with the Workers board, archive included", () => {
 		expect(page).toContain("<WorkerBoardList");

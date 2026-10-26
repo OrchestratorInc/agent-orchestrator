@@ -24,6 +24,14 @@ describe("Settings environment navigation", () => {
 		expect(settings).not.toContain('label="All machines"');
 	});
 
+	// A cold link to /settings/theme lands with the Settings list beneath it,
+	// so "Back to Settings" goes back to the list instead of closing the sheet.
+	it("opens every Settings page above the Settings list", () => {
+		const settingsLayout = read("../app/settings/_layout.tsx");
+
+		expect(settingsLayout).toContain('export const unstable_settings = { initialRouteName: "index" };');
+	});
+
 	it("keeps Settings scroll gestures from dismissing the native sheet", () => {
 		const rootLayout = read("../app/_layout.tsx");
 		const settingsScreen = rootLayout.match(/<Stack\.Screen\s+name="settings"[\s\S]*?\/>/)?.[0] ?? "";
