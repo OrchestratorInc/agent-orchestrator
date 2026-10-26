@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import type { Theme } from "../../../lib/theme";
@@ -15,6 +15,8 @@ import { UnpairedState } from "../../../lib/UnpairedState";
 import { PR_SUMMARY_REUSE_MS, usePRSummaries, type PRSummarySession } from "../../../lib/usePRSummaries";
 import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
+import { ToastHost } from "../../../lib/Toast";
+import { useToast } from "../../../lib/useToast";
 import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { Button, EmptyState, ListSectionHeader } from "../../../lib/ui";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
@@ -63,6 +65,13 @@ export default function PRsScreen() {
 	const notificationsUnread = hostStates.reduce((sum, host) => sum + host.notificationsUnread, 0);
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshing, setRefreshing] = useState(false);
+	const toast = useToast();
+	const { show: showToast } = toast;
+	// Android 13 and later confirms every copy with its own clipboard preview.
+	const linkCopied = useCallback(() => {
+		if (Platform.OS === "android" && Number(Platform.Version) >= 33) return;
+		showToast("Link copied.");
+	}, [showToast]);
 
 	// Grouped around the user's next action, matching the Workers board rather
 	// than presenting a flat stream in daemon order.
@@ -187,6 +196,7 @@ export default function PRsScreen() {
 				<PRFilterDock filter={filter} counts={counts} onChange={setFilter} />
 			</View>
 			<BoardHeaderItems unread={notificationsUnread} />
+			<ToastHost toast={toast} bottomOffset={dockBottom + DOCK_HEIGHT + space.sm} />
 		</View>
 	);
 }

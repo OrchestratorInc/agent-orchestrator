@@ -41,10 +41,16 @@ vi.mock("expo-secure-store", () => ({}));
 vi.mock("./installId", () => ({}));
 vi.mock("./sentry", () => ({}));
 vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all", refreshAll: vi.fn() }) }));
-vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixture.theme) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: object) => object) => factory(fixture.theme) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn() } }));
 vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
+vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
+vi.mock("@expo/ui/community/menu", async () => {
+	const React = await import("react");
+	return { MenuView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("MenuView", props, children) };
+});
+vi.mock("./Toast", () => ({ ToastHost: () => null }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./pr-filter-dock", () => ({ PRFilterDock: "PRFilterDock" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
