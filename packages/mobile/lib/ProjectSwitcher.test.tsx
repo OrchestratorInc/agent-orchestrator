@@ -90,6 +90,16 @@ describe("ProjectSwitcher", () => {
 		expect(menu.props.actions.filter((action: { state: string }) => action.state === "on").map((action: { id: string }) => action.id)).toEqual(["all"]);
 	});
 
+	// The list already shows All, but the dead id must not outlive the choice
+	// and come back on the next cold start.
+	it("saves All over a project that is gone, without a selection tick", () => {
+		fixture.app.activeProjectId = "deleted";
+		const menu = render().findByType("MenuView" as never);
+		act(() => menu.props.onPressAction({ nativeEvent: { event: "all" } }));
+		expect(fixture.app.setActiveProject).toHaveBeenCalledWith("all");
+		expect(fixture.select).not.toHaveBeenCalled();
+	});
+
 	it("applies a new choice in place, and ignores the current one", () => {
 		const menu = render().findByType("MenuView" as never);
 		act(() => menu.props.onPressAction({ nativeEvent: { event: "api" } }));

@@ -38,8 +38,10 @@ export function ProjectSwitcher() {
 	].map((action) => ({ ...action, state: action.id === applied ? "on" : "off" }));
 
 	const choose = ({ nativeEvent: { event } }: NativeActionEvent) => {
-		if (event === applied) return;
-		haptics.select();
+		// Compared with the saved id, not the applied one: choosing All over a
+		// project that no longer exists still has to clear it from storage.
+		if (event === activeProjectId) return;
+		if (event !== applied) haptics.select();
 		// Rebuilding the list must not hold up the menu's dismissal.
 		startTransition(() => setActiveProject(event));
 	};
