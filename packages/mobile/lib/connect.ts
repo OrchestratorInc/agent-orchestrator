@@ -36,7 +36,12 @@ export type ConnectDeps = {
 	race: (host: Host) => Promise<RaceOutcome>;
 	/** Asks the daemon what it advertises now, over the endpoint that just won. */
 	refreshEndpoints: (config: ServerConfig) => Promise<Endpoint[]>;
-	saveEndpoints: (hostId: string, endpoints: Endpoint[]) => Promise<void>;
+	/**
+	 * Rewrites a host's stored endpoints from the ones stored at that moment.
+	 * The refresh lands after connect returns, possibly after another connect or
+	 * a re-pair has stored newer ones, so it must not merge onto a stale copy.
+	 */
+	saveEndpoints: (hostId: string, update: (stored: Endpoint[]) => Endpoint[]) => Promise<void>;
 	/** Records the identity a machine reported that had none stored. */
 	adoptIdentity: (oldId: string, hostId: string) => Promise<void>;
 	touch: (hostId: string) => Promise<void>;
@@ -80,10 +85,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 			? [...advertised, outcome.endpoint] : advertised;
 		// Merged, not replaced: a kind the daemon omits — a tunnel mid-restart,
 		// above all — is unknown rather than gone. See mergeEndpoints.
-		await deps.saveEndpoints(
-			hostKey,
-			mergeEndpoints(host.endpoints, refreshed),
-		);
+		await deps.saveEndpoints(hostKey, (stored) => mergeEndpoints(stored, refreshed));
 	})().catch(() => {
 		// A failed refresh must not cost us a working connection: the endpoints
 		// already stored are what got us here and remain good enough.

@@ -157,6 +157,10 @@ describe("host store", () => {
 		const got = await loadHosts();
 		expect(got[0].endpoints).toEqual([lan("10.0.0.5")]);
 		expect(got[0].token).toBe("pw");
+
+		// An update computed from what is stored sees the latest write.
+		await updateHostEndpoints("h_one", (stored) => [...stored, lan("10.0.0.6")]);
+		expect((await loadHosts())[0].endpoints).toEqual([lan("10.0.0.5"), lan("10.0.0.6")]);
 	});
 
 	it("keeps every paired host available for explicit removal", async () => {
