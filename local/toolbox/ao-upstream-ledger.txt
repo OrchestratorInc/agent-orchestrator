@@ -141,3 +141,20 @@ dcd8a632a5582e05f62a84db2258d71b80caea99 skipped fix(ui): give overlays one fain
 7361dc843404639569ae543913e5578056ca3c06 taken fix(chat): make agent question dock scrollable and bound height (#6942) (#6975)
 c771b7881dd59b0edb4a70d0a17bd04d47c2f7a3 skipped fix(acp): fail closed on rejected Cursor fast setting (#7080) — тянет shared-куски #6588/#6778 (QuickStop, StandingInstructionsBlock, netpreload); брать только вместе с реабилитированной #6588
 b259d0c2b95d2dfe4d0e9fa49ac225ab98e050b4 skipped feat(remote-hosts): make remote hosts available without Developer mode (#7152)
+3cc605a155e82c7cef7015d88d9ab7ae3a7979e3 skipped fix(cli): route ao browser to the configured remote agent browser (#7182) — конфликт session_manager/manager.go+test, отложен
+bf1a9bca9a1e50bb33df6131a7c959c877e7a5fb skipped fix: preserve Cloud review scope when maximizing files (#6702) — конфликт ui-store.ts (горячий файл дельты), отложен
+18af45ca6bee27112e19aeb62624016719cfa14d skipped docs(readme): refresh README
+0570866ecb30b98b0961314b510057a1242a87eb skipped feat(desktop): add swipe navigation across app and settings (#6858)
+0ef2cee46e33183f9a4363c4c1e268ff0593598a skipped fix: restore project options container borders (#7214) — конфликт CloudWorkspaceExplorer.test.tsx + modify/delete e2e-spec, отложен
+7193eff4e08f1481944845ee058fe6fd18930b6d skipped feat(search): search file contents and chats from the command palette (#7185)
+31c2931487fd2f0dd68e9f454fd85877f33a638a taken fix(mobile): keep the comment composer's glass full height above the keyboard (#7188)
+6dd5777d583fa43ab541cc803c6775347ec5156a skipped fix(mobile): keep spawn photo thumbnails out of the form sheet's scroll view fix-up (#7189) — конфликт modify/delete packages/mobile, отложен
+676ab6065c1be9dc8e9f16ce25eef19cbc419879 skipped fix: use vertical dots for the session tab menu (#7219) — modify/delete TerminalAgentControls.tsx (удалён в форке), отложен
+8dd86f02a8024823af2347142c696ebfc220289a skipped perf(chat): trim Claude chat start and park idle providers longer (#7218)
+3505e2499196b0f6b8fa91371a6487cb1d101994 taken fix(fx): only warn about FX connections the user set up (#6971)
+e65b57b0ca926584ec860614c7862fa6e3553e99 skipped chore: run typechecks with tsgo instead of tsc (#7047)
+d5596e5ce24883aa3e04b8111abc283d3cfad3f3 taken fix(frontend): teach cn() the app's custom text sizes (#7220)
+841b5bb1faa8a41491d5fa0b41e495910057b180 skipped perf(chat): reuse completed markdown blocks while streaming (#7226)
+af42f6bd487241f7b84065295f37b452ff0b3f4f skipped fix(mobile): keep attachments picked on Android and type images by their bytes (#7237) — конфликт packages/mobile, отложен
+35807b1952b9ca7d9df438393805ec2868aae830 skipped perf(chat): stream code tokens incrementally with shiki (#7231)
+787834575d7058ecfe4304022e78d8b753234139 taken fix(scm): dedupe PRs reported under a renamed repository's old name (#7206)
