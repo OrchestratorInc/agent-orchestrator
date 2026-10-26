@@ -15,6 +15,7 @@ import { captureRendererEvent } from "../lib/telemetry";
 import { aoBridge } from "../lib/bridge";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
+import { useHealthyRemoteHosts } from "./useEventsConnection";
 import { requestRemoteHostsRefresh } from "./useRemoteHosts";
 import { applyOptimisticSessionKills } from "./optimistic-session-kills";
 import { appI18n } from "../i18n";
@@ -730,12 +731,14 @@ export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOpti
 
 export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions = {}) {
 	const connected = useConnectedHosts();
+	// A host whose event stream delivers refreshes these lists from its events.
+	const healthy = useHealthyRemoteHosts();
 	const projects = useQueries({
 		queries: connected.map((hostId) => ({
 			queryKey: remoteProjectsQueryKey(hostId),
 			queryFn: () => fetchRemoteProjects(hostId),
 			retry: 1,
-			refetchInterval: 15_000,
+			refetchInterval: healthy.has(hostId) ? false : 15_000,
 			subscribed: options.subscribed,
 		})),
 	});
@@ -744,7 +747,7 @@ export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions = {}) 
 			queryKey: remoteSessionsQueryKey(hostId),
 			queryFn: () => fetchRemoteSessions(hostId),
 			retry: 1,
-			refetchInterval: 15_000,
+			refetchInterval: healthy.has(hostId) ? false : 15_000,
 			subscribed: options.subscribed,
 		})),
 	});

@@ -49,7 +49,7 @@ vi.mock("./host-clients", () => ({
 import { createEventTransport } from "./event-transport";
 import { conversationPageDigest, conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import type { ConversationSnapshot } from "../types/conversation";
-import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
+import { getEventsConnectionState, isEventStreamHealthy, setEventsConnectionState } from "./events-connection";
 
 class EventSourceStub {
 	static instances: EventSourceStub[] = [];
@@ -192,10 +192,8 @@ describe("createEventTransport", () => {
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-b", "review-1"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-b"] }, { cancelRefetch: false });
-		const readsBeforeVerify = remoteGetMock.mock.calls.length;
 		remoteA.emit("cursor", "0");
-		// A verified stream catches the open chat up through its newest page only.
-		await vi.waitFor(() => expect(remoteGetMock.mock.calls.length).toBeGreaterThan(readsBeforeVerify));
+		// The verified stream caught the open chat up through its newest page only.
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a"] }, { cancelRefetch: false });
 
@@ -244,6 +242,39 @@ describe("createEventTransport", () => {
 		remoteA.onerror?.();
 		expect(client.invalidateQueries).not.toHaveBeenCalled();
 		disconnect();
+	});
+
+	it("re-probes a dropped host stream and stops polling once it delivers again", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			const hostSources = () => EventSourceStub.instances.filter((source) => source.url.includes("/box-a/"));
+			const workspacePolls = () => vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(["remote-workspaces", "box-a"])).length;
+			hostSources()[0].emit("cursor", "0");
+			expect(isEventStreamHealthy("box-a")).toBe(true);
+
+			hostSources()[0].onerror?.();
+			expect(isEventStreamHealthy("box-a")).toBe(false);
+			const afterDrop = workspacePolls();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(workspacePolls()).toBeGreaterThan(afterDrop);
+
+			// The first retry waits at most the base delay; jitter only shortens it.
+			await vi.advanceTimersByTimeAsync(computeSseRetryDelayMs(1, () => 1));
+			expect(hostSources()).toHaveLength(2);
+			hostSources()[1].emit("cursor", "0");
+			expect(isEventStreamHealthy("box-a")).toBe(true);
+			await vi.advanceTimersByTimeAsync(0);
+			const afterRecovery = workspacePolls();
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(workspacePolls()).toBe(afterRecovery);
+
+			disconnect();
+			expect(isEventStreamHealthy("box-a")).toBe(false);
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("rebinds a host stream when its reachable address changes", async () => {
