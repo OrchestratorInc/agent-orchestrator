@@ -32,7 +32,7 @@ vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => cloudCpMock,
 }));
 
-import { useSessionInterfaceTransition } from "./useSessionInterfaceTransition";
+import { nativeSessionReadinessDelay, useSessionInterfaceTransition } from "./useSessionInterfaceTransition";
 
 function wrapper({ children }: { children: ReactNode }) {
 	const queryClient = new QueryClient({
@@ -1029,5 +1029,23 @@ describe("interface switch readiness", () => {
 		await waitFor(() =>
 			expect(result.current.transition?.noticeAcknowledgedAt).toBe("2026-08-13T08:00:00Z"),
 		);
+	});
+});
+
+describe("nativeSessionReadinessDelay", () => {
+	it("rechecks every second for 30 s, then backs off", () => {
+		const now = vi.spyOn(Date, "now").mockReturnValue(0);
+		const query = {};
+		expect(nativeSessionReadinessDelay(query, "NATIVE_SESSION_MISSING")).toBe(1_000);
+		now.mockReturnValue(29_000);
+		expect(nativeSessionReadinessDelay(query, "NATIVE_SESSION_MISSING")).toBe(1_000);
+		now.mockReturnValue(31_000);
+		expect(nativeSessionReadinessDelay(query, "NATIVE_SESSION_MISSING")).toBe(15_000);
+		// A new readiness wait starts fast again.
+		expect(nativeSessionReadinessDelay(query, "WORKSPACE_UNAVAILABLE")).toBe(1_000);
+		expect(nativeSessionReadinessDelay(query, undefined)).toBe(false);
+		now.mockReturnValue(90_000);
+		expect(nativeSessionReadinessDelay(query, "NATIVE_SESSION_MISSING")).toBe(1_000);
+		now.mockRestore();
 	});
 });

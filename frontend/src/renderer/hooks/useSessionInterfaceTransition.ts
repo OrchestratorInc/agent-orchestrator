@@ -143,6 +143,31 @@ const cancellablePhases = new Set<SessionInterfaceTransition["phase"]>([
 ]);
 
 const nativeSessionReadinessPoll = 1_000;
+// A readiness wait that outlasts this is not the session-start hook arriving:
+// an old orchestrator whose transcript is gone (Claude prunes them after 30
+// days) stays NATIVE_SESSION_MISSING for good, and the sidebar checks every
+// project's orchestrator, so keep rechecking but back off.
+const nativeSessionReadinessFastWindow = 30_000;
+const nativeSessionReadinessSlowPoll = 15_000;
+const nativeSessionReadinessWaits = new WeakMap<object, { reasonCode: string; since: number }>();
+
+export function nativeSessionReadinessDelay(query: object, reasonCode: string | undefined): number | false {
+	if (reasonCode !== "NATIVE_SESSION_MISSING" &&
+		reasonCode !== "NATIVE_SESSION_UNVERIFIED" &&
+		reasonCode !== "WORKSPACE_UNAVAILABLE") {
+		nativeSessionReadinessWaits.delete(query);
+		return false;
+	}
+	const now = Date.now();
+	const wait = nativeSessionReadinessWaits.get(query);
+	if (!wait || wait.reasonCode !== reasonCode) {
+		nativeSessionReadinessWaits.set(query, { reasonCode, since: now });
+		return nativeSessionReadinessPoll;
+	}
+	return now - wait.since < nativeSessionReadinessFastWindow
+		? nativeSessionReadinessPoll
+		: nativeSessionReadinessSlowPoll;
+}
 
 export function interfaceTransitionIsActive(transition?: SessionInterfaceTransition): boolean {
 	return Boolean(transition && activePhases.has(transition.phase));
@@ -235,11 +260,7 @@ function useSessionInterfaceTransitionStatusQuery(
 			// clears once Retry start sets it up. Recheck only those readiness
 			// states so supported switches enable without polling permanently
 			// unsupported harnesses or ordinary idle sessions.
-			return status?.reasonCode === "NATIVE_SESSION_MISSING" ||
-				status?.reasonCode === "NATIVE_SESSION_UNVERIFIED" ||
-				status?.reasonCode === "WORKSPACE_UNAVAILABLE"
-				? nativeSessionReadinessPoll
-				: false;
+			return nativeSessionReadinessDelay(state, status?.reasonCode);
 		},
 		retry: 1,
 	});
