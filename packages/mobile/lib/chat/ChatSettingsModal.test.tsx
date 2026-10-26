@@ -461,6 +461,27 @@ describe("turn settings sheet on Android", () => {
 	});
 });
 
+describe("turn settings sheet on either platform", () => {
+	afterEach(() => {
+		platform.OS = "android";
+	});
+
+	const notice = (renderer: ReactTestRenderer) => renderer.root.find((node) => (node.type as unknown) === "View" && node.props.accessibilityRole === "alert");
+	const texts = (node: ReturnType<typeof notice>) => node.findAllByType("Text" as never).map((text) => text.props.children);
+
+	it.each(["ios", "android"])("says on %s which model was requested and why another answers", (os) => {
+		platform.OS = os;
+		const at = "2026-10-26T00:00:00Z";
+		const { renderer } = sheet({ snapshot: snapshot({ modelReroute: { fromModel: "Opus", toModel: "Sonnet", reason: "Opus is at capacity.", at } }) });
+		const rerouted = notice(renderer);
+		expect(rerouted.props.accessible).toBe(true);
+		expect(texts(rerouted)).toEqual(["Currently answered by Sonnet", "Opus was requested. Opus is at capacity."]);
+		act(() => renderer.update(<ChatSettingsSheet snapshot={snapshot({ modelReroute: { toModel: "Sonnet", at } })} models={models} options={options} onRefresh={vi.fn()} onSettings={vi.fn()} onOption={vi.fn()} />));
+		expect(texts(notice(renderer))).toEqual(["Currently answered by Sonnet", "The provider selected a fallback model for this conversation."]);
+		act(() => renderer.unmount());
+	});
+});
+
 describe("turn settings sheet on iOS", () => {
 	afterEach(() => {
 		platform.OS = "android";

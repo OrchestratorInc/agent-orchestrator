@@ -144,7 +144,7 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 		<View style={styles.header}>
 			<SheetHeader title="Turn settings" subtitle="Changes apply to the next message." />
 			{error ? <Notice color={t.red} background={t.tintRed} icon="error" text={error} /> : null}
-			{snapshot.modelReroute ? <Notice color={t.amber} background={t.tintAmber} icon="warning" text={`Currently answered by ${snapshot.modelReroute.toModel}`} /> : null}
+			{snapshot.modelReroute ? <Notice color={t.amber} background={t.tintAmber} icon="warning" text={`Currently answered by ${snapshot.modelReroute.toModel}`} detail={rerouteDetail(snapshot.modelReroute)} /> : null}
 		</View>
 		{ios ? (
 			<Host style={styles.form} colorScheme={scheme}>
@@ -328,9 +328,22 @@ export function EffortSlider({ choices, selected, unplaced, disabled, onChange }
 	</ComposeColumn>;
 }
 
-function Notice({ color, background, icon, text }: { color: string; background: string; icon: "error" | "warning"; text: string }) {
+/** `detail` is a second, quieter line; the notice is read as one element. */
+function Notice({ color, background, icon, text, detail }: { color: string; background: string; icon: "error" | "warning"; text: string; detail?: string }) {
 	const styles = useThemedStyles(makeStyles);
-	return <View accessibilityRole="alert" style={[styles.notice, { backgroundColor: background }]}><AppSymbol name={icon} size={iconSize.sm} color={color} /><Text style={[styles.noticeText, { color }]}>{text}</Text></View>;
+	return <View accessible accessibilityRole="alert" style={[styles.notice, { backgroundColor: background }]}>
+		<AppSymbol name={icon} size={iconSize.sm} color={color} />
+		<View style={styles.noticeCopy}>
+			<Text style={[styles.noticeText, { color }]}>{text}</Text>
+			{detail ? <Text style={styles.noticeDetail}>{detail}</Text> : null}
+		</View>
+	</View>;
+}
+
+/** Which model was asked for and why the provider answered with another. */
+function rerouteDetail(reroute: NonNullable<ConversationSnapshot["modelReroute"]>): string {
+	const requested = reroute.fromModel ? `${reroute.fromModel} was requested. ` : "";
+	return `${requested}${reroute.reason || "The provider selected a fallback model for this conversation."}`;
 }
 
 /** The description of the current choice. */
@@ -358,5 +371,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// Compose host cannot take as a layout value.
 	sections: { alignSelf: "stretch" },
 	notice: { minHeight: 38, flexDirection: "row", alignItems: "center", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", paddingHorizontal: space.md, paddingVertical: space.sm },
-	noticeText: { fontFamily: type.footnote.fontFamily, flex: 1, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	noticeCopy: { flex: 1, gap: space.hair },
+	noticeText: { fontFamily: type.footnote.fontFamily, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	noticeDetail: { fontFamily: type.footnote.fontFamily, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });
