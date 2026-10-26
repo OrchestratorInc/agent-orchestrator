@@ -25,6 +25,7 @@ import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { isRestoredQueryData } from "../lib/restored-query";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { useEventStreamHealthy } from "./useEventsConnection";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -376,6 +377,8 @@ export interface ConversationQueryResult {
 	unavailable?: { code: string; message: string };
 	error?: string;
 	refreshError?: string;
+	/** The snapshot came from the cache of an earlier launch and is being refetched; never act on it. */
+	restored?: boolean;
 	hasOlder: boolean;
 	isLoadingOlder: boolean;
 	loadOlder: () => void;
@@ -553,8 +556,10 @@ export function conversationQueryOptions(sessionId: string, hostId?: string) {
 		// A local chat changes only through events, which invalidate it even while
 		// it is closed, and a reconnect invalidates every chat. Opening an unchanged
 		// chat again therefore needs no request; refetching here reloaded every page
-		// it had. Remote chats keep the default and their own polling.
-		...(hostId ? {} : { staleTime: Infinity }),
+		// it had. Remote chats keep the default and their own polling. A page
+		// restored from the last launch heard none of those events, so it stays
+		// stale until a fetch replaces it.
+		...(hostId ? {} : { staleTime: (query: { state: { data: unknown; dataUpdatedAt: number } }) => (isRestoredQueryData(query.state) ? 0 : Infinity) }),
 		gcTime: 30 * 60_000,
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading
@@ -621,6 +626,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 	return {
 		snapshot: query.data,
 		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
+		restored: isRestoredQueryData(query),
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,

@@ -56,6 +56,7 @@ import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled, refreshLiveConversation } from "../hooks/useConversation";
+import { isRestoredQueryData } from "../lib/restored-query";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
@@ -513,9 +514,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && openedSession.current.key === uiSessionId && !openedSession.current.checked);
 	const resumeOnOpen = autoResume.mutate;
+	// A session list restored from the last launch can say an agent exited when it
+	// runs now, or the reverse; wait for the live list before deciding.
+	const workspaceRestored = !hostId && isRestoredQueryData(workspaceQuery);
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
-		if (usesPreviewWorkspaceData || hostId || session?.cloud || !session || daemonStatus.state !== "ready" ||
+		if (usesPreviewWorkspaceData || hostId || workspaceRestored || session?.cloud || !session || daemonStatus.state !== "ready" ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;
 		if (!sessionAgentExited(session)) {
 			openedSession.current.checked = true;
@@ -526,7 +530,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
 		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId]);
+	}, [canResume, daemonStatus.state, hostId, resumeOnOpen, session, uiSessionId, workspaceRestored]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);

@@ -67,6 +67,7 @@ const {
 		isLoading: false,
 		unavailable: undefined as { message: string } | undefined,
 		error: undefined as string | undefined,
+		restored: false,
 		hasOlder: false,
 		isLoadingOlder: false,
 		loadOlder: vi.fn(),
@@ -267,6 +268,7 @@ beforeEach(() => {
 	conversationState.isLoading = false;
 	conversationState.unavailable = undefined;
 	conversationState.error = undefined;
+	conversationState.restored = false;
 	conversationState.hasOlder = false;
 	conversationState.isLoadingOlder = false;
 	conversationState.loadOlder = vi.fn();
@@ -1363,5 +1365,41 @@ describe("SessionChatSurface startup recovery", () => {
 		const view = render(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
 		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
 		expect(conversationRefreshes(invalidate)).toBe(0);
+	});
+});
+
+describe("SessionChatSurface restored snapshot", () => {
+	it("fences new work and opens no links until the restored snapshot is refetched", async () => {
+		const restoredSession = { ...session, id: "session-restored" };
+		const openInBrowser = vi.fn().mockResolvedValue(undefined);
+		const onConversationWorkChange = vi.fn();
+		conversationState.snapshot = {
+			capabilities: [],
+			latestSequence: 2,
+			items: [
+				{ kind: "message", id: "user-1", sequence: 1, revision: 1, role: "user", origin: "human", text: "Build it", streaming: false, createdAt: "2026-08-08T00:00:01Z" },
+				{ kind: "message", id: "assistant-1", sequence: 2, revision: 1, role: "assistant", origin: "provider", text: "Done: https://example.com/result", streaming: false, createdAt: "2026-08-08T00:00:02Z" },
+			],
+		};
+		conversationState.restored = true;
+		const client = new QueryClient();
+		const tree = () => (
+			<Wrapper client={client}>
+				<SessionChatSurface session={restoredSession} onOpenLinkInBrowser={openInBrowser} onConversationWorkChange={onConversationWorkChange} />
+			</Wrapper>
+		);
+		const view = render(tree());
+
+		expect(screen.getByTestId("chat-new-work")).toHaveAttribute("data-disabled", "true");
+		expect(onConversationWorkChange).not.toHaveBeenCalled();
+		expect(openInBrowser).not.toHaveBeenCalled();
+
+		// The live snapshot counts as the first one, as on a launch without a cache.
+		conversationState.restored = false;
+		conversationState.snapshot = { ...conversationState.snapshot };
+		view.rerender(tree());
+		await waitFor(() => expect(screen.getByTestId("chat-new-work")).toHaveAttribute("data-disabled", "false"));
+		expect(onConversationWorkChange).toHaveBeenCalled();
+		await waitFor(() => expect(openInBrowser).toHaveBeenCalledWith("https://example.com/result"));
 	});
 });
