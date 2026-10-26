@@ -3766,3 +3766,29 @@ func TestPoll_RequestedReviewRefreshFetchesThreadsOnce(t *testing.T) {
 		t.Fatalf("one request refreshed more than once: reviews=%d", provider.reviewCalls)
 	}
 }
+
+// A forced review refresh is still a provider call: during a rate-limit
+// cooldown it must not fetch threads (or the PR) before Retry-After elapses.
+func TestPoll_RequestedReviewRefreshRespectsRateLimitCooldown(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	store.prs["p-1"] = []domain.PullRequest{local}
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo", NotModified: true}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): testObs(1)},
+		reviews:      map[string]ports.SCMReviewObservation{prKey(testRepo, 1): {Decision: string(domain.ReviewNone)}},
+	}
+	now := time.Unix(200, 0).UTC()
+	obs := newTestObserver(store, provider, &fakeLifecycle{}, now)
+	obs.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo"
+	obs.Cache.LastSyncCursor[prKey(testRepo, 0)] = time.Unix(190, 0).UTC()
+	obs.setRateLimitCooldown(now, "github", 2*time.Minute)
+
+	obs.RequestReviewRefresh(local.URL)
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 0 || len(provider.fetchBatches) != 0 {
+		t.Fatalf("forced refresh called a cooled-down provider: reviews=%d batches=%d", provider.reviewCalls, len(provider.fetchBatches))
+	}
+}

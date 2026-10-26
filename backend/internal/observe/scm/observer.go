@@ -1740,6 +1740,11 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 		if !forcedFor(forced, s.known) && !o.needsReviewRefresh(pkey, s.known, decision, hasObs, updatedAtProvider, now) {
 			continue
 		}
+		// A rate-limited provider gets no calls until its cooldown ends, a forced
+		// refresh included; the regular poll fetches the threads afterwards.
+		if o.inRateLimitCooldown(now, s.repo.Provider) {
+			continue
+		}
 		started := time.Now()
 		review, err := o.provider.FetchReviewThreads(ctx, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
 		o.logProviderRequest("fetch_review_threads", repoFullName(s.repo), started, err)
