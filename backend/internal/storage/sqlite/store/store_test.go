@@ -2,10 +2,8 @@ package store_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -71,7 +69,6 @@ func TestSubagentFactsPersistWithActivityProjection(t *testing.T) {
 	}
 	created.Metadata.ClaudeActivityFacts = `{"launchId":"launch-1","parentState":"idle","children":{"child-1":{"running":true,"at":1}}}`
 	created.Metadata.CodexActivityFacts = `{"launchId":"launch-2","parentState":"idle","children":{"child-2":{"running":true,"at":2}}}`
-	created.Metadata.NativeIdentityObservedAt = created.UpdatedAt.Add(time.Minute).In(time.FixedZone("IST", 5*60*60+30*60))
 	if applied, err := s.UpdateSessionFromActivitySignal(ctx, created, created.Revision); err != nil || !applied {
 		t.Fatalf("project facts: applied=%v err=%v", applied, err)
 	}
@@ -81,56 +78,6 @@ func TestSubagentFactsPersistWithActivityProjection(t *testing.T) {
 	}
 	if got.Metadata.CodexActivityFacts != created.Metadata.CodexActivityFacts {
 		t.Fatalf("Codex facts=%q, want %q", got.Metadata.CodexActivityFacts, created.Metadata.CodexActivityFacts)
-	}
-	listed, err := s.ListSessions(ctx, created.ProjectID)
-	if err != nil {
-		t.Fatalf("ListSessions after activity projection: %v", err)
-	}
-	if len(listed) != 1 || !listed[0].Metadata.NativeIdentityObservedAt.Equal(created.Metadata.NativeIdentityObservedAt) {
-		t.Fatalf("listed native identity observation = %+v", listed)
-	}
-}
-
-func TestSessionListingToleratesLegacyBlankNativeIdentityTimestamp(t *testing.T) {
-	ctx := context.Background()
-	dataDir := t.TempDir()
-	s := sqlitetest.MustOpenAt(t, dataDir)
-	seedProject(t, s, "legacy-native")
-	rec := sampleRecord("legacy-native")
-	created, err := s.CreateSession(ctx, rec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.ExecContext(ctx, "UPDATE sessions SET native_identity_observed_at = '' WHERE id = ?", created.ID); err != nil {
-		t.Fatal(err)
-	}
-	var oldScanner sql.NullTime
-	if err := db.QueryRowContext(ctx, "SELECT native_identity_observed_at FROM sessions WHERE id = ?", created.ID).Scan(&oldScanner); err == nil {
-		t.Fatal("legacy timestamp unexpectedly scanned into sql.NullTime")
-	}
-	got, found, err := s.GetSession(ctx, created.ID)
-	if err != nil || !found || !got.Metadata.NativeIdentityObservedAt.IsZero() {
-		t.Fatalf("GetSession with legacy timestamp text: found=%v session=%+v err=%v", found, got, err)
-	}
-	listed, err := s.ListSessions(ctx, created.ProjectID)
-	if err != nil {
-		t.Fatalf("ListSessions with legacy timestamp text: %v", err)
-	}
-	if len(listed) != 1 || listed[0].ID != created.ID || !listed[0].Metadata.NativeIdentityObservedAt.IsZero() {
-		t.Fatalf("listed sessions = %+v", listed)
-	}
-	all, err := s.ListAllSessions(ctx)
-	if err != nil || len(all) != 1 || all[0].ID != created.ID {
-		t.Fatalf("ListAllSessions = %+v, err = %v", all, err)
-	}
-	var stored string
-	if err := db.QueryRowContext(ctx, "SELECT native_identity_observed_at FROM sessions WHERE id = ?", created.ID).Scan(&stored); err != nil || stored != "" {
-		t.Fatalf("stored legacy value = %q, err = %v", stored, err)
 	}
 }
 

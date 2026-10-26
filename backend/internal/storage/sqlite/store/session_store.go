@@ -10,7 +10,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamp"
 )
 
 // ---- sessions ----
@@ -535,7 +534,7 @@ func (s *Store) UpdateSessionFromActivitySignal(
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
 		AgentSessionID:                   rec.Metadata.AgentSessionID,
 		AgentSessionIDLaunchID:           rec.Metadata.AgentSessionIDLaunchID,
-		NativeIdentityObservedAt:         timestamp.ObservedAt{NullTime: timeToNullTime(rec.Metadata.NativeIdentityObservedAt)},
+		NativeIdentityObservedAt:         timeToNullTime(rec.Metadata.NativeIdentityObservedAt),
 		LatestUserPrompt:                 rec.Metadata.LatestUserPrompt,
 		LatestUserPromptAt:               timeToNullTime(rec.Metadata.LatestUserPromptAt),
 		LatestAssistantUpdate:            rec.Metadata.LatestAssistantUpdate,
@@ -997,7 +996,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			RuntimeReleasedLaunchID:          row.RuntimeReleasedLaunchID,
 			AgentSessionID:                   row.AgentSessionID,
 			AgentSessionIDLaunchID:           row.AgentSessionIDLaunchID,
-			NativeIdentityObservedAt:         nullTimeToTime(row.NativeIdentityObservedAt.NullTime),
+			NativeIdentityObservedAt:         nullTimeToTime(row.NativeIdentityObservedAt),
 			Prompt:                           row.Prompt,
 			LatestUserPrompt:                 row.LatestUserPrompt,
 			LatestUserPromptAt:               nullTimeToTime(row.LatestUserPromptAt),
@@ -1124,7 +1123,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		RuntimeLaunchID:                  rec.Metadata.RuntimeLaunchID,
 		AgentSessionID:                   rec.Metadata.AgentSessionID,
 		AgentSessionIDLaunchID:           rec.Metadata.AgentSessionIDLaunchID,
-		NativeIdentityObservedAt:         timestamp.ObservedAt{NullTime: timeToNullTime(rec.Metadata.NativeIdentityObservedAt)},
+		NativeIdentityObservedAt:         timeToNullTime(rec.Metadata.NativeIdentityObservedAt),
 		Prompt:                           rec.Metadata.Prompt,
 		LatestUserPrompt:                 rec.Metadata.LatestUserPrompt,
 		LatestUserPromptAt:               timeToNullTime(rec.Metadata.LatestUserPromptAt),
@@ -1193,7 +1192,7 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 		RuntimeLaunchID:                  rec.Metadata.RuntimeLaunchID,
 		AgentSessionID:                   rec.Metadata.AgentSessionID,
 		AgentSessionIDLaunchID:           rec.Metadata.AgentSessionIDLaunchID,
-		NativeIdentityObservedAt:         timestamp.ObservedAt{NullTime: timeToNullTime(rec.Metadata.NativeIdentityObservedAt)},
+		NativeIdentityObservedAt:         timeToNullTime(rec.Metadata.NativeIdentityObservedAt),
 		Prompt:                           rec.Metadata.Prompt,
 		LatestUserPrompt:                 rec.Metadata.LatestUserPrompt,
 		LatestUserPromptAt:               timeToNullTime(rec.Metadata.LatestUserPromptAt),

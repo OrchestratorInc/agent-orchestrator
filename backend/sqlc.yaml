@@ -94,10 +94,6 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
-          - column: "sessions.native_identity_observed_at"
-            go_type:
-              import: "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamp"
-              type: "ObservedAt"
           - column: "session_artifact_versions.session_id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"

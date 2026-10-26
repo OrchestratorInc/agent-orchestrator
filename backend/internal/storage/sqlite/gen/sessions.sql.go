@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamp"
 )
 
 const activateConversationBranchSession = `-- name: ActivateConversationBranchSession :execrows
@@ -247,7 +246,7 @@ type GetSessionRow struct {
 	RuntimeHandleID                  string
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
-	NativeIdentityObservedAt         timestamp.ObservedAt
+	NativeIdentityObservedAt         sql.NullTime
 	Prompt                           string
 	CreatedAt                        time.Time
 	UpdatedAt                        time.Time
@@ -437,7 +436,7 @@ type GetSessionByAutomationRunIDRow struct {
 	RuntimeHandleID                  string
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
-	NativeIdentityObservedAt         timestamp.ObservedAt
+	NativeIdentityObservedAt         sql.NullTime
 	Prompt                           string
 	CreatedAt                        time.Time
 	UpdatedAt                        time.Time
@@ -641,7 +640,7 @@ type InsertSessionParams struct {
 	RuntimeLaunchID                  string
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
-	NativeIdentityObservedAt         timestamp.ObservedAt
+	NativeIdentityObservedAt         sql.NullTime
 	Prompt                           string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
@@ -790,7 +789,7 @@ type ListAllSessionsRow struct {
 	RuntimeHandleID                  string
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
-	NativeIdentityObservedAt         timestamp.ObservedAt
+	NativeIdentityObservedAt         sql.NullTime
 	Prompt                           string
 	CreatedAt                        time.Time
 	UpdatedAt                        time.Time
@@ -1029,7 +1028,7 @@ type ListSessionsByProjectRow struct {
 	RuntimeHandleID                  string
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
-	NativeIdentityObservedAt         timestamp.ObservedAt
+	NativeIdentityObservedAt         sql.NullTime
 	Prompt                           string
 	CreatedAt                        time.Time
 	UpdatedAt                        time.Time
@@ -2161,7 +2160,7 @@ type UpdateSessionParams struct {
 	RuntimeLaunchID                  string
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
-	NativeIdentityObservedAt         timestamp.ObservedAt
+	NativeIdentityObservedAt         sql.NullTime
 	Prompt                           string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
