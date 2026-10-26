@@ -63,7 +63,12 @@ beforeEach(() => {
 	vi.stubGlobal("EventSource", EventSourceStub);
 	EventSourceStub.instances = [];
 	serverController = "connecting";
-	getMock.mockReset().mockImplementation(async () => ({ data: { ...wire, controller: serverController } }));
+	getMock.mockReset().mockImplementation(async (path: string) => {
+		if (path === "/api/v1/sessions/{sessionId}") {
+			return { data: { session: { id: wire.sessionId, projectId: "connecting-repro-project", status: "idle", activity: { state: "idle" } } } };
+		}
+		return { data: { ...wire, controller: serverController } };
+	});
 	postMock.mockReset().mockResolvedValue({ data: { duplicate: false, turnId: "repro-sent-turn" } });
 	queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 });
@@ -125,7 +130,8 @@ describe("conversation readiness updates", () => {
 	it.each(["ancillary", "provisioned"] as const)("clears connecting after ready is followed by the %s session update", async (kind) => {
 		await openWhileConnecting();
 		await publishReadySession(kind);
-		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation")).toHaveLength(2);
+		expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}")).toHaveLength(kind === "ancillary" ? 1 : 0);
 		expect(postMock).not.toHaveBeenCalled();
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 	});
@@ -133,7 +139,7 @@ describe("conversation readiness updates", () => {
 	it("clears connecting if the readiness event also identifies its conversation", async () => {
 		await openWhileConnecting();
 		await publishReadySession("ancillary", true);
-		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation")).toHaveLength(2);
 		expect(screen.queryByText("Connecting to the agent…")).not.toBeInTheDocument();
 	});
 

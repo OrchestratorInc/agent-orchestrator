@@ -1043,9 +1043,12 @@ describe("id-only session updates", () => {
 			for (let elapsed = 0; elapsed < 300_000; elapsed += 1_000) {
 				idOnly("a"); await vi.advanceTimersByTimeAsync(1_000);
 			}
-			// Twenty scheduled polls, no event-driven whole-list read.
-			expect(listRead).toHaveBeenCalledTimes(20);
+			// Cache writes re-arm QueryObserver's poll timer during continuous
+			// updates. The regular full-list poll resumes after the stream is quiet.
+			expect(listRead).not.toHaveBeenCalled();
 			expect(rowGetMock).toHaveBeenCalledTimes(300);
+			await vi.advanceTimersByTimeAsync(15_000);
+			expect(listRead).toHaveBeenCalledTimes(1);
 		} finally { disconnect(); unsubscribe(); client.clear(); }
 	});
 

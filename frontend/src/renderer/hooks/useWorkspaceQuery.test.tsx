@@ -1020,8 +1020,8 @@ describe("patchWorkspaceSession", () => {
 		const invalidate = vi.spyOn(client, "invalidateQueries");
 		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 1, sessions: [] }]);
 		client.setQueryData(["session", row.id], toWorkspaceSession(row, { id: "p", name: "Project" }));
-		expect(patchWorkspaceSession(client, { ...row, isTerminated: true, displayName: "Updated archive" })).toBe(true);
-		expect(client.getQueryData(["session", row.id])).toMatchObject({ title: "Updated archive", isTerminated: true, status: "terminated" });
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: true, status: "merged", displayName: "Updated archive" })).toBe(true);
+		expect(client.getQueryData(["session", row.id])).toMatchObject({ title: "Updated archive", isTerminated: true, status: "merged" });
 		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toEqual([]);
 		expect(invalidate).not.toHaveBeenCalled();
 		client.clear();
