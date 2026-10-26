@@ -2,17 +2,13 @@ import { Host } from "@expo/ui";
 import { Button, HStack, Image, Text } from "@expo/ui/swift-ui";
 import { accessibilityLabel, buttonBorderShape, buttonStyle, controlSize, font, foregroundStyle, tint } from "@expo/ui/swift-ui/modifiers";
 import { Platform, StyleSheet } from "react-native";
+import { geistFont } from "../swiftUIFont";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import { space, type } from "../tokens";
+import { space } from "../tokens";
 import { jumpToLatestColors } from "./chatChrome";
 import { JUMP_TO_LATEST_LABEL, type JumpToLatestProps } from "./JumpToLatest.types";
 
 export type { JumpToLatestProps } from "./JumpToLatest.types";
-
-// SwiftUI looks a custom font up by the name inside the file. expo-font's
-// "Geist_600SemiBold" is an alias only React Native's text resolves, so SwiftUI
-// would fall back to the system face.
-const GEIST_SEMIBOLD = "Geist-SemiBold";
 
 // Liquid Glass arrived with iOS 26; SwiftUI draws the glass styles as a bare
 // label before it, which would leave the label floating over the reply.
@@ -43,7 +39,7 @@ export function JumpToLatest({ onPress }: JumpToLatestProps) {
 			>
 				<HStack spacing={space.xs}>
 					<Image systemName="arrow.down" color={colors.foregroundColor} modifiers={[font({ textStyle: "subheadline", weight: "semibold" })]} />
-					<Text modifiers={[font({ textStyle: "subheadline", family: GEIST_SEMIBOLD, size: type.subheadline.fontSize }), foregroundStyle(colors.foregroundColor)]}>Latest</Text>
+					<Text modifiers={[geistFont("subheadline", { weight: "600" }), foregroundStyle(colors.foregroundColor)]}>Latest</Text>
 				</HStack>
 			</Button>
 		</Host>

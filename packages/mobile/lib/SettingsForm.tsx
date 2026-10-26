@@ -31,8 +31,9 @@ import {
 	type SettingsToggleRowProps,
 	type SettingsValueRowProps,
 } from "./SettingsForm.types";
+import { geistFont } from "./swiftUIFont";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { font as typeface, space, type } from "./tokens";
+import { space } from "./tokens";
 
 export { settingsIcons, type SettingsIconName, type SettingsOption, type SettingsTone } from "./SettingsForm.types";
 
@@ -56,7 +57,7 @@ export function SettingsForm({ children, testID }: SettingsFormProps) {
 					scrollContentBackground("hidden"),
 					background(t.bgBase),
 					// Every row's text in the app's family, scaled with Dynamic Type.
-					font({ family: typeface.regular, size: type.body.fontSize, textStyle: "body" }),
+					geistFont("body"),
 					foregroundStyle(t.textPrimary),
 				]}
 			>
@@ -86,9 +87,8 @@ function SectionText({ children, header = false }: { children: string; header?: 
 	return (
 		<Text
 			modifiers={[
-				// A custom face's size is its base, which the text style only scales;
-				// without one it would draw at body size.
-				font({ family: typeface.regular, size: type.footnote.fontSize, textStyle: "footnote" }),
+				// Its own footnote face, or it would take the Form's body font.
+				geistFont("footnote"),
 				foregroundStyle(t.textSecondary),
 				...(header ? [accessibilityAddTraits(["isHeader"])] : []),
 			]}
