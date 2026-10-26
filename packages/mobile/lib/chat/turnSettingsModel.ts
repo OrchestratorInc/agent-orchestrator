@@ -263,6 +263,11 @@ function isPermissionModeOption(option: ChatConfigOption): boolean {
 		![choice.value, choice.name].some((text) => /^(?:plan|agent|build)(?:[\s_-]mode)?$/i.test(text.trim())));
 }
 
+/** A provider `mode` option that offers only execution modes, such as OpenCode's build/plan. */
+export function isExecutionModeOption(option: ChatConfigOption): boolean {
+	return (option.category === "mode" || option.id === "mode") && !isPermissionModeOption(option);
+}
+
 export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): TurnSettingRow[] {
 	const selectedModel = models.find((model) => model.id === snapshot.settings.model) ?? models.find((model) => model.default);
 	const providerModel = options.some((option) => option.category === "model" || option.id === "model" || option.id === "agent");

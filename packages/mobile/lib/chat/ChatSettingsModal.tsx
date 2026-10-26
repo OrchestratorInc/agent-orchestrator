@@ -13,7 +13,7 @@ import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { SheetHeader } from "../ui";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 import { can } from "./types";
-import { approvalLabel, effortChoiceLabel, effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, followsAgentLabel, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind } from "./turnSettingsModel";
+import { approvalLabel, effortChoiceLabel, effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, followsAgentLabel, isExecutionModeOption, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, type ProviderTurnControlKind } from "./turnSettingsModel";
 import { iconSize, radius, space, stateOpacity, type } from "../tokens";
 
 // Labels come from approvalLabel, which names Codex's default differently.
@@ -53,14 +53,21 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 	const selected = models.find((model) => model.id === snapshot.settings.model) ?? models.find((model) => model.default);
 	const usesProviderOptions = can(snapshot, "config_options");
 	const providerControls = useMemo(() => orderedProviderControls([...options]), [options]);
-	const modelOption = providerControls.find((option) => providerTurnControlKind(option) === "model");
-	const effortOption = providerControls.find((option) => providerTurnControlKind(option) === "effort");
+	// The option each fixed section is built on. An agent picker is not a model
+	// and OpenCode's build/plan modes are not permissions, so neither takes those
+	// titles; they, and any second option of a kind, get a section of their own.
 	const fastOption = providerControls.find((option) => providerTurnControlKind(option) === "fast");
-	const permissionOption = providerControls.find((option) => providerTurnControlKind(option) === "permissions");
-	const advancedOptions = providerControls.filter((option) => providerTurnControlKind(option) === "other");
+	const modelOption = providerControls.find((option) => providerTurnControlKind(option) === "model" && option.id !== "agent");
+	const effortOption = providerControls.find((option) => providerTurnControlKind(option) === "effort");
+	const permissionOption = providerControls.find((option) => providerTurnControlKind(option) === "permissions" && !isExecutionModeOption(option));
+	const ownSections = (kind: ProviderTurnControlKind) => providerControls.filter((option) =>
+		providerTurnControlKind(option) === kind && option !== fastOption && option !== modelOption && option !== effortOption && option !== permissionOption);
+	// A provider with only an agent picker still chooses the model itself, so the
+	// native models stay hidden, as they are in the turn-settings menu.
+	const providerModel = providerControls.some((option) => providerTurnControlKind(option) === "model");
 	const modelChoices: Choice[] = modelOption
 		? modelOption.choices.map((model) => ({ value: model.value, label: model.name, description: model.description }))
-		: models.map((model) => ({ value: model.id, label: model.displayName, description: model.description || undefined }));
+		: providerModel ? [] : models.map((model) => ({ value: model.id, label: model.displayName, description: model.description || undefined }));
 	// Nothing reported means nothing selected: the first model or level is not
 	// a stand-in for the one the provider did not name (#5834).
 	const selectedModel = modelOption?.currentValue ?? selected?.id ?? "";
@@ -78,10 +85,6 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 		: APPROVALS.map((item) => ({ value: item.id, label: approvalLabel(item.id, snapshot.harness), description: item.description }));
 	const selectedPermission = permissionOption?.currentValue ?? snapshot.settings.approvalMode ?? "default";
 	const permissionValue = permissionOption ? providerChoiceLabel(permissionOption) : approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness);
-	// iOS lists each choice with its description; an Android menu shows names
-	// only, so the current choice's description goes in the section's footer.
-	const modelHint = ios ? undefined : hintFor(modelChoices, selectedModel) ?? "Choose the model for the next message";
-	const permissionHint = ios ? undefined : hintFor(permissionChoices, selectedPermission);
 	const empty = usesProviderOptions && options.length === 0 && models.length === 0;
 
 	// A SwiftUI picker keeps the row it was tapped to even when the save fails
@@ -94,19 +97,21 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 		wasDisabled.current = disabled;
 	}, [disabled]);
 
+	const optionSections = (kind: ProviderTurnControlKind) => ownSections(kind).map((option) =>
+		<OptionSection key={option.id} option={option} revision={revision} disabled={disabled} onOption={onOption} />);
+
 	const sections = <>
 		{fastOption ? <FieldGroup.Section>
 			<FastModeSwitch option={fastOption} disabled={disabled} onOption={onOption} />
 			<FieldGroup.SectionFooter><Hint>{fastOption.description || "Faster responses on supported models"}</Hint></FieldGroup.SectionFooter>
 		</FieldGroup.Section> : null}
+		{optionSections("fast")}
 
-		{modelChoices.length ? <FieldGroup.Section title="Model">
-			<ChoicePicker key={`model:${revision}`} label="Model" value={modelValue} choices={modelChoices} selected={selectedModel} disabled={disabled} onChange={(model) => {
-				if (modelOption) void onOption(modelOption.id, { value: model });
-				else void onSettings({ ...snapshot.settings, model, reasoningEffort: undefined });
-			}} />
-			{modelHint ? <FieldGroup.SectionFooter><Hint>{modelHint}</Hint></FieldGroup.SectionFooter> : null}
-		</FieldGroup.Section> : null}
+		{modelChoices.length ? <ChoiceSection key={`model:${revision}`} title="Model" description={modelOption?.description} defaultHint="Choose the model for the next message" label="Model" value={modelValue} choices={modelChoices} selected={selectedModel} disabled={disabled} onChange={(model) => {
+			if (modelOption) void onOption(modelOption.id, { value: model });
+			else void onSettings({ ...snapshot.settings, model, reasoningEffort: undefined });
+		}} /> : null}
+		{optionSections("model")}
 
 		{effortChoices.length ? <FieldGroup.Section title="Reasoning effort">
 			{ios
@@ -117,23 +122,17 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 				: <EffortSlider choices={effortChoices} selected={selectedEffort} unplaced={effortValue} disabled={disabled} onChange={(reasoningEffort) => effortOption
 					? onOption(effortOption.id, { value: reasoningEffort })
 					: onSettings({ ...snapshot.settings, reasoningEffort })} />}
-			<FieldGroup.SectionFooter><Hint>More effort can improve harder tasks</Hint></FieldGroup.SectionFooter>
+			<FieldGroup.SectionFooter><Hint>{effortOption?.description || "More effort can improve harder tasks"}</Hint></FieldGroup.SectionFooter>
 		</FieldGroup.Section> : null}
+		{optionSections("effort")}
 
-		{permissionChoices.length ? <FieldGroup.Section title="Permissions">
-			<ChoicePicker key={`permissions:${revision}`} label="Permission mode" value={permissionValue} choices={permissionChoices} selected={selectedPermission} disabled={disabled} onChange={(value) => {
-				if (permissionOption) void onOption(permissionOption.id, { value });
-				else void onSettings({ ...snapshot.settings, approvalMode: value as TurnSettings["approvalMode"] });
-			}} />
-			{permissionHint ? <FieldGroup.SectionFooter><Hint>{permissionHint}</Hint></FieldGroup.SectionFooter> : null}
-		</FieldGroup.Section> : null}
+		{permissionChoices.length ? <ChoiceSection key={`permissions:${revision}`} title="Permissions" description={permissionOption?.description} label="Permission mode" value={permissionValue} choices={permissionChoices} selected={selectedPermission} disabled={disabled} onChange={(value) => {
+			if (permissionOption) void onOption(permissionOption.id, { value });
+			else void onSettings({ ...snapshot.settings, approvalMode: value as TurnSettings["approvalMode"] });
+		}} /> : null}
+		{optionSections("permissions")}
 
-		{advancedOptions.map((option) => <FieldGroup.Section key={option.id} title={option.type === "boolean" ? undefined : option.name}>
-			{option.type === "boolean"
-				? <Switch label={option.name} value={Boolean(option.currentBoolean)} disabled={disabled} onValueChange={(enabled) => { haptics.select(); void onOption(option.id, { enabled }); }} />
-				: <ChoicePicker key={`${option.id}:${revision}`} label={option.name} value={providerChoiceLabel(option)} choices={groupedChoices(option)} selected={option.currentValue ?? ""} disabled={disabled} onChange={(value) => void onOption(option.id, { value })} />}
-			{option.description ? <FieldGroup.SectionFooter><Hint>{option.description}</Hint></FieldGroup.SectionFooter> : null}
-		</FieldGroup.Section>)}
+		{optionSections("other")}
 
 		{empty ? <FieldGroup.Section>
 			<Hint>No turn controls are available for this provider.</Hint>
@@ -171,7 +170,7 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
  * description, and ticks the current one; Android shows the current value in
  * the row and the choices in a menu, the current one's radio filled.
  */
-function ChoicePicker({ label, value, choices, selected, disabled, onChange }: {
+type ChoicePickerProps = {
 	label: string;
 	/** The current value by name, for the Android row, including one no choice matches. */
 	value: string;
@@ -179,7 +178,9 @@ function ChoicePicker({ label, value, choices, selected, disabled, onChange }: {
 	selected: string;
 	disabled?: boolean;
 	onChange(value: string): void;
-}) {
+};
+
+function ChoicePicker({ label, value, choices, selected, disabled, onChange }: ChoicePickerProps) {
 	const t = useTheme();
 	const [expanded, setExpanded] = useState(false);
 	const choose = (next: string) => {
@@ -223,6 +224,32 @@ function ChoicePicker({ label, value, choices, selected, disabled, onChange }: {
 			</DropdownMenu.Items>
 		</DropdownMenu>
 	);
+}
+
+/**
+ * A section of one choice among several. Its footer holds the setting's own
+ * description; on Android, whose menu names the choices only, it also holds the
+ * current choice's, or `defaultHint` when neither says anything.
+ */
+function ChoiceSection({ title, description, defaultHint, ...picker }: { title: string; description?: string; defaultHint?: string } & ChoicePickerProps) {
+	const ios = Platform.OS === "ios";
+	const lines = (ios ? [description] : [description, hintFor(picker.choices, picker.selected)]).filter((hint): hint is string => Boolean(hint));
+	if (!lines.length && defaultHint && !ios) lines.push(defaultHint);
+	return <FieldGroup.Section title={title}>
+		<ChoicePicker {...picker} />
+		{lines.length ? <FieldGroup.SectionFooter>{lines.map((line) => <Hint key={line}>{line}</Hint>)}</FieldGroup.SectionFooter> : null}
+	</FieldGroup.Section>;
+}
+
+/** A provider option without a fixed section, under its own name: a switch, or a choice among its values. */
+function OptionSection({ option, revision, disabled, onOption }: { option: ChatConfigOption; revision: number; disabled?: boolean; onOption(id: string, value: { value: string } | { enabled: boolean }): Promise<void> }) {
+	if (option.type === "boolean") {
+		return <FieldGroup.Section>
+			<Switch label={option.name} value={Boolean(option.currentBoolean)} disabled={disabled} onValueChange={(enabled) => { haptics.select(); void onOption(option.id, { enabled }); }} />
+			{option.description ? <FieldGroup.SectionFooter><Hint>{option.description}</Hint></FieldGroup.SectionFooter> : null}
+		</FieldGroup.Section>;
+	}
+	return <ChoiceSection key={revision} title={option.name} description={option.description} label={option.name} value={providerChoiceLabel(option)} choices={groupedChoices(option)} selected={option.currentValue ?? ""} disabled={disabled} onChange={(value) => void onOption(option.id, { value })} />;
 }
 
 function FastModeSwitch({ option, disabled, onOption }: { option: ChatConfigOption; disabled?: boolean; onOption(id: string, value: { value: string } | { enabled: boolean }): void }) {

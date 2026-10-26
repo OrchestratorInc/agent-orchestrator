@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary, turnSettingTopic, turnSettingWrite } from "./turnSettingsModel";
+import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, isExecutionModeOption, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary, turnSettingTopic, turnSettingWrite } from "./turnSettingsModel";
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -79,6 +79,13 @@ describe("turnSettingsRows", () => {
 		const rows = turnSettingsRows(snapshot({ settings: { approvalMode: "bypass-permissions" } }), [], options);
 		expect(rows.map((row) => row.label)).toContain("Approvals");
 		expect(rows.find((row) => row.label === "Approvals")?.value).toBe("Never ask");
+	});
+
+	it("tells execution modes from a mode option that sets permissions", () => {
+		const mode = (choices: string[]): ChatConfigOption => ({ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: choices[0], choices: choices.map((value) => ({ value, name: value })) });
+		expect(isExecutionModeOption(mode(["build", "plan"]))).toBe(true);
+		expect(isExecutionModeOption(mode(["plan", "bypassPermissions"]))).toBe(false);
+		expect(isExecutionModeOption({ id: "permission_mode", name: "Permissions", type: "select", currentValue: "plan", choices: [{ value: "plan", name: "Plan only" }] })).toBe(false);
 	});
 
 	it("builds model, effort, and approvals drill-down rows when provider controls are unavailable", () => {

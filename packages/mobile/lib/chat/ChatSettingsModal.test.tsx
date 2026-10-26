@@ -435,6 +435,14 @@ describe("turn settings sheet on Android", () => {
 		act(() => renderer.unmount());
 	});
 
+	it("footers a provider setting with its description and the current choice's", () => {
+		const model: ChatConfigOption = { id: "model", name: "Model", description: "AI model to use", category: "model", type: "select", currentValue: "gpt", choices: [{ value: "gpt", name: "GPT", description: "Balanced" }, { value: "o3", name: "o3" }] };
+		const { renderer } = sheet({ snapshot: snapshot({ capabilities: ["config_options"] }), options: [model] });
+		const footer = renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSectionFooter")[0];
+		expect(footer.findAllByType("ComposeText" as never).map((node) => node.props.children)).toEqual(["AI model to use", "Balanced"]);
+		act(() => renderer.unmount());
+	});
+
 	it("picks from a Material menu whose current choice is the filled radio", () => {
 		const { renderer, onSettings } = sheet();
 		const model = renderer.root.findAll((node) => (node.type as unknown) === "DropdownMenu")[0];
@@ -501,6 +509,40 @@ describe("turn settings sheet on iOS", () => {
 		expect(renderer.root.findAll((node) => (node.type as unknown) === "Slider")).toHaveLength(0);
 		act(() => pickers[1].props.onSelectionChange("high"));
 		expect(onSettings).toHaveBeenCalledExactlyOnceWith({ model: "opus", approvalMode: "auto", reasoningEffort: "high" });
+		act(() => renderer.unmount());
+	});
+
+	it("gives an agent picker, a second option of a kind and execution modes their own named sections", () => {
+		platform.OS = "ios";
+		const provider: ChatConfigOption[] = [
+			{ id: "agent", name: "Agent", description: "Which agent answers", category: "model", type: "select", currentValue: "build", choices: [{ value: "build", name: "Build" }, { value: "plan", name: "Plan" }] },
+			{ id: "model", name: "Model", description: "AI model to use", category: "model", type: "select", currentValue: "gpt", choices: [{ value: "gpt", name: "GPT" }] },
+			{ id: "effort", name: "Effort", description: "How hard it thinks", category: "thought_level", type: "select", currentValue: "high", choices: [{ value: "high", name: "High" }] },
+			{ id: "reasoning_summary", name: "Reasoning summary", category: "thought_level", type: "select", currentValue: "auto", choices: [{ value: "auto", name: "Auto" }, { value: "none", name: "None" }] },
+			{ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "build", choices: [{ value: "build", name: "build" }, { value: "plan", name: "plan" }] },
+		];
+		const { renderer, onOption, onSettings } = sheet({ snapshot: snapshot({ capabilities: ["config_options"] }), options: provider });
+		expect(sectionTitles(renderer)).toEqual(["Model", "Agent", "Reasoning effort", "Reasoning summary", "Permissions", "Mode"]);
+		const iosFooters = renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSectionFooter").map((node) => node.findByType("SwiftUIText" as never).props.children);
+		// The provider's own descriptions; iOS lists each choice's under it.
+		expect(iosFooters).toEqual(["AI model to use", "Which agent answers", "How hard it thinks"]);
+		const pickers = renderer.root.findAllByType("SwiftUIPicker" as never);
+		expect(pickers.map((picker) => picker.props.label)).toEqual(["Model", "Agent", "Reasoning effort", "Reasoning summary", "Permission mode", "Mode"]);
+		// The provider's model, not the native catalog, and the agent's own choices.
+		expect(pickers[0].props.children.map((choice: { key: string }) => choice.key)).toEqual(["gpt"]);
+		act(() => pickers[1].props.onSelectionChange("plan"));
+		expect(onOption).toHaveBeenLastCalledWith("agent", { value: "plan" });
+		// Build/plan sets no permissions, so the approvals stay reachable.
+		act(() => pickers[4].props.onSelectionChange("bypass-permissions"));
+		expect(onSettings).toHaveBeenCalledExactlyOnceWith({ model: "opus", approvalMode: "bypass-permissions" });
+		act(() => renderer.unmount());
+	});
+
+	it("names an agent picker that comes alone as itself, not as the model", () => {
+		platform.OS = "ios";
+		const agent: ChatConfigOption = { id: "agent", name: "Agent", category: "model", type: "select", currentValue: "build", choices: [{ value: "build", name: "Build" }, { value: "plan", name: "Plan" }] };
+		const { renderer } = sheet({ snapshot: snapshot({ capabilities: ["config_options"] }), options: [agent] });
+		expect(sectionTitles(renderer)).toEqual(["Agent", "Reasoning effort", "Permissions"]);
 		act(() => renderer.unmount());
 	});
 

@@ -15,7 +15,7 @@ describe("model setting icon", () => {
 
 	it("leaves the sheet's sections without glyphs", () => {
 		expect(sheet).not.toContain("AppSymbol name=\"model\"");
-		expect(sheet).toContain('<FieldGroup.Section title="Model">');
+		expect(sheet).toContain('<ChoiceSection key={`model:${revision}`} title="Model"');
 	});
 });
 
