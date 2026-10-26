@@ -22,7 +22,7 @@ import { font, fontScaleCap, radius, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
 import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
-import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
+import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, MARKER_WIDTH, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
 import { fileIcon } from "../../../lib/files/fileIcons";
 import {
 	annotationTarget,
@@ -276,9 +276,10 @@ function SessionFileContent() {
 
 	// Hold-and-drag, or drag the line numbers, to select a range. Starting on an
 	// end of the current selection picks that end up instead of starting over.
+	// The numbers and the +/− column grow with the text, and so does the strip.
 	const drag = useLineDrag({
 		listRef: list,
-		gutterWidth: gutterWidth(digits, codeScale) + 16,
+		gutterWidth: gutterWidth(digits, codeScale) + MARKER_WIDTH * codeScale,
 		enabled: rows.length > 0,
 		onStart: (index) => {
 			setActionError(undefined);

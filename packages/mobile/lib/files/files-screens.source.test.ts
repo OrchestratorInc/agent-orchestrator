@@ -113,6 +113,11 @@ describe("the file viewer", () => {
 		expect(file).not.toMatch(/textTransform: "uppercase"/);
 	});
 
+	// At a large text size the drag strip has to cover the scaled +/− column too.
+	it("sizes the drag-to-select strip to the scaled gutter and marker", () => {
+		expect(file).toContain("gutterWidth: gutterWidth(digits, codeScale) + MARKER_WIDTH * codeScale,");
+	});
+
 	// 44 points on iOS, Material's 48dp on Android.
 	it("sizes every line-comment composer control to the touch target", () => {
 		const components = source("./components.tsx");

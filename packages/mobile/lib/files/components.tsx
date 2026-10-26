@@ -98,7 +98,7 @@ const SELECTION_BAR_INSET = 3;
 const SELECTION_BAR_WIDTH = 3;
 const SELECTION_KNOB = SELECTION_BAR_INSET * 2 + SELECTION_BAR_WIDTH;
 
-export { CODE_FONT_SIZE, CODE_LINE_HEIGHT, CODE_MAX_SCALE, codeContentWidth, codeScale, gutterWidth } from "./codeMetrics";
+export { CODE_FONT_SIZE, CODE_LINE_HEIGHT, CODE_MAX_SCALE, codeContentWidth, codeScale, gutterWidth, MARKER_WIDTH } from "./codeMetrics";
 
 export function useCodeScale(): number {
 	return codeScale(useWindowDimensions().fontScale);
