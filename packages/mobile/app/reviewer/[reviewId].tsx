@@ -1,15 +1,17 @@
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useLayoutEffect } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { ReviewerComposer } from "../../lib/chat/ReviewerComposer";
 import { ChatTimeline } from "../../lib/chat/ChatTimeline";
 import { useChatKeyboard } from "../../lib/chat/useChatKeyboard";
 import { useMobileConversation } from "../../lib/chat/useConversation";
 import { hostRouteMatches } from "../../lib/hostRoute";
+import { Spinner } from "../../lib/Spinner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useThemedStyles } from "../../lib/ThemeProvider";
+import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
@@ -25,7 +27,6 @@ function ReviewerConversationContent() {
 	const navigation = useNavigation();
 	const { config, currentHostId } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// The review id owns the conversation routes; the worker id owns attachment
 	// staging and SSE refresh. Never stage reviewer attachments under a review id.
@@ -36,9 +37,9 @@ function ReviewerConversationContent() {
 
 	useLayoutEffect(() => navigation.setOptions({ title: title ? `Review · ${title}` : "Reviewer chat" }), [navigation, title]);
 
-	if (!hostMatches) return <EmptyState icon="message-circle" title="Review belongs to another machine" message="Open it from that machine's session." />;
-	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!conversation.snapshot) return <EmptyState icon="message-circle" title="Reviewer chat unavailable" message={conversation.unavailable?.message || conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void conversation.refresh()} />} />;
+	if (!hostMatches) return <EmptyState icon="chat" title="Review belongs to another machine" message="Open it from that machine's session." />;
+	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Loading reviewer chat" /></View>;
+	if (!conversation.snapshot) return <EmptyState icon="chat" title="Reviewer chat unavailable" message={conversation.unavailable?.message || conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh" onPress={() => void conversation.refresh()} />} />;
 
 	return <KeyboardAvoidingView style={[styles.screen, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
 		{conversation.unavailable?.message || conversation.error || conversation.actionError ? <Text accessibilityRole="alert" style={styles.error}>{conversation.unavailable?.message || conversation.error || conversation.actionError}</Text> : null}
@@ -51,6 +52,6 @@ function ReviewerConversationContent() {
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	error: { color: t.red, fontSize: 12, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: t.tintRed },
+	error: { ...type.footnote, color: t.red, paddingHorizontal: space.lg, paddingVertical: space.sm, backgroundColor: t.tintRed },
 	pending: { flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
 });
