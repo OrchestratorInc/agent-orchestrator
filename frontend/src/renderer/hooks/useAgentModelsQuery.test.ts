@@ -382,10 +382,10 @@ describe("OpenCode single-read catalogs", () => {
 		} finally { finish({ data: catalog }); unsubscribe(); client.clear(); }
 	});
 
-	it("reuses the pending device read after an observer remount", async () => {
+	it.each(["opencode", "opencode-v2"])("reuses the pending %s device read after an observer remount", async (agentId) => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		const options = agentModelsQueryOptions("opencode", "");
-		const catalog: AgentModelCatalog = { agentId: "opencode", models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const options = agentModelsQueryOptions(agentId, "");
+		const catalog: AgentModelCatalog = { agentId, models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
 		let finish!: (value: { data: AgentModelCatalog }) => void;
 		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never);
 		const first = new QueryObserver(client, options);
@@ -399,6 +399,50 @@ describe("OpenCode single-read catalogs", () => {
 			await vi.waitFor(() => expect(second.getCurrentResult().data).toEqual(catalog));
 			expect(apiClient.GET).toHaveBeenCalledTimes(1);
 		} finally { finish({ data: catalog }); unsubscribeSecond(); client.clear(); }
+	});
+
+	it.each(["opencode", "opencode-v2"])("discards a detached %s read on CDC invalidation before remount", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const old: AgentModelCatalog = { agentId, models: [{ id: "provider/old", label: "Old" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const fresh = { ...old, models: [{ id: "provider/new", label: "New", efforts: ["low", "high"] }] };
+		let finishOld!: (value: { data: AgentModelCatalog }) => void;
+		let finishNew!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET)
+			.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }) as never)
+			.mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }) as never);
+		const first = new QueryObserver(client, options);
+		const unsubscribeFirst = first.subscribe(() => {});
+		let unsubscribeSecond = () => {};
+		let unsubscribeThird = () => {};
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			unsubscribeFirst();
+			expect(client.getQueryState(options.queryKey)?.fetchStatus).toBe("idle");
+			// Match CDC's ordinary query invalidation, without the login helper
+			// or any explicit pending-map clearing.
+			await client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
+			const second = new QueryObserver(client, options);
+			unsubscribeSecond = second.subscribe(() => {});
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			finishOld({ data: old });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(client.getQueryData(options.queryKey)).toBeUndefined();
+			expect(readCachedAgentModels(agentId, "")).toBeUndefined();
+			// Settling the old GET must not remove the new pending entry.
+			unsubscribeSecond();
+			const third = new QueryObserver(client, options);
+			unsubscribeThird = third.subscribe(() => {});
+			finishNew({ data: fresh });
+			await vi.waitFor(() => expect(third.getCurrentResult().data).toEqual(fresh));
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(fresh.models);
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+			expect(third.getCurrentResult().isStale).toBe(false);
+		} finally {
+			finishOld({ data: old });
+			finishNew?.({ data: fresh });
+			unsubscribeFirst(); unsubscribeSecond(); unsubscribeThird(); client.clear();
+		}
 	});
 
 	it("does not reuse a pending OpenCode read after login invalidation", async () => {
