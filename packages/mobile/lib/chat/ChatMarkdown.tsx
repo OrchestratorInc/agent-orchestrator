@@ -11,6 +11,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
+import { FirstLineMarker } from "./FirstLineMarker";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks, type MarkdownBlock } from "./markdownBlocks";
@@ -109,9 +110,9 @@ const TASK_OPEN = { ios: "square", android: "check_box_outline_blank" } as const
  */
 function ListMarker({ checked, number, styles }: { checked?: boolean; number?: number; styles: ReturnType<typeof makeStyles> }) {
 	const t = useTheme();
-	if (checked !== undefined) return <View style={styles.markerBox}><AppSymbol name={checked ? TASK_DONE : TASK_OPEN} size={iconSize.md} color={t.textTertiary} accessibilityLabel={checked ? "Done" : "Not done"} /></View>;
+	if (checked !== undefined) return <FirstLineMarker lineStyle={styles.body} style={styles.markerBox}><AppSymbol name={checked ? TASK_DONE : TASK_OPEN} size={iconSize.md} color={t.textTertiary} accessibilityLabel={checked ? "Done" : "Not done"} /></FirstLineMarker>;
 	if (number !== undefined) return <Text style={styles.marker}>{`${number}.`}</Text>;
-	return <View style={styles.markerBox}><View style={styles.bullet} /></View>;
+	return <FirstLineMarker lineStyle={styles.body} style={styles.markerBox}><View style={styles.bullet} /></FirstLineMarker>;
 }
 
 function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>): boolean {
@@ -277,8 +278,8 @@ const makeStyles = (t: Theme) =>
 		listBody: { flex: 1, minWidth: 0 },
 		// The marker sits on the same line as prose, so it borrows prose leading.
 		marker: { fontFamily: "Geist_400Regular", width: 20, flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, textAlign: "right" },
-		// A drawn marker's box: the numbered marker's width, one prose line tall.
-		markerBox: { width: 20, height: prose.lineHeight, flexShrink: 0, alignItems: "flex-end", justifyContent: "center" },
+		// A drawn marker's column takes the numbered marker's width.
+		markerBox: { width: 20 },
 		bullet: { width: 5, height: 5, borderRadius: radius.pill, backgroundColor: t.textTertiary },
 		taskDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 		quote: { borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.md },

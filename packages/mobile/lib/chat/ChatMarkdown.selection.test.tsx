@@ -247,6 +247,25 @@ describe("list markers outside the selection surface", () => {
 		act(() => renderer.unmount());
 	});
 
+	// The item's text grows with the system font size, so a box of fixed height
+	// would leave the marker above its first line at larger sizes.
+	it("holds each drawn marker on its item's first line at any text size", () => {
+		const flatten = (style: unknown): Record<string, unknown> => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : (style as Record<string, unknown>) || {};
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"- Plain item\n- [ ] Open task"} />); });
+		const lines = renderer.root.findAllByType("Text" as never).filter((node) => node.props.children === "​");
+		const items = renderer.root.findAllByType("UITextView" as never).filter((node) => node.props.selectable);
+		expect(lines).toHaveLength(2);
+		expect(items).toHaveLength(2);
+		lines.forEach((line, index) => {
+			expect(line.props.importantForAccessibility).toBe("no");
+			const { fontSize, lineHeight } = flatten(items[index].props.style);
+			expect(flatten(line.props.style)).toMatchObject({ fontSize, lineHeight });
+			expect(flatten(line.parent!.props.style).height).toBeUndefined();
+		});
+		act(() => renderer.unmount());
+	});
+
 	it("keeps an ordered list's numbers as text", () => {
 		let renderer!: ReactTestRenderer;
 		act(() => { renderer = create(<ChatMarkdown text={"1. First\n2. Second"} />); });

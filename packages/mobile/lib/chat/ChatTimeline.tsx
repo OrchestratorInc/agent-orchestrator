@@ -27,6 +27,7 @@ import { Spinner } from "../Spinner";
 import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { FirstLineMarker } from "./FirstLineMarker";
 import { RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
@@ -1185,7 +1186,7 @@ function EmptyConversation({ controller }: { controller: string }) {
 
 function LabelValue({ label, value }: { label: string; value: string }) { const styles = useThemedStyles(makeStyles); return <View style={styles.labelValue}><Text style={styles.detailLabel}>{label}</Text><Text selectable style={styles.detailValue}>{value}</Text></View>; }
 function CodeOutput({ value }: { value: string }) { const styles = useThemedStyles(makeStyles); return <Pressable onLongPress={() => { void Clipboard.setStringAsync(value); haptics.success(); }}><Text selectable style={styles.output}>{value}</Text></Pressable>; }
-function FileList({ files }: { files: unknown[] }) { const styles = useThemedStyles(makeStyles); return <View style={styles.fileBody}>{files.map((file, index) => <View key={index} style={styles.fileListRow}><View style={styles.fileBullet} /><Text selectable style={styles.filePath}>{typeof file === "string" ? file : printable(file)}</Text></View>)}</View>; }
+function FileList({ files }: { files: unknown[] }) { const styles = useThemedStyles(makeStyles); return <View style={styles.fileBody}>{files.map((file, index) => <View key={index} style={styles.fileListRow}><FirstLineMarker lineStyle={styles.fileLine} style={styles.fileBulletColumn}><View style={styles.fileBullet} /></FirstLineMarker><Text selectable style={styles.filePath}>{typeof file === "string" ? file : printable(file)}</Text></View>)}</View>; }
 
 function printable(value: unknown): string {
 	if (value === null || value === undefined) return "";
@@ -1249,6 +1250,8 @@ const makeStyles = (t: Theme) => {
 	// Every card in the timeline has one shape: the card radius, and the
 	// divider's width for its edge.
 	const card = { borderRadius: radius.md, borderCurve: "continuous", borderWidth: rowDividerWidth } as const;
+	// One line of a file list's path; its bullet is held level with it.
+	const fileLine = { fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight };
 	return StyleSheet.create({
 		timelineWrap: { flex: 1, position: "relative", backgroundColor: t.bgBase },
 		detachedEditor: { paddingHorizontal: space.md, paddingTop: space.xs, paddingBottom: space.xs, backgroundColor: t.bgBase },
@@ -1348,9 +1351,11 @@ const makeStyles = (t: Theme) => {
 		fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
 		fileRowTap: { minHeight: touchTarget },
 		fileListRow: { flexDirection: "row", alignItems: "flex-start", gap: space.xs },
-		fileBullet: { width: 4, height: 4, marginTop: (type.footnote.lineHeight - 4) / 2, borderRadius: radius.pill, backgroundColor: t.textTertiary },
+		fileBulletColumn: { width: 4 },
+		fileBullet: { width: 4, height: 4, borderRadius: radius.pill, backgroundColor: t.textTertiary },
 		fileMark: { width: 13, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		filePath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		fileLine,
+		filePath: { flex: 1, color: t.textSecondary, ...fileLine },
 		fileStat: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
 		approvalRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.lg, gap: space.md },
 		approvalStatus: { flexDirection: "row", alignItems: "center", gap: space.sm },

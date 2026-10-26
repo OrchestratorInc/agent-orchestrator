@@ -202,10 +202,14 @@ describe("timeline rows", () => {
 		expect(styles).toMatch(/turnState: \{[^}]*type\.caption1\.fontSize/);
 	});
 
+	// The bullet's column is one line of the path at the user's text size, so the
+	// bullet stays level with the path's first line as the text grows.
 	it("draw a file list's bullets beside the selectable path", () => {
 		const fileList = source.slice(source.indexOf("function FileList"), source.indexOf("function printable"));
-		expect(fileList).toContain("<View style={styles.fileBullet} />");
+		expect(fileList).toContain("<FirstLineMarker lineStyle={styles.fileLine} style={styles.fileBulletColumn}><View style={styles.fileBullet} /></FirstLineMarker>");
 		expect(fileList).not.toContain("•");
+		expect(styles).toContain("filePath: { flex: 1, color: t.textSecondary, ...fileLine },");
+		expect(styles).not.toMatch(/fileBullet: \{[^}]*marginTop/);
 	});
 });
 
