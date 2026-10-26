@@ -42,11 +42,13 @@ const (
 	DefaultPRMaxAge = 5 * time.Minute
 	// BatchSize is the maximum number of PRs in one provider batch fetch.
 	BatchSize = 25
-	// DefaultLifecycleTimeout bounds one PR's lifecycle reaction. Reactions
-	// write into agent panes and chat hosts, and Poll runs them one after
-	// another, so a single wedged session would otherwise stall every later
-	// session's PR status, indefinitely. A timed-out reaction takes the
-	// ordinary lifecycle-failure path: its hashes stay unacknowledged.
+	// DefaultLifecycleTimeout bounds one open PR's lifecycle reaction.
+	// Reactions write into agent panes and chat hosts, and Poll runs them one
+	// after another, so a single wedged session would otherwise stall every
+	// later session's PR status, indefinitely. A timed-out reaction takes the
+	// ordinary lifecycle-failure path: its hashes stay unacknowledged and the
+	// next poll retries it. It only cuts work that honors cancellation; a wake
+	// or a teardown runs on its own budget. Merged and closed PRs are exempt.
 	DefaultLifecycleTimeout = 30 * time.Second
 )
 
@@ -637,7 +639,13 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			continue
 		}
 		if o.lifecycle != nil {
-			lifecycleCtx, cancel := context.WithTimeout(ctx, o.lifecycleTimeout)
+			// A merged or closed PR is not selected again after a failed
+			// reaction, so its one reaction (teardown, final notifications)
+			// runs unbounded. An open PR is retried on the next poll.
+			lifecycleCtx, cancel := ctx, context.CancelFunc(func() {})
+			if !prepared.PR.Merged && !prepared.PR.Closed {
+				lifecycleCtx, cancel = context.WithTimeout(ctx, o.lifecycleTimeout)
+			}
 			err := o.lifecycle.ApplySCMObservation(lifecycleCtx, subj.session.ID, prepared)
 			cancel()
 			if err != nil {
