@@ -107,6 +107,10 @@ function filterMenu(): ReactTestInstance {
 function submenu(title: string | RegExp): ReactTestInstance {
 	return filterMenu().findAllByType("StackToolbarMenu" as never).find((node) => typeof title === "string" ? node.props.title === title : title.test(node.props.title ?? ""))!;
 }
+/** Titled with its current choice, so it is found by its glyph. */
+function environmentMenu(): ReactTestInstance {
+	return filterMenu().findAllByType("StackToolbarMenu" as never).find((node) => node.props.icon === "tray.2")!;
+}
 function choices(menu: ReactTestInstance): ReactTestInstance[] {
 	return menu.findAllByType("StackToolbarMenuAction" as never);
 }
@@ -116,14 +120,14 @@ function choose(menu: ReactTestInstance, label: string) {
 	act(() => action.props.onPress());
 }
 function selectedEnvironment(): string | undefined {
-	return choices(submenu("Environment")).find((node) => node.props.isOn)?.props.children;
+	return choices(environmentMenu()).find((node) => node.props.isOn)?.props.children;
 }
 function search(text: string) {
 	act(() => renderer.root.findByType("StackSearchBar" as never).props.onChangeText({ nativeEvent: { text } }));
 }
 function selectWindows() {
 	act(() => { renderer = create(<FleetScreen />); });
-	choose(submenu("Environment"), "Windows");
+	choose(environmentMenu(), "Windows");
 }
 function emptyState() {
 	const status = renderer.root.findAllByProps({ testID: "worker-machine-status" })[0];
@@ -283,13 +287,13 @@ describe("Workers filter menu", () => {
 	it("leads the iOS bar with the environment and project choices, current ones checked", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(filterMenu().props).toMatchObject({ icon: "line.3.horizontal.decrease.circle", accessibilityLabel: "Filter workers" });
-		expect(submenu("Environment").props.icon).toBe("tray.2");
-		expect(choices(submenu("Environment")).map((node) => [node.props.children, node.props.icon, node.props.isOn])).toEqual([
+		expect(environmentMenu().props.title).toBe("All environments");
+		expect(choices(environmentMenu()).map((node) => [node.props.children, node.props.icon, node.props.isOn])).toEqual([
 			["All environments", "server.rack", true],
 			["Mac", "desktopcomputer", false],
 			["Windows", "desktopcomputer", false],
 		]);
-		// Titled with the selection alone, which is also what it holds.
+		// Both are titled with their selection alone, which is also what it holds.
 		expect(submenu("All projects").props.icon).toBe("folder");
 		expect(choices(submenu("All projects")).map((node) => [node.props.children, node.props.isOn])).toEqual([["All projects", true]]);
 	});
@@ -299,7 +303,8 @@ describe("Workers filter menu", () => {
 		selectWindows();
 		expect(fixtures.select).toHaveBeenCalledOnce();
 		expect(selectedEnvironment()).toBe("Windows");
-		expect(filterMenu().props).toMatchObject({ icon: "line.3.horizontal.decrease.circle.fill", accessibilityLabel: "Filter workers, filters on" });
+		expect(environmentMenu().props.title).toBe("Windows");
+		expect(filterMenu().props).toMatchObject({ icon: "line.3.horizontal.decrease.circle.fill", accessibilityLabel: "Filter workers, filtered to Windows" });
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
 	});
 
@@ -310,10 +315,26 @@ describe("Workers filter menu", () => {
 		expect(toolbar("left")).toBeUndefined();
 		expect(toolbar("right")!.props.children[0].props.accessibilityLabel).toBe("Filter workers");
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
-		expect(choices(submenu("Environment")).map((node) => node.props.icon)).toEqual([undefined, undefined, undefined]);
-		choose(submenu("Environment"), "Windows");
+		expect(choices(environmentMenu()).map((node) => node.props.icon)).toEqual([undefined, undefined, undefined]);
+		choose(environmentMenu(), "Windows");
 		expect(filterMenu().findByType("StackToolbarBadge" as never).props.style).toEqual({ backgroundColor: "#accent" });
-		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filters on");
+		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Windows");
+	});
+
+	// Compose's menu items draw the check with no selected state for TalkBack,
+	// and one machine leaves no chip row to say it, so the titles carry it.
+	it("names the chosen machine and project on Android, where the check is silent", () => {
+		fixtures.platform = "android";
+		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
+		fixtures.projects = [project("ao", "AO", "mac", "Mac")];
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(0);
+		choose(environmentMenu(), "Mac");
+		expect(environmentMenu().props.title).toBe("Mac");
+		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac");
+		choose(submenu("All projects"), "AO");
+		expect(submenu("AO").props.icon).toBe("folder");
+		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Mac, AO");
 	});
 
 	it("scopes the project choices to the environment and drops one it does not have", () => {
@@ -321,7 +342,7 @@ describe("Workers filter menu", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		choose(submenu("All projects"), "Game · Windows");
 		expect(choices(submenu("Game · Windows")).find((node) => node.props.isOn)?.props.children).toBe("Game · Windows");
-		choose(submenu("Environment"), "Mac");
+		choose(environmentMenu(), "Mac");
 		expect(selectedEnvironment()).toBe("Mac");
 		expect(choices(submenu("All projects")).map((node) => node.props.children)).toEqual(["All projects", "AO"]);
 	});
@@ -341,7 +362,7 @@ describe("Workers filter menu", () => {
 		act(() => renderer.update(<FleetScreen />));
 		expect(toolbar("left")!.props.children).not.toBe(menu);
 		// Machines are listed by name, so the rename also moves it first.
-		expect(choices(submenu("Environment")).map((node) => node.props.children)).toEqual(["All environments", "Gaming PC", "Mac"]);
+		expect(choices(environmentMenu()).map((node) => node.props.children)).toEqual(["All environments", "Gaming PC", "Mac"]);
 	});
 });
 

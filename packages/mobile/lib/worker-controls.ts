@@ -73,6 +73,11 @@ export function workerProjectForEnvironment(
 		: ALL_WORKER_PROJECTS;
 }
 
+export function workerEnvironmentLabel(environments: readonly WorkerEnvironment[], environmentId: string): string {
+	const options = workerEnvironmentOptions(environments);
+	return (options.find((environment) => environment.id === environmentId) ?? options[0]).label;
+}
+
 export function workerEnvironmentOptions(
 	environments: readonly WorkerEnvironment[],
 ): { id: string; label: string; appearance?: MachineAppearance }[] {

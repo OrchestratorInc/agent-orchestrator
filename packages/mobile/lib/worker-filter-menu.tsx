@@ -8,6 +8,7 @@ import { toolbarIcon } from "./toolbarIcon";
 import {
 	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
+	workerEnvironmentLabel,
 	workerEnvironmentOptions,
 	workerProjectLabel,
 	workerProjectOptions,
@@ -44,17 +45,28 @@ export function workerFilterMenu({
 	onSelectProject,
 	badgeColor,
 }: WorkerFilterMenuOptions): ReactElement {
-	const filtered = selectedEnvironmentId !== ALL_WORKER_ENVIRONMENTS || selectedProjectId !== ALL_WORKER_PROJECTS;
+	const environmentLabel = workerEnvironmentLabel(environments, selectedEnvironmentId);
+	const projectLabel = workerProjectLabel(projects, selectedProjectId, selectedEnvironmentId);
+	const activeFilters = [
+		selectedEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? environmentLabel : null,
+		selectedProjectId !== ALL_WORKER_PROJECTS ? projectLabel : null,
+	].filter((label) => label !== null);
+	const filtered = activeFilters.length > 0;
 	const ios = Platform.OS === "ios";
 	return (
 		<Stack.Toolbar.Menu
 			// A filtered board shows it in the glyph, not in colour alone: iOS fills
-			// the symbol, Android badges it with Material's dot.
+			// the symbol, Android badges it with Material's dot. The label names the
+			// filters, since with one machine paired no chip row says it either.
 			icon={toolbarIcon(filtered ? { ios: "line.3.horizontal.decrease.circle.fill", android: "filter_list" } : "filter")}
-			accessibilityLabel={filtered ? "Filter workers, filters on" : "Filter workers"}
+			accessibilityLabel={filtered ? `Filter workers, filtered to ${activeFilters.join(", ")}` : "Filter workers"}
 		>
 			{filtered && !ios ? <Stack.Toolbar.Badge style={{ backgroundColor: badgeColor }} /> : null}
-			<Stack.Toolbar.Menu title="Environment" icon={toolbarIcon({ ios: "tray.2", android: "devices" })}>
+			{/* Each submenu is titled with its current choice. Android's menu items
+			    draw the check without a selected state, so TalkBack learns the
+			    choice from the title. Naming the menu in front of it pushed the row
+			    past the width the menu reserves, and it wrapped. */}
+			<Stack.Toolbar.Menu title={environmentLabel} icon={toolbarIcon({ ios: "tray.2", android: "devices" })}>
 				{workerEnvironmentOptions(environments).map((environment) => (
 					<Stack.Toolbar.MenuAction
 						key={environment.id}
@@ -72,9 +84,7 @@ export function workerFilterMenu({
 					</Stack.Toolbar.MenuAction>
 				))}
 			</Stack.Toolbar.Menu>
-			{/* Titled with the selection on its own: naming the menu in front of it
-			    pushed the row past the width the menu reserves, and it wrapped. */}
-			<Stack.Toolbar.Menu title={workerProjectLabel(projects, selectedProjectId, selectedEnvironmentId)} icon={toolbarIcon("folder")}>
+			<Stack.Toolbar.Menu title={projectLabel} icon={toolbarIcon("folder")}>
 				{workerProjectOptions(projects, selectedEnvironmentId).map((project) => (
 					<Stack.Toolbar.MenuAction
 						key={project.id}

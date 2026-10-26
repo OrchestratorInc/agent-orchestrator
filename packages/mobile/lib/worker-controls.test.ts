@@ -5,6 +5,7 @@ import {
 	filterWorkersByEnvironmentAndProject,
 	filterWorkersByProject,
 	spawnProjectParam,
+	workerEnvironmentLabel,
 	workerEnvironmentOptions,
 	workerProjectForEnvironment,
 	workerProjectLabel,
@@ -84,6 +85,15 @@ describe("workerProjectLabel", () => {
 	it("uses a stable fallback if a selected project was removed", () => {
 		expect(workerProjectLabel([{ id: "alpha", name: "Alpha" }], "missing")).toBe("All projects");
 		expect(workerProjectLabel([{ id: "alpha", name: "Alpha" }], "alpha")).toBe("Alpha");
+	});
+});
+
+describe("workerEnvironmentLabel", () => {
+	it("names the selected machine, and falls back to All environments once it is gone", () => {
+		const environments = [{ id: "mac", name: "Mac" }];
+		expect(workerEnvironmentLabel(environments, "mac")).toBe("Mac");
+		expect(workerEnvironmentLabel(environments, ALL_WORKER_ENVIRONMENTS)).toBe("All environments");
+		expect(workerEnvironmentLabel(environments, "missing")).toBe("All environments");
 	});
 });
 
