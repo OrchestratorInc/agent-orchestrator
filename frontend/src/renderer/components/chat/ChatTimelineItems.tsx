@@ -13,7 +13,7 @@ import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_
 import { ChatImage } from "./ChatImage";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { normalizeToolContent, ToolImage } from "./tool-content-images";
+import { normalizeToolContent, splitToolResult, ToolImage } from "./tool-content-images";
 import {
 	ACCENT_ACTION_SEGMENT,
 	ACCENT_ACTION_SHELL,
@@ -2293,9 +2293,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 						<JsonPayload label="Arguments" value={detail.arguments} />
 					) : null}
 					{detail?.result !== undefined ? (
-						normalizeToolContent(detail.result).some((part) => part.kind === "image")
-							? <ToolContent value={detail.result} />
-							: <JsonPayload label="Result" value={detail.result} />
+						<ToolResult value={detail.result} />
 					) : null}
 					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
 					{detail?.progress ? (
@@ -2312,6 +2310,17 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+		</div>
+	);
+}
+
+function ToolResult({ value }: { value: unknown }) {
+	const result = splitToolResult(value);
+	if (result.images.length === 0) return <JsonPayload label="Result" value={value} />;
+	return (
+		<div className="flex max-w-full flex-col gap-2">
+			{result.images.map((image, index) => <ToolImage key={index} image={image} />)}
+			<JsonPayload label="Result" value={result.value} />
 		</div>
 	);
 }

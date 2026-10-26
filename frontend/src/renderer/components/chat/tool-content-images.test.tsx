@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { normalizeToolContent, ToolImage } from "./tool-content-images";
+import { normalizeToolContent, splitToolResult, ToolImage } from "./tool-content-images";
 
 // Public-domain synthetic 32x32 checkerboard PNG. No session content or private screenshots.
 const data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR4nO3OMQ0AMAwDwcApxGIKpnBJGcRDFXn5wePLF1nd086tcb99AAAAwA7YPlA9AAAA/IDtA9UDAADAD9g+UD0AAADsgAePf/6mCWRFdQAAAABJRU5ErkJggg==";
@@ -61,5 +61,31 @@ describe("tool content images", () => {
 		expect(screen.queryByRole("img")).toBeNull();
 		expect(container.textContent).toContain("image/png, 176 base64 characters");
 		expect(container.textContent).not.toContain("iVBOR");
+	});
+});
+
+
+describe("MCP result image sanitization", () => {
+	it("retains structured results and resources while stripping only image payloads", () => {
+		const resource = { type: "resource", resource: { uri: "fixture:///report", text: "resource body" } };
+		const link = { type: "resource_link", uri: "https://example.test/report", name: "Report" };
+		const input = { content: [block, resource, link], structuredContent: { answer: 42 }, _meta: { trace: "kept" } };
+		const result = splitToolResult(input);
+		expect(result.images).toHaveLength(1);
+		expect(result.value).toMatchObject({ content: [{ type: "image" }, resource, link], structuredContent: { answer: 42 }, _meta: { trace: "kept" } });
+		expect(JSON.stringify(result.value)).not.toContain(data);
+		expect(input.content[0]).toHaveProperty("data", data);
+	});
+
+	it("sanitizes nested images in arbitrary result fields, including ACP sources", () => {
+		const result = splitToolResult({ structuredContent: { screenshot: { text: "caption", source: { data, media_type: "image/png" } } } });
+		expect(result.images).toHaveLength(1);
+		expect(JSON.stringify(result.value)).toContain("caption");
+		expect(JSON.stringify(result.value)).not.toContain("iVBOR");
+	});
+
+	it("preserves text-only results without adding image placeholders", () => {
+		const input = { content: [{ type: "text", text: "result" }], structuredContent: { answer: 42 } };
+		expect(splitToolResult(input)).toEqual({ images: [], value: input });
 	});
 });
