@@ -55,21 +55,27 @@ export function artifactLink(projectId: string, sessionId: string, path: string)
 type ArtifactPathWorkspace = { id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> };
 
 /**
- * The artifact route for text naming a listed session artifact, either as
+ * Session/path candidates from inline artifact text, either as
  * `{session}/{path}` or as a path containing `/artifacts/{session}/{path}`.
  */
-export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
+export function artifactPathCandidates(value: string): Array<{ sessionId: string; path: string }> {
 	const normalized = value.trim().replace(/\\/g, "/");
 	const candidates = normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) ? [] : [normalized];
 	const marker = `/${ARTIFACT_SEGMENT}/`;
 	for (let index = normalized.indexOf(marker); index >= 0; index = normalized.indexOf(marker, index + 1)) {
 		candidates.push(normalized.slice(index + marker.length));
 	}
-	for (const candidate of candidates) {
+	return candidates.flatMap((candidate) => {
 		const slash = candidate.indexOf("/");
-		if (slash <= 0) continue;
+		if (slash <= 0) return [];
 		const sessionId = candidate.slice(0, slash);
 		const path = candidate.slice(slash + 1);
+		return parseArtifactLink(artifactLink("lookup", sessionId, path)) ? [{ sessionId, path }] : [];
+	});
+}
+
+export function artifactLinkForPath(value: string, workspaces: ArtifactPathWorkspace[]): string | undefined {
+	for (const { sessionId, path } of artifactPathCandidates(value)) {
 		for (const workspace of workspaces) {
 			const session = workspace.sessions.find((entry) => entry.id === sessionId);
 			if (session?.artifactFiles?.some((file) => file.path === path)) return artifactLink(workspace.id, sessionId, path);

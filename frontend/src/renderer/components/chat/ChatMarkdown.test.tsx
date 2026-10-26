@@ -1,8 +1,9 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
-import { setApiBaseUrl } from "../../lib/api-client";
+import { apiClient, setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
 import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
@@ -16,8 +17,9 @@ vi.mock("../SessionLinkPreviewCard", () => ({
 	},
 }));
 
-const linkSource = vi.hoisted(() => ({ workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
-vi.mock("../../lib/use-session-link-navigation", () => ({
+const linkSource = vi.hoisted(() => ({ workspaces: [] as Array<{ id: string; archivedCount?: number; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
+vi.mock("../../lib/use-session-link-navigation", async (importOriginal) => ({
+	...await importOriginal<typeof import("../../lib/use-session-link-navigation")>(),
 	useSessionLinkSource: () => ({ ready: true, isLoading: false, isError: false, workspaces: linkSource.workspaces }),
 }));
 
@@ -49,7 +51,8 @@ function renderWithLinkHandler(
 }
 
 function renderWithSessionLinkHandler(text: string, onSessionLinkOpen: (url: string) => void) {
-	return render(<ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider>);
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+	return { ...render(<QueryClientProvider client={client}><ChatLinkProvider onSessionLinkOpen={onSessionLinkOpen}><ChatMarkdown text={text} /></ChatLinkProvider></QueryClientProvider>), client };
 }
 
 describe("ChatMarkdown", () => {
@@ -423,6 +426,46 @@ describe("ChatMarkdown", () => {
 		expect(link).toHaveAttribute("href", href);
 		await userEvent.setup().click(link);
 		expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
+	});
+
+	it.each([
+		["worker-1/plan.md", "plan.md"],
+		["/tmp/ao/artifacts/worker-1/plans/q3.md", "plans/q3.md"],
+	])("resolves an ended worker absent from the active list at the inline path boundary: %s", async (path, artifactPath) => {
+		linkSource.workspaces = [{ id: "project", archivedCount: 1, sessions: [] }];
+		const get = vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { session: {
+			id: "worker-1", projectId: "project", status: "terminated", activity: { state: "idle" }, harness: "claude-code", isTerminated: true,
+			artifactFiles: [{ path: artifactPath, name: "plan", kind: "file" }],
+		} }, response: new Response() } as Awaited<ReturnType<typeof apiClient.GET>>);
+		try {
+			const onSessionLinkOpen = vi.fn();
+			renderWithSessionLinkHandler("`" + path + "`", onSessionLinkOpen);
+			const link = await screen.findByRole("link");
+			const href = "ao://sessions/project/worker-1/artifacts/" + artifactPath;
+			expect(link).toHaveAttribute("href", href);
+			await userEvent.setup().click(link);
+			expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
+			expect(get).toHaveBeenCalledExactlyOnceWith("/api/v1/sessions/{sessionId}", { params: { path: { sessionId: "worker-1" } } });
+			expect(linkSource.workspaces[0]!.sessions).toEqual([]);
+		} finally {
+			get.mockRestore();
+		}
+	});
+
+	it("keeps an inline artifact path inert when detail belongs to an unknown project", async () => {
+		linkSource.workspaces = [{ id: "project", archivedCount: 1, sessions: [] }];
+		const get = vi.spyOn(apiClient, "GET").mockResolvedValue({ data: { session: {
+			id: "worker-1", projectId: "other-project", status: "terminated", activity: { state: "idle" }, harness: "claude-code", isTerminated: true,
+			artifactFiles: [{ path: "plan.md", name: "plan", kind: "file" }],
+		} }, response: new Response() } as Awaited<ReturnType<typeof apiClient.GET>>);
+		try {
+			const { client } = renderWithSessionLinkHandler("`worker-1/plan.md`", vi.fn());
+			await waitFor(() => expect(client.getQueryState(["session", "worker-1"])?.status).toBe("success"));
+			expect(screen.queryByRole("link")).not.toBeInTheDocument();
+			expect(screen.getByText("worker-1/plan.md").tagName).toBe("CODE");
+		} finally {
+			get.mockRestore();
+		}
 	});
 
 	it("leaves inline code naming an unlisted artifact as plain code", () => {

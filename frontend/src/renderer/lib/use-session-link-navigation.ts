@@ -1,4 +1,4 @@
-import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, toWorkspaceSession, toCloudWorkspace, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { useCloudOrg } from "../hooks/useCloudOrg";
@@ -7,7 +7,7 @@ import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspa
 import { apiClient } from "./api-client";
 import { LOCAL_HOST } from "./hosts";
 import { useNavigateToSession } from "./navigate-to-session";
-import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
+import { artifactLink, artifactLinkForPath, artifactPathCandidates, parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
 
 export type SessionLinkSource = {
 	ready: boolean;
@@ -29,6 +29,25 @@ function localLinkSessionOptions(sessionId: string, workspaces: WorkspaceSummary
 		},
 		staleTime: 10_000,
 	});
+}
+
+/** Resolve only the session IDs named by inline artifact paths, never archive pages. */
+export function useArtifactPathLink(value: string, workspaces: WorkspaceSummary[], sourceHostId?: string, sourceKind?: "cloud") {
+	const listed = artifactLinkForPath(value, workspaces);
+	const candidates = listed ? [] : artifactPathCandidates(value);
+	const local = (!sourceHostId || sourceHostId === LOCAL_HOST) && sourceKind !== "cloud"
+		&& workspaces.some((workspace) => workspace.archivedCount !== undefined);
+	const ids = [...new Set(candidates.map((candidate) => candidate.sessionId))];
+	const reads = useQueries({ queries: ids.map((id) => ({ ...localLinkSessionOptions(id, workspaces), enabled: local, retry: false })) });
+	if (listed || !local) return listed;
+	for (const candidate of candidates) {
+		const session = reads.find((read) => read.data?.id === candidate.sessionId)?.data;
+		if (session && workspaces.some((workspace) => workspace.id === session.workspaceId)
+			&& session.artifactFiles?.some((file) => file.path === candidate.path)) {
+			return artifactLink(session.workspaceId, session.id, candidate.path);
+		}
+	}
+	return undefined;
 }
 
 function canLookUpLocalLink(target: { projectId: string }, workspaces: WorkspaceSummary[]) {
