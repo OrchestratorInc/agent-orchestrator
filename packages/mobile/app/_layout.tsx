@@ -245,9 +245,8 @@ function Shell() {
 				{/* Draws its own header. The title is for the back-history menu, like the
 				    board's. */}
 				<Stack.Screen name="notifications" options={{ headerShown: false, title: "Notifications" }} />
-				{/* Draws its own header, like notifications, so the title can be the
-				    project. The page renames itself to the project once it loads. */}
-				<Stack.Screen name="project/[id]" options={{ headerShown: false, title: "Project" }} />
+				{/* The page renames itself to the project once it loads. */}
+				<Stack.Screen name="project/[id]" options={{ title: "Project" }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
 				<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: false }} />
 

@@ -44,18 +44,28 @@ describe("project page", () => {
 		expect(card).toContain("styles.stats");
 	});
 
-	// The header is hidden, but a session opened from here lists the project in
-	// its back-history menu by the route's title.
-	it("gives its route the project's name", () => {
+	// The native header carries the project's name, and so does the back-history
+	// menu of a session opened from here.
+	it("titles the native header with the project's name", () => {
 		expect(page).toContain('const title = row?.project.name ?? "Project";');
 		expect(page).toContain("navigation.setOptions({ title })");
+		expect(page).not.toContain("ScreenHeader");
+		expect(page).not.toContain("insets.top");
 	});
 
-	// A deep link opens this page over a board still on Workers. Popping to the
-	// board and selecting Projects is the same back either way it was opened.
-	it("goes back to Projects", () => {
-		expect(page).toContain('onPress={() => router.dismissTo("/projects")}');
+	// The system back button, not a drawn one. A deep link opens this page over
+	// a board still on Workers, so the page turns the board to Projects beneath
+	// it, and every way back lands there.
+	it("goes back to Projects with the system back button", () => {
+		expect(page).toContain('useBoardTabBeneath("(projects)");');
+		expect(page).not.toContain("HeaderIconButton");
+		expect(page).not.toContain("dismissTo(");
 		expect(page).not.toContain("backOr(");
+	});
+
+	it("shows its machine as a trailing header item", () => {
+		expect(page).toContain('<Stack.Toolbar placement="right">');
+		expect(page).toMatch(/<Stack\.Toolbar\.View hidesSharedBackground>\s*<ProjectMachineIndicator hostId=\{currentHostId\} hosts=\{hostStates\} \/>/);
 	});
 
 	// Reuses the board rather than copying it, so the two cannot drift.
@@ -68,7 +78,8 @@ describe("project page", () => {
 	// iOS, which has no floating button, and Material's FAB on Android, clear of
 	// the gesture bar with the list scrolling out from under it.
 	it("starts a task in this project from a header + on iOS and a FAB on Android", () => {
-		expect(page).toContain('{Platform.OS === "ios" && canStartTask ? <HeaderIconButton icon="add" label="Spawn worker" onPress={startTask} /> : null}');
+		expect(page).toContain('const headerAdd = Platform.OS === "ios" && canStartTask;');
+		expect(page).toContain('{headerAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Spawn worker" onPress={startTask} /> : null}');
 		expect(page).toContain('<AddFab label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" />');
 		expect(page).toContain('params: { projectId: id, hostId: routeHostId }');
 		expect(page).toContain("contentBottomInset={insets.bottom + addFabClearance + space.xxl}");

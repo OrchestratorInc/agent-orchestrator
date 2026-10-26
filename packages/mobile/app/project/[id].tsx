@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,8 +10,10 @@ import { StaleBanner } from "../../lib/StaleBanner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { toolbarIcon } from "../../lib/toolbarIcon";
+import { useBoardTabBeneath } from "../../lib/useBoardTabBeneath";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
-import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
+import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
 import { hostedRowKey } from "../../lib/hostedRows";
@@ -51,9 +53,12 @@ function ProjectScreenContent() {
 		[projects, sessions, orchestrators, id, hostMatches],
 	);
 	const title = row?.project.name ?? "Project";
-	// The header below is the page's own, but a page opened from here lists this
-	// one in its back-history menu by the route's title.
+	// The native header's title, and this page's name in the back-history menu
+	// of a page opened from here.
 	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
+	// Back always lands on Projects, the list this page is opened from, even when
+	// a cold link opened it over the board's Workers tab.
+	useBoardTabBeneath("(projects)");
 	const projectSessions = useMemo(() => hostMatches ? projectDetailSessions(id ?? "", sessions) : [], [hostMatches, id, sessions]);
 	// The archive is counted, not listed, by a machine that pages it.
 	const pagedArchived = hostMatches && id ? archive?.byProject[id] ?? 0 : 0;
@@ -73,37 +78,40 @@ function ProjectScreenContent() {
 		}
 	}, [refresh]);
 
-	const startTask = () => {
+	const startTask = useCallback(() => {
 		if (!hostMatches) return;
 		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
-	};
+	}, [hostMatches, id, routeHostId, router]);
 	const canStartTask = hostMatches && !!row;
+
+	// Memoized on what the items show. hostStates is replaced on every poll, and
+	// each new toolbar element would register the header's options again.
+	const machine = hostStates.find((host) => host.hostId === currentHostId);
+	const machineName = machine?.name;
+	const machineSymbol = machine?.appearance.symbol;
+	// iOS has no floating action button; its create action is a header "+".
+	// Android floats Material's FAB below instead.
+	const headerAdd = Platform.OS === "ios" && canStartTask;
+	const headerItems = useMemo(
+		() => machineName || headerAdd ? (
+			<Stack.Toolbar placement="right">
+				{/* Which machine this project is on: a label, not a control, so it
+				    stays off the bar items' shared glass. */}
+				{machineName ? (
+					<Stack.Toolbar.View hidesSharedBackground>
+						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />
+					</Stack.Toolbar.View>
+				) : null}
+				{headerAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Spawn worker" onPress={startTask} /> : null}
+			</Stack.Toolbar>
+		) : null,
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- the indicator reads only the machine's name and symbol from hostStates
+		[currentHostId, headerAdd, machineName, machineSymbol, startTask],
+	);
 
 	return (
 		<View style={styles.screen}>
-			<View style={{ height: insets.top }} />
-			<ScreenHeader
-				title={title}
-				left={
-					<HeaderIconButton
-						icon="back"
-						label="Back"
-						// Back always lands on Projects. A deep link opens this page over a
-						// board that has not picked a tab, and a plain back would show Workers.
-						// dismissTo pops to that board and selects the tab; navigate would
-						// push a second board on top instead.
-						onPress={() => router.dismissTo("/projects")}
-					/>
-				}
-				right={
-					<>
-						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />
-						{/* iOS has no floating action button; its create action is a header "+".
-						    Android floats Material's FAB below instead. */}
-						{Platform.OS === "ios" && canStartTask ? <HeaderIconButton icon="add" label="Spawn worker" onPress={startTask} /> : null}
-					</>
-				}
-			/>
+			{headerItems}
 			{hostMatches ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
 
 			{!hostMatches ? (

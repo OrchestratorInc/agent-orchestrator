@@ -54,7 +54,7 @@ async function renderRoot(platform: string) {
 	return renderer;
 }
 
-const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file"];
+const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]"];
 
 describe("root stack", () => {
 	// A cold start on a deep link or a notification tap lands with the board
@@ -129,7 +129,6 @@ describe("root stack", () => {
 			expect(options("(tabs)", board(2)).title).toBe("Pull Requests");
 			expect(options("(tabs)").headerShown).toBe(false);
 			expect(options("notifications")).toMatchObject({ headerShown: false, title: "Notifications" });
-			expect(options("project/[id]")).toMatchObject({ headerShown: false, title: "Project" });
 		} finally {
 			act(() => renderer.unmount());
 		}
@@ -146,7 +145,10 @@ describe("root stack", () => {
 				expect(options).not.toHaveProperty("headerLeft");
 				expect(options).not.toHaveProperty("unstable_headerLeftItems");
 				expect(options).not.toHaveProperty("headerBackVisible");
+				expect(options.headerShown).not.toBe(false);
 			}
+			// Titled before the page renames itself to the project.
+			expect(renderer.root.findByProps({ name: "project/[id]" }).props.options.title).toBe("Project");
 		} finally {
 			act(() => renderer.unmount());
 		}
