@@ -52,6 +52,7 @@ const EMPTY: ResolvedCloudOffering = {
 	billingMode: undefined,
 	features: [],
 	customCoder: false,
+	artifacts: false,
 	coderWorkerWorkingFolder: false,
 	source: "fallback",
 };

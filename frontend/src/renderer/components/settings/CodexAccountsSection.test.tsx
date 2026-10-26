@@ -21,6 +21,9 @@ const { deleteMock, getMock, postMock, scrollIntoViewMock, terminalFocusRequeste
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { DELETE: deleteMock, GET: getMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
+	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
+	getApiBaseUrl: () => "http://127.0.0.1:1",
+	subscribeApiBaseUrl: () => () => undefined,
 }));
 
 vi.mock("../TerminalPane", () => ({

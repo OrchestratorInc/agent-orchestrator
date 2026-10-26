@@ -108,6 +108,9 @@ OFFERING_ENV = (
     "AO_CLOUD_PAYWALLED_FEATURES",
     "AO_CLOUD_IDLE_PAUSE_THRESHOLD",
     "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD",
+    "AO_CLOUD_ARTIFACTS",
+    "AO_CLOUD_ARTIFACT_BUCKET",
+    "AO_CLOUD_ARTIFACT_REGION",
     "AO_CLOUD_CODER_READABLE_NAMES",
     "AO_CLOUD_CODER_WORKER_WORKING_FOLDER",
 )
@@ -124,6 +127,11 @@ WORKER_HELPER_BINARY_PATH = "/ao"
 _DIGEST_IMAGE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 _DURATION_PART = re.compile(r"(\d+)(ms|s|m|h)")
 _TOKEN = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
+_BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+_REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d$")
+# The worker-binary buckets (ao-cloud-<environment>-artifacts) never hold
+# customer files.
+_WORKER_BINARY_BUCKET = re.compile(r"^ao-cloud-[a-z]+-artifacts$")
 
 
 def resolve_sandbox_providers(
@@ -357,6 +365,25 @@ def _threshold_seconds(name: str, value: str) -> float:
     return seconds
 
 
+def validate_artifacts(artifacts: str, bucket: str, region: str) -> None:
+    """Validate the cloud artifact settings (AO_CLOUD_ARTIFACT*)."""
+    if artifacts not in ("0", "1"):
+        raise ValueError("AO_CLOUD_ARTIFACTS must be 0 or 1")
+    if artifacts == "1" and (not bucket or not region):
+        raise ValueError(
+            "AO_CLOUD_ARTIFACTS=1 requires AO_CLOUD_ARTIFACT_BUCKET and AO_CLOUD_ARTIFACT_REGION"
+        )
+    if bucket:
+        if not _BUCKET.fullmatch(bucket):
+            raise ValueError(f"AO_CLOUD_ARTIFACT_BUCKET is not a valid bucket name: {bucket}")
+        if _WORKER_BINARY_BUCKET.fullmatch(bucket):
+            raise ValueError(
+                f"AO_CLOUD_ARTIFACT_BUCKET must not be the worker binary bucket {bucket}"
+            )
+    if region and not _REGION.fullmatch(region):
+        raise ValueError(f"AO_CLOUD_ARTIFACT_REGION is not an AWS region: {region}")
+
+
 def validate_offering(
     *,
     providers: list[str],
@@ -370,6 +397,9 @@ def validate_offering(
     coder_readable_names: str,
     coder_worker_working_folder: str,
     staging_providers: list[str] | None = None,
+    artifacts: str = "0",
+    artifact_bucket: str = "",
+    artifact_region: str = "",
 ) -> list[str]:
     """Validate a deployment's offering settings; return the served providers.
 
@@ -407,6 +437,7 @@ def validate_offering(
     _threshold_seconds(
         "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD", freestyle_idle_pause_threshold
     )
+    validate_artifacts(artifacts, artifact_bucket, artifact_region)
     _rollout_flag("AO_CLOUD_CODER_READABLE_NAMES", coder_readable_names)
     _rollout_flag("AO_CLOUD_CODER_WORKER_WORKING_FOLDER", coder_worker_working_folder)
     return served
@@ -697,6 +728,13 @@ def _validate_offering_task(values: dict[str, str], providers: list[str]) -> Non
     for name in ("AO_CLOUD_IDLE_PAUSE_THRESHOLD", "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"):
         if name in values:
             _threshold_seconds(name, values[name])
+    validate_artifacts(
+        values.get("AO_CLOUD_ARTIFACTS", "0"),
+        values.get("AO_CLOUD_ARTIFACT_BUCKET", ""),
+        values.get("AO_CLOUD_ARTIFACT_REGION", ""),
+    )
+    if "AO_CLOUD_ARTIFACT_ENDPOINT" in values:
+        raise ValueError("AO_CLOUD_ARTIFACT_ENDPOINT is for local S3-compatible servers only")
     for name in CODER_ROLLOUT_FLAGS:
         if name in values:
             _rollout_flag(name, values[name])

@@ -250,6 +250,12 @@ jobs:
             --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
             --build-arg EXPAT_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
 
+      - name: Test Brotli security backport
+        run: |
+          docker build --target brotli-build --file Dockerfile \
+            --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
+            --build-arg BROTLI_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
+
   lint:
     runs-on: ubuntu-latest
     steps:

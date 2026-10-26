@@ -51,6 +51,21 @@ type session struct {
 	RuntimeConnected bool          `json:"runtimeConnected"`
 	IsTerminated     bool          `json:"isTerminated"`
 	PRs              []pullRequest `json:"prs"`
+	// The artifact fields are present while cloud artifacts are on.
+	ArtifactCount      *int       `json:"artifactCount,omitempty"`
+	ArtifactsUpdatedAt *time.Time `json:"artifactsUpdatedAt,omitempty"`
+	// ArtifactFiles names the most recently changed files, at most ten;
+	// ArtifactFilesTruncated is set when the worker has more.
+	ArtifactFiles          []artifactFile `json:"artifactFiles,omitempty"`
+	ArtifactFilesTruncated bool           `json:"artifactFilesTruncated,omitempty"`
+}
+
+// artifactFile is one committed file in a worker's artifact directory.
+type artifactFile struct {
+	Path      string    `json:"path"`
+	Kind      string    `json:"kind"`
+	Size      int64     `json:"size"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type pullRequest struct {
@@ -344,12 +359,12 @@ func runList(ctx context.Context, c *client, args []string) error {
 		return nil
 	}
 	out := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(out, "ID\tNAME\tHARNESS\tBRANCH\tSTATUS\tCONNECTED\tPR")
+	fmt.Fprintln(out, "ID\tNAME\tHARNESS\tBRANCH\tSTATUS\tCONNECTED\tPR\tARTIFACTS")
 	for _, child := range items {
 		fmt.Fprintf(
-			out, "%s\t%s\t%s\t%s\t%s\t%t\t%s\n",
+			out, "%s\t%s\t%s\t%s\t%s\t%t\t%s\t%s\n",
 			child.ID, child.DisplayName, child.Harness, child.Branch, child.Status,
-			child.RuntimeConnected, pullRequestSummary(child.PRs),
+			child.RuntimeConnected, pullRequestSummary(child.PRs), artifactSummary(child.ArtifactFiles, artifactCount(child)),
 		)
 	}
 	return out.Flush()
@@ -388,6 +403,32 @@ func listChildren(ctx context.Context, c *client, includeTerminated bool) ([]ses
 	}
 	fmt.Fprintln(os.Stderr, "ao: worker list truncated after 500 entries")
 	return items, nil
+}
+
+// artifactSummary renders the row's ARTIFACTS column: up to two file paths
+// and how many more the worker has in total, e.g. "report.html, notes.md (+3)".
+func artifactSummary(files []artifactFile, count int) string {
+	if len(files) == 0 {
+		return "-"
+	}
+	const shown = 2
+	paths := make([]string, 0, shown)
+	for _, file := range files[:min(shown, len(files))] {
+		paths = append(paths, file.Path)
+	}
+	summary := strings.Join(paths, ", ")
+	if more := max(count, len(files)) - len(paths); more > 0 {
+		summary += fmt.Sprintf(" (+%d)", more)
+	}
+	return summary
+}
+
+// artifactCount is the worker's total artifact files, or 0 when not reported.
+func artifactCount(child session) int {
+	if child.ArtifactCount == nil {
+		return 0
+	}
+	return *child.ArtifactCount
 }
 
 // pullRequestSummary renders the row's PR column, e.g. "#12 ci:failing".

@@ -28,6 +28,7 @@ export function SettingsOptionMenu<T extends string>({
 	renderMenuItem,
 	renderTrigger,
 	triggerClassName,
+	showCaret,
 	menuClassName,
 	menuItemClassName,
 	menuAlign = "end",
@@ -49,12 +50,14 @@ export function SettingsOptionMenu<T extends string>({
 	renderMenuItem?: (option: SettingsOption<T>, selected: boolean) => ReactNode;
 	renderTrigger?: (selected: SettingsOption<T> | undefined, placeholder?: string) => ReactNode;
 	triggerClassName?: string;
+	showCaret?: boolean;
 	menuClassName?: string;
 	menuItemClassName?: string;
 	menuAlign?: "start" | "center" | "end";
 	searchable?: boolean;
 	searchPlaceholder?: string;
-	action?: { label: string; onSelect: () => void };
+	/** An extra row under the options, such as "Manage…". */
+	action?: { label: string; onSelect: () => void; icon?: ReactNode };
 	emptyLabel?: string;
 	triggerRef?: Ref<HTMLButtonElement>;
 	onCloseAutoFocus?: (event: Event) => void;
@@ -106,7 +109,7 @@ export function SettingsOptionMenu<T extends string>({
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
-				<SettingsMenuTrigger ref={triggerRef} className={triggerClassName} aria-label={ariaLabel}>
+				<SettingsMenuTrigger ref={triggerRef} className={triggerClassName} showCaret={showCaret} aria-label={ariaLabel}>
 					{renderTrigger ? (
 						renderTrigger(selected, placeholder)
 					) : (
@@ -156,9 +159,20 @@ export function SettingsOptionMenu<T extends string>({
 								disabled={option.disabled}
 								onSelect={() => onChange(option.value)}
 								onFocus={onHighlight ? () => onHighlight(option.value) : undefined}
+								// Hovering off the options (or into the search box) ends the
+								// preview; moving to another option hands it straight over.
+								onBlur={
+									onHighlight
+										? (event) => {
+												const next = event.relatedTarget;
+												if (next instanceof Element && next.closest('[role="menuitem"]')) return;
+												onHighlight(null);
+											}
+										: undefined
+								}
 								className={cn(
 									SETTINGS_MENU_ITEM,
-									option.value === value && "border-settings-menu bg-settings-menu-selected text-settings-title",
+									option.value === value && "bg-interactive-active text-foreground",
 									menuItemClassName,
 								)}
 							>
@@ -185,7 +199,10 @@ export function SettingsOptionMenu<T extends string>({
 				{action && (
 					<div data-slot="settings-option-menu-action" className="shrink-0">
 						<DropdownMenuSeparator />
-						<DropdownMenuItem onSelect={action.onSelect} className={SETTINGS_MENU_ITEM}>{action.label}</DropdownMenuItem>
+						<DropdownMenuItem onSelect={action.onSelect} className={cn(SETTINGS_MENU_ITEM, action.icon && "gap-2! [&_svg]:text-current!")}>
+							{action.icon}
+							{action.label}
+						</DropdownMenuItem>
 					</div>
 				)}
 			</DropdownMenuContent>

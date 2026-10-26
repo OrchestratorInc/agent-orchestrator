@@ -83,8 +83,9 @@ const DEV_BUILD_INFO = {
 // setting the build cannot read; list the baked defaults and fold in a
 // developer's AO_CLOUD_CONTROL_PLANE_URL override so a custom control plane
 // keeps a working terminal in packaged builds too.
-const CLOUD_CP_WS_ORIGINS = (() => {
-	const origins = ["wss://staging-api.aoagents.dev", "wss://api.aoagents.dev"];
+// The hosted cloud control planes, plus AO_CLOUD_CONTROL_PLANE_URL when set.
+const CLOUD_CP_ORIGINS = (() => {
+	const origins = ["https://staging-api.aoagents.dev", "https://api.aoagents.dev"];
 	const override = process.env.AO_CLOUD_CONTROL_PLANE_URL?.trim();
 	if (!override) return origins;
 	let url: URL;
@@ -93,10 +94,12 @@ const CLOUD_CP_WS_ORIGINS = (() => {
 	} catch {
 		return origins;
 	}
-	const origin = `${url.protocol === "http:" ? "ws:" : "wss:"}//${url.host}`;
+	const origin = `${url.protocol === "http:" ? "http:" : "https:"}//${url.host}`;
 	if (!origins.includes(origin)) origins.push(origin);
 	return origins;
 })();
+
+const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^http/, "ws"));
 
 // CSP for the renderer. The daemon is loopback-only, so network access is
 // pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws), plus the
@@ -117,7 +120,8 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// are only known at runtime. Keep the broad exception limited to images;
 		// scripts, connections, frames, and other resource classes remain scoped.
 		"img-src 'self' data: http://127.0.0.1:* http://*.localhost:* https:",
-		"media-src 'self' http://127.0.0.1:* http://*.localhost:*",
+		// A cloud session's audio and video artifacts stream from its control plane.
+		["media-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",
@@ -143,7 +147,9 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// 'self' lets dev:web, whose API base is relative, frame a page; the page
 		// keeps its own sandbox from the daemon's CSP header either way.
 		// *.localhost is the inline-artifact origin an HTML artifact is framed from.
-		"frame-src 'self' http://127.0.0.1:* http://*.localhost:*",
+		// A cloud session's HTML artifact is framed from its control plane, whose
+		// response CSP sandboxes it.
+		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 	].join("; ");
 }
 
@@ -247,7 +253,9 @@ export default defineConfig({
 		testTimeout: 20_000,
 		// Anchor node_modules at any depth: a bare "node_modules/**" replaces
 		// vitest's default "**/node_modules/**" and only matches the root.
-		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**"],
+		// The docs site is its own package with its own Vitest config and
+		// dependencies; the docs CI step runs its tests.
+		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**", "src/docs/**"],
 		globals: true,
 		setupFiles: "./src/renderer/test/setup.ts",
 	},

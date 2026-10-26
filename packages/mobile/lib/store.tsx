@@ -50,6 +50,7 @@ import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
 import { useConversationEventTransport } from "./chat/conversationEvents";
 import { commitHostSwitch, hostRouteMatches, promotableHostConfig } from "./hostRoute";
 import { emptyHostSnapshot, useOtherHosts, type HostSnapshot } from "./otherHosts";
+import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { createHostedRowsCache, type HostedOrchestrator, type HostedProject, type HostedSession } from "./hostedRows";
 import { reconcileRows } from "./rowSharing";
 import { machineAppearance } from "./machineAppearance";
@@ -97,6 +98,11 @@ type AppState = {
 	/** Whether the current projects value came from the latest daemon response. */
 	projectsKnown: boolean;
 	sessions: DashboardSession[];
+	/**
+	 * This machine's archive size when it pages its archive, which `sessions`
+	 * then leaves out. Null for a daemon that still sends the archive inline.
+	 */
+	archive: ArchiveSummary | null;
 	orchestrators: OrchestratorLink[];
 	orchestratorId: string | null;
 	stats: DashboardStats;
@@ -173,6 +179,7 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 			projects,
 			projectsKnown: host?.projectsKnown ?? false,
 			sessions: host?.sessions ?? [],
+			archive: host?.archive ?? null,
 			orchestrators: host?.orchestrators ?? [],
 			orchestratorId: host?.orchestratorId ?? null,
 			stats: host?.stats ?? {},
@@ -232,6 +239,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [activeEndpoints, setActiveEndpoints] = useState<Endpoint[]>([]);
 	const [knownProjects, setKnownProjects] = useState<KnownProjects>(NO_PROJECTS_KNOWN);
 	const [sessions, setSessions] = useState<DashboardSession[]>([]);
+	const [archive, setArchive] = useState<ArchiveSummary | null>(null);
 	const [orchestrators, setOrchestrators] = useState<OrchestratorLink[]>([]);
 	const [sessionMachine, setSessionMachine] = useState("");
 	const [orchestratorId, setOrchestratorId] = useState<string | null>(null);
@@ -364,6 +372,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setConfig(null);
 				setConfigResolved(false);
 				setSessions([]);
+				setArchive(null);
 				setOrchestrators([]);
 				setSessionMachine("");
 				setOrchestratorId(null);
@@ -487,6 +496,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				known: incoming.projectsKnown,
 			});
 			setSessions(incoming.sessions);
+			setArchive(incoming.archive ?? null);
 			setOrchestrators(incoming.orchestrators);
 			setSessionMachine(machineIdentity(incoming.config));
 			setOrchestratorId(incoming.orchestratorId);
@@ -620,6 +630,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				machineIdentity(c),
 			));
 			setSessions((previous) => reconcileRows(previous, sess.sessions));
+			setArchive((previous) => (sameArchiveSummary(previous, sess.archive) ? previous : sess.archive ?? null));
 			setOrchestrators((previous) => reconcileRows(previous, sess.orchestrators));
 			setSessionMachine(machineIdentity(c));
 			setOrchestratorId(sess.orchestratorId);
@@ -797,6 +808,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		() => sessionRowsForMachine(sessions, sessionMachine, activeMachine),
 		[sessions, sessionMachine, activeMachine],
 	);
+	// Like the rows: one machine's archive size is not evidence about another's.
+	const visibleArchive = sessionMachine === activeMachine ? archive : null;
 	const visibleOrchestrators = useMemo(
 		() => sessionRowsForMachine(orchestrators, sessionMachine, activeMachine),
 		[orchestrators, sessionMachine, activeMachine],
@@ -824,13 +837,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			sessions: visibleSessions,
+			archive: visibleArchive,
 			orchestrators: visibleOrchestrators,
 			orchestratorId,
 			stats,
 			notificationsUnread,
 			lastSyncAt: lastSyncAtRef.current,
 		};
-	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
+	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleArchive, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
 	// Published after commit, never during render: an interrupted or replayed
 	// render must not hand switchHost a snapshot that never reached the screen.
 	// A layout effect runs before any user event can call switchHost.
@@ -999,6 +1013,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			sessions: visibleSessions,
+			archive: visibleArchive,
 			orchestrators: visibleOrchestrators,
 			orchestratorId: sessionMachine === activeMachine ? orchestratorId : null,
 			stats: sessionMachine === activeMachine ? stats : {},
@@ -1040,6 +1055,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			visibleSessions,
+			visibleArchive,
 			visibleOrchestrators,
 			sessionMachine,
 			activeMachine,

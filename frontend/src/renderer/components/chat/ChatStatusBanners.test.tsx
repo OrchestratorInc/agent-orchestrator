@@ -297,6 +297,14 @@ describe("VersionSwitchBanner", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("Switching to v2.1.300…");
 	});
 
+	it("asks for a resume instead of promising a switch when the agent stopped", () => {
+		render(<VersionSwitchBanner staleBinary={{ version: "2.1.308", since: "2026-10-20T00:00:00Z" }} agentStopped />);
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("v2.1.308 installed");
+		expect(status).toHaveTextContent("Resume the agent to start it on the new version.");
+		expect(status).not.toHaveTextContent("Switching");
+	});
+
 	it("stays quiet when moving sessions is turned off", () => {
 		versionRefreshSetting.enabled = false;
 		const { container } = render(<VersionSwitchBanner staleBinary={{ version: "2.1.300", since: "2026-10-15T00:00:00Z" }} />);

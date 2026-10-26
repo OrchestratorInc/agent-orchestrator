@@ -19,7 +19,7 @@ import type { Theme } from "../lib/theme";
 import { haptics } from "../lib/haptics";
 import { clearOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
-import { pairFromCode } from "../lib/pairFlow";
+import { pairFromCode, type MachineNameChoice } from "../lib/pairFlow";
 import { registerForPush } from "../lib/push";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
 import { findHost, saveHost, setActiveHost, type Host } from "../lib/hosts";
@@ -215,8 +215,8 @@ export default function PairScreen() {
 				});
 			},
 			verify: async (config) => void (await pingServer(config)),
-			chooseName: (suggested) => new Promise<string | null>((resolve) => {
-				router.push(machineNameSheetRoute({ suggested, onSelect: resolve }));
+			chooseName: (suggested, appearance, hostId) => new Promise<MachineNameChoice | null>((resolve) => {
+				router.push(machineNameSheetRoute({ suggested, appearance, hostId, onSelect: resolve }));
 			}),
 			saveHost,
 			setActiveHost,

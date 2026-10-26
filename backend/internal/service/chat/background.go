@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,9 +30,9 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 	cfg.ProviderIDsScoped = true
 	cfg.Ephemeral = true
 	cfg.Effort = ""
-	// shortcut: ACP ignores ReadOnly and DisableNetwork; enforce tool restrictions when those providers support them.
 	cfg.ReadOnly = true
 	cfg.DisableNetwork = true
+	cfg.DisableTools = true
 	conversation, err := driver.Start(ctx, cfg)
 	if err != nil {
 		return "", fmt.Errorf("start background %s task: %w", harness, err)
@@ -42,6 +43,12 @@ func (s *Service) RunBackgroundTask(ctx context.Context, harness domain.AgentHar
 		}
 	}()
 
+	// Send the generation request as the turn itself. The input can describe
+	// arbitrary work, and some providers act on it when it is sent unqualified.
+	if instructions := strings.TrimSpace(cfg.SystemPrompt); instructions != "" {
+		input, _ := json.Marshal(prompt)
+		prompt = instructions + "\n\nInput data (JSON string):\n" + string(input)
+	}
 	return runBackgroundTurn(ctx, harness, conversation, prompt)
 }
 

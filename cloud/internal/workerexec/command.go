@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -112,7 +113,7 @@ func (b HarnessBuilder) BuildInteractive(
 		)
 	}
 	agentDir := agentDirectory(launch, workspace)
-	extraDirs := additionalDirectories(launch, workspace, b.DataDir)
+	extraDirs := b.agentDirectories(launch, workspace)
 	if launch.Harness == "cursor" {
 		if err := removeCursorACPStandingRule(agentDir, launch.SessionID); err != nil {
 			return Command{}, err
@@ -219,7 +220,7 @@ func (b HarnessBuilder) BuildInteractive(
 	}
 	if launch.Harness == "claude-code" {
 		if launch.Kind != "reviewer" {
-			setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+			setClaudeAdditionalDirectoriesInstructions(&command, additionalDirectories(launch, workspace, b.DataDir))
 		}
 		if err := b.prepareClaudeCloudExperience(&command, agentDir, extraDirs, permission); err != nil {
 			if command.Cleanup != nil {
@@ -294,6 +295,12 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 	default:
 		if note := repositoriesPromptNote(launch, workspace, b.DataDir); note != "" {
 			systemPrompt += "\n\n" + note
+		}
+	}
+	if launch.Artifacts && launch.Kind != "reviewer" {
+		systemPrompt += "\n\n" + artifactsPrompt(worker.ArtifactsDir(b.DataDir, launch.SessionID))
+		if launch.Kind == "worker" && launch.RequestedOutput == domain.RequestedOutputArtifact {
+			systemPrompt += "\n\n" + artifactOutputPrompt
 		}
 	}
 	// Set only when the sandbox has a browser (agentbrowser.Service).
@@ -373,7 +380,7 @@ func (b HarnessBuilder) Build(
 		return Command{}, errors.New("turn harness does not match session role context")
 	}
 	agentDir := agentDirectory(b.Launch, workspace)
-	extraDirs := additionalDirectories(b.Launch, workspace, b.DataDir)
+	extraDirs := b.agentDirectories(b.Launch, workspace)
 	command := Command{
 		SystemPrompt: b.systemPrompt(b.Launch, workspace),
 		Path:         b.binary(turn.Harness),
@@ -391,7 +398,7 @@ func (b HarnessBuilder) Build(
 		command.Env["CLAUDE_CONFIG_DIR"] = configDir
 		setClaudeNonEssentialTrafficDisabled(&command)
 		command.AdditionalDirectories = extraDirs
-		setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+		setClaudeAdditionalDirectoriesInstructions(&command, additionalDirectories(b.Launch, workspace, b.DataDir))
 		// A session can start in Chat before any terminal wrote the settings;
 		// the ACP adapter and the CLI both load them as user settings.
 		if err := b.writeClaudeChatSettings(configDir, extraDirs); err != nil {
@@ -836,4 +843,18 @@ func loginCodex(binary, home, credentialType, secret string) error {
 		return err
 	}
 	return nil
+}
+
+// agentDirectories is additionalDirectories plus, for a session that keeps
+// artifacts, its artifact directory: it is outside the workspace, so a
+// harness that limits writes to the workspace must be told it may write there.
+// Claude does not load instructions from the artifact directory: a CLAUDE.md
+// written there is a deliverable, so the CLAUDE.md setting uses
+// additionalDirectories alone.
+func (b HarnessBuilder) agentDirectories(launch worker.LaunchContext, workspace string) []string {
+	dirs := additionalDirectories(launch, workspace, b.DataDir)
+	if launch.Artifacts && launch.Kind != "reviewer" {
+		dirs = append(dirs, worker.ArtifactsDir(b.DataDir, launch.SessionID))
+	}
+	return dirs
 }

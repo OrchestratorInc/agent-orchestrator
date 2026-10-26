@@ -79,6 +79,15 @@ The default interface comes from **Settings → General**. Project `agentConfig.
 
 Model, reasoning effort, permissions, and provider execution modes depend on the selected agent. Chat support and the ability to switch interfaces are separate capabilities, so use the switch action offered for that session.
 
+## Switch agents mid-session
+
+A local session can move to a different agent without losing its conversation. The new agent starts with a handoff of the session so far and keeps working in the same worktree.
+
+- **Chat:** open the agent, model, and reasoning effort picker in the composer, choose **Agent**, and pick another agent and its model. The switch happens when you send your next message.
+- **Terminal UI:** open **Session actions** (the … button on the session tab), choose **Agent**, pick the agent and model, then click **Switch**.
+
+Only agents that are installed and ready on that computer are offered, and Chat offers only agents with Chat support. Switch while the agent is idle; Orchestrator refuses a switch while the agent is working or waiting on an approval or question. Cloud sessions cannot switch agents.
+
 ## Project rules
 
 Use `agentRules` and `agentRulesFile` for worker instructions. Use `orchestratorRules` for supervision-specific guidance. These are stored in the typed project config and injected into the appropriate session role.

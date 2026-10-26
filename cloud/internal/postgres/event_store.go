@@ -252,35 +252,9 @@ func (s *Store) AppendSessionEvent(
 	}
 	var event domain.ClientEvent
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		var sequence int64
-		err := tx.QueryRow(
-			ctx,
-			`UPDATE ao_sessions
-			SET next_sequence = next_sequence + 1,
-				updated_at = now()
-			WHERE org_id = $1 AND id = $2
-			RETURNING next_sequence - 1`,
-			orgID,
-			sessionID,
-		).Scan(&sequence)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+		var err error
+		event, err = appendSessionEventTx(ctx, tx, orgID, sessionID, eventType, payload)
 		if err != nil {
-			return err
-		}
-		if err := scanClientEvent(tx.QueryRow(
-			ctx,
-			`INSERT INTO ao_events (
-				org_id, session_id, sequence, type, payload
-			) VALUES ($1, $2, $3, $4, $5)
-			RETURNING session_id, sequence, type, payload, created_at`,
-			orgID,
-			sessionID,
-			sequence,
-			eventType,
-			payload,
-		), &event); err != nil {
 			return err
 		}
 		return dropSupersededScriptUpdatesTx(ctx, tx, orgID, event)
@@ -289,6 +263,46 @@ func (s *Store) AppendSessionEvent(
 		return domain.ClientEvent{}, err
 	}
 	return event, nil
+}
+
+// appendSessionEventTx appends one event to a session stream inside tx.
+func appendSessionEventTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, sessionID, eventType string,
+	payload json.RawMessage,
+) (domain.ClientEvent, error) {
+	var sequence int64
+	err := tx.QueryRow(
+		ctx,
+		`UPDATE ao_sessions
+		SET next_sequence = next_sequence + 1,
+			updated_at = now()
+		WHERE org_id = $1 AND id = $2
+		RETURNING next_sequence - 1`,
+		orgID,
+		sessionID,
+	).Scan(&sequence)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ClientEvent{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.ClientEvent{}, err
+	}
+	var event domain.ClientEvent
+	err = scanClientEvent(tx.QueryRow(
+		ctx,
+		`INSERT INTO ao_events (
+			org_id, session_id, sequence, type, payload
+		) VALUES ($1, $2, $3, $4, $5)
+		RETURNING session_id, sequence, type, payload, created_at`,
+		orgID,
+		sessionID,
+		sequence,
+		eventType,
+		payload,
+	), &event)
+	return event, err
 }
 
 // AppendInteractiveConversationFacts projects native TUI hooks into the durable

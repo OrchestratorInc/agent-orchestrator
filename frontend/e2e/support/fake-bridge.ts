@@ -90,6 +90,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onOpenFolderPath: () => () => undefined,
 					onNewSessionShortcut: unsubscribe,
 					onKeyboardShortcutsHelp: unsubscribe,
+					onQuitConfirmRequest: unsubscribe,
+					resolveQuitConfirm: () => undefined,
 					onNewShellTerminalShortcut: unsubscribe,
 					onCloseShellTerminalShortcut: unsubscribe,
 					setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -100,6 +102,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onScrollPhase: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -129,6 +132,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				cloudArtifact: {
+					fetch: async () => new Uint8Array(),
+					onFrameNavigated: () => () => undefined,
 				},
 				daemon: {
 					getStatus: async () => status,
@@ -982,6 +989,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onOpenFolderPath: () => () => undefined,
 					onNewSessionShortcut: unsubscribe,
 					onKeyboardShortcutsHelp: unsubscribe,
+					onQuitConfirmRequest: unsubscribe,
+					resolveQuitConfirm: () => undefined,
 					onNewShellTerminalShortcut: unsubscribe,
 					onCloseShellTerminalShortcut: unsubscribe,
 					setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -992,6 +1001,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPreviousTabShortcut: unsubscribe,
 					onNextTabShortcut: unsubscribe,
 					onShortcut: unsubscribe,
+					onScrollPhase: unsubscribe,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -1017,6 +1027,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				cloudArtifact: {
+					fetch: async () => new Uint8Array(),
+					onFrameNavigated: () => () => undefined,
 				},
 				daemon: {
 					getStatus: async () => status,

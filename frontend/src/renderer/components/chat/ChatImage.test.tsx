@@ -12,6 +12,18 @@ const png = new Uint8Array([137, 80, 78, 71]);
 afterEach(() => vi.restoreAllMocks());
 
 describe("ChatImage copy and save", () => {
+	it("uses CORS for protected thumbnails and full-size images", () => {
+		render(<ChatImage src={url} alt="Image 1" />);
+		expect(screen.getByRole("img")).toHaveAttribute("crossorigin", "anonymous");
+		fireEvent.click(screen.getByRole("button", { name: "Open image: Image 1" }));
+		for (const image of screen.getAllByRole("img")) expect(image).toHaveAttribute("crossorigin", "anonymous");
+	});
+
+	it("preserves external image loading without requiring third-party CORS", () => {
+		render(<ChatImage src="https://example.com/image.png" alt="External" />);
+		expect(screen.getByRole("img")).not.toHaveAttribute("crossorigin");
+	});
+
 	it("offers copy and save on right-click without opening the preview", () => {
 		render(<ChatImage src={url} alt="Image 1" />);
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open image: Image 1" }));

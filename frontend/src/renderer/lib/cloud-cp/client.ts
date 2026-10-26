@@ -65,6 +65,8 @@ import type {
 	CloudCpRestoreSessionResponse,
 	CloudCpRetrySessionStartupResponse,
 	CloudCpSessionResponse,
+	CloudCpArtifactAccessResponse,
+	CloudCpSessionArtifact,
 	CloudCpAcknowledgeInterfaceTransitionNoticeResponse,
 	CloudCpCancelInterfaceTransitionResponse,
 	CloudCpInterfaceTransitionStatusResponse,
@@ -197,6 +199,18 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSessionResponse>;
 	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	createSessionArtifactAccess(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpArtifactAccessResponse>;
+	listSessionArtifacts(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<{ artifacts: CloudCpSessionArtifact[] }>;
+	/** Deletes one artifact file from cloud storage and the session's worker. */
+	deleteSessionArtifact(orgId: string, sessionId: string, path: string, options?: CloudCpRequestOptions): Promise<void>;
 	updateSessionPreferences(
 		orgId: string,
 		sessionId: string,
@@ -713,6 +727,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		getSession: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
+		createSessionArtifactAccess: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
+		listSessionArtifacts: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),
+		deleteSessionArtifact: (orgId, sessionId, path, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts?path=${encodeURIComponent(path)}`, { signal: o?.signal }),
 		getInterfaceTransition: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition`, { signal: o?.signal }),
 		startInterfaceTransition: (orgId, sessionId, body, o) =>

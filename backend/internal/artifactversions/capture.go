@@ -106,7 +106,7 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	dir := cmp.Or(sess.Metadata.ArtifactDir, sessionartifacts.Dir(c.dataDir, sess.ID))
-	files, err := sessionartifacts.List(dir)
+	files, err := sessionartifacts.List(ctx, dir)
 	if err != nil {
 		return err
 	}
