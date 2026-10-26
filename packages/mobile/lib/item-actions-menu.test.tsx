@@ -134,6 +134,16 @@ describe("ItemActionsMenu on Android", () => {
 		expect(Object.values(onPress).every((fn) => fn.mock.calls.length === 0)).toBe(true);
 	});
 
+	it("does not reopen by itself when a lock that closed it lifts", async () => {
+		const { actions } = fourActions();
+		const root = await render(<ItemActionsMenu accessibilityLabel="Actions" actions={actions} />);
+		act(() => root.findByType("IconButton" as never).props.onClick());
+		await act(async () => renderer!.update(<ItemActionsMenu accessibilityLabel="Actions" actions={actions} disabled />));
+		expect(root.findByType("DropdownMenu" as never).props.expanded).toBe(false);
+		await act(async () => renderer!.update(<ItemActionsMenu accessibilityLabel="Actions" actions={actions} />));
+		expect(root.findByType("DropdownMenu" as never).props.expanded).toBe(false);
+	});
+
 	it("stays shut while disabled, and shows a spinner while an action runs", async () => {
 		const { actions } = fourActions();
 		let root = await render(<ItemActionsMenu accessibilityLabel="Actions" actions={actions} disabled />);

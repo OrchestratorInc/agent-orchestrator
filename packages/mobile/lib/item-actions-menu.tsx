@@ -1,6 +1,6 @@
 import { DropdownMenu, DropdownMenuItem, Host, Icon, IconButton, Text } from "@expo/ui/jetpack-compose";
 import { testID } from "@expo/ui/jetpack-compose/modifiers";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { itemActionIcons, type ItemActionsMenuProps } from "./item-actions-menu.types";
 import { reviewDrawable } from "./review-drawables";
@@ -19,6 +19,8 @@ export function ItemActionsMenu({ actions, accessibilityLabel, disabled = false,
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const [expanded, setExpanded] = useState(false);
+	// A menu shut by a lock (or swapped for the spinner) stays shut once it lifts.
+	useEffect(() => { if (disabled || loading) setExpanded(false); }, [disabled, loading]);
 	if (loading) return <View style={styles.slot}><Spinner size={iconSize.lg} /></View>;
 	if (!actions.length) return null;
 	return (
