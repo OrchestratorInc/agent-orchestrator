@@ -12,6 +12,7 @@ const shellMocks = vi.hoisted(() => {
 	const state = {
 		newSessionListener: undefined as (() => void) | undefined,
 		keyboardShortcutsListener: undefined as (() => void) | undefined,
+		quitConfirmListener: undefined as ((request: { keepsRunning: boolean }) => void) | undefined,
 		newShellTerminalListener: undefined as (() => void) | undefined,
 		openSettingsListener: undefined as (() => void) | undefined,
 		previousSessionListener: undefined as (() => void) | undefined,
@@ -47,6 +48,7 @@ const shellMocks = vi.hoisted(() => {
 							workerAgent: string;
 							orchestratorAgent: string;
 							asWorkspace?: boolean;
+							clonePreparationId?: string;
 						}) => Promise<void>;
 				  }
 			| undefined,
@@ -61,6 +63,11 @@ const shellMocks = vi.hoisted(() => {
 			state.keyboardShortcutsListener = listener;
 			return vi.fn();
 		}),
+		onQuitConfirmRequest: vi.fn((listener: (request: { keepsRunning: boolean }) => void) => {
+			state.quitConfirmListener = listener;
+			return vi.fn();
+		}),
+		resolveQuitConfirm: vi.fn(),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
@@ -136,17 +143,22 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
+	useRouterState: ({ select }: { select: (state: { location: { search: unknown } }) => unknown }) =>
+		select({ location: { search: shellMocks.state.routeSearch ?? {} } }),
 }));
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: {
+			onScrollPhase: () => () => {},
 			onCloseShellTerminalShortcut: () => () => {},
 			onPreviousTabShortcut: () => () => {},
 			onNextTabShortcut: () => () => {},
 			setCloseShellTerminalShortcutEnabled: () => {},
 			onNewSessionShortcut: shellMocks.onNewSessionShortcut,
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
+			onQuitConfirmRequest: shellMocks.onQuitConfirmRequest,
+			resolveQuitConfirm: shellMocks.resolveQuitConfirm,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
@@ -252,6 +264,7 @@ vi.mock("../components/TitlebarNav", async () => {
 		typeof import("../stores/ui-store")
 	>("../stores/ui-store");
 	return {
+		useCanGoForward: () => false,
 		TitlebarNav: () => {
 			const isSidebarOpen = useStore(sidebarIsVisible);
 			const toggleSidebar = useStore((state) => state.toggleSidebar);
@@ -272,7 +285,7 @@ vi.mock("../components/SettingsDialog", () => ({
 	useSettingsPage: () => null,
 }));
 vi.mock("../components/KeyboardShortcutsDialog", () => ({
-	KeyboardShortcutsDialog: ({ open }: { open: boolean }) => (open ? <div data-testid="keyboard-shortcuts" /> : null),
+	KeyboardShortcutsDialog: ({ open, onCustomize }: { open: boolean; onCustomize?: () => void }) => (open ? <div data-testid="keyboard-shortcuts"><button type="button" onClick={onCustomize}>Customize</button></div> : null),
 }));
 vi.mock("../lib/shell-context", () => ({
 	ShellProvider: ({ children, value }: PropsWithChildren<{ value?: { workspaceStartupState?: string } }>) => {
@@ -288,12 +301,12 @@ vi.mock("../components/ui/sidebar", () => ({
 	),
 }));
 
-vi.mock("../components/GlobalNewTaskDialog", async () => {
+vi.mock("../components/NewTaskNavigator", async () => {
 	const { useUiStore: useStore } = await vi.importActual<typeof import("../stores/ui-store")>("../stores/ui-store");
 	return {
-		GlobalNewTaskDialog: () => {
+		NewTaskNavigator: () => {
 			const request = useStore((state) => state.newTaskRequest);
-			return request ? <div data-testid="new-task-flow" data-project={request.projectId} /> : null;
+			return request ? <div data-testid="new-task-flow" data-project={request.projectId} data-host={request.hostId} /> : null;
 		},
 	};
 });
@@ -394,6 +407,8 @@ function emitShortcut() {
 }
 
 beforeEach(() => {
+	// The shell remembers the last project for ⌘N outside one; start each test clean.
+	window.localStorage.removeItem("ao.newTask.lastProject");
 	shellMocks.navigate.mockReset();
 	shellMocks.onNewSessionShortcut.mockClear();
 	shellMocks.onKeyboardShortcutsHelp.mockClear();
@@ -408,11 +423,13 @@ beforeEach(() => {
 	shellMocks.router.history.canGoBack.mockReset().mockReturnValue(true);
 	shellMocks.router.history.back.mockClear();
 	shellMocks.router.history.forward.mockClear();
-	useSidebarOrderStore.setState({ projectOrder: [], sessionOrders: {} });
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	shellMocks.getPathForFile.mockClear();
 	shellMocks.onOpenFolderPath.mockClear();
 	shellMocks.state.newSessionListener = undefined;
 	shellMocks.state.keyboardShortcutsListener = undefined;
+	shellMocks.state.quitConfirmListener = undefined;
+	shellMocks.resolveQuitConfirm.mockClear();
 	shellMocks.state.openSettingsListener = undefined;
 	shellMocks.state.previousSessionListener = undefined;
 	shellMocks.state.nextSessionListener = undefined;
@@ -555,6 +572,33 @@ describe("shell workspace startup", () => {
 		expect(screen.getByTestId("global-toast")).toHaveTextContent("Project already added");
 	});
 
+	it("finishes clone provisioning after registration committed but its response was lost", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.state.routeParams = { projectId: "proj-1" };
+		vi.mocked(apiClient.POST)
+			.mockReset()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockResolvedValueOnce({ error: {
+				code: "PATH_ALREADY_REGISTERED", message: "Already registered", details: { existingProjectId: "proj-1" },
+			} })
+			.mockResolvedValueOnce({ data: { session: {
+				id: "orch-existing", projectId: "proj-1", kind: "orchestrator", mode: "chat",
+			} } });
+		await renderShell();
+		const input = { path: "/one", workerAgent: "codex", orchestratorAgent: "codex", clonePreparationId: "prepared" };
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).rejects.toThrow("Failed to fetch");
+		await expect(shellMocks.state.shellValue?.createProject?.(input)).resolves.toBeUndefined();
+		await waitFor(() => expect(shellMocks.navigate).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "orch-existing" },
+		}));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/sessions", {
+			body: { projectId: "proj-1", kind: "orchestrator", harness: "codex" },
+		});
+		expect(apiClient.POST).toHaveBeenCalledTimes(3);
+		expect(useUiStore.getState().provisioningProjectIds.has("proj-1")).toBe(false);
+	});
+
 	it("uses the daemon project identity when an imported path is an alias", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
 		vi.mocked(apiClient.POST).mockResolvedValueOnce({ error: {
@@ -679,6 +723,19 @@ describe("shell workspace startup", () => {
 			.mockResolvedValueOnce({ data: { project: { id: "proj-new", name: "New", kind: "single_repo", path: "/repo/new" } } })
 			.mockResolvedValueOnce({ data: { session: { id: "orch-new", projectId: "proj-new", kind: "orchestrator", mode: "chat", provisionState: "provisioning" } } });
 	};
+
+	it.each([
+		{ savedOrder: ["proj-2", "proj-1"] },
+		{ savedOrder: ["proj-2", "proj-1", "proj-new"] },
+	])("saves a newly created project first ahead of saved order $savedOrder", async ({ savedOrder }) => {
+		spawnNewProject();
+		useSidebarOrderStore.getState().setProjectOrder(savedOrder);
+		await renderShell();
+		await shellMocks.state.shellValue?.createProject?.({ path: "/repo/new", workerAgent: "codex", orchestratorAgent: "codex" });
+
+		expect(useSidebarOrderStore.getState().projectOrder).toEqual(["proj-new", "proj-2", "proj-1"]);
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["proj-new", "proj-2", "proj-1"]);
+	});
 
 	it("opens the returned orchestrator without waiting for a workspace refetch", async () => {
 		spawnNewProject();
@@ -959,6 +1016,15 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 });
 
 describe("shell keyboard-shortcuts help subscription", () => {
+	it("opens the Shortcuts settings page from Customize and closes help", async () => {
+		await renderShell();
+		act(() => shellMocks.state.keyboardShortcutsListener?.());
+		fireEvent.click(screen.getByRole("button", { name: "Customize" }));
+
+		expect(screen.queryByTestId("keyboard-shortcuts")).not.toBeInTheDocument();
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "shortcuts" });
+	});
+
 	it("opens the keyboard-shortcuts dialog", async () => {
 		await renderShell();
 
@@ -967,6 +1033,46 @@ describe("shell keyboard-shortcuts help subscription", () => {
 		act(() => listener());
 
 		expect(screen.getByTestId("keyboard-shortcuts")).toBeInTheDocument();
+	});
+});
+
+describe("shell quit confirm subscription", () => {
+	it("shows the quit confirm over the startup loader and resolves it either way", async () => {
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
+
+		act(() => listener({ keepsRunning: true }));
+		fireEvent.click(await screen.findByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(true);
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledTimes(2);
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+	});
+
+	it("opens the Quit AO? dialog on request and reports the answer to the main process", async () => {
+		await renderShell();
+
+		const listener = shellMocks.state.quitConfirmListener;
+		if (!listener) throw new Error("quit confirm listener was not registered");
+		act(() => listener({ keepsRunning: true }));
+		expect(
+			await screen.findByText("AO will keep running in the background. You can reopen it from the menu bar."),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Quit" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenCalledExactlyOnceWith(true);
+		await waitFor(() => expect(screen.queryByRole("dialog", { name: "Quit AO?" })).not.toBeInTheDocument());
+
+		act(() => listener({ keepsRunning: false }));
+		expect(await screen.findByText("Are you sure you want to quit AO?")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(shellMocks.resolveQuitConfirm).toHaveBeenLastCalledWith(false);
 	});
 });
 
@@ -997,6 +1103,29 @@ describe("shell new-session shortcut subscription", () => {
 
 		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "__standalone__");
 		expect(screen.queryByTestId("create-project-flow")).not.toBeInTheDocument();
+	});
+
+	it("stays with the project the new chat page shows, not the last one opened", async () => {
+		window.localStorage.setItem("ao.newTask.lastProject", "proj-1");
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "proj-2" };
+		await renderShell();
+
+		emitShortcut();
+
+		expect(screen.getByTestId("new-task-flow")).toHaveAttribute("data-project", "proj-2");
+	});
+
+	it("stays with the project and host a remote new chat page shows", async () => {
+		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.routeSearch = { project: "remote-proj", host: "host-a" };
+		await renderShell();
+
+		emitShortcut();
+
+		const flow = screen.getByTestId("new-task-flow");
+		expect(flow).toHaveAttribute("data-project", "remote-proj");
+		expect(flow).toHaveAttribute("data-host", "host-a");
 	});
 });
 

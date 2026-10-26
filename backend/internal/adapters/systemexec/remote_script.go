@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -110,14 +111,33 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 		// vendor installers and their checksum checks need Get-FileHash, so load
 		// its bundled module explicitly before invoking the untouched script.
 		launcherPath := filepath.Join(jobDir, "launch.ps1")
-		const launcher = "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop\n& (Join-Path $PSScriptRoot 'installer.ps1')\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }\n"
+		launcher := "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop\n& (Join-Path $PSScriptRoot 'installer.ps1')" + powerShellArgs(command.Args) + "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }\n"
 		if err := os.WriteFile(launcherPath, []byte(launcher), 0o600); err != nil {
 			return result, fmt.Errorf("write PowerShell installer launcher: %w", err)
 		}
 		argv = append(argv, launcherPath)
 	} else {
 		argv = append(argv, scriptPath)
+		argv = append(argv, command.Args...)
 	}
 	err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env}, stdout, stderr)
 	return result, err
+}
+
+var powerShellParameterName = regexp.MustCompile(`^-[A-Za-z][A-Za-z0-9]*$`)
+
+// powerShellArgs renders fixed installer arguments into the launcher source:
+// parameter names stay bare so they bind as switches, and every other value is
+// a single-quoted literal so nothing in it is evaluated.
+func powerShellArgs(args []string) string {
+	var b strings.Builder
+	for _, arg := range args {
+		b.WriteByte(' ')
+		if powerShellParameterName.MatchString(arg) {
+			b.WriteString(arg)
+			continue
+		}
+		b.WriteString("'" + strings.ReplaceAll(arg, "'", "''") + "'")
+	}
+	return b.String()
 }

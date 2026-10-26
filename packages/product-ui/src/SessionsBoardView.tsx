@@ -4,6 +4,8 @@ import {
 	memo,
 	startTransition,
 	useEffect,
+	useLayoutEffect,
+	useRef,
 	useState,
 	type HTMLAttributes,
 	type ReactElement,
@@ -634,6 +636,25 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	const prefersReducedMotion = useReducedMotion();
 	const [expanded, setExpanded] = useState(false);
 	const [cardsReady, setCardsReady] = useState(false);
+	const archiveRef = useRef<HTMLDivElement>(null);
+
+	// Clip the lanes behind the sheet without resizing their scroll viewports.
+	// A clear archive must reveal the window material, not the active cards.
+	useLayoutEffect(() => {
+		const archive = archiveRef.current;
+		const board = archive?.parentElement;
+		if (!archive || !board) return;
+		const updateHeight = () => {
+			board.style.setProperty("--sessions-archive-height", `${archive.getBoundingClientRect().height}px`);
+		};
+		updateHeight();
+		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateHeight);
+		observer?.observe(archive);
+		return () => {
+			observer?.disconnect();
+			board.style.removeProperty("--sessions-archive-height");
+		};
+	}, [sessions.length > 0 || Boolean(trailing)]);
 
 	useEffect(() => {
 		setExpanded(false);
@@ -657,7 +678,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	if (sessions.length === 0 && !trailing) return null;
 
 	return (
-		<div className="absolute inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background px-3">
+		<div ref={archiveRef} className="absolute inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background px-3">
 			<div className={cn("flex items-center gap-2", archiveToggleHeightClassName)}>
 				{/* Full-row hit target: the control stretches edge-to-edge so empty
 				    space beside the label toggles archive too. Height must match

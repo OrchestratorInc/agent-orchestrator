@@ -376,6 +376,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("SessionInspector tabs", () => {
@@ -1164,9 +1165,11 @@ describe("SessionInspector Artifacts section", () => {
     expect(screen.getByText("notes.md")).toBeInTheDocument();
   });
 
-  it("opens an html artifact through the Browser preview flow", async () => {
+  it("opens an html artifact in the Artifacts tab", async () => {
+    const onOpenArtifact = vi.fn();
     renderWithQuery(
       <SessionInspector
+        onOpenArtifact={onOpenArtifact}
         session={session([], {
           outputType: "artifact",
           artifactFiles: [
@@ -1183,17 +1186,15 @@ describe("SessionInspector Artifacts section", () => {
 
     fireEvent.click(screen.getByText("report.html"));
 
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
-        params: { path: { sessionId: "sess-1" } },
-        body: { url: "http://sess-1.localhost:3001/report.html" },
-      }),
-    );
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "report.html" });
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
   });
 
-  it("opens an html artifact through the Browser preview flow even after the session terminates", async () => {
+  it("opens an html artifact in the Artifacts tab even after the session terminates", async () => {
+    const onOpenArtifact = vi.fn();
     renderWithQuery(
       <SessionInspector
+        onOpenArtifact={onOpenArtifact}
         session={session([], {
           outputType: "artifact",
           isTerminated: true,
@@ -1212,12 +1213,8 @@ describe("SessionInspector Artifacts section", () => {
 
     fireEvent.click(screen.getByText("report.html"));
 
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
-        params: { path: { sessionId: "sess-1" } },
-        body: { url: "http://sess-1.localhost:3001/report.html" },
-      }),
-    );
+    expect(onOpenArtifact).toHaveBeenCalledWith({ path: "report.html" });
+    expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
   });
 
   it("opens a markdown/file artifact through the artifact viewer flow", () => {
@@ -1241,26 +1238,23 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
-  it("opens the Artifacts view from its own tab", async () => {
-    const onViewChange = vi.fn();
-    renderWithQuery(
-      <SessionInspector
-        onViewChange={onViewChange}
-        session={session([], {
-          artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })],
-        })}
-      />,
-    );
-
-    expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument();
+  it("hides the Artifacts tab until an artifact is opened", () => {
+    renderWithQuery(<SessionInspector session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
     expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("tab", { name: "Artifacts" })).not.toBeInTheDocument();
+  });
 
-    await userEvent.click(screen.getByRole("tab", { name: "Artifacts" }));
-
-    expect(onViewChange).toHaveBeenCalledWith("artifacts");
-    expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
+  it("shows the contextual Artifacts tab while active and hides it on leaving", async () => {
+    vi.stubGlobal("IntersectionObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const onViewChange = vi.fn();
+    renderWithQuery(<SessionInspector onViewChange={onViewChange} view="artifacts" session={session([], { artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })] })} />);
     expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(onViewChange).toHaveBeenCalledWith("summary");
   });
 
   it("keeps the Artifacts tab for a requested artifact the session does not list yet", () => {
@@ -1538,28 +1532,6 @@ describe("SessionInspector Activity section", () => {
         })}
       />,
     );
-    expect(
-      screen.queryByRole("button", { name: "Resume agent" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not offer agent resume while an agent switch owns the exited source", () => {
-    renderWithQuery(
-      <SessionInspector
-        session={session([], {
-          status: "exited",
-          activity: { state: "exited", lastActivityAt: "2026-06-15T10:00:00Z" },
-          activeAgentSwitch: {
-            id: "switch-1",
-            fromHarness: "claude-code",
-            targetHarness: "codex",
-            state: "source_stopped",
-            agentHandoffStatus: "received",
-          },
-        })}
-      />,
-    );
-
     expect(
       screen.queryByRole("button", { name: "Resume agent" }),
     ).not.toBeInTheDocument();

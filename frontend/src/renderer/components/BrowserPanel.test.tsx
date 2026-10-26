@@ -1432,8 +1432,7 @@ describe("BrowserPanel", () => {
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };
 		render(<BrowserPanel active onTogglePopOut={onTogglePopOut} poppedOut={false} session={session} />);
 
-		await openBrowserControls();
-		await userEvent.click(screen.getByRole("menuitem", { name: /pop out/i }));
+		await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 
 		expect(onTogglePopOut).toHaveBeenCalledWith(true);
 	});
@@ -1457,20 +1456,18 @@ describe("BrowserPanel", () => {
 		expect(screen.queryByRole("button", { name: "Return to panel" })).not.toBeInTheDocument();
 	});
 
-	it("keeps workspace sizing controls out of the browser toolbar", async () => {
+	it("exposes the shared maximize control in the browser toolbar", () => {
 		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
 		expect(screen.queryByRole("button", { name: /focus browser workspace/i })).not.toBeInTheDocument();
-		await openBrowserControls();
-		expect(screen.getByRole("menuitem", { name: /pop out/i })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument();
 	});
 
 	it("pops out an empty browser", async () => {
 		const onTogglePopOut = vi.fn();
 		render(<BrowserPanel active onTogglePopOut={onTogglePopOut} poppedOut={false} session={session} />);
 
-		await openBrowserControls();
-		const popOut = screen.getByRole("menuitem", { name: /pop out/i });
+		const popOut = screen.getByRole("button", { name: "Maximize" });
 		expect(popOut).not.toBeDisabled();
 		await userEvent.click(popOut);
 

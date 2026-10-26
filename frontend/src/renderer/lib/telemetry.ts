@@ -1,6 +1,7 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
+import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
@@ -14,6 +15,7 @@ const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
+const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
 const EMBEDDED_LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
@@ -28,6 +30,7 @@ const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 let initPromise: Promise<boolean> | null = null;
 let errorHandlersBound = false;
 let telemetryContext: TelemetryProperties = {};
+let installId = "";
 let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
@@ -67,8 +70,134 @@ export function reserveCapture(name: string, now = Date.now()): boolean {
 	return reserveWindow(dayWindows, name, now, DAY_MS, EVENTS_PER_NAME_PER_DAY);
 }
 
+type PendingUpdateDay = { day: string; failure_count: number };
+
+type UpdateFailureState = {
+	streaks?: Record<string, number>;
+	day?: string;
+	dayCount?: number;
+	pendingDays?: PendingUpdateDay[];
+	pendingDay?: string;
+	pendingCount?: number;
+};
+
+const PENDING_UPDATE_DAY_CAP = 14;
+
+function utcDay(now: number): string {
+	return new Date(now).toISOString().slice(0, 10);
+}
+
+function readUpdateFailureState(storage: DailyActiveStorage): UpdateFailureState {
+	try {
+		const parsed = JSON.parse(storage.getItem(UPDATE_FAILURE_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+		if (parsed && typeof parsed.streaks === "object" && parsed.streaks !== null) return parsed as UpdateFailureState;
+		const streaks: Record<string, number> = {};
+		for (const [key, value] of Object.entries(parsed)) {
+			if (typeof value === "number" && Number.isFinite(value)) streaks[key] = value;
+		}
+		return { streaks };
+	} catch {
+		return { streaks: {} };
+	}
+}
+
+// One streak event until a successful download of that target clears it, plus
+// one daily count after the UTC day that accumulated the retries has ended.
+export function claimUpdateFailure(
+	storage: DailyActiveStorage,
+	properties: TelemetryProperties,
+	now = Date.now(),
+): { emit: boolean; extra: TelemetryProperties; streak?: boolean; daily?: TelemetryProperties; dailies?: TelemetryProperties[]; ackDaily: (day: string) => void; rollback: () => void } {
+	const none = { emit: false, extra: {}, streak: false, ackDaily: () => undefined, rollback: () => undefined };
+	const snapshot = storage.getItem(UPDATE_FAILURE_STORAGE_KEY);
+	let restore = snapshot;
+	const rollback = () => {
+		if (restore === null) storage.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
+		else storage.setItem(UPDATE_FAILURE_STORAGE_KEY, restore);
+	};
+	const ackDaily = (day: string) => {
+		const state = restore === null ? {} : JSON.parse(restore) as UpdateFailureState;
+		state.pendingDays = (state.pendingDays ?? []).filter((pending) => pending.day !== day);
+		if (state.pendingDay === day) {
+			delete state.pendingDay;
+			delete state.pendingCount;
+		}
+		if (state.day === day) state.dayCount = 0;
+		restore = JSON.stringify(state);
+	};
+	try {
+		const state = readUpdateFailureState(storage);
+		state.streaks ??= {};
+		const day = utcDay(now);
+		state.pendingDays ??= [];
+		if (state.pendingDay && (state.pendingCount ?? 0) > 0) {
+			state.pendingDays.push({ day: state.pendingDay, failure_count: state.pendingCount ?? 0 });
+			delete state.pendingDay;
+			delete state.pendingCount;
+		}
+		if (state.day && state.day !== day) {
+			if ((state.dayCount ?? 0) > 0) {
+				state.pendingDays.push({ day: state.day, failure_count: state.dayCount ?? 0 });
+			}
+			if (state.pendingDays.length > PENDING_UPDATE_DAY_CAP) {
+				state.pendingDays = state.pendingDays.slice(-PENDING_UPDATE_DAY_CAP);
+			}
+			state.day = day;
+			state.dayCount = 0;
+		}
+		if (!state.day) state.day = day;
+		const key = updateFailureKey(properties);
+		const streakOpen = state.streaks[key] !== undefined;
+		state.dayCount = (state.dayCount ?? 0) + 1;
+		if (!streakOpen) state.streaks[key] = now;
+		const dailies = state.pendingDays.map((pending) => ({
+			report: "daily" as const,
+			day: pending.day,
+			failure_count: pending.failure_count,
+		}));
+		const daily = dailies[0];
+		if (dailies.length > 0) state.pendingDays = [];
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+		if (streakOpen && dailies.length === 0) return none;
+		return { emit: true, extra: {}, streak: !streakOpen, daily, dailies, ackDaily, rollback };
+	} catch {
+		return { emit: true, extra: {}, streak: true, ackDaily: () => undefined, rollback: () => undefined };
+	}
+}
+
+function updateFailureKey(properties: TelemetryProperties): string {
+	return [properties.phase, properties.error_category, properties.to_version ?? ""].join("|");
+}
+
+
+
+export function clearUpdateFailures(storage: DailyActiveStorage, version: unknown): void {
+	try {
+		const state = readUpdateFailureState(storage);
+		const suffix = `|${version ?? ""}`;
+		for (const key of Object.keys(state.streaks ?? {})) {
+			if (key.endsWith(suffix)) delete state.streaks?.[key];
+		}
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+	} catch {
+		// A storage failure cannot affect the updater.
+	}
+}
+
+export function clearCheckUpdateFailures(storage: DailyActiveStorage): void {
+	try {
+		const state = readUpdateFailureState(storage);
+		for (const key of Object.keys(state.streaks ?? {})) {
+			if (key.startsWith("check|")) delete state.streaks?.[key];
+		}
+		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
+	} catch {
+		// A storage failure cannot affect the updater.
+	}
+}
+
 type TelemetryProperties = Record<string, unknown>;
-type DailyActiveStorage = Pick<Storage, "getItem" | "setItem">;
+type DailyActiveStorage = Pick<Storage, "getItem" | "setItem"> & { removeItem?: Storage["removeItem"] };
 type DailyActiveEventTarget = {
 	addEventListener: (type: string, listener: EventListener, options?: AddEventListenerOptions) => void;
 	removeEventListener: (type: string, listener: EventListener, options?: EventListenerOptions) => void;
@@ -161,7 +290,116 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 }
 
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
-	return { ...telemetryContext, ...cloudContext, ...properties, $process_person_profile: false };
+	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
+	// the flag is left to the SDK, which processes the identified person.
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
+}
+
+// Who this install is. The GitHub login and AO Cloud user ID ride every event as
+// super properties; email is only ever a person property set at identify time.
+let cloudUser: { id: string; email: string } | null = null;
+let githubLogin: string | null = null;
+let identifiedId: string | null = null;
+let posthogReady = false;
+let analyticsOptedOut = false;
+
+function registerBaseProperties(): void {
+	posthog.register({
+		...telemetryContext,
+		surface: "renderer",
+		...(githubLogin ? { github_actor: githubLogin } : {}),
+		...(cloudUser ? { ao_cloud_user_id: cloudUser.id } : {}),
+	});
+}
+
+/**
+ * Identifies the signed-in AO Cloud user with the AO Cloud user ID. Email is a
+ * person property only. An unlinked install starts with its ins_ ID and can be
+ * merged into the Cloud person; a linked install starts with a fresh anon_ ID.
+ * The signed-in daemon sends events under the Cloud user ID directly.
+ */
+export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
+	cloudUser = user;
+	if (analyticsOptedOut || identifiedId === user.id || !(await initTelemetry())) return;
+	// A sign-out, a different account or an opt-out may have landed while init
+	// was pending; this continuation must not identify who is no longer current.
+	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
+	// Switching accounts without a sign-out: never layer B onto A's person.
+	if (identifiedId !== null) posthog.reset();
+	registerBaseProperties();
+	posthog.identify(user.id, {
+		email: user.email,
+		ao_cloud_user_id: user.id,
+		...(githubLogin ? { github_login: githubLogin } : {}),
+	});
+	identifiedId = user.id;
+}
+
+/**
+ * Sign-out: stop attributing renderer events to the user.
+ * ponytail: reset() mints a random anonymous ID that lasts until the next
+ * launch, when the bootstrap restores the ins_ install ID.
+ */
+export function clearCloudUser(): void {
+	cloudUser = null;
+	if (!posthogReady || identifiedId === null) return;
+	identifiedId = null;
+	posthog.reset();
+	registerBaseProperties();
+}
+
+/**
+ * Applies the in-app analytics opt-out. Opting out stops capture and calls
+ * posthog.reset() so no identity survives in the SDK. Opting back in resumes
+ * capture, initializing the client first if this launch started opted out.
+ * ponytail: after an in-session opt-in the SDK uses a fresh anonymous ID until
+ * the next launch chooses an install ID or a fresh anonymous ID from the
+ * durable binding state.
+ */
+export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
+	analyticsOptedOut = optedOut;
+	if (optedOut) {
+		// Updater failures counted before the opt-out must not be exported
+		// after a later opt-in, so the streak and pending daily counts go too.
+		try {
+			telemetryStorage()?.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
+		} catch {
+			// Storage is best-effort; capture is already gated on the flag.
+		}
+		if (posthogReady) {
+			posthog.opt_out_capturing();
+			posthog.reset();
+		}
+		identifiedId = null;
+		return;
+	}
+	if (posthogReady) {
+		posthog.opt_in_capturing({ captureEventName: false });
+		registerBaseProperties();
+	} else {
+		initPromise = null;
+		await initTelemetry();
+	}
+	if (cloudUser) await identifyCloudUser(cloudUser);
+}
+
+// A fresh install often has no GitHub token yet, so the daemon-resolved login is
+// polled on a short bounded schedule rather than read once.
+const GITHUB_LOGIN_RETRY_MS = [2_000, 30_000, 120_000, 600_000];
+
+async function syncGithubLogin(): Promise<void> {
+	for (const delay of GITHUB_LOGIN_RETRY_MS) {
+		await new Promise((resolve) => setTimeout(resolve, delay));
+		if (analyticsOptedOut) return;
+		const login = await Promise.resolve()
+			.then(() => aoBridge.telemetry.getGithubLogin())
+			.catch(() => null);
+		if (!login) continue;
+		githubLogin = login;
+		registerBaseProperties();
+		if (identifiedId) posthog.setPersonProperties({ github_login: login });
+		return;
+	}
 }
 
 // The signed-in cloud org, tagged on every event and exception once /me has
@@ -307,7 +545,7 @@ export function reserveRouteViewCapture(
 	}
 }
 
-function telemetryStorage(): DailyActiveStorage | undefined {
+export function telemetryStorage(): DailyActiveStorage | undefined {
 	try {
 		return window.localStorage;
 	} catch {
@@ -469,7 +707,9 @@ export function sanitizeReplayRequestName(name: string): string {
 }
 
 function sanitizePostHogCaptureResult<T>(event: T): T {
-	return sanitizePostHogEvent(event as unknown as Record<string, unknown>) as unknown as T;
+	const safe = sanitizePostHogEvent(event as unknown as Record<string, unknown>);
+	if (installId) safe.properties = { ...((safe.properties as Record<string, unknown>) ?? {}), install_id: installId };
+	return safe as T;
 }
 
 async function sanitizeRendererContextProperties(properties?: TelemetryProperties): Promise<TelemetryProperties> {
@@ -608,23 +848,27 @@ export async function sanitizeRendererProperties(
 				safe.surface = properties.surface;
 			}
 			break;
-		case "ao.renderer.project_add_requested":
+		case "ao.onboarding.step_viewed":
+		case "ao.onboarding.step_completed":
+		case "ao.onboarding.step_abandoned":
+			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
+			break;
 		case "ao.renderer.loaded":
 			break;
 		case "ao.renderer.project_add_succeeded":
 		case "ao.renderer.project_removed":
 		case "ao.renderer.orchestrator_open_requested":
-		case "ao.renderer.task_create_requested":
 		case "ao.renderer.task_create_succeeded":
 		case "ao.renderer.task_create_failed":
-		case "ao.renderer.session_kill_requested":
 		case "ao.renderer.session_kill_succeeded":
 		case "ao.renderer.session_kill_failed":
-		case "ao.renderer.settings_save_requested":
 		case "ao.renderer.settings_save_succeeded":
 		case "ao.renderer.settings_save_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
+			if ((event === "ao.renderer.task_create_failed" || event === "ao.renderer.task_create_succeeded") && properties?.scope === "standalone") {
+				safe.scope = "standalone";
+			}
 			break;
 		}
 		case "ao.renderer.cloud_orchestrator_spawn_succeeded":
@@ -645,7 +889,6 @@ export async function sanitizeRendererProperties(
 			// separates "checking on a worker" from "reviewing its output".
 			if (typeof properties?.has_pr === "boolean") safe.has_pr = properties.has_pr;
 			break;
-		case "ao.renderer.orchestrator_spawn_requested":
 		case "ao.renderer.orchestrator_spawn_succeeded":
 		case "ao.renderer.orchestrator_spawn_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
@@ -657,7 +900,6 @@ export async function sanitizeRendererProperties(
 		}
 		case "ao.renderer.automation_create_opened":
 			break;
-		case "ao.renderer.automation_create_requested":
 		case "ao.renderer.automation_create_succeeded":
 		case "ao.renderer.automation_create_failed": {
 			// Which kind of automation a prompt describes stays on the machine;
@@ -672,7 +914,6 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
-		case "ao.renderer.artifact_create_requested":
 		case "ao.renderer.artifact_create_succeeded":
 		case "ao.renderer.artifact_create_failed":
 			// Where the session lives, never which project.
@@ -681,7 +922,6 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.notification_opened":
 			if (properties?.target === "pr" || properties?.target === "session") safe.target = properties.target;
 			break;
-		case "ao.renderer.notification_mark_read_requested":
 		case "ao.renderer.notification_mark_read_succeeded":
 		case "ao.renderer.notification_mark_read_failed":
 			if (properties?.scope === "single" || properties?.scope === "all") safe.scope = properties.scope;
@@ -713,17 +953,6 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
-		case "ao.renderer.open_in_editor_requested": {
-			const projectIDHash = await hashedTelemetryID(properties?.project_id);
-			if (projectIDHash) safe.project_id_hash = projectIDHash;
-			if (typeof properties?.editor_id === "string" && EDITOR_ID_SET.has(properties.editor_id)) {
-				safe.editor_id = properties.editor_id;
-			}
-			if (typeof properties?.target_kind === "string" && OPEN_TARGET_KIND_SET.has(properties.target_kind)) {
-				safe.target_kind = properties.target_kind;
-			}
-			break;
-		}
 		case "ao.renderer.open_in_editor_succeeded": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
@@ -744,12 +973,29 @@ export async function sanitizeRendererProperties(
 			if (properties?.field === "status" || properties?.field === "activity") safe.field = properties.field;
 			if (properties?.reason === "missing" || properties?.reason === "unrecognized") safe.reason = properties.reason;
 			break;
+		case "ao.renderer.project_add_failed":
+		case "ao.renderer.project_clone_failed":
+			if (typeof properties?.error_code === "string" && (/^[A-Z0-9_]+$/.test(properties.error_code) || properties.error_code === "unknown")) {
+				safe.error_code = properties.error_code;
+			}
+			break;
+		case "ao.renderer.update_failures_daily":
+			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
+			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
+				safe.failure_count = properties.failure_count;
+			}
+			break;
 		case "ao.renderer.update_failed":
 		case "ao.renderer.update_downloaded":
 		case "ao.renderer.update_unsupported":
 			// Version strings are release identifiers, not user data. The updater's
 			// raw error message is deliberately absent: it can carry feed URLs and
 			// local paths, so update-telemetry.ts maps it to error_category first.
+			if (properties?.report === "daily") safe.report = "daily";
+			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
+			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
+				safe.failure_count = properties.failure_count;
+			}
 			if (typeof properties?.to_version === "string") safe.to_version = properties.to_version;
 			if (typeof properties?.error_category === "string") safe.error_category = properties.error_category;
 			if (properties?.phase === "check" || properties?.phase === "download") safe.phase = properties.phase;
@@ -905,7 +1151,13 @@ export function buildPostHogConfig(distinctId: string): PostHogInitOptions {
 		// an upgrade; the AO-owned heartbeat and route reservations continue to
 		// use window.localStorage independently.
 		persistence: "memory",
-		person_profiles: "never",
+		// Anonymous (no profile) until identifyCloudUser() runs on an AO Cloud
+		// sign-in; only then does PostHog process a person.
+		person_profiles: "identified_only",
+		// The SDK flags a localhost page as an internal user, which turns person
+		// processing on for every event; a dev build driving the real export path
+		// would otherwise bill anonymous events as identified.
+		internal_or_test_user_hostname: null,
 		bootstrap: {
 			distinctID: distinctId,
 			isIdentifiedID: false,
@@ -930,15 +1182,24 @@ export async function initTelemetry(): Promise<boolean> {
 		// Null means the supervisor withheld it: no key, no data dir, or an
 		// unpackaged build that has not opted in. The client is never created.
 		if (!bootstrap) return false;
+		installId = bootstrap.installId;
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
+		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
+		// could only set the flag then, so honor it before any client exists.
+		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel);
 		posthog = await loadPostHog();
+		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
+		// both SDK initialization and the unconditional opt-in below.
+		if (analyticsOptedOut) return false;
 		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootstrap.distinctId));
-		posthog.register({
-			...telemetryContext,
-			surface: "renderer",
-		});
+		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
+		// source of truth and the bootstrap is only handed out when it is absent.
+		posthog.opt_in_capturing({ captureEventName: false });
+		posthogReady = true;
+		registerBaseProperties();
+		void syncGithubLogin();
 		// Typed renderer fault intake has its own main-owned policy gate. PostHog
 		// product analytics are intentionally independent of that preference.
 		void initSentry({
@@ -999,21 +1260,64 @@ export function clearRendererTelemetryQueues(): void {}
 // independent PostHog client in or out.
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
-export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<void> {
+export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
+	// An opted-out renderer must not touch rate-limit slots or the persisted
+	// updater counts, which would otherwise be exported after an opt-in.
+	if (analyticsOptedOut) return false;
 	// Checked before the reservations so a silenced stream does not consume a
 	// rate-limit slot on its way to being discarded, matching the daemon, where
 	// the denylist sits outermost.
-	if (isDeniedEvent(event)) return;
+	if (isDeniedEvent(event)) return false;
 	const sanitizedProperties = await sanitizeRendererProperties(event, properties);
 	if (event === "ao.renderer.route_viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
-		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return;
-	} else if (!reserveCapture(event)) {
-		return;
+		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return false;
+	} else if (event !== "ao.renderer.update_failed" && !reserveCapture(event)) {
+		return false;
 	}
-	if (!(await initTelemetry())) return;
+	if (!(await initTelemetry()) || analyticsOptedOut) return false;
+	const storage = telemetryStorage();
+	let releaseUpdateFailureClaim: (() => void) | undefined;
+	if (event === "ao.renderer.update_failed") {
+		if (!reserveCapture(event)) return false;
+		if (storage) {
+			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
+			if (!decision.emit) return false;
+			// A rollback after an opt-out would restore the counts the opt-out discarded.
+			releaseUpdateFailureClaim = () => {
+				if (!analyticsOptedOut) decision.rollback();
+			};
+			const dailyName = "ao.renderer.update_failures_daily";
+			for (const daily of decision.dailies ?? []) {
+				if (isDeniedEvent(dailyName)) continue;
+				if (!reserveCapture(dailyName)) {
+					releaseUpdateFailureClaim();
+					return false;
+				}
+				let sent = false;
+				try {
+					sent = Boolean(posthog.capture(dailyName, withTelemetryContext(await sanitizeRendererProperties(dailyName, daily))));
+				} catch {
+					sent = false;
+				}
+				if (!sent) {
+					releaseUpdateFailureClaim();
+					return false;
+				}
+				if (typeof daily.day === "string") decision.ackDaily(daily.day);
+			}
+			if (!decision.streak) return true;
+		}
+	}
+	if (storage && event === "ao.renderer.update_downloaded") clearUpdateFailures(storage, sanitizedProperties.to_version);
 	const safeProperties = withTelemetryContext(sanitizedProperties);
-	posthog.capture(postHogEventName(event), safeProperties);
+	let captured = false;
+	try {
+		captured = Boolean(posthog.capture(postHogEventName(event), safeProperties));
+		return captured;
+	} finally {
+		if (!captured && releaseUpdateFailureClaim) releaseUpdateFailureClaim();
+	}
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {

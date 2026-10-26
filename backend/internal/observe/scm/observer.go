@@ -42,6 +42,14 @@ const (
 	DefaultPRMaxAge = 5 * time.Minute
 	// BatchSize is the maximum number of PRs in one provider batch fetch.
 	BatchSize = 25
+	// DefaultLifecycleTimeout bounds one open PR's lifecycle reaction.
+	// Reactions write into agent panes and chat hosts, and Poll runs them one
+	// after another, so a single wedged session would otherwise stall every
+	// later session's PR status, indefinitely. A timed-out reaction takes the
+	// ordinary lifecycle-failure path: its hashes stay unacknowledged and the
+	// next poll retries it. It only cuts work that honors cancellation; a wake
+	// or a teardown runs on its own budget. Merged and closed PRs are exempt.
+	DefaultLifecycleTimeout = 30 * time.Second
 )
 
 // identityKey builds the cache key for a per-provider, per-host identity.
@@ -256,12 +264,14 @@ type Observer struct {
 	Cache ObserverCache
 	// branchStates refreshes local branch facts on each tick.
 	branchStates BranchStateReconciler
+	// lifecycleTimeout bounds each lifecycle notification.
+	lifecycleTimeout time.Duration
 }
 
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, lifecycleTimeout: DefaultLifecycleTimeout}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -629,7 +639,16 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			continue
 		}
 		if o.lifecycle != nil {
-			if err := o.lifecycle.ApplySCMObservation(ctx, subj.session.ID, prepared); err != nil {
+			// A merged or closed PR is not selected again after a failed
+			// reaction, so its one reaction (teardown, final notifications)
+			// runs unbounded. An open PR is retried on the next poll.
+			lifecycleCtx, cancel := ctx, context.CancelFunc(func() {})
+			if !prepared.PR.Merged && !prepared.PR.Closed {
+				lifecycleCtx, cancel = context.WithTimeout(ctx, o.lifecycleTimeout)
+			}
+			err := o.lifecycle.ApplySCMObservation(lifecycleCtx, subj.session.ID, prepared)
+			cancel()
+			if err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
 				markRepoRefreshFailed(subj.repo)
 				continue
@@ -1177,6 +1196,7 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				Host:         repo.Host,
 				Repo:         repoFullName(repo),
 				ProviderID:   pr.ProviderID,
+				URLAlias:     listedRepoAlias(firstNonEmpty(pr.URL, pr.HTMLURL), repo),
 				UpdatedAt:    now,
 			}
 			// Persist the discovered PR as an open baseline row immediately, before
@@ -1266,30 +1286,39 @@ func matchSession(candidates []sessionRepo, sourceBranch string) (sessionRepo, b
 		if sr.branch == "" {
 			continue
 		}
-		if sr.branch == sourceBranch {
-			consider(sr, len(sourceBranch)+1)
-		}
-		for _, prefix := range sessionBranchPrefixes(sr.branch) {
-			if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
-				consider(sr, len(prefix))
+		// A renamed task keeps owning its temporary branch, which the agent may
+		// have built on. It ranks below any session's current branch, so a later
+		// task given that name still wins its own PRs.
+		for temporary, owned := range []string{sr.branch, sr.session.TemporaryBranch} {
+			if owned == "" {
+				continue
 			}
-		}
-		if workspaceHyphenBranch(sr) && strings.HasPrefix(sourceBranch, sr.branch+"-") && len(sourceBranch) > len(sr.branch)+1 {
-			consider(sr, len(sr.branch))
+			rank := func(length int) int { return 2*length + 1 - temporary }
+			if owned == sourceBranch {
+				consider(sr, rank(len(sourceBranch)+1))
+			}
+			for _, prefix := range sessionBranchPrefixes(owned) {
+				if prefix == sourceBranch || strings.HasPrefix(sourceBranch, prefix+"/") {
+					consider(sr, rank(len(prefix)))
+				}
+			}
+			if workspaceHyphenBranch(sr, owned) && strings.HasPrefix(sourceBranch, owned+"-") && len(sourceBranch) > len(owned)+1 {
+				consider(sr, rank(len(owned)))
+			}
 		}
 	}
 	return best, bestLen >= 0 && !ambiguous
 }
 
-func workspaceHyphenBranch(sr sessionRepo) bool {
+func workspaceHyphenBranch(sr sessionRepo, branch string) bool {
 	if !sr.workspace || sr.session.ID == "" {
 		return false
 	}
 	base := "ao/" + string(sr.session.ID)
-	if sr.branch == base {
+	if branch == base {
 		return true
 	}
-	suffix, ok := strings.CutPrefix(sr.branch, base+"-")
+	suffix, ok := strings.CutPrefix(branch, base+"-")
 	if !ok {
 		return false
 	}
@@ -2155,6 +2184,23 @@ func repoFullName(repo ports.SCMRepo) string {
 		return repo.Repo
 	}
 	return repo.Owner + "/" + repo.Name
+}
+
+// listedRepoAlias returns prURL rewritten to the repository name it was listed
+// under when the provider answered with another name (a renamed or transferred
+// repository), so links built from the old name resolve to the same PR. The
+// alias is normalized like ParseChangeRequestURL so any spelling of it matches.
+func listedRepoAlias(prURL string, repo ports.SCMRepo) string {
+	ref, err := domain.ParseChangeRequestURL(prURL)
+	listed := repoFullName(repo)
+	if err != nil || strings.EqualFold(ref.Repository, listed) {
+		return ""
+	}
+	alias, err := domain.ParseChangeRequestURL(strings.Replace(ref.URL, "/"+ref.Repository+"/", "/"+listed+"/", 1))
+	if err != nil {
+		return ""
+	}
+	return alias.URL
 }
 
 func ownerOf(full string) string {

@@ -1201,6 +1201,7 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
+	overrides?: { entryReadyTimeoutMs?: number },
 ) {
 	const constructorOptions: Array<{
 		webPreferences: Electron.WebPreferences;
@@ -1428,6 +1429,7 @@ function setupTabHost(
 		browserProfileStore,
 		browserHistoryStore,
 		clearBrowserProfileData,
+		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -2302,6 +2304,30 @@ describe("browser:act", () => {
 });
 
 describe("ensureNativeActiveTab automation-runtime resync", () => {
+	it("resynchronizes after a failed explicit selection changes the native target", async () => {
+		const { activeTargets, host, invoke, runtime } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await invoke("browser:openTab", { viewId });
+		const runAction = runtime.runAction as unknown as ReturnType<typeof vi.fn>;
+		const originalRunAction = runAction.getMockImplementation()! as (...args: unknown[]) => Promise<unknown>;
+		const pageTargets: string[] = [];
+		runAction.mockImplementation(async (sessionId: string, action: string, args: Record<string, unknown>, provider: unknown) => {
+			if (action === "tab-select" && args.tabId === "t1") {
+				activeTargets.set(sessionId, "t1");
+				throw Object.assign(new Error("Returned target identity did not match"), { code: "AGENT_BROWSER_COMMAND_FAILED" });
+			}
+			if (action === "get") pageTargets.push(activeTargets.get(sessionId) ?? "");
+			return originalRunAction(sessionId, action, args, provider);
+		});
+
+		await expect(host.execute("sess-1", "tab-select", { tabId: "t1" })).rejects.toMatchObject({
+			code: "BROWSER_TARGET_MISMATCH",
+		});
+		expect(activeTargets.get("sess-1")).toBe("t1");
+		await host.execute("sess-1", "get", { property: "url" });
+		expect(pageTargets).toEqual(["t2"]);
+	});
+
 	// Regression, reported against the reopen-closed-tabs PR with a real repro
 	// log: the runtime's own tab registry drifted from session.tabs, and
 	// ensureNativeActiveTab's convergence loop just retried the identical
@@ -2688,6 +2714,57 @@ describe("browser profile partitions and replacement", () => {
 		expect(reconstructed.host.getProfileState(reensured.viewId)).toMatchObject({ profileId: null, temporary: true });
 	});
 
+	it("detaches every idle browser to its own temporary profile while preserving tabs", async () => {
+		const bindings = { "worker-1": profile.id, "worker-2": profile.id };
+		const { host, invoke, constructorOptions } = setupTabHost(fakeBrowserProfileStore(profile, bindings));
+		const first = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		const second = (await invoke("browser:ensure", "worker-2")) as BrowserNavState;
+		await invoke("browser:navigate", { viewId: first.viewId, url: "https://example.com/one" });
+		expect(host.getProfileUsage(profile.id)).toEqual([
+			{ viewId: first.viewId, sessionId: "worker-1", blocker: null },
+			{ viewId: second.viewId, sessionId: "worker-2", blocker: null },
+		]);
+		await host.detachProfile(profile.id);
+		expect(host.isProfileLive(profile.id)).toBe(false);
+		expect(host.getProfileUsage(profile.id)).toEqual([]);
+		expect(bindings).toEqual({ "worker-1": null, "worker-2": null });
+		expect(host.getProfileState(first.viewId)).toMatchObject({ temporary: true });
+		expect(host.getProfileState(second.viewId)).toMatchObject({ temporary: true });
+		const partitions = constructorOptions.slice(2).map((item) => item.webPreferences.partition);
+		expect(new Set(partitions).size).toBe(2);
+		expect(partitions.every((partition) => partition?.startsWith("persist:ao-browser-temporary-"))).toBe(true);
+		expect(await invoke("browser:getTabs", first.viewId)).toMatchObject({ tabs: [expect.objectContaining({ url: "https://example.com/one" })] });
+	});
+
+	it("keeps failed browsers on the named profile and waits for successful switches", async () => {
+		const { host, invoke, runtime } = setupTabHost(fakeBrowserProfileStore(profile, { "worker-1": profile.id, "worker-2": profile.id }));
+		const first = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		const second = (await invoke("browser:ensure", "worker-2")) as BrowserNavState;
+		vi.mocked(runtime.closeSession).mockRejectedValueOnce(new Error("Runtime unavailable"));
+		await expect(host.detachProfile(profile.id)).rejects.toMatchObject({ code: "BROWSER_PROFILE_SWITCH_FAILED", message: expect.stringContaining("profile was kept") });
+		expect(host.getProfileState(first.viewId)?.profileId).toBe(profile.id);
+		expect(host.getProfileState(second.viewId)?.temporary).toBe(true);
+		expect(host.getProfileUsage(profile.id)).toEqual([{ viewId: first.viewId, sessionId: "worker-1", blocker: null }]);
+	});
+
+	it("blocks all detachment before switching any idle browser when an agent is active", async () => {
+		const { host, invoke, runtime } = setupTabHost(fakeBrowserProfileStore(profile, { "worker-1": profile.id, "worker-2": profile.id }));
+		const first = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+		await invoke("browser:ensure", "worker-2");
+		let release!: () => void;
+		const pending = new Promise<void>((resolve) => { release = resolve; });
+		vi.mocked(runtime.runAction).mockImplementationOnce(async () => { await pending; return {}; });
+		const command = host.execute("worker-2", "open", { url: "http://localhost:3000/" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		try {
+			expect(host.getProfileUsage(profile.id)).toContainEqual(expect.objectContaining({ sessionId: "worker-2", blocker: "agent-active" }));
+			await expect(host.detachProfile(profile.id)).rejects.toMatchObject({ code: "BROWSER_PROFILE_ACTIVE", message: expect.stringContaining("worker-2") });
+			expect(host.getProfileState(first.viewId)?.profileId).toBe(profile.id);
+		} finally { release(); await command; }
+		await host.detachProfile(profile.id);
+		expect(host.isProfileLive(profile.id)).toBe(false);
+	});
+
 	it("uses a stable named partition and restores the durable binding on host reconstruction", async () => {
 		const bindings = { "worker-1": profile.id, "worker-2": profile.id };
 		const store = fakeBrowserProfileStore(profile, bindings);
@@ -3019,6 +3096,75 @@ describe("browser profile partitions and replacement", () => {
 		const { host, invoke } = setupTabHost(store);
 		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
 		expect(host.getProfileState(nav.viewId)).toMatchObject({ profileId: null, temporary: true });
+	});
+
+	it("bounds tab readiness so a stuck initial load cannot wedge the session queue", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		let holdLoads = true;
+		const { host, invoke } = setupTabHost(
+			store,
+			false,
+			async () => {
+				if (holdLoads) await new Promise(() => {});
+			},
+			undefined,
+			undefined,
+			{ entryReadyTimeoutMs: 20 },
+		);
+		const nav = (await invoke("browser:ensure", "worker-1")) as BrowserNavState;
+
+		// A native command awaiting tab readiness must fail typed instead of
+		// hanging forever — and keep failing fast, never wedging the queue.
+		await expect(host.execute("worker-1", "snapshot", {})).rejects.toMatchObject({
+			code: "BROWSER_DEVTOOLS_UNAVAILABLE",
+		});
+		await expect(host.execute("worker-1", "snapshot", {})).rejects.toMatchObject({
+			code: "BROWSER_DEVTOOLS_UNAVAILABLE",
+		});
+
+		// Recovery path: once loads settle again, a fresh tab serves commands.
+		holdLoads = false;
+		host.destroy(nav.viewId);
+		await invoke("browser:ensure", "worker-1");
+		await expect(host.execute("worker-1", "snapshot", {})).resolves.toBeTruthy();
+	});
+
+	it("restores readiness when a timed-out initial load later succeeds", async () => {
+		const store = fakeBrowserProfileStore(profile, { "worker-1": profile.id });
+		let release: () => void = () => {};
+		const gate = new Promise<void>((r) => {
+			release = r;
+		});
+		let gatedFirstLoad = true;
+		const { host, invoke } = setupTabHost(
+			store,
+			false,
+			async (_viewIndex, url) => {
+				if (gatedFirstLoad && url === "about:blank") {
+					gatedFirstLoad = false;
+					await gate;
+				}
+			},
+			undefined,
+			undefined,
+			{ entryReadyTimeoutMs: 20 },
+		);
+		await invoke("browser:ensure", "worker-1");
+
+		// The initial about:blank load is stuck past the readiness deadline, so a
+		// command fails typed instead of hanging.
+		await expect(host.execute("worker-1", "snapshot", {})).rejects.toMatchObject({
+			code: "BROWSER_DEVTOOLS_UNAVAILABLE",
+		});
+
+		// The same load then completes: readiness must be restored so the SAME tab
+		// serves commands again, without recreating it.
+		release();
+		await vi.waitFor(async () => {
+			await expect(
+				host.execute("worker-1", "snapshot", {}),
+			).resolves.toBeTruthy();
+		});
 	});
 
 	it("releases profile usage when worker tab startup fails", async () => {
@@ -3752,6 +3898,137 @@ describe("agent browser runtime", () => {
 		await host.execute("sess-1", "tab-close", { tabId: "t2" });
 		const replacement = (await host.execute("sess-1", "tab-new")) as { id: string };
 		expect(replacement.id).toBe("t3");
+	});
+
+	it("updates the AO active tab when native selection only brings the page to front", async () => {
+		const { activeTargets, host, runtime } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select") {
+				// Native agent-browser uses Page.bringToFront, not Target.activateTarget.
+				activeTargets.set(sessionId, String(args.tabId));
+				return {};
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		for (const [tabId, url] of [["t1", "https://first.example.test/"], ["t2", "https://second.example.test/"]]) {
+			await host.execute("sess-1", "tab-select", { tabId });
+			expect(await host.execute("sess-1", "tabs")).toMatchObject({
+				activeTabId: tabId,
+				tabs: [
+					{ id: "t1", active: tabId === "t1" },
+					{ id: "t2", active: tabId === "t2" },
+				],
+			});
+			expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+				value: url,
+				target: { tabId },
+			});
+		}
+	});
+
+	it.each([
+		{ name: "a different tab", selections: ["t3"], expectedTabId: "t3", expectedURL: "https://third.example.test/" },
+		{ name: "away and back", selections: ["t3", "t2"], expectedTabId: "t2", expectedURL: "https://second.example.test/" },
+	])("preserves independent activation $name during a native tab selection", async ({ selections, expectedTabId, expectedURL }) => {
+		const { activeTargets, host, runtime } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://third.example.test/" });
+		await host.execute("sess-1", "tab-select", { tabId: "t2" });
+		let notifyStarted: (provider: import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider) => void = () => undefined;
+		const started = new Promise<import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider>((resolve) => { notifyStarted = resolve; });
+		let releaseSelect: () => void = () => undefined;
+		const pendingSelect = new Promise<void>((resolve) => { releaseSelect = resolve; });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		let blockNextSelect = true;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select") {
+				if (blockNextSelect) {
+					blockNextSelect = false;
+					notifyStarted(provider);
+					await pendingSelect;
+				}
+				activeTargets.set(sessionId, String(args.tabId));
+				return {};
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		const selection = host.execute("sess-1", "tab-select", { tabId: "t1" });
+		try {
+			const provider = await started;
+			for (const tabId of selections) await provider.activateTarget(tabId);
+		} finally {
+			releaseSelect();
+		}
+		await selection;
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: expectedTabId });
+		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+			value: expectedURL,
+			target: { tabId: expectedTabId },
+		});
+	});
+
+	it("keeps a newer independent activation while background popup synchronization completes", async () => {
+		const { activeTargets, host, runtime, views } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		let notifyStarted: (provider: import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider) => void = () => undefined;
+		const started = new Promise<import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider>((resolve) => { notifyStarted = resolve; });
+		let releaseSelect: () => void = () => undefined;
+		const pendingSelect = new Promise<void>((resolve) => { releaseSelect = resolve; });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select") {
+				if (args.tabId === "t2") {
+					notifyStarted(provider);
+					await pendingSelect;
+				}
+				activeTargets.set(sessionId, String(args.tabId));
+				return {};
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		views[0].webContents.openWindow("https://popup.example.test/");
+		try {
+			const provider = await started;
+			await provider.activateTarget("t1");
+		} finally {
+			releaseSelect();
+		}
+		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+			value: "https://first.example.test/",
+			target: { tabId: "t1" },
+		});
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t1" });
+	});
+
+	it("keeps the current AO tab after an explicit native selection fails", async () => {
+		const { host, runtime } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select" && args.tabId === "t1") {
+				throw Object.assign(new Error("Tab t1 not found"), { code: "AGENT_BROWSER_COMMAND_FAILED" });
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		await expect(host.execute("sess-1", "tab-select", { tabId: "t1" })).rejects.toMatchObject({ code: "BROWSER_TARGET_MISMATCH" });
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t2" });
+		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+			value: "https://second.example.test/",
+			target: { tabId: "t2" },
+		});
 	});
 
 	it("keeps popup reads and mutations on the reported tab and returns their AO target identity", async () => {
@@ -6048,7 +6325,7 @@ describe("browser snapshot deltas", () => {
 		]);
 	});
 
-	it("forces full state after the agent switches frames", async () => {
+	it("forces full state after the browser switches frames", async () => {
 		const { host, snapshotCalls } = setupDeltaHost(() => full(1));
 
 		await host.execute("sess-1", "snapshot", { delta: true });
@@ -6058,7 +6335,7 @@ describe("browser snapshot deltas", () => {
 		expect(snapshotCalls()[1]).toEqual({ interactive: false, delta: true, full: true });
 	});
 
-	it("forces full state after the agent switches tabs", async () => {
+	it("forces full state after the browser switches tabs", async () => {
 		const { host, snapshotCalls } = setupDeltaHost(() => full(1));
 
 		await host.execute("sess-1", "snapshot", { delta: true });

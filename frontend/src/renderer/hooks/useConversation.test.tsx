@@ -23,6 +23,7 @@ import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
 	useConversation,
+	ProviderSwitchFailed,
 	useConversationCommands,
 	useConversationConfigOptions,
 	useConversationSkills,
@@ -110,6 +111,7 @@ const WIRE = {
 					{ text: "one", status: "completed" },
 					{ text: "two", status: "in_progress" },
 				],
+				spansTurns: true,
 			},
 		},
 	],
@@ -818,6 +820,7 @@ describe("useConversation snapshot mapping", () => {
 			{ text: "one", status: "completed" },
 			{ text: "two", status: "in_progress" },
 		]);
+		expect(snapshot.turns[0]!.plan?.spansTurns).toBe(true);
 	});
 
 	it("maps retry lineage and durable prompt facts from the daemon", async () => {
@@ -893,6 +896,56 @@ describe("conversation branching commands", () => {
 		for (const [, options] of postMock.mock.calls.slice(1)) {
 			expect(options.headers).toEqual({ "X-AO-Attachment-Upload": "1" });
 		}
+	});
+
+	it("sends a message with its agent switch in one request", async () => {
+		const switched = new Headers({ "X-AO-Provider-Switched": "1" });
+		postMock
+			.mockResolvedValueOnce({ data: { status: "ok", message: { turnId: "turn-9", state: "running", duplicate: false } }, error: undefined, response: new Response() })
+			.mockResolvedValueOnce({ data: undefined, error: { code: "PROVIDER_SWITCH_busy" }, response: new Response(null, { status: 409 }) })
+			.mockResolvedValueOnce({ data: undefined, error: { code: "SESSION_NOT_FOUND" }, response: new Response(null, { status: 404, headers: switched }) });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const providerSwitch = { targetHarness: "codex", model: "gpt-6" };
+
+		await act(async () => {
+			await expect(result.current.send({ text: "first turn", clientMessageId: "m1", providerSwitch })).resolves
+				.toMatchObject({ turnId: "turn-9" });
+		});
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/provider-switch", expect.objectContaining({
+			body: expect.objectContaining({ ...providerSwitch, message: { text: "first turn", clientMessageId: "m1" } }),
+		}));
+
+		// Refused: the message never left.
+		await act(async () => {
+			await expect(result.current.send({ text: "again", clientMessageId: "m2", providerSwitch })).rejects
+				.toBeInstanceOf(ProviderSwitchFailed);
+		});
+		// The switch notice reports it; the composer does not show it twice.
+		expect(result.current.error).toBeUndefined();
+		// Switched, then the send failed: an ordinary send failure.
+		await act(async () => {
+			const failure = await result.current.send({ text: "later", clientMessageId: "m3", providerSwitch }).catch((error) => error);
+			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
+			expect(failure).toMatchObject({ code: "SESSION_NOT_FOUND" });
+		});
+	});
+
+	it("does not call a switch refused when no clear answer came back", async () => {
+		postMock
+			.mockResolvedValueOnce({ data: undefined, error: { code: "UPSTREAM_UNAVAILABLE" }, response: new Response(null, { status: 502 }) })
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		const providerSwitch = { targetHarness: "codex" };
+		// A remote daemon's gateway gave up, but the daemon may still switch and send.
+		await act(async () => {
+			const failure = await result.current.send({ text: "a", clientMessageId: "m1", providerSwitch }).catch((error) => error);
+			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
+		});
+		// The request never got an answer.
+		await act(async () => {
+			const failure = await result.current.send({ text: "b", clientMessageId: "m2", providerSwitch }).catch((error) => error);
+			expect(failure).toBeInstanceOf(TypeError);
+		});
 	});
 
 	it("threads caller-owned idempotency ids through send, steer, and inline edit", async () => {
@@ -1337,4 +1390,31 @@ describe("toSnapshot", () => {
 		const message = snapshot.items.find((item) => item.kind === "message");
 		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
+});
+
+it("keeps a live refresh that is in flight when older history starts loading", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const page = (latestSequence: number, older = false) => ({
+		data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence, oldestSequence: older ? 1 : 20, hasMoreBefore: !older, turns: [], messages: [], activities: [],
+		},
+		error: undefined,
+	});
+	const refresh = deferred<ReturnType<typeof page>>();
+	getMock.mockReset()
+		.mockResolvedValueOnce(page(20))
+		.mockReturnValueOnce(refresh.promise)
+		.mockResolvedValue(page(20, true));
+	const { result } = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(20));
+
+	// A conversation event starts a refresh; the reader scrolls to the top before it lands.
+	void queryClient.invalidateQueries({ queryKey: ["conversation", "ao-1"] }, { cancelRefetch: false });
+	await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+	act(() => result.current.loadOlder());
+	await act(async () => { refresh.resolve(page(21)); });
+
+	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
 });

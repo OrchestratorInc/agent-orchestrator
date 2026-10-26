@@ -63,6 +63,11 @@ type ActivitySignal struct {
 	// and internal <ao-...> coordination turns are filtered by the hook client.
 	LatestUserPrompt      string
 	LatestAssistantUpdate string
+	// FinalAssistantMessage and TurnUserRequest are a main turn's final message
+	// and request as the agent's hooks reported them. They only feed the terminal
+	// turn history and are never a replay checkpoint, so every agent may send them.
+	FinalAssistantMessage string
+	TurnUserRequest       string
 	// ConversationCheckpointOrigin distinguishes real human turns from AO's
 	// own coordination. Lifecycle persists coordination provenance across the
 	// prompt-submit/Stop boundary; an empty value is an older hook client.

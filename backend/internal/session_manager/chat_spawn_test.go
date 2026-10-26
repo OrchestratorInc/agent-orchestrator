@@ -1858,7 +1858,7 @@ func TestChatSpawnInstallsAgentHooksBeforeControllerStart(t *testing.T) {
 			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 			mgr := New(Deps{
 				Runtime:   &fakeRuntime{},
-				Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+				Agents:    testAgentRegistry{domain.HarnessCommandCode: hooks},
 				Workspace: &fakeWorkspace{path: wsDir},
 				Store:     st,
 				Messenger: &fakeMessenger{},
@@ -1915,7 +1915,7 @@ func TestChatSpawnFailsWhenHookInstallFails(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	mgr := New(Deps{
 		Runtime:   &fakeRuntime{},
-		Agents:    switchTestAgents{domain.HarnessCommandCode: hooks},
+		Agents:    testAgentRegistry{domain.HarnessCommandCode: hooks},
 		Workspace: &fakeWorkspace{path: t.TempDir()},
 		Store:     st,
 		Messenger: &fakeMessenger{},
@@ -1955,7 +1955,7 @@ func TestChatSpawnWritesCommandCodeSessionStartHook(t *testing.T) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	mgr := New(Deps{
 		Runtime:   &fakeRuntime{},
-		Agents:    switchTestAgents{domain.HarnessCommandCode: commandcode.New()},
+		Agents:    testAgentRegistry{domain.HarnessCommandCode: commandcode.New()},
 		Workspace: &fakeWorkspace{path: wsDir},
 		Store:     st,
 		Messenger: &fakeMessenger{},

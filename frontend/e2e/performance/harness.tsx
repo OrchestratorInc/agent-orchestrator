@@ -12,6 +12,7 @@ import {
 import { I18nextProvider } from "react-i18next";
 import { appI18n } from "../../src/renderer/i18n";
 import { TooltipProvider } from "../../src/renderer/components/ui/tooltip";
+import { ChatMarkdown } from "../../src/renderer/components/chat/ChatMarkdown";
 import { AssistantMessage } from "../../src/renderer/components/chat/ChatTimelineItems";
 import { ChatWorkspace } from "../../src/renderer/components/chat/ChatWorkspace";
 import { chatFixtureLongHistory } from "../../src/renderer/lib/chat-fixture";
@@ -168,6 +169,24 @@ export const performanceHarness = {
 			),
 		};
 	},
+	async markdownBlocks() {
+		const paragraph = (index: number) => `Paragraph ${index} has **important details** and a useful explanation of the change. The stream adds more text while completed paragraphs stay visible.\n\n`;
+		const initial = Array.from({ length: 100 }, (_, index) => paragraph(index)).join("");
+		const added = Array.from({ length: 25 }, (_, index) => paragraph(index + 100)).join("");
+		render(<ChatMarkdown text={initial} streaming />);
+		await frame();
+		const updateMs: number[] = [];
+		for (let index = 0; index < added.length; index += 40) {
+			const started = performance.now();
+			render(<ChatMarkdown text={initial + added.slice(0, index + 40)} streaming />);
+			updateMs.push(performance.now() - started);
+			await frame();
+		}
+		const expected = (initial + added).replaceAll("**", "").trim().replace(/\s+/g, " ");
+		const actual = [...document.querySelectorAll(".chat-md p")].map((node) => node.textContent).join(" ").trim().replace(/\s+/g, " ");
+		return { updateMs, updates: updateMs.length, characters: initial.length + added.length, exact: actual === expected };
+	},
+
 	async highlighting() {
 		// Load the existing grammar chunk first so this isolates large-block work,
 		// not network/module fetch differences. The worker still starts lazily.

@@ -9,7 +9,7 @@ import (
 )
 
 func TestRefreshRestorePreservesModelAndEffort(t *testing.T) {
-	p := &Plugin{resolvedBinary: "prime-agent"}
+	p := &Plugin{resolvedBinary: "prime-agent", extensionFlag: map[string]bool{"prime-agent": true}}
 	argv, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: t.TempDir(), Config: ports.AgentConfig{Model: "provider/original", Effort: "high"}, Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-original"}}})
 	if err != nil || !ok {
 		t.Fatalf("restore: %t %v", ok, err)

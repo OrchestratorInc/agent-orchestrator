@@ -34,6 +34,9 @@ type Store interface {
 	AppendSessionEvent(ctx context.Context, orgID, sessionID, eventType string, payload json.RawMessage) (domain.ClientEvent, error)
 	MarkSandboxDeletionRequested(ctx context.Context, owner, orgID, sessionID string) error
 	RecordSandboxStartupRepair(ctx context.Context, owner, orgID, sessionID string) (int, error)
+	// LatestWorkerLaunch returns the session's newest worker bootstrap ticket,
+	// or postgres.ErrNotFound when it has none.
+	LatestWorkerLaunch(ctx context.Context, orgID, sessionID string) (postgres.WorkerLaunch, error)
 	RecordSandboxStartupError(ctx context.Context, owner, orgID, sessionID, code, message string) error
 	RecordSandboxProviderFailure(ctx context.Context, owner, orgID, sessionID, failureID string) error
 	CompleteSandboxDeletion(ctx context.Context, owner, orgID, sessionID string) error
@@ -101,6 +104,12 @@ type Options struct {
 	TerminalStartupTimeout time.Duration
 	// HeartbeatTimeout is how long a silent worker is tolerated before repair.
 	HeartbeatTimeout time.Duration
+	// WorkerCheckInTimeout is how long a launched worker that has never
+	// checked in is given, from its launch, before it is relaunched with a
+	// fresh bootstrap ticket. It must outlast the worker's own bootstrap retry
+	// budget plus the install, so a worker still retrying its first request is
+	// never replaced.
+	WorkerCheckInTimeout time.Duration
 	// DeletionDeadline bounds how long the reconciler keeps re-requesting a
 	// deletion the provider will not converge (an unreclaimable box, e.g. a
 	// NodeOps VM stuck in "failed" that the API refuses to destroy). Past it the
@@ -141,7 +150,17 @@ const (
 	// reinstalled, each with a fresh startup window. Past it the sandbox is
 	// parked (terminate): compute stops, billing stops, and the session shows
 	// the startup-failure message instead of looping forever.
-	maxStartupRepairs              = 3
+	maxStartupRepairs = 3
+	// DefaultWorkerCheckInTimeout covers the worker's 8-minute bootstrap retry
+	// budget (ao-worker bootstrapRetryBudget) plus up to 4 minutes between the
+	// ticket being issued and the worker's first request: the provider install
+	// (a Coder PTY upload) and the worker's self-update.
+	DefaultWorkerCheckInTimeout = 12 * time.Minute
+	// maxWorkerRelaunches bounds how many times a launched worker that never
+	// checked in is relaunched per startup. It shares startup_attempts with
+	// the other startup repairs, so it also bounds a startup that was
+	// repaired before its worker launched.
+	maxWorkerRelaunches            = 1
 	DefaultHeartbeatTimeout        = time.Minute
 	DefaultDeletionDeadline        = 15 * time.Minute
 	DefaultBatchSize               = 20
@@ -191,6 +210,8 @@ type Reconciler struct {
 	// run slot behind its organization's runs, as this process's provider
 	// reported it (sandbox.WithCleanupQueueHold): org/session -> duration.
 	cleanupHolds sync.Map
+	// now is the clock the startup windows are measured on.
+	now func() time.Time
 }
 
 func sha256HexOf(data []byte) string {
@@ -219,6 +240,9 @@ func New(store Store, providers Resolver, options Options) *Reconciler {
 	}
 	if options.HeartbeatTimeout <= 0 {
 		options.HeartbeatTimeout = DefaultHeartbeatTimeout
+	}
+	if options.WorkerCheckInTimeout <= 0 {
+		options.WorkerCheckInTimeout = DefaultWorkerCheckInTimeout
 	}
 	if options.DeletionDeadline <= 0 {
 		options.DeletionDeadline = DefaultDeletionDeadline
@@ -261,6 +285,7 @@ func New(store Store, providers Resolver, options Options) *Reconciler {
 		workerBinarySHA256:       sha256HexOf(options.WorkerBinary),
 		workerHelperBinarySHA256: sha256HexOf(options.WorkerHelperBinary),
 		wake:                     make(chan struct{}, 1),
+		now:                      time.Now,
 	}
 }
 
@@ -632,12 +657,25 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 	// Two independent bounds stop the never-checked-in repair loop: the repair
 	// attempt cap (each repair grants a full fresh startup window, so wall
 	// clock alone no longer converges) and the original wall-clock ceiling as
-	// a backstop for a window that never advances at all.
-	if record.DesiredState == domain.SandboxDesiredRunning &&
-		record.WorkerLastSeenAt == nil &&
-		(record.StartupAttempts >= maxStartupRepairs ||
-			r.terminalStartupDeadlineElapsed(record)) {
-		return r.terminate(ctx, record, environment, provider, nil)
+	// a backstop for a window that never advances at all. A launched worker
+	// extends the ceiling to the end of its check-in window, and a relaunch
+	// that is due happens before the ceiling is applied (startupAbandoned).
+	var launch *postgres.WorkerLaunch
+	if record.DesiredState == domain.SandboxDesiredRunning && record.WorkerLastSeenAt == nil {
+		var checkedIn bool
+		launch, checkedIn, err = r.uncheckedWorkerLaunch(ctx, record, provider)
+		if err != nil {
+			return err
+		}
+		if checkedIn {
+			// The worker checked in after this row was claimed. Neither park
+			// nor relaunch it on the stale record: look again next tick.
+			return r.store.ReleaseSandboxClaim(ctx, r.owner, record.OrgID, record.SessionID,
+				time.Now().Add(r.options.Interval))
+		}
+		if abandon, ceiling, launched := r.startupAbandoned(record, environment, launch); abandon {
+			return r.terminateStartup(ctx, record, environment, provider, ceiling, launched, nil)
+		}
 	}
 
 	if record.DesiredState == domain.SandboxDesiredPaused ||
@@ -761,7 +799,7 @@ func (r *Reconciler) reconcileSandbox(ctx context.Context, record domain.Sandbox
 		// to repair a stale release.
 		return r.observe(ctx, record, string(environment.ID), domain.SandboxObservedRestoring, "", 2*time.Second)
 	case sandbox.StateRunning:
-		return r.superviseRunning(ctx, record, environment, provider)
+		return r.superviseRunning(ctx, record, environment, provider, launch)
 	case sandbox.StateProvisioning:
 		// A provider can acknowledge a resume and then remain in its own
 		// transitional state forever. There is no safe in-place action AO can
@@ -1055,6 +1093,7 @@ func (r *Reconciler) superviseRunning(
 	record domain.Sandbox,
 	environment sandbox.Environment,
 	provider sandbox.Provider,
+	launch *postgres.WorkerLaunch,
 ) error {
 	if record.ObservedState == domain.SandboxObservedRestoring {
 		return r.refreshRestoredWorker(ctx, record, environment, provider)
@@ -1074,6 +1113,14 @@ func (r *Reconciler) superviseRunning(
 		record.ObservedState == domain.SandboxObservedBootstrapping) &&
 		record.WorkerLastSeenAt == nil &&
 		r.startupDeadlineElapsed(record)
+	// A launched worker is relaunched when its own check-in window closes,
+	// not when the sandbox's startup budget does: that budget also covers the
+	// compute becoming ready, so it can be shorter than the worker's bootstrap
+	// retries (replacing a worker still checking in) or as long as the
+	// ceiling (never relaunching at all).
+	if launch != nil {
+		startupExpired = !r.now().Before(r.checkInDeadline(*launch))
+	}
 	heartbeatExpired := record.WorkerLastSeenAt != nil &&
 		time.Since(*record.WorkerLastSeenAt) >= r.options.HeartbeatTimeout
 
@@ -1124,6 +1171,16 @@ func (r *Reconciler) superviseRunning(
 					return r.fail(ctx, record, err)
 				}
 			}
+			if launch != nil && startupExpired {
+				r.recordActivity(ctx, record, domain.ActivityWorkerRelaunched, map[string]any{
+					"reason":             "never_checked_in",
+					"epoch":              launch.Epoch,
+					"launched_ago_ms":    r.now().Sub(launch.IssuedAt).Milliseconds(),
+					"redeemed":           launch.RedeemedAt != nil,
+					"checkin_timeout_ms": r.options.WorkerCheckInTimeout.Milliseconds(),
+					"startup_attempts":   attempts,
+				})
+			}
 			if heartbeatExpired {
 				r.recordActivity(ctx, record, domain.ActivityWorkerDisconnected, map[string]any{
 					"reason":           "heartbeat_timeout",
@@ -1134,7 +1191,7 @@ func (r *Reconciler) superviseRunning(
 				"session_id", record.SessionID,
 				"provider", record.Provider,
 				"provider_id", environment.ID,
-				"reason", repairReason(record, startupExpired, heartbeatExpired),
+				"reason", repairReason(record, launch != nil, startupExpired, heartbeatExpired),
 				"startup_attempts", attempts,
 			)
 			if err := bootstrapper.BootstrapWorker(
@@ -1200,15 +1257,19 @@ func (r *Reconciler) refreshRestoredWorker(
 // instead of holding the box awake (and billed) forever.
 func (r *Reconciler) startingUp(record domain.Sandbox) bool {
 	return record.StartupStartedAt != nil &&
-		time.Since(*record.StartupStartedAt) < r.startupTimeout(record)
+		r.now().Sub(*record.StartupStartedAt) < r.startupTimeout(record)
 }
 
 func (r *Reconciler) startupDeadlineElapsed(record domain.Sandbox) bool {
-	startedAt := record.UpdatedAt
+	return r.now().Sub(startupStartedAt(record)) >= r.startupTimeout(record)
+}
+
+// startupStartedAt is when the sandbox's current startup window opened.
+func startupStartedAt(record domain.Sandbox) time.Time {
 	if record.StartupStartedAt != nil {
-		startedAt = *record.StartupStartedAt
+		return *record.StartupStartedAt
 	}
-	return time.Since(startedAt) >= r.startupTimeout(record)
+	return record.UpdatedAt
 }
 
 // startupTimeout is the sandbox's ready-wait budget: the per-session value a
@@ -1252,11 +1313,102 @@ func customerOwnedCompute(record domain.Sandbox) bool {
 // StartupStartedAt, which the store preserves across in-place re-bootstraps, so
 // the ceiling bounds the whole repair storm rather than a single attempt.
 func (r *Reconciler) terminalStartupDeadlineElapsed(record domain.Sandbox) bool {
-	startedAt := record.UpdatedAt
-	if record.StartupStartedAt != nil {
-		startedAt = *record.StartupStartedAt
+	return r.now().Sub(startupStartedAt(record)) >= r.terminalStartupTimeout(record)
+}
+
+// uncheckedWorkerLaunch returns the newest launch of a worker that has never
+// checked in: the sandbox was observed bootstrapping, which it is only after a
+// worker launch succeeded, and its newest bootstrap ticket (issued right before
+// that launch) is the launch's durable record. It returns nil when there is no
+// such launch, or when only a provider that relaunches in place could act on
+// it. checkedIn reports a worker that checked in after the row was claimed.
+func (r *Reconciler) uncheckedWorkerLaunch(
+	ctx context.Context,
+	record domain.Sandbox,
+	provider sandbox.Provider,
+) (launch *postgres.WorkerLaunch, checkedIn bool, err error) {
+	if record.ObservedState != domain.SandboxObservedBootstrapping {
+		return nil, false, nil
 	}
-	return time.Since(startedAt) >= r.terminalStartupTimeout(record)
+	if _, ok := provider.(sandbox.Bootstrapper); !ok || len(r.options.WorkerBinary) == 0 {
+		return nil, false, nil
+	}
+	latest, err := r.store.LatestWorkerLaunch(ctx, record.OrgID, record.SessionID)
+	if errors.Is(err, postgres.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if latest.WorkerSeen {
+		return nil, true, nil
+	}
+	return &latest, false, nil
+}
+
+// checkInDeadline is when a launched worker can no longer check in on its own:
+// the check-in timeout after its launch, or, for a worker that redeemed its
+// ticket, the end of the window in which its bootstrap retries are still
+// accepted, whichever is later.
+func (r *Reconciler) checkInDeadline(launch postgres.WorkerLaunch) time.Time {
+	deadline := launch.IssuedAt.Add(r.options.WorkerCheckInTimeout)
+	if launch.RedeemedAt != nil {
+		if retries := launch.RedeemedAt.Add(postgres.WorkerBootstrapRetryWindow); retries.After(deadline) {
+			deadline = retries
+		}
+	}
+	return deadline
+}
+
+// startupAbandoned decides whether to give up on a startup whose worker has
+// never checked in, and reports how long the startup was given and whether a
+// worker had been launched into ready compute.
+//
+// A launched worker is never given up on while it may still check in: the
+// ceiling extends to the end of its check-in window, by at most one check-in
+// timeout so a chain of launches cannot hold the session forever. When that
+// window closes, a relaunch that is still allowed happens first (in
+// superviseRunning, so only while the compute is running); once the relaunch
+// budget is spent, the session is parked when the relaunched worker's window
+// closes too.
+func (r *Reconciler) startupAbandoned(
+	record domain.Sandbox,
+	environment sandbox.Environment,
+	launch *postgres.WorkerLaunch,
+) (abandon bool, ceiling time.Duration, launched bool) {
+	ceiling = r.terminalStartupTimeout(record)
+	if record.StartupAttempts >= maxStartupRepairs {
+		return true, ceiling, launch != nil
+	}
+	if launch == nil {
+		return r.terminalStartupDeadlineElapsed(record), ceiling, false
+	}
+	now := r.now()
+	checkIn := r.checkInDeadline(*launch)
+	if !now.Before(checkIn) {
+		if record.StartupAttempts >= maxWorkerRelaunches {
+			return true, r.options.WorkerCheckInTimeout, true
+		}
+		if environment.State == sandbox.StateRunning {
+			return false, ceiling, true
+		}
+	}
+	startedAt := startupStartedAt(record)
+	deadline := startedAt.Add(ceiling)
+	if extended := minTime(checkIn, deadline.Add(r.options.WorkerCheckInTimeout)); extended.After(deadline) {
+		deadline = extended
+		// Reported to the user, so in whole minutes rather than to the
+		// millisecond of the launch.
+		ceiling = deadline.Sub(startedAt).Round(time.Minute)
+	}
+	return !now.Before(deadline), ceiling, true
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }
 
 // terminate abandons a permanently broken session. It best-effort stops the
@@ -1276,7 +1428,22 @@ func (r *Reconciler) terminate(
 	provider sandbox.Provider,
 	cause *sandbox.StartupError,
 ) error {
-	ceiling := r.terminalStartupTimeout(record)
+	return r.terminateStartup(ctx, record, environment, provider, r.terminalStartupTimeout(record), false, cause)
+}
+
+// terminateStartup is terminate for a startup given ceiling to check in.
+// launched reports that a worker was launched into ready compute, so a
+// recorded "workspace not ready" reason no longer explains the failure and the
+// ceiling's own reason replaces it.
+func (r *Reconciler) terminateStartup(
+	ctx context.Context,
+	record domain.Sandbox,
+	environment sandbox.Environment,
+	provider sandbox.Provider,
+	ceiling time.Duration,
+	launched bool,
+	cause *sandbox.StartupError,
+) error {
 	customerOwned := customerOwnedCompute(record)
 	terminateAttrs := map[string]any{
 		"ceiling_ms":       ceiling.Milliseconds(),
@@ -1311,7 +1478,8 @@ func (r *Reconciler) terminate(
 		// A specific reason recorded during the startup attempts (a terminal
 		// that never opened, an unusable storage directory) explains the
 		// failure better than the generic ceiling message, so keep it.
-		if record.StartupErrorCode == "" {
+		if record.StartupErrorCode == "" ||
+			(launched && record.StartupErrorCode == sandbox.StartupErrorWorkspaceNotReady) {
 			r.recordStartupError(ctx, record, cause)
 		}
 	} else {
@@ -1339,6 +1507,26 @@ func (r *Reconciler) startupCeilingError(
 			message += " AO left the workspace running so you can inspect it."
 		}
 		return &sandbox.StartupError{Code: sandbox.StartupErrorWorkspaceNotReady, Message: message}
+	}
+	// A repaired startup's window reopened at its last relaunch, so the
+	// ceiling is measured from there.
+	if record.StartupAttempts > 0 {
+		if customerOwned {
+			return &sandbox.StartupError{
+				Code: sandbox.StartupErrorWorkerNeverStarted,
+				Message: fmt.Sprintf(
+					"AO's worker never started in your workspace, even after AO relaunched it: the last launch did not check in within %s. AO left the workspace running so you can inspect it.",
+					humanDuration(ceiling),
+				),
+			}
+		}
+		return &sandbox.StartupError{
+			Code: sandbox.StartupErrorWorkerNeverStarted,
+			Message: fmt.Sprintf(
+				"The session's worker never started, even after AO relaunched it: the last launch did not check in within %s. The sandbox has been stopped.",
+				humanDuration(ceiling),
+			),
+		}
 	}
 	if customerOwned {
 		return &sandbox.StartupError{
@@ -1689,10 +1877,12 @@ func (r *Reconciler) recordStartupError(ctx context.Context, record domain.Sandb
 	}
 }
 
-func repairReason(record domain.Sandbox, startupExpired, heartbeatExpired bool) string {
+func repairReason(record domain.Sandbox, launched, startupExpired, heartbeatExpired bool) string {
 	switch {
 	case record.ObservedState == domain.SandboxObservedFailed:
 		return "previous attempt failed"
+	case launched && startupExpired:
+		return "launched worker never checked in within its check-in window"
 	case startupExpired:
 		return "worker never checked in before the startup deadline"
 	case heartbeatExpired:

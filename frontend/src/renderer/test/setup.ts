@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
-import { expect } from "vitest";
+import { beforeEach, expect } from "vitest";
 import { appI18n } from "../i18n";
 import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
@@ -105,10 +105,18 @@ if (typeof window !== "undefined") {
 		};
 	})();
 
-	Object.defineProperty(window, "localStorage", {
-		configurable: true,
-		writable: true,
-		value: localStorageStub,
+	const installLocalStorage = () => {
+		Object.defineProperty(window, "localStorage", {
+			configurable: true,
+			writable: true,
+			value: localStorageStub,
+		});
+	};
+	installLocalStorage();
+	// A test can spy on the getter and return a Storage that has no clear().
+	// The next file's beforeEach calls clear(). Put the stub back first.
+	beforeEach(() => {
+		if (typeof window.localStorage?.clear !== "function") installLocalStorage();
 	});
 
 	HTMLCanvasElement.prototype.getContext = (() => ({})) as unknown as typeof HTMLCanvasElement.prototype.getContext;
@@ -136,6 +144,8 @@ if (typeof window !== "undefined") {
 			onOpenFolderPath: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
+			onQuitConfirmRequest: () => () => undefined,
+			resolveQuitConfirm: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -146,6 +156,7 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -179,6 +190,10 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		cloudArtifact: {
+			fetch: async () => new Uint8Array(),
+			onFrameNavigated: () => () => undefined,
+		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),
@@ -209,12 +224,16 @@ if (typeof window !== "undefined") {
 		},
 		telemetry: {
 			getBootstrap: async () => null,
+			getAnalyticsOptOut: async () => false,
+			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+			onAnalyticsOptOut: () => () => undefined,
+			setCloudUser: async () => false,
+			getGithubLogin: async () => null,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: true,
@@ -344,7 +363,8 @@ if (typeof window !== "undefined") {
 				return { id, name, createdAt: now, updatedAt: now };
 			},
 			clear: async () => undefined,
-			delete: async () => undefined,
+			usage: async () => ({ sessions: [] }),
+			delete: async () => ({}),
 			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),

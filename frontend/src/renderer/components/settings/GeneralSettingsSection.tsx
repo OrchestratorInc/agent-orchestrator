@@ -7,6 +7,7 @@ import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
+import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
@@ -167,6 +168,10 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const navigationGestures = useUiStore((state) => state.navigationGestures);
+	const setNavigationGestures = useUiStore((state) => state.setNavigationGestures);
+	const renderMath = useUiStore((state) => state.renderMath);
+	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 
@@ -235,6 +240,19 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
+				<SettingsRow label={t("settings.renderMath")} description={t("settings.renderMathHint")}>
+					<Switch aria-label={t("settings.renderMath")} checked={renderMath} onCheckedChange={setRenderMath} />
+				</SettingsRow>
+			</SettingsSection>
+
+			<SettingsSection title={t("settings.navigation")} grouped>
+				<SettingsRow label={t("settings.navigationGestures")} description={t("settings.navigationGesturesHint")}>
+					<Switch
+						aria-label={t("settings.navigationGestures")}
+						checked={navigationGestures}
+						onCheckedChange={setNavigationGestures}
+					/>
+				</SettingsRow>
 			</SettingsSection>
 
 			{/* Sessions */}
@@ -268,6 +286,7 @@ export function GeneralSettingsSection({
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
+				<AnalyticsRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -285,6 +304,43 @@ export function GeneralSettingsSection({
 				{developerMode && <SideChatsRow />}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * PostHog usage analytics opt-out. Independent of the error-event row above: it
+ * switches off the renderer, the daemon and a paired phone together.
+ */
+function AnalyticsRow() {
+	const { t } = useTranslation();
+	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	const loaded = useAnalyticsOptOutStore((state) => state.loaded);
+	const saving = useAnalyticsOptOutStore((state) => state.saving);
+	const loadError = useAnalyticsOptOutStore((state) => state.loadError);
+	const saveError = useAnalyticsOptOutStore((state) => state.saveError);
+	const load = useAnalyticsOptOutStore((state) => state.load);
+	const setOptedOut = useAnalyticsOptOutStore((state) => state.setOptedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<SettingsRow
+			label={t("settings.analytics.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.analytics.loadFailed" : saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.analytics.label")}
+				checked={!optedOut}
+				disabled={saving || !loaded}
+				onCheckedChange={(share) => {
+					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
 	);
 }
 

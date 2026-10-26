@@ -92,7 +92,10 @@ other than `coder`:
   keep the strict check. A symbolic link is always refused.
 - `startupTimeoutSeconds` on the connection (default 1200, 60-7200) is that
   session's ready wait and startup ceiling, replacing the deployment
-  `AO_CLOUD_SANDBOX_STARTUP_TIMEOUT` and the 10-minute ceiling.
+  `AO_CLOUD_SANDBOX_STARTUP_TIMEOUT` and the 10-minute ceiling. A worker
+  launched late in that budget still gets its full check-in window
+  (`AO_CLOUD_WORKER_CHECKIN_TIMEOUT`) and one relaunch before the session
+  parks.
 - On a startup failure AO marks the session failed and records a user-facing
   `startupError`, but never stops or deletes the customer's workspace; only a
   user-initiated session delete removes the workspace AO created.

@@ -1,3 +1,4 @@
+import { BrowserIcon } from "./icons";
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,7 +30,6 @@ import {
 	ArrowUpRight,
 	GitPullRequest,
 	GitMerge,
-	Globe,
 	Info,
 	Play,
 	Loader2,
@@ -45,7 +45,6 @@ import { sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
@@ -81,7 +80,7 @@ import {
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
-import { FilesTopbarHostContext } from "./files-topbar-host";
+import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -142,13 +141,7 @@ const VIEW_DEFS: {
 	{
 		id: "browser",
 		labelKey: "inspector.browser",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<circle cx="12" cy="12" r="9" />
-				<line x1="3" y1="12" x2="21" y2="12" />
-				<path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
-			</svg>
-		),
+		icon: <BrowserIcon aria-hidden="true" />,
 	},
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
 	{
@@ -220,6 +213,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
+	const [filesActionsHost, setFilesActionsHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
@@ -267,8 +261,8 @@ export const SessionInspector = memo(function SessionInspector({
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The Artifacts tab shows only when the session has artifact files to list.
-			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+			// The tab is contextual: an artifact click opens it; leaving it hides it.
+			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
 	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
@@ -324,7 +318,9 @@ export const SessionInspector = memo(function SessionInspector({
 				filesView={
 					session ? (
 						<FilesTopbarHostContext.Provider value={filesTopbarHost}>
-							<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							<FilesActionsHostContext.Provider value={filesActionsHost}>
+								<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							</FilesActionsHostContext.Provider>
 						</FilesTopbarHostContext.Provider>
 					) : undefined
 				}
@@ -336,6 +332,7 @@ export const SessionInspector = memo(function SessionInspector({
 							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
+							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
 							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>
@@ -453,7 +450,6 @@ const SummaryView = memo(function SummaryView({
 							artifact={artifact}
 							key={artifact.path}
 							onOpenArtifact={onOpenArtifact}
-							session={session}
 						/>
 					))
 				) : undefined
@@ -994,7 +990,7 @@ function PRSummaryCard({
 				canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-background hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -1018,28 +1014,15 @@ function PRSummaryCard({
 	);
 }
 
-/**
- * One row in the Summary panel's Artifacts list. HTML artifacts open in the
- * Browser panel; markdown/file artifacts open in the inspector's Artifacts view,
- * since artifact files live outside the git workspace.
- */
+/** One Summary row opens its file in the inspector's contextual Artifacts tab. */
 function ArtifactSummaryCard({
 	artifact,
 	onOpenArtifact,
-	session,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
-	session: WorkspaceSession;
 }) {
-	const openArtifactPreview = useOpenArtifactPreview(session.id, session.hostId);
-	const handleOpen = () => {
-		if (artifact.kind === "html" && artifact.previewUrl) {
-			openArtifactPreview(artifact.previewUrl);
-			return;
-		}
-		onOpenArtifact?.({ path: artifact.path });
-	};
+	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
 	return (
 		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
 			<button
@@ -1048,7 +1031,7 @@ function ArtifactSummaryCard({
 				type="button"
 			>
 				{artifact.kind === "html" ? (
-					<Globe aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				) : (
 					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
