@@ -138,10 +138,6 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 	waitStarted := time.Now()
 	select {
 	case <-drained:
-		if waited := time.Since(waitStarted); waited >= slowAgentOperationWait {
-			m.agentWaitLogger().Warn("agent operation waited for session input to drain",
-				"sessionID", id, "operation", kind, "waited", waited.Round(time.Millisecond))
-		}
 		return nil
 	case <-ctx.Done():
 		// A lease that outlives the whole wait usually belongs to a write that
@@ -161,10 +157,6 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 		return ctx.Err()
 	}
 }
-
-// slowAgentOperationWait is how long an exclusive operation may wait for
-// admitted input before the wait is logged.
-const slowAgentOperationWait = 5 * time.Second
 
 // Some tests build a Manager without New, so the logger may be unset.
 func (m *Manager) agentWaitLogger() *slog.Logger {
