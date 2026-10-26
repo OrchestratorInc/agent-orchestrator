@@ -57,6 +57,11 @@ vi.mock("@expo/ui/community/menu", async () => {
 		return React.createElement("MenuView", props, children);
 	}) };
 });
+// vitest resolves the iOS helper; Metro hands Android the drawable variant.
+vi.mock("./machine-menu-image", async (importOriginal) => {
+	const real = await importOriginal<typeof import("./machine-menu-image")>();
+	return { machineMenuImage: (symbol: Parameters<typeof real.machineMenuImage>[0]) => fixtures.platform === "android" ? `drawable:${symbol}` : real.machineMenuImage(symbol) };
+});
 // The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
 vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
 vi.mock("./store", () => ({ useApp: () => ({
@@ -316,7 +321,8 @@ describe("Workers filter menu", () => {
 		expect(toolbar("left")).toBeUndefined();
 		expect(toolbar("right")!.props.children[0].props.accessibilityLabel).toBe("Filter workers");
 		expect(filterMenu().findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
-		expect(choices(environmentMenu()).map((node) => node.props.icon)).toEqual([undefined, undefined, undefined]);
+		// Each machine keeps its glyph in the Material menu, as in the UIMenu.
+		expect(choices(environmentMenu()).map((node) => node.props.icon)).toEqual(["drawable:server", "drawable:desktop", "drawable:desktop"]);
 		choose(environmentMenu(), "Windows");
 		expect(filterMenu().findByType("StackToolbarBadge" as never).props.style).toEqual({ backgroundColor: "#accent" });
 		expect(filterMenu().props.accessibilityLabel).toBe("Filter workers, filtered to Windows");

@@ -70,9 +70,9 @@ export function workerFilterMenu({
 				{workerEnvironmentOptions(environments).map((environment) => (
 					<Stack.Toolbar.MenuAction
 						key={environment.id}
-						// Android menus here take only bundled drawables, and the machine
-						// glyphs have none; the check alone marks the choice there.
-						icon={ios ? machineMenuImage(environment.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance }).symbol) : undefined}
+						// Each machine's own glyph: an SF Symbol on iOS, its bundled
+						// Material drawable on Android, which takes only image sources.
+						icon={machineMenuImage(environment.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: environment.id, name: environment.label, appearance: environment.appearance }).symbol)}
 						isOn={environment.id === selectedEnvironmentId}
 						onPress={() => {
 							haptics.select();
