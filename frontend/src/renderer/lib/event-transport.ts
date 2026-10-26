@@ -5,7 +5,13 @@ import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
+import {
+	cancelLiveConversationRefreshes,
+	conversationQueryKey,
+	conversationQueryRoot,
+	conversationSettled,
+	refreshLiveConversation,
+} from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -107,21 +113,20 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				close?: () => void;
 				pollTimer?: ReturnType<typeof setInterval>;
 			}>();
-			const remoteConversationRefreshes = new Map<string, { dirty: boolean }>();
-			const refreshRemoteConversationOnce = (hostId: string, sessionId: string) => {
-				const key = `${hostId}\0${sessionId}`;
-				const running = remoteConversationRefreshes.get(key);
-				if (running) { running.dirty = true; return; }
-				const state = { dirty: false };
-				remoteConversationRefreshes.set(key, state);
-				void (async () => {
-					do {
-						state.dirty = false;
-						try { await refreshRemoteConversation(queryClient, sessionId, hostId); }
-						catch { /* A later event or the polling fallback can retry. */ }
-					} while (state.dirty && !disposed && baseUrlForHost(hostId));
-					remoteConversationRefreshes.delete(key);
-				})();
+			// An open, loaded conversation refreshes only its newest page in place.
+			// Anything else is invalidated: an unobserved cache just goes stale, and a
+			// first load still in flight is caught up after it lands.
+			const refreshConversation = (sessionId: string, hostId?: string) => {
+				if (disposed) return;
+				const queryKey = conversationQueryKey(sessionId, hostId);
+				const query = queryClient.getQueryCache().find({ queryKey, exact: true });
+				if (query?.state.data === undefined || query.getObserversCount() === 0) {
+					invalidate(queryKey);
+					return;
+				}
+				void refreshLiveConversation(queryClient, sessionId, hostId).catch(() => {
+					// A later event or the polling fallback can retry.
+				});
 			};
 			// Do not repeatedly cancel a slow fetch under continuous CDC traffic. A
 			// key receives at most one in-flight refresh and one queued catch-up.
@@ -153,7 +158,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
-				if (reconnect) invalidate(["remote-conversation", hostId]);
+				if (reconnect) {
+					for (const query of queryClient.getQueryCache().findAll({ queryKey: ["remote-conversation", hostId] })) {
+						const sessionId = query.queryKey[2];
+						if (typeof sessionId === "string") refreshConversation(sessionId, hostId);
+					}
+				}
 				if (reconnect) invalidate(["reviewer-conversation", hostId]);
 				invalidate(["session-scm-summary", hostId]);
 				invalidate(["session-reviews", hostId]);
@@ -185,7 +195,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						try {
 							const decoded = JSON.parse(String((event as MessageEvent).data)) as { sessionId?: unknown; payload?: { conversationId?: unknown; reviewId?: unknown } };
 							if (typeof decoded.sessionId === "string" && typeof decoded.payload?.conversationId === "string" && typeof decoded.payload.reviewId !== "string") {
-								refreshRemoteConversationOnce(hostId, decoded.sessionId);
+								refreshConversation(decoded.sessionId, hostId);
 							}
 							if (typeof decoded.payload?.reviewId === "string") {
 								invalidate(["reviewer-conversation", hostId, decoded.payload.reviewId]);
@@ -217,6 +227,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					connection.close?.();
 					if (connection.pollTimer !== undefined) clearInterval(connection.pollTimer);
 					remoteSources.delete(hostId);
+					cancelLiveConversationRefreshes(queryClient, hostId);
 				}
 				for (const hostId of active) connectRemote(hostId);
 			};
@@ -234,7 +245,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let lastFlushAt = Number.NEGATIVE_INFINITY;
 			const flushPending = () => {
 				if (allConversationsInvalidationPending) {
-					invalidate(conversationQueryRoot);
+					for (const query of queryClient.getQueryCache().findAll({ queryKey: conversationQueryRoot })) {
+						const sessionId = query.queryKey[1];
+						if (typeof sessionId === "string") pendingConversationSessions.add(sessionId);
+					}
 					invalidate(reviewerConversationQueryRoot);
 					allConversationsInvalidationPending = false;
 				}
@@ -262,9 +276,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					}
 					pendingEditorHandoffSessions.clear();
 				}
-				for (const sessionId of pendingConversationSessions) {
-					invalidate(conversationQueryKey(sessionId));
-				}
+				for (const sessionId of pendingConversationSessions) refreshConversation(sessionId);
 				pendingConversationSessions.clear();
 				for (const sessionId of pendingReviewSessions) {
 					invalidate(sessionReviewsQueryKey(sessionId));
@@ -576,6 +588,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				pendingInterfaceTransitionSessions.clear();
 				pendingModelCatalogScopes.clear();
 				refreshes.clear();
+				cancelLiveConversationRefreshes(queryClient);
 				if (retryTimer) clearTimeout(retryTimer);
 				removeDaemonListener();
 				removeBaseUrlListener();

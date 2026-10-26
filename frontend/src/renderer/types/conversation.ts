@@ -870,6 +870,8 @@ export interface ConversationSnapshot {
 	latestSequence: number;
 	oldestSequence: number;
 	hasMoreBefore: boolean;
+	/** Set on the newest page by daemons that can answer changedSince reads. */
+	changeCursor?: string;
 	/** The first provider-backed prompt in the active provider scope. */
 	nativeForkAvailableAfterSequence?: number;
 	activeBranchId?: string;
