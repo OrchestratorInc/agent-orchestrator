@@ -2456,10 +2456,9 @@ describe("TaskComposer", () => {
 			h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" })] };
 			h.get.mockImplementation(async (path: string) => path.includes("/models")
 				? { data: catalog }
-				: { data: { project: { agent: "codex", config: {} } } });
+				: { data: { status: "ok", project: { agent: "codex", config: {} } } });
 			h.post.mockResolvedValue({ data: { ...catalog, warningCode: undefined, warning: undefined, stale: false, models: [{ id: "gpt-5.5", label: "GPT-5.5", isDefault: true }] } });
 			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-			await userEvent.click(screen.getByRole("button", { name: "Agent" }));
 			expect(await screen.findByTestId("model-catalog-notice")).toHaveTextContent("Codex CLI isn't installed.");
 			expect(screen.queryByText(detail)).not.toBeInTheDocument();
 			await userEvent.click(screen.getByRole("button", { name: "Details" }));
