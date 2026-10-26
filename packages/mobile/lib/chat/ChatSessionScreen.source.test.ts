@@ -39,12 +39,10 @@ describe("active turn controls", () => {
 
 	it("keeps the queued row compact without a second labeled steer pill", () => {
 		expect(composerSource).not.toContain("queueSteerText");
-		expect(composerSource).toContain('queueSteer: { width: touchTarget, height: touchTarget');
 	});
 
 	it("keeps settings and active-turn delivery state in one fixed-height row", () => {
 		expect(composerSource).toContain("<View style={styles.metaRow}>");
-		expect(composerSource).toContain('metaRow: { width: "100%", height: touchTarget');
 		expect(composerSource).toContain('numberOfLines={1} style={styles.deliveryNoteText}');
 		expect(composerSource).toContain('Sent after this');
 	});

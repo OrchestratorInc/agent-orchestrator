@@ -121,6 +121,8 @@ describe("chat composer pill", () => {
 		expect(composer).toContain("hitSlop={{ top: CHANGES_PILL_SLOP, bottom: CHANGES_PILL_SLOP }}");
 		expect(composer).toContain("const CHANGES_PILL_SLOP = (touchTarget - CHANGES_PILL_HEIGHT) / 2");
 		expect(styleRule("deliveryNote")).toContain("height: touchTarget");
+		// The settings and delivery row is one fixed row of those targets.
+		expect(styleRule("metaRow")).toContain('width: "100%", height: touchTarget');
 		expect(composer).not.toContain("hitSlop={7}");
 	});
 
