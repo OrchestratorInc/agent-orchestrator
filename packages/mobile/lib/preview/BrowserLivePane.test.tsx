@@ -340,6 +340,8 @@ describe("live browser gestures", () => {
 		expect(gesture("tap").enabled).toBe(true);
 		expect(gesture("pan").enabled).toBe(true);
 		expect(gesture("pinch").enabled).toBe(true);
+		const frame = nodes("GestureDetector")[0].findByType("View" as never);
+		expect(frame.props).toMatchObject({ accessible: true, accessibilityRole: "image", accessibilityLabel: "Desktop browser, Todo app" });
 	});
 
 	it("clicks the page where a tap lands, and ignores the letterbox", async () => {

@@ -279,7 +279,16 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 		{headerItems}
 		<View style={[styles.stage, { marginBottom: toolbarClearance }]}>
 			<GestureDetector gesture={gesture}>
-				<View collapsable={false} style={styles.viewport} onLayout={onViewportLayout}>
+				<View
+					collapsable={false}
+					// The stream is a picture of the desktop's page; screen readers
+					// hear which page it shows.
+					accessible={interactive}
+					accessibilityRole="image"
+					accessibilityLabel={pageTitle ? `Desktop browser, ${pageTitle}` : "Desktop browser"}
+					style={styles.viewport}
+					onLayout={onViewportLayout}
+				>
 					<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
 						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
 					</Animated.View>
