@@ -486,7 +486,7 @@ func (m *Manager) resumeChatController(
 	}
 	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("controller admission", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	defer releaseCodexAdmission()
 
@@ -499,7 +499,7 @@ func (m *Manager) resumeChatController(
 	agentConfig := restoredAgentConfig(rec, project.Config)
 	additionalDirectories, err := m.restoredWorkspaceProjectDirectories(ctx, rec, project, ws.Path)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("workspace roots", fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err))
 	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
@@ -514,7 +514,7 @@ func (m *Manager) resumeChatController(
 		providerHandoff, err = m.prepareRecoveredChatProviderHandoff(ctx, rec)
 	}
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("provider ownership", fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err))
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget

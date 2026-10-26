@@ -611,7 +611,9 @@ var captureRelaunchError = sentryobs.CaptureHTTPError
 func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id domain.SessionID, err, mapped error) {
 	var relaunchErr *sessionmanager.RelaunchError
 	var apiErr *apierr.Error
-	if !errors.As(err, &relaunchErr) || !errors.As(mapped, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
+	// A canceled context means the client left mid-relaunch; there is no failure to count.
+	if errors.Is(err, context.Canceled) || !errors.As(err, &relaunchErr) ||
+		!errors.As(mapped, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
 		return
 	}
 	cause := relaunchErr.Err

@@ -6104,6 +6104,11 @@ func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("a deadline is already counted as ao.http.5xx; events = %#v", sink.events)
 	}
+	fc.restoreErr = fmt.Errorf("resume agent mer-1: %w", &sessionmanager.RelaunchError{Step: "runtime", Err: context.Canceled})
+	_, _ = svc.ResumeAgent(context.Background(), "mer-1")
+	if len(sink.events) != 2 {
+		t.Fatalf("a client that left mid-relaunch is not a failure to count; events = %#v", sink.events)
+	}
 	// Sentry keeps the raw error the 500 used to carry, once per relaunch failure.
 	if len(sentryErrs) != 2 || !strings.Contains(sentryErrs[0].Error(), "secret-token") ||
 		sentryTags[1]["operation"] != "restore_session" || sentryTags[1]["step"] != "runtime" {

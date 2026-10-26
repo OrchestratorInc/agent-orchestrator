@@ -3287,6 +3287,7 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 // resumeAgentWithMode preserves strict native-history intent for automatic
 // retries, including update stops that have no stale-binary failure marker.
 func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool) (result RestoreResult, err error) {
+	defer func() { m.logRelaunchFailure("resume agent", id, err) }()
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -3421,7 +3422,6 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	}
 	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec,
 		requireNativeHistory || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil))
-	m.logRelaunchFailure("resume agent", id, err)
 	if err == nil && m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
 		rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
 		// A failed move to a new release kept the user's queued messages for
@@ -3541,7 +3541,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
-		return RestoreResult{}, fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness)
+		return RestoreResult{}, relaunchFailed("agent adapter", fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness))
 	}
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
@@ -3574,7 +3574,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if rec.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
 		customEndpoint, err := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
 		if err != nil {
-			return RestoreResult{}, fmt.Errorf("%s %s: model configuration: %w", operation, rec.ID, err)
+			return RestoreResult{}, relaunchFailed("model configuration", fmt.Errorf("%s %s: model configuration: %w", operation, rec.ID, err))
 		}
 		if customEndpoint || validateSpawnModel(rec.Harness, agentConfig.Model) != nil {
 			agentConfig.Model = ""
@@ -3649,7 +3649,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("launch command", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	if requireNativeHistory && !forceFresh && mode != RestoreModeNative {
 		m.cleanupSystemPromptDir(rec.ID)
@@ -3672,12 +3672,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
 		if err != nil {
 			m.cleanupSystemPromptDir(rec.ID)
-			return RestoreResult{}, fmt.Errorf("%s %s: after-start prompt: %w", operation, rec.ID, err)
+			return RestoreResult{}, relaunchFailed("after-start prompt", fmt.Errorf("%s %s: after-start prompt: %w", operation, rec.ID, err))
 		}
 	}
 	if err := m.validateAgentBinary(argv); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("agent binary", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
 	launchID := strings.TrimSpace(reservedGeneration)
@@ -3702,7 +3702,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("controller admission", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	defer releaseCodexAdmission()
 	runtimeCfg := ports.RuntimeConfig{
@@ -3783,7 +3783,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			cleanupErr := m.rollbackNativeInitialization(cleanupCtx, rec, handle, launchID)
 			cancel()
-			return RestoreResult{}, fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr))
+			return RestoreResult{}, relaunchFailed("native initialization", fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr)))
 		}
 	}
 	if delivery == ports.PromptDeliveryAfterStart || initialization != nil {
