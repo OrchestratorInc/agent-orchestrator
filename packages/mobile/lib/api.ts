@@ -189,11 +189,20 @@ export type SessionsResponse = {
 	 */
 	archive?: ArchiveSummary | null;
 	/**
-	 * Unread notifications, when asked for with `unread`. Null when that request
-	 * failed (an older daemon without /notifications, or a blip).
+	 * Settles once every request of this poll has: the unread count, when asked
+	 * for with `unread` (null when that request failed, e.g. an older daemon
+	 * without /notifications), and how long main's one-after-another order would
+	 * have taken from `startedAt`, for pacing the next poll.
 	 */
-	notificationsUnread?: number | null;
+	settled?: Promise<PollSettled>;
 };
+
+export type PollSettled = { notificationsUnread?: number | null; serialMs: number; startedAt: number };
+
+/** When the next poll may start: as often as main's serial requests allowed, never sooner than `intervalMs` from now. */
+export function nextPollDelay(settled: PollSettled, intervalMs: number, now = Date.now()): number {
+	return Math.max(intervalMs, settled.startedAt + settled.serialMs + intervalMs - now);
+}
 
 
 export type { ArchiveSummary } from "./archive/archiveSummary";
@@ -673,6 +682,8 @@ export async function getSessions(
 	const hostKey = archiveHostKey(cfg);
 	const legacySince = legacyArchiveHosts.get(hostKey);
 	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
+	const startedAt = Date.now();
+	let sessionsMs = 0;
 	let accepted!: () => void;
 	const sessionsAccepted = new Promise<void>((resolve) => { accepted = resolve; });
 	const sessionsRead = req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init, undefined, accepted)
@@ -689,20 +700,30 @@ export async function getSessions(
 			// archived rows included; only one that filtered must be asked again.
 			const ignoredFilter = Array.isArray(data?.sessions) && data.sessions.some((s: WireSession) => s.isTerminated);
 			return { data: ignoredFilter ? data : await (await req(cfg, `${API}/sessions`, init)).json(), archive };
-		});
+		})
+		.finally(() => { sessionsMs = Date.now() - startedAt; });
 	// A failed /projects is reported as null rather than [] so a caller can tell
 	// "this daemon has no projects" from "we could not ask". It and the unread
 	// count stay caught: an older daemon, or one blip on that one route, must not
 	// knock the board offline when /sessions answered fine. The unfiltered list
 	// of an older daemon already carries its orchestrators.
 	const rest = sessionsAccepted.then(() => Promise.all([
-		tryPaged ? req(cfg, `${API}/orchestrators`, init).then((res) => res.json()) : null,
-		getProjects(cfg, init).catch(() => null),
-		opts.unread
-			? getNotifications(cfg, { status: "unread", limit: 1 }, init).then((page) => page.unreadCount, () => null)
-			: undefined,
+		timed(tryPaged ? req(cfg, `${API}/orchestrators`, init).then((res) => res.json()) : Promise.resolve(null)),
+		timed(getProjects(cfg, init).catch(() => null)),
 	]));
-	const [{ data: sessData, archive }, [orchData, projects, notificationsUnread]] = await Promise.all([sessionsRead, rest]);
+	// The board does not wait for the unread count, which only feeds the badge.
+	const unread = opts.unread
+		? sessionsAccepted.then(() => timed(getNotifications(cfg, { status: "unread", limit: 1 }, init).then((page) => page.unreadCount, () => null)))
+		: null;
+	const [{ data: sessData, archive }, [[orchData, orchMs], [projects, projectsMs]]] = await Promise.all([sessionsRead, rest]);
+	const settled = (unread ?? Promise.resolve([undefined, 0] as const)).then(([notificationsUnread, unreadMs]) => ({
+		notificationsUnread,
+		// What these requests take one after another, as they went before the
+		// /sessions headers released the rest. Callers pace their next poll from
+		// it so batching does not raise the poll rate (and data per minute).
+		serialMs: sessionsMs + Math.max(orchMs, projectsMs) + unreadMs,
+		startedAt,
+	}));
 	const nameOf = new Map((projects ?? []).map((p) => [p.id, p.name]));
 
 	const rawSessions: WireSession[] = Array.isArray(sessData?.sessions) ? sessData.sessions : [];
@@ -732,10 +753,12 @@ export async function getSessions(
 		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);
 
-	return {
-		sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive,
-		...(notificationsUnread !== undefined ? { notificationsUnread } : {}),
-	};
+	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive, settled };
+}
+
+function timed<T>(work: Promise<T>): Promise<readonly [T, number]> {
+	const started = Date.now();
+	return work.then((value) => [value, Date.now() - started] as const);
 }
 
 /**

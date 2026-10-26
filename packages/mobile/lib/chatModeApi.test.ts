@@ -5,7 +5,7 @@ vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { fetch as expoFetch } from "expo/fetch";
-import { ApiError, apiRequest, delegateTask, getAgentModels, getArchivedSessions, getPreview, getSessions, getSettings, launchOrchestrator, mobileReachablePreviewURL, pinSession, renameSession, restoreSession, resumeSessionAgent, setSessionAutoInjectCI, setSessionAutoInjectReview, setSessionAutoReview, spawnSession, unpinSession, resetArchivePagingProbes } from "./api";
+import { ApiError, apiRequest, delegateTask, getAgentModels, getArchivedSessions, getPreview, getSessions, getSettings, launchOrchestrator, mobileReachablePreviewURL, nextPollDelay, pinSession, renameSession, restoreSession, resumeSessionAgent, setSessionAutoInjectCI, setSessionAutoInjectReview, setSessionAutoReview, spawnSession, unpinSession, resetArchivePagingProbes } from "./api";
 import * as chatApi from "./chat/api";
 import { UNREACHABLE_ACTION_COPY, UnreachableError, userFacingError } from "./connectionError";
 import type { ServerConfig } from "./config";
@@ -185,7 +185,31 @@ describe("mobile Chat API boundaries", () => {
 		pending.shift()!(response({ projects: [] }));
 		pending.shift()!(response({ error: "not found" }, 404));
 		// An older daemon without /notifications still loads the board.
-		expect((await board).notificationsUnread).toBeNull();
+		expect(await (await board).settled).toMatchObject({ notificationsUnread: null });
+	});
+
+	it("publishes the board without waiting for the unread count", async () => {
+		let finishUnread!: (value: Response) => void;
+		vi.mocked(fetch).mockImplementation(async (url) => {
+			const path = String(url).replace("http://ao.test:3011/api/v1", "");
+			if (path.startsWith("/notifications")) return new Promise<Response>((resolve) => { finishUnread = resolve; });
+			return response(path.startsWith("/sessions") ? { archived: NO_ARCHIVE, sessions: [] } : path === "/projects" ? { projects: [] } : { sessions: [] });
+		});
+		const board = await getSessions(cfg, "all", undefined, { unread: true });
+		expect(board.sessions).toEqual([]);
+		let settled: unknown;
+		void board.settled!.then((value) => { settled = value; });
+		await Promise.resolve();
+		expect(settled).toBeUndefined();
+		finishUnread(response({ notifications: [], unreadCount: 3 }));
+		await vi.waitFor(() => expect(settled).toMatchObject({ notificationsUnread: 3 }));
+	});
+
+	it("paces the next poll as if the requests had gone one after another", () => {
+		// Started at 0, all done by 1 s, which main's serial order would have taken 3 s.
+		expect(nextPollDelay({ startedAt: 0, serialMs: 3_000 }, 8_000, 1_000)).toBe(10_000);
+		// Never sooner than the interval after this poll finished.
+		expect(nextPollDelay({ startedAt: 0, serialMs: 500 }, 8_000, 1_000)).toBe(8_000);
 	});
 
 	it("sends nothing else when the daemon rejects the credential, every tick", async () => {

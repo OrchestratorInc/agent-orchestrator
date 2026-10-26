@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reconcileRows } from "./rowSharing";
-import { ApiError, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
+import { ApiError, getSessions, nextPollDelay, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
 import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
@@ -182,12 +182,14 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				orchestrators: answer.orchestrators,
 				orchestratorId: answer.orchestratorId,
 				stats: answer.stats,
-				// Older daemons may not serve notifications; the last count stands.
-				...(typeof answer.notificationsUnread === "number" ? { notificationsUnread: answer.notificationsUnread } : {}),
 				lastSyncAt: Date.now(),
 			});
 			connected = true;
-			schedule(pollIntervalFor(c));
+			const settled = await answer.settled;
+			if (stopped || runner.config !== c) return;
+			// Older daemons may not serve notifications; the last count stands.
+			if (typeof settled?.notificationsUnread === "number") update({ notificationsUnread: settled.notificationsUnread });
+			schedule(settled ? nextPollDelay(settled, pollIntervalFor(c)) : pollIntervalFor(c));
 		} catch (cause) {
 			if (stopped || runner.config !== c) return;
 			const status = cause instanceof ApiError ? cause.status : undefined;

@@ -10,6 +10,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 vi.mock("./api", () => ({
 	ApiError: class ApiError extends Error { constructor(public status: number) { super(String(status)); } },
 	getSessions: vi.fn(),
+	nextPollDelay: (_settled: unknown, intervalMs: number) => intervalMs,
 }));
 vi.mock("./connectRuntime", () => ({ connectToHost: vi.fn() }));
 vi.mock("./hosts", () => ({ findHost: vi.fn() }));
@@ -127,7 +128,7 @@ describe("other host ownership handoff", () => {
 			createdAt: "2026-10-09T00:00:00Z", lastActivityAt: "2026-10-09T00:00:00Z",
 		}));
 		let unread = 0;
-		vi.mocked(getSessions).mockImplementation(async () => ({ projects: [], sessions: structuredClone(rows), orchestrators: [], orchestratorId: null, stats: {}, notificationsUnread: unread }));
+		vi.mocked(getSessions).mockImplementation(async () => ({ projects: [], sessions: structuredClone(rows), orchestrators: [], orchestratorId: null, stats: {}, settled: Promise.resolve({ notificationsUnread: unread, serialMs: 0, startedAt: 0 }) }));
 		const renderer = await renderHarness();
 		try {
 			const first = current.snapshots.b.sessions;

@@ -7,6 +7,7 @@ import type { HostSnapshot } from "./otherHosts";
 vi.mock("./api", () => ({
 	ApiError: class ApiError extends Error { constructor(public status: number) { super(String(status)); } },
 	getSessions: vi.fn(),
+	nextPollDelay: (_settled: unknown, intervalMs: number) => intervalMs,
 }));
 vi.mock("./connectRuntime", () => ({ connectToHost: vi.fn() }));
 vi.mock("./hosts", () => ({ findHost: vi.fn() }));
@@ -31,7 +32,7 @@ describe("another paired host's live runner", () => {
 		vi.mocked(getSessions).mockResolvedValue({
 			projects: [{ id: "same-project", name: "Todo" }],
 			sessions: [{ id: "same-session", projectId: "same-project", mode: "chat" } as DashboardSession],
-			orchestrators: [], orchestratorId: null, stats: {}, notificationsUnread: 2,
+			orchestrators: [], orchestratorId: null, stats: {}, settled: Promise.resolve({ notificationsUnread: 2, serialMs: 0, startedAt: 0 }),
 		});
 		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
 		let snapshot = emptyHostSnapshot(host);
