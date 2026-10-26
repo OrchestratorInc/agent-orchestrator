@@ -2,6 +2,8 @@ package httpd
 
 import (
 	"compress/flate"
+	"compress/zlib"
+	"io"
 	"net/http"
 	"strings"
 
@@ -12,7 +14,15 @@ import (
 // for content types, existing encodings and streaming/upgrade writer interfaces;
 // its pinned version does not negotiate Accept-Encoding quality values.
 func remoteJSONCompression(next http.Handler) http.Handler {
-	compress := middleware.Compress(flate.BestSpeed, "application/json")
+	compressor := middleware.NewCompressor(flate.BestSpeed, "application/json")
+	// HTTP deflate requires zlib framing; chi's default encoder emits raw DEFLATE.
+	compressor.SetEncoder("deflate", func(w io.Writer, level int) io.Writer {
+		writer, err := zlib.NewWriterLevel(w, level)
+		if err != nil {
+			return nil
+		}
+		return writer
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		encoding := preferredRemoteEncoding(r.Header.Values("Accept-Encoding"))
 		if encoding == "" {
@@ -24,7 +34,7 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 		// may proxy the request) still sees the original, unmodified headers.
 		negotiated := r.Clone(r.Context())
 		negotiated.Header.Set("Accept-Encoding", encoding)
-		compress(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		compressor.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			next.ServeHTTP(w, r)
 		})).ServeHTTP(w, negotiated)
 	})

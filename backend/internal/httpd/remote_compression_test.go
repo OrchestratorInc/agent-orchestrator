@@ -1,8 +1,8 @@
 package httpd
 
 import (
-	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,7 +88,10 @@ func TestRemoteJSONCompressionNegotiation(t *testing.T) {
 				defer reader.Close()
 				decoded = reader
 			case "deflate":
-				reader := flate.NewReader(recorder.Body)
+				reader, err := zlib.NewReader(recorder.Body)
+				if err != nil {
+					t.Fatalf("HTTP deflate response lacks valid zlib framing: %v", err)
+				}
 				defer reader.Close()
 				decoded = reader
 			}
