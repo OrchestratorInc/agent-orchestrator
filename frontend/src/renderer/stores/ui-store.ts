@@ -25,6 +25,8 @@ import {
 export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
 export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
 
+export type ChatSendKeyMode = "enter" | "mod-enter";
+
 export type GlobalSettingsSection =
 	| "general"
 	| "harness"
@@ -176,6 +178,8 @@ export type UiState = {
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	/** Chat only: plain Enter sends by default; mod-enter reserves it for newlines. */
+	chatSendKeyMode: ChatSendKeyMode;
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
@@ -232,6 +236,7 @@ export type UiState = {
 	setSideChats: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setChatSendKeyMode: (mode: ChatSendKeyMode) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
@@ -300,6 +305,7 @@ const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const chatSendKeyModeStorageKey = "ao.chatSendKeyMode";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
 function getLocalStorage() {
@@ -335,6 +341,10 @@ function initialWindowTranslucency() {
 
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
+}
+
+function initialChatSendKeyMode(): ChatSendKeyMode {
+	return getLocalStorage()?.getItem(chatSendKeyModeStorageKey) === "mod-enter" ? "mod-enter" : "enter";
 }
 
 function syncDeveloperModeToUpdater(enabled: boolean): void {
@@ -395,6 +405,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	sideChats: initialSideChats(),
 	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	chatSendKeyMode: initialChatSendKeyMode(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) === "true",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
@@ -471,6 +482,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
+	},
+	setChatSendKeyMode: (chatSendKeyMode) => {
+		getLocalStorage()?.setItem(chatSendKeyModeStorageKey, chatSendKeyMode);
+		set({ chatSendKeyMode });
 	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
