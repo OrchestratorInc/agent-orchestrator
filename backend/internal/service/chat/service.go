@@ -856,6 +856,13 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		})
 	}
 	if err != nil {
+		if errors.Is(err, ports.ErrChatAuthRequired) {
+			// A cached successful probe outlives the provider's credential (a
+			// one-hour token, a revoked key). Forgetting it makes the next spawn
+			// re-probe, so an expired credential is reported by PreflightChat
+			// before any worktree exists instead of failing here again.
+			s.forgetProbe(cfg.Harness)
+		}
 		return nil, err
 	}
 	liveReconnect := false
@@ -2268,6 +2275,14 @@ func capabilityAdmissionError(
 		Missing:                append([]ports.ChatCapability(nil), missing...),
 		AllowedPermissionModes: allowed,
 	}
+}
+
+// forgetProbe drops a harness's cached capabilities so the next admission
+// re-runs the driver's Probe.
+func (s *Service) forgetProbe(harness domain.AgentHarness) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	delete(s.probed, harness)
 }
 
 // ChatUnavailable maps each of harnesses whose chat adapter is missing to the

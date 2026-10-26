@@ -213,7 +213,9 @@ var shippedMigrations = map[int64]string{
 	214: "0214_app_settings_version_refresh.sql",
 	215: "0215_session_harness_releases.sql",
 
+	// UTC timestamp IDs from npm run migration:create start here.
 	20261019142324385: "20261019142324385_allow_hermes_harness.sql",
+	20261019154945497: "20261019154945497_allow_zcode_harness.sql",
 	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
 	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
 	20261020090353460: "20261020090353460_allow_ao_action_activity.sql",
