@@ -182,24 +182,6 @@ type ReadOnlySession struct {
 	PermissionPolicy PermissionPolicy
 }
 
-// sessionPolicy picks the mode mapping and permission policy for a launch.
-func (d *Driver) sessionPolicy(cfg LaunchConfig) (func(ports.PermissionMode) string, PermissionPolicy) {
-	if !cfg.ReadOnly || d.cfg.ReadOnly == nil {
-		return d.cfg.SessionMode, d.cfg.PermissionPolicy
-	}
-	session := d.cfg.ReadOnly(cfg)
-	return func(ports.PermissionMode) string { return session.Mode }, session.PermissionPolicy
-}
-
-// checkReadOnly refuses a read-only launch the binding cannot honor. A launch
-// with its tools disabled has nothing left to restrict.
-func (d *Driver) checkReadOnly(cfg LaunchConfig) error {
-	if cfg.ReadOnly && !cfg.DisableTools && d.cfg.ReadOnly == nil {
-		return fmt.Errorf("%w: %s chat cannot run read-only", ports.ErrChatCapabilityUnavailable, d.cfg.Harness)
-	}
-	return nil
-}
-
 // SessionOption is one ACP session configuration selection.
 type SessionOption struct {
 	ID    string
@@ -280,6 +262,24 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 
 // Harness identifies the AO harness this ACP transport adapts.
 func (d *Driver) Harness() domain.AgentHarness { return d.cfg.Harness }
+
+// sessionPolicy picks the mode mapping and permission policy for a launch.
+func (d *Driver) sessionPolicy(cfg LaunchConfig) (func(ports.PermissionMode) string, PermissionPolicy) {
+	if !cfg.ReadOnly || d.cfg.ReadOnly == nil {
+		return d.cfg.SessionMode, d.cfg.PermissionPolicy
+	}
+	session := d.cfg.ReadOnly(cfg)
+	return func(ports.PermissionMode) string { return session.Mode }, session.PermissionPolicy
+}
+
+// checkReadOnly refuses a read-only launch the binding cannot honor. A launch
+// with its tools disabled has nothing left to restrict.
+func (d *Driver) checkReadOnly(cfg LaunchConfig) error {
+	if cfg.ReadOnly && !cfg.DisableTools && d.cfg.ReadOnly == nil {
+		return fmt.Errorf("%w: %s chat cannot run read-only", ports.ErrChatCapabilityUnavailable, d.cfg.Harness)
+	}
+	return nil
+}
 
 // Probe checks the provider binding without creating an ACP session or worktree.
 func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
