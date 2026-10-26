@@ -21,6 +21,8 @@ test.describe("live renderer performance workloads", () => {
 	);
 	test.use({ viewport: { width: 1440, height: 1000 } });
 	for (const workload of [
+		"largeTurn",
+		"largeTurnDisclosure",
 		"events",
 		"streaming",
 		"markdownBlocks",
@@ -48,6 +50,11 @@ test.describe("live renderer performance workloads", () => {
 			}
 			if (workload === "chatRenderCost") expect(result.mountedTurns).toBe(18);
 			if ("latestCallback" in result) expect(result.latestCallback).toBe(true);
+			if ("collapsedBodiesMounted" in result) {
+				expect(result.collapsedBodiesMounted).toBe(false);
+				expect(result.missingOutputs).toBe(0);
+				expect(result.missingNotes).toBe(0);
+			}
 			const label = process.env.AO_PERF_LABEL ?? "sample";
 			const record = {
 				label,
