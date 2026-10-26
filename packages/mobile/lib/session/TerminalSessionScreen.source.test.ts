@@ -8,10 +8,12 @@ describe("the terminal screen's native chrome", () => {
 	it("declares its header actions as native toolbar items", () => {
 		expect(screen).toContain('<Stack.Toolbar placement="right">');
 		expect(screen).toContain('icon={toolbarIcon("chat")}');
-		expect(screen).toContain('icon={toolbarIcon("globe")}');
+		expect(screen).toContain('icon={toolbarIcon(hasPreview && ios ? PREVIEW_READY_GLYPH : "globe")}');
 		expect(screen).toContain('icon={toolbarIcon("fileSearch")}');
 		// The preview-ready dot is the system badge, not a view placed by hand.
 		expect(screen).toContain("<Stack.Toolbar.Badge style={{ backgroundColor: t.green }} />");
+		// iOS has no empty badge, so the globe changes shape there, not only colour.
+		expect(screen).toContain('const PREVIEW_READY_GLYPH: ToolbarSymbol = { ios: "globe.americas.fill", android: "language" };');
 		expect(screen).not.toContain("headerRight: () =>");
 		expect(screen).not.toContain("browserReadyDot");
 	});

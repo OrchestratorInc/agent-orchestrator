@@ -39,7 +39,7 @@ import { adjustTerminalViewport, fitTerminalViewport, scrollTerminalToTop, scrol
 import { ScrollTopButton } from "./ScrollTopButton";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { font, fontScaleCap, iconSize, radius, space, touchTarget, type } from "../tokens";
-import { toolbarIcon } from "../toolbarIcon";
+import { toolbarIcon, type ToolbarSymbol } from "../toolbarIcon";
 import { Spinner } from "../Spinner";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -56,6 +56,9 @@ const FONT_SIZE = 12;
 
 /** A terminal with nothing running behind it: power, switched off. */
 const TERMINATED_GLYPH: PlatformSymbol = { ios: "power", android: "power_settings_new" };
+
+/** The preview globe once there is something to open: filled, a shape change and not only a colour. */
+const PREVIEW_READY_GLYPH: ToolbarSymbol = { ios: "globe.americas.fill", android: "language" };
 
 // Injected into the xterm WebView after load. xterm has its own touch handlers
 // that scroll by discrete lines (the janky "1 line per swipe"). We intercept in
@@ -1327,10 +1330,11 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				)}
 				{shellOnly ? null : (
 					<Stack.Toolbar.Button
-						icon={toolbarIcon("globe")}
-						accessibilityLabel={hasPreview ? "Open preview, preview ready" : "Open preview"}
 						// iOS draws a bar-button badge only from iOS 26, and an empty one is
-						// a blank capsule there, so on iOS the globe itself turns green.
+						// a blank capsule there, so on iOS the globe itself changes: it
+						// fills in, and turns green as well.
+						icon={toolbarIcon(hasPreview && ios ? PREVIEW_READY_GLYPH : "globe")}
+						accessibilityLabel={hasPreview ? "Open preview, preview ready" : "Open preview"}
 						tintColor={hasPreview && ios ? t.green : undefined}
 						onPress={() => headerActions.current.toggleBrowser()}
 					>
