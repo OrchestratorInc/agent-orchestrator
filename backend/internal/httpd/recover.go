@@ -36,7 +36,8 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 						"panic", fmt.Sprint(rec),
 						"stack", stack,
 					)
-					path := telemetrymeta.RoutePattern(r)
+					route := telemetrymeta.RoutePattern(r)
+					path := route.String()
 					panicKind := telemetrymeta.PanicKind(rec)
 					fingerprint := telemetrymeta.Fingerprint("httpd", "http_request_panic", r.Method, path, panicKind)
 					if sink != nil {
@@ -57,15 +58,15 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 							},
 						})
 					}
-					// Capture the panic to Sentry with its Go stack.
-					sentryobs.CapturePanic(r.Context(), rec, stack, map[string]string{
+					// Sentry keeps safe stack frames without raw panic text.
+					sentryobs.CapturePanic(r.Context(), rec, map[string]string{
 						"component":  "httpd",
 						"operation":  "http_request_panic",
 						"method":     r.Method,
 						"path":       path,
 						"panic_kind": panicKind,
 						"request_id": middleware.GetReqID(r.Context()),
-					}, fingerprint)
+					}, fingerprint, route)
 					writeRecoveredError(w, r)
 				}
 			}()

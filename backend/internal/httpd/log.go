@@ -34,7 +34,7 @@ func requestLogger(log *slog.Logger, sink ports.EventSink) func(http.Handler) ht
 	return requestLoggerWithCapture(log, sink, sentryobs.CaptureHTTPError)
 }
 
-type captureHTTPErrorFunc func(context.Context, error, map[string]string, string)
+type captureHTTPErrorFunc func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute)
 
 func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTTPError captureHTTPErrorFunc) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -58,7 +58,8 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 				}
 				log.Info("http request", attrs...)
 				if ww.Status() >= http.StatusInternalServerError {
-					path := telemetrymeta.RoutePattern(r)
+					route := telemetrymeta.RoutePattern(r)
+					path := route.String()
 					capErr := captured.Err
 					var errorKind, errorCode string
 					if capErr != nil {
@@ -116,7 +117,8 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							Payload:    payload,
 						})
 					}
-					// Capture genuine faults to Sentry with the real error/stack.
+					// Sentry keeps safe diagnostic fields and stack frames, but
+					// replaces error text before sending.
 					// 503 (transient contention) is excluded by ShouldCaptureStatus.
 					if sentryobs.ShouldCaptureStatus(ww.Status()) {
 						err := capErr
@@ -133,7 +135,7 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							"error_kind": errorKind,
 							"error_code": errorCode,
 							"request_id": middleware.GetReqID(r.Context()),
-						}, fingerprint)
+						}, fingerprint, route)
 					}
 				}
 			}()

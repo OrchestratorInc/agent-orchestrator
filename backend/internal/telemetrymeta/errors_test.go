@@ -23,11 +23,20 @@ func TestErrorKindAndCode(t *testing.T) {
 	}
 }
 
+func TestSafeErrorAndPanicKinds(t *testing.T) {
+	if !IsErrorKind(ErrorKind(apierr.KindInternal)) || !IsPanicKind(PanicKind("private panic")) {
+		t.Fatal("produced error or panic kind was rejected")
+	}
+	if IsErrorKind("private_project") || IsPanicKind("private_session") {
+		t.Fatal("dynamic error or panic kind was accepted")
+	}
+}
+
 func TestRoutePatternPrefersChiPattern(t *testing.T) {
 	var got string
 	r := chi.NewRouter()
 	r.Get("/api/v1/projects/{projectID}/sessions/{sessionID}", func(w http.ResponseWriter, req *http.Request) {
-		got = RoutePattern(req)
+		got = RoutePattern(req).String()
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -40,6 +49,13 @@ func TestRoutePatternPrefersChiPattern(t *testing.T) {
 	}
 	if got != "/api/v1/projects/{projectID}/sessions/{sessionID}" {
 		t.Fatalf("route pattern = %q, want chi route pattern", got)
+	}
+}
+
+func TestRoutePatternNeverFallsBackToRequestPath(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects/PrivateProjectOrSession_Z9", nil)
+	if got := RoutePattern(req).String(); got != "unmatched" {
+		t.Fatalf("unmatched route = %q, want fixed fallback", got)
 	}
 }
 

@@ -45,6 +45,16 @@ func ErrorKind(kind apierr.Kind) string {
 	}
 }
 
+// IsErrorKind accepts only the categories produced by ErrorKind.
+func IsErrorKind(kind string) bool {
+	switch kind {
+	case "internal", "invalid", "not_found", "conflict", "forbidden", "too_many_requests", "not_implemented", "unavailable":
+		return true
+	default:
+		return false
+	}
+}
+
 // PanicKind classifies panic payloads without exporting their raw contents.
 func PanicKind(rec any) string {
 	switch rec.(type) {
@@ -57,6 +67,11 @@ func PanicKind(rec any) string {
 	}
 }
 
+// IsPanicKind accepts only the categories produced by PanicKind.
+func IsPanicKind(kind string) bool {
+	return kind == "error" || kind == "string" || kind == "other"
+}
+
 // StatusFamily returns a telemetry-friendly HTTP status bucket like 5xx.
 func StatusFamily(status int) string {
 	if status < 100 || status > 999 {
@@ -65,20 +80,28 @@ func StatusFamily(status int) string {
 	return fmt.Sprintf("%dxx", status/100)
 }
 
-// RoutePattern returns the chi route template when available, else the URL path.
-func RoutePattern(r *http.Request) string {
+// SafeRoute is a registered route template or a fixed fallback. Its value cannot
+// be built from a request URL path, which may contain user-provided names.
+type SafeRoute struct{ pattern string }
+
+func (route SafeRoute) String() string {
+	if route.pattern == "" {
+		return "unmatched"
+	}
+	return route.pattern
+}
+
+// RoutePattern returns the chi route template when available, else "unmatched".
+func RoutePattern(r *http.Request) SafeRoute {
 	if r == nil {
-		return ""
+		return SafeRoute{}
 	}
 	if rc := chi.RouteContext(r.Context()); rc != nil {
 		if pattern := strings.TrimSpace(rc.RoutePattern()); pattern != "" {
-			return pattern
+			return SafeRoute{pattern: pattern}
 		}
 	}
-	if r.URL == nil {
-		return ""
-	}
-	return r.URL.Path
+	return SafeRoute{}
 }
 
 // Fingerprint returns a short stable digest for grouping similar failures.

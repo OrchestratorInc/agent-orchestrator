@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // TestRequestLoggerRecords5xxCause: the wire envelope collapses unrecognized
@@ -67,8 +68,8 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 			if got := payload["method"]; got != http.MethodPost {
 				t.Fatalf("payload.method = %#v, want POST", got)
 			}
-			if got := payload["path"]; got != "/api/v1/sessions/x/kill" {
-				t.Fatalf("payload.path = %#v, want request path fallback", got)
+			if got := payload["path"]; got != "unmatched" {
+				t.Fatalf("payload.path = %#v, want fixed unmatched fallback", got)
 			}
 			if got := payload["status"]; got != http.StatusInternalServerError {
 				t.Fatalf("payload.status = %#v, want 500", got)
@@ -135,7 +136,7 @@ func TestRequestLoggerSkipsExpectedCodexUnavailableAndCapturesReal500Once(t *tes
 	log := slog.New(slog.NewTextHandler(&buf, nil))
 	sink := &captureSink{}
 	captures := 0
-	handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string) {
+	handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute) {
 		captures++
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/unavailable" {

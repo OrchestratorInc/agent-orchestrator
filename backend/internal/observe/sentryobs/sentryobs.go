@@ -16,11 +16,15 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 var enabled atomic.Bool
@@ -34,9 +38,65 @@ var captureGate = struct {
 }{}
 
 var (
-	safeErrorCode   = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,79}$`)
 	safeFingerprint = regexp.MustCompile(`^[0-9a-f]{16}$`)
 )
+
+// New daemon Sentry capture operations and tags must be registered here.
+// The values are fixed by AO, never copied from an error or request.
+var operationLabels = map[string]string{
+	"http_request":       "HTTP server error",
+	"http_request_panic": "http handler panic",
+}
+
+// Only literal codes used for reportable 5xx API errors belong here. A new
+// error code stays out of Sentry until it is deliberately added to this list.
+var safeErrorCodes = map[string]struct{}{
+	"AGENT_AUTH_DATA_HOME_UNAVAILABLE":          {},
+	"AGENT_AUTH_TERMINAL_UNAVAILABLE":           {},
+	"AGENT_AUTH_WORKSPACE_UNAVAILABLE":          {},
+	"AUTOMATION_CREATE_FAILED":                  {},
+	"AUTOMATION_DELETE_FAILED":                  {},
+	"AUTOMATION_LIST_FAILED":                    {},
+	"AUTOMATION_READ_FAILED":                    {},
+	"AUTOMATION_RUN_LIST_FAILED":                {},
+	"AUTOMATION_UPDATE_FAILED":                  {},
+	"CLONE_PREPARATION_FAILED":                  {},
+	"CODEX_ACCOUNT_LOGOUT_UNSUPPORTED":          {},
+	"CODEX_ACCOUNT_MANAGEMENT_UNSUPPORTED":      {},
+	"CODEX_GLOBAL_CREDENTIAL_STORE_UNSUPPORTED": {},
+	"CODEX_RESET_CREDIT_UNSUPPORTED":            {},
+	"GITHUB_AUTH_TERMINAL_UNAVAILABLE":          {},
+	"INTERNAL":                                  {},
+	"INTERNAL_ERROR":                            {},
+	"MEMORY_UNSUPPORTED":                        {},
+	"MODEL_DISCOVERY_UNAVAILABLE":               {},
+	"NOT_IMPLEMENTED":                           {},
+	"PROJECTS_LIST_FAILED":                      {},
+	"PROJECT_ADD_FAILED":                        {},
+	"PROJECT_CONFIG_UPDATE_FAILED":              {},
+	"PROJECT_LOAD_FAILED":                       {},
+	"PROJECT_PERMISSIONS_UPDATE_FAILED":         {},
+	"PROJECT_REMOVE_FAILED":                     {},
+	"PROJECT_SETTINGS_UPDATE_FAILED":            {},
+	"RUNTIME_CREATE_FAILED":                     {},
+	"SHELL_TERMINAL_NO_PROJECT_LOOKUP":          {},
+	"SHELL_TERMINAL_NO_SESSION_LOOKUP":          {},
+	"SHELL_TERMINAL_NO_SHELL":                   {},
+	"SHELL_TERMINAL_NO_WORKING_DIR":             {},
+	"SPAWN_BROWSER_CAPABILITY_FAILED":           {},
+	"SPAWN_COMMIT_FAILED":                       {},
+	"SPAWN_CREATE_FAILED":                       {},
+	"SPAWN_INTERNAL":                            {},
+	"SPAWN_LAUNCH_COMMAND_FAILED":               {},
+	"SPAWN_PREPARE_FAILED":                      {},
+	"SPAWN_PREPARE_LAUNCH_FAILED":               {},
+	"SPAWN_PROMPT_DELIVERY_FAILED":              {},
+	"SPAWN_PROMPT_FAILED":                       {},
+	"SPAWN_SUPERVISOR_FAILED":                   {},
+	"SPAWN_SYSTEM_PROMPT_FAILED":                {},
+	"TERMINAL_FAILED":                           {},
+	"WORKSPACE_GIT_READ_FAILED":                 {},
+}
 
 // Config configures the daemon Sentry client.
 type Config struct {
@@ -151,19 +211,22 @@ func scrubEvent(event *sentry.Event) *sentry.Event {
 	// provider output, or panic values. Sentry derives issue titles from these
 	// fields, so path matching alone cannot make them safe.
 	label := "daemon error"
-	switch event.Tags["operation"] {
-	case "http_request_panic":
-		label = "http handler panic"
-	case "http_request":
-		label = "HTTP server error"
+	if known, ok := operationLabels[event.Tags["operation"]]; ok {
+		label = known
 	}
-	if code := event.Tags["error_code"]; safeErrorCode.MatchString(code) {
+	if code := event.Tags["error_code"]; safeErrorCode(code) {
 		label += " (" + code + ")"
 	}
 	event.Message = label
 	event.ServerName = "" // never leak the machine hostname
 	event.Request = nil   // no URLs/headers/cookies
-	event.Contexts = nil
+	// Rebuild the SDK environment context from trusted runtime constants. An
+	// arbitrary context, including a raw panic stack, never crosses this edge.
+	event.Contexts = map[string]sentry.Context{
+		"device":  {"arch": runtime.GOARCH},
+		"os":      {"name": runtime.GOOS},
+		"runtime": {"name": "go", "version": runtime.Version()},
+	}
 	event.Transaction = ""
 	event.Logger = ""
 	event.Breadcrumbs = nil
@@ -186,7 +249,7 @@ func scrubEvent(event *sentry.Event) *sentry.Event {
 	}
 	for i := range event.Exception {
 		event.Exception[i].Type = label
-		event.Exception[i].Value = label
+		event.Exception[i].Value = ""
 		event.Exception[i].Module = ""
 		event.Exception[i].Mechanism = nil
 		if st := event.Exception[i].Stacktrace; st != nil {
@@ -212,30 +275,37 @@ func safeSentryTag(key, value string) bool {
 	case "component":
 		return value == "httpd"
 	case "operation":
-		return value == "http_request" || value == "http_request_panic"
+		_, ok := operationLabels[value]
+		return ok
+	case "path":
+		// applyTags replaces caller-supplied paths with a SafeRoute before send.
+		return value != ""
 	case "method":
 		switch value {
 		case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
 			return true
 		}
 	case "status":
-		return len(value) == 3 && value[0] == '5' && value != "503" && value[1] >= '0' && value[1] <= '9' && value[2] >= '0' && value[2] <= '9'
+		status, err := strconv.Atoi(value)
+		return err == nil && ShouldCaptureStatus(status)
 	case "category":
 		return value == "http_5xx"
 	case "error_kind":
-		switch value {
-		case "internal", "invalid", "not_found", "conflict", "forbidden", "too_many_requests", "not_implemented", "unavailable":
-			return true
-		}
+		return telemetrymeta.IsErrorKind(value)
 	case "panic_kind":
-		return value == "error" || value == "string" || value == "other"
+		return telemetrymeta.IsPanicKind(value)
 	case "error_code":
-		return safeErrorCode.MatchString(value)
+		return safeErrorCode(value)
 	case "install_id":
 		id := installID.Load()
 		return id != nil && value != "" && value == *id
 	}
 	return false
+}
+
+func safeErrorCode(code string) bool {
+	_, ok := safeErrorCodes[code]
+	return ok
 }
 
 // ShouldCaptureStatus reports whether an HTTP status is a genuine server fault
@@ -247,14 +317,14 @@ func ShouldCaptureStatus(status int) bool {
 // CaptureHTTPError captures a server-fault error with the given tags and a
 // fingerprint identical to the PostHog grouping key. No-op when disabled or the
 // error is nil.
-func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fingerprint string) {
+func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute) {
 	if err == nil || ctx.Err() != nil || !enterCapture() {
 		return
 	}
 	defer leaveCapture()
 	sentry.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(sentry.LevelError)
-		applyTags(scope, tags)
+		applyTags(scope, tags, route)
 		if fingerprint != "" {
 			scope.SetFingerprint([]string{fingerprint})
 		}
@@ -263,14 +333,14 @@ func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fi
 }
 
 // CapturePanic captures a recovered panic at fatal level. No-op when disabled.
-func CapturePanic(ctx context.Context, recovered any, _ string, tags map[string]string, fingerprint string) {
+func CapturePanic(ctx context.Context, recovered any, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute) {
 	if ctx.Err() != nil || !enterCapture() {
 		return
 	}
 	defer leaveCapture()
 	sentry.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(sentry.LevelFatal)
-		applyTags(scope, tags)
+		applyTags(scope, tags, route)
 		if fingerprint != "" {
 			scope.SetFingerprint([]string{fingerprint})
 		}
@@ -278,16 +348,17 @@ func CapturePanic(ctx context.Context, recovered any, _ string, tags map[string]
 	})
 }
 
-func applyTags(scope *sentry.Scope, tags map[string]string) {
+func applyTags(scope *sentry.Scope, tags map[string]string, route telemetrymeta.SafeRoute) {
 	scope.SetTag("platform", "daemon")
 	for k, v := range tags {
-		if k == "install_id" {
+		if k == "install_id" || k == "path" {
 			continue
 		}
 		if v != "" {
 			scope.SetTag(k, v)
 		}
 	}
+	scope.SetTag("path", route.String())
 	if id := installID.Load(); id != nil && *id != "" {
 		scope.SetTag("install_id", *id)
 	}

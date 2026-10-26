@@ -3,12 +3,17 @@ package sentryobs
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/go-chi/chi/v5"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 func TestShouldCaptureStatus(t *testing.T) {
@@ -36,8 +41,8 @@ func TestInitNoDSNIsNoOp(t *testing.T) {
 		t.Fatal("Sentry should be disabled without a DSN")
 	}
 	// Capture calls must be safe no-ops when disabled.
-	CaptureHTTPError(context.TODO(), errString("boom"), map[string]string{"path": "/x"}, "fp")
-	CapturePanic(context.TODO(), "kaboom", "stack", nil, "fp")
+	CaptureHTTPError(context.TODO(), errString("boom"), map[string]string{"path": "/x"}, "fp", telemetrymeta.RoutePattern(nil))
+	CapturePanic(context.TODO(), "kaboom", nil, "fp", telemetrymeta.RoutePattern(nil))
 	Flush(0)
 }
 
@@ -48,7 +53,7 @@ func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	}
 	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
 	SetPolicyEnabled(true)
-	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp")
+	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil))
 	select {
 	case event := <-transport.events:
 		if event.Tags["install_id"] != "ins_stable" {
@@ -69,7 +74,7 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	if !Enabled() {
 		t.Fatal("missing installation ID disabled Sentry")
 	}
-	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp")
+	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil))
 	select {
 	case event := <-transport.events:
 		if _, ok := event.Tags["install_id"]; ok {
@@ -95,7 +100,7 @@ func TestScrubEventStripsPathsAndContext(t *testing.T) {
 		ServerName: "daves-macbook.local",
 		Request:    &sentry.Request{URL: "http://127.0.0.1:3001/api/v1/x"},
 		Contexts:   map[string]sentry.Context{"runtime": {"go_stack": "secret stack argument"}},
-		Tags:       map[string]string{"path": "/tmp/private-repo", "operation": "http_request"},
+		Tags:       map[string]string{"path": "unmatched", "operation": "http_request"},
 		Exception: []sentry.Exception{{
 			Value: "open /home/eve/ws/file: denied",
 			Stacktrace: &sentry.Stacktrace{Frames: []sentry.Frame{
@@ -113,14 +118,14 @@ func TestScrubEventStripsPathsAndContext(t *testing.T) {
 	if out.Request != nil {
 		t.Fatal("request context not dropped")
 	}
-	if out.Exception[0].Value != "HTTP server error" || out.Exception[0].Type != "HTTP server error" {
+	if out.Exception[0].Value != "" || out.Exception[0].Type != "HTTP server error" {
 		t.Fatalf("exception value not scrubbed: %q", out.Exception[0].Value)
 	}
 	f := out.Exception[0].Stacktrace.Frames[0]
 	if f.AbsPath != "" || f.Filename != "" || f.ContextLine != "" || len(f.Vars) != 0 || f.Function != "safeFunction" || f.Lineno != 42 {
 		t.Fatalf("frame paths not scrubbed: %+v", f)
 	}
-	if len(out.Contexts) != 0 || len(out.Tags) != 1 {
+	if len(out.Contexts) != 3 || out.Contexts["runtime"]["go_stack"] != nil || out.Contexts["runtime"]["version"] == "" || out.Contexts["device"]["arch"] == "" || out.Contexts["os"]["name"] == "" || len(out.Tags) != 2 {
 		t.Fatalf("dynamic context or tag survived: contexts=%+v tags=%+v", out.Contexts, out.Tags)
 	}
 }
@@ -135,7 +140,7 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 
 	const secret = "PrivateProjectOrSession_Z9"
 	tags := map[string]string{
-		"component": "httpd", "operation": "http_request", "method": "GET",
+		"component": "httpd", "operation": "http_request", "method": "GET", "category": "http_5xx", "platform": "daemon",
 		"status": "500", "error_kind": "internal", "error_code": "INTERNAL_ERROR",
 		"path": "/api/v1/projects/" + secret, "request_id": secret,
 	}
@@ -144,21 +149,21 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 		fmt.Errorf("get session %s: repo %s failed", secret, secret),
 		fmt.Errorf("open /tmp/%s/worktree: access denied", secret),
 	} {
-		CaptureHTTPError(context.Background(), err, tags, "0123456789abcdef")
+		CaptureHTTPError(context.Background(), err, tags, "0123456789abcdef", telemetrymeta.RoutePattern(nil))
 	}
 	for i := 0; i < 3; i++ {
 		event := <-transport.events
-		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != event.Message || event.Exception[0].Type != event.Message {
+		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 			t.Fatalf("unsafe title fields: message=%q exception=%+v", event.Message, event.Exception)
 		}
-		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || len(event.Exception[0].Stacktrace.Frames) == 0 {
+		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || len(event.Exception[0].Stacktrace.Frames) == 0 {
 			t.Fatalf("diagnostics lost: %+v", event)
 		}
 		if event.Fingerprint[0] != "0123456789abcdef" {
 			t.Fatalf("fingerprint lost: %+v", event.Fingerprint)
 		}
-		if _, ok := event.Tags["path"]; ok {
-			t.Fatalf("dynamic route leaked: %+v", event.Tags)
+		if event.Tags["path"] != "unmatched" {
+			t.Fatalf("unsafe route fallback: %+v", event.Tags)
 		}
 		if _, ok := event.Tags["request_id"]; ok {
 			t.Fatalf("untrusted request id leaked: %+v", event.Tags)
@@ -169,16 +174,66 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 		}
 	}
 
-	CapturePanic(context.Background(), "panic in "+secret, "goroutine 1 [running]:\n/tmp/"+secret+"/main.go:10", map[string]string{
+	CapturePanic(context.Background(), "panic in "+secret, map[string]string{
 		"component": "httpd", "operation": "http_request_panic", "panic_kind": "string", "path": "/" + secret,
-	}, "fedcba9876543210")
+	}, "fedcba9876543210", telemetrymeta.RoutePattern(nil))
 	event := <-transport.events
-	if event.Message != "http handler panic" || event.Exception[0].Value != event.Message || event.Exception[0].Type != event.Message {
+	if event.Message != "http handler panic" || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 		t.Fatalf("unsafe panic title: %+v", event)
 	}
 	encoded, err := event.MarshalJSON()
 	if err != nil || strings.Contains(string(encoded), secret) {
 		t.Fatalf("sensitive panic value in outbound event: %s, marshal error: %v", encoded, err)
+	}
+
+	CaptureHTTPError(context.Background(), errString(secret), map[string]string{
+		"operation": secret, "error_code": "PRIVATEPROJECTORSESSION_Z9", "path": "/" + secret,
+	}, secret, telemetrymeta.RoutePattern(nil))
+	event = <-transport.events
+	if event.Message != "daemon error" || event.Exception[0].Type != "daemon error" || event.Exception[0].Value != "" || len(event.Fingerprint) != 0 || event.Tags["error_code"] != "" || event.Tags["operation"] != "" || event.Tags["path"] != "unmatched" {
+		t.Fatalf("unknown code, operation, or fingerprint survived: %+v", event)
+	}
+	encoded, err = event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("sensitive fallback value in outbound event: %s, marshal error: %v", encoded, err)
+	}
+}
+
+func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+
+	router := chi.NewRouter()
+	router.Get("/api/v1/projects/{projectID}", func(w http.ResponseWriter, r *http.Request) {
+		CaptureHTTPError(r.Context(), errString("get project PrivateProjectOrSession_Z9 failed"), map[string]string{
+			"operation": "http_request", "path": r.URL.Path,
+		}, "0123456789abcdef", telemetrymeta.RoutePattern(r))
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/PrivateProjectOrSession_Z9", nil))
+	event := <-transport.events
+	if event.Tags["path"] != "/api/v1/projects/{projectID}" || event.Message != "HTTP server error" {
+		t.Fatalf("registered route or operation lost: %+v", event)
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), "PrivateProjectOrSession_Z9") {
+		t.Fatalf("request path leaked through registered route: %s, marshal error: %v", encoded, err)
+	}
+}
+
+func TestSentryTagRules(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]bool{"500": true, "502": true, "503": false, "499": false, "500x": false} {
+		if got := safeSentryTag("status", value); got != want {
+			t.Fatalf("status %q allowed = %v, want %v", value, got, want)
+		}
+	}
+	if !safeErrorCode("INTERNAL_ERROR") || safeErrorCode("PRIVATEPROJECTORSESSION_Z9") {
+		t.Fatal("error code allowlist accepted a synthetic code or rejected a known code")
 	}
 }
 
@@ -195,7 +250,7 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 
 	captured := make(chan struct{})
 	go func() {
-		CaptureHTTPError(context.Background(), errString("before opt-out"), nil, "fp")
+		CaptureHTTPError(context.Background(), errString("before opt-out"), nil, "fp", telemetrymeta.RoutePattern(nil))
 		close(captured)
 	}()
 	select {
@@ -222,7 +277,7 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 		t.Fatalf("Drain: %v", err)
 	}
 
-	CaptureHTTPError(context.Background(), errString("after opt-out"), nil, "fp")
+	CaptureHTTPError(context.Background(), errString("after opt-out"), nil, "fp", telemetrymeta.RoutePattern(nil))
 	if got := transport.calls.Load(); got != 1 {
 		t.Fatalf("provider calls = %d, want only the call entered before opt-out", got)
 	}
