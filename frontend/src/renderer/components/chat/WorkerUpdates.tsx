@@ -259,25 +259,31 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 	return undefined;
 }
 
-const PlainReferences = createContext<Options["remarkPlugins"]>(undefined);
+// Keyed on which sessions exist, not on the workspace list: that list changes with every session
+// event, and a new plugin list re-parses every message that renders it.
+// ponytail: one cached session set; chats on two hosts at once rebuild in turn, key the cache by set if that shows up.
+type References = { sessions: string; plugins: Options["remarkPlugins"] };
+const referencesByWorkspaces = new WeakMap<object, References>();
+let latestReferences: References | undefined;
 
 /**
  * Agents message each other in plain prose; their paths read as code and the
- * sessions they name link to them. One plugin list per chat, keyed on which
- * sessions exist rather than on the workspace list, which changes with every
- * session event and would re-parse every message.
+ * sessions they name link to them. Built once per workspace list and shared by
+ * every message, and the same list until a session is added or removed.
  */
-export function PlainReferencesProvider({ children }: { children: ReactNode }) {
+export function usePlainReferences(): Options["remarkPlugins"] {
 	const workspaces = useChatLinkWorkspaces();
-	const sessions = JSON.stringify(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id])));
-	const plugins = useMemo<Options["remarkPlugins"]>(
-		() => [[remarkPlainReferences, new Map(JSON.parse(sessions) as [string, string][])]],
-		[sessions],
-	);
-	return <PlainReferences.Provider value={plugins}>{children}</PlainReferences.Provider>;
+	let references = referencesByWorkspaces.get(workspaces);
+	if (!references) {
+		const sessions = JSON.stringify(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id])));
+		references = latestReferences?.sessions === sessions
+			? latestReferences
+			: { sessions, plugins: [[remarkPlainReferences, new Map(JSON.parse(sessions) as [string, string][])]] };
+		referencesByWorkspaces.set(workspaces, references);
+	}
+	latestReferences = references;
+	return references.plugins;
 }
-
-export const usePlainReferences = () => useContext(PlainReferences);
 
 function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const [open, setOpen] = useState(false);

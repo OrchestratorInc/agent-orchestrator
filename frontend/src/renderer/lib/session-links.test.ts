@@ -88,6 +88,9 @@ describe("session links", () => {
 		expect(found("frontend/src/renderer in session proj-297, not proj-2970.")).toEqual([
 			["frontend/src/renderer", "inlineCode"], ["proj-297", "link"],
 		]);
+		expect(found("src/App.test.tsx, src/index.d.ts and config/.env.local")).toEqual([
+			["src/App.test.tsx", "inlineCode"], ["src/index.d.ts", "inlineCode"], ["config/.env.local", "inlineCode"],
+		]);
 		expect(found("and/or CI/CD /review /tmp 1/2")).toEqual([]);
 		expect(findPlainReferences("proj-297", sessions)[0]!.node.url).toBe("ao://sessions/proj/proj-297");
 	});

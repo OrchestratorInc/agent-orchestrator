@@ -167,8 +167,8 @@ const LEADING_WRAP = /^[("'“‘[<]+/;
 const TRAILING_WRAP = /[)"'”’\]>.,;:!?]+$/;
 // `~/x`, `./x`, `/a/b`; a bare `/word` reads as a slash command, not a path.
 const ROOTED_PATH = /^(?:~|\.{1,2})\/\S|^\/[^\s/]+\//;
-// `a/b/c`, or `a/b.ext`, optionally with `:line[:col]`. A single `and/or` is prose.
-const RELATIVE_PATH = /^[\w.-]+(?:\/[\w.@+-]+){2,}(?::\d+){0,2}$|^[\w.-]+\/[\w@+-]+\.\w+(?::\d+){0,2}$/;
+// `a/b/c`, or `a/b.ext` (`a/b.test.tsx`, `a/.env.local`), optionally with `:line[:col]`. A single `and/or` is prose.
+const RELATIVE_PATH = /^[\w.-]+(?:\/[\w.@+-]+){2,}(?::\d+){0,2}$|^[\w.-]+\/[\w@+-]*(?:\.[\w@+-]+)+(?::\d+){0,2}$/;
 
 /**
  * Plain-text references in prose nobody formatted: file paths become inline code,
@@ -198,7 +198,8 @@ export function remarkPlainReferences(sessionProjects: ReadonlyMap<string, strin
 }
 
 function visitMarkdown(node: MarkdownNode, find: (text: string) => TextMatch[]): void {
-	if (!node.children || node.type === "code" || node.type === "inlineCode" || node.type === "link") return;
+	// An authored link, inline or by reference, keeps its own target; a link inside it would fire both.
+	if (!node.children || node.type === "code" || node.type === "inlineCode" || node.type === "link" || node.type === "linkReference") return;
 	for (let index = 0; index < node.children.length; index += 1) {
 		const child = node.children[index]!;
 		if (child.type !== "text" || !child.value) {
