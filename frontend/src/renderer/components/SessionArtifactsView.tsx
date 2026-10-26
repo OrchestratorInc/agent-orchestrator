@@ -313,7 +313,11 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session} />
+					<ArtifactActionsMenu artifact={selected} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+						{session.cloud || selectedFile.data?.binary ? null : (
+							<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
+						)}
+					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
 						{hasHtmlPreview && previewVersion === null ? (
@@ -322,9 +326,6 @@ export function SessionArtifactsView({
 								<Button className="transition-none" aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
 							</div>
 						) : null}
-						{session.cloud || selectedFile.data?.binary ? null : (
-							<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
-						)}
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button

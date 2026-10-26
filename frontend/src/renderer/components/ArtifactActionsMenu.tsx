@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ArrowUpRight, ChevronDown, Copy, Ellipsis, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
@@ -46,6 +46,7 @@ export function ArtifactActionsMenu({
 	onDeleted,
 	errorClassName,
 	className,
+	children,
 }: {
 	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl">;
 	hostId?: string;
@@ -60,6 +61,7 @@ export function ArtifactActionsMenu({
 	onDeleted?: () => void;
 	errorClassName?: string;
 	className?: string;
+	children?: ReactNode;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -203,6 +205,8 @@ export function ArtifactActionsMenu({
 					</Tooltip>
 				) : menuTrigger}
 				<DropdownMenuContent align={iconOnly ? "end" : "start"} className="min-w-44" data-browser-native-overlay="true">
+					{children}
+					{children ? <DropdownMenuSeparator /> : null}
 					{onTogglePin || onOpenInSession ? (
 						<>
 							{onTogglePin ? (

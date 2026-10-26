@@ -102,7 +102,7 @@ describe("SessionArtifactsView", () => {
 			renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={session()} />);
 
 			await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-			await userEvent.click(screen.getAllByRole("menuitem")[1]);
+			await userEvent.click(screen.getByRole("menuitem", { name: "Show in Terminal" }));
 			expect(await screen.findByRole("alert")).toHaveTextContent("Could not open Terminal.");
 
 			await act(() => vi.advanceTimersByTimeAsync(5_000));
@@ -200,12 +200,15 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView session={session([...artifacts, image])} />);
 
 		await userEvent.click(screen.getByRole("button", { name: /^plan\.md/ }));
-		expect(await screen.findByRole("button", { name: "Version history" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Version history" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: /^plan\.md/ }));
+		expect(await screen.findByRole("menuitem", { name: "Version history" })).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
 
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		await userEvent.click(screen.getByRole("button", { name: /^chart\.png/ }));
-		await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Version history" })).not.toBeInTheDocument());
 		await userEvent.click(screen.getByRole("button", { name: /chart\.png/ }));
+		expect(screen.queryByRole("menuitem", { name: "Version history" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Copy contents" })).not.toBeInTheDocument();
 	});
 
@@ -261,10 +264,10 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getAllByText("plan.md")).toHaveLength(1);
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
 		const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
-		expect(items).toEqual([expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"]);
-		await userEvent.click(screen.getAllByRole("menuitem")[0]);
+		expect(items).toEqual(["Version history", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"]);
+		await userEvent.click(screen.getByRole("menuitem", { name: /^Show in (?!Terminal)/ }));
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
-		await userEvent.click(screen.getAllByRole("menuitem")[1]);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Show in Terminal" }));
 
 		expect(openArtifacts).toHaveBeenNthCalledWith(1, { sessionId: "sess-1", targetId: "file-manager", path: "reports/plan.md" });
 		expect(openArtifacts).toHaveBeenNthCalledWith(2, { sessionId: "sess-1", targetId: "terminal", path: "reports/plan.md" });
@@ -282,13 +285,13 @@ describe("SessionArtifactsView", () => {
 		writeText.mockRestore();
 	});
 
-	it("copies the contents of any other artifact, and offers only that on a remote host", async () => {
+	it("copies other artifact contents on a remote host without local reveal actions", async () => {
 		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
 		const other: SessionArtifact = { kind: "file", name: "data.json", path: "data.json", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
 		renderView(<SessionArtifactsView hostId="remote-1" request={{ key: 1, path: "data.json" }} session={session([other])} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "data.json" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy contents", "Delete artifact"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", "Copy contents", "Delete artifact"]);
 		await userEvent.click(screen.getByRole("menuitem", { name: "Copy contents" }));
 
 		await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("contents of data.json"));
