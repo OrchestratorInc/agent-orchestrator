@@ -293,6 +293,47 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
+	it("blocks updates during inline sign-in and releases the guard after cancellation", async () => {
+		mockInstalledOperations("npm");
+		const login = { id: "login-update-guard", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-28T12:00:00Z", loginUrl: "https://auth.openai.com/authorize" };
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never;
+			if (path === "/api/v1/agents/{agent}/auth/operations/{operationId}") return { data: login } as never;
+			return get(path, options);
+		});
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth/operations" ? { data: login } as never : post(path, options));
+		let finishCancellation!: () => void;
+		const cancellation = new Promise<never>((resolve) => { finishCancellation = () => resolve({} as never); });
+		vi.spyOn(apiClient, "DELETE").mockReturnValue(cancellation);
+		try {
+			renderSection();
+			const page = await findAgentRow("codex");
+			const update = await within(page).findByRole("button", { name: "Update" });
+			expect(update).toBeEnabled();
+			// Also exercise the handler before React replaces the old Update control.
+			act(() => {
+				fireEvent.click(within(page).getByRole("button", { name: "Log in again" }));
+				fireEvent.click(update);
+			});
+			const panel = await within(page).findByRole("region", { name: "Sign in to Codex" });
+			await userEvent.click(within(panel).getByRole("button", { name: "Continue in browser" }));
+			expect(await within(panel).findByRole("button", { name: "Open sign-in page" })).toBeVisible();
+			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await act(async () => finishCancellation());
+			const unlockedUpdate = await within(page).findByRole("button", { name: "Update" });
+			expect(unlockedUpdate).toBeEnabled();
+			await userEvent.click(unlockedUpdate);
+			await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } }));
+		} finally {
+			finishCancellation();
+		}
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
