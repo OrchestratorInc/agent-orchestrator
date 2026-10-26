@@ -109,6 +109,29 @@ test("typing hides the suggestion and clearing the draft restores it for Tab acc
 	expect(sent).toEqual([]);
 });
 
+test("clearing Tab-accepted text restores the same suggestion until Escape dismisses it @T0", async ({ page }) => {
+	const { composer, sent, suggestion } = await openChat(page);
+	await expect(suggestion).toHaveText(prompt);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		await composer.press("Tab");
+		await expect(composer).toHaveText(prompt);
+		await expect(suggestion).toBeHidden();
+		await composer.press("ControlOrMeta+a");
+		await composer.press("Backspace");
+		await expect(composer).toHaveText("");
+		await expect(suggestion).toHaveText(prompt);
+		await expect(suggestion).toBeVisible();
+	}
+	await composer.press("Escape");
+	await expect(suggestion).toBeHidden();
+	await composer.pressSequentially("Another draft");
+	await composer.press("ControlOrMeta+a");
+	await composer.press("Backspace");
+	await expect(composer).toHaveText("");
+	await expect(suggestion).toBeHidden();
+	expect(sent).toEqual([]);
+});
+
 test("Escape dismisses the suggestion and restores normal Tab focus navigation @T0", async ({ page }) => {
 	const { composer, sent, suggestion } = await openChat(page);
 	await expect(suggestion).toHaveText(prompt);

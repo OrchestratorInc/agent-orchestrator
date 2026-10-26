@@ -514,7 +514,7 @@ const EditorBridge = forwardRef<
 	);
 
 	useLayoutEffect(() => {
-		// Draft edits only hide the hint; accepting it or pressing Escape dismisses it.
+		// Draft edits and Tab acceptance only hide the hint; Escape dismisses it.
 		const updateEmpty = () => onEmptyChange($serializeComposer().length === 0);
 		editor.getEditorState().read(updateEmpty);
 		return editor.registerUpdateListener(({ editorState, tags }) => {
@@ -543,7 +543,6 @@ const EditorBridge = forwardRef<
 				// restore. Outgoing text is trimmed; ordinary prose stays unchanged.
 				const trailingTrigger = findActiveTrigger(promptSuggestion.text, promptSuggestion.text.length);
 				selection.insertText(promptSuggestion.text + (trailingTrigger ? " " : ""));
-				onDismissSuggestion();
 				if (event) {
 					completionHandledEvents.add(event);
 					event.preventDefault();

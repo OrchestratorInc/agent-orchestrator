@@ -58,7 +58,28 @@ describe("next-message suggestion", () => {
 		expect(onSend).not.toHaveBeenCalled();
 		await userEvent.keyboard("{Tab}");
 		expect(lexicalEditorText(field)).toBe(suggestion.text);
+		expect(onDismiss).not.toHaveBeenCalled();
+	});
+
+	it("restores a Tab-accepted suggestion after deleting its text until Escape dismisses it", async () => {
+		const onDismiss = vi.fn();
+		const sessionId = "prompt-suggestion-cleared-after-tab";
+		const { field, onSend } = renderComposer({ draftSessionId: sessionId, promptSuggestion: { ...suggestion, onDismiss } });
+		for (let attempt = 0; attempt < 2; attempt++) {
+			await userEvent.keyboard("{Tab}");
+			expect(lexicalEditorText(field)).toBe(suggestion.text);
+			expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+			await clearDraft(field);
+			expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(suggestion.text);
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+			expect(onDismiss).not.toHaveBeenCalled();
+		}
+		fireEvent.keyDown(field, { key: "Escape" });
 		expect(onDismiss).toHaveBeenCalledOnce();
+		await typeInLexicalEditor(field, "Another draft");
+		await clearDraft(field);
+		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		expect(onSend).not.toHaveBeenCalled();
 	});
 
 	it("does not accept or send ghost text on Enter", async () => {
@@ -167,11 +188,11 @@ describe("next-message suggestion", () => {
 		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
 	});
 
-	it("undoes accepted suggestion text without restoring the ghost", async () => {
+	it("restores the suggestion when Tab-accepted text is undone", async () => {
 		const { field } = renderComposer();
 		await userEvent.keyboard("{Tab}");
 		await userEvent.keyboard("{Control>}z{/Control}");
 		expect(lexicalEditorText(field)).toBe("");
-		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(suggestion.text);
 	});
 });
