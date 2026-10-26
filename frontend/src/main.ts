@@ -1,4 +1,5 @@
 import { SideCloseRecovery } from "./main/side-close";
+import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
@@ -674,14 +675,9 @@ function focusMainWindow(): void {
 	mainWindow.focus();
 }
 
-let sideClaimedDaemonPID: number | undefined;
-let sideLaunchReady: Promise<void> = Promise.resolve();
 let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> } | undefined;
 const SIDE_STATE_BACKSTOP_MS = 5_000;
 let sideStateTimer: ReturnType<typeof setInterval> | undefined;
-let sideStatePolling = false;
-let sideStateRequest = 0;
-let sideStateApplied = 0;
 const sideCloseRecovery = new SideCloseRecovery();
 function publishPendingSideCloses(): void {
 	getShellWebContents()?.send("sideChats:pendingClosesChanged");
@@ -692,11 +688,28 @@ function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; nu
 	publishPendingSideCloses();
 }
 
+const sideLaunchRecovery = new SideLaunchRecovery({
+	snapshot: () => sideLaunchState,
+	onRestore: () => sideCloseRecovery.markRestoreAttempt(),
+	onSnapshot: rememberSideLaunchState,
+	onError: error => console.warn("AO: side chat recovery or capture failed", error),
+	onReady: () => {
+		const capture = () => sideLaunchRecovery.captureInBackground();
+		capture();
+		if (sideStateTimer) clearInterval(sideStateTimer);
+		sideStateTimer = setInterval(capture, SIDE_STATE_BACKSTOP_MS);
+	},
+});
+app.once("will-quit", () => {
+	sideLaunchRecovery.setAttachment(undefined);
+	if (sideStateTimer) clearInterval(sideStateTimer);
+	sideStateTimer = undefined;
+});
+
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	if (nextStatus.state !== "ready") {
-		sideClaimedDaemonPID = undefined;
 		if (sideStateTimer) clearInterval(sideStateTimer);
 		sideStateTimer = undefined;
 		disposeBrowserStreamLink();
@@ -710,44 +723,11 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		establishBrowserStreamLink();
 	}
 	const daemonIdentity = nextStatus.pid ?? daemonProcess?.pid;
-	if (nextStatus.state === "ready" && nextStatus.port && daemonIdentity && sideClaimedDaemonPID !== daemonIdentity) {
-		sideClaimedDaemonPID = daemonIdentity;
-		const sideBase = `http://127.0.0.1:${nextStatus.port}/api/v1/side-chats/launch`;
-		sideLaunchReady = fetch(`${sideBase}/claim`, {
-			method: "POST",
-			signal: AbortSignal.timeout(5000),
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ appRunId }),
-		}).then(async (response) => {
-			if (!response.ok) throw new Error(`side launch claim failed: ${response.status}`);
-			if (sideLaunchState?.appRunId === appRunId && (sideLaunchState.sides.length > 0 || Object.keys(sideLaunchState.numbers ?? {}).length > 0)) {
-				sideCloseRecovery.markRestoreAttempt();
-				const restored = await fetch(`${sideBase}/state`, {
-					method: "POST", headers: { "content-type": "application/json" },
-					signal: AbortSignal.timeout(15000),
-					body: JSON.stringify(sideLaunchState),
-				});
-				if (!restored.ok) throw new Error(`side chat recovery failed: ${restored.status}`);
-			}
-			const readState = async () => {
-				if (sideStatePolling || sideClaimedDaemonPID !== daemonIdentity) return;
-				sideStatePolling = true;
-				const request = ++sideStateRequest;
-				try {
-					const result = await fetch(`${sideBase}/state?appRunId=${encodeURIComponent(appRunId)}`, { signal: AbortSignal.timeout(5000) });
-					if (result.ok) {
-						const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
-						if (sideClaimedDaemonPID === daemonIdentity && state.appRunId === appRunId && request > sideStateApplied) { sideStateApplied = request; rememberSideLaunchState(state); }
-					}
-				} catch (error) { console.warn("AO: side chat memory snapshot failed", error); }
-				finally { sideStatePolling = false; }
-			};
-			await readState();
-			// Backstop only: the renderer captures this state after every side chat
-			// change (sideChats:capture). Polling at 500ms cost ~7,200 daemon
-			// requests an hour for the whole app lifetime.
-			if (sideClaimedDaemonPID === daemonIdentity) sideStateTimer = setInterval(() => void readState(), SIDE_STATE_BACKSTOP_MS);
-		}).catch((error) => { if (sideClaimedDaemonPID === daemonIdentity) sideClaimedDaemonPID = undefined; console.warn("AO: side chat launch claim failed", error); });
+	if (sideLaunchRecovery.setAttachment(nextStatus.state === "ready" && nextStatus.port && daemonIdentity
+		? { generation: daemonAttachmentGeneration, pid: daemonIdentity, port: nextStatus.port, appRunId }
+		: undefined)) {
+		if (sideStateTimer) clearInterval(sideStateTimer);
+		sideStateTimer = undefined;
 	}
 }
 
@@ -2611,14 +2591,7 @@ async function captureSideChatState(closedSideId?: string, cancelClose = false, 
 		sideLaunchState = sideCloseRecovery.state;
 		publishPendingSideCloses();
 	}
-	// Do not race close/reconciliation against an older launch restore that is
-	// still installing open sides into the replacement daemon.
-	let ready: Promise<void>;
-	do {
-		ready = sideLaunchReady;
-		await ready;
-	} while (ready !== sideLaunchReady);
-	if (daemonStatus.state === "ready" && !sideClaimedDaemonPID) throw new Error("Side chat launch recovery is unavailable. Retry after reconnecting.");
+	await sideLaunchRecovery.ensureReady();
 	if (closedSideId) {
 		if (cancelClose) sideCloseRecovery.cancel(closedSideId);
 		else {
@@ -2630,19 +2603,12 @@ async function captureSideChatState(closedSideId?: string, cancelClose = false, 
 		sideLaunchState = sideCloseRecovery.state;
 		publishPendingSideCloses();
 	}
-	if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
-	const daemonIdentity = sideClaimedDaemonPID;
-	const request = ++sideStateRequest;
-	const result = await fetch(
-		`http://127.0.0.1:${daemonStatus.port}/api/v1/side-chats/launch/state?appRunId=${encodeURIComponent(appRunId)}`,
-		{ signal: AbortSignal.timeout(5000) },
-	);
-	if (!result.ok) throw new Error(`side chat capture failed: ${result.status}`);
-	const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
-	if (daemonIdentity === sideClaimedDaemonPID && state.appRunId === appRunId && request > sideStateApplied) {
-		sideStateApplied = request;
-		if (alreadyClosedId) sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
-		rememberSideLaunchState(state);
+	const { attachment, state } = await sideLaunchRecovery.capture();
+	if (!sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
+	if (alreadyClosedId) {
+		sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
+		sideLaunchState = sideCloseRecovery.state;
+		publishPendingSideCloses();
 	}
 }
 
@@ -2659,7 +2625,8 @@ ipcMain.handle("sideChats:confirmClose", async (event, sideId: string, alreadyCl
 	if (alreadyClosed) { await captureSideChatState(undefined, false, sideId); return; }
 	sideCloseRecovery.confirm(sideId);
 	publishPendingSideCloses();
-	await captureSideChatState();
+	// DELETE already established success. Keep cleanup in RAM while refreshing.
+	sideLaunchRecovery.captureInBackground();
 });
 ipcMain.handle("sideChats:pendingCloses", (event, sessionId: string) => {
 	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || sessionId.length > 255) throw new Error("Invalid side close query.");

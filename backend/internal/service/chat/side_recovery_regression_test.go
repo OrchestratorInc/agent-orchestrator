@@ -3,6 +3,7 @@ package chat_test
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,47 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
+
+func TestSideLaunchRecoveryRetryDoesNotDuplicateProvidersOrReopenClosedSides(t *testing.T) {
+	h := newSideWorkflow(t, "")
+	ctx := context.Background()
+	conv := newFakeConversation()
+	conv.providerConversationID = "recovered-fork"
+	var resumes atomic.Int32
+	h.driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) {
+		resumes.Add(1)
+		return conv, nil
+	}
+	records := []chatsvc.SideRecoveryRecord{{
+		PolicyVersion: 1, BoundaryState: "delivered", BoundaryTurnID: "boundary",
+		Harness: domain.HarnessCodex, Generation: "recovered-generation",
+		ProviderHostID: "btw-workflow-recovered", ProviderForkID: "recovered-fork",
+		LaunchConfig: json.RawMessage(`{"WorkspacePath":"recovery-workspace"}`),
+		Side:         domain.SideConversation{ID: "recovered", SessionID: testSession, MainConversationID: h.ctrl.ConversationID(), State: "ready"},
+	}}
+	for range 10 {
+		if err := h.svc.ClaimSideChatLaunch(ctx, "workflow"); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.svc.RecoverSideChatLaunch(ctx, "workflow", records); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.awaitSide(t, "recovered", func(s domain.SideSnapshot) bool { return s.Side.State == "ready" })
+	if resumes.Load() != 1 {
+		t.Fatalf("resumed %d providers", resumes.Load())
+	}
+	if err := h.svc.CloseIndependentSideChat(ctx, testSession, "recovered"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.RecoverSideChatLaunch(ctx, "workflow", records); err != nil {
+		t.Fatal(err)
+	}
+	sides, err := h.svc.ListIndependentSideChats(ctx, testSession)
+	if err != nil || len(sides) != 0 || resumes.Load() != 1 {
+		t.Fatalf("closed side restored: %+v, resumes=%d, err=%v", sides, resumes.Load(), err)
+	}
+}
 
 type terminalSideHistory struct {
 	*fakeConversation

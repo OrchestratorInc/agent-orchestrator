@@ -390,7 +390,7 @@ export function useIndependentSideChats(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [pending, setPending] = useState(false);
-	const [, setSendingRevision] = useState(0);
+	const [sendingRevision, setSendingRevision] = useState(0);
 	const sendingRef = useRef(new Set<string>());
 	const sending = Boolean(activeId && sendingRef.current.has(activeId));
 	const [editingTurnId, setEditingTurnId] = useState<string>();
@@ -595,7 +595,7 @@ export function useIndependentSideChats(
 			.catch((error) => {
 				if (sessionRef.current === sessionId) setError(String(error));
 			});
-	}, [sessionId, activeId, drafts]);
+	}, [sessionId, activeId, drafts, sendingRevision]);
 
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID()) => {
@@ -733,7 +733,7 @@ export function useIndependentSideChats(
 		if (!activeId || drafts[activeId] === undefined) return;
 		const draft = drafts[activeId];
 		const save = () => {
-			if (closedSidesRef.current.has(activeId)) return;
+			if (closedSidesRef.current.has(activeId) || (sendingRef.current.has(activeId) && activeIdRef.current === activeId && sessionRef.current === sessionId)) return;
 			const currentDraft = draftsRef.current[activeId] ?? draft;
 			void saveSideChatDraft(sessionId, activeId, JSON.stringify(currentDraft))
 				.then(({ error: requestError }) => {
@@ -756,7 +756,45 @@ export function useIndependentSideChats(
 			)
 				save();
 		};
-	}, [sessionId, activeId, drafts]);
+	}, [sessionId, activeId, drafts, sendingRevision]);
+
+	const cancelHandoff = useCallback(async (sideId: string) => {
+		const pending = draftsRef.current[sideId]?.pendingCommand;
+		if (!pending || sendingRef.current.has(sideId) || closedSidesRef.current.has(sideId) || closingSidesRef.current.has(sideId)) return;
+		sendingRef.current.add(sideId);
+		setSendingRevision(version => version + 1);
+		const command = { ...pending, cancelRequested: true };
+		const available = () => sessionRef.current === sessionId && !closedSidesRef.current.has(sideId) && !closingSidesRef.current.has(sideId);
+		const apply = (remove: boolean) => {
+			if (!available()) throw new Error("Side chat is no longer active.");
+			const current = draftsRef.current[sideId];
+			if (!current || (current.pendingCommand && current.pendingCommand.creationKey !== command.creationKey)) throw new Error("Side chat handoff changed.");
+			const { pendingCommand: _, ...rest } = current;
+			const next = remove ? rest : { ...rest, pendingCommand: command };
+			draftsRef.current = { ...draftsRef.current, [sideId]: next };
+			setDrafts(current => ({ ...current, [sideId]: next }));
+			return next;
+		};
+		const persist = async (draft: SideChatDraft) => {
+			const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(draft));
+			if (saved.error) throw saved.error;
+			await aoBridge.sideChats.capture();
+		};
+		try {
+			// A remount/crash after this capture can only finish cancellation, never send.
+			await persist(apply(false));
+			await persist(apply(true));
+			if (available()) setError(undefined);
+		} catch (cause) {
+			if (available()) {
+				if (!draftsRef.current[sideId]?.pendingCommand || draftsRef.current[sideId].pendingCommand?.creationKey === command.creationKey) apply(false); // Preserve newer edits and cancellation intent.
+				setError(apiErrorMessage(cause));
+			}
+		} finally {
+			sendingRef.current.delete(sideId);
+			setSendingRevision(version => version + 1);
+		}
+	}, [sessionId]);
 
 	const send = useCallback(
 		async (
@@ -769,6 +807,7 @@ export function useIndependentSideChats(
 			preparedReceipt?: SideDeliveryReceipt,
 			canDispatch?: () => boolean,
 		): Promise<void> => {
+			if (!preparedReceipt && draftsRef.current[sideId]?.pendingCommand?.cancelRequested) { await cancelHandoff(sideId); return; }
 			if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) {
 				if (propagateError) throw new Error("Side chat is closing.");
 				return;
@@ -798,6 +837,11 @@ export function useIndependentSideChats(
 						command = draftsRef.current[sideId].pendingCommand;
 					}
 					const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+					if (command?.cancelRequested) {
+						sendingRef.current.delete(sideId);
+						await cancelHandoff(sideId);
+						return;
+					}
 					if (draft.pendingDelivery || (command && text && text !== command.receipt.submitted.text))
 						throw new Error("Retry the original handoff before sending another question.");
 					if (!command) {
@@ -1002,7 +1046,7 @@ export function useIndependentSideChats(
 				setSendingRevision((version) => version + 1);
 			}
 		},
-		[sessionId, attachments, stageAttachments, nativeImages, create, sides],
+		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff],
 	);
 
 	const close = useCallback(
@@ -1039,8 +1083,6 @@ export function useIndependentSideChats(
 			}
 			if (sessionRef.current !== sessionId) return;
 			closedSidesRef.current.add(sideId);
-			await aoBridge.sideChats.capture().catch(() => undefined);
-			if (sessionRef.current !== sessionId) return;
 			setDrafts((current) => {
 				const next = { ...current };
 				delete next[sideId];
@@ -1520,8 +1562,12 @@ export function useIndependentSideChats(
 									disabled={sending}
 									onClick={() => void send(activeId, "")}
 								>
-									{t("sideChat.retryDelivery")}
+									{drafts[activeId]?.pendingCommand?.cancelRequested ? t("sideChat.finishCancellation") : t("sideChat.retryDelivery")}
 								</Button>
+								{drafts[activeId]?.pendingCommand ? <>
+									<p>{t("sideChat.cancelHandoffHelp")}</p>
+									{!drafts[activeId]?.pendingCommand?.cancelRequested ? <Button type="button" size="sm" variant="ghost" disabled={sending} onClick={() => void cancelHandoff(activeId)}>{t("sideChat.cancelHandoff")}</Button> : null}
+								</> : null}
 							</div>
 						) : null}
 						<SideComposer
@@ -1700,6 +1746,7 @@ export function useIndependentSideChats(
 		pending,
 		error,
 		send,
+		cancelHandoff,
 		setQuestionDraft: updateDraft,
 		replaceDraft,
 		addReference,

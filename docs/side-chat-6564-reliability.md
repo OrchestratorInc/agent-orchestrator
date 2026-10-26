@@ -87,3 +87,37 @@ an incremental recheck covers the final hardening changes.
 
 Developer Mode gating and launch-scoped recovery remain unchanged. Performance,
 visual redesign, and long-history reconstruction are outside this branch.
+
+
+## Ronish review follow-up (#7088)
+
+Rebased the existing six commits onto upstream main
+`c7a99e1ad83c0ea9bfc84e35f679fa2a08e6169f`. Other PR branches and review
+checkouts are unchanged.
+
+- P1: idle command handoffs now offer Cancel handoff. The current draft, files,
+  references and newer edits stay intact. Cancellation records a version-1
+  `cancelRequested` marker before clearing ownership; retries/remounts finish
+  cancellation without dispatching the frozen request. Failed persistence or
+  capture remains retryable. Subsequent questions get fresh identities.
+- P2: one Electron-main recovery controller owns each daemon attachment. Claim
+  retains its five-second timeout; restore has sixty seconds. Network errors,
+  HTTP 408/429 and 5xx retry at 1/2/4/8/16/30 seconds, capped at thirty seconds.
+  Permanent rejection stops retrying. Retry bodies stay frozen within the
+  attachment, and stale responses cannot mutate the replacement's state.
+- Cleanup ownership is retained before DELETE. A successful DELETE does not wait
+  for its background snapshot to finish; 404 reconciliation still requires a
+  fresh same-daemon snapshot. The existing five-second backstop remains singular.
+  Captures share one read plus a follow-up for newer mutations. Recovery adds no
+  healthy-state polling or repeated provider/history reconstruction.
+
+All 89 focused frontend tests pass across
+seven suites. Targeted Go tests confirm idempotent restore, one provider resume,
+closed-side tombstones and stale-running-turn recovery. Frontend/E2E typechecks,
+renderer build, Electron main/preload bundle compilation, Go build/vet and API/SQL
+contract drift checks pass. The native Electron lab was attempted with its own
+npm installation and isolated AO data/profile, but better-sqlite3 rebuilding is
+blocked by missing Visual Studio C++ build tools. No full-app or real-provider
+crash-window pass is claimed. Full Windows suites have platform limitations; see
+[the PR validation notes](https://github.com/OrchestratorInc/agent-orchestrator/pull/7088)
+for complete-suite counts and final-head CI results.

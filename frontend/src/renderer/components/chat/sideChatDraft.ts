@@ -23,6 +23,7 @@ export type SideChatDraft = {
 		creationKey: string;
 		destinationId?: string;
 		accepted?: boolean;
+		cancelRequested?: boolean;
 		receipt: SideDeliveryReceipt;
 	};
 	// Keep the last acknowledged main-composer handoff for retries after remount.
