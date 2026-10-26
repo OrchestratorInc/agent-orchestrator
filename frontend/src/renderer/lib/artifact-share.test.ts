@@ -8,6 +8,7 @@ import { ArtifactShareAuthError, ArtifactShareLimitError, ArtifactShareUnavailab
 
 const input = {
 	baseUrl: "http://127.0.0.1:8081",
+	userId: "user-1",
 	sessionId: "sess-1",
 	path: "img/chart.png",
 	name: "chart.png",
@@ -24,6 +25,7 @@ function jsonResponse(status: number, body: unknown) {
 describe("publishArtifactShare", () => {
 	beforeEach(() => {
 		uploadMock.mockReset();
+		window.localStorage.clear();
 		vi.stubGlobal("fetch", vi.fn(async () => new Response(bytes, { status: 200 })));
 	});
 	afterEach(() => vi.unstubAllGlobals());
@@ -68,5 +70,55 @@ describe("publishArtifactShare", () => {
 		vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
 		await expect(publishArtifactShare(input, "failed")).rejects.toThrow("failed");
 		expect(uploadMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("updates the remembered link with PUT when the same file is shared again, even after a rename", async () => {
+		uploadMock.mockResolvedValueOnce(jsonResponse(201, { share: { id: "s1", url: "http://l/", name: "chart.png" }, replaced: false }));
+		await publishArtifactShare(input, "failed");
+		uploadMock.mockResolvedValueOnce(jsonResponse(200, { share: { id: "s1", url: "http://l/", name: "chart.png" } }));
+		const link = await publishArtifactShare({ ...input, feature: "Renamed session" }, "failed");
+
+		expect(link).toEqual({ id: "s1", url: "http://l/", name: "chart.png", replaced: true });
+		const [, path, method] = uploadMock.mock.calls[1]!;
+		expect(method).toBe("PUT");
+		expect(path).toBe("/api/cloud/v1/me/artifact-shares/s1?name=chart.png");
+	});
+
+	it("publishes by name again when the remembered link is gone or names another file", async () => {
+		for (const stale of [
+			jsonResponse(404, { code: "not_found", message: "The requested resource was not found." }),
+			jsonResponse(409, { code: "artifact_share_name_changed", message: "A share link keeps its file name." }),
+		]) {
+			window.localStorage.clear();
+			uploadMock.mockReset();
+			uploadMock.mockResolvedValueOnce(jsonResponse(201, { share: { id: "old", url: "http://old/", name: "chart.png" } }));
+			await publishArtifactShare(input, "failed");
+			uploadMock.mockResolvedValueOnce(stale);
+			uploadMock.mockResolvedValueOnce(jsonResponse(201, { share: { id: "new", url: "http://new/", name: "chart.png" } }));
+			const link = await publishArtifactShare(input, "failed");
+			expect(link.id).toBe("new");
+			expect(uploadMock.mock.calls.map((call) => call[2])).toEqual(["POST", "PUT", "POST"]);
+			// The new link is remembered for next time.
+			uploadMock.mockResolvedValueOnce(jsonResponse(200, { share: { id: "new", url: "http://new/", name: "chart.png" } }));
+			await publishArtifactShare(input, "failed");
+			expect(uploadMock.mock.calls[3]![1]).toContain("/artifact-shares/new?");
+		}
+	});
+
+	it("keeps links separate per user, session and file", async () => {
+		uploadMock.mockImplementation(async () => jsonResponse(201, { share: { id: "s1", url: "http://l/", name: "chart.png" } }));
+		await publishArtifactShare(input, "failed");
+		for (const other of [{ userId: "user-2" }, { sessionId: "sess-2" }, { path: "img/other.png", name: "other.png" }]) {
+			await publishArtifactShare({ ...input, ...other }, "failed");
+		}
+		expect(uploadMock.mock.calls.map((call) => call[2])).toEqual(["POST", "POST", "POST", "POST"]);
+	});
+
+	it("reports a server without share links even when a link was remembered", async () => {
+		uploadMock.mockResolvedValueOnce(jsonResponse(201, { share: { id: "s1", url: "http://l/", name: "chart.png" } }));
+		await publishArtifactShare(input, "failed");
+		uploadMock.mockResolvedValueOnce(new Response("404 page not found", { status: 404, headers: { "content-type": "text/plain" } }));
+		await expect(publishArtifactShare(input, "failed")).rejects.toBeInstanceOf(ArtifactShareUnavailableError);
+		expect(uploadMock).toHaveBeenCalledTimes(2);
 	});
 });

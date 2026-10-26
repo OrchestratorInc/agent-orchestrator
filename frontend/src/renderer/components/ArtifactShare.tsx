@@ -83,6 +83,7 @@ export function useArtifactShare(session: WorkspaceSession, artifact: SessionArt
 		try {
 			const created = await publishArtifactShare({
 				baseUrl,
+				userId: cloudSession?.user.id ?? "",
 				sessionId: session.id,
 				path: artifact.path,
 				name: artifact.name,
@@ -106,7 +107,7 @@ export function useArtifactShare(session: WorkspaceSession, artifact: SessionArt
 		} finally {
 			inFlight.current = false;
 		}
-	}, [artifact.name, artifact.path, artifact.rawUrl, baseUrl, session.id, session.title, session.workspaceName, t]);
+	}, [artifact.name, artifact.path, artifact.rawUrl, baseUrl, cloudSession?.user.id, session.id, session.title, session.workspaceName, t]);
 
 	const onOpenChange = (next: boolean) => {
 		setOpen(next);
