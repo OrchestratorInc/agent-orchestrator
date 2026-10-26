@@ -26,13 +26,18 @@ describe("native hosts take the platform's own theme", () => {
 		expect(seeded).toEqual([]);
 	});
 
-	it("leaves the notifications switch to the system's own on colour", () => {
-		const settings = source("app/settings/index.tsx");
-		expect(settings).toMatch(/<Host style=\{\{ width: 54, height: 34 \}\} colorScheme=\{scheme\}>\s*<Switch /);
+	// Neither the switch nor the form around it carries a tint, which the switch would take up.
+	it("leaves the settings switches to the system's own on colour", () => {
+		const settingsForm = source("lib/SettingsForm.tsx");
+		const toggleRow = settingsForm.match(/export function SettingsToggleRow[\s\S]*?\n}\n/)?.[0] ?? "";
+		const form = settingsForm.match(/export function SettingsForm\b[\s\S]*?\n}\n/)?.[0] ?? "";
+		expect(toggleRow).toContain("<Toggle ");
+		expect(form).toContain("<FieldGroup");
+		for (const part of [toggleRow, form]) expect(part).not.toContain("tint(");
 	});
 
-	it("tints the iOS appearance menu like the values in the rows around it", () => {
-		expect(source("app/settings/index.tsx")).toMatch(/<Row alignment="center" modifiers=\{\[tint\(t\.textSecondary\)\]\}>\s*<Picker/);
+	it("tints the iOS settings menus like the values in the rows around them", () => {
+		expect(source("lib/SettingsForm.tsx")).toMatch(/modifiers=\{\[pickerStyle\("menu"\), tint\(t\.textSecondary\)/);
 	});
 
 	it("gives native text fields the caret colour of the app's React Native fields", () => {

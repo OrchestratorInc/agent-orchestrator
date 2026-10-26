@@ -14,7 +14,7 @@ describe("settings desktop section", () => {
 		expect(source).not.toMatch(/"Paired"/);
 		expect(source).not.toMatch(/label="Selected machine"/);
 		expect(source).toMatch(/<MachineSelector/);
-		expect(source).toMatch(/statusLabel=\{machineStatus\.label\}/);
+		expect(source).toMatch(/<MachineStatusRow[^>]*statusLabel=\{machineStatus\.label\} statusTone=\{machineStatus\.tone\}/);
 	});
 
 	it("leaves destructive management in Environments", () => {

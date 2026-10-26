@@ -1,99 +1,109 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
+const { haptics } = vi.hoisted(() => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 
-const { alert, haptics } = vi.hoisted(() => ({
-	alert: vi.fn(),
-	haptics: { tap: vi.fn(), select: vi.fn(), warning: vi.fn() },
-}));
-
-vi.mock("react-native", () => ({
-	ActivityIndicator: "ActivityIndicator",
-	Alert: { alert },
-	Pressable: "Pressable",
-	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
-	Text: "Text",
-	View: "View",
-}));
-vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./haptics", () => ({ haptics }));
-vi.mock("./ThemeProvider", () => ({
-	useTheme: () => ({ accent: "blue", bgElevatedHover: "hover", bgSubtle: "subtle", borderSubtle: "border", green: "green", textFaint: "faint", textPrimary: "white", textSecondary: "gray", textTertiary: "dim" }),
-	useThemedStyles: (factory: (theme: Record<string, string>) => unknown) => factory({ accent: "blue", bgElevatedHover: "hover", bgSubtle: "subtle", borderSubtle: "border", green: "green", textFaint: "faint", textPrimary: "white", textSecondary: "gray", textTertiary: "dim" }),
-}));
+vi.mock("./SettingsForm", () => ({ SettingsPickerRow: "SettingsPickerRow", SettingsValueRow: "SettingsValueRow" }));
 
-import { MachineSelector } from "./MachineSelector";
+import { MachineSelector, MachineStatusRow } from "./MachineSelector";
 
 const hosts = [
 	{ id: "prod", name: "Prod" },
 	{ id: "dev", name: "Dev" },
 ] as never;
 
-function render(overrides: Partial<React.ComponentProps<typeof MachineSelector>> = {}) {
-	let renderer!: ReactTestRenderer;
-	act(() => {
-		renderer = create(<MachineSelector
-			hosts={hosts}
-			selectedHostId="dev"
-			statusLabel="Connected"
-			statusColor="green"
-			switchingHostId={null}
-			onSelect={vi.fn()}
-			{...overrides}
-		/>);
-	});
-	return renderer;
+let renderer: ReactTestRenderer | undefined;
+
+function render(element: React.ReactElement) {
+	act(() => { renderer = create(element); });
+	return renderer!;
 }
 
+function selector(overrides: Partial<React.ComponentProps<typeof MachineSelector>> = {}) {
+	return render(<MachineSelector hosts={hosts} selectedHostId="dev" switchingHostId={null} onSelect={vi.fn()} {...overrides} />);
+}
+
+beforeEach(() => {
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	haptics.select.mockClear();
+	const error = console.error;
+	vi.spyOn(console, "error").mockImplementation((...args) => {
+		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
+		error(...args);
+	});
+});
+
+afterEach(() => {
+	act(() => renderer?.unmount());
+	renderer = undefined;
+	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
+});
+
 describe("MachineSelector", () => {
-	it("uses the machine name as the trigger and places a Default pill beside it", () => {
-		const renderer = render();
+	// The platform's picker: a menu on iOS, a dropdown on Android, with every
+	// paired machine as a choice and the default as its value.
+	it("is a Default machine picker over the paired machines", () => {
+		const picker = selector().root.findByType("SettingsPickerRow" as never);
 
-		expect(renderer.root.findByProps({ testID: "machine-selector-name" }).props.children).toBe("Dev");
-		expect(renderer.root.findByProps({ testID: "machine-selector-default" }).props.children).toBe("Default");
-		expect(renderer.root.findByProps({ testID: "machine-selector-trigger" }).props.accessibilityState).toEqual({ expanded: false });
-		expect(renderer.root.findAllByProps({ testID: "machine-selector-options" })).toHaveLength(0);
+		expect(picker.props).toMatchObject({ icon: "defaultMachine", label: "Default machine", selectedValue: "dev", disabled: false, testID: "machine-selector" });
+		expect(picker.props.options).toEqual([{ value: "prod", label: "Prod" }, { value: "dev", label: "Dev" }]);
 	});
 
-	it("expands only saved machines, leaving adding a machine to Settings", () => {
-		const renderer = render();
-
-		act(() => renderer.root.findByProps({ testID: "machine-selector-trigger" }).props.onPress());
-
-		const options = renderer.root.findByProps({ testID: "machine-selector-options" });
-		expect(renderer.root.findByProps({ testID: "machine-selector-trigger" }).props.accessibilityState).toEqual({ expanded: true });
-		expect(renderer.root.findByProps({ testID: "machine-selector-option-prod" }).props.accessibilityState).toEqual({ selected: false, disabled: false });
-		expect(renderer.root.findByProps({ testID: "machine-selector-option-dev" }).props.accessibilityState).toEqual({ selected: true, disabled: false });
-		expect(options.findAllByProps({ testID: "machine-selector-add" })).toHaveLength(0);
-	});
-
-	it("selects a machine and collapses the dropdown", () => {
+	it("makes a newly chosen machine the default, once", () => {
 		const onSelect = vi.fn();
-		const renderer = render({ onSelect });
-		act(() => renderer.root.findByProps({ testID: "machine-selector-trigger" }).props.onPress());
+		const picker = selector({ onSelect }).root.findByType("SettingsPickerRow" as never);
 
-		act(() => renderer.root.findByProps({ testID: "machine-selector-option-prod" }).props.onPress());
-
+		act(() => picker.props.onValueChange("prod"));
 		expect(onSelect).toHaveBeenCalledWith("prod");
-		expect(renderer.root.findAllByProps({ testID: "machine-selector-options" })).toHaveLength(0);
-		expect(haptics.select).toHaveBeenCalled();
+		expect(haptics.select).toHaveBeenCalledOnce();
+
+		act(() => picker.props.onValueChange("dev"));
+		expect(onSelect).toHaveBeenCalledOnce();
 	});
 
-	it("only selects a default, leaving edit and removal to Environments", () => {
-		const renderer = render();
-		act(() => renderer.root.findByProps({ testID: "machine-selector-trigger" }).props.onPress());
-		const options = renderer.root.findByProps({ testID: "machine-selector-options" });
-		expect(options.findAllByType("Pressable" as never)).toHaveLength(2);
-		expect(options.findAllByType("Feather" as never).map((icon) => icon.props.name)).not.toContain("trash-2");
-		expect(options.findAllByType("Feather" as never).map((icon) => icon.props.name)).not.toContain("edit-2");
+	it("holds the picker while a switch is under way", () => {
+		expect(selector({ switchingHostId: "prod" }).root.findByType("SettingsPickerRow" as never).props.disabled).toBe(true);
 	});
 
-	it("does not put an add action inside the empty dropdown", () => {
-		const renderer = render({ hosts: [], selectedHostId: null, selectedHostName: null });
-		act(() => renderer.root.findByProps({ testID: "machine-selector-trigger" }).props.onPress());
+	// The saved config can name a machine before any paired one is chosen.
+	it("shows the configured machine until a paired one is the default", () => {
+		const onSelect = vi.fn();
+		const picker = selector({ selectedHostId: null, selectedHostName: "Legacy", onSelect }).root.findByType("SettingsPickerRow" as never);
 
-		const options = renderer.root.findByProps({ testID: "machine-selector-options" });
-		expect(options.children).toHaveLength(0);
+		expect(picker.props.selectedValue).toBe("");
+		expect(picker.props.options[0]).toEqual({ value: "", label: "Legacy" });
+		act(() => picker.props.onValueChange(""));
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
+	it("reads as a plain value with no machines to choose from", () => {
+		const root = selector({ hosts: [] as never, selectedHostId: null, selectedHostName: null }).root;
+
+		expect(root.findAllByType("SettingsPickerRow" as never)).toHaveLength(0);
+		expect(root.findByType("SettingsValueRow" as never).props).toMatchObject({ label: "Default machine", value: "None" });
+	});
+
+	// Choosing is the whole job: no edit, forget or add actions in here.
+	it("offers nothing but the choice of default", () => {
+		const root = selector().root;
+		expect(root.findAll((node) => typeof node.props.onPress === "function")).toHaveLength(0);
+	});
+});
+
+describe("MachineStatusRow", () => {
+	it.each([
+		["ok", "Connected", "good"],
+		["error", "Unreachable", "bad"],
+		["neutral", "Connecting…", "default"],
+	] as const)("names a %s connection in words, with the matching tone", (statusTone, statusLabel, tone) => {
+		const row = render(<MachineStatusRow hosts={hosts} statusLabel={statusLabel} statusTone={statusTone} switchingHostId={null} />).root.findByType("SettingsValueRow" as never);
+		expect(row.props).toMatchObject({ icon: "status", label: "Status", value: statusLabel, tone });
+	});
+
+	it("says which machine it is switching to", () => {
+		const row = render(<MachineStatusRow hosts={hosts} statusLabel="Connected" statusTone="ok" switchingHostId="prod" />).root.findByType("SettingsValueRow" as never);
+		expect(row.props).toMatchObject({ value: "Switching to Prod…", tone: "default" });
 	});
 });
