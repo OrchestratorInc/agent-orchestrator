@@ -1,5 +1,5 @@
-import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 import { forgetEnvironmentMachine } from "../../../../lib/environmentActions";
 import { postEnvironmentNotice } from "../../../../lib/environmentNotice";
@@ -18,6 +18,7 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../../../lib/RouteErrorB
 export default function MachineDetailScreen() {
 	const { id } = useLocalSearchParams<{ id: string }>();
 	const router = useRouter();
+	const navigation = useNavigation();
 	const t = useTheme();
 	const { hostStates, configForHost, switchHost, reloadConfig, reloadHostMetadata } = useApp();
 	const [host, setHost] = useState<Host | null | undefined>(undefined);
@@ -36,6 +37,14 @@ export default function MachineDetailScreen() {
 		}
 	}, [id]);
 	useFocusEffect(useCallback(() => { void reload(); }, [reload]));
+
+	// A forget can't be called back, so the Settings sheet stays until it lands.
+	useEffect(() => {
+		if (!forgetting) return;
+		const settings = navigation.getParent();
+		settings?.setOptions({ gestureEnabled: false });
+		return () => settings?.setOptions({ gestureEnabled: true });
+	}, [forgetting, navigation]);
 
 	const edit = useCallback(() => {
 		router.push({ pathname: "/settings/machine/[id]/edit", params: { id } });
@@ -89,6 +98,9 @@ export default function MachineDetailScreen() {
 			// page behind another machine's connection.
 			void reloadHostMetadata().catch(() => {});
 			if (result.wasDefault) void reloadConfig().catch(() => {});
+			// Left while it ran (Android's back still works): navigating now would
+			// act on whatever is on top. The notice waits for the list instead.
+			if (!navigation.isFocused()) return;
 			// Back to the list, which says what happened. A page opened by a link
 			// has no list under it, so the list takes its place instead.
 			router.dismissTo("/settings/environments");

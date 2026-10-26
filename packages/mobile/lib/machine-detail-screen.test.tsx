@@ -13,6 +13,8 @@ const fixtures = vi.hoisted(() => ({
 	alert: vi.fn(),
 	push: vi.fn(),
 	dismissTo: vi.fn(),
+	setSheetOptions: vi.fn(),
+	focused: { current: true },
 	hostStates: [] as { hostId: string; connection: "closed" | "connecting" | "open"; loading: boolean; config: ServerConfig | null }[],
 	haptics: { select: vi.fn(), error: vi.fn(), warning: vi.fn(), success: vi.fn() },
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", green: "green", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
@@ -22,6 +24,7 @@ vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	const router = { push: fixtures.push, dismissTo: fixtures.dismissTo };
+	const navigation = { getParent: () => ({ setOptions: fixtures.setSheetOptions }), isFocused: () => fixtures.focused.current };
 	return {
 		Stack: {
 			Screen: host("StackScreen"),
@@ -29,6 +32,7 @@ vi.mock("expo-router", async () => {
 		},
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
 		useLocalSearchParams: () => ({ id: "a" }),
+		useNavigation: () => navigation,
 		useRouter: () => router,
 	};
 });
@@ -91,7 +95,8 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo]) mock.mockReset();
+	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions]) mock.mockReset();
+	fixtures.focused.current = true;
 	fixtures.loadHosts.mockResolvedValue([a, b]);
 	fixtures.activeHost.mockResolvedValue(b);
 	fixtures.switchHost.mockResolvedValue(undefined);
@@ -188,6 +193,25 @@ describe("a machine's page on iOS", () => {
 		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
 		expect(fixtures.dismissTo).toHaveBeenCalledWith("/settings/environments");
 		expect(takeEnvironmentNotice()).toBe("Studio Mac forgotten. Dev is now the default.");
+	});
+
+	// A forget can't be called back. Returning to the list after Settings had
+	// closed under it would put Settings in the board's place.
+	it("holds the Settings sheet while a forget runs, and returns only while still on top", async () => {
+		let finish!: () => void;
+		fixtures.forget.mockReturnValue(new Promise((resolve) => {
+			finish = () => resolve({ remaining: [b], nextDefault: b, wasDefault: false, notice: "Studio Mac forgotten." });
+		}));
+		await open();
+		act(() => byTestID("environment-forget-a").props.onPress());
+		const buttons = fixtures.alert.mock.calls.at(-1)![2];
+		await act(async () => { buttons.find((button: { text: string }) => button.text === "Forget").onPress(); });
+		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: false });
+		fixtures.focused.current = false;
+		await act(async () => finish());
+		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
+		expect(fixtures.dismissTo).not.toHaveBeenCalled();
+		expect(takeEnvironmentNotice()).toBe("Studio Mac forgotten.");
 	});
 
 	it("keeps the page and says why when forgetting fails", async () => {
