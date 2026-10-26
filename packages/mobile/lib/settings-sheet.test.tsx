@@ -72,7 +72,8 @@ describe("Settings presentation", () => {
 				expect(settings.sheetGrabberVisible).toBe(true);
 				expect(settings.sheetCornerRadius).toBeUndefined();
 				expect(naming.presentation).toBe("formSheet");
-				expect(naming.sheetAllowedDetents).toBe("fitToContents");
+				// A SwiftUI Form fills the sheet instead of measuring to fit.
+				expect(naming.sheetAllowedDetents).toEqual([0.5]);
 			}
 		} finally {
 			act(() => renderer.unmount());

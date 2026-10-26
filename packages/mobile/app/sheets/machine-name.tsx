@@ -1,24 +1,19 @@
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Platform, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 import { backOr } from "../../lib/backNavigation";
 import { haptics } from "../../lib/haptics";
 import { loadHosts, type Host } from "../../lib/hosts";
-import { machineAppearance, machineAppearancePalette, machineSymbolLabels, unusedMachineSymbol, type MachineSymbol } from "../../lib/machineAppearance";
-import { MachineSymbolPicker } from "../../lib/MachineSymbolPicker";
+import { machineAppearance, machineAppearancePalette, unusedMachineSymbol, type MachineSymbol } from "../../lib/machineAppearance";
+import { MachineNameForm } from "../../lib/MachineNameForm";
 import type { MachineNameChoice } from "../../lib/pairFlow";
-import { Button, SheetScreen } from "../../lib/ui";
 import { releaseSheetResult, takeSheetResult } from "../../lib/sheetResult";
-import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { textSelectionColors } from "../../lib/textSelection";
-import { space, type } from "../../lib/tokens";
+import { useTheme } from "../../lib/ThemeProvider";
 
 export default function MachineNameSheetRoute() {
 	const router = useRouter();
 	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
 	const { resultKey, suggested, symbol: suggestedSymbol, hostId } = useLocalSearchParams<{ resultKey?: string; suggested?: string; symbol?: string; hostId?: string }>();
 	const [name, setName] = useState((suggested ?? "").slice(0, 48));
 	const [symbol, setSymbol] = useState<MachineSymbol>(
@@ -96,35 +91,15 @@ export default function MachineNameSheetRoute() {
 	) : null, [canSave, ios, router]);
 
 	const content = (
-		<SheetScreen title={ios ? undefined : "Name this machine"} subtitle="Choose a name you'll recognize in Orchestrator.">
-			<View style={styles.field}>
-				<Text style={styles.label}>MACHINE NAME</Text>
-				<TextInput
-					autoFocus
-					value={name}
-					onChangeText={setName}
-					placeholder="Studio Mac"
-					placeholderTextColor={t.textFaint}
-					{...textSelectionColors(t)}
-					maxLength={48}
-					returnKeyType="done"
-					onSubmitEditing={save}
-					style={styles.input}
-				/>
-			</View>
-			<View style={styles.field}>
-				<Text style={styles.label}>
-					ICON <Text style={styles.labelValue}>· {machineSymbolLabels[symbol]}</Text>
-				</Text>
-				<MachineSymbolPicker testIDPrefix="machine-name-symbol" selected={symbol} onSelect={pickSymbol} />
-				{sharingSymbol.length > 0 ? (
-					<Text testID="machine-name-symbol-shared" style={styles.hint}>
-						Also used by {formatNames(sharingSymbol)}. The name will tell them apart.
-					</Text>
-				) : null}
-			</View>
-			{ios ? null : <Button title="Save machine" disabled={!canSave} onPress={save} style={styles.button} />}
-		</SheetScreen>
+		<MachineNameForm
+			name={name}
+			onChangeName={setName}
+			symbol={symbol}
+			onSelectSymbol={pickSymbol}
+			iconHint={sharingSymbol.length > 0 ? `Also used by ${formatNames(sharingSymbol)}. The name will tell them apart.` : undefined}
+			canSave={canSave}
+			onSave={() => saveRef.current()}
+		/>
 	);
 
 	if (Platform.OS === "android") {
@@ -159,32 +134,8 @@ function formatNames(names: readonly string[]): string {
 	return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-const makeStyles = (t: Theme) => StyleSheet.create({
+const styles = StyleSheet.create({
 	androidModalRoot: { flex: 1, backgroundColor: "transparent" },
-	field: { marginTop: space.lg },
-	label: {
-		fontFamily: "Geist_600SemiBold",
-		color: t.textTertiary,
-		fontSize: type.caption2.fontSize,
-		fontWeight: "600",
-		letterSpacing: 1.1,
-		marginBottom: space.xs,
-	},
-	hint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.sm },
-	labelValue: { fontFamily: "Geist_500Medium", color: t.textSecondary, fontWeight: "500", letterSpacing: 0 },
-	input: {
-		fontFamily: "Geist_400Regular",
-		backgroundColor: t.bgElevated,
-		borderWidth: 1,
-		borderColor: t.borderDefault,
-		borderRadius: 8,
-		borderCurve: "continuous",
-		paddingHorizontal: space.md,
-		paddingVertical: space.md,
-		color: t.textPrimary,
-		fontSize: type.subheadline.fontSize,
-	},
-	button: { marginTop: space.lg },
 });
 
 export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

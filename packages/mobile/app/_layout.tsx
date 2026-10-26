@@ -69,7 +69,9 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 //
 // So Android opens at the smaller detent and is expanded to the larger one by the
 // OS as soon as a field is focused, then restored when the keyboard hides. iOS
-// lifts a presented sheet by itself, so it keeps the exact-fit sizing.
+// lifts a presented sheet by itself. Its body is a SwiftUI Form, which scrolls
+// and fills the sheet rather than measuring to fit, so the sheet opens at a
+// fixed height: full for the connection form.
 //
 // iOS heads these forms with a native bar: an inline title, Cancel and the
 // confirm action, as a form sheet's are. Shown from the start rather than by
@@ -77,7 +79,7 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 // Android keeps the title in the sheet's body.
 const CONNECT_SHEET_OPTIONS = {
 	presentation: "formSheet",
-	sheetAllowedDetents: Platform.OS === "ios" ? "fitToContents" : [0.6, 0.95],
+	sheetAllowedDetents: Platform.OS === "ios" ? [1] : [0.6, 0.95],
 	sheetGrabberVisible: true,
 	sheetCornerRadius,
 	headerShown: Platform.OS === "ios",
@@ -287,9 +289,10 @@ function Shell() {
 					options={{
 						...CONNECT_SHEET_OPTIONS,
 						title: "Connect manually",
-						// The bar in the sheet's own colour, so the two read as one surface.
-						headerStyle: { backgroundColor: t.bgSurface },
-						contentStyle: { backgroundColor: t.bgSurface },
+						// The bar in the colour of the form below it (the grouped page
+						// on iOS, the sheet surface on Android), so the two read as one.
+						headerStyle: { backgroundColor: t.bgBase },
+						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgBase : t.bgSurface },
 					}}
 				/>
 				<Stack.Screen
@@ -302,9 +305,10 @@ function Shell() {
 					} : {
 						...CONNECT_SHEET_OPTIONS,
 						title: "Name this machine",
-						sheetAllowedDetents: "fitToContents",
-						headerStyle: { backgroundColor: t.bgSurface },
-						contentStyle: { backgroundColor: t.bgSurface },
+						// Two short rows: half height clears the keyboard on every phone.
+						sheetAllowedDetents: [0.5],
+						headerStyle: { backgroundColor: t.bgBase },
+						contentStyle: { backgroundColor: t.bgBase },
 					}}
 				/>
 			</Stack>
