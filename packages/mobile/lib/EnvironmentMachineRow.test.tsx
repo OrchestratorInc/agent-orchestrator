@@ -25,6 +25,7 @@ vi.mock("./ThemeProvider", () => ({
 }));
 
 import { EnvironmentMachineList } from "./EnvironmentMachineRow";
+import { radius } from "./tokens";
 
 const studio: Host = {
 	id: "host-1",
@@ -131,8 +132,8 @@ describe("Environments list on Android", () => {
 		expect(status.props).toMatchObject({ color: "red", children: "Offline" });
 		// The two rows join into one group: rounded at its ends only.
 		const shape = (row: ReactTestInstance) => (modifiersOf(row).find((m) => m.$type === "clip")?.args[0] as { radii: Record<string, number> }).radii;
-		expect(shape(rows[0])).toEqual({ topStart: 20, topEnd: 20, bottomStart: 4, bottomEnd: 4 });
-		expect(shape(rows[1])).toEqual({ topStart: 4, topEnd: 4, bottomStart: 20, bottomEnd: 20 });
+		expect(shape(rows[0])).toEqual({ topStart: radius.xl, topEnd: radius.xl, bottomStart: radius.xs, bottomEnd: radius.xs });
+		expect(shape(rows[1])).toEqual({ topStart: radius.xs, topEnd: radius.xs, bottomStart: radius.xl, bottomEnd: radius.xl });
 	});
 
 	it("opens a machine's page from its row with a ripple", async () => {

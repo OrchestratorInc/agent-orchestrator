@@ -4,7 +4,7 @@ import * as Clipboard from "expo-clipboard";
 import { Stack } from "expo-router";
 import { useMemo, useState, type ComponentProps } from "react";
 import { Platform } from "react-native";
-import { GroupedRow, GroupedSection } from "./composeGroupedList.android";
+import { GroupedRow, GroupedSection, groupedListPadding } from "./composeGroupedList.android";
 import {
 	endpointDisplayAddress,
 	environmentEndpointRows,
@@ -16,6 +16,7 @@ import { formDrawables } from "./formDrawables.android";
 import { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { ToastHost } from "./Toast";
+import { space } from "./tokens";
 import { useToast } from "./useToast";
 
 export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
@@ -49,7 +50,7 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 		<>
 			{headerItems}
 			<Host style={{ flex: 1 }} colorScheme={scheme}>
-				<LazyColumn contentPadding={{ start: 16, end: 16, top: 8, bottom: 24 }} verticalArrangement={{ spacedBy: 16 }} modifiers={[fillMaxSize()]}>
+				<LazyColumn contentPadding={groupedListPadding} verticalArrangement={{ spacedBy: space.lg }} modifiers={[fillMaxSize()]}>
 					<GroupedSection footer={isDefault ? DEFAULT_MACHINE_NOTE : undefined}>
 						<GroupedRow headline="Status" trailing={<Text color={environmentStatusColor(t, status)}>{status.label}</Text>} testID="machine-status" />
 						{host.platform ? <GroupedRow headline="Platform" trailing={environmentPlatformLabel(host.platform)} /> : null}

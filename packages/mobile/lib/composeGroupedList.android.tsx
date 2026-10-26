@@ -2,7 +2,7 @@ import { Column, ListItem, Text } from "@expo/ui/jetpack-compose";
 import { alpha, clickable, clip, combinedClickable, fillMaxWidth, padding, Shapes, testID as testTag } from "@expo/ui/jetpack-compose/modifiers";
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { useTheme } from "./ThemeProvider";
-import { stateOpacity } from "./tokens";
+import { gutter, radius, space, stateOpacity } from "./tokens";
 
 // Android: a Material 3 settings list, built from Compose ListItems in the
 // theme's surfaces. Rows in a section join into one rounded group, fully
@@ -10,10 +10,13 @@ import { stateOpacity } from "./tokens";
 // @expo/ui's FieldGroup draws, but in the app's palette rather than the
 // wallpaper's.
 
+/** The padding a LazyColumn of GroupedSections takes, inset to the screen's gutter. */
+export const groupedListPadding = { start: gutter, end: gutter, top: space.sm, bottom: space.xxl };
+
 type RowPosition = "only" | "leading" | "middle" | "trailing";
 
-const FULL = 20;
-const JOINED = 4;
+const FULL = radius.xl;
+const JOINED = radius.xs;
 
 function cornerRadii(position: RowPosition) {
 	const top = position === "only" || position === "leading" ? FULL : JOINED;
@@ -38,13 +41,13 @@ export function GroupedSection({ title, footer, footerColor, children }: {
 	const t = useTheme();
 	const rows = Children.toArray(children).filter(isValidElement) as ReactElement<{ position?: RowPosition }>[];
 	return (
-		<Column verticalArrangement={{ spacedBy: 2 }} modifiers={[fillMaxWidth()]}>
+		<Column verticalArrangement={{ spacedBy: space.hair }} modifiers={[fillMaxWidth()]}>
 			{title ? (
-				<Text color={t.textSecondary} style={{ typography: "titleSmall" }} modifiers={[padding(16, 8, 16, 6)]}>{title}</Text>
+				<Text color={t.textSecondary} style={{ typography: "titleSmall" }} modifiers={[padding(gutter, space.sm, gutter, space.xs)]}>{title}</Text>
 			) : null}
 			{rows.map((row, index) => cloneElement(row, { position: rowPosition(index, rows.length) }))}
 			{footer ? (
-				<Text color={footerColor ?? t.textSecondary} style={{ typography: "bodySmall" }} modifiers={[padding(16, 6, 16, 0)]}>{footer}</Text>
+				<Text color={footerColor ?? t.textSecondary} style={{ typography: "bodySmall" }} modifiers={[padding(gutter, space.xs, gutter, space.none)]}>{footer}</Text>
 			) : null}
 		</Column>
 	);

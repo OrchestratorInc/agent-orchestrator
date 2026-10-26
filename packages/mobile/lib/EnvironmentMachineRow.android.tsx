@@ -1,6 +1,6 @@
 import { Host, Icon, LazyColumn, PullToRefreshBox, Text } from "@expo/ui/jetpack-compose";
 import { fillMaxSize } from "@expo/ui/jetpack-compose/modifiers";
-import { GroupedRow, GroupedSection } from "./composeGroupedList.android";
+import { GroupedRow, GroupedSection, groupedListPadding } from "./composeGroupedList.android";
 import type { EnvironmentMachineListProps, EnvironmentMachineSummary } from "./EnvironmentMachineRow.types";
 import { environmentRouteSummary, environmentStatusColor } from "./environmentView";
 import { machineMenuImage } from "./machine-menu-image.android";
@@ -22,7 +22,7 @@ export function EnvironmentMachineList({ machines, footer, error, refreshing, on
 				indicator={{ color: t.accent, containerColor: t.bgElevated }}
 				modifiers={[fillMaxSize()]}
 			>
-				<LazyColumn contentPadding={{ start: 16, end: 16, top: 8, bottom: 24 }} modifiers={[fillMaxSize()]}>
+				<LazyColumn contentPadding={groupedListPadding} modifiers={[fillMaxSize()]}>
 					<GroupedSection footer={error ?? footer} footerColor={error ? t.red : undefined}>
 						{machines.map((machine) => (
 							<EnvironmentMachineRow key={machine.host.id} machine={machine} onPress={() => onOpen(machine.host.id)} />
