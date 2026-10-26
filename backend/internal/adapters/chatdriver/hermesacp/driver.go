@@ -53,13 +53,15 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 // HERMES_EPHEMERAL_SYSTEM_PROMPT, which Hermes injects at API-call time without
 // persisting it into the transcript. Hermes reads that variable first and only
 // falls back to its native persona configuration when it is empty, so the
-// value folds the native persona in ahead of AO's instructions exactly like
-// the TUI launch path does.
+// value folds the persona the session would have applied natively in ahead of
+// AO's instructions exactly like the TUI launch path does. The native side is
+// resolved by OriginalEphemeralPrompt: an explicit prompt inherited through
+// the environment wins over the config.yaml overlay, mirroring GetAgentHooks.
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"acp"}
 	env := map[string]string(nil)
 	if prompt := strings.TrimSpace(cfg.SystemPrompt); prompt != "" {
-		persona, err := hermes.NativeEphemeralOverlay(cfg.Env)
+		persona, err := hermes.OriginalEphemeralPrompt(cfg.Env)
 		if err != nil {
 			return nil, nil, err
 		}

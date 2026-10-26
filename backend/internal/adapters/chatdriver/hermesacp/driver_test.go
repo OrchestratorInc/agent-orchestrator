@@ -47,6 +47,37 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Follow AO rules."},
 		},
 		{
+			// Hermes reads an explicit environment prompt ahead of its
+			// configuration, so the persona from config.yaml must not replace
+			// it when the launch inherits one.
+			name: "an inherited explicit prompt wins over the config persona",
+			cfg: acpdriver.LaunchConfig{
+				SystemPrompt: "Follow AO rules.",
+				Env: map[string]string{
+					"HERMES_HOME":                    home,
+					"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Use my team conventions",
+				},
+			},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Use my team conventions\n\nFollow AO rules."},
+		},
+		{
+			// The hook-config path preserves the pre-AO prompt through the
+			// marker; the launch must keep composing from that original even
+			// when both the environment entry and the config carry a persona.
+			name: "the preserved original marker wins over env and config",
+			cfg: acpdriver.LaunchConfig{
+				SystemPrompt: "Follow AO rules.",
+				Env: map[string]string{
+					"HERMES_HOME":                    home,
+					"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Inherited env prompt",
+					"AO_HERMES_ORIGINAL_EPHEMERAL":   "Marker persona text",
+				},
+			},
+			want: []string{"acp"},
+			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Marker persona text\n\nFollow AO rules."},
+		},
+		{
 			name: "model is session-owned, never a launch flag",
 			cfg:  acpdriver.LaunchConfig{Model: "anthropic/claude-sonnet"},
 			want: []string{"acp"},

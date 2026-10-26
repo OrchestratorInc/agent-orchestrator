@@ -1396,6 +1396,22 @@ func ComposeEphemeralPrompt(original, instructions string) (string, error) {
 	return combined, nil
 }
 
+// OriginalEphemeralPrompt resolves the persona text Hermes would apply before
+// AO's instructions: an explicit ephemeral prompt — preserved through
+// AO_HERMES_ORIGINAL_EPHEMERAL by the hook-config path, or inherited directly
+// through the launch environment, both of which Hermes reads ahead of its
+// configuration — and only when neither exists the config.yaml overlay that
+// NativeEphemeralOverlay renders.
+func OriginalEphemeralPrompt(env map[string]string) (string, error) {
+	if original, ok := env["AO_HERMES_ORIGINAL_EPHEMERAL"]; ok && original != "" {
+		return original, nil
+	}
+	if original := env["HERMES_EPHEMERAL_SYSTEM_PROMPT"]; original != "" {
+		return original, nil
+	}
+	return NativeEphemeralOverlay(env)
+}
+
 // NativeEphemeralOverlay reads the persona Hermes would apply natively from
 // <HERMES_HOME>/config.yaml, the same overlay the TUI path renders
 // (nativeOverlay). It returns "" when the native configuration carries no
