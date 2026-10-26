@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useRef, type CSSProperties, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { cn } from "../../lib/utils";
 
@@ -20,6 +20,10 @@ export function MultiStepLoader({
 	/** Optional controls rendered beside a step's label, by step index. */
 	stepAccessories?: readonly ReactNode[];
 }) {
+	// Animate a step only when the loader advances to it. The step it mounts on
+	// shows at once: a loader that takes over from another (the board's while
+	// an orchestrator starts, then the session's) must not blank its label.
+	const mountedIndex = useRef(activeIndex);
 	if (steps.length === 0) return null;
 
 	return (
@@ -37,7 +41,7 @@ export function MultiStepLoader({
 						{index === activeIndex && !complete ? (
 							<span data-testid="multi-step-loader-step">
 								<span
-									className="multi-step-loader__step multi-step-loader__shimmer font-medium"
+									className={cn(activeIndex !== mountedIndex.current && "multi-step-loader__step", "multi-step-loader__shimmer font-medium")}
 									key={activeIndex}
 									style={{ "--multi-step-loader-duration": `${duration}ms` } as CSSProperties}
 								>

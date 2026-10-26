@@ -446,7 +446,7 @@ export function ProjectSettingsSection({
 	return (
 		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
 			{!titleHidden && (
-				<h2 className="px-3 text-xs font-medium leading-4 text-settings-muted">
+				<h2 className="px-(--settings-row-inset) text-sm font-medium leading-5 text-foreground">
 					{title}
 				</h2>
 			)}

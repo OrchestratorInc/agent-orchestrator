@@ -1,12 +1,19 @@
 import { QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceFilesResponse, WorkspaceFileSummary } from "./useSessionWorkspaceFiles";
-import { prefetchDefaultWorkspaceReviewDiffs, sessionWorkspaceDiffsQueryKey } from "./useSessionWorkspaceFiles";
+import {
+	filesReviewEndOfFileQueryKey,
+	prefetchDefaultWorkspaceReviewDiffs,
+	sessionWorkspaceDiffsQueryKey,
+	sessionWorkspaceDiffsQueryOptions,
+} from "./useSessionWorkspaceFiles";
+import { CHECKED_OUT_BRANCH, DEFAULT_FILES_SELECTION, buildReviewTarget, isLegacyManifest, normalizeChanges } from "../lib/files-review-selection";
 
 const { getMock, postMock } = vi.hoisted(() => ({ getMock: vi.fn(), postMock: vi.fn() }));
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { POST: postMock, GET: getMock },
+	apiErrorCode: () => undefined,
 	apiErrorMessage: (_error: unknown, fallback = "Request failed") => fallback,
 }));
 
@@ -14,6 +21,7 @@ function file(path: string, overrides: Partial<WorkspaceFileSummary> = {}): Work
 	return { path, status: "modified", additions: 1, deletions: 1, size: 40, binary: false, fileFingerprint: `fp:${path}`, ...overrides };
 }
 
+// An older daemon's manifest: no Uncommitted section, so the review opens on combined Changes.
 function workspace(unstaged: WorkspaceFileSummary[], extra: Partial<WorkspaceFilesResponse> = {}): WorkspaceFilesResponse {
 	return {
 		sessionId: "sess-1",
@@ -25,6 +33,16 @@ function workspace(unstaged: WorkspaceFileSummary[], extra: Partial<WorkspaceFil
 		truncated: false,
 		...extra,
 	};
+}
+
+function manifest(sections: Partial<WorkspaceFilesResponse["sections"]>): WorkspaceFilesResponse {
+	return workspace([], { sections: { uncommitted: [], committed: [], staged: [], unstaged: [], untracked: [], ...sections } });
+}
+
+// What the Files review reads while nothing is picked, built as the pane builds it.
+function paneTarget(data: WorkspaceFilesResponse) {
+	const legacy = isLegacyManifest(data);
+	return buildReviewTarget({ branch: CHECKED_OUT_BRANCH, changes: normalizeChanges(DEFAULT_FILES_SELECTION, data, legacy), manifest: data, legacy });
 }
 
 const eofPatch = [
@@ -74,7 +92,7 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
-	it("warms the default combined diff and the end-of-file contents the review pane waits on", async () => {
+	it("warms an older daemon's combined diff and the end-of-file contents the review pane waits on", async () => {
 		const queryClient = new QueryClient();
 		const sessionId = "sess-prefetch-unstaged";
 		await prefetchDefaultWorkspaceReviewDiffs(queryClient, sessionId, workspace([file("README.md")]));
@@ -94,7 +112,7 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 		expect(postMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("warms all combined changes including staged, committed, and untracked paths", async () => {
+	it("warms an older daemon's combined changes including staged, committed, and untracked paths", async () => {
 		const files = [file("unstaged.ts"), file("staged.ts"), file("committed.ts"), file("new.ts", { status: "added" }), file("unchanged.ts", { status: "unmodified" })];
 		const data = workspace([files[0]!], {
 			files,
@@ -109,16 +127,51 @@ describe("prefetchDefaultWorkspaceReviewDiffs", () => {
 		});
 	});
 
-	it("warms the latest commit when there are no combined changes", async () => {
-		const committed = { ...file("committed.ts"), editable: false, fileFingerprint: "commit:committed.ts" };
-		const data = workspace([], {
-			files: [],
-			commits: [{ author: "Ada", files: [committed], sha: "commit-1", subject: "Commit", timestamp: "2026-10-03T00:00:00Z" }],
-		});
+	it("warms Uncommitted under the keys the review pane reads", async () => {
+		const queryClient = new QueryClient();
+		const sessionId = "sess-prefetch-uncommitted";
+		const data = manifest({ uncommitted: [file("README.md")], committed: [file("committed.ts")] });
+		await prefetchDefaultWorkspaceReviewDiffs(queryClient, sessionId, data);
 
-		await prefetchDefaultWorkspaceReviewDiffs(new QueryClient(), "sess-prefetch-commit", data);
+		const body = postMock.mock.calls[0]?.[1]?.body;
+		expect(body).toMatchObject({ scope: "uncommitted", paths: ["README.md"], workspaceVersion: "workspace-1" });
+		expect(body.commitSha).toBeUndefined();
+		expect(body.commitShas).toBeUndefined();
+		const target = paneTarget(data);
+		expect(target).toMatchObject({ scope: "uncommitted", selectionKey: "" });
+		const paneDiffs = sessionWorkspaceDiffsQueryOptions({ contextLines: 3, paths: ["README.md"], scope: target.scope, sessionId, workspaceVersion: target.workspaceVersion, commitShas: target.commitShas, view: target.view });
+		expect(queryClient.getQueryData(paneDiffs.queryKey)).toBeTruthy();
+		const endOfFile = queryClient.getQueryCache().findAll({ queryKey: ["files-review-end-of-file", sessionId] });
+		expect(endOfFile).toHaveLength(1);
+		expect(endOfFile[0]?.queryKey.slice(0, 6)).toEqual(filesReviewEndOfFileQueryKey(sessionId, target.scope, target.selectionKey, "README.md", "fp:README.md", "").slice(0, 6));
+		expect(getMock.mock.calls.map((call) => call[1]?.params.query)).toEqual([
+			expect.objectContaining({ path: "README.md", scope: "uncommitted", side: "before", commitSha: undefined, commitShas: undefined }),
+			expect.objectContaining({ path: "README.md", scope: "uncommitted", side: "after", commitSha: undefined, commitShas: undefined }),
+		]);
+	});
 
-		expect(postMock.mock.calls[0]?.[1]?.body).toMatchObject({ scope: "committed", commitSha: "commit-1", paths: ["committed.ts"] });
+	it("warms All commits on a clean worktree under the keys the review pane reads", async () => {
+		const queryClient = new QueryClient();
+		const sessionId = "sess-prefetch-all-commits";
+		const committed = { ...file("README.md"), editable: false };
+		const data = manifest({ committed: [committed] });
+		await prefetchDefaultWorkspaceReviewDiffs(queryClient, sessionId, data);
+
+		const body = postMock.mock.calls[0]?.[1]?.body;
+		expect(body).toMatchObject({ scope: "committed", paths: ["README.md"], workspaceVersion: "workspace-1" });
+		expect(body.commitSha).toBeUndefined();
+		expect(body.commitShas).toBeUndefined();
+		const target = paneTarget(data);
+		expect(target).toMatchObject({ scope: "committed", selectionKey: "", commitShas: undefined });
+		const paneDiffs = sessionWorkspaceDiffsQueryOptions({ contextLines: 3, paths: ["README.md"], scope: target.scope, sessionId, workspaceVersion: target.workspaceVersion, commitShas: target.commitShas, view: target.view });
+		expect(queryClient.getQueryData(paneDiffs.queryKey)).toBeTruthy();
+		const endOfFile = queryClient.getQueryCache().findAll({ queryKey: ["files-review-end-of-file", sessionId] });
+		expect(endOfFile[0]?.queryKey.slice(0, 6)).toEqual(filesReviewEndOfFileQueryKey(sessionId, target.scope, target.selectionKey, "README.md", "fp:README.md", "").slice(0, 6));
+	});
+
+	it("warms nothing while the default review is empty", async () => {
+		await prefetchDefaultWorkspaceReviewDiffs(new QueryClient(), "sess-prefetch-empty", manifest({ staged: [file("staged.ts")] }));
+		expect(postMock).not.toHaveBeenCalled();
 	});
 
 	it("warms matching 24-file batches and refills an evicted later batch", async () => {

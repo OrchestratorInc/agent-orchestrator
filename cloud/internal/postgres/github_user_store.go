@@ -127,69 +127,7 @@ func (s *Store) CompleteGitHubUserAuthorization(
 		} else if err != nil {
 			return err
 		}
-		err := tx.QueryRow(
-			ctx,
-			`INSERT INTO ao_github_user_connections (
-				user_id, github_user_id, github_login, github_avatar_url,
-				access_token_ciphertext, access_token_nonce,
-				access_token_expires_at, refresh_token_ciphertext,
-				refresh_token_nonce, refresh_token_expires_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-			ON CONFLICT (user_id) DO UPDATE
-			SET github_user_id = EXCLUDED.github_user_id,
-			    github_login = EXCLUDED.github_login,
-			    github_avatar_url = EXCLUDED.github_avatar_url,
-			    access_token_ciphertext = EXCLUDED.access_token_ciphertext,
-			    access_token_nonce = EXCLUDED.access_token_nonce,
-			    access_token_expires_at = EXCLUDED.access_token_expires_at,
-			    refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
-			    refresh_token_nonce = EXCLUDED.refresh_token_nonce,
-			    refresh_token_expires_at = EXCLUDED.refresh_token_expires_at,
-			    last_synced_at = now(), updated_at = now()
-			RETURNING user_id, github_user_id, github_login, github_avatar_url,
-				access_token_ciphertext, access_token_nonce,
-				access_token_expires_at, refresh_token_ciphertext,
-				refresh_token_nonce, refresh_token_expires_at,
-				last_synced_at, created_at, updated_at`,
-			route.userID,
-			input.GitHubUserID,
-			input.GitHubLogin,
-			input.GitHubAvatarURL,
-			input.AccessTokenCiphertext,
-			input.AccessTokenNonce,
-			input.AccessTokenExpiresAt,
-			nullableBytes(input.RefreshTokenCiphertext),
-			nullableBytes(input.RefreshTokenNonce),
-			input.RefreshTokenExpiresAt,
-		).Scan(githubUserConnectionTargets(&connection)...)
-		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-				return ErrConflict
-			}
-			return err
-		}
-		// One AO user can replace their connected GitHub identity. Remove the
-		// previous non-secret revocation route before installing the new one so
-		// a later webhook for the old identity cannot delete the replacement.
-		if _, err := tx.Exec(
-			ctx,
-			`DELETE FROM ao_github_user_connection_routes WHERE user_id = $1`,
-			route.userID,
-		); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(
-			ctx,
-			`INSERT INTO ao_github_user_connection_routes (
-				github_user_id, user_id
-			) VALUES ($1, $2)
-			ON CONFLICT (github_user_id) DO UPDATE
-			SET user_id = EXCLUDED.user_id
-			WHERE ao_github_user_connection_routes.user_id = EXCLUDED.user_id`,
-			connection.GitHubUserID,
-			route.userID,
-		); err != nil {
+		if err := saveGitHubUserConnectionTx(ctx, tx, route.userID, input, &connection); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(
@@ -405,4 +343,99 @@ func nullableBytes(value []byte) any {
 		return nil
 	}
 	return value
+}
+
+// saveGitHubUserConnectionTx upserts the user's GitHub connection and its
+// revocation route inside a withUser transaction.
+func saveGitHubUserConnectionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	userID string,
+	input GitHubUserConnectionInput,
+	connection *domain.GitHubUserConnection,
+) error {
+	err := tx.QueryRow(
+		ctx,
+		`INSERT INTO ao_github_user_connections (
+			user_id, github_user_id, github_login, github_avatar_url,
+			access_token_ciphertext, access_token_nonce,
+			access_token_expires_at, refresh_token_ciphertext,
+			refresh_token_nonce, refresh_token_expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (user_id) DO UPDATE
+		SET github_user_id = EXCLUDED.github_user_id,
+		    github_login = EXCLUDED.github_login,
+		    github_avatar_url = EXCLUDED.github_avatar_url,
+		    access_token_ciphertext = EXCLUDED.access_token_ciphertext,
+		    access_token_nonce = EXCLUDED.access_token_nonce,
+		    access_token_expires_at = EXCLUDED.access_token_expires_at,
+		    refresh_token_ciphertext = EXCLUDED.refresh_token_ciphertext,
+		    refresh_token_nonce = EXCLUDED.refresh_token_nonce,
+		    refresh_token_expires_at = EXCLUDED.refresh_token_expires_at,
+		    last_synced_at = now(), updated_at = now()
+		RETURNING user_id, github_user_id, github_login, github_avatar_url,
+			access_token_ciphertext, access_token_nonce,
+			access_token_expires_at, refresh_token_ciphertext,
+			refresh_token_nonce, refresh_token_expires_at,
+			last_synced_at, created_at, updated_at`,
+		userID,
+		input.GitHubUserID,
+		input.GitHubLogin,
+		input.GitHubAvatarURL,
+		input.AccessTokenCiphertext,
+		input.AccessTokenNonce,
+		input.AccessTokenExpiresAt,
+		nullableBytes(input.RefreshTokenCiphertext),
+		nullableBytes(input.RefreshTokenNonce),
+		input.RefreshTokenExpiresAt,
+	).Scan(githubUserConnectionTargets(connection)...)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrConflict
+		}
+		return err
+	}
+	// One AO user can replace their connected GitHub identity. Remove the
+	// previous non-secret revocation route before installing the new one so
+	// a later webhook for the old identity cannot delete the replacement.
+	if _, err := tx.Exec(
+		ctx,
+		`DELETE FROM ao_github_user_connection_routes WHERE user_id = $1`,
+		userID,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO ao_github_user_connection_routes (
+			github_user_id, user_id
+		) VALUES ($1, $2)
+		ON CONFLICT (github_user_id) DO UPDATE
+		SET user_id = EXCLUDED.user_id
+		WHERE ao_github_user_connection_routes.user_id = EXCLUDED.user_id`,
+		connection.GitHubUserID,
+		userID,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+// SaveGitHubUserConnection stores the user's GitHub authorization obtained
+// outside the user authorization flow (the App installation callback, which
+// also authorizes the user).
+func (s *Store) SaveGitHubUserConnection(
+	ctx context.Context,
+	userID string,
+	input GitHubUserConnectionInput,
+) (domain.GitHubUserConnection, error) {
+	if userID == "" || !validGitHubUserConnectionInput(input) {
+		return domain.GitHubUserConnection{}, ErrInvalid
+	}
+	var connection domain.GitHubUserConnection
+	err := s.withUser(ctx, userID, func(tx pgx.Tx) error {
+		return saveGitHubUserConnectionTx(ctx, tx, userID, input, &connection)
+	})
+	return connection, err
 }

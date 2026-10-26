@@ -126,18 +126,20 @@ describe("native-composition transparency cascade", () => {
 		expect(maskRule?.body).toMatch(/background:\s*var\(--bg\)/);
 	});
 
-	it("centers the browser address bar and caps it clear of the inspector tabs", () => {
+	it("centers the browser address bar between the inspector tabs and actions", () => {
 		const topbarRule = rules().find((rule) => rule.selector.endsWith(".session-inspector__topbar--browser"));
-		expect(topbarRule?.body).toMatch(
-			/grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, clamp\(120px, calc\(100cqw - 2 \* var\(--inspector-tabs-reserve\)\), 240px\)\) minmax\(0, 1fr\)/,
-		);
+		// Intrinsic side tracks: the field centers in the gap left by however many tabs there are.
+		expect(topbarRule?.body).toMatch(/grid-template-columns:\s*max-content minmax\(0, 1fr\) max-content/);
+		const hostRule = rules().find((rule) => rule.selector === ".session-inspector__topbar > .browser-panel__topbar-host");
+		expect(hostRule?.body).toMatch(/justify-self:\s*center/);
+		expect(hostRule?.body).toMatch(/width:\s*min\(100%, 240px\)/);
 		// Centered: no offset is applied to the field in any layout.
 		const addressBarRule = rules().find(
 			(rule) => rule.selector.endsWith(".browser-panel__topbar-host > .browser-panel__address-bar"),
 		);
 		expect(addressBarRule?.body ?? "").not.toMatch(/translateX/);
 		expect(css).toMatch(
-			/\.session-inspector__topbar--browser:has\(\.browser-panel__address-bar--editing\)\s*{[^}]*clamp\(120px, min\(52cqw, calc\(100cqw - 2 \* var\(--inspector-tabs-reserve\)\)\), 560px\)/,
+			/\.session-inspector__topbar--browser:has\(\.browser-panel__address-bar--editing\) > \.browser-panel__topbar-host\s*{[^}]*width:\s*min\(100%, 52cqw, 560px\)/,
 		);
 		expect(css).toMatch(
 			/@container inspector \(max-width: 440px\)[\s\S]*?\.session-inspector__topbar--browser\s*{[\s\S]*?grid-template-rows:\s*var\(--size-inspector-tabs\) var\(--size-inspector-tabs\)/,

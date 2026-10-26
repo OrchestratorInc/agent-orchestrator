@@ -99,10 +99,17 @@ export function AoDiffFile({
 
 	const loadDiffFiles = useCallback(
 		async (fileDiff: FileDiffMetadata) => {
-			const [before, after] = await Promise.all([
-				source.kind === "pull_request" ? fetchPRFileRevision(sessionId, source.number, source.url, detail.path, "before", commitSha, hostId) : fetchWorkspaceFileRevision({ commitSha, sessionId, path: detail.path, scope, side: "before", workspaceVersion: detail.workspaceVersion, hostId }),
-				source.kind === "pull_request" ? fetchPRFileRevision(sessionId, source.number, source.url, detail.path, "after", commitSha, hostId) : fetchWorkspaceFileRevision({ commitSha, sessionId, path: detail.path, scope, side: "after", workspaceVersion: detail.workspaceVersion, hostId }),
-			]);
+			const loadRevision = (side: "before" | "after") => {
+    if(source.kind === "pull_request") return fetchPRFileRevision(sessionId,source.number,source.url,detail.path,side,commitSha,hostId);
+    return fetchWorkspaceFileRevision({
+     commitSha,sessionId,path:detail.path,side,hostId,
+     scope:source.kind === "snapshot" ? "committed" : scope,
+     workspaceVersion:source.kind === "snapshot" ? undefined : detail.workspaceVersion,
+     view:source.kind === "snapshot" ? source.view : undefined,
+     commitShas:source.kind === "snapshot" ? source.commitShas : undefined,
+    });
+   };
+   const [before,after]=await Promise.all([loadRevision("before"),loadRevision("after")]);
 			if (before.binary || after.binary || before.truncated || after.truncated) {
 				throw new Error(t("files.explorer.tooLarge", { size: Math.max(before.size, after.size) }));
 			}
@@ -120,8 +127,8 @@ export function AoDiffFile({
 	// Pierre has no dead "More unchanged context may be available" row to draw.
 	const endsAtEndOfFile = metadata != null && detail.size <= END_OF_FILE_PREFETCH_MAX_BYTES && endsAtLastHunk(metadata);
 	const endOfFileContents = useQuery({
-		queryKey: hostId ? ["files-preview-end-of-file", hostId, sessionId, source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, endsAtEndOfFile && metadata ? patchIdentity(metadata) : ""] as const
-			: ["files-preview-end-of-file", sessionId, source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, endsAtEndOfFile && metadata ? patchIdentity(metadata) : ""] as const,
+		queryKey: hostId ? ["files-preview-end-of-file", hostId, sessionId, source.kind === "snapshot" ? JSON.stringify(source) : source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, endsAtEndOfFile && metadata ? patchIdentity(metadata) : ""] as const
+			: ["files-preview-end-of-file", sessionId, source.kind === "snapshot" ? JSON.stringify(source) : source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, endsAtEndOfFile && metadata ? patchIdentity(metadata) : ""] as const,
 		queryFn: () => loadDiffFiles(metadata as FileDiffMetadata),
 		enabled: endsAtEndOfFile,
 		retry: false,

@@ -7,10 +7,6 @@ import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspa
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import {
-	useSessionUsageSummaries,
-	type SessionUsageSummary,
-} from "../hooks/useSessionUsageSummaries";
-import {
 	useWorkspaceQuery,
 	workspaceQueryKey,
 } from "../hooks/useWorkspaceQuery";
@@ -28,15 +24,12 @@ const dragStyle = isMac
 const noDragStyle = isMac
 	? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties)
 	: undefined;
-const emptyUsageBySession: ReadonlyMap<string, SessionUsageSummary> = new Map();
 
 export function StandaloneArchiveView() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const workspaceQuery = useWorkspaceQuery();
-	const usageBySession =
-		useSessionUsageSummaries(undefined).data ?? emptyUsageBySession;
 	const restoreSessionById = useRestoreSession();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const [restoringSessionId, setRestoringSessionId] = useState<
@@ -156,7 +149,6 @@ export function StandaloneArchiveView() {
 								}
 								restoreError={restoreErrors[session.id]}
 								session={session}
-								usage={usageBySession.get(session.id)}
 							/>
 						))}
 					</div>

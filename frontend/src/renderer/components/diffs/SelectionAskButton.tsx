@@ -28,7 +28,7 @@ export function SelectionAskButton({ onAsk, source }: { onAsk: () => void; sourc
 	const label = t("files.askInChat");
 	return createPortal(
 		<div
-			className="z-overlay flex items-center rounded-lg border border-border bg-card p-0.5 font-sans shadow-md"
+			className="z-overlay flex items-center rounded-lg border border-(--color-border-overlay) bg-overlay p-0.5 font-sans shadow-(--shadow-popover)"
 			data-selection-ask=""
 			onMouseDown={(event) => event.preventDefault()}
 			ref={buttonRef}

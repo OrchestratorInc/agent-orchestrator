@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,19 +92,87 @@ func testSupervisor(control *controlStub, builder builderStub, runner Runner) *S
 	}
 }
 
-func TestExecuteFailsQueuedChatTurnWhenWorkspaceCheckoutFailed(t *testing.T) {
-	control := &controlStub{}
-	supervisor := testSupervisor(control, builderStub{}, nil)
-	supervisor.SetWorkspaceStartupError("Repository checkout failed. Reconnect GitHub.")
-	if err := supervisor.execute(context.Background(), worker.Turn{ID: "turn-1", Attempt: 1}); err != nil {
-		t.Fatalf("execute: %v", err)
+// claimCounter counts turn claims and never hands one out.
+type claimCounter struct {
+	controlStub
+	claims atomic.Int32
+}
+
+func (c *claimCounter) ClaimTurn(context.Context) (*worker.Turn, error) {
+	c.claims.Add(1)
+	return nil, nil
+}
+
+// A failed checkout or Setup leaves queued Chat turns queued, as a failed local
+// start keeps its messages; they are claimed once a retry clears the failure.
+func TestQueuedChatTurnsWaitWhileTheWorkspaceStartFailed(t *testing.T) {
+	control := &claimCounter{}
+	supervisor := &Supervisor{
+		Control: control, Builder: builderStub{}, Runner: runnerStub{}, Workspace: t.TempDir(),
+		PollInterval: time.Millisecond, CancelInterval: time.Millisecond, CompletionRetry: time.Millisecond,
 	}
-	if control.failed != "Repository checkout failed. Reconnect GitHub." || control.completed {
-		t.Fatalf("failed=%q completed=%v, want a durable checkout failure", control.failed, control.completed)
+	supervisor.SetWorkspaceStartupError("Setup failed")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	if claims := control.claims.Load(); claims != 0 {
+		t.Fatalf("claimed %d turns while the workspace start was failed", claims)
 	}
 	supervisor.SetWorkspaceStartupError("")
-	if supervisor.workspaceStartupError.Load() != nil {
-		t.Fatal("checkout recovery must clear the startup failure before new turns")
+	for deadline := time.Now().Add(2 * time.Second); control.claims.Load() == 0 && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if control.claims.Load() == 0 {
+		t.Fatal("no turn was claimed after the workspace start recovered")
+	}
+}
+
+// countingClaims counts the controller's claims and hands out no turn.
+type countingClaims struct {
+	controlStub
+	claims atomic.Int32
+}
+
+func (c *countingClaims) ClaimTurn(context.Context) (*worker.Turn, error) {
+	c.claims.Add(1)
+	return nil, nil
+}
+
+// A Chat controller opened over a failed checkout or Setup claims no turn
+// until the workspace recovers: a claimed turn would fail for good, so a new
+// session's task would never run after the person fixes Setup and reopens it.
+func TestRunClaimsNoTurnWhileTheWorkspaceStartupFailed(t *testing.T) {
+	control := &countingClaims{}
+	supervisor := &Supervisor{
+		Control: control, Builder: builderStub{}, Runner: runnerStub{}, Workspace: t.TempDir(),
+		PollInterval: time.Millisecond,
+	}
+	supervisor.SetWorkspaceStartupError("Setup failed: exit status 1")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- supervisor.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	if claims := control.claims.Load(); claims != 0 {
+		cancel()
+		<-done
+		t.Fatalf("claimed %d turns while the workspace startup failed, want none", claims)
+	}
+	supervisor.SetWorkspaceStartupError("")
+	deadline := time.Now().Add(5 * time.Second)
+	for control.claims.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if control.claims.Load() == 0 {
+		t.Fatal("no claim after the workspace recovered")
 	}
 }
 
@@ -537,4 +606,46 @@ func TestExecuteWithOSRunnerProjectsHarnessProtocols(t *testing.T) {
 			t.Fatalf("native identity %q was not published; activity = %#v", test.wantNative, control.activity)
 		})
 	}
+}
+
+// ClaimedTurn turns true once the controller claims a turn (the session's
+// task ran in Chat), and stays false while it only polls an empty queue.
+func TestSupervisorReportsAClaimedTurn(t *testing.T) {
+	idle := testSupervisor(&controlStub{}, builderStub{}, runnerStub{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- idle.Run(ctx) }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+	if idle.ClaimedTurn() {
+		t.Fatal("an empty queue reported a claimed turn")
+	}
+
+	started := make(chan struct{})
+	runner := runnerFunc(func(context.Context, Command, func(Output) error) error {
+		close(started)
+		return nil
+	})
+	control := &controlStub{
+		turn:       &worker.Turn{ID: "turn-1", Attempt: 1, Harness: "codex", Prompt: "hi"},
+		credential: worker.CredentialResponse{Provider: "codex", CredentialType: "api_key", Secret: "s"},
+	}
+	supervisor := testSupervisor(control, builderStub{command: Command{Path: "/bin/echo", Dir: "."}}, runner)
+	if supervisor.ClaimedTurn() {
+		t.Fatal("claimed before running")
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+	go func() { done <- supervisor.Run(ctx) }()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn did not start executing")
+	}
+	if !supervisor.ClaimedTurn() {
+		t.Fatal("a claimed turn was not reported")
+	}
+	cancel()
+	<-done
 }

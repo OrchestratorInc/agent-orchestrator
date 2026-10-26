@@ -219,8 +219,11 @@ func (s *Service) claimOpenedWebhookPullRequest(ctx context.Context, orgID strin
 			State   string `json:"state"`
 			Draft   bool   `json:"draft"`
 			Head    struct {
-				Ref string `json:"ref"`
-				SHA string `json:"sha"`
+				Ref  string `json:"ref"`
+				SHA  string `json:"sha"`
+				Repo *struct {
+					ID int64 `json:"id"`
+				} `json:"repo"`
 			} `json:"head"`
 			Base struct {
 				Ref string `json:"ref"`
@@ -240,6 +243,11 @@ func (s *Service) claimOpenedWebhookPullRequest(ctx context.Context, orgID strin
 	if pr.Number <= 0 || pr.HTMLURL == "" || pr.Title == "" || pr.Head.Ref == "" || pr.Head.SHA == "" || pr.Base.Ref == "" ||
 		!strings.EqualFold(pr.State, "open") || event.Repository.FullName == "" {
 		return domain.PullRequest{}, postgres.ErrInvalid
+	}
+	// Workers push to the project repository itself, so a pull request from a
+	// fork is never a worker's, even when its branch name matches a session's.
+	if pr.Head.Repo == nil || pr.Head.Repo.ID != delivery.GitHubRepositoryID {
+		return domain.PullRequest{}, postgres.ErrNotFound
 	}
 	sessionID, err := s.store.SessionForGitHubPullRequestHead(ctx, orgID, delivery.GitHubRepositoryID, pr.Head.Ref, pr.Head.SHA)
 	if err != nil {

@@ -25,6 +25,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"opencode", "Log in to OpenCode", "opencode", "Native provider chooser", "https://github.com/anomalyco/opencode", "", ActionLogin, []string{"opencode", "auth", "login"}},
 		{"opencode-v2", "Log in to OpenCode 2", "opencode", "Native provider chooser", "https://opencode.ai/v2/docs", "", ActionLogin, []string{"opencode", "auth", "login"}},
 		{"mimo-code", "Log in to MiMo Code", "mimo", "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code", "", ActionLogin, []string{"mimo", "auth", "login"}},
+		{"memcode", "Set up memcode", "", "Configure a native endpoint and provider credentials before launching AO", "https://github.com/memcode-ai/memcode", "", ActionSetup, nil},
 		{"aider", "Set up Aider", "", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html", "", ActionSetup, nil},
 		{"copilot", "Log in to GitHub Copilot", "copilot", "Copilot opens its account picker automatically", "https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli", "", ActionLogin, []string{"copilot"}},
 		{"grok", "Log in to Grok", "grok", "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview", "", ActionLogin, []string{"grok", "login"}},
@@ -54,6 +55,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"deepseek-harness", "Set up DeepSeek", "dsh", "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness", "", ActionSetup, []string{"dsh", "--profile", "web"}},
 		{"openhands", "Set up OpenHands", "openhands", "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start", "", ActionSetup, []string{"openhands"}},
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
+		{"hermes", "Set up Hermes Agent", "hermes", "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs", "", ActionSetup, []string{"hermes", "model"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)
@@ -70,7 +72,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		// with no command to drive. DeepSeek Harness has no login subcommand either,
 		// but its web profile serves the Models page that writes the credential, so
 		// its setup is a terminal plan.
-		case "aider", "unreal-agent":
+		case "aider", "unreal-agent", "memcode":
 			wantLaunchMode = LaunchDocumentation
 		}
 		if seen[got.AgentID] {

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacehandoff"
@@ -35,6 +36,69 @@ func (i SessionInterface) Normalized() SessionInterface {
 		return i
 	}
 	return SessionInterfaceTUI
+}
+
+// chatHarnesses are the harnesses with a headless Chat controller in the
+// worker: a session can start in Chat or switch to it. The control plane's
+// create, its interface switching and /me (chatHarnesses, which the
+// new-task composer reads as it reads the local daemon's settings
+// chatHarnesses) all use this one list; adding a harness here is the whole
+// change.
+var chatHarnesses = []string{"claude-code", "codex", "cursor"}
+
+// ChatHarnesses lists the harnesses with a Chat controller (a copy).
+func ChatHarnesses() []string {
+	return slices.Clone(chatHarnesses)
+}
+
+// HarnessHasChat reports whether a session of harness can run in Chat: start
+// there, or switch to it.
+func HarnessHasChat(harness string) bool {
+	return slices.Contains(chatHarnesses, harness)
+}
+
+// StartInterface is the interface a new session starts in, resolved as the
+// local daemon resolves a spawn's mode (backend session_manager
+// startSessionMode; both are tested against
+// contracts/session-start-interface.json):
+//
+//  1. the interface the caller explicitly requested;
+//  2. TUI when the caller sent no default interface (cloud only);
+//  3. Chat for an orchestrator;
+//  4. the user's default session interface (the desktop's setting);
+//  5. TUI.
+//
+// A create without a default comes from a desktop that predates the field
+// (v0.14.3 and older), so its orchestrators keep starting in the TUI as they
+// did before: that desktop sends an explicit approval mode ("default") with
+// every Chat turn, which would make a trusted orchestrator ask before each
+// command. The local daemon always has a default, so rule 2 never applies
+// there; a current desktop always sends its default, "tui" included.
+//
+// Chat then holds only for a harness with a Chat controller (HarnessHasChat);
+// any other harness starts in the TUI without an error, as the local daemon
+// falls back when Chat is unavailable for a mode it did not explicitly
+// request. (The create API refuses an explicit Chat request for such a
+// harness with SESSION_MODE_UNSUPPORTED before it gets here.)
+func StartInterface(kind string, requested, defaultInterface SessionInterface, harness string) SessionInterface {
+	resolved := startPrecedence(kind, requested, defaultInterface)
+	if resolved == SessionInterfaceChat && !HarnessHasChat(harness) {
+		return SessionInterfaceTUI
+	}
+	return resolved
+}
+
+func startPrecedence(kind string, requested, defaultInterface SessionInterface) SessionInterface {
+	if requested.Valid() {
+		return requested
+	}
+	if defaultInterface == "" {
+		return SessionInterfaceTUI
+	}
+	if kind == "orchestrator" {
+		return SessionInterfaceChat
+	}
+	return defaultInterface.Normalized()
 }
 
 func (i SessionInterface) Opposite() SessionInterface {

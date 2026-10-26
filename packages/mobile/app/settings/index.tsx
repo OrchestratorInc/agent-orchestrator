@@ -42,6 +42,7 @@ import {
 	type StoreRowResult,
 } from "../../lib/storeUpdate";
 import type { Theme } from "../../lib/theme";
+import { getThemeDefinition } from "../../../shared/theme/palettes";
 import { preferenceLabel, type ThemePreference } from "../../lib/themePreference";
 
 // Light / Dark / System, in the desktop app's order and wording.
@@ -207,6 +208,7 @@ export default function SettingsScreen() {
 				<SettingsSection title="Preferences">
 					<SettingsCard>
 						<AppearanceRow />
+						<ColorThemeRow />
 						<NotificationsRow />
 					</SettingsCard>
 				</SettingsSection>
@@ -442,6 +444,20 @@ function AppearanceRow() {
 	);
 }
 
+/** The named colour theme; the picker is its own screen, the list is too long for a menu. */
+function ColorThemeRow() {
+	const router = useRouter();
+	const { style } = useThemeState();
+	return (
+		<CardRow
+			icon="palette"
+			label="Theme"
+			value={getThemeDefinition(style).label}
+			onPress={() => router.push("/settings/theme")}
+		/>
+	);
+}
+
 function NotificationsRow() {
 	const t = useTheme();
 	const { scheme } = useThemeState();
@@ -501,7 +517,10 @@ function NotificationsRow() {
 			label="Notifications"
 			disabled={toggle.disabled}
 			right={
-				<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={t.accent}>
+				// iOS uses seedColor as the SwiftUI tint, i.e. the "on" track. The dark
+				// accent is near-white, which hides the white thumb, so follow the
+				// system convention of a green track there.
+				<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={Platform.OS === "ios" ? t.green : t.accent}>
 					<Switch value={pending ?? toggle.value} disabled={toggle.disabled || pending !== null} onValueChange={onToggle} />
 				</Host>
 			}

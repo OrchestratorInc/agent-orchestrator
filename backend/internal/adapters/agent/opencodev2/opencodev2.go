@@ -303,6 +303,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	for _, integration := range integrations {
 		if len(integration.Connections) > 0 {
+			ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
 			return ports.AgentAuthStatusAuthorized, nil
 		}
 	}

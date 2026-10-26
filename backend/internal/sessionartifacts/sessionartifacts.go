@@ -5,6 +5,7 @@
 package sessionartifacts
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -28,6 +29,11 @@ func Dir(dataDir string, id domain.SessionID) string {
 	return filepath.Join(dataDir, "artifacts", string(id))
 }
 
+// VersionsDir is the directory inside a session's artifact directory that
+// holds the artifacts' version history. List skips it, so snapshots are not
+// artifacts themselves.
+const VersionsDir = ".versions"
+
 // MaxFiles bounds how many files List returns so a pathological artifact tree
 // cannot stall a session read or the lifecycle reconcile that runs under the
 // lifecycle mutex.
@@ -38,9 +44,10 @@ const MaxFiles = 1000
 const MaxVisited = 10000
 
 // List walks a session's artifact directory and returns up to MaxFiles of its
-// regular files, sorted by path. Unreadable entries are skipped rather than
-// failing the walk.
-func List(dir string) ([]domain.SessionArtifactFile, error) {
+// regular files outside VersionsDir, sorted by path. Entries matched by
+// ignored are skipped, as are unreadable entries rather than failing the walk.
+// A cancelled ctx stops the walk and returns its error.
+func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, nil
@@ -52,6 +59,9 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 	files := make([]domain.SessionArtifactFile, 0)
 	visited := 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			if path == root {
 				return walkErr
@@ -71,7 +81,16 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 			}
 			return nil
 		}
+		if path != root && ignored(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
+			if d.Name() == VersionsDir && filepath.Dir(path) == root {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, err := d.Info()
@@ -102,6 +121,26 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 		return files[i].Path < files[j].Path
 	})
 	return files, nil
+}
+
+// ignoredNames are OS metadata files and tool directories that List skips,
+// matched case-insensitively.
+var ignoredNames = map[string]bool{
+	".ds_store":       true,
+	".spotlight-v100": true,
+	".trashes":        true,
+	".fseventsd":      true,
+	"thumbs.db":       true,
+	"desktop.ini":     true,
+	".git":            true,
+	"node_modules":    true,
+	"__pycache__":     true,
+}
+
+// ignored reports whether List skips an entry named name: ignoredNames and
+// macOS "._" resource-fork files.
+func ignored(name string) bool {
+	return strings.HasPrefix(name, "._") || ignoredNames[strings.ToLower(name)]
 }
 
 func inferKind(relPath string) domain.SessionArtifactKind {

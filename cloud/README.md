@@ -159,8 +159,10 @@ redirects and production responses, verifies `/readyz` reports
 `~/.ao/staging-desktop` by default. If public ingress is unavailable, it exits
 with the failing readiness URL and HTTP/TLS error before Electron starts. The
 desktop uses the URL for staging preflight and Cloud API calls, including
-projects and sessions. WorkOS desktop authentication continues to use the
-`ao-app://callback` deep link.
+projects and sessions. This is an unpackaged build, so WorkOS sign-in returns
+to a loopback callback (`http://127.0.0.1:3000/callback`) and the build leaves
+the `ao-app://` deep link to the installed app; set `AO_CLOUD_AUTH_REDIRECT` to
+a bounce page to exercise the deep-link path.
 
 The optional web app intentionally resolves public TypeScript package sources
 from the containing checkout. Its setup and staging launcher belong to
@@ -283,6 +285,7 @@ All resource routes use `/api/cloud/v1`. Project and session creation require an
 | `PUT` | `/orgs/{orgId}/sessions/{sessionId}/workspace/review/file` | Write an editable file when its expected fingerprint still matches |
 | `POST` | `/orgs/{orgId}/sessions/{sessionId}/terminal-ticket` | Create a short-lived workspace-terminal ticket |
 | `GET` | `/terminal` | Upgrade a single-use ticket to the durable terminal WebSocket |
+| `GET/POST` | `/orgs/{orgId}/sessions/{sessionId}/agent-browser/*` | Relay the sandbox's agent browser (viewer, stream socket, file transfers) to the desktop |
 
 WorkOS access tokens and local development tokens both use
 `Authorization: Bearer <token>`.
@@ -330,8 +333,9 @@ so local and staging can manage the one App without copying secrets or callback
 state into either environment.
 
 Staging and production intentionally share one WorkOS environment while keeping
-their AO databases separate. Desktop login continues to use the
-`ao-app://callback` deep link.
+their AO databases separate. The installed desktop app signs in through the
+`/app/auth/return` bounce page, which hands off to the `ao-app://callback` deep
+link; development builds use a loopback callback instead.
 
 ## Tenancy
 

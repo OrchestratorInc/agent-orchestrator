@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -25,10 +27,16 @@ const (
 	// terminalRelayOutputBuffer limits data held only for a currently attached
 	// browser. Durable replay remains the recovery path after a disconnect.
 	terminalRelayOutputBuffer = 128
-	// terminalRelayAuditBuffer bounds background output mirroring. Reaching it
-	// makes the worker stream apply backpressure rather than silently losing
-	// replay/audit data.
+	// terminalRelayAuditBuffer is the background output mirror's queue. It
+	// matches the worker's unacknowledged-output window, so a worker can never
+	// fill it; a slow mirror slows the worker instead of losing output.
 	terminalRelayAuditBuffer = 256
+	// terminalRelayFailureLogInterval rate-limits the warning for a durable
+	// mirror that keeps failing, so a broken store cannot log at frame rate.
+	terminalRelayFailureLogInterval = 30 * time.Second
+	// terminalStreamControlBuffer bounds resize and repaint frames queued
+	// toward one worker. Overflow falls back to the durable queue.
+	terminalStreamControlBuffer = 8
 )
 
 // terminalStreams tracks which terminals have a live worker stream (input
@@ -45,7 +53,25 @@ type terminalStreams struct {
 type workerTerminalStream struct {
 	claims worker.Claims
 	send   chan []byte
-	done   chan struct{}
+	// control carries resize and repaint frames. It is nil for a worker that
+	// did not dial with worker.TerminalStreamControlFeature, which would drop
+	// frame types it does not know.
+	control chan worker.TerminalStreamFrame
+	done    chan struct{}
+	// mirrored is the highest sequence the durable mirror has finished with,
+	// stored or given up on. A browser missing a frame at or below it will
+	// not get that frame from the replay log unless the log already has it.
+	mirrored atomic.Int64
+}
+
+// markMirrored records that the mirror has finished with sequence.
+func (w *workerTerminalStream) markMirrored(sequence int64) {
+	for {
+		current := w.mirrored.Load()
+		if sequence <= current || w.mirrored.CompareAndSwap(current, sequence) {
+			return
+		}
+	}
 }
 
 // terminalRelayOutput is the live branch of the terminal data plane. Sequence
@@ -179,6 +205,18 @@ func (t *terminalStreams) registerWorker(
 	}
 }
 
+// mirroredThrough reports the highest sequence the terminal's current worker
+// stream has mirrored, and false when this replica holds no stream for it.
+func (t *terminalStreams) mirroredThrough(terminalID string) (int64, bool) {
+	t.mu.Lock()
+	stream := t.workers[terminalID]
+	t.mu.Unlock()
+	if stream == nil {
+		return 0, false
+	}
+	return stream.mirrored.Load(), true
+}
+
 func (t *terminalStreams) lookupWorker(terminalID string) *workerTerminalStream {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -207,6 +245,28 @@ func (t *terminalStreams) pushInput(terminalID string, data []byte) bool {
 	default:
 		// Buffer full: fall back to the durable queue rather than block the
 		// client's read loop.
+		return false
+	}
+}
+
+// pushControl delivers a resize or repaint frame straight into the worker's
+// stream, like pushInput does for keystrokes. It returns false when this
+// replica holds no stream for the terminal, the worker does not understand
+// control frames, or the buffer is full; the caller then uses the durable
+// queue.
+func (t *terminalStreams) pushControl(terminalID string, frame worker.TerminalStreamFrame) bool {
+	t.mu.Lock()
+	stream := t.workers[terminalID]
+	t.mu.Unlock()
+	if stream == nil || stream.control == nil {
+		return false
+	}
+	select {
+	case stream.control <- frame:
+		return true
+	case <-stream.done:
+		return false
+	default:
 		return false
 	}
 }
@@ -326,9 +386,62 @@ func (s *Server) pushPendingTerminalInput(
 	}
 }
 
+// relayFailureLog reports a recurring relay failure at most once per
+// terminalRelayFailureLogInterval, with the count it suppressed in between.
+type relayFailureLog struct {
+	last       time.Time
+	suppressed int
+}
+
+func (l *relayFailureLog) allow(now time.Time) (int, bool) {
+	if !l.last.IsZero() && now.Sub(l.last) < terminalRelayFailureLogInterval {
+		l.suppressed++
+		return 0, false
+	}
+	suppressed := l.suppressed
+	l.last, l.suppressed = now, 0
+	return suppressed, true
+}
+
+// terminalOutputRejection maps a store error that no later frame can recover
+// from to the stream error code the worker treats as permanent. Old workers
+// only know STALE_WORKER_TOKEN and TRANSPORT_EXPIRED, so a closed terminal
+// keeps reporting the latter. Every other error is transient.
+func terminalOutputRejection(err error) string {
+	switch {
+	case errors.Is(err, postgres.ErrStaleWorker):
+		return "STALE_WORKER_TOKEN"
+	case errors.Is(err, postgres.ErrTerminalClosed):
+		return "TRANSPORT_EXPIRED"
+	}
+	return ""
+}
+
+// queueRelayMirror hands a relayed frame to the durable mirror. The browser
+// already has the frame. A worker keeps at most terminalRelayAuditBuffer
+// frames unacknowledged, so the mirror's queue has room for every frame it can
+// send; a slow mirror slows the worker down (its window fills) rather than
+// losing output. Only an older worker without that window can fill the queue,
+// and then the stream waits here, which is the same backpressure. It reports
+// false only when the stream ends.
+func queueRelayMirror(
+	ctx context.Context,
+	audit chan<- worker.TerminalStreamFrame,
+	frame worker.TerminalStreamFrame,
+) bool {
+	select {
+	case audit <- frame:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // workerTerminalStream is the persistent duplex terminal socket a worker
 // holds per open terminal. In relay mode, output frames go immediately to a
 // local browser and then through an ordered background durable mirror. The
+// mirror is best effort: its failures are logged and never end the live
+// relay, except a rejection that proves the terminal or worker is gone. The
 // original persist-before-wake behavior remains available when relay mode is
 // disabled.
 func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
@@ -362,6 +475,9 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 		send:   make(chan []byte, terminalStreamSendBuffer),
 		done:   make(chan struct{}),
 	}
+	if streamFeature(r.URL.Query().Get("features"), worker.TerminalStreamControlFeature) {
+		stream.control = make(chan worker.TerminalStreamFrame, terminalStreamControlBuffer)
+	}
 	deregister := s.terminalStreams.registerWorker(terminalID, stream)
 	defer deregister()
 
@@ -378,29 +494,50 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 
 	// One mirror loop preserves frame order for this terminal. The relay sends
 	// the same worker-assigned sequence to the browser first; the database uses
-	// that sequence when it records replay state.
-	type auditFrame struct {
-		frame worker.TerminalStreamFrame
-	}
-	audit := make(chan auditFrame, terminalRelayAuditBuffer)
+	// that sequence when it records replay state. Only a stored frame is
+	// acknowledged, so the worker can resend the rest if this stream dies.
+	audit := make(chan worker.TerminalStreamFrame, terminalRelayAuditBuffer)
 	if s.terminalRelayEnabled {
 		go func() {
-			for queued := range audit {
+			var failures relayFailureLog
+			for frame := range audit {
 				sequence, persistErr := s.store.AppendTerminalOutputAt(
 					ctx, claims.OrgID, claims.SessionID, claims.WorkerID,
-					terminalID, claims.Epoch, queued.frame.ID, queued.frame.Data,
+					terminalID, claims.Epoch, frame.ID, frame.Data,
 				)
 				if persistErr != nil {
-					if ctx.Err() == nil {
-						s.logger.Error("terminal relay durable mirror failed",
-							"error", persistErr, "terminal_id", terminalID,
-							"sequence", queued.frame.ID)
+					if ctx.Err() != nil {
+						return
 					}
-					cancel()
-					return
+					if code := terminalOutputRejection(persistErr); code != "" {
+						// The terminal is closed or this worker was superseded, so
+						// nothing it sends can be stored or reach a browser anymore.
+						if s.logger != nil {
+							s.logger.Info("terminal relay stream rejected",
+								"error", persistErr, "terminal_id", terminalID, "code", code)
+						}
+						_ = writeFrame(worker.TerminalStreamFrame{Type: "error", Code: code})
+						cancel()
+						return
+					}
+					if suppressed, ok := failures.allow(time.Now()); ok && s.logger != nil {
+						s.logger.Warn("terminal relay durable mirror failed; live output continues",
+							"error", persistErr, "terminal_id", terminalID,
+							"sequence", frame.ID, "suppressed", suppressed)
+					}
+					// Acknowledge it anyway: the browser has it, and a resend
+					// cannot fix a failing store, while holding the worker's
+					// window open would stall the live terminal.
+					stream.markMirrored(frame.ID)
+					if err := writeFrame(worker.TerminalStreamFrame{Type: "ack", ID: frame.ID}); err != nil {
+						cancel()
+						return
+					}
+					continue
 				}
+				stream.markMirrored(frame.ID)
 				if err := writeFrame(worker.TerminalStreamFrame{
-					Type: "ack", ID: queued.frame.ID, Sequence: sequence,
+					Type: "ack", ID: frame.ID, Sequence: sequence,
 				}); err != nil {
 					cancel()
 					return
@@ -408,7 +545,7 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 				if s.logger != nil {
 					s.logger.Debug("terminal relay output mirrored",
 						"terminal_id", terminalID, "sequence", sequence,
-						"bytes", len(queued.frame.Data))
+						"bytes", len(frame.Data))
 				}
 			}
 		}()
@@ -425,6 +562,11 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 				if err := writeFrame(worker.TerminalStreamFrame{
 					Type: "input", Data: data,
 				}); err != nil {
+					cancel()
+					return
+				}
+			case frame := <-stream.control:
+				if err := writeFrame(frame); err != nil {
 					cancel()
 					return
 				}
@@ -479,9 +621,7 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 					"terminal_id", terminalID, "sequence", frame.ID,
 					"bytes", len(frame.Data), "saturated_clients", dropped)
 			}
-			select {
-			case audit <- auditFrame{frame: frame}:
-			case <-ctx.Done():
+			if !queueRelayMirror(ctx, audit, frame) {
 				return
 			}
 			continue
@@ -492,9 +632,9 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 		)
 		if err != nil {
 			code := "TRANSPORT_FAILED"
-			if errors.Is(err, postgres.ErrStaleWorker) {
-				code = "STALE_WORKER_TOKEN"
-			} else if errors.Is(err, postgres.ErrTransportExpired) {
+			if rejection := terminalOutputRejection(err); rejection != "" {
+				code = rejection
+			} else if errors.Is(err, postgres.ErrTerminalExpired) {
 				code = "TRANSPORT_EXPIRED"
 			}
 			_ = writeFrame(worker.TerminalStreamFrame{Type: "error", Code: code})
@@ -507,4 +647,14 @@ func (s *Server) workerTerminalStream(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// streamFeature reports whether a comma-separated feature list names feature.
+func streamFeature(features, feature string) bool {
+	for _, candidate := range strings.Split(features, ",") {
+		if strings.TrimSpace(candidate) == feature {
+			return true
+		}
+	}
+	return false
 }

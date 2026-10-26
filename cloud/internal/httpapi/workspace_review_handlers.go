@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -13,8 +14,44 @@ func (s *Server) getWorkspaceReview(w http.ResponseWriter, r *http.Request) {
 	s.dispatchWorkspaceReview(w, r, "workspace.review.summary", struct{}{}, &worker.WorkspaceReviewResponse{})
 }
 
+// workspaceRepositoriesResponse lists a session's repository checkouts: the
+// main one and, for a project with additional repositories, one per
+// additional repository. Each item is the worker's description of the
+// checkout ({name, repository?, branch?, main?, present}); "name" is the
+// value the other workspace endpoints take as ?repository=.
+type workspaceRepositoriesResponse struct {
+	Repositories []json.RawMessage `json:"repositories"`
+}
+
+// getWorkspaceRepositories answers from the main checkout's review summary,
+// which lists the checkouts, so it needs no request kind of its own. A
+// single-repository session (or an older worker) lists only the main checkout,
+// with an empty name: requests about it need no ?repository=.
+func (s *Server) getWorkspaceRepositories(w http.ResponseWriter, r *http.Request) {
+	orgID, sessionID, ok := workspaceRoute(w, r)
+	if !ok {
+		return
+	}
+	query := r.URL.Query()
+	query.Del("repository")
+	r.URL.RawQuery = query.Encode()
+	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, "workspace.review.summary", json.RawMessage(`{}`))
+	if !ok {
+		return
+	}
+	var summary workspaceRepositoriesResponse
+	if err := json.Unmarshal(result, &summary); err != nil {
+		writeError(w, r, http.StatusBadGateway, "INVALID_WORKER_RESPONSE", "The worker returned an invalid workspace review response.")
+		return
+	}
+	if len(summary.Repositories) == 0 {
+		summary.Repositories = []json.RawMessage{json.RawMessage(`{"name":"","main":true,"present":true}`)}
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
 func (s *Server) getChatModels(w http.ResponseWriter, r *http.Request) {
-	s.dispatchWorkspaceReview(w, r, "chat.models", struct{}{}, &worker.ChatModelsResponse{})
+	s.dispatchWorkspaceReviewWithin(w, r, "chat.models", struct{}{}, &worker.ChatModelsResponse{}, s.chatModelsRequestTimeout())
 }
 
 func (s *Server) getWorkspaceReviewTree(w http.ResponseWriter, r *http.Request) {
@@ -133,6 +170,20 @@ func (s *Server) putWorkspaceReviewFile(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) dispatchWorkspaceReview(w http.ResponseWriter, r *http.Request, kind string, input any, response any) bool {
+	return s.dispatchWorkspaceReviewWithin(w, r, kind, input, response, s.workerRequestTimeout)
+}
+
+// chatModelsRequestTimeout is how long a model catalog request waits for the
+// worker. The worker gives discovery up to 20 s (starting the Claude ACP
+// adapter and probing each model's approval modes on a cold worker), longer
+// than the default request wait, so the wait covers that plus delivery.
+func (s *Server) chatModelsRequestTimeout() time.Duration {
+	return max(s.workerRequestTimeout, minChatModelsRequestTimeout)
+}
+
+const minChatModelsRequestTimeout = 25 * time.Second
+
+func (s *Server) dispatchWorkspaceReviewWithin(w http.ResponseWriter, r *http.Request, kind string, input any, response any, timeout time.Duration) bool {
 	orgID, sessionID, ok := workspaceRoute(w, r)
 	if !ok {
 		return false
@@ -142,7 +193,7 @@ func (s *Server) dispatchWorkspaceReview(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The workspace request could not be encoded.")
 		return false
 	}
-	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, kind, payload)
+	result, ok := s.runWorkspaceRequestWithin(w, r, orgID, sessionID, kind, payload, timeout)
 	if !ok {
 		return false
 	}

@@ -501,6 +501,46 @@ func TestPoll_ReconcilesBranchStatesWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestPoll_LogsStartAndCompletionTiming(t *testing.T) {
+	store := &fakeStore{
+		sessions: nil,
+		projects: map[string]domain.ProjectRecord{},
+		prs:      map[domain.SessionID][]domain.PullRequest{},
+		checks:   map[string][]domain.PullRequestCheck{},
+	}
+	var logs bytes.Buffer
+	obs := New(&fakeProvider{}, store, &fakeLifecycle{}, Config{
+		Tick:   time.Hour,
+		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	})
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logged := logs.String()
+	for _, field := range []string{"scm observer: poll started", "scm observer: poll completed", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in poll timing log:\n%s", field, logged)
+		}
+	}
+}
+
+func TestLogProviderRequest_WarnsForRequestLongerThanPollCadence(t *testing.T) {
+	var logs bytes.Buffer
+	obs := &Observer{
+		tick:   30 * time.Second,
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	obs.logProviderRequest("repo_pr_list_guard", "acme/widgets", time.Now().Add(-31*time.Second), nil)
+
+	logged := logs.String()
+	for _, field := range []string{"slow provider request completed", "stage=repo_pr_list_guard", "repository=acme/widgets", "started_at=", "completed_at=", "duration_ms="} {
+		if !strings.Contains(logged, field) {
+			t.Fatalf("missing %q in provider timing log:\n%s", field, logged)
+		}
+	}
+}
+
 func TestPoll_ResumesAfterCredentialsBecomeAvailable(t *testing.T) {
 	store := testStoreWithSession()
 	provider := &fakeProvider{
@@ -853,6 +893,37 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 }
 
+// A worker renamed after launch keeps owning branches under its temporary
+// name, which the agent may have made or remembered before the rename landed.
+func TestMatchSession_RenamedTaskKeepsTemporaryNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, branch, temporary, source string
+		workspace                       bool
+	}{
+		{"single-repo sibling", "ao/fix-login/root", "ao/p-1/root", "ao/p-1/fix", false},
+		{"pushed temporary root", "ao/fix-login/root", "ao/p-1/root", "ao/p-1/root", false},
+		{"dev namespace sibling", "ao/dev/fix-login/root", "ao/dev/p-1/root", "ao/dev/p-1/fix", false},
+		{"workspace hyphen sibling", "ao/fix-login/root", "ao/p-1", "ao/p-1-fix", true},
+	} {
+		sr := sessionRepo{session: domain.SessionRecord{ID: "p-1", TemporaryBranch: tc.temporary}, branch: tc.branch, workspace: tc.workspace}
+		if got, ok := matchSession([]sessionRepo{sr}, tc.source); !ok || got.session.ID != "p-1" {
+			t.Errorf("%s: %q not attributed after rename", tc.name, tc.source)
+		}
+	}
+	// A later task named after the old temporary branch owns it outright.
+	renamed := sessionRepo{session: domain.SessionRecord{ID: "p-1", TemporaryBranch: "ao/p-1/root"}, branch: "ao/login/root"}
+	named := sessionRepo{session: domain.SessionRecord{ID: "p-9"}, branch: "ao/p-1/root"}
+	for _, source := range []string{"ao/p-1/root", "ao/p-1/fix"} {
+		if got, ok := matchSession([]sessionRepo{renamed, named}, source); !ok || got.session.ID != "p-9" {
+			t.Errorf("%q = %q, %v; want the task currently on it", source, got.session.ID, ok)
+		}
+	}
+	never := sessionRepo{session: domain.SessionRecord{ID: "p-1"}, branch: "ao/login/root"}
+	if _, ok := matchSession([]sessionRepo{never}, "ao/p-1/fix"); ok {
+		t.Error("a session that was never renamed claimed its ID namespace")
+	}
+}
+
 func TestMatchSession_PrefersExactBranchOverNamespaceMatch(t *testing.T) {
 	exact := sessionRepo{session: domain.SessionRecord{ID: "exact"}, branch: "ao/p-1"}
 	namespace := sessionRepo{session: domain.SessionRecord{ID: "namespace"}, branch: "ao/p-1/root"}
@@ -1018,6 +1089,19 @@ func TestPoll_DiscoversSameRepoPRAfterRename(t *testing.T) {
 	if len(store.writes) == 0 || store.writes[0].pr.SessionID != "p-1" {
 		t.Fatalf("renamed-repo PR must be attributed to p-1, got %#v", store.writes)
 	}
+	if got := store.writes[0].pr.URLAlias; got != "https://github.com/o/r/pull/1" {
+		t.Fatalf("discovered PR URLAlias = %q, want the listed old-name URL", got)
+	}
+}
+
+func TestListedRepoAliasIsNormalized(t *testing.T) {
+	listed := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "Old-Org", Name: "R", Repo: "Old-Org/R"}
+	if got := listedRepoAlias("https://github.com/NewOrg/r/pull/1", listed); got != "https://github.com/old-org/r/pull/1" {
+		t.Fatalf("alias = %q, want the normalized old-name URL", got)
+	}
+	if got := listedRepoAlias("https://github.com/old-org/r/pull/1", listed); got != "" {
+		t.Fatalf("alias = %q, want none when only the case differs", got)
+	}
 }
 
 func mustGit(t *testing.T, args ...string) {
@@ -1173,6 +1257,114 @@ func TestPoll_CIETagChangeRefreshesWhenRepoUnchanged(t *testing.T) {
 	}
 	if len(provider.fetchBatches) != 1 {
 		t.Fatalf("CI ETag 200 should trigger batch fetch, got %d", len(provider.fetchBatches))
+	}
+}
+
+// stallingLifecycle hangs on one session's reaction until its context ends,
+// like a merge-conflict nudge stuck on a wedged agent pane or chat host.
+type stallingLifecycle struct {
+	mu       sync.Mutex
+	stall    domain.SessionID
+	observed []domain.SessionID
+}
+
+func (l *stallingLifecycle) ApplySCMObservation(ctx context.Context, id domain.SessionID, _ ports.SCMObservation) error {
+	if id == l.stall {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.observed = append(l.observed, id)
+	return nil
+}
+
+func TestPoll_StalledLifecycleDoesNotBlockOtherSessions(t *testing.T) {
+	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
+	for i := 1; i <= 2; i++ {
+		id := domain.SessionID("p-" + fmt.Sprint(i))
+		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
+		pr := knownPR(i)
+		pr.SessionID = id
+		pr.MetadataHash = "" // force candidate
+		store.prs[id] = []domain.PullRequest{pr}
+		provider.observations[prKey(testRepo, i)] = testObs(i)
+	}
+	conflicted := testObs(1)
+	conflicted.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeConflicting), Conflict: true}
+	provider.observations[prKey(testRepo, 1)] = conflicted
+	lc := &stallingLifecycle{stall: "p-1"}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	obs.lifecycleTimeout = 20 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- obs.Poll(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll stalled behind one session's lifecycle reaction")
+	}
+	if len(lc.observed) != 1 || lc.observed[0] != "p-2" {
+		t.Fatalf("lifecycle observed %v, want [p-2]", lc.observed)
+	}
+}
+
+type deadlineLifecycle struct {
+	mu          sync.Mutex
+	hasDeadline map[domain.SessionID]bool
+	errs        map[domain.SessionID]error
+	work        time.Duration
+}
+
+func (l *deadlineLifecycle) ApplySCMObservation(ctx context.Context, id domain.SessionID, _ ports.SCMObservation) error {
+	_, bounded := ctx.Deadline()
+	var err error
+	select {
+	case <-time.After(l.work):
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hasDeadline[id], l.errs[id] = bounded, err
+	return err
+}
+
+// A merged or closed PR is not selected again after a failed reaction, so the
+// reaction timeout must not cut its teardown and final notifications short.
+func TestPoll_TerminalPRLifecycleIsNotTimeBounded(t *testing.T) {
+	store := &fakeStore{projects: map[string]domain.ProjectRecord{"p": {ID: "p", RepoOriginURL: "https://github.com/o/r.git"}}, prs: map[domain.SessionID][]domain.PullRequest{}, checks: map[string][]domain.PullRequestCheck{}}
+	provider := &fakeProvider{repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo"}}, observations: map[string]ports.SCMObservation{}}
+	for i := 1; i <= 2; i++ {
+		id := domain.SessionID("p-" + fmt.Sprint(i))
+		store.sessions = append(store.sessions, domain.SessionRecord{ID: id, ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "b" + fmt.Sprint(i)}})
+		pr := knownPR(i)
+		pr.SessionID = id
+		pr.MetadataHash = "" // force candidate
+		store.prs[id] = []domain.PullRequest{pr}
+		provider.observations[prKey(testRepo, i)] = testObs(i)
+	}
+	merged := testObs(1)
+	merged.PR.State, merged.PR.Merged = string(domain.PRStateMerged), true
+	provider.observations[prKey(testRepo, 1)] = merged
+	lc := &deadlineLifecycle{hasDeadline: map[domain.SessionID]bool{}, errs: map[domain.SessionID]error{}, work: 100 * time.Millisecond}
+	obs := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC())
+	obs.lifecycleTimeout = 20 * time.Millisecond
+
+	if err := obs.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if lc.hasDeadline["p-1"] || lc.errs["p-1"] != nil {
+		t.Fatalf("merged PR reaction bounded=%v err=%v, want unbounded and complete", lc.hasDeadline["p-1"], lc.errs["p-1"])
+	}
+	if !lc.hasDeadline["p-2"] || !errors.Is(lc.errs["p-2"], context.DeadlineExceeded) {
+		t.Fatalf("open PR reaction bounded=%v err=%v, want the reaction timeout", lc.hasDeadline["p-2"], lc.errs["p-2"])
 	}
 }
 

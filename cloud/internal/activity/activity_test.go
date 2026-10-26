@@ -49,6 +49,38 @@ func TestRedactMasksCredentials(t *testing.T) {
 	}
 }
 
+// Masking twice keeps the text after a masked value.
+func TestRedactTwiceKeepsWhatFollowsAMaskedValue(t *testing.T) {
+	once := Redact(`{"password": "x"} and token=abc, done`)
+	if twice := Redact(once); twice != once || once != `{"password": [REDACTED]} and token=[REDACTED], done` {
+		t.Fatalf("once %q, twice %q", once, twice)
+	}
+}
+
+// A quoted value holding escaped JSON (an AWS Secrets Manager SecretString)
+// is masked whole, not up to its first escaped quote, which would leave the
+// password it holds in place.
+func TestRedactMasksAnEscapedJSONValueWhole(t *testing.T) {
+	for text, want := range map[string]string{
+		`{"SecretString":"{\"password\":\"hunter2xyz\"}"}`: `{"SecretString":[REDACTED]}`,
+		`"client_secret": "a\"b", "next": 1`:               `"client_secret": [REDACTED], "next": 1`,
+		// Escapes that never close it: up to the next quote, as before.
+		`token="abc\" rest`: `token=[REDACTED] rest`,
+	} {
+		if got := Redact(text); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// StripControl removes escapes and control characters without redacting.
+func TestStripControlDoesNotRedact(t *testing.T) {
+	text := "\x1b[31mpassword=x\x1b[0m\r\n\x07done\t1"
+	if got := StripControl(text); got != "password=x\ndone\t1" {
+		t.Fatalf("StripControl(%q) = %q", text, got)
+	}
+}
+
 func TestRedactKeepsOrdinaryDiagnostics(t *testing.T) {
 	input := "coder: worker bootstrap failed: AO worker did not start; /home/coder/.ao/worker/worker.log exited 1 (lifecycle start_error)"
 	if got := Redact(input); got != input {

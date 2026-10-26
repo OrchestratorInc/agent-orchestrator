@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { setOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
 import { useApp } from "../lib/store";
-import { Button, NumberedStep } from "../lib/ui";
+import { Button, MASCOT_ASPECT, NumberedStep } from "../lib/ui";
 import MASCOT from "../assets/mascot.png";
 import { useThemedStyles } from "../lib/ThemeProvider";
 import type { Theme } from "../lib/theme";
@@ -100,7 +100,7 @@ const makeStyles = (t: Theme) =>
 		paddingBottom: space.xxs,
 	},
 	brand: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	mascot: { width: 26, height: 23 },
+	mascot: { width: 26, height: 26 * MASCOT_ASPECT },
 	brandName: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600", letterSpacing: -0.2 },
 	skip: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
 

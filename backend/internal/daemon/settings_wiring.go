@@ -24,7 +24,9 @@ func (s settingsStore) GetAppSettings(ctx context.Context) (settingssvc.Snapshot
 	}
 	return settingssvc.Snapshot{
 		DefaultSessionMode: row.DefaultSessionMode,
+		HarnessDefaults:    row.HarnessDefaults,
 		CloudOffering:      row.CloudOffering,
+		VersionRefresh:     row.VersionRefresh,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -39,4 +41,12 @@ func (s settingsStore) SetDefaultSessionMode(
 
 func (s settingsStore) SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error {
 	return s.store.SetCloudOffering(ctx, enabled, now)
+}
+
+func (s settingsStore) SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error {
+	return s.store.SetVersionRefresh(ctx, enabled, now)
+}
+
+func (s settingsStore) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error {
+	return s.store.SetHarnessDefault(ctx, agent, value, now)
 }

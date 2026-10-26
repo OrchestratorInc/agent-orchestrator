@@ -36,6 +36,22 @@ describe("WorkerRowActions", () => {
 
 		const archive = renderer.root.findByProps({ accessibilityLabel: "Archive Polish workers" });
 		expect(archive).toBeTruthy();
-		expect(renderer.root.findByProps({ name: "archive" }).props.color).toBe("secondary");
+		expect(renderer.root.findByProps({ name: "archive" }).props.color).toBe("primary");
+	});
+
+	it("draws archive with the same control and ink as pin", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerRowActions title="Polish workers" pinned={false} onSetPinned={vi.fn()} onDelete={vi.fn()} />,
+			);
+		});
+
+		const style = (label: string) =>
+			renderer.root.find((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityLabel === label).props.style({ pressed: false });
+		expect(style("Archive Polish workers")).toEqual(style("Pin Polish workers"));
+		const pinIcon = renderer.root.findByProps({ name: "pin" }).props;
+		const archiveIcon = renderer.root.findByProps({ name: "archive" }).props;
+		expect({ size: archiveIcon.size, color: archiveIcon.color }).toEqual({ size: pinIcon.size, color: pinIcon.color });
 	});
 });

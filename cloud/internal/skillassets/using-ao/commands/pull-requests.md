@@ -27,7 +27,8 @@ ao claim-pr <number-or-url>
 ```
 
 Use when a PR for this work already exists (for example, opened in an earlier
-session) and this session should own it. Prints `claimed PR #<n> <url>`.
+session) and this session should continue its implementation. Reviewing someone
+else's PR does not require a claim. Prints `claimed PR #<n> <url>`.
 
 ## ao review trigger — start an AO review
 
@@ -35,15 +36,20 @@ session) and this session should own it. Prints `claimed PR #<n> <url>`.
 ao review trigger
 ```
 
-Use when asked to review this session's PR or to request an AO review. It
+Use when asked to review this session's implementation PR or to request an AO review. It
 starts AO's reviewer on every open, non-draft PR this session owns, in its own
 reviewer terminal that the human watches in the desktop app. Prints one line
 per PR: `started AO review of PR #<n> <url>`, or `AO review of PR #<n> is
 already running <url>`. The reviewer's findings arrive in this session as PR
 review comments. Do not review the PR yourself instead.
 
+For a requested review of someone else's PR, use a normal review-only worker
+without claiming the target. Submit the requested provider review and comments
+directly. Do not use `ao review trigger` or create an ownership-only placeholder.
+
 ## Submitting an AO review verdict
 
-Only when the prompt asked this session to review a PR: run the command in
-`$AO_REVIEW_HELP` with the review run id from the prompt and a verdict of
-`approved` or `changes_requested`.
+Only when AO launched this session as its native reviewer for an owned
+implementation PR: run the command in `$AO_REVIEW_HELP` with the review run id
+from the prompt and a verdict of `approved` or `changes_requested`. A normal
+review-only worker submits the requested provider review directly.

@@ -73,6 +73,7 @@ type createWorkerChildRequest struct {
 	Mode                        string   `json:"mode,omitempty"`
 	DeniedCommands              []string `json:"deniedCommands,omitempty"`
 	SandboxProviderConnectionID string   `json:"sandboxProviderConnectionId,omitempty"`
+	Branch                      string   `json:"branch,omitempty"`
 }
 
 func (s *Server) listWorkerChildren(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +115,8 @@ func (s *Server) listWorkerChildren(w http.ResponseWriter, r *http.Request) {
 }
 
 // childItems renders child sessions with their PR facts (for status
-// derivation) and full PR rows (for the prs[] payload) in two batch reads.
+// derivation), full PR rows (for the prs[] payload), and committed artifact
+// files (while cloud artifacts are on) in batch reads.
 func (s *Server) childItems(
 	r *http.Request,
 	orgID string,
@@ -132,9 +134,17 @@ func (s *Server) childItems(
 	if err != nil {
 		return nil, err
 	}
+	artifactFiles, err := s.sessionArtifactFiles(r.Context(), orgID, childIDs)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]sessionChildResponse, 0, len(children))
 	for _, child := range children {
-		items = append(items, toSessionChildResponse(child, prFacts[child.ID], pullRequests[child.ID]))
+		item := toSessionChildResponse(child, prFacts[child.ID], pullRequests[child.ID])
+		if artifactFiles != nil {
+			item.setChildArtifactFiles(artifactFiles[child.ID])
+		}
+		items = append(items, item)
 	}
 	return items, nil
 }
@@ -159,6 +169,7 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 	request.Prompt = strings.TrimSpace(request.Prompt)
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
+	request.Branch = strings.TrimSpace(request.Branch)
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
@@ -252,10 +263,13 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 			// connection of its own), so its children do too.
 			connections = nil
 		}
-		placement, err = resolveCoderPlacement(parent.ProjectConfig, connections, preferred)
+		placement, err = resolveCoderPlacement(parent.ProjectConfig, parent.RepositoryURL, connections, preferred)
 		if err != nil {
 			s.writeCoderPlacementError(w, r, err)
 			return
+		}
+		if placement.override != nil {
+			placement.override.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(parent.ProjectName)
 		}
 		if placement.connectionID != "" {
 			request.SandboxProviderConnectionID = placement.connectionID
@@ -273,6 +287,7 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		domain.CreateSession{
 			Kind: "worker", Harness: request.Harness, DisplayName: request.DisplayName,
 			Prompt: request.Prompt, Mode: request.Mode, DeniedCommands: request.DeniedCommands,
+			Branch:   request.Branch,
 			Provider: plan.Provider, SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile: plan.ResourceProfile, BootstrapContext: plan.BootstrapContext,
 			Release: s.release,

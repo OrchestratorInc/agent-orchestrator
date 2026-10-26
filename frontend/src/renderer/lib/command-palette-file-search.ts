@@ -1,4 +1,6 @@
 import type { CloudCpClient } from "./cloud-cp";
+import { apiClient, apiErrorMessage } from "./api-client";
+import { clientForSessionHost } from "./host-clients";
 import { cloudWorkspaceReviewSearchQueryOptions } from "../hooks/useCloudWorkspaceReview";
 import { sessionWorkspaceSearchQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import type { WorkspaceFileSearchItem, WorkspaceFileSearchTarget } from "./command-palette";
@@ -78,5 +80,37 @@ export function commandPaletteFileSearchQueryOptions(
 		...options,
 		queryFn: async (context: { signal?: AbortSignal } = {}) =>
 			normalizeSearchResponse(await options.queryFn(context)),
+	};
+}
+
+/** Lines inside a session's files. Cloud sessions have no daemon to search them. */
+export function commandPaletteContentSearchQueryOptions(target: WorkspaceFileSearchTarget, query: string, errorMessage: string) {
+	return {
+		queryKey: ["palette-content-search", target.hostId ?? "", target.sessionId, query] as const,
+		queryFn: async ({ signal }: { signal?: AbortSignal } = {}) => {
+			const { data, error } = await clientForSessionHost(target.hostId).GET("/api/v1/sessions/{sessionId}/workspace/search/content", {
+				params: { path: { sessionId: target.sessionId }, query: { query } },
+				signal,
+			});
+			if (error) throw new Error(apiErrorMessage(error, errorMessage));
+			if (!data) throw new Error(errorMessage);
+			return data;
+		},
+	};
+}
+
+/** Messages across this machine's chats. */
+export function commandPaletteChatSearchQueryOptions(query: string, errorMessage: string) {
+	return {
+		queryKey: ["palette-chat-search", query] as const,
+		queryFn: async ({ signal }: { signal?: AbortSignal } = {}) => {
+			const { data, error } = await apiClient.GET("/api/v1/conversations/search", {
+				params: { query: { query } },
+				signal,
+			});
+			if (error) throw new Error(apiErrorMessage(error, errorMessage));
+			if (!data) throw new Error(errorMessage);
+			return data;
+		},
 	};
 }

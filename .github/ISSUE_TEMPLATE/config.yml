@@ -2,7 +2,7 @@ blank_issues_enabled: true
 contact_links:
   - name: Discord community
     url: https://discord.com/invite/UZv7JjxbwG
-    about: Questions, mentoring, and the daily contributor sync (10:00 PM IST).
+    about: Questions, mentoring, and the weekly contributor call.
   - name: Contributing guide
-    url: https://github.com/AgentWrapper/agent-orchestrator/blob/main/CONTRIBUTING.md
+    url: https://github.com/OrchestratorInc/agent-orchestrator/blob/main/CONTRIBUTING.md
     about: How to claim issues, open PRs, and work with maintainers.

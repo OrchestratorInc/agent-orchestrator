@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/jackc/pgx/v5"
@@ -25,7 +26,8 @@ func (s *Store) WorkerGitHubCheckoutContext(
 			`SELECT project.id, project.github_repository_grant_id, grant_row.id,
 				installation.github_installation_id,
 				repository.github_repository_id, repository.full_name,
-				repository.clone_url, project.default_branch
+				repository.clone_url, project.default_branch,
+				installation.access_scope, COALESCE(installation.scope_user_id::text, '')
 			FROM ao_sessions session
 			JOIN ao_projects project
 			  ON project.org_id = session.org_id AND project.id = session.project_id
@@ -50,6 +52,7 @@ func (s *Store) WorkerGitHubCheckoutContext(
 			  AND repository.is_archived = false
 			  AND repository.is_disabled = false
 			  AND btrim(repository.clone_url) <> ''
+			  AND `+githubUserScopeIntactSQL+`
 			ORDER BY grant_row.granted_at DESC
 			LIMIT 1`,
 			orgID, sessionID,
@@ -62,6 +65,8 @@ func (s *Store) WorkerGitHubCheckoutContext(
 			&authorization.FullName,
 			&authorization.CloneURL,
 			&authorization.DefaultBranch,
+			&authorization.AccessScope,
+			&authorization.ScopeUserID,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
@@ -86,7 +91,8 @@ func (s *Store) WorkerGitHubCheckoutContext(
 }
 
 // WorkerSessionExtraRepos returns the additional repositories a session's
-// project declares (the coder dev-kit "extraRepos"), if any. It is a
+// project declares (config "repos", or the legacy coder dev-kit "extraRepos"),
+// if any. It is a
 // best-effort read used only to broaden a checkout token's repository scope, so
 // callers must tolerate an empty result and must never fail the primary checkout
 // on its account. Repository and installation authority still come exclusively
@@ -121,11 +127,112 @@ func (s *Store) WorkerSessionExtraRepos(
 	if err != nil {
 		return nil, err
 	}
-	coder, ok := domain.DecodeProjectCoderConfig(config)
-	if !ok {
-		return nil, nil
+	return domain.ProjectAdditionalRepos(config), nil
+}
+
+// WorkerSessionGrantedExtraRepos returns the session's additional
+// repositories (WorkerSessionExtraRepos) that still have an active,
+// non-revoked grant in the organization through the same GitHub App
+// installation as the main repository. It is what an App checkout or push
+// token, and an App pull request, may cover: a repository whose grant was
+// revoked after the project was set up, or one a project declared without a
+// grant (a legacy dev kit list, or a config stored before grants were
+// checked), is left out. A project whose main repository has no active grant
+// gets none.
+func (s *Store) WorkerSessionGrantedExtraRepos(
+	ctx context.Context,
+	orgID, sessionID string,
+) ([]domain.RepoRef, error) {
+	var granted []domain.RepoRef
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var config json.RawMessage
+		var mainInstallation *int64
+		err := tx.QueryRow(ctx,
+			`SELECT project.config,
+				COALESCE((
+					SELECT installation.github_installation_id
+					FROM ao_github_repository_grants grant_row
+					JOIN ao_github_installations installation
+					  ON installation.org_id = grant_row.org_id
+					 AND installation.id = grant_row.installation_id
+					WHERE grant_row.org_id = project.org_id
+					  AND grant_row.github_repository_id = project.github_repository_id
+					  AND grant_row.revoked_at IS NULL
+					  AND installation.status = 'active'
+					  AND installation.suspended_at IS NULL
+					  AND installation.disconnected_at IS NULL
+					  AND installation.deleted_at IS NULL
+					ORDER BY grant_row.granted_at DESC
+					LIMIT 1
+				), project.github_installation_id)
+			FROM ao_sessions session
+			JOIN ao_projects project
+			  ON project.org_id = session.org_id AND project.id = session.project_id
+			WHERE session.org_id = $1 AND session.id = $2
+			  AND session.is_terminated = false`,
+			orgID, sessionID,
+		).Scan(&config, &mainInstallation)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("load session extra repositories: %w", err)
+		}
+		declared := domain.ProjectAdditionalRepos(config)
+		if len(declared) == 0 || mainInstallation == nil {
+			return nil
+		}
+		fullNames := make([]string, 0, len(declared))
+		for _, repo := range declared {
+			if _, fullName, err := domain.CanonicalGitHubRepoURL(repo.URL); err == nil {
+				fullNames = append(fullNames, strings.ToLower(fullName))
+			}
+		}
+		rows, err := tx.Query(ctx,
+			`SELECT lower(repository.full_name)
+			FROM ao_github_repository_grants grant_row
+			JOIN ao_github_repositories repository
+			  ON repository.github_repository_id = grant_row.github_repository_id
+			JOIN ao_github_installations installation
+			  ON installation.org_id = grant_row.org_id
+			 AND installation.id = grant_row.installation_id
+			WHERE grant_row.org_id = $1
+			  AND grant_row.revoked_at IS NULL
+			  AND installation.github_installation_id = $2
+			  AND installation.status = 'active'
+			  AND installation.suspended_at IS NULL
+			  AND installation.disconnected_at IS NULL
+			  AND installation.deleted_at IS NULL
+			  AND lower(repository.full_name) = ANY($3::text[])
+			  AND `+githubUserScopeIntactSQL,
+			orgID, *mainInstallation, fullNames,
+		)
+		if err != nil {
+			return fmt.Errorf("load granted extra repositories: %w", err)
+		}
+		defer rows.Close()
+		active := map[string]bool{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			active[name] = true
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, repo := range declared {
+			if _, fullName, err := domain.CanonicalGitHubRepoURL(repo.URL); err == nil && active[strings.ToLower(fullName)] {
+				granted = append(granted, repo)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return coder.ExtraRepos, nil
+	return granted, nil
 }
 
 // WorkerGitHubPAT resolves the session creator's explicitly configured GitHub

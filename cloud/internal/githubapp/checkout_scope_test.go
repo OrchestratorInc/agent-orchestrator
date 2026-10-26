@@ -209,7 +209,7 @@ func (s *checkoutStubStore) WorkerGitHubCheckoutContext(
 	return s.primary, nil
 }
 
-func (s *checkoutStubStore) WorkerSessionExtraRepos(
+func (s *checkoutStubStore) WorkerSessionGrantedExtraRepos(
 	context.Context, string, string,
 ) ([]domain.RepoRef, error) {
 	s.extrasSeen++
@@ -440,7 +440,7 @@ func TestIssuePushGrantForRepoScopesToPrimary(t *testing.T) {
 	}
 	// A declared primary need not be listed as an extra to resolve.
 	if store.extrasSeen != 0 {
-		t.Fatalf("WorkerSessionExtraRepos called %d times for the primary, want 0", store.extrasSeen)
+		t.Fatalf("WorkerSessionGrantedExtraRepos called %d times for the primary, want 0", store.extrasSeen)
 	}
 }
 
@@ -530,6 +530,6 @@ func TestIssueCheckoutGrantPrimaryOnlyWhenNoExtras(t *testing.T) {
 		t.Fatalf("listed repositories %d times, want 0 (no extras declared)", backend.listCalls)
 	}
 	if store.extrasSeen != 1 {
-		t.Fatalf("WorkerSessionExtraRepos called %d times, want 1", store.extrasSeen)
+		t.Fatalf("WorkerSessionGrantedExtraRepos called %d times, want 1", store.extrasSeen)
 	}
 }

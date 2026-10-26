@@ -31,11 +31,23 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 		const element = scrollRef.current;
 		if (!element) return;
 		updateEdges();
+		// Drive the strip from every wheel event over it, whichever axis
+		// dominates. Left to the browser, a trackpad gesture that starts slightly
+		// vertical latches onto an outer scroller and the strip stops responding.
+		const handleWheel = (event: WheelEvent) => {
+			if (event.ctrlKey || event.metaKey || element.scrollWidth <= element.clientWidth) return;
+			const delta = Math.abs(event.deltaX) >= Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+			if (delta === 0) return;
+			event.preventDefault();
+			element.scrollBy({ left: delta });
+		};
 		element.addEventListener("scroll", updateEdges, { passive: true });
+		element.addEventListener("wheel", handleWheel, { passive: false });
 		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateEdges);
 		observer?.observe(element);
 		return () => {
 			element.removeEventListener("scroll", updateEdges);
+			element.removeEventListener("wheel", handleWheel);
 			observer?.disconnect();
 		};
 	}, [updateEdges, ...dependencies]);

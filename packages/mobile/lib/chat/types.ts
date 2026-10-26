@@ -14,7 +14,8 @@ export type ActivityKind =
 	| "system"
 	| "mcp_tool"
 	| "auto_review"
-	| "user_input";
+	| "user_input"
+	| "ao_action";
 
 export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permissions";
 export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };
@@ -59,6 +60,8 @@ export type ConversationMessage = {
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
+	/** The daemon can branch before this human prompt and resend it edited. */
+	editAvailable?: boolean;
 	createdAt: string;
 };
 
@@ -228,6 +231,10 @@ export type ConversationSnapshot = {
 	threadState?: ConversationThreadState;
 	mcpServers?: McpServer[];
 	capabilities?: string[];
+	/** The branch these rows belong to; an edit or branch switch changes it. Absent on older hosts. */
+	activeBranchId?: string;
+	/** Human prompts after this sequence can fork natively; 0 or absent means none. */
+	nativeForkAvailableAfterSequence?: number;
 };
 
 export type ChatModel = {

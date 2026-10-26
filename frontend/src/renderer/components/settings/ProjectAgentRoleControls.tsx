@@ -1,14 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { Info } from "lucide-react";
 import { Switch } from "../ui/switch";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryKey, agentModelsQueryOptions, refreshAgentModels, revalidateAgentModels, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
+import { useOfferedModels } from "../../hooks/useOfferedModels";
 import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../../lib/agent-model-choices";
 import { LOCAL_HOST } from "../../lib/hosts";
 import { AgentModelCombobox } from "./AgentModelCombobox";
 import { SettingsOptionMenu } from "./SettingsOptionMenu";
+import { SettingsRow } from "./SettingsRow";
 import { MENU_TRIGGER_CHROME } from "../ui/option-menu";
 import { cn } from "../../lib/utils";
 
@@ -54,6 +54,8 @@ export function AgentModelField({
 	const queryClient = useQueryClient();
 	const query = useQuery(agentModelsQueryOptions(agentId, projectId, hostId));
 	const catalog: AgentModelCatalog | undefined = query.data;
+	// Settings → Harness → Models picks which local models are offered; Cloud keeps its own catalog.
+	const { models: offeredModels } = useOfferedModels(agentId, catalog?.models, { hostId, keep: [model, mode], skip: !followCatalogDefaults });
 	const revalidationQuery = useQuery({
 		queryKey: ["agent-model-revalidation", hostId ?? LOCAL_HOST, agentId, projectId, catalog?.validatedAt ?? ""],
 		queryFn: () => revalidateAgentModels(agentId, projectId, hostId),
@@ -73,20 +75,10 @@ export function AgentModelField({
 		catalog?.warning ??
 		(query.isError ? (query.error instanceof Error ? query.error.message : t("settings.models.loadFailed")) : undefined);
 
-	if (agentId !== "" && query.isFetching && catalog === undefined) {
-		return (
-			<div className="min-w-0">
-				<span className="text-xs text-settings-muted" role="status" aria-label={t("settings.models.loading")}>
-					{t("settings.models.loading")}
-				</span>
-			</div>
-		);
-	}
-
 	if (isMode) {
-		const defaultMode = followCatalogDefaults ? catalog.models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : "agent";
+		const defaultMode = followCatalogDefaults ? offeredModels.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : "agent";
 		const selectedMode = isConcreteModelID(mode) ? mode : "";
-		const options = (catalog.models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+		const options = offeredModels.filter((item) => isConcreteModelID(item.id)).map((item) => ({
 			value: item.id,
 			label: agentModelDisplayLabel(agentId, modelChoiceLabel(item)),
 		}));
@@ -114,7 +106,7 @@ export function AgentModelField({
 		);
 	}
 
-	const models = (catalog?.models ?? []).map((item) => ({
+	const models = offeredModels.map((item) => ({
 		...item,
 		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, item.label),
 		...(supportedEfforts ? { efforts: item.efforts ? item.efforts.filter((value) => supportedEfforts.includes(value)) : [...supportedEfforts] } : {}),
@@ -191,32 +183,13 @@ export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: 
 
 function ProjectToggleRow({ id, label, description, checked, onCheckedChange }: { id: string; label: string; description: string; checked: boolean; onCheckedChange: (checked: boolean) => void }) {
 	return (
-		<div className="settings-row-bar">
-			<div className="flex shrink-0 items-center gap-1.5">
-				<span className="whitespace-nowrap text-sm leading-5 text-settings-label">{label}</span>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							type="button"
-							className="inline-flex size-5 items-center justify-center rounded-md text-settings-muted transition-colors hover:bg-settings-menu-selected hover:text-settings-label focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-							aria-label={description}
-						>
-							<Info className="size-icon-sm" aria-hidden="true" />
-						</button>
-					</TooltipTrigger>
-					<TooltipContent className="max-w-72 leading-normal" side="top">
-						{description}
-					</TooltipContent>
-				</Tooltip>
-			</div>
-			<div className="flex min-w-0 flex-1 items-center justify-end">
-				<Switch
-					aria-label={label}
-					checked={checked}
-					id={id}
-					onCheckedChange={onCheckedChange}
-				/>
-			</div>
-		</div>
+		<SettingsRow label={label} description={description}>
+			<Switch
+				aria-label={label}
+				checked={checked}
+				id={id}
+				onCheckedChange={onCheckedChange}
+			/>
+		</SettingsRow>
 	);
 }

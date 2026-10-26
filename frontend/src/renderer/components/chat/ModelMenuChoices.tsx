@@ -1,25 +1,39 @@
 import { Search } from "lucide-react";
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+
+const MAX_SEARCH_RESULTS = 50;
 
 /** Mounted inside menu content so closing either menu also clears its query. */
 export function ModelMenuChoices<T extends { id: string; label: string }>({
 	models,
+	searchable,
+	searchPlaceholder,
 	children,
 }: {
 	models: T[];
-	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string) => ReactNode;
+	/** Whether to show the search field, ruled off from the list. Unset shows a plain one on a long list. */
+	searchable?: boolean;
+	/** Set where the rows are a menu that search replaces with matches; nothing is "not found" before a query. */
+	searchPlaceholder?: string;
+	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string, query?: string) => ReactNode;
 }) {
 	const { t } = useTranslation();
 	const [search, setSearch] = useState("");
-	const showSearch = models.length >= 10;
+	const showSearch = searchable ?? models.length >= 10;
 	const query = showSearch ? search.trim() : "";
 	const normalizedQuery = query.toLocaleLowerCase();
-	const matches = useMemo(() => {
+	// A query can match hundreds of rows across every agent's catalog; rendering them all lagged.
+	const lowered = useMemo(() => models.map((model) => model.label.toLocaleLowerCase()), [models]);
+	const allMatches = useMemo(() => {
 		if (!normalizedQuery) return models;
-		return models.filter((model) => model.label.toLocaleLowerCase().includes(normalizedQuery));
-	}, [models, normalizedQuery]);
+		return models.filter((_, index) => lowered[index].includes(normalizedQuery));
+	}, [models, lowered, normalizedQuery]);
+	const matches = useMemo(
+		() => (normalizedQuery ? allMatches.slice(0, MAX_SEARCH_RESULTS) : allMatches),
+		[allMatches, normalizedQuery],
+	);
 	const [searchFocused, setSearchFocused] = useState(false);
 	const searchActiveID = normalizedQuery && searchFocused ? matches[0]?.id : undefined;
 	const optionIDPrefix = useId();
@@ -34,14 +48,18 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		const element = scrollRef.current;
 		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
 	}, []);
+	// A new search starts at the top; a refreshed (polled) list keeps its scroll.
 	useLayoutEffect(() => {
-		if (scrollRef.current) scrollRef.current.scrollTop = 0;
-		updateScrollCue();
+		if (scrollRef.current && scrollRef.current.scrollTop !== 0) scrollRef.current.scrollTop = 0;
+	}, [normalizedQuery]);
+	// Measured after paint: reading scrollHeight in a layout effect reflows every row per keystroke.
+	useEffect(() => {
+		const frame = requestAnimationFrame(updateScrollCue);
 		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return;
+		if (!element || typeof ResizeObserver === "undefined") return () => cancelAnimationFrame(frame);
 		const observer = new ResizeObserver(updateScrollCue);
 		observer.observe(element);
-		return () => observer.disconnect();
+		return () => { cancelAnimationFrame(frame); observer.disconnect(); };
 	}, [matches, updateScrollCue]);
 
 	return (
@@ -50,7 +68,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
 					// since their highlight spans the same content box.
-					className="relative shrink-0 pb-1"
+					className={cn("relative shrink-0 pb-1", searchable ? "mb-1 border-b border-border" : undefined)}
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
 						if (event.nativeEvent.isComposing) {
@@ -73,7 +91,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						}
 						if (event.key === "ArrowDown" || event.key === "ArrowUp") {
 							event.preventDefault();
-							const items = scrollRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]');
+							const items = scrollRef.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]');
 							const target = event.key === "ArrowDown" ? items?.[0] : items?.[items.length - 1];
 							target?.focus();
 						}
@@ -93,8 +111,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 							onChange={(event) => setSearch(event.target.value)}
 							onFocus={() => setSearchFocused(true)}
 							onBlur={() => setSearchFocused(false)}
-							placeholder={t("settings.models.searchPlaceholder")}
-							className="menu-search-input h-control-form! rounded-[10px] pl-8!"
+							placeholder={searchPlaceholder ?? t("settings.models.searchPlaceholder")}
+							className="menu-search-input h-auto! rounded-[10px] py-[7px]! pl-8! text-xs!"
 						/>
 					</div>
 					{normalizedQuery ? (
@@ -110,8 +128,9 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 					onScroll={updateScrollCue}
 					onKeyDownCapture={(event) => {
-						if (!searchRef.current) return;
-						const firstItem = event.currentTarget.querySelector('[role="menuitemradio"]');
+						// A submenu's keys bubble here through React, not the DOM; they are its own.
+						if (!searchRef.current || !event.currentTarget.contains(event.target as Node)) return;
+						const firstItem = event.currentTarget.querySelector('[role^="menuitem"]');
 						if ((event.key === "ArrowUp" && event.target === firstItem) || (event.key === "Tab" && event.shiftKey)) {
 							// Return to search before the menu's roving focus handles the key.
 							event.preventDefault();
@@ -137,8 +156,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						}
 					}}
 				>
-					{children(matches, searchActiveID, optionID)}
-					{matches.length === 0 && (
+					{children(matches, searchActiveID, optionID, normalizedQuery)}
+					{matches.length === 0 && (normalizedQuery || !searchPlaceholder) && (
 						<p className="px-2 py-1.5 text-xs text-settings-muted">{t("settings.models.noMatches")}</p>
 					)}
 				</div>

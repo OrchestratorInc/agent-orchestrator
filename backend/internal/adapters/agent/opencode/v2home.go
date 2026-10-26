@@ -124,6 +124,10 @@ func PrepareV2DataHome(ctx context.Context) (string, error) {
 	return destinationHome, nil
 }
 
+// legacyToolCacheDir is the data-store subdirectory opencode downloads tools
+// into; the migration leaves it behind.
+const legacyToolCacheDir = "bin"
+
 func copyTree(ctx context.Context, source, destination string) error {
 	sourceRoot, err := os.OpenRoot(source)
 	if err != nil {
@@ -147,6 +151,10 @@ func copyTree(ctx context.Context, source, destination string) error {
 		if info.IsDir() {
 			if relative == "." {
 				return nil
+			}
+			// Full of node_modules/.bin symlinks, and OpenCode 2 downloads it again.
+			if relative == legacyToolCacheDir {
+				return filepath.SkipDir
 			}
 			return destinationRoot.Mkdir(relative, info.Mode().Perm())
 		}

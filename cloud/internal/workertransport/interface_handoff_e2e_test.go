@@ -66,6 +66,10 @@ func (s *handoffPathStore) ReleaseCoordinatedInterfaceClaim(context.Context, str
 	return nil
 }
 
+func (s *handoffPathStore) FailTerminatedInterfaceTransition(context.Context, string, string, domain.SessionInterfaceTransitionPhase, string, string) error {
+	return nil
+}
+
 func (s *handoffPathStore) CreateCoordinatedInterfaceRequest(_ context.Context, _, _, kind string, payload json.RawMessage) (domain.WorkerRequest, error) {
 	s.requests = append(s.requests, kind)
 	if kind == "interface.start" && s.sourceDone != nil {

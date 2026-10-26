@@ -149,9 +149,17 @@ func TestRetrySessionStartup(t *testing.T) {
 
 	store := &startupRetryStore{}
 	rec := httptest.NewRecorder()
-	newBYOCServer(store).retrySessionStartup(rec, request())
+	server := newBYOCServer(store)
+	wakes := 0
+	server.sandboxWake = func() { wakes++ }
+	server.retrySessionStartup(rec, request())
 	if rec.Code != http.StatusAccepted || store.retried != 1 {
 		t.Fatalf("status = %d, retried = %d; want 202 and one retry. body = %s", rec.Code, store.retried, rec.Body.String())
+	}
+	// The reconciler acts on the re-armed sandbox (a new workspace build, a
+	// fresh bootstrap) now, not at its next tick.
+	if wakes != 1 {
+		t.Fatalf("reconciler wakes = %d, want 1", wakes)
 	}
 	var body struct {
 		Session sessionResponse `json:"session"`
@@ -162,9 +170,14 @@ func TestRetrySessionStartup(t *testing.T) {
 
 	conflict := &startupRetryStore{retryErr: postgres.ErrConflict}
 	rec = httptest.NewRecorder()
-	newBYOCServer(conflict).retrySessionStartup(rec, request())
+	server = newBYOCServer(conflict)
+	server.sandboxWake = func() { wakes++ }
+	server.retrySessionStartup(rec, request())
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "startup_retry_unavailable") {
 		t.Fatalf("conflict status = %d body = %s, want 409 startup_retry_unavailable", rec.Code, rec.Body.String())
+	}
+	if wakes != 1 {
+		t.Fatalf("a refused retry woke the reconciler (wakes = %d)", wakes)
 	}
 
 	missing := &startupRetryStore{retryErr: postgres.ErrNotFound}

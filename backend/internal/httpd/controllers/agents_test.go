@@ -28,6 +28,7 @@ type fakeAgentCatalog struct {
 	probeAgent      string
 	models          ports.AgentModelCatalog
 	modelCalls      int
+	catalogCalls    int
 	modelAgent      string
 	modelProject    string
 	modelRefresh    bool
@@ -72,6 +73,14 @@ func (f *fakeAgentCatalog) Probe(_ context.Context, agentID string) (agentsvc.Pr
 
 func (f *fakeAgentCatalog) Models(_ context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
 	f.modelCalls++
+	f.modelAgent = agentID
+	f.modelProject = projectID
+	f.modelRefresh = refresh
+	return f.models, f.err
+}
+
+func (f *fakeAgentCatalog) ModelCatalog(_ context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error) {
+	f.catalogCalls++
 	f.modelAgent = agentID
 	f.modelProject = projectID
 	f.modelRefresh = refresh
@@ -256,12 +265,15 @@ func TestProbeAgent(t *testing.T) {
 func TestGetAndRefreshAgentModels(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, tc := range []struct {
-		name           string
-		method         string
-		path           string
-		wantRefresh    bool
-		wantRevalidate bool
+		name            string
+		method          string
+		path            string
+		wantRefresh     bool
+		wantRevalidate  bool
+		wantCatalogOnly bool
 	}{
+		{name: "refresh browsing catalog", method: http.MethodPost, path: "/api/v1/agents/codex/models/refresh?projectId=proj-1&catalogOnly=true", wantCatalogOnly: true, wantRefresh: true},
+		{name: "catalog only", method: http.MethodGet, path: "/api/v1/agents/codex/models?projectId=proj-1&catalogOnly=true", wantCatalogOnly: true},
 		{name: "cached", method: http.MethodGet, path: "/api/v1/agents/codex/models?projectId=proj-1"},
 		{name: "refresh", method: http.MethodPost, path: "/api/v1/agents/codex/models/refresh?projectId=proj-1", wantRefresh: true},
 		{name: "revalidate", method: http.MethodPost, path: "/api/v1/agents/codex/models/refresh?projectId=proj-1&revalidate=true", wantRevalidate: true},
@@ -296,10 +308,10 @@ func TestGetAndRefreshAgentModels(t *testing.T) {
 				}
 			}
 			wantModelCalls := 1
-			if tc.wantRevalidate {
+			if tc.wantRevalidate || tc.wantCatalogOnly {
 				wantModelCalls = 0
 			}
-			if catalog.modelCalls != wantModelCalls || catalog.revalidateCalls != btoi(tc.wantRevalidate) || catalog.modelAgent != "codex" || catalog.modelProject != "proj-1" || catalog.modelRefresh != tc.wantRefresh {
+			if catalog.catalogCalls != btoi(tc.wantCatalogOnly) || catalog.modelCalls != wantModelCalls || catalog.revalidateCalls != btoi(tc.wantRevalidate) || catalog.modelAgent != "codex" || catalog.modelProject != "proj-1" || catalog.modelRefresh != tc.wantRefresh {
 				t.Fatalf("model call = count:%d revalidate:%d agent:%q project:%q refresh:%v", catalog.modelCalls, catalog.revalidateCalls, catalog.modelAgent, catalog.modelProject, catalog.modelRefresh)
 			}
 		})

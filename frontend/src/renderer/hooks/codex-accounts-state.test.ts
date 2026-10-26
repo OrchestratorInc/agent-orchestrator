@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodexAccountsResponse } from "./useCodexAccountsQuery";
-import { catalogFor } from "../i18n/messages";
+import { catalogFor } from "../i18n/all-messages";
 import type { AppLocale } from "../i18n/locales";
 import { codexAccountCanSwitch, codexAccountReasonCodes, codexAccountReasonKey, codexAuthenticationDisplay, codexSwitchDisplay, mergeCodexAccounts } from "./codex-accounts-state";
 import type { CodexAccountSwitch } from "./useCodexAccountsQuery";

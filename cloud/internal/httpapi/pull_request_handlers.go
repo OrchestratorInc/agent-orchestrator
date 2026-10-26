@@ -238,6 +238,22 @@ type pullRequestSummaryResponse struct {
 	ObservedAt       time.Time                              `json:"observedAt"`
 	CIObservedAt     time.Time                              `json:"ciObservedAt"`
 	ReviewObservedAt time.Time                              `json:"reviewObservedAt"`
+	// OpenedBy is the person who started the session, set when the AO GitHub
+	// App opened the pull request for them so Author is the App's bot.
+	OpenedBy *pullRequestOpenerResponse `json:"openedBy,omitempty"`
+}
+
+type pullRequestOpenerResponse struct {
+	Name        string `json:"name"`
+	GitHubLogin string `json:"githubLogin,omitempty"`
+	AvatarURL   string `json:"avatarUrl,omitempty"`
+}
+
+// openedByAO reports whether a pull request's GitHub author is the AO GitHub
+// App, which opens every pull request a session raises. Other bots (a
+// dependabot pull request claimed with ao claim-pr) keep their own name.
+func (s *Server) openedByAO(author string) bool {
+	return s.github.IsAppAccount(author)
 }
 
 func toPullRequestSummaryResponse(pr domain.PullRequest, snapshot domain.PullRequestSnapshot) pullRequestSummaryResponse {
@@ -412,6 +428,11 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	items := make([]pullRequestSummaryResponse, 0, len(pullRequests))
+	// An orchestrator lists every pull request in its project, so each one is
+	// named by the session that raised it, resolved once per request. Only
+	// organization members see who that is, not a project share grantee.
+	openers := make(map[string]*pullRequestOpenerResponse)
+	openersHidden := false
 	for _, pr := range pullRequests {
 		snapshot, err := s.store.PullRequestSnapshot(r.Context(), orgID, pr.ID)
 		if err != nil {
@@ -419,6 +440,26 @@ func (s *Server) listSessionPullRequests(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		item := toPullRequestSummaryResponse(pr, snapshot)
+		if !openersHidden && s.openedByAO(item.Author) && pr.SessionID != "" {
+			opener, loaded := openers[pr.SessionID]
+			if !loaded {
+				resolved, err := s.store.SessionPullRequestOpener(r.Context(), principalFrom(r), orgID, pr.SessionID)
+				switch {
+				case errors.Is(err, postgres.ErrForbidden):
+					openersHidden = true
+				case errors.Is(err, postgres.ErrNotFound):
+					// No creator on record: expected, and asked on every poll.
+				case err != nil:
+					s.logger.Warn("resolve pull request opener", "error", err, "request_id", requestID(r))
+				case resolved.Name != "" || resolved.GitHubLogin != "":
+					opener = &pullRequestOpenerResponse{
+						Name: resolved.Name, GitHubLogin: resolved.GitHubLogin, AvatarURL: resolved.AvatarURL,
+					}
+				}
+				openers[pr.SessionID] = opener
+			}
+			item.OpenedBy = opener
+		}
 		if s.github != nil && pr.Provider == "github" && (pr.State == contract.PRStateOpen || pr.State == contract.PRStateDraft) {
 			_, _, err := s.store.GitHubInstallationForRepository(r.Context(), orgID, pr.Repository)
 			if errors.Is(err, postgres.ErrNotFound) {

@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,6 +114,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		// existing - the true occurrence count of a burst - is silently
 		// stripped before it ever reaches PostHog.
 		"count":        {},
+		"day":          {},
 		"window_start": {},
 		"window_end":   {},
 	},
@@ -166,8 +166,8 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"created_runs": {},
 		"harness":      {},
 		"rerun":        {},
-		"reused":       {},
-		"trigger":      {},
+
+		"trigger": {},
 	},
 	"ao.review.trigger_failed": {
 		"error_kind": {},
@@ -210,6 +210,27 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.session.waiting_input_entered": {
 		"state": {},
 	},
+	"ao.harness.update": {
+		"harness":       {},
+		"level":         {},
+		"live_sessions": {},
+		"result":        {},
+	},
+	"ao.harness.update_idle_wait": {
+		"harness":  {},
+		"sessions": {},
+		"wait_ms":  {},
+	},
+	"ao.harness.version_switch": {
+		"harness":    {},
+		"latency_ms": {},
+		"mode":       {},
+		"result":     {},
+	},
+	"ao.harness.stale_sessions": {
+		"harness":  {},
+		"sessions": {},
+	},
 	"ao.session.waiting_input_exited": {
 		"dwell_ms":  {},
 		"exited_to": {},
@@ -225,13 +246,16 @@ type postHogClient interface {
 type PostHogSink struct {
 	apiKey       string
 	host         string
-	distinctID   string
 	defaultAgent string
 	tenure       *tenureTracker
-	// personProfileSet flips true the first time an event carries the operator's
-	// GitHub handle, so the identified person `$set` is sent once per process
-	// rather than on every spawn. See properties().
-	personProfileSet atomic.Bool
+	// ident carries the opt-out switch and the signed-in user attributes. Nil
+	// (zero-value sinks in tests) behaves as anonymous and opted in.
+	ident *Identity
+	// setKey is the last identity whose person `$set` send succeeded, so
+	// it goes out once per identity change rather than on every event. See
+	// properties().
+	setMu  sync.Mutex
+	setKey string
 	// appVersion stamps app_version/ao_version on every exported event. Empty
 	// leaves the properties off entirely rather than reporting a misleading
 	// "unknown" that would show up as a real version in release breakdowns.
@@ -262,7 +286,7 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	distinctID, err := loadOrCreateInstallID(dataDir)
+	ident, err := NewIdentity(dataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -270,7 +294,7 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	s := &PostHogSink{
 		apiKey:       apiKey,
 		host:         strings.TrimRight(host, "/"),
-		distinctID:   distinctID,
+		ident:        ident,
 		defaultAgent: safeAgentSlug(defaultAgent),
 		tenure:       newTenureTracker(dataDir, time.Now),
 		client:       client,
@@ -285,8 +309,18 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	return s, nil
 }
 
-// Emit enqueues an event for best-effort export.
+// Identity returns the live identity (install ID, signed-in user, opt-out).
+func (s *PostHogSink) Identity() *Identity { return s.ident }
+
+// suppressed reports an opt-out or an unpersistable identity: nothing is exported.
+func (s *PostHogSink) suppressed() bool { return s.ident != nil && s.ident.ExportSuppressed() }
+
+// Emit enqueues an event for best-effort export. An opted-out install exports
+// nothing, so the stream stops the moment the user flips the switch.
 func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	if s.suppressed() {
+		return
+	}
 	s.queueMu.RLock()
 	if s.closed {
 		s.queueMu.RUnlock()
@@ -359,12 +393,23 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	// volume, breaking the "retries add no volume" guarantee). PostHog dedupes
 	// events that carry the same uuid.
 	eventUUID := uuid.NewString()
+	props := s.properties(ev)
+	// A signed-in install reports as the AO Cloud user, so its events never
+	// depend on which account the anonymous install ID was once merged into.
+	// Signed out, the current anonymous install ID is used.
+	cloudUserID, _ := props["ao_cloud_user_id"].(string)
+	identity := ports.TelemetryIdentity{CloudUserID: cloudUserID}
+	if s.ident != nil {
+		identity.InstallID = s.ident.InstallID()
+		identity.AnonymousID = s.ident.AnonymousID()
+	}
+	distinctID := identity.DistinctID()
 	body := map[string]any{
 		"api_key":     s.apiKey,
 		"event":       eventName,
-		"distinct_id": s.distinctID,
+		"distinct_id": distinctID,
 		"uuid":        eventUUID,
-		"properties":  s.properties(ev),
+		"properties":  props,
 		"timestamp":   ev.OccurredAt.UTC().Format(time.RFC3339Nano),
 	}
 	payload, err := json.Marshal(body)
@@ -374,8 +419,20 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	}
 
 	for attempt := 1; attempt <= postHogSendMaxAttempts; attempt++ {
+		// The payload is already built, so a retry after a failed first attempt
+		// must honor an opt-out that landed during the request or the backoff.
+		if s.suppressed() {
+			return
+		}
 		retryable, err := s.sendOnce(ctx, payload)
 		if err == nil {
+			if _, hasSet := props["$set"]; hasSet {
+				actor, _ := props["github_actor"].(string)
+				uid, _ := props["ao_cloud_user_id"].(string)
+				s.setMu.Lock()
+				s.setKey = personSetKey(actor, uid)
+				s.setMu.Unlock()
+			}
 			return
 		}
 		if !retryable || attempt == postHogSendMaxAttempts {
@@ -475,20 +532,62 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	for k, v := range sanitizeRemotePayload(ev.Name, ev.Payload) {
 		props[k] = v
 	}
-	// Mirror the handle into a person property once per process; it is stable, so
-	// re-sending $set on every spawn would only multiply identified-event cost
-	// (see $process_person_profile above) against the 200 spawns/day the limiter
-	// allows. github_actor still rides every spawn as an event property, so
-	// activity breakdowns stay complete.
-	if actor, ok := props["github_actor"]; ok && s.personProfileSet.CompareAndSwap(false, true) {
-		props["$set"] = map[string]any{"github_actor": actor}
-		props["$unset"] = stalePersonProperties
-		props["$process_person_profile"] = true
+	s.stampIdentity(props)
+	if s.ident != nil {
+		props["install_id"] = s.ident.InstallID()
 	}
 	return props
 }
 
+// stampIdentity attaches who this install is to an event. The GitHub login and
+// AO Cloud user ID ride every event as event properties; the person profile is
+// only processed (billed as identified) once there is a login to mirror or a
+// signed-in user to link, and the person `$set` is resent only when either
+// changes, so a busy daemon does not multiply identified-event cost. Email is
+// deliberately absent: it is set once by the signed-in desktop at identify time.
+func (s *PostHogSink) stampIdentity(props map[string]any) {
+	var uid string
+	if s.ident != nil {
+		var login string
+		uid, login = s.ident.eventAttributes()
+		if _, ok := props["github_actor"]; !ok && login != "" {
+			props["github_actor"] = login
+		}
+	}
+	actor, _ := props["github_actor"].(string)
+	if uid != "" {
+		props["ao_cloud_user_id"] = uid
+		// Linked to the person the desktop identify() selected; the stable
+		// installation ID remains an event property.
+		props["$process_person_profile"] = true
+	}
+	if actor == "" && uid == "" {
+		return
+	}
+	key := personSetKey(actor, uid)
+	s.setMu.Lock()
+	changed := key != s.setKey
+	s.setMu.Unlock()
+	if !changed {
+		return
+	}
+	set := map[string]any{}
+	if actor != "" {
+		// github_actor is the long-standing person property; github_login is the
+		// name the desktop identify() uses. Same value, kept in step.
+		set["github_actor"], set["github_login"] = actor, actor
+	}
+	if uid != "" {
+		set["ao_cloud_user_id"] = uid
+	}
+	props["$set"] = set
+	props["$unset"] = stalePersonProperties
+	props["$process_person_profile"] = true
+}
+
 var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}
+
+func personSetKey(actor, uid string) string { return actor + "|" + uid }
 
 func remoteEventName(name string) string {
 	if alias, ok := remoteEventNameAliases[name]; ok {
@@ -529,6 +628,9 @@ func isAllowedCommandValue(key, value string) bool {
 		}
 		_, ok := remoteCommandTokens[value]
 		return ok
+	}
+	if key == "command_path" && value == "other" {
+		return true
 	}
 	if key != "command_path" || tokens[0] != "ao" {
 		return false
@@ -621,19 +723,101 @@ func versionChannel(appVersion string) string {
 }
 
 func loadOrCreateInstallID(dataDir string) (string, error) {
-	path := filepath.Join(dataDir, "telemetry_install_id")
-	if b, err := os.ReadFile(path); err == nil {
+	path := filepath.Join(dataDir, installIDFile)
+	for range 5 {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			if id := strings.TrimSpace(string(b)); id != "" {
+				return id, nil
+			}
+			return recoverEmptyInstallID(dataDir, path)
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read telemetry install id: %w", err)
+		}
+
+		id := "ins_" + uuid.NewString()
+		tmp, err := os.CreateTemp(dataDir, ".telemetry_install_id_*")
+		if err != nil {
+			return "", fmt.Errorf("create telemetry install id: %w", err)
+		}
+		if _, err := tmp.WriteString(id + "\n"); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return "", fmt.Errorf("write telemetry install id: %w", err)
+		}
+		if err := tmp.Close(); err != nil {
+			_ = os.Remove(tmp.Name())
+			return "", fmt.Errorf("close telemetry install id: %w", err)
+		}
+		err = os.Link(tmp.Name(), path)
+		_ = os.Remove(tmp.Name())
+		if err == nil {
+			return id, nil
+		}
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("publish telemetry install id: %w", err)
+		}
+	}
+	return "", fmt.Errorf("telemetry install id creation did not settle")
+}
+
+// recoverEmptyInstallID serializes repair of a legacy empty file with the
+// renderer. A second process must re-read after taking the lock, or it could
+// delete an ID that the first process just published.
+func recoverEmptyInstallID(dataDir, path string) (string, error) {
+	lockPath := path + ".recovery"
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		err := os.Mkdir(lockPath, 0o700)
+		if err == nil {
+			break
+		}
+		if !os.IsExist(err) {
+			return "", fmt.Errorf("lock telemetry install id recovery: %w", err)
+		}
+		info, err := os.Stat(lockPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect telemetry install id recovery: %w", err)
+		}
+		if time.Since(info.ModTime()) > 10*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("timed out waiting for telemetry install id recovery")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer func() { _ = os.Remove(lockPath) }()
+	b, err := os.ReadFile(path)
+	if err == nil {
 		if id := strings.TrimSpace(string(b)); id != "" {
 			return id, nil
 		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return "", fmt.Errorf("remove empty telemetry install id: %w", err)
+		}
 	} else if !os.IsNotExist(err) {
-		return "", fmt.Errorf("read telemetry install id: %w", err)
+		return "", fmt.Errorf("read telemetry install id during recovery: %w", err)
 	}
-	id := "ins_" + uuid.NewString()
-	if err := os.WriteFile(path, []byte(id+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("write telemetry install id: %w", err)
+	return loadOrCreateInstallID(dataDir)
+}
+
+// writeFileAtomic swaps data in through a temp file in the same directory, so a
+// concurrent reader never sees a partial file and a failure leaves the old one.
+func writeFileAtomic(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
 	}
-	return id, nil
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func sha256String(raw string) string {

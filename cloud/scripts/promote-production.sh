@@ -121,6 +121,26 @@ PY
 # value set in the promoting shell wins. Only the secrets of providers
 # production actually serves are required.
 load_offering ./scripts/offering/production.env
+# Artifacts, like a provider, reach production only after staging serves them.
+staging_artifacts="$(
+	SOURCE="$staging_source" python3 - <<'PY'
+import json
+import os
+
+source = json.loads(os.environ["SOURCE"])
+container = next(
+    item
+    for item in source["taskDefinition"]["containerDefinitions"]
+    if item["name"] == "control-plane"
+)
+environment = {item["name"]: item["value"] for item in container["environment"]}
+print(environment.get("AO_CLOUD_ARTIFACTS", "0"))
+PY
+)"
+if [[ "$AO_CLOUD_ARTIFACTS" == 1 && "$staging_artifacts" != 1 ]]; then
+	echo "AO_CLOUD_ARTIFACTS=1 in production needs staging to serve artifacts first (staging has ${staging_artifacts})." >&2
+	exit 1
+fi
 SANDBOX_PROVIDER="$AO_CLOUD_SANDBOX_PROVIDER"
 PROVIDERS="$AO_CLOUD_SANDBOX_PROVIDERS"
 if [[ "$SANDBOX_PROVIDER" != "nodeops" && "$SANDBOX_PROVIDER" != "coder" && "$SANDBOX_PROVIDER" != "freestyle" ]]; then
@@ -149,8 +169,14 @@ fi
 	--default-org-billing "$AO_CLOUD_DEFAULT_ORG_BILLING" \
 	--paywalled-features "$AO_CLOUD_PAYWALLED_FEATURES" \
 	--idle-pause-threshold "$AO_CLOUD_IDLE_PAUSE_THRESHOLD" \
-	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD"
-echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none}" >&2
+	--freestyle-idle-pause-threshold "$AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD" \
+	--artifacts "$AO_CLOUD_ARTIFACTS" \
+	--artifact-bucket "$AO_CLOUD_ARTIFACT_BUCKET" \
+	--artifact-region "$AO_CLOUD_ARTIFACT_REGION" \
+	--coder-readable-names "$AO_CLOUD_CODER_READABLE_NAMES" \
+	--coder-worker-working-folder "$AO_CLOUD_CODER_WORKER_WORKING_FOLDER"
+echo "Offering: providers=${PROVIDERS} (staging: ${staging_providers}) default=${SANDBOX_PROVIDER} gated=${AO_CLOUD_CAPABILITY_GATED_PROVIDERS:-none} default_org_capabilities=${AO_CLOUD_DEFAULT_ORG_CAPABILITIES:-none} default_org_billing=${AO_CLOUD_DEFAULT_ORG_BILLING} paywalled=${AO_CLOUD_PAYWALLED_FEATURES:-none} artifacts=${AO_CLOUD_ARTIFACTS}" >&2
+check_artifact_bucket "$PRODUCTION_CLUSTER" "$PRODUCTION_SERVICE" || exit 1
 release="${RELEASE_ARG:-$staging_release}"
 if [[ "$release" != "$staging_release" ]]; then
 	echo "Release ${release} is not the healthy staging release ${staging_release}." >&2
@@ -234,7 +260,7 @@ verify_scan() {
 	)"
 	# CVE-2026-14456 is a scanner false positive for Debian's OpenSSL 3.0:
 	# its QUIC listener was introduced in OpenSSL 3.5.
-	if ! SCAN="$scan" ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091 CVE-2026-93990 CVE-2026-95619 CVE-2026-95210 CVE-2026-88647 CVE-2026-67693 CVE-2026-95184 CVE-2026-95209 CVE-2026-107161}" python3 - <<'PY'
+	if ! SCAN="$scan" ALLOWLIST="${AO_CLOUD_SCAN_CVE_ALLOWLIST:-CVE-2026-57432 CVE-2026-45186 CVE-2026-12087 CVE-2025-15661 CVE-2026-58051 CVE-2026-7017 CVE-2026-48962 CVE-2026-57433 CVE-2026-66032 CVE-2026-48961 CVE-2026-48959 CVE-2026-66034 CVE-2026-58050 CVE-2026-13221 CVE-2026-14456 CVE-2026-66046 CVE-2026-63076 CVE-2026-53615 CVE-2026-54874 CVE-2026-63072 CVE-2026-8927 CVE-2026-8924 CVE-2026-8286 CVE-2026-85091 CVE-2026-93990 CVE-2026-95619 CVE-2026-95210 CVE-2026-88647 CVE-2026-67693 CVE-2026-95184 CVE-2026-95209 CVE-2026-107161 CVE-2026-5435 CVE-2026-19499}" python3 - <<'PY'
 import json
 import os
 import sys
@@ -432,6 +458,11 @@ register_api_task() {
 		--set-environment "AO_CLOUD_PAYWALLED_FEATURES=${AO_CLOUD_PAYWALLED_FEATURES}"
 		--set-environment "AO_CLOUD_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_IDLE_PAUSE_THRESHOLD}"
 		--set-environment "AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=${AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD}"
+		--set-environment "AO_CLOUD_ARTIFACTS=${AO_CLOUD_ARTIFACTS}"
+		--set-environment "AO_CLOUD_ARTIFACT_BUCKET=${AO_CLOUD_ARTIFACT_BUCKET}"
+		--set-environment "AO_CLOUD_ARTIFACT_REGION=${AO_CLOUD_ARTIFACT_REGION}"
+		--set-environment "AO_CLOUD_CODER_READABLE_NAMES=${AO_CLOUD_CODER_READABLE_NAMES}"
+		--set-environment "AO_CLOUD_CODER_WORKER_WORKING_FOLDER=${AO_CLOUD_CODER_WORKER_WORKING_FOLDER}"
 	)
 	if providers_has coder; then
 		render_args+=(

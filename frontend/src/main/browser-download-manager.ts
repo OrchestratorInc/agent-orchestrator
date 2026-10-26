@@ -379,6 +379,13 @@ export function createBrowserDownloadManager(options: BrowserDownloadManagerOpti
 			reservedPaths.clear();
 			blockedRequests.clear();
 			approvals.clear();
+			try {
+				// Observers (wake policy) must learn that nothing is tracked any more;
+				// otherwise they keep treating the last progressing download as live.
+				options.notify({ downloads: [] });
+			} catch {
+				// The window may already be gone.
+			}
 		},
 		list: state,
 		async action(input: BrowserDownloadActionInput): Promise<BrowserDownloadsState> {

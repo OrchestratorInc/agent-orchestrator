@@ -9,7 +9,7 @@
     "start:perf": "expo start --dev-client --no-dev --minify",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "build": "npm run typecheck",
     "postinstall": "patch-package",
     "test": "vitest run"
@@ -74,6 +74,7 @@
     "@types/node": "^26.2.0",
     "@types/react": "~19.2.4",
     "@types/react-test-renderer": "^19.3.0",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "patch-package": "^8.0.1",
     "pngjs": "3.4.0",
     "react-test-renderer": "^19.2.3",

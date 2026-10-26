@@ -85,3 +85,34 @@ func TestNotificationFromActivityOnlyReportsTerminalFailure(t *testing.T) {
 		}
 	}
 }
+
+// Every terminal Claude hook records the conversation its process is in, so
+// the worker follows the transcript /clear or /resume moves it to.
+func TestRunHookRecordsTheTerminalClaudeConversation(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	t.Setenv("AO_CLOUD_SOURCE_INTERFACE", "tui")
+	t.Setenv("CLAUDE_PID", "4242")
+	c := &client{tokenFile: dataDir + "/missing-token"}
+	hook := func(event, sessionID string) {
+		t.Helper()
+		if err := runHook(context.Background(), c, []string{"claude-code", event},
+			strings.NewReader(`{"session_id":"`+sessionID+`","prompt":"go"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook("user-prompt-submit", "conv-a")
+	hook("user-prompt-submit", "conv-b")
+	record, ok := worker.ReadClaudeConversations(dataDir)["4242"]
+	if !ok || record.First != "conv-a" || record.Current != "conv-b" {
+		t.Fatalf("records = %+v, want process 4242 moved from conv-a to conv-b", worker.ReadClaudeConversations(dataDir))
+	}
+
+	// Chat's hooks are not the terminal's.
+	t.Setenv("AO_CLOUD_SOURCE_INTERFACE", "chat")
+	t.Setenv("CLAUDE_PID", "5151")
+	hook("user-prompt-submit", "conv-c")
+	if _, ok := worker.ReadClaudeConversations(dataDir)["5151"]; ok {
+		t.Fatal("a Chat hook recorded a terminal conversation")
+	}
+}

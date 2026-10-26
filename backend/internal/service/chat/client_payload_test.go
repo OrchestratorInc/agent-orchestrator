@@ -42,3 +42,28 @@ func TestClientPayloadHashPreservesLegacyEmptySenderHash(t *testing.T) {
 		t.Fatal("sender identity did not change the payload hash")
 	}
 }
+
+func TestClientPayloadHashDistinguishesContinuation(t *testing.T) {
+	ordinary := ports.ChatUserMessage{ClientMessageID: "c1", Text: "Continue from where you stopped."}
+	continued := ordinary
+	continued.Continuation = true
+	first, err := clientPayloadHash(ordinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := clientPayloadHash(continued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("continuation must change the client payload hash")
+	}
+	stored := domain.ConversationMessage{Text: ordinary.Text, Origin: domain.MessageOriginHuman}
+	if legacyMessageMatches(stored, continued) {
+		t.Fatal("ordinary message must not match a continuation")
+	}
+	stored.Continuation = true
+	if !legacyMessageMatches(stored, continued) {
+		t.Fatal("matching continuation must remain idempotent")
+	}
+}

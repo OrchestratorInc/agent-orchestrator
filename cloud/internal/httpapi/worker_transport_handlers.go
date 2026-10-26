@@ -206,5 +206,13 @@ func (s *Server) writeWorkerTransportError(w http.ResponseWriter, r *http.Reques
 		writeError(w, r, http.StatusConflict, "TRANSPORT_EXPIRED", "The worker request is no longer active.")
 		return
 	}
+	if errors.Is(err, postgres.ErrTerminalClosed) {
+		writeError(w, r, http.StatusConflict, "TERMINAL_CLOSED", "The terminal is no longer open.")
+		return
+	}
+	if errors.Is(err, postgres.ErrTerminalExpired) {
+		writeError(w, r, http.StatusConflict, "TERMINAL_EXPIRED", "The terminal lease has expired.")
+		return
+	}
 	s.writeWorkerStoreError(w, r, err)
 }

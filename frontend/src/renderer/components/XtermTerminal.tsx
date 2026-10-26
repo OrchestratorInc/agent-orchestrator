@@ -330,12 +330,12 @@ type TerminalContextMenuActions = Record<TerminalContextMenuAction, () => void>;
 // and scrolls its scrollback via copy-mode. Left to itself xterm would convert
 // the wheel into cursor-arrow keys (its alt-buffer fallback), which move the
 // agent's cursor rather than scrolling. SGR button 64 = wheel up, 65 = down;
-// reports are 1-based and a single cell is enough for a borderless single pane.
+// reports are 1-based; coordinates must identify the actual transcript cell.
 const SGR_WHEEL_UP = 64;
 const SGR_WHEEL_DOWN = 65;
 
-function sgrWheelReport(button: number, count: number): string {
-	return `\x1b[<${button};1;1M`.repeat(count);
+function sgrWheelReport(button: number, count: number, column: number, row: number): string {
+	return `\x1b[<${button};${column};${row}M`.repeat(count);
 }
 
 // PageUp (CSI 5~) / PageDown (CSI 6~) for pane apps that scroll their transcript
@@ -457,7 +457,9 @@ export function sessionLinkProvider(
 export function XtermTerminal(props: XtermTerminalProps) {
 	const { t } = useTranslation();
 	const themeStyle = useUiStore((state) => state.themeStyle);
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const macPlatform = isMacPlatform();
+	const translucent = macPlatform && windowTranslucency;
 	const shellRef = useRef<HTMLDivElement | null>(null);
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
@@ -611,10 +613,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		applyDocumentThemeStyle(themeStyle);
 		const term = termRef.current;
 		if (!term) return;
-		const { dark, light } = buildTerminalThemes();
+		const { dark, light } = buildTerminalThemes(translucent);
 		term.options.theme = props.theme === "dark" ? dark : light;
+		webglLeaseRef.current?.setEnabled(!translucent);
 		colorSchemeReporterRef.current?.(props.theme, themeStyle);
-	}, [props.theme, themeStyle]);
+	}, [props.theme, themeStyle, translucent]);
 
 	useEffect(() => {
 		if (!termRef.current || !props.supportsCursorColorScheme) return;
@@ -659,9 +662,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			callbacksRef.current.onChangeFontSize?.(delta);
 		});
 		const activateLink = (event: MouseEvent, uri: string) => {
+			// Open on a plain click even while the pane tracks the mouse, like web
+			// links: tmux (mouse on) and fullscreen TUIs keep tracking on, so a
+			// modifier gate here made plain clicks do nothing.
 			if (uri.startsWith("ao:")) {
-				const modifierPressed = isMacPlatform() ? event.metaKey : event.ctrlKey;
-				if (term.modes.mouseTrackingMode !== "none" && !modifierPressed) return;
 				callbacksRef.current.onSessionLinkOpen?.(uri);
 				return;
 			}
@@ -693,8 +697,11 @@ export function XtermTerminal(props: XtermTerminalProps) {
 
 		let term: Terminal;
 		try {
-			const { dark, light } = buildTerminalThemes();
+			const { dark, light } = buildTerminalThemes(translucent);
 			term = new Terminal({
+				// xterm requires this before open; keep macOS terminals ready for
+				// live transparency toggles without recreating their buffers.
+				allowTransparency: macPlatform,
 				// Required for the Unicode 11 width addon below.
 				allowProposedApi: true,
 				cursorBlink: true,
@@ -779,7 +786,10 @@ export function XtermTerminal(props: XtermTerminalProps) {
 		if (import.meta.env.DEV) {
 			(host as DevXtermHost).__aoXtermForTest = term;
 		}
-		const webglLease = leaseWebglRenderer(term, () => callbacksRef.current.isVisible !== false);
+		// WebGL forces alpha to 1 for default-background cells carrying flags
+		// such as dim, leaving opaque rectangles on a transparent canvas. The
+		// DOM renderer respects their alpha and preserves the same buffer.
+		const webglLease = leaseWebglRenderer(term, () => callbacksRef.current.isVisible !== false, !translucent);
 		webglLeaseRef.current = webglLease;
 		webglLease.activate();
 		term.options.macOptionClickForcesSelection = true;
@@ -1475,7 +1485,9 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			emitUserInput(report, "protocol");
 		});
 		const protocolInput = term.onData((data) => {
-			oscColorForwarder.push(data);
+			// xterm answers old colour queries in a replayed scrollback, and the agent, no longer
+			// waiting, takes the answer as typed text ("11;rgb:…" in Droid's prompt).
+			if (pendingReplayWrites === 0) oscColorForwarder.push(data);
 			cursorPositionForwarder.push(data);
 		});
 		const keyInput = term.onKey(({ key }) => emitUserInput(key, "keyboard"));
@@ -1525,7 +1537,16 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			// reaches the app directly; under a mux it drives copy-mode.
 			if (term.modes.mouseTrackingMode !== "none") {
 				const button = lines < 0 ? SGR_WHEEL_UP : SGR_WHEEL_DOWN;
-				emitUserInput(sgrWheelReport(button, Math.abs(lines)), "wheel");
+				const screen = term.screenElement?.getBoundingClientRect();
+				if (!screen || screen.width <= 0 || screen.height <= 0
+					|| !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+				// Measure the grid itself, excluding host padding and the scrollbar.
+				// Dividing its rendered size also accounts for CSS scaling and zoom.
+				const column = Math.max(1, Math.min(term.cols,
+					Math.floor((event.clientX - screen.left) * term.cols / screen.width) + 1));
+				const row = Math.max(1, Math.min(term.rows,
+					Math.floor((event.clientY - screen.top) * term.rows / screen.height) + 1));
+				emitUserInput(sgrWheelReport(button, Math.abs(lines), column, row), "wheel");
 				return false;
 			}
 			// Alt-buffer pane with mouse tracking off and no keyboard-scroll hint:
@@ -1948,7 +1969,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 				{copiedToast && props.isVisible !== false ? (
 					<div
 						aria-live="polite"
-						className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)] px-3 py-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
+						className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)] px-3 py-1.5 text-xs text-[var(--color-text-import-title)] shadow-[var(--shadow-import-modal)]"
 						role="status"
 					>
 						{t("terminal.copiedToClipboard")}
@@ -2069,7 +2090,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 						onPointerLeave={() => linkPreviewControlsRef.current.hide()}
 					>
 						{linkPreviewQuery.data ? (
-							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} />
+							<LinkPreviewCard url={linkPreview.url} preview={linkPreviewQuery.data} onBrowserOpen={props.onLinkOpen} />
 						) : (
 							<LinkPreviewCardLoading />
 						)}

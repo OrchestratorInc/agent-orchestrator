@@ -9,20 +9,28 @@
   var display = document.createElement("style");
   display.id = "ao-display";
   (document.head || document.documentElement).appendChild(display);
+  var wrap = document.createElement("style");
+  wrap.id = "ao-wrap";
+  (document.head || document.documentElement).appendChild(wrap);
   var framed = window.parent !== window;
   var seq = 0;
   // Fullscreen gives the page the whole dialog width: center a top-level block
   // that has a max width, and show the scrollbar. A scrollable page (AO's own
   // field) scrolls inside a capped inline frame, so it shows the scrollbar
   // too. Inline otherwise stays as it is.
-  var mode, scrollable = false;
+  var mode, scrollable = false, wrapContent = false;
   var showScrollbar = "html{scrollbar-width:auto}html::-webkit-scrollbar{display:block}";
-  function setDisplay(nextMode, nextScrollable) {
+  // Reflow is a reader choice, so it overrides the page's fixed widths and nowrap.
+  var wrapCSS = "html,body,body *{min-width:0!important;max-width:100%!important;box-sizing:border-box!important;overflow-wrap:anywhere!important;text-wrap-mode:wrap!important}" +
+    "table{width:100%!important;table-layout:fixed!important}colgroup,col,th,td{width:auto!important}img,video{height:auto!important}";
+  function setDisplay(nextMode, nextScrollable, nextWrapContent) {
     if (nextMode !== undefined) mode = nextMode;
     if (nextScrollable !== undefined) scrollable = nextScrollable === true;
+    if (nextWrapContent !== undefined) wrapContent = nextWrapContent === true;
     display.textContent = mode === "fullscreen"
       ? "body>*{margin-inline:auto}" + showScrollbar
       : scrollable ? showScrollbar : "";
+    wrap.textContent = wrapContent ? wrapCSS : "";
   }
   function apply(t) {
     if (!theme || !t || typeof t !== "object" || !t.variables || typeof t.variables !== "object") return;
@@ -37,7 +45,7 @@
     if (m) {
       var initial = JSON.parse(decodeURIComponent(m[1]));
       apply(initial);
-      if (initial) setDisplay(initial.displayMode, initial.scrollable);
+      if (initial) setDisplay(initial.displayMode, initial.scrollable, initial.wrapContent);
       history.replaceState(history.state, "", location.pathname + location.search);
     }
   } catch (e) {}
@@ -47,7 +55,7 @@
     if (e.source !== window.parent || !d || d.jsonrpc !== "2.0" ||
         d.method !== "ui/notifications/host-context-changed" || !p) return;
     // MCP Apps context updates may be partial; an absent field is unchanged.
-    setDisplay(p.displayMode, p.scrollable);
+    setDisplay(p.displayMode, p.scrollable, p.wrapContent);
     if (p.styles) apply({ appearance: p.theme, variables: p.styles.variables });
   });
   if (!framed) return;

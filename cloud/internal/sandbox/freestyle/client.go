@@ -68,6 +68,16 @@ type Client struct {
 	defaultSnapshot string
 	http            *http.Client
 	log             *slog.Logger
+	// cleanupWait, cleanupInline and cleanupResumeWait override the
+	// project Cleanup's budget, how long one Delete waits for it, and how
+	// long it waits for a paused VM to resume (tests only; zero means the
+	// defaults).
+	cleanupWait       time.Duration
+	cleanupInline     time.Duration
+	cleanupResumeWait time.Duration
+	// backgroundPoll overrides how often a backgrounded exec is polled
+	// (tests only).
+	backgroundPoll time.Duration
 }
 
 var (
@@ -238,8 +248,18 @@ func (c *Client) Resume(ctx context.Context, id sandbox.ID) error {
 	return c.Start(ctx, id)
 }
 
-// Delete reclaims a VM. An already-deleted VM is success.
+// Delete reclaims a VM after running the project's Cleanup in it
+// (cleanupFinished). While Cleanup is still running it returns nil without
+// deleting, and the reconciler re-issues it. An already-deleted VM is success.
 func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
+	if !c.cleanupFinished(ctx, id) {
+		return nil
+	}
+	return c.delete(ctx, id)
+}
+
+// delete reclaims a VM without Cleanup. An already-deleted VM is success.
+func (c *Client) delete(ctx context.Context, id sandbox.ID) error {
 	err := c.do(ctx, http.MethodDelete, "/v5/vms/"+url.PathEscape(string(id)), nil, nil)
 	if errors.Is(err, sandbox.ErrNotFound) {
 		return nil
@@ -250,9 +270,10 @@ func (c *Client) Delete(ctx context.Context, id sandbox.ID) error {
 // Recreate replaces a VM that cannot be restored with a fresh one from the
 // session's snapshot. A session's VM is found again by its slug, so the old VM
 // must be gone before the replacement can take the slug. Like a NodeOps
-// recreate, uncommitted work on the old VM is lost.
+// recreate, uncommitted work on the old VM is lost. The session goes on, so
+// the project's Cleanup does not run.
 func (c *Client) Recreate(ctx context.Context, id sandbox.ID, spec sandbox.Spec) (sandbox.Environment, error) {
-	if err := c.Delete(ctx, id); err != nil {
+	if err := c.delete(ctx, id); err != nil {
 		return sandbox.Environment{}, err
 	}
 	deadline := time.Now().Add(recreateDeleteWait)
@@ -417,6 +438,10 @@ func (c *Client) DeleteSnapshot(ctx context.Context, snapshotID string) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	return c.doWith(ctx, c.http, method, path, body, out)
+}
+
+func (c *Client) doWith(ctx context.Context, client *http.Client, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -435,7 +460,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", "Bearer "+c.apiKey)
 
-	response, err := c.http.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("freestyle: %s %s: %w", method, path, err)
 	}

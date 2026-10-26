@@ -143,6 +143,19 @@ func TestPermissionPolicyAnswersOnceForAutoAndEdits(t *testing.T) {
 	}
 }
 
+func TestSessionPreambleCarriesStandingInstructions(t *testing.T) {
+	blocks := SessionPreamble(acpdriver.LaunchConfig{SystemPrompt: "follow AO rules"})
+	if len(blocks) != 1 {
+		t.Fatalf("blocks = %#v, want one text block", blocks)
+	}
+}
+
+func TestSessionPreambleOmitWhenEmpty(t *testing.T) {
+	if got := SessionPreamble(acpdriver.LaunchConfig{}); got != nil {
+		t.Fatalf("blocks = %#v, want nil", got)
+	}
+}
+
 func TestHarnessConstantMatchesTheRegistryKey(t *testing.T) {
 	if domain.HarnessDeepSeek != "deepseek-harness" {
 		t.Fatalf("harness = %q", domain.HarnessDeepSeek)

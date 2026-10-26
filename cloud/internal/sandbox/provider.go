@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -24,6 +25,23 @@ var ErrSnapshotNotFound = errors.New("sandbox snapshot not found")
 // present: the provider enforces one sandbox per session name. The caller
 // adopts that sandbox through FindBySession instead of creating another.
 var ErrAlreadyExists = errors.New("sandbox environment already exists")
+
+// WorkspaceNameTakenError reports that Create was refused because another
+// workspace, not the session's own, already holds the session's stored
+// workspace name, and that the session has one retry name left to use. The
+// caller records Retry as the session's workspace name and provisions again;
+// it never adopts or deletes the workspace that holds Name.
+type WorkspaceNameTakenError struct {
+	Name  string
+	Retry string
+	Err   error
+}
+
+func (e *WorkspaceNameTakenError) Error() string {
+	return fmt.Sprintf("workspace name %q is taken by another workspace (retrying as %q): %v", e.Name, e.Retry, e.Err)
+}
+
+func (e *WorkspaceNameTakenError) Unwrap() error { return e.Err }
 
 // DuplicateRejectingCreator marks a provider whose Create fails with
 // ErrAlreadyExists rather than making a second sandbox for the same session.
@@ -70,6 +88,33 @@ type Environment struct {
 	Resource  domain.ResourceProfile
 	Deadline  *time.Time
 	StopCause string
+	// Failure explains a StateFailed environment whose failed operation was
+	// bringing compute up. It is nil for every other state, and for a failed
+	// operation that was stopping or deleting compute.
+	Failure *Failure
+}
+
+// Failure is a provider operation that failed and will not converge on its
+// own, such as a Coder workspace build that failed or was canceled.
+type Failure struct {
+	// ID identifies the failed operation (the Coder build id), so the
+	// reconciler acts on each failure once, without comparing clocks.
+	ID string
+	// Canceled is set when the operation was canceled rather than failing.
+	Canceled bool
+	// Err is a generic user-facing reason, code StartupErrorWorkspaceBuildFailed.
+	// A FailureDescriber gives a specific one when the failure is reported.
+	Err *StartupError
+}
+
+// FailureDescriber is an optional provider capability that explains a failed
+// operation the reconciler is about to report. It is called once per failure,
+// so it may read provider logs. customerOwned is set for an organization's own
+// compute, whose provider errors the user may see; for AO-operated compute the
+// message must not reveal AO's infrastructure, and the provider's own words go
+// only in Err, for operators.
+type FailureDescriber interface {
+	DescribeFailure(ctx context.Context, id ID, failure Failure, customerOwned bool) *StartupError
 }
 
 // DeadlineExtender is an optional provider capability. The reconciler uses it
@@ -99,6 +144,23 @@ const (
 	// connection's workspace ready check never passed within its timeout: the
 	// template's own setup did not finish, so AO did not start its worker.
 	StartupErrorWorkspaceSetupNotReady = "workspace_setup_not_ready"
+	// StartupErrorWorkspaceBuildFailed means the provider could not build the
+	// session's compute (a Coder workspace build failed or was canceled, for
+	// example on a cloud quota). It does not recover until a new build runs.
+	StartupErrorWorkspaceBuildFailed = "workspace_build_failed"
+	// StartupErrorWorkspaceCreateFailed means AO could not create the
+	// session's compute at the provider within the startup budget.
+	StartupErrorWorkspaceCreateFailed = "workspace_create_failed"
+	// StartupErrorWorkingDirectoryNotDurable means the project's working
+	// folder is outside the Coder connection's durable root, so the agent's
+	// uncommitted work would not survive a workspace restart. It does not
+	// recover until the project's working folder changes.
+	StartupErrorWorkingDirectoryNotDurable = domain.CoderWorkingFolderNotDurableCode
+	// StartupErrorWorkingDirectoryUnusable means AO could not prepare the
+	// project's working folder in the workspace (the same code a worker
+	// reports, domain.WorkspaceStartupErrorWorkingDirectory). It does not
+	// recover until the folder or the setting changes.
+	StartupErrorWorkingDirectoryUnusable = domain.WorkspaceStartupErrorWorkingDirectory
 )
 
 // StartupError attaches a stable code and a human message to a provider
@@ -163,6 +225,20 @@ type WorkerBootstrap struct {
 	// HOME, groups and environment. The Coder provider sets it from the
 	// session profile; callers leave it false.
 	RunAsWorkspaceUser bool
+	// CheckoutDirectory (Coder only, dedicated worker user) is the absolute
+	// folder the session's main repository is checked out in instead of the
+	// durable root's repository folder, and CheckoutSiblings the folder names
+	// of its additional repositories beside it. The bootstrap creates any of
+	// them that is missing, owned by User, and never touches one that exists.
+	// The Coder provider sets them from the session profile; callers leave
+	// them empty.
+	CheckoutDirectory string
+	CheckoutSiblings  []string
+	// CheckoutHome (with CheckoutDirectory) is the workspace login user's
+	// home: the bootstrap gives traverse permission only to it and the
+	// folders below it, and creates missing parents only below it or the
+	// durable root.
+	CheckoutHome string
 }
 
 // Bootstrapper installs and starts an AO worker in an existing sandbox.
@@ -198,8 +274,12 @@ const (
 	StateRunning      = "running"
 	StateStopped      = "stopped"
 	StatePaused       = "paused"
-	StateDeleting     = "deleting"
-	StateDeleted      = "deleted"
+	// StateFailed is compute whose last provider operation failed or was
+	// canceled and will not converge on its own (a failed Coder workspace
+	// build). Only a new operation recovers it.
+	StateFailed   = "failed"
+	StateDeleting = "deleting"
+	StateDeleted  = "deleted"
 )
 
 // Provider-neutral stop causes. An empty cause is deliberately ambiguous and

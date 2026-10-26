@@ -125,6 +125,46 @@ func TestClientRequestSessionBindsOneWorkerAndPreparedPromotionCannotStealKey(t 
 	}
 }
 
+func TestClientRequestIdentitySurvivesNormalSessionReads(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.ClientRequestID, rec.ClientRequestHash = "retry-key", "v1:payload"
+	created, _, err := s.CreateClientRequestSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, committed := range []bool{false, true} {
+		if committed {
+			if err := s.CommitClientRequestSession(ctx, created.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, found, err := s.GetSession(ctx, created.ID)
+		if err != nil || !found {
+			t.Fatalf("get session: found=%v err=%v", found, err)
+		}
+		project, err := s.ListSessions(ctx, "mer")
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.ListAllSessions(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(project) != 1 || len(all) != 1 {
+			t.Fatalf("session counts: project=%d all=%d", len(project), len(all))
+		}
+		for _, read := range []domain.SessionRecord{got, project[0], all[0]} {
+			if read.ID != created.ID || read.ClientRequestID != rec.ClientRequestID ||
+				read.ClientRequestHash != rec.ClientRequestHash || read.ClientRequestCommitted != committed {
+				t.Fatalf("request identity lost: got %+v, committed=%v", read, committed)
+			}
+		}
+	}
+}
+
 func TestSessionCreateAllowsPrimeAgentHarness(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -317,7 +357,7 @@ func TestUpdateSessionPreservesConcurrentProvisionState(t *testing.T) {
 			if err != nil || !ok || published.ProvisionState != tc.state || published.ProvisionError != tc.cause {
 				t.Fatalf("published provision state: session=%+v ok=%v err=%v", published, ok, err)
 			}
-			stale.DisplayName = "lifecycle update"
+			stale.Metadata.Model = "lifecycle update"
 			if err := s.UpdateSession(ctx, stale); err != nil {
 				t.Fatal(err)
 			}
@@ -325,8 +365,8 @@ func TestUpdateSessionPreservesConcurrentProvisionState(t *testing.T) {
 			if err != nil || !ok {
 				t.Fatalf("get updated session: %v, %v", ok, err)
 			}
-			if got.DisplayName != stale.DisplayName || got.ProvisionState != tc.state || got.ProvisionError != tc.cause {
-				t.Fatalf("stale lifecycle update overwrote provisioning facts: name=%q state=%q error=%q", got.DisplayName, got.ProvisionState, got.ProvisionError)
+			if got.Metadata.Model != stale.Metadata.Model || got.ProvisionState != tc.state || got.ProvisionError != tc.cause {
+				t.Fatalf("stale lifecycle update overwrote provisioning facts: model=%q state=%q error=%q", got.Metadata.Model, got.ProvisionState, got.ProvisionError)
 			}
 		})
 	}
@@ -667,7 +707,7 @@ func TestBrowserCapabilityRotationIsNarrowAndControllerOwnerFenced(t *testing.T)
 	expected := created.ControllerOwner()
 
 	concurrent := created
-	concurrent.DisplayName = "newer display name"
+	concurrent.Metadata.Model = "newer model"
 	concurrent.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: created.UpdatedAt.Add(2 * time.Second)}
 	concurrent.UpdatedAt = created.UpdatedAt.Add(2 * time.Second)
 	if err := s.UpdateSession(ctx, concurrent); err != nil {
@@ -684,7 +724,7 @@ func TestBrowserCapabilityRotationIsNarrowAndControllerOwnerFenced(t *testing.T)
 		t.Fatalf("GetSession: ok=%v err=%v", ok, err)
 	}
 	if updated.Metadata.BrowserCapabilityVerifier != "verifier-2" ||
-		updated.DisplayName != concurrent.DisplayName || updated.Activity != concurrent.Activity ||
+		updated.Metadata.Model != concurrent.Metadata.Model || updated.Activity != concurrent.Activity ||
 		!updated.UpdatedAt.Equal(concurrent.UpdatedAt) {
 		t.Fatalf("narrow verifier update changed unrelated facts: got=%+v", updated)
 	}
@@ -1359,6 +1399,78 @@ func TestPRCRUD(t *testing.T) {
 	}
 	if list, _ := s.ListPRsBySession(ctx, r.ID); len(list) != 1 {
 		t.Fatalf("list prs = %d, want 1", len(list))
+	}
+}
+
+func TestMarkPRMergedPreservesObservedFactsAndEmitsCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{
+		URL: "https://github.com/acme/repo/pull/7", SessionID: r.ID, Number: 7,
+		CI: domain.CIPassing, Review: domain.ReviewApproved, Mergeability: domain.MergeMergeable,
+		Provider: "github", Host: "github.com", Repo: "acme/repo", ProviderID: "provider-pr-7",
+		SourceBranch: "feature", TargetBranch: "main", HeadSHA: "head-sha", Title: "keep this title",
+		MetadataHash: "metadata-v1", CIHash: "ci-v1", ReviewHash: "review-v1",
+		UpdatedAt: now, StateChangedAt: now, ObservedAt: now,
+	}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	base, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mergedAt := now.Add(time.Minute)
+	if err := s.MarkPRMerged(ctx, pr.URL, "merge-sha", mergedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" {
+		t.Fatalf("merge state = merged:%v draft:%v closed:%v sha:%q", got.Merged, got.Draft, got.Closed, got.MergeCommitSHA)
+	}
+	if !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("merge timestamps = state:%s updated:%s observed:%s, want %s", got.StateChangedAt, got.UpdatedAt, got.ObservedAt, mergedAt)
+	}
+	if got.Title != pr.Title || got.HeadSHA != pr.HeadSHA || got.CI != pr.CI || got.Review != pr.Review || got.Mergeability != pr.Mergeability ||
+		got.MetadataHash != pr.MetadataHash || got.CIHash != pr.CIHash || got.ReviewHash != pr.ReviewHash {
+		t.Fatalf("mark merged replaced observed facts: got=%+v want preserved=%+v", got, pr)
+	}
+
+	events, err := s.EventsAfter(ctx, base, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || string(events[0].Type) != "pr_updated" {
+		t.Fatalf("merge events = %+v, want one pr_updated", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["url"] != pr.URL || payload["state"] != "merged" {
+		t.Fatalf("merge event payload = %#v", payload)
+	}
+
+	// A provider poll may have fetched the old open state before the merge
+	// completed and reach SQLite afterward. That stale observation must not
+	// regress the authoritative merge result.
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err = s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr after stale observation: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" || !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("stale observation regressed merged state: %+v", got)
 	}
 }
 
@@ -2416,7 +2528,7 @@ func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	if applied, err := s.UpdateSessionArtifactOutput(ctx, created.ID, "/data/artifacts/x", domain.SessionOutputArtifact); err != nil || !applied {
 		t.Fatalf("narrow write: %v, %v", applied, err)
 	}
-	stale.DisplayName = "stale full-row write"
+	stale.Metadata.Model = "stale full-row write"
 	if err := s.UpdateSession(ctx, stale); err != nil {
 		t.Fatal(err)
 	}
@@ -2424,8 +2536,8 @@ func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get session: %v, %v", ok, err)
 	}
-	if got.DisplayName != stale.DisplayName {
-		t.Fatalf("display name = %q, want the full-row write applied", got.DisplayName)
+	if got.Metadata.Model != stale.Metadata.Model {
+		t.Fatalf("model = %q, want the full-row write applied", got.Metadata.Model)
 	}
 	if got.OutputType != domain.SessionOutputArtifact || got.Metadata.ArtifactDir != "/data/artifacts/x" {
 		t.Fatalf("stale UpdateSession clobbered output columns: type=%q dir=%q", got.OutputType, got.Metadata.ArtifactDir)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -41,7 +42,9 @@ func (c *conversation) SetConfigOption(
 	c.mu.Lock()
 	sessionID := c.sessionID
 	closed := c.closed
-	legacyModel := c.legacyModel
+	// session/set_model returns nothing, while a config option change returns the
+	// new model's settings, such as Cursor's thinking and fast mode.
+	legacyModel := c.legacyModel && !c.modelConfigOption
 	legacyMode := c.legacyMode
 	var option *ports.ChatConfigOption
 	for i := range c.configOptions {
@@ -123,12 +126,14 @@ func (c *conversation) SetConfigOption(
 	// instead would be just as wrong in the other direction — the agent applied
 	// the value, so a UI that snaps back to the old one is lying about state the
 	// provider already changed. Record the accepted value against the catalog we
-	// hold and let a later ConfigOptionUpdate deliver any rebuild.
+	// hold and let a later ConfigOptionUpdate deliver any rebuild. Callers that
+	// specifically require an authoritative provider-reported post-change catalog
+	// (such as safety guards during handoff) receive nil so they can fail closed.
 	if len(resp.ConfigOptions) == 0 {
 		c.applyAcceptedConfigOption(id, value)
-	} else {
-		c.replaceConfigOptions(resp.ConfigOptions)
+		return nil, nil
 	}
+	c.replaceConfigOptions(resp.ConfigOptions)
 	return c.ListConfigOptions(ctx)
 }
 
@@ -184,6 +189,36 @@ func (c *conversation) configOptionOffers(id, value string) (offered, known bool
 		return choiceOffered(option.Choices, value), true
 	}
 	return false, false
+}
+
+// configOptionValueNamed is the value of the choice shown under name, or "".
+func (c *conversation) configOptionValueNamed(id, name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		if c.configOptions[i].ID != id {
+			continue
+		}
+		for _, choice := range c.configOptions[i].Choices {
+			if strings.EqualFold(strings.TrimSpace(choice.Name), name) {
+				return choice.Value
+			}
+		}
+	}
+	return ""
+}
+
+// configOptionCurrent is a select option's current value, or "" when the
+// session does not list it.
+func (c *conversation) configOptionCurrent(id string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.configOptions {
+		if c.configOptions[i].ID == id && c.configOptions[i].Type == ports.ChatConfigOptionSelect {
+			return c.configOptions[i].Current.Select
+		}
+	}
+	return ""
 }
 
 func normalizeConfigOptions(options []acpsdk.SessionConfigOption) []ports.ChatConfigOption {
@@ -243,7 +278,9 @@ func normalizeSessionOptions(
 			Current: ports.ChatConfigOptionValue{Select: models.CurrentModelID}, Choices: choices,
 		})
 	}
-	if modes != nil && !seen["mode"] {
+	// pi-acp sends its thinking levels both as a config option and as legacy
+	// session modes. Shown as a mode, they would sit where permissions go.
+	if modes != nil && !seen["mode"] && !modesRepeatAnOption(out, modes) {
 		choices := make([]ports.ChatConfigOptionChoice, 0, len(modes.AvailableModes))
 		for _, mode := range modes.AvailableModes {
 			choices = append(choices, ports.ChatConfigOptionChoice{
@@ -256,6 +293,16 @@ func normalizeSessionOptions(
 		})
 	}
 	return out
+}
+
+// modesRepeatAnOption reports legacy session modes whose ids are exactly the
+// choices of a config option the agent already sent.
+func modesRepeatAnOption(options []ports.ChatConfigOption, modes *acpsdk.SessionModeState) bool {
+	return len(modes.AvailableModes) > 0 && slices.ContainsFunc(options, func(option ports.ChatConfigOption) bool {
+		return len(option.Choices) == len(modes.AvailableModes) && !slices.ContainsFunc(modes.AvailableModes, func(mode acpsdk.SessionMode) bool {
+			return !choiceOffered(option.Choices, string(mode.Id))
+		})
+	})
 }
 
 func normalizeSelectChoices(options acpsdk.SessionConfigSelectOptions) []ports.ChatConfigOptionChoice {

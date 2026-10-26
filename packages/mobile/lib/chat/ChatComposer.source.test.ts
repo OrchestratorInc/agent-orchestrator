@@ -7,10 +7,13 @@ function source(relativePath: string): string {
 }
 
 const composer = source("./ChatComposer.tsx");
+// The dock and pill rules ChatComposer shares with ReviewerComposer.
+const composerStyles = source("./composerStyles.ts");
 
-/** The body of one entry in the composer's stylesheet. */
+/** The body of one entry in the composer's stylesheet, shared or its own. */
 function styleRule(name: string): string {
-	const match = composer.match(new RegExp(`\\n\\t${name}: \\{([^}]*)\\}`));
+	const rule = new RegExp(`\\n\\t${name}: \\{([^}]*)\\}`);
+	const match = composerStyles.match(rule) ?? composer.match(rule);
 	expect(match, `${name} rule`).not.toBeNull();
 	return match?.[1] ?? "";
 }
@@ -21,7 +24,8 @@ describe("chat composer pill", () => {
 	it("draws a single borderless capsule", () => {
 		const pill = styleRule("composer");
 		expect(pill).toContain("borderRadius: COMPOSER_RADIUS");
-		expect(composer).toContain("const COMPOSER_RADIUS = 28");
+		expect(composerStyles).toContain("const COMPOSER_RADIUS = 28");
+		expect(composer).toContain("...composerStyleRules(t),");
 		expect(pill).not.toContain("borderWidth");
 		expect(pill).not.toContain("borderColor");
 		// No fill under the glass: an opaque pill under a material is the one
@@ -98,7 +102,7 @@ describe("chat composer pill", () => {
 	// inset too low and then jumped into place at the end.
 	it("rides the keyboard's own progress instead of switching inset on a flag", () => {
 		expect(composer).toContain("useReanimatedKeyboardAnimation()");
-		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value");
+		expect(composer).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");
 		expect(composer).toContain("{ paddingBottom: restingInset }");
 		expect(composer).not.toContain("dockInset(");
 	});
@@ -138,5 +142,19 @@ describe("PR review composer", () => {
 		expect(prompt).toContain('name="git-pull-request"');
 		expect(prompt).toContain('name="chevron-right"');
 		expect(prompt).not.toContain('name="arrow-up-right"');
+	});
+});
+
+describe("session changes pill", () => {
+	// Codex-style: once the session has changed files, the meta row offers them
+	// where the "Sent after this" note sat. The placeholder still says a message
+	// waits for the turn, so nothing is lost, and steering stays reachable.
+	it("replaces the queue note and keeps the steer action", () => {
+		const start = composer.indexOf("{changes && !(deliveryPresentation.showQueueNote && attachments.length)");
+		expect(start).toBeGreaterThan(-1);
+		const pill = composer.slice(start, composer.indexOf(': deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>', start));
+		expect(pill).toContain("changes.onOpen()");
+		expect(pill).toContain('accessibilityLabel="Steer this turn now"');
+		expect(composer).toContain('{attachments.length ? "Attachments next" : "Sent after this"}');
 	});
 });

@@ -140,7 +140,7 @@ func (s *Store) ClaimWorkerTurn(
 		// created from a capped share-grant holder's message narrows that
 		// ceiling further, never loosens it. See effectiveMode.
 		turn.Mode = effectiveMode(effectiveMode(turn.Mode, turnModeCap), requestedMode)
-		turn.ApprovalMode = approvalMode
+		turn.ApprovalMode = effectiveApprovalMode(turn.Mode, turn.Harness, approvalMode)
 		turn.DeniedCommands = effectiveDeniedCommands(turn.DeniedCommands, turnDeniedCommands)
 		turn.CancelRequested = state == "cancel_requested"
 		claimed = true
@@ -690,4 +690,23 @@ func appendTypedEvent(
 		encoded,
 	)
 	return err
+}
+
+// effectiveApprovalMode drops a turn's approval mode that the turn's
+// effective mode does not allow, as the worker's validateApprovalMode would
+// reject it and fail the turn: none under read-only, bypass only when
+// trusted, and Codex's full access ("default") not under standard. A message
+// from a share grantee capped below the session's mode can carry such a
+// mode, since the request only checks the value. Without one the worker
+// derives the approval from the effective mode.
+func effectiveApprovalMode(mode, harness, approvalMode string) string {
+	switch {
+	case mode == "read-only":
+		return ""
+	case approvalMode == "bypass-permissions" && mode != "trusted":
+		return ""
+	case approvalMode == "default" && mode == "standard" && harness == "codex":
+		return ""
+	}
+	return approvalMode
 }

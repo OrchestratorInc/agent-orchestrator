@@ -25,12 +25,14 @@ export function PRSummaryMeta({
 	leading?: string;
 	pr: SessionPRSummary;
 }) {
+	const { t } = useTranslation();
 	return (
 		<ProductPRSummaryMeta
 			className={className}
 			countNounLabel={useCountNounLabel()}
 			externalLink={ProductExternalLink}
 			leading={leading}
+			openedViaLabel={t("pr.openedVia")}
 			pr={pr}
 		/>
 	);

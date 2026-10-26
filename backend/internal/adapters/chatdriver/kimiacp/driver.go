@@ -6,6 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
+
+	acpsdk "github.com/coder/acp-go-sdk"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
@@ -25,6 +28,7 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 			ports.ChatCapabilityPlans:   true,
 		},
 		Configure:            configure,
+		SessionPreamble:      sessionPreamble,
 		SessionOptions:       sessionOptions,
 		ValidateTurnSettings: validateTurnSettings,
 	}, log)
@@ -37,7 +41,22 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	if err := kimi.PrepareACPInstructions(ctx, cfg.WorkspacePath, cfg.SystemPrompt); err != nil {
 		return nil, nil, err
 	}
+	// The chat runs in AO's Kimi home, which signs in with the user's own login.
+	if err := kimi.ShareCredentials(cfg.DataDir); err != nil {
+		return nil, nil, err
+	}
 	return []string{"acp"}, nil, nil
+}
+
+// sessionPreamble carries AO's instructions, with any handoff note, on the
+// first prompt when the project owns .kimi-code/AGENTS.md: that file is the only
+// one of Kimi Code's that AO writes, and kimi acp reads no session metadata.
+func sessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
+	standing := strings.TrimSpace(cfg.SystemPrompt)
+	if standing == "" || !kimi.CodeInstructionsOwnedByProject(context.Background(), cfg.WorkspacePath) {
+		return nil
+	}
+	return []acpsdk.ContentBlock{acpdriver.StandingInstructionsBlock(standing)}
 }
 
 func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {

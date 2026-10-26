@@ -1,5 +1,4 @@
 import { AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED, type RendererTelemetryCapture, type TelemetryPolicySnapshot, type TelemetryPolicyView } from "../shared/telemetry-policy";
-import { DaemonTelemetryControlUnavailableError, type DaemonTelemetryPolicyAcknowledgement } from "./daemon-telemetry-policy-client";
 
 const RETRY_BACKOFF_INIT_MS = 2_000;
 const RETRY_BACKOFF_MAX_MS = 60_000;
@@ -24,11 +23,6 @@ type Authority = {
 	retryPendingReplacement(): Promise<TelemetryPolicySnapshot>;
 };
 
-type DaemonPolicyClient = {
-	prepareDisable(): Promise<DaemonTelemetryPolicyAcknowledgement>;
-	applyPolicy(generation: string, enabled: boolean): Promise<DaemonTelemetryPolicyAcknowledgement>;
-};
-
 export class DesktopTelemetryController {
 	private view: TelemetryPolicyView;
 	private transport: DesktopTelemetryTransport | null = null;
@@ -39,14 +33,12 @@ export class DesktopTelemetryController {
 
 	constructor(private readonly options: {
 		authority: Authority;
-		daemon: DaemonPolicyClient;
 		transportFactory: () => Promise<DesktopTelemetryTransport | null>;
 		environmentAllowsEvents: boolean;
 		productionEnabled?: boolean;
 		now?: () => number;
 		broadcast?: (view: TelemetryPolicyView) => void;
 		clearRendererQueues?: () => Promise<void>;
-		visibility?: { setPolicy(enabled: boolean, consentGeneration: string): void; disableAndDrain(): Promise<void>; closeAndDrain(): Promise<void> };
 	}) {
 		this.view = this.toView(options.authority.snapshot(), "applied");
 		this.operation = Promise.resolve(this.view);
@@ -57,15 +49,8 @@ export class DesktopTelemetryController {
 	initialize(): Promise<TelemetryPolicyView> {
 		return this.serialize(async () => {
 			const snapshot = await this.options.authority.load();
-			let applied = false;
-			if (snapshot.acknowledged) {
-				try {
-					const ack = await this.options.daemon.applyPolicy(snapshot.consentGeneration, snapshot.eventsEnabled);
-					applied = this.acknowledges(snapshot.eventsEnabled, snapshot.consentGeneration, ack);
-				} catch { applied = false; }
-			}
-			this.view = this.toView({ ...snapshot, acknowledged: snapshot.acknowledged && applied }, snapshot.acknowledged ? (applied ? "applied" : "cleanup_pending") : "cleanup_failed", snapshot.acknowledged ? (applied ? this.baseReason() : "daemon_cleanup_pending") : (this.options.authority.durabilitySupported ? "invalid_authority" : "durability_unsupported"));
-			if (applied && this.captureEnabled(snapshot)) this.transport = await this.options.transportFactory();
+			this.view = this.toView(snapshot, snapshot.acknowledged ? "applied" : "cleanup_failed");
+			if (snapshot.acknowledged && this.captureEnabled(snapshot)) this.transport = await this.options.transportFactory();
 			this.publish();
 			return this.snapshot();
 		});
@@ -83,7 +68,6 @@ export class DesktopTelemetryController {
 		return this.serialize(async () => {
 			if (this.view.state === "applied" || !this.options.authority.durabilitySupported) return this.snapshot();
 			if (this.clock() < this.nextRetryAtMs) return this.snapshot();
-			let desktopCleanupFailed = false;
 			let authorityVerified = false;
 			try {
 				let snapshot = this.options.authority.snapshot();
@@ -92,23 +76,19 @@ export class DesktopTelemetryController {
 					snapshot.consentGeneration === this.view.consentGeneration &&
 					snapshot.eventsEnabled === this.view.eventsEnabled;
 				if (!authorityVerified) throw new Error("durable policy authority was not acknowledged");
-				const ack = await this.options.daemon.applyPolicy(snapshot.consentGeneration, snapshot.eventsEnabled);
-				if (!this.acknowledges(snapshot.eventsEnabled, snapshot.consentGeneration, ack)) throw new Error("policy was not acknowledged");
-				if (!snapshot.eventsEnabled && this.pendingDesktopCleanup && !(await this.pendingDesktopCleanup())) { desktopCleanupFailed = true; throw new Error("desktop cleanup is incomplete"); }
+				if (!snapshot.eventsEnabled && this.pendingDesktopCleanup && !(await this.pendingDesktopCleanup())) throw new Error("desktop cleanup is incomplete");
 				this.pendingDesktopCleanup = null;
 				this.view = this.toView(snapshot, "applied", this.baseReason());
 				if (this.captureEnabled(this.view) && !this.transport) this.transport = await this.options.transportFactory();
 				this.resetRetryBackoff();
-			} catch (error) {
-				if (!(error instanceof DaemonTelemetryControlUnavailableError)) {
-					this.retryFailures += 1;
-					this.nextRetryAtMs = this.clock() + telemetryRetryDelayMs(this.retryFailures);
-				}
+			} catch {
+				this.retryFailures += 1;
+				this.nextRetryAtMs = this.clock() + telemetryRetryDelayMs(this.retryFailures);
 				this.view = {
 					...this.view,
 					state: authorityVerified ? "cleanup_pending" : "cleanup_failed",
 					acknowledged: false,
-					reason: desktopCleanupFailed || !authorityVerified ? "cleanup_failed" : "daemon_cleanup_pending",
+					reason: "cleanup_failed",
 				};
 			}
 			this.publish(); return this.snapshot();
@@ -123,27 +103,16 @@ export class DesktopTelemetryController {
 	async close(): Promise<void> {
 		const transport = this.transport;
 		this.transport = null;
-		await Promise.allSettled([
-			this.options.visibility?.closeAndDrain() ?? Promise.resolve(),
-			transport?.closeAndDrain() ?? Promise.resolve(),
-		]);
+		await transport?.closeAndDrain();
 	}
 
 	private async disable(): Promise<TelemetryPolicyView> {
-		let visibilityDrained = true;
-		try {
-			this.options.visibility?.setPolicy(false, this.view.consentGeneration);
-			await this.options.visibility?.disableAndDrain();
-		} catch { visibilityDrained = false; }
 		const closingTransport = this.transport;
 		let transportDrained = true;
 		try { await closingTransport?.closeAndDrain(); } catch { transportDrained = false; }
 		this.transport = null;
 		this.pendingDesktopCleanup = async () => {
 			let purged = true;
-			if (!visibilityDrained) {
-				try { await this.options.visibility?.disableAndDrain(); visibilityDrained = true; } catch { purged = false; }
-			}
 			if (!transportDrained) {
 				try { await closingTransport?.closeAndDrain(); transportDrained = true; } catch { purged = false; }
 			}
@@ -151,7 +120,6 @@ export class DesktopTelemetryController {
 			try { await this.options.clearRendererQueues?.(); } catch { purged = false; }
 			return purged;
 		};
-		try { await this.options.daemon.prepareDisable(); } catch { /* durable off still proceeds */ }
 		let snapshot: TelemetryPolicySnapshot;
 		try { snapshot = await this.options.authority.setEventsEnabled(false); }
 		catch (error) {
@@ -160,15 +128,10 @@ export class DesktopTelemetryController {
 			this.publish();
 			throw error;
 		}
-		let applied = false;
-		try {
-			const ack = await this.options.daemon.applyPolicy(snapshot.consentGeneration, false);
-			applied = ack.consentGeneration === snapshot.consentGeneration && !ack.eventsEnabled && ack.gateDrained && ack.purgeConfirmed;
-		} catch { applied = false; }
 		const desktopPurged = await this.pendingDesktopCleanup();
 		if (desktopPurged) this.pendingDesktopCleanup = null;
-		const cleanupApplied = applied && desktopPurged;
-		this.view = this.toView({ ...snapshot, acknowledged: snapshot.acknowledged && cleanupApplied }, cleanupApplied ? "applied" : "cleanup_pending", cleanupApplied ? this.baseReason() : (desktopPurged ? "daemon_cleanup_pending" : "cleanup_failed"));
+		const cleanupApplied = desktopPurged;
+		this.view = this.toView({ ...snapshot, acknowledged: snapshot.acknowledged && cleanupApplied }, cleanupApplied ? "applied" : "cleanup_pending", cleanupApplied ? this.baseReason() : "cleanup_failed");
 		this.publish(); return this.snapshot();
 	}
 
@@ -176,28 +139,20 @@ export class DesktopTelemetryController {
 		if (!this.options.authority.durabilitySupported) throw new Error("telemetry enablement is unavailable because durable policy replacement is unsupported");
 		if (!this.options.environmentAllowsEvents) { this.view = { ...this.view, environmentVeto: true, reason: "environment_veto" }; this.publish(); return this.snapshot(); }
 		if (!this.view.eventsEnabled && this.view.state !== "applied") {
-			const cleanup = await this.options.daemon.applyPolicy(this.view.consentGeneration, false);
-			if (!cleanup.gateDrained || !cleanup.purgeConfirmed || cleanup.eventsEnabled || cleanup.consentGeneration !== this.view.consentGeneration) throw new Error("prior telemetry purge is incomplete");
 			if (this.pendingDesktopCleanup && !(await this.pendingDesktopCleanup())) throw new Error("prior desktop telemetry purge is incomplete");
 			this.pendingDesktopCleanup = null;
 		}
 		const snapshot = await this.options.authority.setEventsEnabled(true);
 		let transport: DesktopTelemetryTransport | null = null;
 		try {
-			const ack = await this.options.daemon.applyPolicy(snapshot.consentGeneration, true);
-			const releaseEnabled = this.options.productionEnabled ?? AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED;
-			if (ack.consentGeneration !== snapshot.consentGeneration || (releaseEnabled && !ack.eventsEnabled)) {
-				throw new Error("telemetry enablement was not acknowledged");
-			}
 			if (this.captureEnabled(snapshot)) {
 				transport = await this.options.transportFactory();
 				if (!transport) throw new Error("desktop telemetry transport is unavailable");
 			}
 		} catch (error) {
-			// The durable enabled generation may already have opened the daemon
-			// gate even when its response was lost. Reuse the full opt-out path so
-			// no process can retain that ambiguous enablement.
-			this.view = this.toView({ ...snapshot, acknowledged: false }, "cleanup_pending", "daemon_cleanup_pending");
+			// If enabling fails after durable state changes, reuse the full opt-out
+			// path so no process can retain ambiguous enablement.
+			this.view = this.toView({ ...snapshot, acknowledged: false }, "cleanup_pending", "cleanup_failed");
 			await this.disable();
 			throw error;
 		}
@@ -220,12 +175,6 @@ export class DesktopTelemetryController {
 		return undefined;
 	}
 
-	private acknowledges(enabled: boolean, generation: string, ack: DaemonTelemetryPolicyAcknowledgement): boolean {
-		if (ack.consentGeneration !== generation) return false;
-		if (!enabled) return !ack.eventsEnabled && ack.gateDrained && ack.purgeConfirmed;
-		return ack.eventsEnabled || !(this.options.productionEnabled ?? AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED);
-	}
-
 	private clock(): number {
 		return (this.options.now ?? Date.now)();
 	}
@@ -236,7 +185,6 @@ export class DesktopTelemetryController {
 	}
 
 	private publish(): void {
-		this.options.visibility?.setPolicy(this.captureEnabled(this.view), this.view.consentGeneration);
 		this.options.broadcast?.(this.snapshot());
 	}
 

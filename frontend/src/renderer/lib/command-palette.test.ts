@@ -23,6 +23,7 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 import { appI18n } from "../i18n";
+import { sessionBranchPresentation } from "./session-branch";
 
 function session(overrides: Partial<WorkspaceSession> & { id: string }): WorkspaceSession {
 	return {
@@ -720,5 +721,27 @@ describe("buildSessionActions", () => {
 	it("omits Copy branch for a synthetic branch", () => {
 		const items = buildSessionActions(workspace, session({ id: "syn", branch: "session/syn" }));
 		expect(items.some((i) => i.action?.kind === "copy-branch")).toBe(false);
+	});
+});
+
+
+describe("pending branch presentation", () => {
+	const pending = session({ id: "delegated", provisionState: "ready", provisionSteps: [{ id: "worktree", status: "running" }] });
+	it("keeps synchronous provisional names hidden while naming", () => {
+		expect(sessionBranchPresentation(pending)).toEqual({ branch: undefined, naming: true });
+	});
+	it.each([{ terminalHandleId: "terminal" }, { chatProviderPreserved: true }])("reveals a launched worker's branch despite stale progress: %j", (launched) => {
+		expect(sessionBranchPresentation({ ...pending, ...launched })).toEqual({ branch: pending.branch, naming: false });
+	});
+	it.each<Partial<WorkspaceSession>>([{ activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }, { statusReadiness: "unavailable" }, { isTerminated: true }, { provisionState: "failed" }])("does not shimmer forever on a stopped or failed worker: %j", (stopped) => {
+		expect(sessionBranchPresentation({ ...pending, ...stopped })).toEqual({ branch: undefined, naming: false });
+	});
+	it("hides a task's branch while its generated name is on the way", () => {
+		const launched = session({ id: "mer-7", branch: "ao/mer-7/root", chatProviderPreserved: true, branchNaming: true });
+		expect(sessionBranchPresentation(launched)).toEqual({ branch: undefined, naming: true });
+		expect(sessionBranchPresentation({ ...launched, branch: "ao/login-redirect/root", branchNaming: false })).toEqual({ branch: "ao/login-redirect/root", naming: false });
+		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
+		// A start that failed after launch has its worktree.
+		expect(sessionBranchPresentation({ ...launched, provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }] })).toEqual({ branch: "ao/mer-7/root", naming: false });
 	});
 });

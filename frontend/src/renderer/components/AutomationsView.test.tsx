@@ -161,7 +161,7 @@ describe("AutomationsView", () => {
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 
 		const funnel = { project_id: "demo", schedule_preset: "daily", prompt_length_bucket: "xs" };
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_requested", funnel);
+		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.automation_create_requested", expect.anything());
 		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_succeeded", funnel);
 		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.automation_create_failed", expect.anything());
 	});
@@ -357,7 +357,7 @@ describe("AutomationsView", () => {
 		await userEvent.click(screen.getAllByRole("button", { name: /create automation/i })[0]);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
-		expect(dialog).toHaveClass("border-border", "bg-popover", "rounded-lg");
+		expect(dialog).toHaveClass("border-(--color-border-overlay)", "bg-popover", "rounded-lg");
 		expect(dialog.querySelector(".border-b")).toBeNull();
 		expect(dialog.querySelector(".border-t")).toBeNull();
 		expect(within(dialog).getByRole("heading", { name: "Create automation" })).toHaveClass(

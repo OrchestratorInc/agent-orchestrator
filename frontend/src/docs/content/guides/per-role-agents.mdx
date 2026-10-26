@@ -46,6 +46,14 @@ This example uses `bypass-permissions`, which lets provider tools act without th
 
 The `--config-json` flag takes a JSON string, not a file, and `set-config` replaces the whole project configuration. Preserve existing setup, rules, reviewers, and intake settings. See [Projects: update from the CLI](/configuration/projects#update-from-the-cli) for CLI limitations and safer alternatives.
 
+## Choose which models a harness offers
+
+Open **Settings → Harnesses**, choose a harness, and open **Models**. Turn a model's switch off to hide it from the model pickers for new tasks, project settings, reviewers, agent switching, and chat. **Enable all** and **Disable all** change every listed model at once; at least one model stays on. With every model on, the pickers offer the harness's full catalog, including models it reports later.
+
+The choice belongs to the selected computer. A model a project, task, or session already uses stays listed even when it is switched off. Cloud VM tasks use their own catalog.
+
+The Models tab also shows each model's context window in tokens when the harness catalog reports it.
+
 ## Start an orchestrator or worker
 
 The desktop provides dedicated new-session and orchestrator flows. From the CLI:
@@ -70,6 +78,15 @@ Compatible Claude Code and Codex sessions expose **Switch to chat UI** or **Swit
 The default interface comes from **Settings → General**. Project `agentConfig.mode` does not set Chat or Terminal UI. A choice made for a task or with the CLI takes precedence.
 
 Model, reasoning effort, permissions, and provider execution modes depend on the selected agent. Chat support and the ability to switch interfaces are separate capabilities, so use the switch action offered for that session.
+
+## Switch agents mid-session
+
+A local session can move to a different agent without losing its conversation. The new agent starts with a handoff of the session so far and keeps working in the same worktree.
+
+- **Chat:** open the agent, model, and reasoning effort picker in the composer, choose **Agent**, and pick another agent and its model. The switch happens when you send your next message.
+- **Terminal UI:** open **Session actions** (the … button on the session tab), choose **Agent**, pick the agent and model, then click **Switch**.
+
+Only agents that are installed and ready on that computer are offered, and Chat offers only agents with Chat support. Switch while the agent is idle; Orchestrator refuses a switch while the agent is working or waiting on an approval or question. Cloud sessions cannot switch agents.
 
 ## Project rules
 

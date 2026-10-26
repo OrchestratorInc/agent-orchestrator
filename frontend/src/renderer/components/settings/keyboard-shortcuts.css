@@ -1,0 +1,77 @@
+.shortcuts-settings { position: relative; width: 100%; min-width: 0; }
+.shortcuts-settings .shortcut-button { min-height: 32px; height: auto; padding: 6px 10px; font-size: 13px; line-height: 18px; }
+.shortcut-icon-button { display: inline-flex; width: 32px; height: 32px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--color-muted-foreground); }
+.shortcut-icon-button:hover, .shortcut-icon-button[aria-expanded="true"] { background: var(--color-muted); color: var(--color-foreground); }
+.shortcut-icon-button:disabled { opacity: .5; pointer-events: none; }
+.shortcuts-settings button:focus-visible, .shortcuts-settings input:focus-visible { outline: 2px solid var(--color-settings-accent); outline-offset: 2px; }
+.shortcut-recorder:focus { outline: none; }
+.shortcut-modified { padding: 1px 6px; border-radius: var(--radius-sm); background: var(--color-settings-menu-selected); font-size: 11px; line-height: 18px; color: var(--color-muted-foreground); }
+.shortcut-alternative { display: inline-flex; align-items: center; gap: var(--space-2); }
+.shortcut-or, .shortcut-unassigned, .shortcut-fixed { font-size: 12px; line-height: 20px; color: var(--color-muted-foreground); }
+.shortcut-fixed { padding-right: var(--space-2); }
+.shortcut-recorder { display: flex; align-items: center; gap: var(--space-3); margin: 0 var(--space-3) var(--space-3); padding: var(--space-3); border: 1px solid var(--color-border-settings-input); border-radius: var(--radius-md); background: var(--color-bg-settings-input); font-size: 14px; line-height: 20px; }
+.shortcut-recording-help { margin-top: var(--space-1); font-size: 12px; line-height: 18px; color: var(--color-muted-foreground); }
+.shortcut-error { margin-top: var(--space-2); font-size: 13px; line-height: 20px; color: var(--color-error); }
+.shortcut-row-error { padding: 0 var(--space-4) var(--space-3); }
+.shortcut-management { display: flex; flex-direction: column; gap: var(--space-2); margin: 0 var(--space-4) var(--space-3); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg-settings-input); }
+.shortcut-manage-binding { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.shortcut-manage-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.shortcut-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: var(--space-8) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md); text-align: center; }
+.shortcut-empty > svg, .shortcut-empty > span { color: var(--color-muted-foreground); }
+.shortcut-empty p { font-size: 14px; font-weight: 500; }
+.shortcut-empty > span { max-width: 40ch; font-size: 13px; line-height: 20px; }
+
+/* Match Harness: the page supplies the height; only the list scrolls. */
+.settings-thin-scrollbar:has([data-shortcuts-layout]) {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.settings-dialog-body:has([data-shortcuts-layout]),
+.settings-dialog-body > div:has([data-shortcuts-layout]),
+.shortcuts-settings[data-shortcuts-layout],
+.shortcuts-settings[data-shortcuts-layout] > [data-section="keyboard-shortcuts"],
+.shortcuts-settings[data-shortcuts-layout] [data-section="keyboard-shortcuts"] div:has([data-shortcuts-list]) {
+	min-width: 0;
+	min-height: 0;
+	flex: 1;
+}
+
+.settings-dialog-body > div:has([data-shortcuts-layout]),
+.shortcuts-settings[data-shortcuts-layout],
+.shortcuts-settings[data-shortcuts-layout] [data-section="keyboard-shortcuts"],
+.shortcuts-settings[data-shortcuts-layout] [data-section="keyboard-shortcuts"] div:has([data-shortcuts-list]) {
+	max-width: 100%;
+}
+
+.settings-dialog-body:has([data-shortcuts-layout]) {
+	padding-bottom: 18px;
+}
+
+.shortcuts-settings[data-shortcuts-layout] {
+	display: flex;
+	flex-direction: column;
+}
+
+.shortcuts-settings[data-shortcuts-layout] .shortcut-toolbar {
+	position: static;
+	flex-shrink: 0;
+}
+
+.shortcuts-settings[data-shortcuts-layout] div:has(> [data-shortcuts-list]) > :not([data-shortcuts-list]) {
+	flex-shrink: 0;
+}
+
+.shortcuts-settings[data-shortcuts-layout] [data-shortcuts-list] {
+	min-height: 0;
+	flex: 1;
+	overflow-x: hidden;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+/* The standalone customize modal already has a title above its body. */
+.shortcuts-customize-body [data-section="keyboard-shortcuts"] > div {
+	margin-top: 0;
+}

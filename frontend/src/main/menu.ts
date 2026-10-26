@@ -8,10 +8,32 @@ import type { MenuItemConstructorOptions } from "electron";
 // fileMenu role binds Cmd+W to "Close Window", which kills the entire application
 // window whenever a tab or terminal close races the native menu. Multi-tab
 // macOS applications (Safari, Chrome, VS Code) bind Shift+Command+W to "Close Window"
-// so Command+W remains scoped to tabs and terminals.
-export function buildMacAppMenuTemplate(onToggleDevTools: () => void): MenuItemConstructorOptions[] {
+// so Command+W remains scoped to tabs and terminals. Quit is a plain item, not
+// the quit role (which maps straight to NSApp terminate:), so a ⌘Q press can ask
+// for confirmation while choosing Quit from the menu still quits at once.
+export function buildMacAppMenuTemplate(
+	onToggleDevTools: () => void,
+	quit: { appName: string; onQuit: (fromShortcut: boolean) => void },
+): MenuItemConstructorOptions[] {
 	return [
-		{ role: "appMenu" },
+		{
+			role: "appMenu",
+			submenu: [
+				{ role: "about" },
+				{ type: "separator" },
+				{ role: "services" },
+				{ type: "separator" },
+				{ role: "hide" },
+				{ role: "hideOthers" },
+				{ role: "unhide" },
+				{ type: "separator" },
+				{
+					label: `Quit ${quit.appName}`,
+					accelerator: "Command+Q",
+					click: (_item, _window, event) => quit.onQuit(event.triggeredByAccelerator === true),
+				},
+			],
+		},
 		{
 			role: "fileMenu",
 			submenu: [

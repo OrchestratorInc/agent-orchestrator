@@ -10,7 +10,6 @@ import { apiClient } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { CreateProjectAgentSheet } from "./CreateProjectAgentSheet";
-import { NewTaskDialog } from "./NewTaskDialog";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -27,18 +26,17 @@ const project = {
 };
 let catalog = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")] };
 
-function RecoveryDialogs({ origin }: { origin?: "create-project" | "new-task" }) {
+function RecoveryDialogs({ origin }: { origin?: "create-project" }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<>
 			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
-			{origin === "new-task" && <NewTaskDialog open={open} onOpenChange={setOpen} projectId="proj-1" onCreated={() => undefined} />}
 			<SettingsDialog />
 		</>
 	);
 }
 
-function renderDialogs(origin?: "create-project" | "new-task") {
+function renderDialogs(origin?: "create-project") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
 	client.setQueryData(agentReadinessQueryKey, catalog);
 	client.setQueryData(workspaceQueryKey, []);
@@ -153,7 +151,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Agents" }));
 		const trigger = await screen.findByLabelText("Worker agent");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("tab", { name: "Account" });
 
 		act(() => client.setQueryData(agentReadinessQueryKey, {
 			agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex")],
@@ -179,6 +177,7 @@ describe("Settings recovery modal integration", () => {
 		requireCodexLogin(client);
 		await openAgentManagement("Worker agent");
 
+		await userEvent.click(await screen.findByRole("button", { name: "All harnesses" }));
 		const search = await screen.findByRole("textbox", { name: "Search harnesses" });
 		await userEvent.type(search, "Claude");
 		expect(search).toHaveValue("Claude");
@@ -186,19 +185,6 @@ describe("Settings recovery modal integration", () => {
 
 		expect(await screen.findByRole("combobox", { name: "Worker agent" })).toHaveTextContent("Codex");
 		expect(screen.getByLabelText("Assignee")).toHaveValue("octocat");
-		expect(useUiStore.getState().settingsModal).toBeNull();
-		await userEvent.keyboard("{Escape}");
-		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
-	});
-
-	it("Escape dismisses recovery settings and brings the new-task dialog back", async () => {
-		requireCodexLogin();
-		renderDialogs("new-task");
-		await openAgentManagement("Agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
-		await userEvent.keyboard("{Escape}");
-
-		expect(await screen.findByRole("textbox", { name: "Task" })).toBeInTheDocument();
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument());
@@ -216,7 +202,7 @@ describe("Settings recovery modal integration", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
 		const form = document.getElementById("project-settings-form");
 		await openAgentManagement("Worker agent");
-		await screen.findByRole("textbox", { name: "Search harnesses" });
+		await screen.findByRole("tab", { name: "Account" });
 
 		expect(form).not.toBeNull();
 		if (dismiss === "Escape") await userEvent.keyboard("{Escape}");

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -486,8 +487,8 @@ func TestGetOrgCoderConfigReturnsConfigWithoutToken(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !resp.Configured || resp.CoderConfig == nil {
-		t.Fatalf("expected configured response, got %+v", resp)
+	if !resp.Configured || resp.CoderConfig == nil || !resp.Editable {
+		t.Fatalf("expected an editable configured response, got %+v", resp)
 	}
 	if resp.CoderConfig.BaseURL != "https://coder.acme.example.com" || resp.CoderConfig.TemplateID != coderCfgTemplate {
 		t.Fatalf("config = %+v", resp.CoderConfig)
@@ -538,8 +539,10 @@ func TestDeleteOrgCoderConfigRemovesConnection(t *testing.T) {
 	}
 }
 
-// An unentitled org may neither write nor clear a coder connection.
-func TestDeleteOrgCoderConfigRejectsWhenOrgNotEntitled(t *testing.T) {
+// An org without the coder capability may not write a connection, but it can
+// clear one it was left with: its sessions keep running on a stored
+// connection, so removing it must not need the capability.
+func TestDeleteOrgCoderConfigAllowsOrgWithoutCapability(t *testing.T) {
 	t.Parallel()
 	store := &coderConfigFakeStore{}
 	srv, _ := newCoderConfigServer(t, store, true) // coder is capability-gated
@@ -547,11 +550,11 @@ func TestDeleteOrgCoderConfigRejectsWhenOrgNotEntitled(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.deleteOrgCoderConfig(rec, coderConfigRequest(t, http.MethodDelete, "", nil))
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body = %s", rec.Code, rec.Body.String())
 	}
-	if store.deleted != 0 {
-		t.Fatal("an unentitled org must not delete a coder config")
+	if store.deleted != 1 {
+		t.Fatal("an org without the capability could not clear its coder config")
 	}
 }
 
@@ -597,5 +600,21 @@ func TestDeleteOrgCoderConfigSurfacesNotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A connection that live sessions still run on is kept: the store refuses the
+// delete and the handler says why with a 409, not a generic conflict.
+func TestDeleteOrgCoderConfigRefusesConnectionInUse(t *testing.T) {
+	t.Parallel()
+	store := &coderConfigFakeStore{deleteErr: fmt.Errorf("%w: 2 sandboxes still run on it", postgres.ErrProviderConnectionInUse)}
+	srv, _ := newCoderConfigServer(t, store, false)
+
+	rec := httptest.NewRecorder()
+	srv.deleteOrgCoderConfig(rec, coderConfigRequest(t, http.MethodDelete, "", nil))
+
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"connection_in_use"`) ||
+		!strings.Contains(rec.Body.String(), "Sessions still run on this Coder connection.") {
+		t.Fatalf("status = %d, body = %s; want 409 connection_in_use", rec.Code, rec.Body.String())
 	}
 }

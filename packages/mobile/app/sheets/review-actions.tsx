@@ -100,9 +100,11 @@ function ReviewActionsContent() {
 		const request = ++modelRequest.current;
 		setModels(undefined);
 		if (!hostMatches || !config || !effectiveReviewer) return;
-		void getAgentModels(config, effectiveReviewer)
+		const polling = new AbortController();
+		void getAgentModels(config, effectiveReviewer, undefined, polling.signal)
 			.then((result) => { if (request === modelRequest.current) setModels(result); })
 			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
+		return () => polling.abort();
 	}, [config, effectiveReviewer, hostMatches]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
 	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);

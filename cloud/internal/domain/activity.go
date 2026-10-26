@@ -25,6 +25,7 @@ const (
 
 	ActivityWorkerConnected    = "worker.connected"
 	ActivityWorkerDisconnected = "worker.disconnected"
+	ActivityWorkerRelaunched   = "worker.relaunched"
 	ActivityGitGrantFailed     = "worker.git_grant_failed"
 
 	ActivityBootstrapStage  = "bootstrap.stage"

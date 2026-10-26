@@ -37,6 +37,11 @@ func (s *Store) UpdateProjectSettings(ctx context.Context, principal domain.Prin
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
+		// Additional repositories and the repository each Setup or Cleanup step
+		// runs in are checked against the project's main repository.
+		if config, err = domain.NormalizeProjectRepoSettings(project.RepositoryURL, config); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
 		if input.DisplayName != nil {
 			project.DisplayName = *input.DisplayName
 		}

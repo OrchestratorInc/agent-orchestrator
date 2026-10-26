@@ -13,6 +13,11 @@ import (
 
 func TestAuthStatusAuthorizedFromDocumentedAPIKey(t *testing.T) {
 	t.Setenv("DEVIN_API_KEY", "cog_test")
+	previous := authprobe.CmdRunner
+	t.Cleanup(func() { authprobe.CmdRunner = previous })
+	authprobe.CmdRunner = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("You are not logged in."), errors.New("exit status 1")
+	}
 	got, err := (&Plugin{resolvedBinary: "devin"}).AuthStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)

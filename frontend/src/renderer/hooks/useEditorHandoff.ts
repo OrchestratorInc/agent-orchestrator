@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
-import { isEditorId, type EditorHandoffState, type OpenTargetId } from "../../shared/editor-handoff";
+import { isEditorId, type EditorHandoffState, type OpenSessionArtifactsInput, type OpenTargetId } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
 
@@ -65,7 +65,8 @@ export function workspaceCheckFailed(state: EditorHandoffState | undefined): boo
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
 	const failedChecks = useRef(0);
-	return useQuery<EditorHandoffState>({
+	const queryClient = useQueryClient();
+	const query = useQuery<EditorHandoffState>({
 		queryKey: editorHandoffQueryKey(sessionId),
 		enabled: Boolean(sessionId),
 		staleTime: 10_000,
@@ -91,6 +92,14 @@ export function useEditorHandoffState(sessionId: string, readiness: EditorHandof
 			}
 		},
 	});
+	return {
+		...query,
+		async refreshTargets() {
+			await queryClient.cancelQueries({ queryKey: editorHandoffQueryKey(sessionId), exact: true });
+			const state = await aoBridge.editorHandoff.getState(sessionId, { refreshTerminals: true });
+			queryClient.setQueryData(editorHandoffQueryKey(sessionId), state);
+		},
+	};
 }
 
 export type OpenSessionTargetMutationInput = {
@@ -102,12 +111,7 @@ export type OpenSessionTargetMutationInput = {
 export function useOpenSessionTarget() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: async ({ sessionId, projectId, targetId }: OpenSessionTargetMutationInput) => {
-			void captureRendererEvent("ao.renderer.open_in_editor_requested", {
-				project_id: projectId,
-				target_kind: targetId === "file-manager" ? "file_manager" : targetId === "terminal" ? "terminal" : "editor",
-				...(targetId && isEditorId(targetId) ? { editor_id: targetId } : {}),
-			});
+		mutationFn: async ({ sessionId, targetId }: OpenSessionTargetMutationInput) => {
 			try {
 				return await aoBridge.editorHandoff.open({ sessionId, ...(targetId ? { targetId } : {}) });
 			} catch (error) {
@@ -135,6 +139,19 @@ export function useOpenSessionTarget() {
 			// disables itself instead of inviting the same failing click again.
 			void queryClient.invalidateQueries({ queryKey: editorHandoffQueryKey(input.sessionId) });
 			void captureRendererEvent("ao.renderer.open_in_editor_failed", { project_id: input.projectId });
+		},
+	});
+}
+
+/** Opens a session's artifact directory, or reveals one artifact, in the file manager or a terminal. */
+export function useOpenSessionArtifacts() {
+	return useMutation({
+		mutationFn: async (input: OpenSessionArtifactsInput) => {
+			try {
+				return await aoBridge.editorHandoff.openArtifacts(input);
+			} catch (error) {
+				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
+			}
 		},
 	});
 }

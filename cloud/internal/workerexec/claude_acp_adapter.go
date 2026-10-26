@@ -33,6 +33,11 @@ var (
 	// ErrChatAdapterInstalling: the worker is still installing the adapter;
 	// the caller's deadline ran out first. Retrying shortly succeeds.
 	ErrChatAdapterInstalling = errors.New("claude ACP adapter is being installed")
+	// errNPMMissing: the workspace has no npm to install the adapter with. It
+	// is never served from the failed-install cache: a template that installs
+	// its tools in the background can add npm at any moment, and looking it
+	// up again costs nothing, so the start settle always sees it fresh.
+	errNPMMissing = errors.New("npm is not installed on the workspace")
 )
 
 // claudeACPAdapter resolves (and if needed installs) the adapter once per
@@ -69,6 +74,26 @@ func WarmClaudeACPAdapter() {
 	go func() { _, _ = defaultClaudeACPAdapter.ensure(context.Background()) }()
 }
 
+// ClaudeACPAdapterStartable reports, without waiting, whether Chat for Claude
+// can run in this workspace: nil when the adapter is installed or its install
+// has started (WarmClaudeACPAdapter), ErrChatAdapterUnavailable when it is
+// missing and cannot be installed (no npm, no home directory, or an install
+// that just failed). A session about to start in Chat checks it so it can
+// start in the terminal instead of in a Chat whose every turn would fail.
+func ClaudeACPAdapterStartable() error {
+	return defaultClaudeACPAdapter.startable()
+}
+
+func (a *claudeACPAdapter) startable() error {
+	probe, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := a.ensure(probe)
+	if errors.Is(err, ErrChatAdapterInstalling) {
+		return nil
+	}
+	return err
+}
+
 func (a *claudeACPAdapter) ensure(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	if a.path != "" && fileExecutable(a.path) {
@@ -93,7 +118,8 @@ func (a *claudeACPAdapter) ensure(ctx context.Context) (string, error) {
 		a.mu.Unlock()
 		return local, nil
 	}
-	if a.pending == nil && a.err != nil && time.Since(a.failedAt) < claudeACPRetryAfter {
+	if a.pending == nil && a.err != nil && !errors.Is(a.err, errNPMMissing) &&
+		time.Since(a.failedAt) < claudeACPRetryAfter {
 		err := a.err
 		a.mu.Unlock()
 		return "", err
@@ -101,7 +127,7 @@ func (a *claudeACPAdapter) ensure(ctx context.Context) (string, error) {
 	if a.pending == nil {
 		npm, lookErr := a.lookPath("npm")
 		if lookErr != nil {
-			a.err = fmt.Errorf("%w: npm is not installed on the workspace", ErrChatAdapterUnavailable)
+			a.err = fmt.Errorf("%w: %w", ErrChatAdapterUnavailable, errNPMMissing)
 			a.mu.Unlock()
 			return "", a.err
 		}

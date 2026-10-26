@@ -12,13 +12,16 @@ import { IncompatibleHostVersionError } from "./race";
 import {
 	classifyConnectionFailure,
 	describeConnectionFailure,
+	isLocalNetworkHost,
 	LOCAL_NETWORK_HINT,
 	type ConnectionErrorCopy,
 } from "./connectionError";
+import { setLocalNetworkConfirmed } from "./localNetworkStore";
 import type { Theme } from "./theme";
 import { haptics } from "./haptics";
 import { Button, SHEET_SCROLL_CONTENT, SheetHeader, SheetScreen } from "./ui";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry } from "./telemetry/runtime";
 import { iconSize, space, touchTarget, type } from "./tokens";
@@ -56,6 +59,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 					saveHost,
 					renameHost,
 				});
+				if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
 				haptics.success();
 				onConnected();
 				return;
@@ -71,6 +75,9 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 			// so a persisted wrong password locks the user out on its own in ~40s,
 			// with no further input from them.
 			await pingServer(target);
+			// Reaching a LAN address proves iOS granted Local Network access, so a
+			// later scan that reaches nothing can say so at once (localNetworkWait).
+			if (isLocalNetworkHost(target.host)) void setLocalNetworkConfirmed();
 			await saveConfig(target);
 			// Store it as a machine and select it. Writing only the legacy config
 			// left resolution reconnecting the previously active machine on the
@@ -141,7 +148,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 						onChangeText={set("password")}
 						placeholder="Connection password"
 						placeholderTextColor={t.textFaint}
-						selectionColor={t.accent}
+						{...textSelectionColors(t)}
 						autoCapitalize="none"
 						autoCorrect={false}
 						secureTextEntry={!showPassword}
@@ -236,7 +243,7 @@ function Field({ label, ...input }: { label: string } & React.ComponentProps<typ
 	return (
 		<View style={styles.field}>
 			<Text style={styles.fieldLabel}>{label}</Text>
-			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} selectionColor={t.accent} />
+			<TextInput {...input} style={styles.input} placeholderTextColor={t.textFaint} {...textSelectionColors(t)} />
 		</View>
 	);
 }

@@ -581,8 +581,16 @@ type editDriverState struct {
 	startErr     error
 	resumeErr    error
 	beforeResume func(ports.ChatResumeConfig) error
-	fresh        *fakeConversation
-	resumed      map[string]*fakeConversation
+	// beforeStart runs, unlocked, before every start after the first.
+	beforeStart func(ports.ChatStartConfig)
+	// target, when set, is what the second start returns, wrapping fresh.
+	target  func(*fakeConversation) ports.ChatConversation
+	fresh   *fakeConversation
+	resumed map[string]*fakeConversation
+	// refusedMode is a permission mode the agent will not run in; onlyMode, when
+	// set, is the one mode it runs in.
+	refusedMode ports.PermissionMode
+	onlyMode    ports.PermissionMode
 }
 
 func newEditHarness(t *testing.T, supportsPromptReplay bool) (*harness, *historyRecorder, *editDriverState) {
@@ -662,7 +670,19 @@ func newEditHarnessWithOptions(
 		initial = source.fakeConversation
 	}
 	driver := fakeDriver{conv: initial}
+	driver.supports = func(mode ports.PermissionMode) bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return (state.refusedMode == "" || mode != state.refusedMode) && (state.onlyMode == "" || mode == state.onlyMode)
+	}
 	driver.start = func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+		state.mu.Lock()
+		beforeStart := state.beforeStart
+		first := state.startCalls == 0
+		state.mu.Unlock()
+		if beforeStart != nil && !first {
+			beforeStart(cfg)
+		}
 		state.mu.Lock()
 		defer state.mu.Unlock()
 		state.startConfigs = append(state.startConfigs, cfg)
@@ -674,6 +694,9 @@ func newEditHarnessWithOptions(
 			return nil, state.startErr
 		}
 		if state.startCalls == 2 {
+			if state.target != nil {
+				return state.target(state.fresh), nil
+			}
 			return state.fresh, nil
 		}
 		freshBranch := newFakeConversation()
@@ -724,10 +747,11 @@ func newEditHarnessWithOptions(
 	})
 	svc := chatsvc.New(chatsvc.Options{
 		Store: wrapStore(st), Sessions: st,
-		Reader:   wrapReader(reader),
-		Drivers:  fakeRegistry{driver: driver},
-		Log:      slog.New(slog.DiscardHandler),
-		Activity: activity,
+		Reader:     wrapReader(reader),
+		PageReader: boundedSnapshotReader(st),
+		Drivers:    fakeRegistry{driver: driver},
+		Log:        slog.New(slog.DiscardHandler),
+		Activity:   activity,
 		NewID: func() string {
 			idMu.Lock()
 			defer idMu.Unlock()
@@ -832,6 +856,75 @@ func TestEditAndBranchActivationRotateControllerCredentialsAfterStoppingSource(t
 	mu.Unlock()
 	if gotCalls != 3 {
 		t.Fatalf("credential rotations = %d, want initial start + edit + activation", gotCalls)
+	}
+}
+
+// A branch install rewrites the session's durable controller owner, including
+// its agent-session identity (ActivateConversationBranchSession). The owner the
+// next credential rotation expects must match it, or Session Manager's fence
+// refuses the rotation and a second edit of the same prompt is reported
+// uncertain while the source restore fails the same way and stops the session.
+func TestRepeatedEditRotatesCredentialsAgainstDurableControllerOwner(t *testing.T) {
+	var mu sync.Mutex
+	var st *store.Store
+	type rotation struct{ expected, durable domain.SessionControllerOwner }
+	var rotations []rotation
+	prepare := func(ctx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
+		mu.Lock()
+		current := st
+		mu.Unlock()
+		if current != nil {
+			record, found, err := current.GetSession(ctx, testSession)
+			if err != nil || !found {
+				return nil, fmt.Errorf("GetSession: found=%v err=%w", found, err)
+			}
+			mu.Lock()
+			rotations = append(rotations, rotation{expected: expected, durable: record.ControllerOwner()})
+			mu.Unlock()
+		}
+		return map[string]string{"AO_BROWSER_CAPABILITY": "rotated"}, nil
+	}
+	h, _, driver := newEditHarnessWithControllerEnv(t, false, prepare)
+	mu.Lock()
+	st = h.st
+	mu.Unlock()
+	ctx := context.Background()
+	first := completeTurn(t, h, "A", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	edited, err := h.svc.EditMessage(ctx, testSession, first, ports.ChatUserMessage{
+		Text: "banana", ClientMessageID: "repeat-edit-1", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatalf("first EditMessage: %v", err)
+	}
+	driver.fresh.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-101"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-101", TurnState: domain.TurnStateCompleted},
+	)
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		for _, turn := range snapshot.Turns {
+			if turn.ID == edited.Turn.ID {
+				return turn.State.Terminal()
+			}
+		}
+		return false
+	})
+	if _, err := h.svc.EditMessage(ctx, testSession, edited.Turn.ID, ports.ChatUserMessage{
+		Text: "dog", ClientMessageID: "repeat-edit-2", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("second EditMessage: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(rotations) != 2 {
+		t.Fatalf("credential rotations = %d, want one per edit", len(rotations))
+	}
+	second := rotations[1]
+	if second.expected.AgentSessionID != second.durable.AgentSessionID ||
+		second.expected.AgentSessionIDLaunchID != second.durable.AgentSessionIDLaunchID ||
+		second.expected.ProviderConversationID != second.durable.ProviderConversationID ||
+		second.expected.ControllerGeneration != second.durable.ControllerGeneration {
+		t.Fatalf("second edit rotated credentials for a stale owner:\nexpected %#v\ndurable  %#v", second.expected, second.durable)
 	}
 }
 

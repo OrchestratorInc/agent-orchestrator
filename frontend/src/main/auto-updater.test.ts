@@ -994,10 +994,10 @@ describe("startAutoUpdates", () => {
       await module.checkForUpdatesNow(stateDir);
       updaterEvents.get("update-available")?.({ version: "1.0.1-nightly.202608231517" });
 
-      // HTML stripped, list items kept as separate lines.
+      // HTML stripped, list items kept as Markdown bullets.
       expect(statusMessages().at(-1)?.payload).toMatchObject({
         state: "available",
-        releaseNotes: "Stopped the re-stage loop\nRebuilt the Updates page",
+        releaseNotes: "- Stopped the re-stage loop\n- Rebuilt the Updates page",
       });
     } finally {
       if (originalResourcesPath) {
@@ -2955,7 +2955,7 @@ describe("startAutoUpdates", () => {
       await harness.module.startAutoUpdates(stateDir);
 
       expect(harness.module.getUpdateStatus()).toMatchObject({
-        releaseNotes: "Fixed the restart dialog\nImproved update reliability",
+        releaseNotes: "- Fixed the restart dialog\n- Improved update reliability",
         staged: { version, stagedAt },
       });
       expect(harness.autoUpdater.downloadUpdate).not.toHaveBeenCalled();
@@ -2964,7 +2964,7 @@ describe("startAutoUpdates", () => {
         .toMatchObject({
           version,
           stagedAt,
-          releaseNotes: "Fixed the restart dialog\nImproved update reliability",
+          releaseNotes: "- Fixed the restart dialog\n- Improved update reliability",
         });
     } finally {
       vi.unstubAllGlobals();

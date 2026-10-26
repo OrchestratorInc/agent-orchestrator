@@ -35,12 +35,12 @@ func commandCodeHooksPath(workspacePath string) string {
 }
 
 // GetAgentHooks installs AO's Command Code hooks while preserving user settings.
-//
-// The SessionStart hook delivers AO's standing instructions for Terminal UI
-// sessions. It does not reach Chat: in Command Code v1.79.0 that hook is fired
-// only by the TUI lifecycle, never by the ACP path, so the Chat driver leads the
-// first prompt with the standing context instead. See the commandcodeacp
-// binding.
+// These hooks observe activity and capture the native session id; they do not
+// carry AO's standing instructions. SessionStart is the one hook Command Code
+// fires only from the TUI lifecycle, so a Chat session never receives context
+// this way, and the other hooks deliver context as tool-result material the model
+// discounts. Standing instructions ride the session's memory instead. See
+// sessionhome.go.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	return commandCodeHooks.Install(ctx, cfg.WorkspacePath)
 }

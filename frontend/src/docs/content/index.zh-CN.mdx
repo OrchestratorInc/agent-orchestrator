@@ -1,0 +1,81 @@
+---
+title: 简介
+description: 了解 Agent Orchestrator 能做什么、适合在什么时候使用，以及从哪里开始。
+translatedFrom: 9a6abb44a136
+---
+
+Orchestrator 是一款用于监督 AI 编程代理的桌面应用。它为每个 worker 提供隔离的工作区，让它的对话或终端随时可用，并把 Git 工作与拉取请求、CI、代码审查和合并冲突关联起来。
+
+代码由代理编写。Orchestrator 帮你管理项目和会话、跟进工作、发送指令、审查更改，并打开浏览器预览。
+
+<Callout type="info" title="最快的上手方式">
+	下载桌面应用，添加一个仓库，然后启动一个小会话。请先阅读[安装](/installation)，再阅读[快速开始](/quickstart)。
+</Callout>
+
+<span id="what-ao-helps-you-do" />
+<span id="what-orchestrator-helps-you-do" />
+## Orchestrator 能帮你做什么
+
+- 同时运行多个编程代理，而不会混淆它们的文件、分支或拉取请求。
+- 为每个会话选择原生终端 UI 或结构化的 Chat。
+- 在桌面应用中跟进活动、CI、审查反馈和可合并状态。
+- 把后续指令发送给正确的 worker。
+- 运行审查代理，并把要求的修改发回给 worker。
+- 在会话的 Chat 或终端旁边预览它的本地应用。
+- 用 Automations 安排定期工作，用 Cues 复用项目指令或 shell 命令。
+- 通过 Connect Mobile，在配套的移动应用中查看进度并作出回应。
+
+当每个 worker 都有清晰、便于审查的结果时，Orchestrator 的效果最好，例如：一个明确的缺陷、功能、重构、测试、文档更新或审查后的跟进。
+
+<span id="the-basic-loop" />
+## 基本流程
+
+```text
+add project -> start session -> isolated worktree -> pull request -> CI/review -> merge -> cleanup
+```
+
+你可以在桌面应用或可选的 CLI 中创建会话。Orchestrator 会启动所选代理的界面，并结合已保存的活动和拉取请求数据来显示会话状态。
+
+<span id="chat-and-terminal-ui" />
+## Chat 与 Terminal UI
+
+每个会话同一时间只有一个生效的代理界面：
+
+| 界面 | 适用场景 |
+| --- | --- |
+| **Chat** | 结构化消息、活动、审批、计划、用量和对话历史。 |
+| **Terminal UI** | 代理 harness 自带的原生交互式终端体验。 |
+
+是否支持 Chat 取决于 harness 及其已安装的版本；请参阅[代理能力目录](/plugins/agents#chat-versus-terminal-ui)。兼容的会话可以在不改变会话或工作树的情况下切换界面；界面中会显示可以进行哪些切换。
+
+<span id="where-local-data-lives" />
+## 本地数据存放位置
+
+<span id="local-by-design" />
+
+桌面应用在 `127.0.0.1` 上运行一个 Go 后台服务，并通过本地 API 与其通信。Orchestrator 默认把应用数据和工作树元数据存放在 `~/.ao` 下。大多数集成使用你电脑上已有的编程代理和源代码管理凭据；Orchestrator 不会捆绑外部代理或它们的凭据。Unreal Agent 是 macOS 和 Linux 上内置的、仅用于 Chat 的适配器。
+
+Connect Mobile 是一个独立的、需要主动开启的监听器，并由连接密码保护。本地配对和安全的远程配对请参阅 [Connect Mobile](/configuration/remote-access)。
+
+本手册以最新的稳定版 [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3)（2026 年 10 月 1 日发布）为准进行核对。`main` 上较新的控件可能与该版本不同。使用新控件之前，请查看[更新日志](/changelog)及其发布说明。
+
+云端会话是一项独立的服务，对账户访问有要求。设置方法请参阅 [Cloud 指南](/guides/cloud)。
+
+<span id="supported-agents" />
+## 支持的代理
+
+Orchestrator 支持 Claude Code、Codex、Cursor、Aider、OpenCode、Droid、Kimi Code 和 GitHub Copilot 等编程代理。它们对 worker、Chat 和审查者角色的支持各不相同。详情请查看[代理目录](/plugins/agents)。Cloud 提供的[提供方](/guides/cloud#before-you-start)较少。
+
+GitHub 和 GitLab 提供源代码管理的观察和 issue 导入。导入需要主动开启，并且对 issue 跟踪器是只读的；不支持 Linear 和旧版 Node 插件包。
+
+<span id="where-to-go-next" />
+## 接下来
+
+<Cards>
+	<Card title="安装" description="下载桌面应用并连接你的工具。" href="/installation" />
+	<Card title="快速开始" description="把一个 worker 会话从任务推进到拉取请求。" href="/quickstart" />
+	<Card title="仪表板" description="了解桌面看板、会话视图、Chat、终端和检查器。" href="/dashboard" />
+	<Card title="云端会话" description="当你的账户可以使用 Cloud 时，设置远程项目。" href="/guides/cloud" />
+	<Card title="架构" description="了解 Go 守护进程、Electron 应用、存储和会话模式。" href="/architecture" />
+	<Card title="故障排除" description="解决桌面应用、守护进程、代理和会话的常见问题。" href="/troubleshooting" />
+</Cards>

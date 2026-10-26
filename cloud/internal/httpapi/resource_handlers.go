@@ -72,15 +72,18 @@ type updateProjectRequest struct {
 }
 
 type projectResponse struct {
-	ID                 string         `json:"id"`
-	OrgID              string         `json:"orgId"`
-	DisplayName        string         `json:"displayName"`
-	RepositoryURL      string         `json:"repositoryUrl"`
-	DefaultBranch      string         `json:"defaultBranch"`
-	GitHubRepositoryID string         `json:"githubRepositoryId,omitempty"`
-	Config             map[string]any `json:"config"`
-	CreatedAt          time.Time      `json:"createdAt"`
-	UpdatedAt          time.Time      `json:"updatedAt"`
+	ID                 string `json:"id"`
+	OrgID              string `json:"orgId"`
+	DisplayName        string `json:"displayName"`
+	RepositoryURL      string `json:"repositoryUrl"`
+	DefaultBranch      string `json:"defaultBranch"`
+	GitHubRepositoryID string `json:"githubRepositoryId,omitempty"`
+	// Standalone marks a project with no repository; its repositoryUrl is a
+	// placeholder (https://scratch.ao.local/<id>) that is never cloned.
+	Standalone bool           `json:"standalone,omitempty"`
+	Config     map[string]any `json:"config"`
+	CreatedAt  time.Time      `json:"createdAt"`
+	UpdatedAt  time.Time      `json:"updatedAt"`
 }
 
 type createSessionRequest struct {
@@ -101,6 +104,21 @@ type createSessionRequest struct {
 	// is optional: an empty value uses the control plane default. When set it
 	// must be one of the providers the deployment offers (see /me).
 	Provider string `json:"provider,omitempty"`
+	// RequestedOutput asks for a specific deliverable: "artifact" asks the
+	// agent for a file instead of a pull request. Requires cloud artifacts.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// InterfaceMode is the interface the session starts in: "chat" or "tui".
+	// Omitted resolves it from DefaultInterfaceMode, else the terminal; Chat
+	// needs a harness with a Chat controller (domain.ChatHarnesses).
+	InterfaceMode string `json:"interfaceMode,omitempty"`
+	// DefaultInterfaceMode is the user's default session interface ("tui" or
+	// "chat"), the desktop's setting. A create without interfaceMode resolves
+	// the session's interface from it as the local daemon does
+	// (domain.StartInterface): an orchestrator starts in Chat where its
+	// harness can. An orchestrator keeps it for the workers it spawns. A
+	// create with neither (an older desktop) starts in the TUI, an
+	// orchestrator too.
+	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
 }
 
 type createSessionRepo struct {
@@ -155,9 +173,24 @@ type sessionResponse struct {
 	// WorkerEpoch advances on every fresh worker connection (resume, restore,
 	// re-provision). Clients key their terminal on it so a resumed session
 	// re-attaches to the live agent instead of the dead epoch's terminal.
-	WorkerEpoch int64     `json:"workerEpoch,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	WorkerEpoch int64 `json:"workerEpoch,omitempty"`
+	// RequestedOutput is the deliverable the session was created for.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
+	OutputType string `json:"outputType"`
+	// ArtifactCount is the number of the session's committed artifact files,
+	// on the session read and list routes and the worker children listing
+	// while cloud artifacts are on.
+	ArtifactCount *int `json:"artifactCount,omitempty"`
+	// ArtifactsUpdatedAt is when the newest of those files was committed;
+	// it changes whenever a commit changes the files, and only then.
+	ArtifactsUpdatedAt *time.Time `json:"artifactsUpdatedAt,omitempty"`
+	// ArtifactFiles lists the session's committed artifact files on the
+	// session read route and the worker children listing while cloud
+	// artifacts are on.
+	ArtifactFiles []sessionArtifactResponse `json:"artifactFiles,omitempty"`
+	CreatedAt     time.Time                 `json:"createdAt"`
+	UpdatedAt     time.Time                 `json:"updatedAt"`
 }
 
 type pageInfo struct {
@@ -191,6 +224,71 @@ type sessionPRFactsResponse struct {
 type sessionChildResponse struct {
 	sessionResponse
 	PRs []sessionPRFactsResponse `json:"prs"`
+	// ArtifactFiles names at most maxChildArtifactFiles of the child's
+	// committed artifact files, the most recently changed first, so a page of
+	// children fits the ao CLI's response limit; artifactCount has them all.
+	ArtifactFiles []childArtifactFileResponse `json:"artifactFiles,omitempty"`
+	// ArtifactFilesTruncated is set when the child has more files than listed.
+	ArtifactFilesTruncated bool `json:"artifactFilesTruncated,omitempty"`
+}
+
+// maxChildArtifactFiles and maxChildArtifactFileBytes bound the artifact
+// files listed per child: by count, and by their JSON encoding, which escapes
+// characters such as & to six bytes. With the worker children page of 100, the
+// listed files of a page stay within about 1.6 MiB however their paths are
+// written, inside the ao CLI's 2 MiB response limit. The longest path encodes
+// to well under the byte budget, so a child with files always lists one.
+const (
+	maxChildArtifactFiles     = 10
+	maxChildArtifactFileBytes = 16 << 10
+)
+
+// childArtifactFileResponse is one artifact file in a worker children listing.
+type childArtifactFileResponse struct {
+	Path      string    `json:"path"`
+	Kind      string    `json:"kind"`
+	Size      int64     `json:"size"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// setChildArtifactFiles sets the child's artifact count and newest commit
+// time, and lists its most recently changed files up to maxChildArtifactFiles.
+func (r *sessionChildResponse) setChildArtifactFiles(files []domain.SessionArtifact) {
+	r.setArtifactFiles(files)
+	r.sessionResponse.ArtifactFiles = nil
+	newest := slices.Clone(files)
+	slices.SortStableFunc(newest, func(a, b domain.SessionArtifact) int {
+		return b.UpdatedAt.Compare(a.UpdatedAt)
+	})
+	r.ArtifactFiles = make([]childArtifactFileResponse, 0, min(len(newest), maxChildArtifactFiles))
+	encoded := 0
+	for _, file := range newest {
+		entry := childArtifactFileResponse{Path: file.Path, Kind: file.Kind, Size: file.Size, UpdatedAt: file.UpdatedAt.UTC()}
+		// json.Marshal escapes as writeJSON's encoder does; +1 for the comma.
+		size := 1
+		if raw, err := json.Marshal(entry); err == nil {
+			size += len(raw)
+		}
+		if len(r.ArtifactFiles) == maxChildArtifactFiles || (len(r.ArtifactFiles) > 0 && encoded+size > maxChildArtifactFileBytes) {
+			r.ArtifactFilesTruncated = true
+			break
+		}
+		r.ArtifactFiles = append(r.ArtifactFiles, entry)
+		encoded += size
+	}
+}
+
+// setArtifactFiles sets the session's committed artifact files, their count,
+// and the newest commit time.
+func (r *sessionResponse) setArtifactFiles(files []domain.SessionArtifact) {
+	count := len(files)
+	r.ArtifactCount = &count
+	r.ArtifactFiles = toSessionArtifactResponses(files)
+	for _, file := range files {
+		if updatedAt := file.UpdatedAt.UTC(); r.ArtifactsUpdatedAt == nil || updatedAt.After(*r.ArtifactsUpdatedAt) {
+			r.ArtifactsUpdatedAt = &updatedAt
+		}
+	}
 }
 
 func toSessionChildResponse(
@@ -290,10 +388,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		coderConfig = s.sanitizeCoderConfig(r.Context(), coderConfig, requestID(r))
 		// Template parameters must be ones the chosen template declares (best
 		// effort: only a readable parameter list can reject a name).
-		if unknown := s.unknownCoderTemplateParameters(
+		if problem := s.coderTemplateParameterProblem(
 			r.Context(), orgID, coderConfig.TemplateID, coderConfig.Parameters, requestID(r),
-		); len(unknown) > 0 {
-			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", unknownCoderTemplateParametersMessage(unknown))
+		); problem != "" {
+			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", problem)
 			return
 		}
 		config, err = domain.MergeProjectCoderConfig(config, coderConfig)
@@ -301,6 +399,15 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project coder configuration is invalid.")
 			return
 		}
+	}
+	// Checked on the merged config, so the coder dev kit's extra repositories
+	// sent as the separate coder input are admin-gated like "repos".
+	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
+		return
+	}
+	if config, err = s.pinProjectProvider(r.Context(), principalFrom(r), orgID, config); err != nil {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
+		return
 	}
 	principal := principalFrom(r)
 	userStore, ok := s.store.(userProviderConnectionStore)
@@ -339,6 +446,26 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	owner, repo, _ := parseGitHubRepo(request.RepositoryURL)
 	canonicalURL := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	config, problem := normalizeNewProjectRepoConfig(canonicalURL, config)
+	if problem != nil {
+		problem.write(w, r)
+		return
+	}
+	// This project reaches GitHub through the creator's personal access token,
+	// so every additional repository must be reachable with it too.
+	for _, extra := range domain.ProjectAdditionalRepos(config) {
+		reachable, _, err := s.probeRepositoryAccess(r.Context(), extra.URL, string(secret))
+		if err != nil {
+			s.logger.Error("probe additional repository access", "error", err, "request_id", requestID(r))
+			writeError(w, r, http.StatusBadGateway, "provider_unavailable", "GitHub is temporarily unavailable. Please try again later.")
+			return
+		}
+		if !reachable {
+			writeError(w, r, http.StatusUnprocessableEntity, "repository_unreachable",
+				fmt.Sprintf("Can't reach %s with your GitHub token. It may be private, or the URL may be wrong.", extra.URL))
+			return
+		}
+	}
 
 	project, err := s.store.CreateProject(
 		r.Context(),
@@ -489,11 +616,30 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	request.Mode = strings.TrimSpace(request.Mode)
 	request.SandboxProviderConnectionID = strings.TrimSpace(request.SandboxProviderConnectionID)
 	request.Provider = strings.ToLower(strings.TrimSpace(request.Provider))
+	request.RequestedOutput = strings.TrimSpace(request.RequestedOutput)
+	if !domain.ValidRequestedOutput(request.RequestedOutput) ||
+		(request.RequestedOutput != "" && !s.artifactsEnabled()) {
+		writeError(w, r, http.StatusUnprocessableEntity, "invalid_requested_output",
+			"requestedOutput must be omitted or \"artifact\", and \"artifact\" requires cloud artifacts.")
+		return
+	}
+	request.InterfaceMode = strings.TrimSpace(request.InterfaceMode)
+	request.DefaultInterfaceMode = strings.TrimSpace(request.DefaultInterfaceMode)
 	if request.Mode == "" {
 		request.Mode = "trusted"
 	}
 	if !validSessionInput(request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Session project, kind, harness, name, or prompt is invalid.")
+		return
+	}
+	if request.DefaultInterfaceMode != "" && !domain.SessionInterface(request.DefaultInterfaceMode).Valid() {
+		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "defaultInterfaceMode must be tui or chat.")
+		return
+	}
+	// As the local daemon does, Chat for a harness without a Chat controller is
+	// refused with the code the desktop offers to retry in the terminal.
+	if request.InterfaceMode == string(domain.SessionInterfaceChat) && !chatControllerSupported(request.Harness) {
+		writeError(w, r, http.StatusConflict, "SESSION_MODE_UNSUPPORTED", request.Harness+" can't run in Chat in AO Cloud. Start it in the terminal.")
 		return
 	}
 	if !supportedInteractivePolicy(request) {
@@ -532,8 +678,8 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerFromProject := false
-	if projectProvider := domain.DecodeProjectSandboxProvider(project.Config); projectProvider != "" {
-		request.Provider = projectProvider
+	if provider := projectProvider(project.Config); provider != "" {
+		request.Provider = provider
 		providerFromProject = true
 	}
 	// A top-level worker created for a project that already has an active
@@ -567,7 +713,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	// provider cannot run cloud sessions at all.
 	principal := principalFrom(r)
 	if request.Provider == "" {
-		request.Provider = s.defaultProviderForOrg(principal, orgID)
+		request.Provider = s.defaultProviderForOrg(r.Context(), principal, orgID)
 		if request.Provider == "" {
 			writeProviderForbidden(w, r, "", false)
 			return
@@ -603,12 +749,15 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var coderOpts *sandbox.CoderSessionOptions
 	var coderOverride *sandbox.CoderDeploymentOverride
 	if request.Provider == sandbox.ProviderCoder {
-		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config)
+		placement, placementErr := s.orgCoderPlacement(r.Context(), principal, orgID, project.Config, project.RepositoryURL)
 		if placementErr != nil {
 			s.writeCoderPlacementError(w, r, placementErr)
 			return
 		}
 		coderOpts, coderOverride = placement.options, placement.override
+		if coderOverride != nil {
+			coderOverride.DefaultWorkspaceNamePrefix = domain.CoderWorkspaceNamePrefixFor(project.DisplayName)
+		}
 		if placement.connectionID != "" {
 			request.SandboxProviderConnectionID = placement.connectionID
 		}
@@ -657,15 +806,19 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 			DisplayName:         request.DisplayName,
 			Prompt:              request.Prompt,
 			Mode:                request.Mode,
+			Interface:           domain.SessionInterface(request.InterfaceMode),
 			Model:               request.Model,
 			ReasoningEffort:     request.ReasoningEffort,
 			DeniedCommands:      request.DeniedCommands,
+			DefaultInterface:    domain.SessionInterface(request.DefaultInterfaceMode),
 			Provider:            plan.Provider,
 			SandboxConnectionID: request.SandboxProviderConnectionID,
 			ResourceProfile:     plan.ResourceProfile,
 			BootstrapContext:    plan.BootstrapContext,
 			Release:             s.release,
 			ParentSessionID:     parentSessionID,
+			CoderCapability:     s.orgHasCoderCapability(principalFrom(r), orgID),
+			RequestedOutput:     request.RequestedOutput,
 		},
 	)
 	if err != nil {
@@ -680,6 +833,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		"session_id", session.ID,
 		"provider", plan.Provider,
 		"harness", request.Harness,
+		"interface", session.Interface,
 	)
 	s.recordSessionCreateRequested(r, orgID, session.ID, plan.Provider, request.SandboxProviderConnectionID,
 		request.ProjectID, request.Kind, request.Harness, projectSnapshot != nil)
@@ -742,10 +896,23 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	artifactCounts, err := s.sessionArtifactCounts(r.Context(), orgID, sessionIDs)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	items := make([]sessionResponse, 0, len(sessions))
 	for _, session := range sessions {
 		response := toSessionResponse(session, prFacts[session.ID])
 		response.PRs = toSessionPRFactsResponses(pullRequests[session.ID], prFacts[session.ID])
+		if artifactCounts != nil {
+			summary := artifactCounts[session.ID]
+			response.ArtifactCount = &summary.Count
+			if summary.Count > 0 {
+				updatedAt := summary.UpdatedAt.UTC()
+				response.ArtifactsUpdatedAt = &updatedAt
+			}
+		}
 		items = append(items, response)
 	}
 	page := pageInfo{HasMore: hasMore}
@@ -766,8 +933,10 @@ type sessionStartupRetryStore interface {
 }
 
 // retrySessionStartup lets a user retry a session whose sandbox never started
-// (the startup ceiling parked it, or a bootstrap failed) without deleting it:
-// the reconciler re-runs the worker bootstrap against the existing compute.
+// (the startup ceiling parked it, a bootstrap failed, or its workspace build
+// failed) without deleting it: the reconciler re-runs the worker bootstrap
+// against the existing compute, starts a new build of a failed workspace, or
+// creates the compute that could not be created.
 func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -788,6 +957,10 @@ func (s *Server) retrySessionStartup(w http.ResponseWriter, r *http.Request) {
 		}
 		s.writeStoreError(w, r, err)
 		return
+	}
+	// The sandbox is re-armed; act on it now rather than at the next tick.
+	if s.sandboxWake != nil {
+		s.sandboxWake()
 	}
 	session, err := s.store.GetSession(r.Context(), principalFrom(r), orgID, sessionID)
 	if err != nil {
@@ -905,8 +1078,16 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	artifactFiles, err := s.sessionArtifactFiles(r.Context(), orgID, []string{sessionID})
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
 	response := toSessionResponse(session, prFacts[sessionID])
 	response.PRs = toSessionPRFactsResponses(pullRequests[sessionID], prFacts[sessionID])
+	if artifactFiles != nil {
+		response.setArtifactFiles(artifactFiles[sessionID])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": response})
 }
 
@@ -1080,6 +1261,11 @@ func (s *Server) sanitizeCoderConfig(ctx context.Context, cfg domain.ProjectCode
 // settings carry a workspace name prefix Coder would refuse: every session of
 // the project would otherwise fail to provision.
 func validateProjectCoderConfig(config json.RawMessage) error {
+	// The project's Setup and Cleanup commands are checked here too, so both
+	// project create paths reject them in the wrong shape.
+	if err := domain.ValidateProjectScriptsConfig(config); err != nil {
+		return err
+	}
 	if cfg, ok := domain.DecodeProjectCoderConfig(config); ok {
 		if err := domain.ValidateCoderWorkspaceNamePrefix(cfg.WorkspaceNamePrefix); err != nil {
 			return err
@@ -1249,7 +1435,8 @@ func validSessionInput(request createSessionRequest) bool {
 		// with "Session ... is invalid" for any brief over 80 chars).
 		len(request.DisplayName) < 1 || utf8.RuneCountInString(request.DisplayName) > 100 ||
 		len(request.Prompt) > 65536 ||
-		len(request.DeniedCommands) > 128 {
+		len(request.DeniedCommands) > 128 ||
+		(request.InterfaceMode != "" && !domain.SessionInterface(request.InterfaceMode).Valid()) {
 		return false
 	}
 	for _, command := range request.DeniedCommands {
@@ -1275,6 +1462,7 @@ func toProjectResponse(project domain.Project) projectResponse {
 		RepositoryURL:      project.RepositoryURL,
 		DefaultBranch:      project.DefaultBranch,
 		GitHubRepositoryID: decimalID(project.GitHubRepositoryID),
+		Standalone:         domain.IsStandaloneRepositoryURL(project.RepositoryURL),
 		Config:             config,
 		CreatedAt:          project.CreatedAt,
 		UpdatedAt:          project.UpdatedAt,
@@ -1296,7 +1484,9 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 	}
 	coderWorkspaceURL := ""
 	if ref := session.BYOCoderWorkspace; ref != nil {
-		coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, ref.NamePrefix, session.ID)
+		if strings.TrimSpace(session.ID) != "" {
+			coderWorkspaceURL = coder.WorkspaceURL(ref.BaseURL, ref.Owner, coder.SessionWorkspaceName(ref.Name, ref.NamePrefix, session.ID))
+		}
 	}
 	return sessionResponse{
 		ID:                 session.ID,
@@ -1327,10 +1517,21 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		AutoInjectReview:   session.AutoInjectReview,
 		TerminateOnPRMerge: session.TerminateOnPRMerge,
 		WorkerEpoch:        session.WorkerEpoch,
+		RequestedOutput:    session.RequestedOutput,
+		OutputType:         sessionOutputType(session, prs),
 		CreatedAt:          session.CreatedAt,
 		UpdatedAt:          session.UpdatedAt,
 		PRs:                []sessionPRFactsResponse{},
 	}
+}
+
+// sessionOutputType is the session's stored output type, counting a pull
+// request observed since the last artifact commit.
+func sessionOutputType(session domain.Session, prs []contract.PRFacts) string {
+	stored := session.OutputType
+	hasPR := len(prs) > 0 || stored == domain.SessionOutputPR || stored == domain.SessionOutputPRAndArtifact
+	hasArtifact := stored == domain.SessionOutputArtifact || stored == domain.SessionOutputPRAndArtifact
+	return domain.DeriveSessionOutputType(hasPR, hasArtifact)
 }
 
 func toSessionPRFactsResponses(prs []domain.PullRequest, facts []contract.PRFacts) []sessionPRFactsResponse {

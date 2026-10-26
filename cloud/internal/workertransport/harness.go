@@ -16,10 +16,11 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/workerexec"
 )
 
 const (
-	claudeCodeVersion      = "2.1.228"
+	claudeCodeVersion      = workerexec.ClaudeCodeVersion
 	codexVersion           = "0.147.0"
 	cursorAgentVersion     = "2026.08.11-e8db854"
 	maxHarnessArchiveBytes = 256 << 20

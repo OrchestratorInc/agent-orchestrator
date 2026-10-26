@@ -28,6 +28,21 @@ type fakeAPI struct {
 	// createStatus, when set, answers every create with it and createBody.
 	createStatus int
 	createBody   string
+	// execFunc, when set, answers an exec with its stdout and status code;
+	// execStatus, when set, answers it with that HTTP status instead.
+	execFunc   func(command string) (string, int)
+	execStatus int
+	// execBlock, when set, holds every exec until it is closed.
+	execBlock chan struct{}
+	// startTo, when set, is the state a VM's start leaves it in.
+	startTo string
+	// backgroundPending is how many times a backgrounded exec answers 202
+	// (once to the exec, then to each poll) before its result;
+	// refuseBackground refuses a backgrounded exec's timeout as an agent
+	// without native exec does.
+	backgroundPending int
+	refuseBackground  bool
+	pendingResult     []byte
 }
 
 func stringValue(value any) string {
@@ -39,6 +54,8 @@ type recorded struct {
 	method, path string
 	body         map[string]any
 	auth         string
+	// background is the request's backgrounding header.
+	background string
 }
 
 func newFakeAPI() *fakeAPI {
@@ -52,9 +69,29 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if raw, _ := io.ReadAll(r.Body); len(raw) > 0 {
 		_ = json.Unmarshal(raw, &body)
 	}
-	f.requests = append(f.requests, recorded{r.Method, r.URL.Path, body, r.Header.Get("Authorization")})
+	f.requests = append(f.requests, recorded{r.Method, r.URL.Path, body, r.Header.Get("Authorization"),
+		r.Header.Get("x-freestyle-background-after-secs")})
 	path := strings.TrimPrefix(r.URL.Path, "/v5/vms")
+	timeoutMs, _ := body["timeoutMs"].(float64)
+	backgrounded := r.Header.Get("x-freestyle-background-after-secs") != ""
 	switch {
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v5/background-requests/"):
+		if strings.TrimPrefix(r.URL.Path, "/v5/background-requests/") != "bgr-1" || f.pendingResult == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if f.backgroundPending > 0 {
+			f.backgroundPending--
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(w, `{"requestId":"bgr-1","status":"pending"}`)
+			return
+		}
+		_, _ = w.Write(f.pendingResult)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/exec-await") &&
+		timeoutMs > 300000 && (!backgrounded || f.refuseBackground):
+		// The real API's inline cap.
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"code":"BAD_REQUEST","message":"timeout_ms cannot exceed 300000 for this exec mode"}`)
 	case r.Method == http.MethodPost && path == "" && f.createStatus != 0:
 		w.WriteHeader(f.createStatus)
 		_, _ = io.WriteString(w, f.createBody)
@@ -73,7 +110,36 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.vms[slug] = view
 		_ = json.NewEncoder(w).Encode(view)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/exec-await"):
-		_ = json.NewEncoder(w).Encode(map[string]any{"statusCode": f.execCode, "stdout": f.execOut})
+		if f.execBlock != nil {
+			f.mu.Unlock()
+			select {
+			case <-f.execBlock:
+			case <-r.Context().Done():
+			}
+			f.mu.Lock()
+		}
+		if f.execStatus != 0 {
+			w.WriteHeader(f.execStatus)
+			return
+		}
+		stdout, code := f.execOut, f.execCode
+		if f.execFunc != nil {
+			stdout, code = f.execFunc(stringValue(body["command"]))
+		}
+		result, _ := json.Marshal(map[string]any{"statusCode": code, "stdout": stdout})
+		if backgrounded && f.backgroundPending > 0 {
+			f.backgroundPending--
+			f.pendingResult = result
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(w, `{"requestId":"bgr-1","status":"pending"}`)
+			return
+		}
+		_, _ = w.Write(result)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/start") && f.startTo != "":
+		if view, ok := f.vms[strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/start")]; ok {
+			view.State = f.startTo
+			f.vms[view.ID], f.vms[view.Slug] = view, view
+		}
 	case r.Method == http.MethodGet:
 		view, ok := f.vms[strings.TrimPrefix(path, "/")]
 		if !ok {

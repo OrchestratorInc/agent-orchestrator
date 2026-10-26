@@ -16,6 +16,9 @@ import { workerActionSymbol } from "./worker-action-model";
 
 const ACTION_WIDTH = 64;
 const CONTROL_SIZE = 44;
+// The glass button hugs its label, so each glyph gets the same box. Without
+// it the taller `pin` symbol drew a larger circle than the archive box.
+const GLYPH_BOX = 24;
 
 export function WorkerRowActions({
 	title,
@@ -60,6 +63,7 @@ export function WorkerRowActions({
 						systemName={pinned ? "pin.fill" : "pin"}
 						size={iconSize.lg}
 						color={t.textPrimary}
+						modifiers={[frame({ width: GLYPH_BOX, height: GLYPH_BOX })]}
 					/>
 				</Button>
 				<Button
@@ -69,13 +73,18 @@ export function WorkerRowActions({
 						buttonBorderShape("circle"),
 						controlSize("large"),
 						labelStyle("iconOnly"),
-						tint(t.textSecondary),
+						tint(t.textPrimary),
 						frame({ width: CONTROL_SIZE, height: CONTROL_SIZE }),
 						accessibilityLabel(`Archive ${title}`),
 						accessibilityIdentifier("worker-archive"),
 					]}
 				>
-					<Image systemName={workerActionSymbol("delete")} size={iconSize.lg} color={t.textSecondary} />
+					<Image
+						systemName={workerActionSymbol("delete")}
+						size={iconSize.lg}
+						color={t.textPrimary}
+						modifiers={[frame({ width: GLYPH_BOX, height: GLYPH_BOX })]}
+					/>
 				</Button>
 			</HStack>
 		</Host>

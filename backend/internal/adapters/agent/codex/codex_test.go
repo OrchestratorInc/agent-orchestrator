@@ -451,6 +451,28 @@ func TestGetLaunchCommandAppendsConfiguredEffort(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandSetsTheFastTierEitherWay(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	for _, tt := range []struct {
+		launch domain.AgentLaunchOptions
+		want   string
+	}{
+		{domain.AgentLaunchOptions{FastMode: true}, "service_tier='priority'"},
+		{domain.AgentLaunchOptions{FastModeOff: true}, "service_tier='default'"},
+	} {
+		cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Launch: tt.launch}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !containsSubsequence(cmd, []string{"-c", tt.want}) {
+			t.Fatalf("command %#v missing %s", cmd, tt.want)
+		}
+	}
+	if cmd, _ := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{}); contains(cmd, "service_tier='default'") || contains(cmd, "service_tier='priority'") {
+		t.Fatalf("command %#v set a tier nobody chose", cmd)
+	}
+}
+
 func TestGetLaunchCommandOmitsBlankConfiguredModel(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "codex"}
 
@@ -669,6 +691,11 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 			Key:         "model",
 			Type:        ports.ConfigFieldString,
 			Description: "Model override passed to `codex --model`.",
+		},
+		{
+			Key:         "effort",
+			Type:        ports.ConfigFieldString,
+			Description: "Reasoning effort override passed to `codex -c model_reasoning_effort`.",
 		},
 	}
 	if !reflect.DeepEqual(spec.Fields, want) {
@@ -1110,5 +1137,28 @@ func TestDoctorLaunchProbesMirrorLaunchFlags(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("override probe missing %q in %s", want, joined)
 		}
+	}
+}
+
+// An account home links its sessions folder to the computer's own, so the
+// rollout of a conversation started on another account is visible through it.
+func TestNativeConversationExistsFollowsALinkedSessionsFolder(t *testing.T) {
+	p := &Plugin{}
+	id := "019fc430-1234-7abc-8def-0123456789ab"
+	shared := t.TempDir()
+	activeDir := filepath.Join(shared, "sessions", "2026", "10", "17")
+	if err := os.MkdirAll(activeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activeDir, "rollout-2026-10-17T02-00-00-"+id+".jsonl"), []byte("{\"type\":\"session_meta\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	account := t.TempDir()
+	if err := os.Symlink(filepath.Join(shared, "sessions"), filepath.Join(account, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, map[string]string{"CODEX_HOME": account})
+	if err != nil || !exists {
+		t.Fatalf("rollout through a linked sessions folder: exists=%v err=%v", exists, err)
 	}
 }

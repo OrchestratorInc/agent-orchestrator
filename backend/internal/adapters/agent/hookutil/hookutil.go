@@ -4,8 +4,10 @@
 package hookutil
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -118,4 +120,60 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// FinalAssistantTextJS is shared by the JavaScript extensions AO installs for
+// agents whose run-end event carries the conversation.
+const FinalAssistantTextJS = `// The run's final assistant text. The event shape is the agent's, so anything
+// unexpected only means "no text".
+function finalAssistantText(event) {
+  try {
+    for (const message of [...(event?.messages ?? [])].reverse()) {
+      if (message?.role !== "assistant") continue;
+      const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
+      const text = (Array.isArray(parts) ? parts : []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+      if (text.trim()) return text;
+    }
+  } catch {}
+  return "";
+}
+`
+
+// ReadJSONLTail returns the complete records in the last window bytes of a
+// JSON Lines transcript: a record cut by the window's start, and one the
+// harness has not finished writing, are dropped. A path that is not a regular
+// file yields no records.
+func ReadJSONLTail(path string, window int64) ([]byte, error) {
+	file, err := os.Open(path) //nolint:gosec // a transcript path reported by the harness's own hook
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	offset := info.Size() - window
+	if offset < 0 {
+		offset = 0
+	}
+	data, err := io.ReadAll(io.NewSectionReader(file, offset, info.Size()-offset))
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		first := bytes.IndexByte(data, '\n')
+		if first < 0 {
+			return nil, nil
+		}
+		data = data[first+1:]
+	}
+	last := bytes.LastIndexByte(data, '\n')
+	if last < 0 {
+		return nil, nil
+	}
+	return data[:last+1], nil
 }

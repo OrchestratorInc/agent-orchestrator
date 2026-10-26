@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FileTree } from "./FileTree";
-import type { TreeNode } from "../hooks/useSessionWorkspaceTree";
+import { buildWorkspaceFileTree, type TreeNode } from "../hooks/useSessionWorkspaceTree";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 
@@ -19,13 +19,12 @@ vi.mock("../lib/api-client", () => ({
 function renderWithQuery(children: ReactNode) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
-	// FileTree only mounts react-arborist's <Tree> once its container has a
-	// measured size; the test setup's ResizeObserver stub never invokes its
-	// callback, so drive it here the same way XtermTerminal.test.tsx does.
+	// Give the virtualized tree a measured viewport; the default test
+	// ResizeObserver stub does not invoke its callback.
 	act(() => {
 		for (const callback of resizeCallbacks) callback([{ contentRect: { width: 400, height: 400 } }] as never, {} as ResizeObserver);
 	});
-	return view;
+	return { ...view, client };
 }
 
 const resizeCallbacks: ResizeObserverCallback[] = [];
@@ -124,6 +123,39 @@ describe("FileTree", () => {
 		expect(await findTreeRow("workspace-file-tree", "src/app.go")).toBeInTheDocument();
 	});
 
+	it("updates expanded nested folders after invalidation and refreshes a closed folder on reopening", async () => {
+		let file = "old.go";
+		getMock.mockImplementation(async (_path: string, options: { params: { query: { path?: string } } }) => {
+			const dir = options.params.query.path ?? "";
+			if (!dir) return treeResponse("", [{ name: "src", path: "src", type: "dir", hasChanges: false }]);
+			if (dir === "src") return treeResponse(dir, [{ name: "nested", path: "src/nested", type: "dir", hasChanges: false }]);
+			return treeResponse(dir, [{ name: file, path: `${dir}/${file}`, type: "file", status: "modified" }]);
+		});
+		const view = renderWithQuery(<FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />);
+		await userEvent.click(await findTreeRow("workspace-file-tree", "src/"));
+		await userEvent.click(await findTreeRow("workspace-file-tree", "src/nested/"));
+		expect(await findTreeRow("workspace-file-tree", "src/nested/old.go")).toBeInTheDocument();
+		file = "new.go";
+		await act(() => view.client.invalidateQueries({ queryKey: ["session-workspace-tree", "sess-1"] }));
+		expect(await findTreeRow("workspace-file-tree", "src/nested/new.go")).toBeInTheDocument();
+		expect(screen.getByTestId("workspace-file-tree").shadowRoot?.querySelector('[data-item-path="src/nested/old.go"]')).not.toBeInTheDocument();
+		await userEvent.click(await findTreeRow("workspace-file-tree", "src/nested/"));
+		file = "reopened.go";
+		await act(() => view.client.invalidateQueries({ queryKey: ["session-workspace-tree", "sess-1"] }));
+		await userEvent.click(await findTreeRow("workspace-file-tree", "src/nested/"));
+		expect(await findTreeRow("workspace-file-tree", "src/nested/reopened.go")).toBeInTheDocument();
+	});
+
+	it("coalesces rapid search edits into one cancellable request", async () => {
+		getMock.mockImplementation(async (path: string) => path.endsWith("/search") ? { data: { sessionId: "sess-1", query: "target", results: [] } } : treeResponse("", [{ name: "README.md", path: "README.md", type: "file", status: "unmodified" }]));
+		const tree = (filterText: string) => <FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText={filterText} />;
+		const view = renderWithQuery(tree(""));
+		await findTreeRow("workspace-file-tree", "README.md");
+		for (const filter of ["t", "ta", "target"]) view.rerender(<QueryClientProvider client={view.client}>{tree(filter)}</QueryClientProvider>);
+		await waitFor(() => expect(getMock.mock.calls.filter(([path]) => path.endsWith("/search"))).toHaveLength(1));
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/search", { params: { path: { sessionId: "sess-1" }, query: { query: "target", limit: 100 } }, signal: expect.any(AbortSignal) });
+	});
+
 	it("calls onSelectPath when a file row is activated", async () => {
 		getMock.mockResolvedValue(treeResponse("", [{ name: "README.md", path: "README.md", type: "file", status: "modified" }]));
 		const onSelectPath = vi.fn();
@@ -178,6 +210,35 @@ describe("FileTree", () => {
 		const tree = await screen.findByTestId("changed-file-tree");
 		await waitFor(() => expect(tree.shadowRoot?.querySelector('[data-item-path="notes.txt"]')).not.toBeNull());
 		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("opens every folder of the changed tree when asked, including ones that appear later", async () => {
+		const nested = (paths: string[]): TreeNode[] => buildWorkspaceFileTree(paths.map((path) => ({ path, status: "modified", binary: false })));
+		const tree = (paths: string[]) => (
+			<FileTree changedOnly changedOnlyData={nested(paths)} expandChanged onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />
+		);
+		const view = renderWithQuery(tree(["src/app/main.ts"]));
+		const host = await screen.findByTestId("changed-file-tree");
+		await waitFor(() => expect(host.shadowRoot?.querySelector('[data-item-path="src/app/main.ts"]')).not.toBeNull());
+
+		view.rerender(<QueryClientProvider client={new QueryClient()}>{tree(["src/app/main.ts", "lib/util/text.ts"])}</QueryClientProvider>);
+		await waitFor(() => expect(host.shadowRoot?.querySelector('[data-item-path="lib/util/text.ts"]')).not.toBeNull());
+	});
+
+	it("says a filter matched nothing rather than that the folder is empty", async () => {
+		const changedOnlyData: TreeNode[] = [{ name: "notes.txt", path: "notes.txt", type: "file", status: "added" }];
+		renderWithQuery(<FileTree changedOnly changedOnlyData={changedOnlyData} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="zzz" />);
+		expect(await screen.findByText("No changed files match this filter.")).toBeInTheDocument();
+		expect(screen.queryByText("This folder is empty.")).not.toBeInTheDocument();
+	});
+
+	it("shows stand-in rows, not a line of text, while the tree loads", async () => {
+		getMock.mockImplementation(() => new Promise(() => {}));
+		renderWithQuery(<FileTree changedOnly={false} changedOnlyData={[]} onSelectPath={vi.fn()} selectedPath={null} sessionId="sess-1" filterText="" />);
+		const status = await screen.findByRole("status");
+		expect(status).toHaveAttribute("aria-busy", "true");
+		expect(status).toHaveTextContent("Loading files...");
+		expect(status.querySelectorAll('[data-slot="skeleton"]').length).toBeGreaterThan(8);
 	});
 
 	it("selects a changed file from Pierre's path-first tree", async () => {
@@ -259,4 +320,13 @@ describe("FileTree", () => {
 		await userEvent.keyboard("{ArrowDown}");
 		expect(screen.getByTestId("workspace-file-tree")).not.toHaveAttribute("data-pointer-focus");
 	});
+});
+
+
+it("browses a snapshot tree through its source and never accepts a live-tree fallback",async()=>{
+ const source={kind:"snapshot" as const,view:{branch:"feature",expectedTipSha:"a".repeat(40)},label:"feature"};
+ getMock.mockResolvedValue({data:{sessionId:"snapshot-tree",path:"",entries:[],truncated:false}});
+ renderWithQuery(<FileTree sessionId="snapshot-tree" source={source} changedOnly={false} changedOnlyData={[]} filterText="" selectedPath={null} onSelectPath={vi.fn()}/>);
+ expect(await screen.findByText(/does not support snapshot tree browsing/)).toBeInTheDocument();
+ expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/tree",expect.objectContaining({params:expect.objectContaining({query:expect.objectContaining({snapshot:true,branch:"feature",expectedTipSha:"a".repeat(40)})})}));
 });

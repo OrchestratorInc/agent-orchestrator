@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCloudTerminalMux } from "./cloud-terminal-mux";
 import { subscribeCloudNotificationHints } from "./cloud-notification-hints";
 
@@ -100,8 +100,14 @@ describe("createCloudTerminalMux direct open", () => {
 		expect(ws.sent).toHaveLength(0);
 		// Becoming visible (open for a visible pane, or resize on activation) sends
 		// the real, non-zero grid so the PTY resizes and the TUI redraws at width.
-		mux.resize("agent", 100, 30);
-		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 100, rows: 30 }]);
+		vi.useFakeTimers();
+		try {
+			mux.resize("agent", 100, 30);
+			vi.advanceTimersByTime(150);
+			expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 100, rows: 30 }]);
+		} finally {
+			vi.useRealTimers();
+		}
 		mux.dispose();
 	});
 
@@ -115,12 +121,19 @@ describe("createCloudTerminalMux direct open", () => {
 		// couple columns; forwarding that wraps the agent TUI to ~2 chars, and it
 		// would be cached in pendingResize and replayed on every reconnect. It must
 		// be dropped, never sent and never cached.
-		mux.resize("agent", 2, 2);
-		mux.resize("agent", 8, 30);
-		expect(ws.sent).toHaveLength(0);
-		// A settled, plausible grid sends normally.
-		mux.resize("agent", 120, 40);
-		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 120, rows: 40 }]);
+		vi.useFakeTimers();
+		try {
+			mux.resize("agent", 2, 2);
+			mux.resize("agent", 8, 30);
+			vi.advanceTimersByTime(150);
+			expect(ws.sent).toHaveLength(0);
+			// A settled, plausible grid sends normally.
+			mux.resize("agent", 120, 40);
+			vi.advanceTimersByTime(150);
+			expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 120, rows: 40 }]);
+		} finally {
+			vi.useRealTimers();
+		}
 		mux.dispose();
 	});
 
@@ -136,6 +149,121 @@ describe("createCloudTerminalMux direct open", () => {
 		const ws = FakeWebSocket.instances[0];
 		ws.emit("open", {}); // drive the on-open replay of the cached resize
 		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 110, rows: 44 }]);
+		mux.dispose();
+	});
+});
+
+describe("createCloudTerminalMux resize coalescing", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	async function openMux(kind: "agent" | "workspace" = "agent") {
+		FakeWebSocket.instances = [];
+		const mux = createCloudTerminalMux({
+			wsBaseUrl: "wss://cp.example.com/api/cloud/v1",
+			kind,
+			mintTicket: async () => "ticket-1",
+			WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+		});
+		await settle();
+		const ws = FakeWebSocket.instances[0];
+		ws.emit("open", {});
+		ws.sent.length = 0;
+		return { mux, ws };
+	}
+
+	const resizes = (ws: FakeWebSocket) => sentJSON(ws).filter((frame) => frame.type === "resize");
+
+	it("collapses a resize burst into one trailing send of the final size", async () => {
+		const { mux, ws } = await openMux();
+		// A dragged side panel: a fit every few milliseconds.
+		for (let cols = 80; cols <= 120; cols++) {
+			mux.resize("agent", cols, 40);
+			vi.advanceTimersByTime(10);
+		}
+		expect(resizes(ws)).toEqual([]);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toEqual([{ type: "resize", columns: 120, rows: 40 }]);
+		mux.dispose();
+	});
+
+	it("drops a resize equal to the size already sent", async () => {
+		const { mux, ws } = await openMux("workspace");
+		mux.resize("workspace", 100, 30);
+		vi.advanceTimersByTime(150);
+		mux.resize("workspace", 100, 30);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toEqual([{ type: "resize", columns: 100, rows: 30 }]);
+		mux.dispose();
+	});
+
+	it("asks for a repaint when a burst ends at the size already sent but the screen reflowed", async () => {
+		const { mux, ws } = await openMux();
+		mux.resize("agent", 148, 43);
+		vi.advanceTimersByTime(150);
+		// A side panel toggled open and closed quickly: the pane fits at the
+		// narrower width and back, and the program never sees a size change.
+		for (let toggle = 0; toggle < 24; toggle++) {
+			mux.resize("agent", toggle % 2 === 0 ? 81 : 148, 43);
+			vi.advanceTimersByTime(100);
+		}
+		mux.resize("agent", 148, 43);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toEqual([
+			{ type: "resize", columns: 148, rows: 43 },
+			{ type: "resize", columns: 148, rows: 43, repaint: true },
+		]);
+		// Nothing reflowed since, so a later fit at the same size sends nothing.
+		mux.resize("agent", 148, 43);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toHaveLength(2);
+		mux.dispose();
+	});
+
+	it("sends the size over the open terminal socket, the live path input takes", async () => {
+		const { mux, ws } = await openMux();
+		mux.resize("agent", 132, 43);
+		mux.sendInput("agent", "x");
+		// Input is not debounced; the resize follows on the same socket.
+		expect(sentJSON(ws)).toEqual([{ type: "input", data: "x" }]);
+		vi.advanceTimersByTime(150);
+		expect(sentJSON(ws)).toEqual([
+			{ type: "input", data: "x" },
+			{ type: "resize", columns: 132, rows: 43 },
+		]);
+		mux.dispose();
+	});
+
+	it("delivers the final size once connected even if the debounce fired while disconnected", async () => {
+		const { mux, ws } = await openMux();
+		ws.readyState = 3; // CLOSED
+		mux.resize("agent", 110, 35);
+		mux.resize("agent", 111, 36);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toEqual([]);
+		ws.readyState = FakeWebSocket.OPEN;
+		ws.emit("open", {});
+		expect(resizes(ws)).toEqual([{ type: "resize", columns: 111, rows: 36 }]);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toHaveLength(1);
+		mux.dispose();
+	});
+
+	it("resends the current size on a new socket even when it did not change", async () => {
+		const { mux, ws } = await openMux();
+		mux.resize("agent", 100, 30);
+		vi.advanceTimersByTime(150);
+		expect(resizes(ws)).toHaveLength(1);
+		// The same socket reopening stands in for a reconnect to a new worker PTY.
+		ws.emit("open", {});
+		expect(resizes(ws)).toEqual([
+			{ type: "resize", columns: 100, rows: 30 },
+			{ type: "resize", columns: 100, rows: 30 },
+		]);
 		mux.dispose();
 	});
 });

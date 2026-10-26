@@ -20,8 +20,17 @@ import (
 // ReportInterruptWindow is the durable per-worker urgent interruption limit.
 const ReportInterruptWindow = 3 * time.Minute
 
+// OrchestratorBusyRetry is how long a batch refused with ErrOrchestratorBusy
+// waits before its next delivery attempt.
+const OrchestratorBusyRetry = 30 * time.Second
+
 // ErrReportDeliveryModeUnsupported reports a target without semantic delivery.
 var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a semantic conversation")
+
+// ErrOrchestratorBusy marks a Submit refused because the orchestrator cannot
+// take the batch right now — its composer holds the operator's unsent draft —
+// and should be retried later rather than immediately.
+var ErrOrchestratorBusy = errors.New("orchestrator cannot take reports right now")
 
 // DeliveryStore is the durable report scheduling and routing boundary.
 type DeliveryStore interface {
@@ -179,6 +188,12 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
+		if errors.Is(err, ErrOrchestratorBusy) {
+			// Released, the batch would stay the earliest due and every retry would
+			// stop RunDue before any other project's reports. Back off instead.
+			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), err.Error())
+			return deferErr
+		}
 		return c.release(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())

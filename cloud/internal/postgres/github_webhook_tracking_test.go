@@ -62,4 +62,13 @@ func TestGitHubRepositoryTrackedRequiresATrackingOrganization(t *testing.T) {
 	if tracked, err := store.GitHubRepositoryTracked(ctx, randomGitHubInstallationID(t), trackedRepositoryID); err != nil || tracked {
 		t.Fatalf("unrouted installation: tracked=%v err=%v; want untracked", tracked, err)
 	}
+	// An additional repository of a project is tracked too, so a pull request
+	// opened on it reaches its session.
+	if _, err := admin.Exec(ctx, `UPDATE ao_projects SET config = '{"repos":[{"url":"https://github.com/acme/other"}]}'
+		WHERE org_id = $1 AND github_repository_id = $2`, fixture.orgID, trackedRepositoryID); err != nil {
+		t.Fatal(err)
+	}
+	if tracked, err := store.GitHubRepositoryTracked(ctx, githubInstallationID, untrackedRepositoryID); err != nil || !tracked {
+		t.Fatalf("additional repository: tracked=%v err=%v; want tracked", tracked, err)
+	}
 }

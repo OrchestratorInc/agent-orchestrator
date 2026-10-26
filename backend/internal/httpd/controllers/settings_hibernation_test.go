@@ -51,3 +51,32 @@ func TestSettingsChatHibernationRequiresBoolean(t *testing.T) {
 		}
 	}
 }
+
+type versionRefreshSettingsService struct {
+	hibernationSettingsService
+	refresh bool
+}
+
+func (s *versionRefreshSettingsService) SetVersionRefresh(_ context.Context, enabled bool) (settingssvc.Snapshot, error) {
+	s.refresh = enabled
+	s.calls++
+	return settingssvc.Snapshot{VersionRefresh: enabled}, nil
+}
+
+func TestSettingsVersionRefreshRequiresBoolean(t *testing.T) {
+	svc := &versionRefreshSettingsService{}
+	c := &SettingsController{Svc: svc}
+	for _, body := range []string{`{}`, `{"enabled":null}`, `{"enabled":"false"}`} {
+		w := httptest.NewRecorder()
+		c.setVersionRefresh(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/version-refresh", strings.NewReader(body)))
+		if w.Code != http.StatusBadRequest || svc.calls != 0 {
+			t.Fatalf("body=%s status=%d calls=%d", body, w.Code, svc.calls)
+		}
+	}
+	w := httptest.NewRecorder()
+	c.setVersionRefresh(w, httptest.NewRequest(http.MethodPatch, "/api/v1/settings/version-refresh", strings.NewReader(`{"enabled":false}`)))
+	var got SettingsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK || got.VersionRefresh || svc.refresh {
+		t.Fatalf("status=%d response=%+v err=%v", w.Code, got, err)
+	}
+}

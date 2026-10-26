@@ -13,8 +13,11 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
 import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
+import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
 import { backOr } from "../../lib/backNavigation";
 import { hostedRowKey } from "../../lib/hostedRows";
+import { SpawnFab } from "../../lib/spawn-fab";
+import { workerDockRestingBottom, workerListBottomInset } from "../../lib/worker-dock-layout";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -34,7 +37,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const insets = useSafeAreaInsets();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators } = useApp();
+	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	const [refreshing, setRefreshing] = useState(false);
@@ -48,7 +51,13 @@ function ProjectScreenContent() {
 		[projects, sessions, orchestrators, id, hostMatches],
 	);
 	const projectSessions = useMemo(() => hostMatches ? projectDetailSessions(id ?? "", sessions) : [], [hostMatches, id, sessions]);
-	const stats = useMemo(() => projectPageStats(projectSessions, row?.link), [projectSessions, row?.link]);
+	// The archive is counted, not listed, by a machine that pages it.
+	const pagedArchived = hostMatches && id ? archive?.byProject[id] ?? 0 : 0;
+	const stats = useMemo(() => projectPageStats(projectSessions, row?.link, pagedArchived), [projectSessions, row?.link, pagedArchived]);
+	const archiveSources = useMemo<ArchiveSource[]>(
+		() => hostMatches && id && archive && currentHostId ? [{ hostId: currentHostId, projectId: id, summary: archive }] : [],
+		[hostMatches, id, archive, currentHostId],
+	);
 
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
@@ -65,6 +74,9 @@ function ProjectScreenContent() {
 		haptics.tap();
 		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
 	};
+	// Same corner and height as the Workers dock, so the spawn button does not
+	// move between the two screens.
+	const fabBottom = workerDockRestingBottom(insets.bottom);
 
 	return (
 		<View style={styles.screen}>
@@ -110,8 +122,9 @@ function ProjectScreenContent() {
 			) : (
 				<WorkerBoardList
 					sessions={projectSessions}
+					archiveSources={archiveSources}
 					showProject={false}
-					contentBottomInset={insets.bottom + 32}
+					contentBottomInset={workerListBottomInset(fabBottom)}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
@@ -135,6 +148,11 @@ function ProjectScreenContent() {
 					}
 				/>
 			)}
+			{hostMatches && row ? (
+				<View style={[styles.fab, { bottom: fabBottom }]}>
+					<SpawnFab onPress={startTask} testID="project-spawn-worker" />
+				</View>
+			) : null}
 		</View>
 	);
 }
@@ -143,4 +161,5 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
+		fab: { position: "absolute", right: 16 },
 	});

@@ -1,10 +1,10 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Copy, ExternalLink, File, FileText, Folder, Globe, Loader2, Plus, Search } from "lucide-react";
+import { BrowserIcon } from "./icons";
+import { ChevronDown, Cloud, File, FileText, Folder, Loader2, Plus, Search } from "lucide-react";
 import { ScrollArea } from "radix-ui";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
-import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
 	artifactCount,
@@ -13,7 +13,6 @@ import {
 	type ArtifactGroup,
 	type ArtifactRow,
 } from "../lib/artifacts";
-import { aoBridge } from "../lib/bridge";
 import { formatTimeCompact } from "../lib/format-time";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { hidesShellTopbar } from "../lib/platform";
@@ -23,24 +22,22 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } fr
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
 import { Button } from "./ui/button";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuItem,
-	DropdownMenuSeparator,
-	DropdownMenuTrigger,
-} from "./ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ALL_PROJECTS = "all";
 
-/** Every artifact agents have written on this machine, grouped by project. */
+/**
+ * Every artifact agents have written, grouped by project: on this machine, and
+ * in cloud sessions when the control plane keeps artifacts.
+ */
 export function ArtifactsView() {
 	const { t } = useTranslation();
 	const showPageTitle = hidesShellTopbar();
-	const workspaceQuery = useWorkspaceQuery({ includeCloud: false });
+	const cloudArtifacts = useCloudOffering().artifacts;
+	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
 	const [query, setQuery] = useState("");
@@ -62,7 +59,7 @@ export function ArtifactsView() {
 			    each other: half the gap between the toolbar and a control. */}
 			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
 				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
-					{showPageTitle ? <FileText className="size-icon-md" aria-hidden="true" /> : null}
+					{showPageTitle ? <File className="size-icon-md" aria-hidden="true" /> : null}
 					{t("artifacts.title")}
 				</h1>
 				<div className="workspace-topbar-actions flex shrink-0 items-center gap-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
@@ -103,7 +100,7 @@ export function ArtifactsView() {
 						pending={createArtifact.pending}
 						label="new"
 						align="end"
-						disabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
+						localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
 					/>
 				</div>
 			</header>
@@ -145,7 +142,7 @@ export function ArtifactsView() {
 function ArtifactGroupSection({ group }: { group: ArtifactGroup }) {
 	const { t } = useTranslation();
 	const name = group.isScratchpad ? t("standalone.workspaceName") : group.name;
-	const GroupIcon = group.isScratchpad ? File : Folder;
+	const GroupIcon = group.isScratchpad ? File : group.cloud ? Cloud : Folder;
 	return (
 		<section aria-label={name}>
 			<h2 className="flex h-8 items-center gap-2 px-3 text-xs font-medium text-muted-foreground">
@@ -164,26 +161,13 @@ function ArtifactGroupSection({ group }: { group: ArtifactGroup }) {
 
 function ArtifactListRow({ row }: { row: ArtifactRow }) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const navigateToSession = useNavigateToSession();
-	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
-	const externalUrl = row.previewUrl ?? row.rawUrl;
+	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
 
 	const open = () => {
 		requestWorkspaceFileOpen(row.sessionId, row.path, undefined, "artifact");
 		navigateToSession(row.projectId, row.sessionId);
-	};
-	const copyContents = async () => {
-		try {
-			const file = await queryClient.fetchQuery(sessionArtifactFileQueryOptions(row.sessionId, row.path, row.rawUrl, t("files.error.loadArtifact")));
-			if (file.binary) throw new Error(t("artifacts.copyBinary"));
-			await aoBridge.clipboard.writeText(file.content);
-			showGlobalToast(t("artifacts.copied", { name: row.name }));
-		} catch (error) {
-			showGlobalToast(error instanceof Error ? error.message : t("files.error.loadArtifact"), undefined, "error");
-		}
 	};
 
 	return (
@@ -207,16 +191,6 @@ function ArtifactListRow({ row }: { row: ArtifactRow }) {
 				<span className="relative z-[1] shrink-0 truncate text-control font-medium text-foreground">{row.name}</span>
 				<span className="relative z-[1] min-w-0 truncate text-xs text-muted-foreground">{row.sessionTitle}</span>
 			</button>
-			<div className="relative z-[2] flex shrink-0 items-center gap-0.5 opacity-0 group-hover/artifact:opacity-100 group-has-focus-visible/artifact:opacity-100">
-				<RowAction label={t("artifacts.copy")} onClick={() => void copyContents()}>
-					<Copy className="size-icon-sm" />
-				</RowAction>
-				{externalUrl ? (
-					<RowAction label={t("artifacts.openExternal")} onClick={() => window.open(externalUrl, "_blank", "noopener,noreferrer")}>
-						<ExternalLink className="size-icon-sm" />
-					</RowAction>
-				) : null}
-			</div>
 			<time dateTime={row.updatedAt} className="relative z-[1] ms-auto w-20 shrink-0 text-right text-xs tabular-nums text-passive">
 				{formatTimeCompact(row.updatedAt)}
 			</time>
@@ -225,36 +199,21 @@ function ArtifactListRow({ row }: { row: ArtifactRow }) {
 	);
 }
 
-function RowAction({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button
-					variant="ghost"
-					size="icon-sm"
-					className="text-muted-foreground active:not-aria-[haspopup]:translate-y-0 active:not-aria-[haspopup]:scale-100"
-					aria-label={label}
-					onClick={onClick}
-				>
-					{children}
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent>{label}</TooltipContent>
-		</Tooltip>
-	);
-}
-
 function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[] }) {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	// Developer mode moves account management to the Harness page.
+	const agentsSection = useUiStore((state) => state.developerMode) ? "harness" : "agents";
 	const { agentReady, create, pending } = useCreateArtifactSession();
+	const hasCloudProject = workspaces.some((workspace) => workspace.kind === CLOUD_PROJECT_KIND && Boolean(workspace.cloudOrgId));
 
-	if (!agentReady) {
+	// Without a local agent a cloud project, which runs its own, can still start one.
+	if (!agentReady && !hasCloudProject) {
 		return (
 			<div className="flex flex-col items-center gap-1 py-24 text-center">
 				<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.noAgent.title")}</h2>
 				<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.noAgent.description")}</p>
-				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings("agents")}>
+				<Button variant="ghost" size="sm" className="mt-2" onClick={() => openGlobalSettings(agentsSection)}>
 					{t("artifacts.noAgent.action")}
 				</Button>
 			</div>
@@ -264,7 +223,14 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 		<div className="flex flex-col items-center gap-1 py-24 text-center">
 			<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.empty.title")}</h2>
 			<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.empty.description")}</p>
-			<CreateArtifactMenu workspaces={workspaces} create={create} pending={pending} className="mt-3" align="center" />
+			<CreateArtifactMenu
+				workspaces={workspaces}
+				create={create}
+				pending={pending}
+				className="mt-3"
+				align="center"
+				localDisabledReason={agentReady ? undefined : t("artifacts.noAgent.description")}
+			/>
 		</div>
 	);
 }
@@ -280,20 +246,28 @@ function CreateArtifactMenu({
 	label = "create",
 	align,
 	className,
-	disabledReason,
+	localDisabledReason,
 }: {
 	workspaces: readonly WorkspaceSummary[];
-	create: (projectId?: string) => Promise<void>;
+	create: (projectId?: string, cloudOrgId?: string) => Promise<void>;
 	pending: boolean;
 	label?: "create" | "new";
 	align: "center" | "end";
 	className?: string;
-	disabledReason?: string;
+	/** Why Scratchpad and local projects cannot start a session; cloud projects run their own agent. */
+	localDisabledReason?: string;
 }) {
 	const { t } = useTranslation();
+	// Cloud workspaces are listed only when the control plane keeps artifacts.
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== CLOUD_PROJECT_KIND && !workspace.hostId,
+		(workspace) =>
+			workspace.id !== STANDALONE_WORKSPACE_ID &&
+			!workspace.hostId &&
+			(workspace.kind !== CLOUD_PROJECT_KIND || Boolean(workspace.cloudOrgId)),
 	);
+	const localBlocked = Boolean(localDisabledReason);
+	const hasCloudProject = projects.some((project) => project.kind === CLOUD_PROJECT_KIND);
+	const disabledReason = localBlocked && !hasCloudProject ? localDisabledReason : undefined;
 	const disabled = pending || Boolean(disabledReason);
 	const trigger =
 		label === "new" ? (
@@ -334,14 +308,24 @@ function CreateArtifactMenu({
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
 			<DropdownMenuContent align={align} className="min-w-56">
-				<DropdownMenuItem onSelect={() => void create()}>
+				{/* Says why Scratchpad and local projects are disabled while cloud ones are not. */}
+				{localBlocked ? <DropdownMenuLabel className="max-w-64 text-xs font-normal text-muted-foreground">{localDisabledReason}</DropdownMenuLabel> : null}
+				<DropdownMenuItem disabled={localBlocked} onSelect={() => void create()}>
 					<File aria-hidden="true" className="size-icon-sm" />
 					{t("standalone.workspaceName")}
 				</DropdownMenuItem>
 				{projects.length > 0 ? <DropdownMenuSeparator /> : null}
 				{projects.map((project) => (
-					<DropdownMenuItem key={project.id} onSelect={() => void create(project.id)}>
-						<Folder aria-hidden="true" className="size-icon-sm" />
+					<DropdownMenuItem
+						key={project.id}
+						disabled={localBlocked && project.kind !== CLOUD_PROJECT_KIND}
+						onSelect={() => void create(project.id, project.kind === CLOUD_PROJECT_KIND ? project.cloudOrgId : undefined)}
+					>
+						{project.kind === CLOUD_PROJECT_KIND ? (
+							<Cloud aria-hidden="true" className="size-icon-sm" />
+						) : (
+							<Folder aria-hidden="true" className="size-icon-sm" />
+						)}
 						<span className="truncate">{project.name}</span>
 					</DropdownMenuItem>
 				))}

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -49,8 +50,10 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	if p.liveCheckPassed(ctx) {
+		ports.RecordAuthEvidence(ctx, domain.CommandSource("codewhale", "doctor", "--probe-api"))
 		return ports.AgentAuthStatusAuthorized, nil
 	}
+	ports.RecordAuthEvidence(ctx, domain.CommandSource("codewhale", "auth", "status", "--provider", provider))
 	return ports.AgentAuthStatusConfigured, nil
 }
 

@@ -7,6 +7,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 const { request, storage } = vi.hoisted(() => ({ request: vi.fn(), storage: { getItem: vi.fn(async (_key: string) => null as string | null), setItem: vi.fn(async (_key: string, _value: string) => {}), removeItem: vi.fn(async (_key: string) => {}) } }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: storage }));
 vi.mock("react-native", () => ({
+	Platform: { OS: "ios" },
 	ActivityIndicator: "ActivityIndicator", Image: "Image", Keyboard: { dismiss: vi.fn() },
 	PanResponder: { create: () => ({ panHandlers: {} }) }, Pressable: "Pressable", ScrollView: "ScrollView", Text: "Text", TextInput: "TextInput", View: "View",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: {} },
@@ -132,4 +133,55 @@ it("saves an immediately submitted reply and quote before an old host rejects it
 	await act(async () => { renderer = create(<Harness quote={false} />); });
 	expect(renderer.root.findByType(TextInput).props.value).toBe("Latest reply");
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Quoted response: Quoted context" })).toHaveLength(1);
+});
+
+it("keeps a photo picked while Android remounts the chat, labelled by its bytes", async () => {
+	const JPEG = "/9j/4AAQSkZJRgAB";
+	let pick!: (result: unknown) => void;
+	vi.mocked(launchImageLibraryAsync).mockImplementation(() => new Promise((resolve) => { pick = resolve; }) as never);
+	const p = props();
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	act(() => renderer.root.findByType(ChatAttachmentMenu).props.onChoosePhoto());
+	// Android's picker is its own activity: the app backgrounds and the chat
+	// unmounts behind it, so the pick resolves into a composer that is gone.
+	act(() => renderer.unmount());
+	// Android exports base64 as JPEG but still reports a screenshot's PNG type.
+	await act(async () => pick({ canceled: false, assets: [{ uri: "file:///shot.png", fileName: "shot.png", width: 1, height: 1, base64: JPEG, mimeType: "image/png" }] }));
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove shot.png" })).toHaveLength(1);
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
+	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("", [{ mimeType: "image/jpeg", data: JPEG }], undefined, undefined);
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove shot.png" })).toHaveLength(0);
+});
+
+it("accepts an iPhone HEIC pick, which the picker exports as JPEG, instead of rejecting its label", async () => {
+	const JPEG = "/9j/4AAQSkZJRgAB";
+	vi.mocked(launchImageLibraryAsync).mockResolvedValue({ canceled: false, assets: [{ uri: "file:///IMG_0001.heic", fileName: "IMG_0001.heic", width: 1, height: 1, base64: JPEG, mimeType: "image/heic" }] } as never);
+	const p = props();
+	p.sessionId = "heic-session";
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	await act(async () => renderer.root.findByType(ChatAttachmentMenu).props.onChoosePhoto());
+	expect(renderer.root.findAll((node) => node.props.accessibilityRole === "alert")).toHaveLength(0);
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress());
+	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("", [{ mimeType: "image/jpeg", data: JPEG }], undefined, undefined);
+});
+
+it("clears only what a send submitted, keeping a photo attached in a reopened composer meanwhile", async () => {
+	const JPEG = "/9j/4AAQSkZJRgAB";
+	const photo = (name: string) => ({ canceled: false, assets: [{ uri: `file:///${name}`, fileName: name, width: 1, height: 1, base64: JPEG, mimeType: "image/jpeg" }] });
+	vi.mocked(launchImageLibraryAsync).mockResolvedValueOnce(photo("a.jpg") as never).mockResolvedValueOnce(photo("b.jpg") as never);
+	let finish!: (id: string) => void;
+	const p = props();
+	p.sessionId = "deferred-send-session";
+	p.onSend = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	await act(async () => renderer.root.findByType(ChatAttachmentMenu).props.onChoosePhoto());
+	act(() => { void renderer.root.findByProps({ accessibilityLabel: "Send message" }).props.onPress(); });
+	// Leave and reopen the conversation while the send is still in flight.
+	act(() => renderer.unmount());
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	await act(async () => renderer.root.findByType(ChatAttachmentMenu).props.onChoosePhoto());
+	await act(async () => finish("send-id"));
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove a.jpg" })).toHaveLength(0);
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove b.jpg" })).toHaveLength(1);
 });

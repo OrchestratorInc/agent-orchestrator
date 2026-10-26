@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,12 +37,21 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 // JSON a client actually parses is what is checked.
 
 type fakeConversationService struct {
+	switchRequest     domain.ProviderSwitchRequest
+	switchErr         error
+	history           []domain.HandoffTurn
+	historyTotal      int
+	historyOffset     int
+	historyLimit      int
+	historyErr        error
 	viewID            string
 	viewActive        bool
 	viewSessionID     domain.SessionID
 	viewCalls         int
 	snapshot          chatsvc.Snapshot
 	sendErr           error
+	sendCtxErr        error
+	switchCtxErr      error
 	skills            []ports.ChatSkill
 	skillErr          error
 	configOptions     []ports.ChatConfigOption
@@ -145,8 +156,9 @@ func (f *fakeConversationService) Snapshot(context.Context, domain.SessionID) (c
 	return f.snapshot, nil
 }
 
-func (f *fakeConversationService) Send(_ context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
+func (f *fakeConversationService) Send(ctx context.Context, _ domain.SessionID, message ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	f.sent = message
+	f.sendCtxErr = ctx.Err()
 	return domain.ConversationTurn{ID: "turn-1", State: domain.TurnStateRunning}, f.sendErr
 }
 
@@ -241,6 +253,26 @@ func (f *fakeConversationService) ReloadMCPServers(
 	return f.mcpServers, f.reloadErr
 }
 
+func (f *fakeConversationService) SwitchProvider(ctx context.Context, _ domain.SessionID, request domain.ProviderSwitchRequest) error {
+	f.switchRequest = request
+	f.switchCtxErr = ctx.Err()
+	return f.switchErr
+}
+
+// SwitchProviderAndSend is the service's: a retry after the switch went through finds the target active.
+func (f *fakeConversationService) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, message ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	if err := f.SwitchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		return domain.ConversationTurn{}, false, err
+	}
+	turn, err := f.Send(ctx, id, message)
+	return turn, true, err
+}
+
+func (f *fakeConversationService) SessionHistory(_ context.Context, _ domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error) {
+	f.historyOffset, f.historyLimit = offset, limit
+	return f.history, f.historyTotal, f.historyErr
+}
+
 func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]ports.ChatSkill, error) {
 	return f.skills, f.skillErr
 }
@@ -290,6 +322,25 @@ func TestConversationSnapshotCarriesTheSendersClientMessageID(t *testing.T) {
 	}
 	if _, exists := messages[1].(map[string]any)["clientMessageId"]; exists {
 		t.Fatalf("a message with no sender key must omit clientMessageId, got %#v", messages[1])
+	}
+}
+
+func TestConversationSnapshotCarriesHumanPromptFactWithoutPagedMessage(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Turns: []domain.ConversationTurn{
+			{ID: "human", State: domain.TurnStateFailed, HasHumanPrompt: true, RequestedAt: now},
+			{ID: "automation", State: domain.TurnStateFailed, RequestedAt: now},
+		},
+	})
+	turns := body["turns"].([]any)
+	if got := turns[0].(map[string]any)["hasHumanPrompt"]; got != true {
+		t.Errorf("human prompt fact = %#v, want true despite absent paged messages", got)
+	}
+	if got := turns[1].(map[string]any)["hasHumanPrompt"]; got != nil && got != false {
+		t.Errorf("automation prompt fact = %#v, want absent or false", got)
 	}
 }
 
@@ -749,5 +800,105 @@ func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	}
 	if _, present := detail["outputTruncated"]; present {
 		t.Error("untruncated output still carried the truncation flag")
+	}
+}
+
+func TestSnapshotOutputTruncationFollowsSelectedSource(t *testing.T) {
+	aggregateOutput := strings.Repeat("a", 64*1024)
+	aggregate, err := json.Marshal(map[string]any{
+		"output":          aggregateOutput,
+		"outputSource":    "aggregate",
+		"outputTruncated": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name            string
+		stream          string
+		streamTruncated bool
+		wantSource      string
+		wantTruncated   bool
+	}{
+		{"uncut stream replaces capped aggregate", strings.Repeat("s", 60*1024), false, "stream", false},
+		{"capped stream replaces capped aggregate", strings.Repeat("s", 64*1024), true, "stream", true},
+		{"no stream keeps capped aggregate", "", false, "aggregate", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := conversationSnapshotBody(t, chatsvc.Snapshot{
+				SessionID: domain.SessionID("p1-1"),
+				Mode:      domain.SessionModeChat,
+				Activities: []domain.ConversationActivity{{
+					ID: "act-1", Kind: domain.ActivityKindCommand,
+					Status: domain.ActivityStatusCompleted, Summary: "run tests",
+					Detail: aggregate, CommandOutput: tc.stream,
+					CommandOutputTruncated: tc.streamTruncated,
+					CreatedAt:              time.Now().UTC(),
+				}},
+			})
+			detail := body["activities"].([]any)[0].(map[string]any)["detail"].(map[string]any)
+			wantOutput := aggregateOutput
+			if tc.stream != "" {
+				wantOutput = tc.stream
+			}
+			if detail["output"] != wantOutput || detail["outputSource"] != tc.wantSource {
+				t.Fatalf("output did not come from %s", tc.wantSource)
+			}
+			truncated, present := detail["outputTruncated"]
+			if tc.wantTruncated && truncated != true || !tc.wantTruncated && present {
+				t.Errorf("outputTruncated = %#v (present=%v), want truncated=%v", truncated, present, tc.wantTruncated)
+			}
+		})
+	}
+}
+
+func TestSendConversationCarriesContinuation(t *testing.T) {
+	service := &fakeConversationService{}
+	server := conversationTestServer(t, service)
+	response, err := http.Post(server.URL+"/api/v1/sessions/p1-1/conversation/messages", "application/json",
+		bytes.NewReader([]byte(`{"text":"Continue from where you stopped.","continuation":true}`)))
+	if err != nil {
+		t.Fatalf("POST message: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusAccepted {
+		got, _ := io.ReadAll(response.Body)
+		t.Fatalf("status = %d, body = %s", response.StatusCode, got)
+	}
+	if !service.sent.Continuation || service.sent.Origin != domain.MessageOriginHuman {
+		t.Fatalf("sent = %#v, want a human continuation", service.sent)
+	}
+}
+
+func TestConversationSnapshotMarksContinuation(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	body := conversationSnapshotBody(t, chatsvc.Snapshot{
+		Conversation: domain.ConversationRecord{ID: "conversation-1"},
+		SessionID:    domain.SessionID("p1-1"),
+		Messages: []domain.ConversationMessage{
+			{ID: "asked", TurnID: "turn-asked", Sequence: 1, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "write the migration", CreatedAt: now},
+			{ID: "continued", TurnID: "turn-continued", Sequence: 2, Role: domain.MessageRoleUser, Origin: domain.MessageOriginHuman, Text: "Continue from where you stopped.", Continuation: true, CreatedAt: now},
+		},
+	})
+	messages := body["messages"].([]any)
+	if _, present := messages[0].(map[string]any)["continuation"]; present {
+		t.Fatalf("ordinary message carries continuation: %#v", messages[0])
+	}
+	if messages[1].(map[string]any)["continuation"] != true {
+		t.Fatalf("continuation message = %#v, want continuation: true", messages[1])
+	}
+}
+
+func TestContinuationUnavailableIsAConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: chatsvc.ErrContinuationUnavailable}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages", `{"text":"Continue","continuation":true}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_CONTINUATION_UNAVAILABLE" {
+		t.Fatalf("stale Continue response: %d %s", status, body)
 	}
 }

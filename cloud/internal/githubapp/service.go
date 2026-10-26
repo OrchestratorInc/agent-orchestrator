@@ -26,6 +26,9 @@ type Store interface {
 	CompleteGitHubUserAuthorization(context.Context, []byte, postgres.GitHubUserConnectionInput) (domain.GitHubUserConnection, error)
 	GitHubUserConnection(context.Context, string) (domain.GitHubUserConnection, error)
 	UpdateGitHubUserConnection(context.Context, string, postgres.GitHubUserConnectionInput) (domain.GitHubUserConnection, error)
+	SaveGitHubUserConnection(context.Context, string, postgres.GitHubUserConnectionInput) (domain.GitHubUserConnection, error)
+	GitHubUserScopeIntact(ctx context.Context, orgID, userID string) (bool, error)
+	GitHubConnectOthersTarget(ctx context.Context, orgID, userID string) (email string, onlyMember bool, err error)
 	DeleteGitHubUserConnection(context.Context, string) error
 	DeleteGitHubUserConnectionByGitHubID(context.Context, int64) error
 	CreateGitHubInstallAttempt(context.Context, domain.Principal, string, []byte, time.Time) (domain.GitHubInstallAttempt, error)
@@ -44,6 +47,7 @@ type Store interface {
 	InsertGitHubWebhook(context.Context, domain.GitHubWebhookDelivery, []byte) (bool, error)
 	ClaimGitHubWebhook(context.Context, string, time.Time) (domain.GitHubWebhookDelivery, error)
 	CompleteGitHubWebhook(context.Context, string, string) error
+	PruneGitHubWebhooks(context.Context, time.Time, int) (int64, error)
 	RetryGitHubWebhook(context.Context, string, string, string, time.Time, bool) error
 	RecentOpenedPullRequestWebhooks(context.Context, int64, time.Time, int) ([]domain.GitHubWebhookDelivery, error)
 	GitHubInstallationRoutes(context.Context, int64) ([]domain.GitHubInstallationRoute, error)
@@ -51,7 +55,10 @@ type Store interface {
 	ApplyGitHubInstallationEvent(context.Context, string, string, string, string) error
 	WorkerGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
 	WorkerRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error)
-	WorkerSessionExtraRepos(context.Context, string, string) ([]domain.RepoRef, error)
+	// WorkerSessionGrantedExtraRepos is the project's additional repositories
+	// that still have an active grant through the main repository's GitHub App
+	// installation: the only ones an App token or pull request may cover.
+	WorkerSessionGrantedExtraRepos(context.Context, string, string) ([]domain.RepoRef, error)
 	CreatePullRequestRecord(
 		ctx context.Context,
 		orgID, sessionID string,
@@ -106,6 +113,9 @@ func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string
 	if !ok || owner == "" || repo == "" {
 		return postgres.ErrInvalid
 	}
+	if err := s.requireUserScopedPush(ctx, orgID, repository, repositoryID); err != nil {
+		return err
+	}
 	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
 	if err != nil {
 		return err
@@ -114,15 +124,23 @@ func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string
 }
 
 type Service struct {
-	store                    Store
-	client                   *Client
-	stateKey                 []byte
-	webhookSecret            string
-	installTTL               time.Duration
-	logger                   *slog.Logger
-	workerID                 string
-	credentialKey            []byte
-	userTokenMu              sync.Mutex
+	store         Store
+	client        *Client
+	stateKey      []byte
+	webhookSecret string
+	installTTL    time.Duration
+	logger        *slog.Logger
+	workerID      string
+	credentialKey []byte
+	userTokenMu   sync.Mutex
+	// userAccess caches positive live access checks of user-scoped
+	// connections; see userRepositoryAccess.
+	userAccessMu sync.Mutex
+	userAccess   map[userAccessKey]userAccessEntry
+	// userScopeRefreshAt is when each user-scoped connection last started a
+	// background refresh; see refreshUserScopedInBackground.
+	userScopeRefreshMu       sync.Mutex
+	userScopeRefreshAt       map[string]time.Time
 	checkMu                  sync.Mutex
 	checkAt                  time.Time
 	checkErr                 error
@@ -149,6 +167,14 @@ const (
 	defaultWebhookWorkers = 8
 	// webhookIdlePoll is how long a worker waits after finding the queue empty.
 	webhookIdlePoll = time.Second
+	// webhookRetention is how long finished deliveries are kept. It covers
+	// GitHub's redelivery window and the 7-day look-back of
+	// RecentOpenedPullRequestWebhooks.
+	webhookRetention = 8 * 24 * time.Hour
+	// webhookPruneInterval and webhookPruneBatch pace the deletion of older
+	// finished deliveries so it never competes with claiming.
+	webhookPruneInterval = time.Hour
+	webhookPruneBatch    = 1000
 )
 
 func (s *Service) Check(ctx context.Context) error {
@@ -269,13 +295,38 @@ func (s *Service) CompleteOAuth(
 	ctx context.Context,
 	state, code string,
 ) (domain.GitHubInstallation, error) {
+	installation, _, err := s.CompleteOAuthWithOffer(ctx, state, code)
+	return installation, err
+}
+
+// CompleteOAuthWithOffer is CompleteOAuth that also returns, when there is
+// one, the offer to connect the user's other GitHub installations, for the
+// callback page to show (see connect_others.go).
+func (s *Service) CompleteOAuthWithOffer(
+	ctx context.Context,
+	state, code string,
+) (domain.GitHubInstallation, *ConnectOthersOffer, error) {
+	installation, attempt, userToken, err := s.completeOAuth(ctx, state, code)
+	if err != nil {
+		return domain.GitHubInstallation{}, nil, err
+	}
+	return installation, s.connectOthersOffer(ctx, attempt, userToken), nil
+}
+
+func (s *Service) completeOAuth(
+	ctx context.Context,
+	state, code string,
+) (domain.GitHubInstallation, domain.GitHubInstallAttempt, UserAccessToken, error) {
+	fail := func(err error) (domain.GitHubInstallation, domain.GitHubInstallAttempt, UserAccessToken, error) {
+		return domain.GitHubInstallation{}, domain.GitHubInstallAttempt{}, UserAccessToken{}, err
+	}
 	if state == "" || code == "" {
-		return domain.GitHubInstallation{}, postgres.ErrInvalid
+		return fail(postgres.ErrInvalid)
 	}
 	stateHash := HashState(state)
 	attempt, err := s.store.GitHubOAuthAttempt(ctx, stateHash)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	associatedData := []byte(strconv.FormatInt(attempt.PendingGitHubInstallationID, 10))
 	verifier, err := Decrypt(
@@ -285,32 +336,33 @@ func (s *Service) CompleteOAuth(
 		associatedData,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
-	accessToken, err := s.client.ExchangeOAuthCode(ctx, code, string(verifier))
+	userToken, err := s.client.ExchangeOAuthCodeForUser(ctx, code, string(verifier))
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
+	accessToken := userToken.Token()
 	authorized, err := s.client.UserHasInstallation(
 		ctx,
 		accessToken,
 		attempt.PendingGitHubInstallationID,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	if !authorized {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return fail(postgres.ErrForbidden)
 	}
 	providerInstallation, err := s.client.GetInstallation(
 		ctx,
 		attempt.PendingGitHubInstallationID,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	if !InstallationSupportsAuthorityProof(providerInstallation) {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return fail(postgres.ErrForbidden)
 	}
 	authorized, err = s.client.UserCanAdministerInstallation(
 		ctx,
@@ -318,20 +370,24 @@ func (s *Service) CompleteOAuth(
 		providerInstallation,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
 	if !authorized {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return fail(postgres.ErrForbidden)
 	}
+	// The user administers this installation (checked above), so it is a
+	// whole-installation connection.
+	completed := toDomainInstallation(providerInstallation)
+	completed.AccessScope = domain.GitHubAccessScopeInstallation
 	installation, err := s.store.CompleteGitHubInstallation(
 		ctx,
 		stateHash,
-		toDomainInstallation(providerInstallation),
+		completed,
 	)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return fail(err)
 	}
-	return installation, nil
+	return installation, attempt, userToken, nil
 }
 
 // CompleteInstallationOAuth handles GitHub's combined installation and user
@@ -346,19 +402,30 @@ func (s *Service) CompleteInstallationOAuth(
 	state, code string,
 	installationID int64,
 ) (domain.GitHubInstallation, error) {
+	installation, _, err := s.CompleteInstallationOAuthWithOffer(ctx, state, code, installationID)
+	return installation, err
+}
+
+// CompleteInstallationOAuthWithOffer is CompleteInstallationOAuth returning the
+// callback page's offer, as CompleteOAuthWithOffer does.
+func (s *Service) CompleteInstallationOAuthWithOffer(
+	ctx context.Context,
+	state, code string,
+	installationID int64,
+) (domain.GitHubInstallation, *ConnectOthersOffer, error) {
 	if state == "" || code == "" || installationID <= 0 {
-		return domain.GitHubInstallation{}, postgres.ErrInvalid
+		return domain.GitHubInstallation{}, nil, postgres.ErrInvalid
 	}
 	stateHash := HashState(state)
 	if err := s.store.ValidateGitHubInstallState(ctx, stateHash); err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
 	providerInstallation, err := s.client.GetInstallation(ctx, installationID)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
 	if !InstallationSupportsAuthorityProof(providerInstallation) {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
+		return domain.GitHubInstallation{}, nil, postgres.ErrForbidden
 	}
 	// No PKCE verifier: GitHub already performed the authorization during
 	// installation, so we never issued a code_challenge. Store an empty verifier
@@ -367,7 +434,7 @@ func (s *Service) CompleteInstallationOAuth(
 	associatedData := []byte(strconv.FormatInt(installationID, 10))
 	ciphertext, nonce, err := Encrypt(s.stateKey, nil, associatedData)
 	if err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
 	if _, err := s.store.BeginGitHubOAuth(
 		ctx,
@@ -378,9 +445,9 @@ func (s *Service) CompleteInstallationOAuth(
 		nonce,
 		time.Now().UTC().Add(s.installTTL),
 	); err != nil {
-		return domain.GitHubInstallation{}, err
+		return domain.GitHubInstallation{}, nil, err
 	}
-	return s.CompleteOAuth(ctx, state, code)
+	return s.CompleteOAuthWithOffer(ctx, state, code)
 }
 
 func (s *Service) ListInstallations(
@@ -397,6 +464,11 @@ func (s *Service) ListInstallations(
 		if installation.Status != "active" {
 			continue
 		}
+		// A user-scoped connection follows its user's GitHub access, which can
+		// change without any installation webhook (a team removal, a repository
+		// permission change). The desktop polls this list while it is picking a
+		// repository, so refresh a stale one, in the background.
+		s.refreshUserScopedInBackground(ctx, installation)
 		_, err := s.client.GetInstallation(ctx, installation.GitHubInstallationID)
 		if err == nil {
 			continue
@@ -480,7 +552,8 @@ func (s *Service) IssueCheckoutGrant(
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
-	repositoryIDs := s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization)
+	repositoryIDs := s.filterUserScopedRepositoryIDs(ctx, authorization,
+		s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization), false)
 	access, err := s.client.repositoryReadTokenForRepos(
 		ctx,
 		authorization.GitHubInstallationID,
@@ -513,7 +586,7 @@ func (s *Service) checkoutRepositoryIDs(
 	authorization domain.GitHubCheckoutContext,
 ) []int64 {
 	primary := authorization.GitHubRepositoryID
-	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	extras, err := s.store.WorkerSessionGrantedExtraRepos(ctx, orgID, sessionID)
 	if err != nil {
 		s.logger.Warn("load session extra repositories for checkout scope",
 			"error", err, "org_id", orgID, "session_id", sessionID)
@@ -607,7 +680,11 @@ func (s *Service) IssuePushGrant(
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
-	repositoryIDs := s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization)
+	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, true); err != nil {
+		return CheckoutGrant{}, err
+	}
+	repositoryIDs := s.filterUserScopedRepositoryIDs(ctx, authorization,
+		s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization), true)
 	access, err := s.client.repositoryWriteTokenForRepos(
 		ctx,
 		authorization.GitHubInstallationID,
@@ -647,6 +724,9 @@ func (s *Service) IssuePushGrantForRepo(
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
+	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
+		return CheckoutGrant{}, err
+	}
 	access, err := s.client.repositoryWriteToken(ctx, authorization.GitHubInstallationID, repositoryID)
 	if err != nil {
 		return CheckoutGrant{}, err
@@ -680,22 +760,9 @@ func (s *Service) pushRepositoryID(
 	if requested == "" || strings.EqualFold(requested, primaryFullName) {
 		return authorization.GitHubRepositoryID, nil
 	}
-	extras, err := s.store.WorkerSessionExtraRepos(ctx, orgID, sessionID)
+	canonical, err := s.declaredExtraRepository(ctx, orgID, sessionID, requested)
 	if err != nil {
 		return 0, err
-	}
-	canonical := ""
-	for _, extra := range extras {
-		fullName, ok := gitHubRepositoryFullName(extra.URL)
-		if ok && strings.EqualFold(fullName, requested) {
-			canonical = fullName
-			break
-		}
-	}
-	if canonical == "" {
-		// The requested repository is not one the session is authorized to
-		// touch. Forbid the App grant; the caller decides whether a PAT applies.
-		return 0, postgres.ErrForbidden
 	}
 	ids, unresolved, err := s.client.resolveInstallationRepositoryIDs(
 		ctx, authorization.GitHubInstallationID, []string{canonical},
@@ -710,6 +777,50 @@ func (s *Service) pushRepositoryID(
 		return 0, postgres.ErrForbidden
 	}
 	return ids[0], nil
+}
+
+// declaredExtraRepository returns the owner/name, as the project declares it,
+// of the additional repository requested names, or postgres.ErrForbidden when
+// the session's project declares no such repository: a session may only touch
+// repositories it checked out.
+func (s *Service) declaredExtraRepository(ctx context.Context, orgID, sessionID, requested string) (string, error) {
+	extras, err := s.store.WorkerSessionGrantedExtraRepos(ctx, orgID, sessionID)
+	if err != nil {
+		return "", err
+	}
+	for _, extra := range extras {
+		fullName, ok := gitHubRepositoryFullName(extra.URL)
+		if ok && strings.EqualFold(fullName, requested) {
+			return fullName, nil
+		}
+	}
+	return "", postgres.ErrForbidden
+}
+
+// pullRequestRepository resolves the repository a worker's pull request is
+// for: the session's main repository when requested is empty or names it,
+// otherwise one of the project's additional repositories that the App
+// installation can access (see pushRepositoryID).
+func (s *Service) pullRequestRepository(
+	ctx context.Context,
+	orgID, sessionID string,
+	authorization domain.GitHubCheckoutContext,
+	requested string,
+) (fullName string, repositoryID int64, err error) {
+	primaryFullName := strings.Trim(authorization.FullName, "/")
+	requested = strings.Trim(strings.TrimSpace(requested), "/")
+	if requested == "" || strings.EqualFold(requested, primaryFullName) {
+		return primaryFullName, authorization.GitHubRepositoryID, nil
+	}
+	fullName, err = s.declaredExtraRepository(ctx, orgID, sessionID, requested)
+	if err != nil {
+		return "", 0, err
+	}
+	repositoryID, err = s.pushRepositoryID(ctx, orgID, sessionID, authorization, fullName)
+	if err != nil {
+		return "", 0, err
+	}
+	return fullName, repositoryID, nil
 }
 
 // resolveWorkerCheckoutAuthorization loads and re-validates a session's
@@ -734,6 +845,11 @@ func (s *Service) resolveWorkerCheckoutAuthorization(
 		authorization.GitHubRepositoryID <= 0 ||
 		!validGitHubCloneIdentity(authorization.CloneURL, authorization.FullName) {
 		return domain.GitHubCheckoutContext{}, postgres.ErrForbidden
+	}
+	// A user-scoped connection reaches a repository only while its user still
+	// can on GitHub, re-checked live rather than trusting the last sync.
+	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, false); err != nil {
+		return domain.GitHubCheckoutContext{}, err
 	}
 	return authorization, nil
 }
@@ -816,27 +932,43 @@ func (s *Service) RaisePullRequest(
 	if err != nil {
 		return domain.PullRequest{}, err
 	}
+	fullName, repositoryID, err := s.pullRequestRepository(ctx, orgID, sessionID, authorization, input.Repository)
+	if err != nil {
+		return domain.PullRequest{}, err
+	}
+	owner, repo, ok := strings.Cut(fullName, "/")
+	if !ok || owner == "" || repo == "" {
+		return domain.PullRequest{}, postgres.ErrInvalid
+	}
+	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
+		return domain.PullRequest{}, err
+	}
+	access, err := s.client.repositoryWriteToken(
+		ctx,
+		authorization.GitHubInstallationID,
+		repositoryID,
+	)
+	if err != nil {
+		return domain.PullRequest{}, err
+	}
 	base := strings.TrimSpace(input.BaseBranch)
-	if base == "" {
+	if base == "" && repositoryID == authorization.GitHubRepositoryID {
 		base = strings.TrimSpace(authorization.DefaultBranch)
+	}
+	if base == "" && repositoryID != authorization.GitHubRepositoryID {
+		// An additional repository's default branch is not on record, so ask
+		// GitHub, with the token just minted for that repository.
+		repository, err := s.client.GetRepositoryAsUser(ctx, access.Token, owner, repo)
+		if err != nil {
+			return domain.PullRequest{}, err
+		}
+		base = strings.TrimSpace(repository.DefaultBranch)
 	}
 	if base == "" {
 		return domain.PullRequest{}, fmt.Errorf(
 			"%w: no base branch given and the repository has none on record",
 			postgres.ErrInvalid,
 		)
-	}
-	owner, repo, ok := strings.Cut(authorization.FullName, "/")
-	if !ok || owner == "" || repo == "" {
-		return domain.PullRequest{}, postgres.ErrInvalid
-	}
-	access, err := s.client.repositoryWriteToken(
-		ctx,
-		authorization.GitHubInstallationID,
-		authorization.GitHubRepositoryID,
-	)
-	if err != nil {
-		return domain.PullRequest{}, err
 	}
 	pr, err := s.client.CreatePullRequest(ctx, access.Token, owner, repo, CreatePullRequestInput{
 		Title: title,
@@ -850,7 +982,7 @@ func (s *Service) RaisePullRequest(
 	record, err := s.store.CreatePullRequestRecord(
 		ctx,
 		orgID, sessionID,
-		"github", authorization.FullName, pr.User.Login,
+		"github", fullName, pr.User.Login,
 		pr.Number, pr.HTMLURL, head, base, pr.Head.SHA, title,
 		pr.Additions, pr.Deletions, pr.ChangedFiles,
 	)
@@ -858,6 +990,16 @@ func (s *Service) RaisePullRequest(
 		return domain.PullRequest{}, err
 	}
 	return record, nil
+}
+
+// IsAppAccount reports whether a GitHub login is this App's bot account. The
+// REST API names it "<slug>[bot]" and GraphQL plain "<slug>".
+func (s *Service) IsAppAccount(login string) bool {
+	if s == nil || s.client == nil || s.client.appSlug == "" {
+		return false
+	}
+	login = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(login)), "[bot]")
+	return login == strings.ToLower(s.client.appSlug)
 }
 
 // ClaimPullRequest records a pull request that worker-side tooling already
@@ -872,18 +1014,31 @@ func (s *Service) ClaimPullRequest(
 	if err != nil {
 		return domain.PullRequest{}, err
 	}
-	owner, repository, ok := strings.Cut(authorization.FullName, "/")
+	referenced, number, err := ParsePullRequestTarget(reference)
+	if err != nil {
+		return domain.PullRequest{}, err
+	}
+	fullName, repositoryID, err := s.pullRequestRepository(ctx, orgID, sessionID, authorization, referenced)
+	if err != nil {
+		if errors.Is(err, postgres.ErrForbidden) && referenced != "" {
+			// A URL for a repository the project does not declare is a bad
+			// reference for this session, as it was before additional
+			// repositories could be claimed.
+			return domain.PullRequest{}, postgres.ErrInvalid
+		}
+		return domain.PullRequest{}, err
+	}
+	owner, repository, ok := strings.Cut(fullName, "/")
 	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(repository) == "" {
 		return domain.PullRequest{}, postgres.ErrInvalid
 	}
-	number, err := parsePullRequestReference(reference, authorization.FullName)
-	if err != nil {
+	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
 		return domain.PullRequest{}, err
 	}
 	access, err := s.client.repositoryWriteToken(
 		ctx,
 		authorization.GitHubInstallationID,
-		authorization.GitHubRepositoryID,
+		repositoryID,
 	)
 	if err != nil {
 		return domain.PullRequest{}, err
@@ -904,7 +1059,7 @@ func (s *Service) ClaimPullRequest(
 	}
 	record, err := s.store.ClaimPullRequestRecord(ctx, orgID, sessionID, domain.PullRequest{
 		Provider:     "github",
-		Repository:   authorization.FullName,
+		Repository:   fullName,
 		Author:       pullRequest.User.Login,
 		Number:       pullRequest.Number,
 		URL:          pullRequest.HTMLURL,
@@ -924,34 +1079,50 @@ func (s *Service) ClaimPullRequest(
 	return record, nil
 }
 
+// parsePullRequestReference returns the number of a pull request reference (a
+// number, or a github.com pull request URL) in the repository fullName.
 func parsePullRequestReference(reference, fullName string) (int, error) {
+	referenced, number, err := ParsePullRequestTarget(reference)
+	if err != nil {
+		return 0, err
+	}
+	if referenced != "" && !strings.EqualFold(referenced, strings.Trim(fullName, "/")) {
+		return 0, postgres.ErrInvalid
+	}
+	return number, nil
+}
+
+// ParsePullRequestTarget splits a pull request reference into the repository
+// it names (owner/name; empty for a bare number, which means the main
+// repository) and its number.
+func ParsePullRequestTarget(reference string) (fullName string, number int, err error) {
 	reference = strings.TrimSpace(reference)
 	if number, err := strconv.Atoi(reference); err == nil && number > 0 {
-		return number, nil
+		return "", number, nil
 	}
 	parsed, err := url.Parse(reference)
 	if err != nil || parsed.Scheme != "https" ||
 		!strings.EqualFold(parsed.Hostname(), "github.com") || parsed.Port() != "" ||
 		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return 0, postgres.ErrInvalid
+		return "", 0, postgres.ErrInvalid
 	}
 	parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
 	if len(parts) != 4 || !strings.EqualFold(parts[2], "pull") {
-		return 0, postgres.ErrInvalid
+		return "", 0, postgres.ErrInvalid
 	}
 	owner, err := url.PathUnescape(parts[0])
-	if err != nil {
-		return 0, postgres.ErrInvalid
+	if err != nil || owner == "" {
+		return "", 0, postgres.ErrInvalid
 	}
 	repository, err := url.PathUnescape(parts[1])
-	if err != nil || !strings.EqualFold(owner+"/"+repository, strings.Trim(fullName, "/")) {
-		return 0, postgres.ErrInvalid
+	if err != nil || repository == "" {
+		return "", 0, postgres.ErrInvalid
 	}
-	number, err := strconv.Atoi(parts[3])
+	number, err = strconv.Atoi(parts[3])
 	if err != nil || number <= 0 {
-		return 0, postgres.ErrInvalid
+		return "", 0, postgres.ErrInvalid
 	}
-	return number, nil
+	return owner + "/" + repository, number, nil
 }
 
 func validGitHubCloneIdentity(cloneURL, fullName string) bool {
@@ -1035,7 +1206,45 @@ func (s *Service) Run(ctx context.Context) {
 			s.runWebhookWorker(ctx)
 		}()
 	}
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		s.runWebhookPruner(ctx)
+	}()
 	group.Wait()
+}
+
+// runWebhookPruner deletes finished deliveries older than webhookRetention once
+// an hour, in small batches, until ctx is canceled.
+func (s *Service) runWebhookPruner(ctx context.Context) {
+	for {
+		s.pruneWebhooks(ctx, time.Now().Add(-webhookRetention))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(webhookPruneInterval):
+		}
+	}
+}
+
+func (s *Service) pruneWebhooks(ctx context.Context, before time.Time) {
+	var total int64
+	for ctx.Err() == nil {
+		deleted, err := s.store.PruneGitHubWebhooks(ctx, before, webhookPruneBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.logger.Error("prune GitHub webhooks", "error", err)
+			}
+			return
+		}
+		total += deleted
+		if deleted < webhookPruneBatch {
+			break
+		}
+	}
+	if total > 0 {
+		s.logger.Info("pruned GitHub webhooks", "deleted", total)
+	}
 }
 
 func (s *Service) runWebhookWorker(ctx context.Context) {
@@ -1222,10 +1431,16 @@ func (s *Service) syncOnce(
 	if err != nil {
 		return err
 	}
-	providerRepositories, err := s.client.ListRepositories(
-		ctx,
-		installation.GitHubInstallationID,
-	)
+	var providerRepositories []Repository
+	if installation.UserScoped() {
+		// Only what the connecting user can access on GitHub; see user_scope.go.
+		providerRepositories, err = s.userScopedRepositories(ctx, installation)
+	} else {
+		providerRepositories, err = s.client.ListRepositories(
+			ctx,
+			installation.GitHubInstallationID,
+		)
+	}
 	if err != nil {
 		_ = s.store.MarkGitHubSyncFailure(
 			ctx,

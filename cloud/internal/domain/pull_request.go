@@ -47,12 +47,25 @@ type PullRequest struct {
 	UpdatedAt          time.Time
 }
 
+// PullRequestOpener is the person who started the session behind a pull
+// request: their AO name and, when they connected GitHub to AO, their GitHub
+// login and avatar.
+type PullRequestOpener struct {
+	Name        string
+	GitHubLogin string
+	AvatarURL   string
+}
+
 // RaisePullRequest is the input to open a new pull request for a session.
 type RaisePullRequest struct {
 	Title      string
 	Body       string
 	HeadBranch string
 	BaseBranch string
+	// Repository is the owner/name of the project repository to open the pull
+	// request in; empty means the main repository. Any other value must be
+	// one of the project's additional repositories.
+	Repository string
 }
 
 // PullRequestRef identifies a pull request for background status polling.

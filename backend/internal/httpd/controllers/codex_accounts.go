@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -290,7 +291,7 @@ func (c *CodexAccountsController) events(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	events, err := c.Svc.SubscribeCodexAccounts(r.Context())
-	if err != nil {
+	if err != nil && !codexAccountStreamQuiet(err) {
 		envelope.WriteError(w, r, err)
 		return
 	}
@@ -298,6 +299,16 @@ func (c *CodexAccountsController) events(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	if events == nil {
+		if _, err := fmt.Fprint(w, ": codex-account-management-unavailable\n\n"); err != nil {
+			return
+		}
+		flusher.Flush()
+		events = c.waitForCodexAccountStream(r.Context(), w, flusher)
+		if events == nil {
+			return
+		}
+	}
 	flusher.Flush()
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
@@ -320,6 +331,53 @@ func (c *CodexAccountsController) events(w http.ResponseWriter, r *http.Request)
 			}
 			if _, err := fmt.Fprintf(w, "event: codex_account\ndata: %s\n\n", data); err != nil {
 				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+// codexAccountStreamRetry is how long an open account stream waits before
+// asking again after account management was unavailable.
+var codexAccountStreamRetry = 30 * time.Second
+
+// SetCodexAccountStreamRetryForTest sets the retry interval and returns a restore function.
+func SetCodexAccountStreamRetryForTest(d time.Duration) func() {
+	previous := codexAccountStreamRetry
+	codexAccountStreamRetry = d
+	return func() { codexAccountStreamRetry = previous }
+}
+
+func codexAccountStreamQuiet(err error) bool {
+	var api *apierr.Error
+	if !errors.As(err, &api) {
+		return false
+	}
+	// Hold the stream for both. Non-stream routes still report setup-incomplete.
+	return api.Code == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" || api.Code == "CODEX_ACCOUNT_SETUP_INCOMPLETE"
+}
+
+func (c *CodexAccountsController) waitForCodexAccountStream(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) <-chan agentsvc.CodexAccounts {
+	retry := codexAccountStreamRetry
+	if retry <= 0 {
+		retry = 30 * time.Second
+	}
+	ticker := time.NewTicker(retry)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			events, err := c.Svc.SubscribeCodexAccounts(ctx)
+			if err == nil {
+				return events
+			}
+			if !codexAccountStreamQuiet(err) {
+				return nil
+			}
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
+				return nil
 			}
 			flusher.Flush()
 		}

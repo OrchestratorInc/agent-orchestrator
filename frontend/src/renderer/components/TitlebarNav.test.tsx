@@ -38,9 +38,31 @@ describe("TitlebarNav", () => {
 		useUiStore.setState({ isSidebarOpen: open });
 		const { container, rerender } = render(<TitlebarNav />);
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("top-px", "h-traffic-light-clearance", "left-titlebar-cluster-left");
+		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
-		expect(nav).toHaveClass("top-px", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
-		expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
+		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
+		// The brand and the history arrows trade places; the hidden one is inert and
+		// aria-hidden (it collapses to width 0 rather than unmounting).
+		const brand = container.querySelector('[data-slot="titlebar-brand"]');
+		const history = container.querySelector('[data-slot="titlebar-history"]');
+		expect(brand?.hasAttribute("aria-hidden")).toBe(!open);
+		expect(history?.hasAttribute("aria-hidden")).toBe(open);
+		if (!open) expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
+	});
+
+	it("nudges the sidebar re-clamp when fullscreen or zoom moves the brand", () => {
+		const onResize = vi.fn();
+		window.addEventListener("resize", onResize);
+		const { rerender } = render(<TitlebarNav />);
+		expect(onResize).toHaveBeenCalledTimes(1);
+		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(2);
+		rerender(<TooltipProvider><TitlebarNav zoomFactor={1.25} /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(3);
+		// No brand to fit while the sidebar is closed.
+		useUiStore.setState({ isSidebarOpen: false });
+		rerender(<TooltipProvider><TitlebarNav isFullScreen zoomFactor={1.25} /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(3);
+		window.removeEventListener("resize", onResize);
 	});
 });

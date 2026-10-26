@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +103,50 @@ func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	}
 }
 
+func TestCoordinatorBusyOrchestratorDoesNotHoldUpOtherProjects(t *testing.T) {
+	// Project p's orchestrator composer holds the operator's unsent draft, so its
+	// earliest-due batch is refused. It must back off instead of staying first in
+	// line and starving project q's reports on every retry.
+	now := time.Date(2026, 9, 14, 13, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{
+		{ID: "orch-p", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+		{ID: "orch-q", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+	}
+	other := reportAt("q-1", "worker-q", now.Add(time.Second), now, "q finished")
+	other.ProjectID = "q"
+	store.add(reportAt("p-1", "worker-p", now, now, "p finished"), other)
+	delivery := &coordinatorDelivery{submitErrFor: map[domain.SessionID]error{
+		"orch-p": fmt.Errorf("send orch-p: %w", ErrOrchestratorBusy),
+	}}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, NewToken: func() string { return "claim" }})
+
+	delay, err := c.RunDue(context.Background())
+	if err != nil {
+		t.Fatalf("RunDue: %v", err)
+	}
+	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "orch-q" {
+		t.Fatalf("submissions = %#v, want q's report delivered past p's busy orchestrator", delivery.submissions)
+	}
+	if delay != OrchestratorBusyRetry {
+		t.Fatalf("next run in %v, want p's backoff %v", delay, OrchestratorBusyRetry)
+	}
+	for _, rec := range store.reports {
+		if rec.ID == "p-1" && (rec.DeliveryState != domain.ReportPending || !rec.AvailableAt.Equal(now.Add(OrchestratorBusyRetry))) {
+			t.Fatalf("p's report = %s available %s, want pending at %s", rec.DeliveryState, rec.AvailableAt, now.Add(OrchestratorBusyRetry))
+		}
+	}
+
+	now = now.Add(OrchestratorBusyRetry)
+	delete(delivery.submitErrFor, "orch-p")
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatalf("RunDue after backoff: %v", err)
+	}
+	if len(delivery.submissions) != 2 || delivery.submissions[1].target != "orch-p" {
+		t.Fatalf("submissions = %#v, want p's report delivered once its composer cleared", delivery.submissions)
+	}
+}
+
 func TestReportSessionLinkUsesDisplayName(t *testing.T) {
 	got := reportSessionLink(domain.ReportRecord{
 		SessionID: "worker/1", ProjectID: "proj 1", SessionDisplayName: "Backend [worker]",
@@ -164,8 +209,14 @@ func reportAt(id string, worker domain.SessionID, created, available time.Time, 
 func (s *coordinatorStore) add(records ...domain.ReportRecord) {
 	s.reports = append(s.reports, records...)
 }
-func (s *coordinatorStore) ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error) {
-	return append([]domain.SessionRecord(nil), s.sessions...), nil
+func (s *coordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	var recs []domain.SessionRecord
+	for _, rec := range s.sessions {
+		if rec.ProjectID == project {
+			recs = append(recs, rec)
+		}
+	}
+	return recs, nil
 }
 func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	for _, rec := range s.sessions {
@@ -280,14 +331,18 @@ type coordinatorSubmission struct {
 	message, key string
 }
 type coordinatorDelivery struct {
-	submissions []coordinatorSubmission
-	interrupts  []domain.SessionID
-	submitErr   error
+	submissions  []coordinatorSubmission
+	interrupts   []domain.SessionID
+	submitErr    error
+	submitErrFor map[domain.SessionID]error
 }
 
 func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
 	if d.submitErr != nil {
 		return d.submitErr
+	}
+	if err := d.submitErrFor[target]; err != nil {
+		return err
 	}
 	d.submissions = append(d.submissions, coordinatorSubmission{target, message, key})
 	return nil

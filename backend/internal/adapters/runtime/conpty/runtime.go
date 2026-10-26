@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 )
 
 const (
@@ -89,6 +90,8 @@ type Runtime struct {
 	unregisterHost func(context.Context, string) error
 	destroyWait    time.Duration
 	destroyPoll    time.Duration
+	// processTable reads every process, for RunningWorkloadCommands.
+	processTable func(context.Context) ([]procmem.Process, error)
 
 	mu       sync.Mutex
 	sessions map[string]*hostSession // sessionID -> live session
@@ -114,6 +117,7 @@ func New(opts Options) *Runtime {
 		unregisterHost: unregisterHost,
 		destroyWait:    500 * time.Millisecond,
 		destroyPoll:    25 * time.Millisecond,
+		processTable:   snapshotProcesses,
 		sessions:       make(map[string]*hostSession),
 	}
 }

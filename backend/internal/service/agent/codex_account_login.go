@@ -24,7 +24,7 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 	}
 	defer release()
 	if m.terminal == nil || m.executable == nil {
-		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex login terminal is unavailable")
+		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login terminal is unavailable")
 	}
 	targetAccountID = strings.TrimSpace(targetAccountID)
 	deviceCredential, deviceState, deviceErr := readCodexDeviceFileState(m.globalCredentialPath(), true)
@@ -72,13 +72,13 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 	pendingDir, home, err := createPendingCredentialHome(m.pendingRoot, id)
 	if err != nil {
 		m.clearLoginReservation(id)
-		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex login could not be prepared")
+		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login could not be prepared")
 	}
 	executable, err := m.executable()
 	if err != nil || strings.TrimSpace(executable) == "" {
 		_ = os.RemoveAll(pendingDir)
 		m.clearLoginReservation(id)
-		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex login terminal is unavailable")
+		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login terminal is unavailable")
 	}
 	title := "Add Codex account"
 	if targetAccountID != "" {
@@ -88,7 +88,7 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 	if err != nil {
 		_ = os.RemoveAll(pendingDir)
 		m.clearLoginReservation(id)
-		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex login terminal could not be opened")
+		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login terminal could not be opened")
 	}
 	m.mu.Lock()
 	if m.login == nil || m.login.snapshot.OperationID != id {
@@ -420,7 +420,7 @@ func (m *codexAccountManager) cancelLogin(ctx context.Context, operationID strin
 				}
 				m.mu.Unlock()
 				m.publish()
-				return domain.CodexAccountLoginOperation{}, apierr.Unavailable("CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex login terminal could not be closed")
+				return domain.CodexAccountLoginOperation{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login terminal could not be closed")
 			}
 		}
 		_ = os.RemoveAll(pending)

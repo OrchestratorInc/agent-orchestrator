@@ -48,6 +48,11 @@ export type CreateGitHubScratchProjectResponse =
   Schemas["CreateGitHubScratchProjectResponse"];
 
 export type Session = Schemas["Session"];
+export type SessionArtifact = Schemas["SessionArtifact"];
+export type SessionArtifactList = Schemas["SessionArtifactList"];
+export type SessionArtifactAccess = Schemas["SessionArtifactAccess"];
+export type SessionOutputType = Schemas["SessionOutputType"];
+export type RequestedOutput = Schemas["RequestedOutput"];
 export type SessionStartupError = Schemas["SessionStartupError"];
 export type SessionKind = Schemas["SessionKind"];
 export type SessionMode = Schemas["SessionMode"];

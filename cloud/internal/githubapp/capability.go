@@ -155,11 +155,17 @@ func (s *Service) PrepareScratchCapability(
 	if eligible, _ := scratchInstallationEligibility(providerInstallation); !eligible {
 		return ScratchCapabilityGrant{}, postgres.ErrForbidden
 	}
+	// Seeing the installation is not administering it: a member who is not
+	// an owner connects it user-scoped, as everywhere else.
+	scoped, err := s.scopedInstallation(ctx, principal, token, providerInstallation)
+	if err != nil {
+		return ScratchCapabilityGrant{}, err
+	}
 	bound, err := s.store.BindGitHubInstallation(
 		ctx,
 		principal,
 		orgID,
-		toDomainInstallation(providerInstallation),
+		scoped,
 	)
 	if err != nil {
 		return ScratchCapabilityGrant{}, err
