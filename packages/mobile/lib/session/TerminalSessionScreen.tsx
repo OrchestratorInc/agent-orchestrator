@@ -1354,6 +1354,10 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				)}
 				{menuItems.length ? (
 					<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions" title={grid && ios && !dead ? `Grid ${grid}` : undefined}>
+						{/* The bar button's own title, which UIKit shows in the Large
+						    Content Viewer and an overflowing bar. Without a label the
+						    menu's title, the grid size, would stand in for it. */}
+						{ios ? <Stack.Toolbar.Label>Terminal actions</Stack.Toolbar.Label> : null}
 						{menuItems}
 					</Stack.Toolbar.Menu>
 				) : null}

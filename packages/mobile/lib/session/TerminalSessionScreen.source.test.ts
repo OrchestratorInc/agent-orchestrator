@@ -32,6 +32,8 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).toContain(">Fit width</Stack.Toolbar.MenuAction>");
 		expect(screen).toMatch(/<Stack\.Toolbar\.MenuAction key="close" destructive[^>]*onPress=\{\(\) => headerActions\.current\.confirmKill\(\)\}>/);
 		expect(screen).toContain('{ label: "Archive session", symbol: "archivebox" as const }');
+		// The grid size titles the iOS menu, not the bar button that opens it.
+		expect(screen).toContain("{ios ? <Stack.Toolbar.Label>Terminal actions</Stack.Toolbar.Label> : null}");
 		// The old status row is gone; the connection speaks only while it is not live.
 		expect(screen).not.toContain("styles.statusBar");
 		expect(screen).not.toContain("zoomBtn");
