@@ -273,3 +273,29 @@ it.each(["left", "remote"])("does not refresh local history after a failed wake 
 	expect(invalidate).not.toHaveBeenCalled();
 	if (state === "remote") view.unmount();
 });
+
+it("refreshes the conversation after a renewal failure without a completion event", async () => {
+	const { wrapper } = setup();
+	let snapshot = wire("chat", "ready");
+	const renewal = deferred<{ error: { code: string } }>();
+	post.mockResolvedValueOnce({ error: undefined }).mockImplementationOnce(() => renewal.promise);
+	get.mockImplementation(async (path) => path === conversationPath ? { data: snapshot } : { data: {} });
+	const intervals = vi.spyOn(window, "setInterval");
+	const view = renderHook(() => useOpen("chat"), { wrapper });
+	try {
+		await waitFor(() => expect(view.result.current.snapshot?.controller.state).toBe("ready"));
+		expect(requests(conversationPath)).toHaveLength(1);
+		const renew = intervals.mock.calls.find(([, delay]) => delay === 10_000)?.[0] as () => void;
+		expect(renew).toBeTypeOf("function");
+		act(() => { renew(); });
+		await waitFor(() => expect(post.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
+		snapshot = wire("chat", "stopped");
+		await act(async () => { renewal.resolve({ error: { code: "CHAT_RESUME_FAILED" } }); });
+		await waitFor(() => expect(view.result.current.snapshot?.controller.state).toBe("stopped"));
+		expect(requests(conversationPath)).toHaveLength(2);
+		expect(requests("/api/v1/sessions")).toHaveLength(0);
+	} finally {
+		view.unmount();
+		intervals.mockRestore();
+	}
+});
