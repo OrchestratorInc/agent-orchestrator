@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -599,34 +600,46 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	})
 }
 
+// captureRelaunchError sends a relaunch failure's raw error to Sentry.
+var captureRelaunchError = sentryobs.CaptureHTTPError
+
 // emitRelaunchFailed records a failed agent relaunch. These answer 409
-// AGENT_RESUME_FAILED rather than 500, so ao.http.5xx no longer sees them; this
-// event keeps them countable per operation and step. The raw error stays in the
-// daemon log; only its Go type is exported because the text can carry paths and env.
+// AGENT_RESUME_FAILED rather than 500, so neither ao.http.5xx nor the request
+// logger's Sentry capture sees them any more. PostHog gets the operation, step
+// and the root error's Go type (never its text, which can carry paths and env);
+// Sentry, which scrubs events, gets the raw error the 500 used to carry.
 func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id domain.SessionID, err, mapped error) {
 	var relaunchErr *sessionmanager.RelaunchError
 	var apiErr *apierr.Error
-	if s.telemetry == nil || !errors.As(err, &relaunchErr) ||
-		!errors.As(mapped, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
+	if !errors.As(err, &relaunchErr) || !errors.As(mapped, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
 		return
 	}
 	cause := relaunchErr.Err
 	for next := errors.Unwrap(cause); next != nil; next = errors.Unwrap(cause) {
 		cause = next
 	}
+	fingerprint := telemetrymeta.Fingerprint("session_service", operation, relaunchErr.Step)
 	payload := map[string]any{
 		"component":   "session_service",
 		"operation":   operation,
 		"step":        relaunchErr.Step,
 		"cause_type":  fmt.Sprintf("%T", cause),
 		"error_code":  "AGENT_RESUME_FAILED",
-		"fingerprint": telemetrymeta.Fingerprint("session_service", operation, relaunchErr.Step),
+		"fingerprint": fingerprint,
 	}
 	var projectID *domain.ProjectID
 	if rec, ok, getErr := s.store.GetSession(ctx, id); getErr == nil && ok {
 		payload["harness"] = string(rec.Harness)
 		payload["kind"] = string(rec.Kind)
 		projectID = &rec.ProjectID
+	}
+	tags := map[string]string{"request_id": reqid.FromContext(ctx)}
+	for key, value := range payload {
+		tags[key] = fmt.Sprint(value)
+	}
+	captureRelaunchError(ctx, err, tags, fingerprint)
+	if s.telemetry == nil {
+		return
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.session.relaunch_failed",

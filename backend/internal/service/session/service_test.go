@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -6056,6 +6057,13 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 }
 
 func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
+	var sentryErrs []error
+	var sentryTags []map[string]string
+	captureRelaunchError = func(_ context.Context, err error, tags map[string]string, _ string) {
+		sentryErrs = append(sentryErrs, err)
+		sentryTags = append(sentryTags, tags)
+	}
+	t.Cleanup(func() { captureRelaunchError = sentryobs.CaptureHTTPError })
 	cause := sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("tmux: secret-token failed")}
 	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
 	sink := &fakeTelemetrySink{}
@@ -6095,5 +6103,10 @@ func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	}
 	if len(sink.events) != 2 {
 		t.Fatalf("a deadline is already counted as ao.http.5xx; events = %#v", sink.events)
+	}
+	// Sentry keeps the raw error the 500 used to carry, once per relaunch failure.
+	if len(sentryErrs) != 2 || !strings.Contains(sentryErrs[0].Error(), "secret-token") ||
+		sentryTags[1]["operation"] != "restore_session" || sentryTags[1]["step"] != "runtime" {
+		t.Fatalf("sentry captures = %v / %v, want the raw error for both operations", sentryErrs, sentryTags)
 	}
 }
