@@ -237,6 +237,7 @@ describe("Android spawn Start", () => {
 		const start = trigger(root, "spawn-submit");
 		expect(start.props.enabled).toBe(false);
 		expect(start.findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
-		expect(text(start)).toBe("Starting…");
+		// TalkBack reads the button's text, so it is the name iOS announces.
+		expect(text(start)).toBe("Starting task");
 	});
 });

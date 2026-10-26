@@ -158,8 +158,11 @@ export function SpawnComposerControls({
 					modifiers={[fillMaxWidth(), testID("spawn-submit")]}
 				>
 					{busy ? <CircularProgressIndicator color={t.textFaint} strokeWidth={2} modifiers={[size(iconSize.md, iconSize.md)]} /> : null}
+					{/* TalkBack names a Compose button by its text (@expo/ui gives it
+					    no content description), so the busy text spells out the name
+					    iOS announces; the spinner already shows the progress. */}
 					<Text style={{ typography: "labelLarge", fontFamily: font.semibold }} modifiers={busy ? [padding(space.sm, 0, 0, 0)] : undefined}>
-						{busy ? "Starting…" : "Start task"}
+						{busy ? "Starting task" : "Start task"}
 					</Text>
 				</Button>
 			</Host>
