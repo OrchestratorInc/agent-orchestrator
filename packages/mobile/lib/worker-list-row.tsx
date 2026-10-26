@@ -15,7 +15,6 @@ import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
-import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { Spinner } from "./Spinner";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
 import { useOpenPage } from "./pageNavigation";
@@ -120,20 +119,18 @@ export const WorkerListRow = memo(
 	}, [onRename, onRenameCancel, renameSaving, renameTitle]);
 	const renderRightActions = useCallback(
 		() => (
-			<View style={styles.actionRail}>
-				<WorkerRowActions
-					title={row.title}
-					pinned={Boolean(session.isPinned)}
-					onSetPinned={(pinned) => {
-						closeActionRailRef.current();
-						haptics.tap();
-						void onSetPinned(pinned);
-					}}
-					onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
-				/>
-			</View>
+			<WorkerRowActions
+				title={row.title}
+				pinned={Boolean(session.isPinned)}
+				onSetPinned={(pinned) => {
+					closeActionRailRef.current();
+					haptics.tap();
+					void onSetPinned(pinned);
+				}}
+				onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
+			/>
 		),
-		[onDelete, onSetPinned, row.title, session.isPinned, styles.actionRail],
+		[onDelete, onSetPinned, row.title, session.isPinned],
 	);
 	const openSession = useCallback(() => {
 		haptics.tap();
@@ -188,7 +185,6 @@ export const WorkerListRow = memo(
 			shellStyle={styles.shell}
 			foregroundStyle={styles.foreground}
 			rowStyle={styles.row}
-			pressedStyle={styles.rowPressed}
 			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
 			accessibilityHint="Swipe left for pin and delete actions. Long press for more."
 			onPress={openSession}
@@ -375,12 +371,6 @@ const makeStyles = (t: Theme) =>
 			borderBottomWidth: rowDividerWidth,
 			borderBottomColor: t.borderSubtle,
 		},
-		actionRail: {
-			width: WORKER_ACTION_REVEAL_WIDTH,
-			backgroundColor: t.bgElevated,
-			borderLeftWidth: StyleSheet.hairlineWidth,
-			borderLeftColor: t.borderSubtle,
-		},
 		foreground: { backgroundColor: t.bgBase },
 		row: {
 			minHeight: 76,
@@ -388,7 +378,6 @@ const makeStyles = (t: Theme) =>
 			paddingVertical: space.sm,
 			gap: space.hair,
 		},
-		rowPressed: { backgroundColor: t.bgSubtle },
 		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xs },
 		renameInput: { fontFamily: "Geist_600SemiBold", flex: 1, minWidth: 0, minHeight: 32, paddingHorizontal: space.none, paddingVertical: space.none, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
 		renameError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: -1 },

@@ -1,9 +1,10 @@
-import { Feather } from "./icons";
 import { Pressable, StyleSheet, View } from "react-native";
+import { AppSymbol } from "./AppSymbol";
+import type { PlatformSymbol } from "./symbols";
 import { type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { press } from "./tokens";
-import { workerActionGlyph } from "./worker-action-model";
+import { iconSize, press } from "./tokens";
+import { workerActionSymbol } from "./worker-action-model";
 
 const ACTION_WIDTH = 64;
 const CONTROL_SIZE = 44;
@@ -20,18 +21,17 @@ export function WorkerRowActions({
 	onDelete(): void;
 }) {
 	const styles = useThemedStyles(makeStyles);
-	const archiveGlyph = workerActionGlyph("delete");
 
 	return (
 		<View style={styles.actions}>
 			<Action
 				accessibilityLabel={pinned ? `Unpin ${title}` : `Pin ${title}`}
-				icon={pinned ? "pin-off" : "pin"}
+				icon={workerActionSymbol(pinned ? "unpin" : "pin")}
 				onPress={() => onSetPinned(!pinned)}
 			/>
 			<Action
 				accessibilityLabel={`Archive ${title}`}
-				icon={archiveGlyph.name}
+				icon={workerActionSymbol("delete")}
 				onPress={onDelete}
 			/>
 		</View>
@@ -47,7 +47,7 @@ function Action({
 	onPress,
 }: {
 	accessibilityLabel: string;
-	icon: keyof typeof Feather.glyphMap;
+	icon: PlatformSymbol;
 	onPress(): void;
 }) {
 	const t = useTheme();
@@ -61,7 +61,7 @@ function Action({
 				onPress={onPress}
 				style={({ pressed }) => [styles.control, pressed && styles.pressed]}
 			>
-				<Feather name={icon} size={20} color={t.textPrimary} />
+				<AppSymbol name={icon} size={iconSize.lg} color={t.textPrimary} />
 			</Pressable>
 		</View>
 	);

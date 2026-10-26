@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
 	ARCHIVE_SESSION_HINT,
 	ARCHIVE_SESSION_CONFIRM,
-	workerActionGlyph,
 	workerActionSymbol,
 	workerActionSymbols,
 	workerContextActions,
@@ -112,44 +111,13 @@ describe("workerActionSymbol", () => {
 	// Android's menu takes a bundled drawable, and a missing file is a
 	// bundle-time failure rather than a blank icon, so every action's Material
 	// Symbol needs its file, written from the font by the generator, and its
-	// require in both menus that bundle them.
+	// require in the map the menus draw from.
 	it.each(ALL_ACTIONS)("bundles %s's Material Symbol as a drawable", (id) => {
 		const name = workerActionSymbols[id].android;
 		const path = fileURLToPath(new URL(`../assets/icons/${name}.xml`, import.meta.url));
 		expect(existsSync(path)).toBe(true);
 		expect(readFileSync(path, "utf8")).toContain('android:viewportWidth="960"');
-		for (const menu of ["./worker-rename-context-menu.android.tsx", "./worker-rename-context-menu.tsx"]) {
-			expect(readFileSync(fileURLToPath(new URL(menu, import.meta.url)), "utf8")).toContain(`${name}: require("../assets/icons/${name}.xml")`);
-		}
-	});
-});
-
-describe("workerActionGlyph", () => {
-	// Android renders its own Modal, not the native menu, so these are what that
-	// list actually shows. Every action needs one or a row renders iconless beside
-	// rows that don't.
-	it("gives every action a glyph", () => {
-		for (const id of ["pin", "unpin", "rename", "delete", "open", "openPr", "resume", "restore"] as const) {
-			expect(workerActionGlyph(id).name).toBeTruthy();
-		}
-	});
-
-	// The swipe rail already offers pin and unpin with a pushpin; a menu that drew
-	// the same action differently would read as a different action.
-	// The renderer pins with Lucide's Pin/PinOff, so the rail does too — the same
-	// pushpin the desktop shows, not a filled Material one.
-	it("pins with the same pushpin the desktop uses", () => {
-		expect(workerActionGlyph("pin")).toEqual({ family: "feather", name: "pin" });
-		expect(workerActionGlyph("unpin")).toEqual({ family: "feather", name: "pin-off" });
-	});
-
-	it("uses the archive glyph for the restorable session action", () => {
-		expect(workerActionGlyph("delete")).toEqual({ family: "feather", name: "archive" });
-	});
-
-	// Destructive and recovery actions are the ones you must not confuse.
-	it("keeps delete, resume and restore distinct", () => {
-		const names = [workerActionGlyph("delete"), workerActionGlyph("resume"), workerActionGlyph("restore")].map((glyph) => glyph.name);
-		expect(new Set(names).size).toBe(3);
+		expect(readFileSync(fileURLToPath(new URL("./worker-action-drawables.ts", import.meta.url)), "utf8"))
+			.toContain(`${name}: require("../assets/icons/${name}.xml")`);
 	});
 });

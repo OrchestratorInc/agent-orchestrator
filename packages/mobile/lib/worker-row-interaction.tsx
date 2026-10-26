@@ -1,15 +1,28 @@
-import { useEffect, useRef, useState } from "react";
-import { View } from "react-native";
-import type { GestureType } from "react-native-gesture-handler";
-import Swipeable from "react-native-gesture-handler/Swipeable";
-import { haptics } from "./haptics";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { StyleSheet, View } from "react-native";
+import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
+import { rowDividerWidth } from "./divider";
+import type { Theme } from "./theme";
+import { useThemedStyles } from "./ThemeProvider";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { WorkerRowContextMenu } from "./worker-rename-context-menu";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
 
-// Web keeps the existing gesture-handler implementation. Native platforms use
-// their own files: iOS preserves its native context menu and Android owns all
-// competing row gestures in one GestureDetector.
+/** How far a finger travels sideways before the row takes the touch from the list. */
+const DRAG_DISTANCE = 16;
+/**
+ * A resting row has nothing to reveal to its left, so a rightward drag never
+ * claims the touch: it stays with the list and with iOS's edge-swipe back.
+ * Gesture Handler takes a finite offset, so "never" is one no finger reaches.
+ */
+const NEVER = 10_000;
+
+/**
+ * A worker row's touch surface, the same on both platforms: Gesture Handler's
+ * Reanimated swipeable, so the drag and its settle run on the UI thread, around
+ * the row's Pressable and its native long-press menu (SwiftUI on iOS, Compose on
+ * Android).
+ */
 export function WorkerRowInteraction({
 	sessionId,
 	enabled,
@@ -19,7 +32,6 @@ export function WorkerRowInteraction({
 	shellStyle,
 	foregroundStyle,
 	rowStyle,
-	pressedStyle,
 	accessibilityLabel,
 	accessibilityHint,
 	onPress,
@@ -29,44 +41,53 @@ export function WorkerRowInteraction({
 	onSwipeClose,
 	onReady,
 }: WorkerRowInteractionProps) {
-	const swipeableRef = useRef<Swipeable>(null);
-	const renameGestureRef = useRef<GestureType | undefined>(undefined);
-	const [actionsOpen, setActionsOpen] = useState(false);
-	const close = () => swipeableRef.current?.close();
+	const styles = useThemedStyles(makeStyles);
+	const swipeable = useRef<SwipeableMethods>(null);
+	const [open, setOpen] = useState(false);
+	// The rail's controls exist only while the row is off its resting position: a
+	// resting row hides them behind its foreground, and building native buttons
+	// under every mounted row was most of a row's cost.
+	const [railMounted, setRailMounted] = useState(false);
+	const close = useCallback(() => swipeable.current?.close(), []);
 
 	useEffect(() => {
 		onReady?.(close);
-	}, [onReady]);
+	}, [close, onReady]);
 	useEffect(() => {
 		if (activeSwipeId && activeSwipeId !== sessionId) close();
-	}, [activeSwipeId, sessionId]);
+	}, [activeSwipeId, close, sessionId]);
 
 	return (
-		<Swipeable
-			ref={swipeableRef}
+		<ReanimatedSwipeable
+			ref={swipeable}
 			enabled={enabled}
 			containerStyle={shellStyle}
 			childrenContainerStyle={foregroundStyle}
-			dragOffsetFromRightEdge={16}
-			activeOffsetX={actionsOpen ? [-16, 16] : -16}
-			failOffsetY={[-12, 12]}
-			simultaneousHandlers={renameGestureRef}
+			dragOffsetFromRightEdge={DRAG_DISTANCE}
+			dragOffsetFromLeftEdge={open ? DRAG_DISTANCE : NEVER}
 			rightThreshold={WORKER_ACTION_REVEAL_WIDTH / 2}
 			overshootRight={false}
+			onSwipeableOpenStartDrag={() => setRailMounted(true)}
 			onSwipeableWillOpen={() => {
-				setActionsOpen(true);
+				setRailMounted(true);
+				setOpen(true);
 				onSwipeOpen(sessionId, close);
-				haptics.select();
 			}}
+			onSwipeableWillClose={() => setOpen(false)}
 			onSwipeableClose={() => {
-				setActionsOpen(false);
+				// Also fires when a short or cancelled drag settles back at rest.
+				setRailMounted(false);
+				setOpen(false);
 				onSwipeClose(sessionId);
 			}}
-			renderRightActions={() => rightActions}
+			renderRightActions={() => (
+				// The rail keeps its width before its controls mount: the swipeable
+				// measures it to resolve the very first drag.
+				<View style={styles.rail}>{railMounted ? rightActions : null}</View>
+			)}
 		>
 			{enabled ? (
 				<WorkerRowContextMenu
-					gestureRef={renameGestureRef}
 					onPress={onPress}
 					actions={actions}
 					onAction={(id) => {
@@ -78,13 +99,26 @@ export function WorkerRowInteraction({
 					accessibilityLabel={accessibilityLabel}
 					accessibilityHint={accessibilityHint}
 					style={rowStyle}
-					pressedStyle={pressedStyle}
 				>
 					{children}
 				</WorkerRowContextMenu>
 			) : (
 				<View style={rowStyle}>{children}</View>
 			)}
-		</Swipeable>
+		</ReanimatedSwipeable>
 	);
 }
+
+const makeStyles = (t: Theme) =>
+	StyleSheet.create({
+		rail: {
+			width: WORKER_ACTION_REVEAL_WIDTH,
+			// The rail is the row's full height and its controls one fixed block.
+			// Centred, they stay level with the row's middle when it grows past the
+			// minimum: a rename in progress, a larger text size, a wrapped line.
+			justifyContent: "center",
+			backgroundColor: t.bgElevated,
+			borderLeftWidth: rowDividerWidth,
+			borderLeftColor: t.borderSubtle,
+		},
+	});

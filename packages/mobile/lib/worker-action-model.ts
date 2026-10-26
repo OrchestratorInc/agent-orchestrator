@@ -1,4 +1,3 @@
-import type { FeatherIconName } from "./icons";
 /**
  * What the worker row's long-press menu offers, given one session's facts.
  *
@@ -90,37 +89,10 @@ export const workerActionSymbols = {
 /** The Material Symbols Android's menu bundles a drawable for, one per action. */
 export type WorkerActionDrawable = (typeof workerActionSymbols)[WorkerActionId]["android"];
 
+/**
+ * The action's glyph wherever it is drawn: the long-press menu on both
+ * platforms and the swipe rail, so one action never reads two ways.
+ */
 export function workerActionSymbol(id: WorkerActionId): PlatformSymbol {
 	return workerActionSymbols[id];
-}
-
-/**
- * Icon for each action, for Android's own action sheet.
- *
- * Android does not render the native MenuView — its rows are an in-app Modal —
- * so it cannot use the bundled drawables above. A vector font needs no asset
- * pipeline at all, and gives that list the same iconography iOS gets from SF
- * Symbols.
- *
- * Pin and unpin carry the same pushpin the swipe rail uses, which comes from a
- * different icon set — hence the family tag. A menu and a rail offering the same
- * action should not draw it two different ways, and Feather has only a map
- * marker, which reads as a location rather than a pin. Kept as plain data so
- * this module stays free of React Native.
- */
-export type WorkerActionGlyph =
-	| { family: "feather"; name: FeatherIconName }
-
-
-export function workerActionGlyph(id: WorkerActionId): WorkerActionGlyph {
-	switch (id) {
-		case "open": return { family: "feather", name: "message-square" };
-		case "pin": return { family: "feather", name: "pin" };
-		case "unpin": return { family: "feather", name: "pin-off" };
-		case "rename": return { family: "feather", name: "edit-2" };
-		case "resume": return { family: "feather", name: "play" };
-		case "restore": return { family: "feather", name: "rotate-ccw" };
-		case "openPr": return { family: "feather", name: "git-pull-request" };
-		case "delete": return { family: "feather", name: "archive" };
-	}
 }

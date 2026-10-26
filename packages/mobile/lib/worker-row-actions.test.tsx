@@ -26,6 +26,10 @@ vi.mock("./ThemeProvider", () => {
 
 import { WorkerRowActions } from "./worker-row-actions";
 
+// The rail draws system symbols; find one by its Material name.
+const glyph = (renderer: ReactTestRenderer, android: string) =>
+	renderer.root.find((node) => (node.type as unknown) === "SymbolView" && node.props.name?.android === android);
+
 describe("WorkerRowActions", () => {
 	it("presents session removal as a neutral archive action", () => {
 		let renderer!: ReactTestRenderer;
@@ -37,7 +41,7 @@ describe("WorkerRowActions", () => {
 
 		const archive = renderer.root.findByProps({ accessibilityLabel: "Archive Polish workers" });
 		expect(archive).toBeTruthy();
-		expect(renderer.root.findByProps({ name: "archive" }).props.color).toBe("primary");
+		expect(glyph(renderer, "archive").props.tintColor).toBe("primary");
 	});
 
 	it("draws archive with the same control and ink as pin", () => {
@@ -51,9 +55,9 @@ describe("WorkerRowActions", () => {
 		const style = (label: string) =>
 			renderer.root.find((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityLabel === label).props.style({ pressed: false });
 		expect(style("Archive Polish workers")).toEqual(style("Pin Polish workers"));
-		const pinIcon = renderer.root.findByProps({ name: "pin" }).props;
-		const archiveIcon = renderer.root.findByProps({ name: "archive" }).props;
-		expect({ size: archiveIcon.size, color: archiveIcon.color }).toEqual({ size: pinIcon.size, color: pinIcon.color });
+		const pinIcon = glyph(renderer, "keep").props;
+		const archiveIcon = glyph(renderer, "archive").props;
+		expect({ size: archiveIcon.size, tintColor: archiveIcon.tintColor }).toEqual({ size: pinIcon.size, tintColor: pinIcon.tintColor });
 	});
 
 	// Both rails draw the pin the way the system symbol stands, never tilted.
