@@ -11,9 +11,9 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 });
 
-it("finishes stale startup and disposal before a reopened panel recovers a login", async () => {
+it.each(["old-login", "recovered-login"])("finishes stale startup and disposal before a reopened panel recovers %s", async (operationId) => {
 	const old: AgentLoginSnapshot = { id: "old-login", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-27T12:00:00Z" };
-	const recovered = { ...old, id: "recovered-login", loginUrl: "https://auth.openai.com/oauth/authorize" };
+	const recovered = { ...old, id: operationId, loginUrl: "https://auth.openai.com/oauth/authorize" };
 	let finishStart!: (value: unknown) => void;
 	let finishStop!: () => void;
 	const started = new Promise<never>((resolve) => { finishStart = (value) => resolve(value as never); });
@@ -27,12 +27,13 @@ it("finishes stale startup and disposal before a reopened panel recovers a login
 		const first = render(<HarnessLoginPanel {...props} />);
 		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
 		first.unmount();
-		render(<HarnessLoginPanel {...props} />);
+		render(<HarnessLoginPanel {...props} hostId="local" />);
 		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
 		expect(post).toHaveBeenCalledTimes(1);
 		await act(async () => finishStart({ data: old }));
 		await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
 		expect(post).toHaveBeenCalledTimes(1);
+		expect(get).not.toHaveBeenCalled();
 		await act(async () => finishStop());
 		await waitFor(() => expect(get).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: "codex", operationId: recovered.id } } }));
 		expect(await screen.findByRole("button", { name: "Open sign-in page" })).toBeVisible();
@@ -41,6 +42,8 @@ it("finishes stale startup and disposal before a reopened panel recovers a login
 		get.mockResolvedValue({ data: { ...recovered, status: "succeeded" } } as never);
 		expect(await screen.findByText("Connected", {}, { timeout: 3_000 })).toBeVisible();
 		expect(props.onVerify).toHaveBeenCalledTimes(1);
+		expect(remove).toHaveBeenCalledTimes(1);
+		expect(screen.queryByText("Sign-in cancelled")).not.toBeInTheDocument();
 	} finally {
 		finishStart({ data: old });
 		finishStop();
