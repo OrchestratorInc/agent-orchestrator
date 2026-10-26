@@ -1,8 +1,8 @@
 import { Feather } from "../icons";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApiError, getPreview, killSession, killSessionReviewer, sendMessage } from "../api";
 import { isConfigured } from "../config";
@@ -38,7 +38,9 @@ import {
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
 import { adjustTerminalViewport } from "./terminalViewport";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
-import { iconSize, press, space, type } from "../tokens";
+import { iconSize, press, space, touchTarget, type } from "../tokens";
+import { toolbarIcon } from "../toolbarIcon";
+import { Spinner } from "../Spinner";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -1021,7 +1023,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// Preview is one session-level destination: the live desktop browser first,
 	// with the generated app/document preview available as a second tab.
 	const toggleBrowser = useCallback(() => {
-		haptics.tap();
 		router.push({
 			pathname: "/preview/[id]",
 			params: {
@@ -1132,69 +1133,64 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		interfaceFailureRecovery.confirm((policy) => void startInterfaceSwitch(policy));
 	}, [interfaceFailureRecovery, startInterfaceSwitch]);
 
-	// The browser toggle lives in the nav bar, beside the session name, to keep the
-	// status row uncluttered. Separate from the title effect above because
-	// `toggleBrowser` is declared here — referencing it in that effect's dep array
-	// would read it before initialisation.
-	useLayoutEffect(() => {
-		if (shellOnly || !headerRightReady) {
-			navigation.setOptions(glassHeaderControl("right"));
-			return;
-		}
-		navigation.setOptions({
-			headerRight: () => (
-				<View style={styles.headerActions}>
-					<Pressable
-						hitSlop={10}
+	const openFiles = useCallback(() => {
+		router.push(filesRoute(sessionId, params.hostId, params.title));
+	}, [params.hostId, params.title, router, sessionId]);
+
+	// The header items reach their handlers through a ref. The transition hook
+	// returns a new object every render, so `requestInterfaceSwitch` is new every
+	// render too, and a new toolbar element registers the header's options again:
+	// keyed on it, the header would rebuild on every keystroke.
+	const headerActions = useRef({ requestInterfaceSwitch, toggleBrowser, openFiles });
+	headerActions.current = { requestInterfaceSwitch, toggleBrowser, openFiles };
+	const chatSwitchBusy = rechecking || interfaceSwitch.starting;
+	const chatSwitchReady = Boolean(interfaceSwitch.status?.supported);
+	const headerItems = useMemo(() => {
+		// Held back for the frame `resetHeaderRightForSwap` keeps the slot empty,
+		// so the bar never draws these over what the Chat renderer left there.
+		if (shellOnly || !headerRightReady) return null;
+		return (
+			<Stack.Toolbar placement="right">
+				{/* A spinner rather than a dimmed glyph: the recheck only runs while
+				    the glyph is already faint, so fading it further reads as broken.
+				    `starting` shows it too — that POST is disabled-but-silent for up
+				    to REQUEST_TIMEOUT_MS otherwise, the same dead-button shape the
+				    recheck spinner exists to remove. */}
+				{chatSwitchBusy ? (
+					<Stack.Toolbar.View hidesSharedBackground>
+						<View style={styles.headerSpinner}>
+							<Spinner color={t.accent} accessibilityLabel="Checking whether Chat can open" />
+						</View>
+					</Stack.Toolbar.View>
+				) : (
+					<Stack.Toolbar.Button
+						icon={toolbarIcon("chat")}
 						accessibilityLabel="Open Chat interface"
-						accessibilityState={{
-							busy: interfaceTransitionActive || interfaceSwitch.starting || rechecking,
-						}}
-						disabled={rechecking || interfaceSwitch.starting || interfaceTransitionActive}
-						onPress={() => void requestInterfaceSwitch()}
-						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
-					>
-						{/* A spinner rather than a dimmed glyph: the recheck only runs while
-						    the icon is already faint, so fading it further reads as broken.
-						    `starting` shows it too — that POST is disabled-but-silent for up
-						    to REQUEST_TIMEOUT_MS otherwise, the same dead-button shape the
-						    recheck spinner exists to remove. */}
-						{rechecking || interfaceSwitch.starting ? (
-							<ActivityIndicator size="small" color={t.accent} />
-						) : (
-							<Feather
-								name={interfaceTransitionActive ? "repeat" : "message-square"}
-								size={iconSize.md}
-								color={interfaceSwitch.status?.supported ? t.accent : t.textFaint}
-							/>
-						)}
-					</Pressable>
-					<Pressable
-						hitSlop={12}
-						accessibilityLabel="Open preview"
-						onPress={toggleBrowser}
-						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
-					>
-						<Feather
-							name="globe"
-							size={iconSize.lg}
-							color={hasPreview ? t.green : t.textSecondary}
-						/>
-						{hasPreview && <View style={styles.browserReadyDot} />}
-					</Pressable>
-					<Pressable
-						hitSlop={10}
-						accessibilityRole="button"
-						accessibilityLabel="Session files and changes"
-						onPress={() => { haptics.tap(); router.push(filesRoute(sessionId, params.hostId, params.title)); }}
-						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}
-					>
-						<Feather name="file-diff" size={iconSize.lg} color={t.textSecondary} />
-					</Pressable>
-				</View>
-			),
-		});
-	}, [headerRightReady, navigation, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch, router, sessionId, params.hostId, params.title]);
+						disabled={interfaceTransitionActive}
+						// Faint until the daemon says Chat can resume this session. It stays
+						// tappable: the tap asks again and explains what is missing.
+						tintColor={chatSwitchReady ? undefined : t.textFaint}
+						onPress={() => void headerActions.current.requestInterfaceSwitch()}
+					/>
+				)}
+				<Stack.Toolbar.Button
+					icon={toolbarIcon("globe")}
+					accessibilityLabel={hasPreview ? "Open preview, preview ready" : "Open preview"}
+					// iOS draws a bar-button badge only from iOS 26, and an empty one is
+					// a blank capsule there, so on iOS the globe itself turns green.
+					tintColor={hasPreview && Platform.OS === "ios" ? t.green : undefined}
+					onPress={() => headerActions.current.toggleBrowser()}
+				>
+					{hasPreview && Platform.OS !== "ios" ? <Stack.Toolbar.Badge style={{ backgroundColor: t.green }} /> : null}
+				</Stack.Toolbar.Button>
+				<Stack.Toolbar.Button
+					icon={toolbarIcon("fileSearch")}
+					accessibilityLabel="Session files and changes"
+					onPress={() => headerActions.current.openFiles()}
+				/>
+			</Stack.Toolbar>
+		);
+	}, [chatSwitchBusy, chatSwitchReady, hasPreview, headerRightReady, interfaceTransitionActive, shellOnly, styles, t]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
@@ -1304,6 +1300,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	if (activeConfig && !isConfigured(activeConfig)) {
 		return (
 			<View style={styles.center}>
+				{headerItems}
 				<Text style={styles.bannerText}>No machine paired.</Text>
 			</View>
 		);
@@ -1318,6 +1315,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 	return (
 		<View style={[styles.screen, rootPad > 0 && { paddingBottom: rootPad }]}>
+			{headerItems}
 			<View style={styles.statusBar}>
 				<View style={[styles.statusDot, { backgroundColor: statusColorFor(t)[status] }]} />
 				{/* Status-bar chrome: capped so the toolbar keeps its height and the
@@ -1589,17 +1587,8 @@ const makeStyles = (t: Theme) =>
 		paddingVertical: space.xxs,
 		marginLeft: space.md,
 	},
-	// Bare glyph in the nav bar: iOS draws its own round box behind header buttons,
-	// so a tinted pill here would fight it. Colour carries the state instead.
-	// A fixed square with centred content, not padding — asymmetric padding leaves
-	// the glyph visibly off-centre inside the circle iOS draws around it.
-	headerBrowserBtn: {
-		width: 35,
-		height: 30,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	headerActions: { flexDirection: "row", alignItems: "center" },
+	// The size of the button it stands in for, so the items beside it hold still.
+	headerSpinner: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	interfaceOverlay: {
 		...StyleSheet.absoluteFill,
 		alignItems: "center",
@@ -1631,19 +1620,6 @@ const makeStyles = (t: Theme) =>
 	},
 	interfaceCancelText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	interfaceError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, textAlign: "center" },
-	// Small green badge on the globe when a real preview is available. Offsets are
-	// from the square's centre, so it rides the glyph rather than the button frame.
-	browserReadyDot: {
-		position: "absolute",
-		top: 4,
-		right: 3,
-		width: 8,
-		height: 8,
-		borderRadius: 4, borderCurve: "continuous",
-		backgroundColor: t.green,
-		borderWidth: 1,
-		borderColor: t.bgSurface,
-	},
 	restoreBtn: {
 		flexDirection: "row",
 		alignItems: "center",
