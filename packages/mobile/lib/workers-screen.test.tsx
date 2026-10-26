@@ -58,6 +58,8 @@ vi.mock("@expo/ui/community/menu", async () => {
 	}) };
 });
 vi.mock("@expo/ui/community/bottom-sheet", () => ({ default: "BottomSheet", BottomSheetView: "BottomSheetView", BottomSheetScrollView: "BottomSheetScrollView" }));
+// The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
+vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
 vi.mock("./store", () => ({ useApp: () => ({
 	configured: fixtures.configured, connection: "open", loading: false, error: null,
 	config: { hostId: "mac" },
@@ -457,37 +459,15 @@ describe("Workers selected-machine reachability", () => {
 		expect(fixtures.refreshHost).toHaveBeenCalledWith("windows");
 		expect(fixtures.refreshAll).not.toHaveBeenCalled();
 	});
-	it("opens only the native environment choices from the unreachable machine's picker", () => {
+	// The same picker on both platforms; its native menus are tested on their own.
+	it.each(["ios", "android"] as const)("offers every environment from the unreachable machine's picker on %s and applies a choice immediately", (platform) => {
+		fixtures.platform = platform;
 		selectWindows();
-		const menu = renderer.root.findByType("MenuView" as never);
-		expect(menu.props.actions.map((action: { title: string }) => action.title)).toEqual(["All environments", "Mac", "Windows"]);
-		expect(menu.props.actions[2].state).toBe("on");
-		act(() => menu.props.onPressAction({ nativeEvent: { event: "mac" } }));
+		const picker = renderer.root.findByType("EnvironmentPicker" as never);
+		expect(picker.props.environments.map((environment: { name: string }) => environment.name)).toEqual(["Mac", "Windows"]);
+		expect(picker.props.selectedEnvironmentId).toBe("windows");
+		act(() => picker.props.onSelectEnvironment("mac"));
 		expect(selectedEnvironment()).toBe("Mac");
-	});
-	it("opens an environment-only sheet on Android and applies a choice immediately", () => {
-		fixtures.platform = "android";
-		fixtures.hostStates[1].appearance = { symbol: "laptop" };
-		selectWindows();
-		act(() => renderer.root.findByProps({ accessibilityLabel: "Switch environment" }).props.onPress());
-		const sheet = renderer.root.findByType("BottomSheet" as never);
-		expect(sheet.props.index).toBe(0);
-		expect(renderer.root.findAllByType("MenuView" as never)).toHaveLength(0);
-		const options = sheet.findAllByType("Pressable" as never).filter(node => node.props.accessibilityRole === "radio");
-		expect(options.map(node => node.props.accessibilityLabel)).toEqual(["All environments", "Mac", "Windows"]);
-		expect(options[2].props.accessibilityState.checked).toBe(true);
-		expect(options[2].findAllByType("SymbolView" as never)[0].props.name).toEqual({ ios: "laptopcomputer", android: "laptop" });
-		act(() => options[1].props.onPress());
-		expect(selectedEnvironment()).toBe("Mac");
-		expect(renderer.root.findAllByType("BottomSheet" as never)).toHaveLength(0);
-	});
-	it("dismisses the Android sheet without changing the environment", () => {
-		fixtures.platform = "android";
-		selectWindows();
-		act(() => renderer.root.findByProps({ accessibilityLabel: "Switch environment" }).props.onPress());
-		act(() => renderer.root.findByType("BottomSheet" as never).props.onClose());
-		expect(renderer.root.findByType("BottomSheet" as never).props.index).toBe(-1);
-		expect(selectedEnvironment()).toBe("Windows");
 	});
 	it("keeps the small connecting indicator beside its status and away from the picker", () => {
 		Object.assign(fixtures.hostStates[1], { connection: "connecting", loading: true, error: null, appearance: { symbol: "laptop" } });
@@ -495,9 +475,9 @@ describe("Workers selected-machine reachability", () => {
 		const status = renderer.root.findByProps({ testID: "worker-machine-status" });
 		expect(status.findByType("ActivityIndicator" as never).props.size).toBe("small");
 		expect(status.findByType("Text" as never).props.children).toBe("Connecting…");
-		expect(renderer.root.findByType("MenuView" as never).findAllByType("ActivityIndicator" as never)).toHaveLength(0);
+		expect(renderer.root.findByType("EnvironmentPicker" as never).findAllByType("ActivityIndicator" as never)).toHaveLength(0);
 		expect(renderer.root.findAllByType("SymbolView" as never).some((node) => node.props.name?.android === "laptop")).toBe(true);
-		expect(renderer.root.findByType("MenuView" as never).props.actions[2].image).toBe("laptopcomputer");
+		expect(renderer.root.findByType("EnvironmentPicker" as never).props.environments[1].appearance).toEqual({ symbol: "laptop" });
 	});
 	it("uses the no-workers state only once the selected machine is connected", () => {
 		Object.assign(fixtures.hostStates[1], { connection: "open", error: null });
