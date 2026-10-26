@@ -8,6 +8,7 @@ import {
 	backgroundOverlay,
 	buttonStyle,
 	clipShape,
+	contentShape,
 	controlSize,
 	disabled as disabledModifier,
 	font,
@@ -20,6 +21,7 @@ import {
 	opacity,
 	padding,
 	resizable,
+	shapes,
 	tint,
 	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
@@ -85,97 +87,101 @@ export function SpawnComposerControls({
 	return (
 		<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.host}>
 			<VStack alignment="leading" spacing={space.sm}>
-				{/* Compact and left-anchored: a max-width frame would make a Menu
-				    fill the row, which centers its popup over the whole sheet. */}
-				<HStack spacing={space.sm}>
-					<Menu
-						label={<SelectorLabel icon={<SelectorGlyph name="desktopcomputer" />} title={`Run on ${hostLabel}`} indicator="chevron.up.chevron.down" />}
-						modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-host")]}
-					>
-						{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => choose(onSelectHost, host.id)} />)}
-					</Menu>
-					<Menu
-						label={<SelectorLabel icon={<SelectorGlyph name={projectSystemImage(selectedProject)} />} title={projectLabel} indicator="chevron.up.chevron.down" />}
-						modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-project")]}
-					>
-						{projects.flatMap((project) => [
-							project.sectionBreakBefore ? <Divider key={`${project.id}-break`} /> : null,
-							<Choice key={project.id} label={project.label} systemImage={projectSystemImage(project)} selected={project.id === projectId} onChoose={() => choose(onSelectProject, project.id)} />,
-						])}
-					</Menu>
-					<Spacer minLength={0} />
-				</HStack>
+				{/* Every trigger's touch target carries its own air above and below
+				    the text, so the rail needs no gap of its own under the selectors. */}
+				<VStack alignment="leading" spacing={space.none}>
+					{/* Compact and left-anchored: a max-width frame would make a Menu
+					    fill the row, which centers its popup over the whole sheet. */}
+					<HStack spacing={space.sm}>
+						<Menu
+							label={<SelectorLabel icon={<SelectorGlyph name="desktopcomputer" />} title={`Run on ${hostLabel}`} indicator="chevron.up.chevron.down" />}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-host")]}
+						>
+							{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => choose(onSelectHost, host.id)} />)}
+						</Menu>
+						<Menu
+							label={<SelectorLabel icon={<SelectorGlyph name={projectSystemImage(selectedProject)} />} title={projectLabel} indicator="chevron.up.chevron.down" />}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-project")]}
+						>
+							{projects.flatMap((project) => [
+								project.sectionBreakBefore ? <Divider key={`${project.id}-break`} /> : null,
+								<Choice key={project.id} label={project.label} systemImage={projectSystemImage(project)} selected={project.id === projectId} onChoose={() => choose(onSelectProject, project.id)} />,
+							])}
+						</Menu>
+						<Spacer minLength={0} />
+					</HStack>
 
-				<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.sm, vertical: space.xxs }), glassPanel()]}>
-					<Menu
-						label="Attach"
-						systemImage="paperclip"
-						modifiers={[
-							buttonStyle("plain"),
-							labelStyle("iconOnly"),
-							menuOrder("fixed"),
-							frame({ minWidth: touchTarget, minHeight: touchTarget }),
-							font({ textStyle: "body" }),
-							tint(t.textPrimary),
-							accessibilityIdentifier("spawn-attachment"),
-						]}
-					>
-						<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />
-						<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
-					</Menu>
+					<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.sm, vertical: space.xxs }), glassPanel()]}>
+						{/* A plain-style Menu answers taps only inside its label, so the
+						    paperclip's target is sized there: a frame around the Menu
+						    enlarges its layout, not its hit area. */}
+						<Menu
+							label={
+								<Label
+									title="Attach"
+									systemImage="paperclip"
+									modifiers={[labelStyle("iconOnly"), font({ textStyle: "body" }), frame({ minWidth: touchTarget, minHeight: touchTarget }), contentShape(shapes.rectangle())]}
+								/>
+							}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textPrimary), accessibilityIdentifier("spawn-attachment")]}
+						>
+							<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />
+							<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
+						</Menu>
 
-					{/* The agent's name is laid out first, at its natural width, and
-					    the model fills what the rail has left. Given to the filling
-					    model instead, the priority squeezed the name to an ellipsis. */}
-					<Menu
-						label={<SelectorLabel icon={<HarnessImage uri={logoUris[harness]} harness={harness} />} title={harnessLabel} indicator="chevron.down" />}
-						modifiers={[buttonStyle("plain"), menuOrder("fixed"), layoutPriority(1), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
-					>
-						{agents.map((agent) => (
-							<Choice key={agent.id} label={agent.label} icon={<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />} selected={agent.id === harness} onChoose={() => choose(onSelectHarness, agent.id)} />
-						))}
-					</Menu>
+						{/* The agent's name is laid out first, at its natural width, and
+						    the model fills what the rail has left. Given to the filling
+						    model instead, the priority squeezed the name to an ellipsis. */}
+						<Menu
+							label={<SelectorLabel icon={<HarnessImage uri={logoUris[harness]} harness={harness} />} title={harnessLabel} indicator="chevron.down" />}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), layoutPriority(1), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
+						>
+							{agents.map((agent) => (
+								<Choice key={agent.id} label={agent.label} icon={<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />} selected={agent.id === harness} onChoose={() => choose(onSelectHarness, agent.id)} />
+							))}
+						</Menu>
 
-					<Menu
-						label={
-							<HStack spacing={space.xxs} modifiers={[frame({ maxWidth: FILL_WIDTH, alignment: "leading" })]}>
-								<SelectorText>{modelLabel}</SelectorText>
-								<Spacer />
-								<SelectorGlyph name="chevron.down" indicator />
-							</HStack>
-						}
-						modifiers={[
-							buttonStyle("plain"),
-							menuOrder("fixed"),
-							frame({ maxWidth: FILL_WIDTH, alignment: "leading" }),
-							tint(t.textSecondary),
-							opacity(models.length || modelSelection === "__auto__" ? 1 : stateOpacity.disabled),
-							accessibilityIdentifier("spawn-model"),
-						]}
-					>
-						{[{ id: "__auto__", label: "Automatic" }, ...models].map((model) => (
-							<Choice key={model.id} label={model.label} selected={model.id === modelSelection} onChoose={() => choose(onSelectModel, model.id)} />
-						))}
-					</Menu>
+						<Menu
+							label={
+								<HStack spacing={space.xxs} modifiers={[frame({ maxWidth: FILL_WIDTH, minHeight: touchTarget, alignment: "leading" }), contentShape(shapes.rectangle())]}>
+									<SelectorText>{modelLabel}</SelectorText>
+									<Spacer />
+									<SelectorGlyph name="chevron.down" indicator />
+								</HStack>
+							}
+							modifiers={[
+								buttonStyle("plain"),
+								menuOrder("fixed"),
+								frame({ maxWidth: FILL_WIDTH, alignment: "leading" }),
+								tint(t.textSecondary),
+								opacity(models.length || modelSelection === "__auto__" ? 1 : stateOpacity.disabled),
+								accessibilityIdentifier("spawn-model"),
+							]}
+						>
+							{[{ id: "__auto__", label: "Automatic" }, ...models].map((model) => (
+								<Choice key={model.id} label={model.label} selected={model.id === modelSelection} onChoose={() => choose(onSelectModel, model.id)} />
+							))}
+						</Menu>
 
-					{/* Hold-to-talk needs press-in and press-out, which a SwiftUI
-					    Button doesn't expose, so the mic is the React Native key
-					    hosted inside the rail. Plain, like the paperclip: the rail's
-					    glass is the material, and a second disc would compete with it. */}
-					<RNHostView matchContents>
-						<View style={styles.micSlot}>
-							<MicKey
-								variant="plain"
-								size={touchTarget}
-								glyphSize={iconSize.md}
-								state={voice.state}
-								mode={voice.mode}
-								onPressIn={voice.onPressIn}
-								onPressOut={voice.onPressOut}
-							/>
-						</View>
-					</RNHostView>
-				</HStack>
+						{/* Hold-to-talk needs press-in and press-out, which a SwiftUI
+						    Button doesn't expose, so the mic is the React Native key
+						    hosted inside the rail. Plain, like the paperclip: the rail's
+						    glass is the material, and a second disc would compete with it. */}
+						<RNHostView matchContents>
+							<View style={styles.micSlot}>
+								<MicKey
+									variant="plain"
+									size={touchTarget}
+									glyphSize={iconSize.md}
+									state={voice.state}
+									mode={voice.mode}
+									onPressIn={voice.onPressIn}
+									onPressOut={voice.onPressOut}
+								/>
+							</View>
+						</RNHostView>
+					</HStack>
+				</VStack>
 
 				{/* The success and failure haptics come from the request itself, so
 				    the press adds none of its own. */}
@@ -223,9 +229,13 @@ function Choice({ label, systemImage, icon, selected, onChoose }: {
 		: <Toggle isOn={selected} onIsOnChange={onIsOnChange} label={label} systemImage={systemImage} />;
 }
 
+/**
+ * A trigger's face. A plain-style Menu answers taps only inside its label, so
+ * the label itself is a full touch target, gaps included.
+ */
 function SelectorLabel({ icon, title, indicator }: { icon: ReactNode; title: string; indicator: IOSSymbol }) {
 	return (
-		<HStack spacing={space.xs}>
+		<HStack spacing={space.xs} modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
 			{icon}
 			<SelectorText>{title}</SelectorText>
 			<SelectorGlyph name={indicator} indicator />

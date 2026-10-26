@@ -34,13 +34,17 @@ vi.mock("@expo/ui/swift-ui", async () => {
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
-	return Object.fromEntries([
-		"accessibilityIdentifier", "accessibilityLabel", "aspectRatio", "backgroundOverlay", "buttonStyle", "clipShape", "controlSize", "disabled", "font",
-		"foregroundStyle", "frame", "glassEffect", "labelStyle", "layoutPriority", "lineLimit", "menuOrder", "opacity", "padding", "resizable", "tint", "truncationMode",
-	].map((name) => [name, record(name)]));
+	return {
+		...Object.fromEntries([
+			"accessibilityIdentifier", "accessibilityLabel", "aspectRatio", "backgroundOverlay", "buttonStyle", "clipShape", "contentShape", "controlSize", "disabled", "font",
+			"foregroundStyle", "frame", "glassEffect", "labelStyle", "layoutPriority", "lineLimit", "menuOrder", "opacity", "padding", "resizable", "tint", "truncationMode",
+		].map((name) => [name, record(name)])),
+		shapes: { rectangle: () => ({ shape: "rectangle" }) },
+	};
 });
 
 import { SpawnComposerControls } from "./spawn-composer-controls.ios";
+import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -98,6 +102,9 @@ const modifiers = (node: ReactTestInstance) => (node.props.modifiers ?? []) as M
 const modifier = (node: ReactTestInstance, name: string) => modifiers(node).find((entry) => entry.modifier === name);
 const identified = (root: ReactTestInstance, id: string) =>
 	root.findAll((node) => hostType(node) !== "" && modifiers(node).some((entry) => entry.modifier === "accessibilityIdentifier" && entry.args[0] === id))[0];
+// A Menu's `label` is a prop, not a child, so its element is read unrendered.
+type LabelElement = { type: unknown; props: { modifiers?: Modifier[]; children?: unknown } };
+const modifierOf = (element: LabelElement, name: string) => (element.props.modifiers ?? []).find((entry) => entry.modifier === name);
 const choices = (menu: ReactTestInstance) => menu.findAll((node) => hostType(node) === "Toggle");
 const choiceLabel = (choice: ReactTestInstance): string => choice.props.label ?? choice.findByType("Label" as never).props.title;
 
@@ -154,7 +161,9 @@ describe("iOS spawn selectors", () => {
 		const props = baseProps();
 		const root = await render(props);
 		const menu = identified(root, "spawn-attachment");
-		expect(menu.props).toMatchObject({ label: "Attach", systemImage: "paperclip" });
+		// An icon-only Label keeps "Attach" as the name VoiceOver reads.
+		expect(menu.props.label.props).toMatchObject({ title: "Attach", systemImage: "paperclip" });
+		expect(modifierOf(menu.props.label, "labelStyle")?.args).toEqual(["iconOnly"]);
 		const buttons = menu.findAll((node) => hostType(node) === "Button");
 		expect(buttons.map((node) => [node.props.label, node.props.systemImage])).toEqual([["Choose Photo", "photo"], ["Choose File", "doc"]]);
 		await act(async () => buttons[0].props.onPress());
@@ -183,6 +192,24 @@ describe("iOS spawn selectors", () => {
 		expect(modifier(identified(root, "spawn-harness"), "layoutPriority")?.args).toEqual([1]);
 		expect(modifier(identified(root, "spawn-model"), "layoutPriority")).toBeUndefined();
 		expect(root.findByType("Host" as never).props.matchContents).toEqual({ vertical: true });
+	});
+
+	// A plain-style Menu hears taps only inside its label: a frame on the Menu
+	// grows its layout, and gaps or a Spacer in the label are transparent.
+	it("answers taps across a full touch target on every trigger", async () => {
+		const root = await render(baseProps());
+		for (const id of ["spawn-host", "spawn-project", "spawn-attachment", "spawn-harness", "spawn-model"]) {
+			const menu = identified(root, id);
+			expect(modifier(menu, "frame")?.args[0] ?? {}).not.toHaveProperty("minHeight");
+			let face: ReactTestRenderer | undefined;
+			await act(async () => { face = create(menu.props.label); });
+			const top = face!.root.findAll((node) => hostType(node) !== "")[0];
+			expect(modifier(top, "frame")?.args[0]).toMatchObject({ minHeight: touchTarget });
+			expect(modifier(top, "contentShape")?.args).toEqual([{ shape: "rectangle" }]);
+			await act(async () => face!.unmount());
+		}
+		const attach = identified(root, "spawn-attachment").props.label as LabelElement;
+		expect(modifierOf(attach, "frame")?.args[0]).toMatchObject({ minWidth: touchTarget, minHeight: touchTarget });
 	});
 });
 
