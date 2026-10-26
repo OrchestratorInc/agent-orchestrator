@@ -113,6 +113,10 @@ func TestSessionListingToleratesLegacyBlankNativeIdentityTimestamp(t *testing.T)
 	if err := db.QueryRowContext(ctx, "SELECT native_identity_observed_at FROM sessions WHERE id = ?", created.ID).Scan(&oldScanner); err == nil {
 		t.Fatal("legacy timestamp unexpectedly scanned into sql.NullTime")
 	}
+	got, found, err := s.GetSession(ctx, created.ID)
+	if err != nil || !found || !got.Metadata.NativeIdentityObservedAt.IsZero() {
+		t.Fatalf("GetSession with legacy timestamp text: found=%v session=%+v err=%v", found, got, err)
+	}
 	listed, err := s.ListSessions(ctx, created.ProjectID)
 	if err != nil {
 		t.Fatalf("ListSessions with legacy timestamp text: %v", err)
