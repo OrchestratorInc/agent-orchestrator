@@ -1,10 +1,8 @@
-import { Host, Switch } from "@expo/ui";
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-	Alert,
 	FlatList,
 	Image,
 	Keyboard,
@@ -22,7 +20,7 @@ import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
-import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
+import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
 import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
@@ -36,17 +34,16 @@ import { userMessageSurfaceStyle } from "./chatChrome";
 import { actionControlWidth, requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
-import { ElicitationAction, ElicitationChoiceList, ElicitationTextField } from "./elicitation-native-controls";
+import { ElicitationAction } from "./elicitation-native-controls";
+import { ElicitationInputField } from "./ElicitationInputField";
 import {
 	elicitationPromptCopy,
 	elicitationStepPresentation,
 	groupedQuestionInputs,
 	humanizeInputName,
 	initialInputValue,
-	inputOptions,
 	missingRequiredInputs,
 	safeHttpURL,
-	toggleInputValue,
 	validateInput,
 } from "./elicitationModel";
 import { previewFilePath } from "../api";
@@ -63,7 +60,6 @@ import type {
 	ConversationSnapshot,
 	ConversationTurn,
 	FileChange,
-	InputProperty,
 } from "./types";
 import {
 	activityHierarchy,
@@ -86,6 +82,7 @@ import { iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
+import { TurnRollbackButton } from "./TurnRollbackButton";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { SessionStartupView } from "../session/sessionStartup";
 
@@ -856,53 +853,15 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 	</Pressable>;
 }
 
-// "Roll back", in each platform's own glyph for undoing back to an earlier point.
-const ROLLBACK_SYMBOL = { ios: "arrow.uturn.backward", android: "undo" } as const;
-
 function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const rollbackFeedback = usePressFeedback("icon");
-	const [rollingBack, setRollingBack] = useState(false);
 	const settled = turn.state !== "running" && turn.state !== "queued";
-	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
-	// It cannot be undone, so the system's destructive confirmation asks first,
-	// the way Archive does.
-	const confirmRollback = () => {
-		if (!onRollback || rollingBack) return;
-		haptics.warning();
-		Alert.alert(
-			"Make the agent forget this turn and everything after it?",
-			"Files stay changed. Only conversation memory is rolled back, and this cannot be undone.",
-			[
-				{ text: "Cancel", style: "cancel" },
-				{ text: "Roll back", style: "destructive", onPress: () => {
-					setRollingBack(true);
-					void onRollback(turn.id)
-						.catch((cause) => Alert.alert("Couldn't roll back", userFacingError(cause)))
-						.finally(() => setRollingBack(false));
-				} },
-			],
-			{ cancelable: true },
-		);
-	};
+	const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;
 	return (
 		<View style={styles.turnWrap}>
 			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
-			{canRollBack ? <View style={styles.turnLine}>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Roll back to before this turn"
-					accessibilityState={{ disabled: rollingBack, busy: rollingBack }}
-					disabled={rollingBack}
-					onPress={confirmRollback}
-					android_ripple={rollbackFeedback.android_ripple}
-					style={({ pressed }) => [styles.rollback, pressed && rollbackFeedback.pressed]}
-				>
-					{rollingBack ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name={ROLLBACK_SYMBOL} size={iconSize.md} color={t.textTertiary} />}
-				</Pressable>
-			</View> : null}
+			{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
@@ -1098,7 +1057,7 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 		{promptCopy ? <Text style={styles.requestCopy}>{promptCopy}</Text> : null}
 		{pending && activity.detail?.inputMode === "url" ? <View style={styles.urlBox}><Text selectable style={styles.urlText}>{url?.href ?? "The provider supplied an unsafe or invalid URL."}</Text></View> : null}
 		{pending && activity.detail?.inputMode !== "url" && schema?.properties ? <View style={styles.form}>
-			{visibleProperties.map(([name, property]) => <InputField key={name} name={name} property={property} required={schema.required?.includes(name) ?? false} value={values[name]} onChange={(value) => { setValidationError(undefined); setValues((old) => ({ ...old, [name]: value })); }} />)}
+			{visibleProperties.map(([name, property]) => <ElicitationInputField key={name} name={name} property={property} required={schema.required?.includes(name) ?? false} value={values[name]} onChange={(value) => { setValidationError(undefined); setValues((old) => ({ ...old, [name]: value })); }} />)}
 		</View> : null}
 		{validationError ? <Text accessibilityRole="alert" style={styles.validation}>{validationError}</Text> : null}
 		{submitError ? <Text accessibilityRole="alert" style={styles.validation}>{submitError}</Text> : null}
@@ -1116,50 +1075,6 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so Orchestrator cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
 	</View>;
 }
-
-function InputField({ name, property, required, value, onChange }: { name: string; property: InputProperty; required: boolean; value: unknown; onChange(value: unknown): void }) {
-	const styles = useThemedStyles(makeStyles);
-	const { scheme } = useThemeState();
-	const label = `${property.title || humanizeInputName(name)}${required ? " *" : ""}`;
-	if (property.type === "boolean") {
-		const checked = Boolean(value);
-		// The label and the switch are one control to a screen reader, as a native
-		// toggle row is. The hosted switch has no label of its own on Android, so
-		// it is hidden and the row answers to activate instead.
-		return <View
-			accessible
-			accessibilityRole="switch"
-			accessibilityLabel={label}
-			accessibilityState={{ checked }}
-			accessibilityActions={[{ name: "activate" }]}
-			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "activate") onChange(!checked); }}
-			style={styles.switchRow}
-		>
-			<Text style={[styles.inputLabel, styles.switchLabel]}>{label}</Text>
-			<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-				{/* No tint: the switch keeps the system's colours, as Settings' does. */}
-				<Host style={styles.switchHost} colorScheme={scheme}>
-					<Switch value={checked} onValueChange={onChange} />
-				</Host>
-			</View>
-		</View>;
-	}
-	const options = inputOptions(property);
-	if (options.length) {
-		const multi = property.type === "array";
-		return <View style={styles.field}>
-			<Text style={styles.inputEyebrow}>{label}</Text>
-			{property.description ? <Text style={styles.inputQuestion}>{property.description}</Text> : null}
-			<ElicitationChoiceList choices={options} multi={multi} selected={(choice) => multi ? Array.isArray(value) && value.includes(choice) : value === choice} onChange={(choice) => onChange(multi ? toggleInputValue(Array.isArray(value) ? value : [], choice) : choice)} />
-		</View>;
-	}
-	return <View style={styles.field}>
-		<Text style={styles.inputLabel}>{label}</Text>
-		{property.description ? <Text style={styles.inputHint}>{property.description}</Text> : null}
-		<ElicitationTextField label={label} value={value} numeric={property.type === "number" || property.type === "integer"} maxLength={property.maxLength} onChange={onChange} />
-	</View>;
-}
-
 
 function CompactionMarker({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
@@ -1329,8 +1244,6 @@ const makeStyles = (t: Theme) => {
 		statusRow: { minHeight: STATUS_ROW_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 		turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 		turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "right" },
-		// The glyph lines up with the reply's right edge; the target reaches past it.
-		rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginRight: -(touchTarget - iconSize.md) / 2 },
 		planCard: { ...card, backgroundColor: t.bgSurface, borderColor: t.borderDefault, overflow: "hidden" },
 		planHeader: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
 		changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
@@ -1376,15 +1289,6 @@ const makeStyles = (t: Theme) => {
 		inputActions: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.hair, paddingTop: space.hair },
 		requestCommand: { flex: 1, color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		form: { gap: space.sm },
-		field: { gap: space.xs },
-		inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		inputQuestion: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
-		inputLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		inputHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md },
-		switchLabel: { flex: 1 },
-		// The system switch's own footprint, as Settings hosts it.
-		switchHost: { width: 54, height: 34 },
 		urlBox: { backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm },
 		urlText: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		validation: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },

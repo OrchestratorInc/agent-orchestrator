@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(new URL("./ChatTimeline.tsx", import.meta.url), "utf8");
+const fieldSource = readFileSync(new URL("./ElicitationInputField.tsx", import.meta.url), "utf8");
 const turnSummarySource = source.slice(
 	source.indexOf("function TurnStatusRow"),
 	source.indexOf("function TurnPlan"),
@@ -53,7 +54,7 @@ describe("elicitation typography", () => {
 	it("matches the question to regular assistant copy", () => {
 		// The family is required next to every weight now, so this pins the parts
 		// that carry the intent: the question reads at assistant-copy size and weight.
-		expect(source).toContain('fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" }');
+		expect(fieldSource).toContain('fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" }');
 		expect(source).toContain("inputRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.xl, gap: space.md }");
 		expect(source).toContain('inputActions: { minHeight: 36, flexDirection: "row"');
 	});
@@ -96,42 +97,27 @@ describe("jump to latest", () => {
 	});
 });
 
+// TurnRollbackButton.test and ElicitationInputField.test render these controls.
 describe("turn rollback", () => {
 	const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function TurnPlan"));
 
-	// Forgetting a turn cannot be undone, so it asks through the system's own
-	// destructive confirmation rather than a card drawn into the timeline.
-	it("confirms with a native destructive alert", () => {
-		expect(summary).toContain("Alert.alert(");
-		expect(summary).toContain('{ text: "Cancel", style: "cancel" }');
-		expect(summary).toContain('{ text: "Roll back", style: "destructive", onPress: () => {');
+	// Forgetting a turn cannot be undone, so the control asks through the
+	// system's destructive alert rather than a card drawn into the timeline.
+	it("offers the confirming control on a settled turn the provider knows", () => {
+		expect(summary).toContain("const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;");
+		expect(summary).toContain("{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}");
 		expect(summary).not.toContain("rollbackConfirm");
 		expect(summary).not.toContain("setConfirming");
-	});
-
-	it("is a labelled button the size of a touch target", () => {
-		expect(summary).toContain('accessibilityRole="button"');
-		expect(summary).toContain('accessibilityLabel="Roll back to before this turn"');
-		expect(source).toMatch(/rollback: \{ width: touchTarget, height: touchTarget/);
-		expect(summary).not.toContain("hitSlop");
 	});
 });
 
 describe("elicitation boolean input", () => {
-	const field = source.slice(source.indexOf("function InputField"), source.indexOf("function CompactionMarker"));
-
 	// React Native's Android switch is the older SwitchCompat, beside M3 controls
 	// everywhere else in the flow.
 	it("hosts the universal native switch", () => {
-		expect(source).toContain('import { Host, Switch } from "@expo/ui";');
-		expect(source).not.toMatch(/import \{[^}]*\bSwitch\b[^}]*\} from "react-native"/);
-		expect(field).toContain("<Switch value={checked} onValueChange={onChange} />");
-	});
-
-	it("reads as one labelled switch that a screen reader can toggle", () => {
-		expect(field).toContain('accessibilityRole="switch"');
-		expect(field).toContain("accessibilityState={{ checked }}");
-		expect(field).toContain('if (event.nativeEvent.actionName === "activate") onChange(!checked);');
+		expect(source).toContain("<ElicitationInputField key={name}");
+		expect(fieldSource).toContain('import { Host, Switch } from "@expo/ui";');
+		for (const file of [source, fieldSource]) expect(file).not.toMatch(/import \{[^}]*\bSwitch\b[^}]*\} from "react-native"/);
 	});
 });
 
