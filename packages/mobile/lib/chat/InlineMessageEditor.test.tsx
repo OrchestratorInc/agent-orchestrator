@@ -11,7 +11,6 @@ vi.mock("react-native", () => ({
 	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
 }));
 vi.mock("../haptics", () => ({ haptics: { success: vi.fn(), error: vi.fn(), tap: vi.fn() } }));
-vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
 vi.mock("../textSelection", () => ({ textSelectionColors: () => ({}) }));
 vi.mock("./useConversation", () => ({ clientMessageId: () => `id-${++fixtures.ids}` }));

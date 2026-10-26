@@ -128,6 +128,19 @@ describe("the file viewer", () => {
 		expect(components).not.toMatch(/width: 44, height: 44/);
 	});
 
+	// The chat composer's pill is taller on Android (48dp controls), so copies of
+	// its iOS numbers left this one shorter and squarer there.
+	it("sizes the line-comment pill from the chat composer's own constants", () => {
+		const components = source("./components.tsx");
+		expect(components).toContain('import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_HEIGHT, COMPOSER_RADIUS } from "../chat/composerStyles";');
+		expect(components).toContain("composerPill: { minHeight: COMPOSER_HEIGHT,");
+		expect(components).toContain("borderRadius: COMPOSER_RADIUS");
+		expect(components).toContain("composerInput: { flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT,");
+		expect(components).not.toContain("const COMPOSER_RADIUS");
+		expect(components).toContain('<AppSymbol name="send" size={iconSize.md} color={t.onAccent}');
+		expect(components).not.toContain("color={t.bgBase}");
+	});
+
 	it("confirms with the shared toast", () => {
 		expect(file).toMatch(/<ToastHost\s+toast=\{toast\}/);
 		expect(file).not.toContain("setNotice");

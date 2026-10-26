@@ -12,6 +12,7 @@ import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-cont
 import { SvgXml } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
+import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_HEIGHT, COMPOSER_RADIUS } from "../chat/composerStyles";
 import { dockRestingInset, KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { highlightCode, type SyntaxTokenKind } from "../chat/syntaxHighlight";
 import { AppSymbol } from "../AppSymbol";
@@ -231,9 +232,6 @@ export const FoldRow = memo(function FoldRow({ hidden, section, expandable, onEx
 
 export type ComposerAction = "comment" | "send";
 
-/** The session composer's capsule corner (ChatComposer), so the glass behind both matches. */
-const COMPOSER_RADIUS = radius.xxl;
-
 export function SelectionComposer({
 	label,
 	busy,
@@ -410,17 +408,17 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	foldSection: { fontFamily: t.fontMono, color: t.textTertiary },
 
 	composerDock: { position: "absolute", left: 0, right: 0, bottom: 0 },
-	// Mirrors ChatComposer's dock and pill (COMPOSER_HEIGHT 56, field 44, radius 28),
-	// so commenting on a line feels like messaging the session.
+	// ChatComposer's dock and pill, sized from the same constants, so commenting
+	// on a line feels like messaging the session.
 	composerShell: { backgroundColor: t.bgBase, paddingHorizontal: space.md, paddingTop: space.xxs, gap: space.xxs },
 	// The session composer's meta row: its left edge, and the close button over send.
 	composerMeta: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm, paddingRight: space.xs },
 	composerLabel: { flex: 1, fontFamily: font.semibold, fontSize: type.footnote.fontSize, fontWeight: "600", color: t.textSecondary },
 	composerIcon: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginLeft: -space.sm },
 	composerError: { ...type.footnote, color: t.red, paddingHorizontal: space.sm },
-	composerPill: { minHeight: 56, padding: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
+	composerPill: { minHeight: COMPOSER_HEIGHT, padding: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
 	composerRow: { flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
-	composerInput: { flex: 1, minHeight: 44, maxHeight: 138, fontFamily: font.regular, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, color: t.textPrimary, paddingHorizontal: space.md, paddingVertical: space.md, textAlignVertical: "top" },
+	composerInput: { flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, fontFamily: font.regular, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, color: t.textPrimary, paddingHorizontal: space.md, paddingVertical: space.md, textAlignVertical: "top" },
 	composerPlain: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, alignItems: "center", justifyContent: "center" },
 	composerSend: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	disabled: { opacity: stateOpacity.disabled },
