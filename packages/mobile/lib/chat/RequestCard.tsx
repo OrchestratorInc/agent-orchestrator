@@ -1,18 +1,25 @@
-import { Feather } from "../icons";
 import { useCallback, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View, type AccessibilityRole } from "react-native";
 import { Directions, Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight } from "react-native-reanimated";
 
+import { AppSymbol } from "../AppSymbol";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { PAGE_SLIDE_MS } from "../motion";
+import { usePressFeedback } from "../pressFeedback";
+import { Spinner } from "../Spinner";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
-import { fontScaleCap, space, type } from "../tokens";
+import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import { useReducedMotion } from "../useReducedMotion";
+import { toggleInputValue } from "./elicitationModel";
 import type { RequestDockModel, RequestDockPage } from "./requestDockModel";
 import { userFacingError } from "../connectionError";
+
+/** The arrow that points back up the timeline, to the card that owns the request. */
+const towardCard = { ios: "arrow.up", android: "arrow_upward" } as const;
 
 /**
  * The pending request, standing in for the composer.
@@ -41,6 +48,10 @@ export function RequestCard({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
+	const iconFeedback = usePressFeedback("icon");
+	const rowFeedback = usePressFeedback("row");
+	const textFeedback = usePressFeedback("button");
+	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const [page, setPage] = useState(0);
 	const [values, setValues] = useState<Record<string, unknown>>({});
 	const [draft, setDraft] = useState("");
@@ -78,6 +89,7 @@ export function RequestCard({
 
 	const skippable = !current.required && model.kind === "input" && Boolean(model.requestId);
 
+	// One haptic per answer, when it lands: the press itself only starts the work.
 	const run = (work: Promise<void>) => {
 		setSubmitting(true);
 		setError(undefined);
@@ -90,6 +102,12 @@ export function RequestCard({
 			.finally(() => setSubmitting(false));
 	};
 
+	// Past the last question, send the lot; otherwise on to the next one.
+	const advance = (next: Record<string, unknown>) => {
+		if (page >= total - 1) run(onResolveInput(model.requestId ?? "", "accept", next));
+		else goTo(page + 1);
+	};
+
 	const answer = (value: unknown, property?: string) => {
 		if (busy || !model.requestId) return;
 		if (model.kind === "approval") {
@@ -100,10 +118,21 @@ export function RequestCard({
 		if (!name) return;
 		const next = { ...values, [name]: value };
 		setValues(next);
-		// Last question answered — send the lot.
-		if (page >= total - 1) run(onResolveInput(model.requestId, "accept", next));
-		else goTo(page + 1);
+		advance(next);
 	};
+
+	// Several answers: each option toggles, and the question moves on only when
+	// asked to.
+	const toggle = (value: string) => {
+		const name = current.propertyName;
+		if (busy || !name) return;
+		const chosen = values[name];
+		setValues({ ...values, [name]: toggleInputValue(Array.isArray(chosen) ? chosen : [], value) });
+		haptics.select();
+	};
+	const chosen = current.propertyName ? values[current.propertyName] : undefined;
+	const multiAnswered = Array.isArray(chosen) && chosen.length > 0;
+	const canContinue = Boolean(model.requestId) && !busy && (multiAnswered || !current.required);
 
 	const sendTyped = () => {
 		const typed = draft.trim();
@@ -111,43 +140,76 @@ export function RequestCard({
 		answer(current.freeText.numeric ? Number(typed) : typed, current.freeText.name);
 	};
 
+	const dismiss = (
+		<Pressable
+			accessibilityRole="button"
+			accessibilityLabel="Dismiss and type instead"
+			android_ripple={iconFeedback.android_ripple}
+			onPress={onDismiss}
+			style={({ pressed }) => [styles.iconButton, pressed && iconFeedback.pressed]}
+		>
+			<AppSymbol name="close" size={iconSize.md} color={t.textTertiary} />
+		</Pressable>
+	);
+
 	// Deferred requests get a name and a way back to the card that owns them.
 	if (!model.canAnswerInline) {
 		return (
 			<View style={styles.card}>
 				<View style={styles.head}>
-					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.eyebrow}>{model.title}</Text>
-					<Pressable accessibilityRole="button" accessibilityLabel="Dismiss and type instead" hitSlop={10} onPress={() => { haptics.tap(); onDismiss(); }}>
-						<Feather name="x" size={17} color={t.textTertiary} />
-					</Pressable>
+					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.eyebrow}>{model.title}</Text>
+					{dismiss}
 				</View>
 				{current.question ? <Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.question}>{current.question}</Text> : null}
 				<Pressable
 					accessibilityRole="button"
 					accessibilityLabel="Open the full request"
-					onPress={() => { haptics.tap(); onShow(model.sequence); }}
-					style={({ pressed }) => [styles.openForm, pressed && styles.pressed]}
+					android_ripple={textFeedback.android_ripple}
+					onPress={() => onShow(model.sequence)}
+					style={({ pressed }) => [styles.openForm, pressed && textFeedback.pressed]}
 				>
-					<Feather name="arrow-up" size={15} color={t.accent} />
+					<AppSymbol name={towardCard} size={iconSize.sm} color={t.accent} />
 					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.openFormText}>Open the full request</Text>
 				</Pressable>
 			</View>
 		);
 	}
 
+	// An approval's options are its decisions, each an action. A question's are
+	// its answers: one of several, or any number of them.
+	const optionRole: AccessibilityRole = model.kind === "approval" ? "button" : current.multi ? "checkbox" : "radio";
+	const atStart = page === 0;
+	const atEnd = page >= total - 1;
+
 	return (
 		<GestureDetector gesture={swipe}>
 			<View style={styles.card}>
 				<View style={styles.head}>
 					{total > 1 ? <View style={styles.pager}>
-						<Pressable accessibilityRole="button" accessibilityLabel="Previous question" disabled={page === 0} hitSlop={10} onPress={() => goTo(page - 1)}>
-							<Feather name="chevron-left" size={17} color={page === 0 ? t.textFaint : t.textSecondary} />
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Previous question"
+							accessibilityState={{ disabled: atStart }}
+							disabled={atStart}
+							android_ripple={iconFeedback.android_ripple}
+							onPress={() => goTo(page - 1)}
+							style={({ pressed }) => [styles.iconButton, pressed && iconFeedback.pressed]}
+						>
+							<AppSymbol name="chevronBackward" size={iconSize.md} color={atStart ? t.textFaint : t.textSecondary} />
 						</Pressable>
 						<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.pagerText}>{page + 1} of {total}</Text>
-						<Pressable accessibilityRole="button" accessibilityLabel="Next question" disabled={page >= total - 1} hitSlop={10} onPress={() => goTo(page + 1)}>
-							<Feather name="chevron-right" size={17} color={page >= total - 1 ? t.textFaint : t.textSecondary} />
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel="Next question"
+							accessibilityState={{ disabled: atEnd }}
+							disabled={atEnd}
+							android_ripple={iconFeedback.android_ripple}
+							onPress={() => goTo(page + 1)}
+							style={({ pressed }) => [styles.iconButton, pressed && iconFeedback.pressed]}
+						>
+							<AppSymbol name="chevronForward" size={iconSize.md} color={atEnd ? t.textFaint : t.textSecondary} />
 						</Pressable>
-					</View> : <Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.eyebrow}>{model.title}</Text>}
+					</View> : <Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.eyebrow}>{model.title}</Text>}
 					{/* One exit, in one place. Skip takes the corner where it exists;
 					    otherwise — an approval, or a required question — the close holds
 					    it, since the card has replaced the composer and that is the only
@@ -156,18 +218,15 @@ export function RequestCard({
 						<Pressable
 							accessibilityRole="button"
 							accessibilityLabel="Skip this question"
+							accessibilityState={{ disabled: busy }}
 							disabled={busy}
-							hitSlop={10}
-							onPress={() => { haptics.tap(); if (page < total - 1) goTo(page + 1); else run(onResolveInput(model.requestId ?? "", "accept", values)); }}
-							style={({ pressed }) => [styles.skip, pressed && styles.pressed, busy && styles.dim]}
+							android_ripple={textFeedback.android_ripple}
+							onPress={() => { if (page < total - 1) goTo(page + 1); else run(onResolveInput(model.requestId ?? "", "accept", values)); }}
+							style={({ pressed }) => [styles.skip, pressed && textFeedback.pressed, busy && styles.dim]}
 						>
 							<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.skipText}>Skip</Text>
 						</Pressable>
-					) : (
-						<Pressable accessibilityRole="button" accessibilityLabel="Dismiss and type instead" hitSlop={10} onPress={() => { haptics.tap(); onDismiss(); }}>
-							<Feather name="x" size={17} color={t.textTertiary} />
-						</Pressable>
-					)}
+					) : dismiss}
 				</View>
 
 				<Animated.View
@@ -177,35 +236,55 @@ export function RequestCard({
 				>
 					{current.question ? <Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.question}>{current.question}</Text> : null}
 
-					{current.options.map((option, index) => {
-						// The answers were always kept — they accumulate until the last
-						// page submits them — but nothing said so on a second visit.
-						const selected = current.propertyName ? values[current.propertyName] === option.id : false;
-						return (
-							<Pressable
-								key={option.id}
-								accessibilityRole="button"
-								accessibilityLabel={option.label}
-								accessibilityState={{ disabled: busy, selected }}
-								disabled={busy}
-								onPress={() => { haptics.tap(); answer(option.id); }}
-								style={({ pressed }) => [styles.option, index > 0 && styles.optionDivider, pressed && styles.pressed, busy && styles.dim]}
-							>
-								<View style={[styles.ordinal, selected && styles.ordinalSelected]}>
-									{selected
-										? <Feather name="check" size={12} color={t.bgBase} />
-										: <Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.ordinalText}>{index + 1}</Text>}
-								</View>
-								<View style={styles.optionBody}>
-									<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
-									{option.description ? <Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.optionHint}>{option.description}</Text> : null}
-								</View>
-							</Pressable>
-						);
-					})}
+					<View accessibilityRole={optionRole === "radio" ? "radiogroup" : undefined}>
+						{current.options.map((option, index) => {
+							// The answers were always kept — they accumulate until the last
+							// page submits them — but nothing said so on a second visit.
+							const selected = current.multi
+								? Array.isArray(chosen) && chosen.includes(option.id)
+								: current.propertyName ? values[current.propertyName] === option.id : false;
+							return (
+								<Pressable
+									key={option.id}
+									accessibilityRole={optionRole}
+									accessibilityLabel={option.label}
+									accessibilityHint={option.description}
+									accessibilityState={optionRole === "button" ? { disabled: busy } : { disabled: busy, checked: selected }}
+									disabled={busy}
+									android_ripple={rowFeedback.android_ripple}
+									onPress={() => { if (current.multi) toggle(option.id); else answer(option.id); }}
+									style={({ pressed }) => [styles.option, index > 0 && styles.optionDivider, pressed && rowFeedback.pressed, busy && styles.dim]}
+								>
+									<View style={[styles.ordinal, selected && styles.ordinalSelected]}>
+										{selected
+											? <AppSymbol name="checkmark" size={iconSize.xs} color={t.bgBase} />
+											: <Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.ordinalText}>{index + 1}</Text>}
+									</View>
+									<View style={styles.optionBody}>
+										<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
+										{option.description ? <Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.optionHint}>{option.description}</Text> : null}
+									</View>
+								</Pressable>
+							);
+						})}
+					</View>
+
+					{current.multi && current.options.length ? <View style={styles.continueRow}>
+						<Pressable
+							accessibilityRole="button"
+							accessibilityLabel={atEnd ? "Send answers" : "Next question"}
+							accessibilityState={{ disabled: !canContinue, busy: busy && !draft.trim() }}
+							disabled={!canContinue}
+							android_ripple={sendFeedback.android_ripple}
+							onPress={() => advance(values)}
+							style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed, !canContinue && styles.dim]}
+						>
+							{busy && !draft.trim() ? <Spinner color={t.onAccent} /> : <AppSymbol name={atEnd ? "send" : "chevronForward"} size={iconSize.sm} color={t.onAccent} />}
+						</Pressable>
+					</View> : null}
 
 					{current.freeText ? <View style={[styles.typed, current.options.length > 0 && styles.optionDivider]}>
-						<View style={styles.ordinal}><Feather name="edit-2" size={12} color={t.textTertiary} /></View>
+						<View style={styles.ordinal}><AppSymbol name="rename" size={iconSize.xs} color={t.textTertiary} /></View>
 						<TextInput
 							accessibilityLabel={current.freeText.placeholder}
 							editable={!busy}
@@ -224,18 +303,19 @@ export function RequestCard({
 						{draft.trim() ? <Pressable
 							accessibilityRole="button"
 							accessibilityLabel="Send answer"
-							accessibilityState={{ disabled: busy }}
+							accessibilityState={{ disabled: busy, busy }}
 							disabled={busy}
+							android_ripple={sendFeedback.android_ripple}
 							onPress={sendTyped}
-							style={({ pressed }) => [styles.send, pressed && styles.pressed]}
+							style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed]}
 						>
-							{busy ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={15} color={t.bgBase} />}
+							{busy ? <Spinner color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.sm} color={t.onAccent} />}
 						</Pressable> : null}
 					</View> : null}
 				</Animated.View>
 
 
-				{busy && !draft.trim() ? <View style={styles.busy}><ActivityIndicator size="small" color={t.textTertiary} /></View> : null}
+				{busy && !draft.trim() && !current.multi ? <View style={styles.busy}><Spinner color={t.textTertiary} /></View> : null}
 				{error ? <Text accessibilityRole="alert" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.error}>{error}</Text> : null}
 			</View>
 		</GestureDetector>
@@ -246,40 +326,43 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		card: {
 			backgroundColor: t.bgElevated,
-			borderWidth: StyleSheet.hairlineWidth,
+			borderWidth: rowDividerWidth,
 			borderColor: t.borderDefault,
-			borderRadius: 20,
+			borderRadius: radius.xl,
 			borderCurve: "continuous",
 			paddingHorizontal: space.md,
-			paddingTop: space.sm,
+			paddingTop: space.xxs,
 			paddingBottom: space.xs,
 			overflow: "hidden",
 		},
-		head: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: 26 },
-		pager: { flexDirection: "row", alignItems: "center", gap: space.sm },
-		pagerText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600", fontVariant: ["tabular-nums"] },
-		eyebrow: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 0.4, textTransform: "uppercase" },
+		// The chevrons, Skip and the close are full touch targets; the row is as
+		// tall as they are and pulls them out to the card's edge.
+		head: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: touchTarget, marginRight: -space.sm },
+		pager: { flexDirection: "row", alignItems: "center", marginLeft: -space.sm },
+		iconButton: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+		pagerText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600", fontVariant: ["tabular-nums"] },
+		eyebrow: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		question: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, lineHeight: type.body.lineHeight, fontWeight: "600", marginTop: space.xxs, marginBottom: space.sm },
-		option: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.md },
-		optionDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
-		ordinal: { width: 26, height: 26, borderRadius: 12, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle },
-		ordinalText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
+		option: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.md },
+		optionDivider: { borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
+		ordinal: { width: 26, height: 26, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle },
+		ordinalText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		// Neutral, like the Orchestrator badge: the filled circle and the check
 		// carry the selection, so it needs no colour of its own.
 		ordinalSelected: { backgroundColor: t.textSecondary },
 		optionLabelSelected: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 		optionBody: { flex: 1, minWidth: 0, gap: space.hair },
 		optionLabel: { fontFamily: "Geist_400Regular", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
-		optionHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+		optionHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		continueRow: { flexDirection: "row", justifyContent: "flex-end", paddingVertical: space.xs },
 		typed: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.xs },
-		typedInput: { fontFamily: "Geist_400Regular", flex: 1, minHeight: 38, color: t.textPrimary, fontSize: type.subheadline.fontSize, paddingVertical: space.sm },
-		send: { width: 34, height: 34, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: t.textPrimary },
-		skip: { paddingVertical: space.hair, paddingHorizontal: space.hair },
+		typedInput: { fontFamily: "Geist_400Regular", flex: 1, minHeight: touchTarget, color: t.textPrimary, fontSize: type.subheadline.fontSize, paddingVertical: space.sm },
+		send: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
+		skip: { minWidth: touchTarget, minHeight: touchTarget, alignItems: "center", justifyContent: "center", paddingHorizontal: space.sm, borderRadius: radius.pill, overflow: "hidden" },
 		skipText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		openForm: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.sm },
+		openForm: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs },
 		openFormText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.subheadline.fontSize, fontWeight: "600" },
 		busy: { paddingVertical: space.sm, alignItems: "center" },
-		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingBottom: space.xs },
-		pressed: { opacity: 0.6 },
-		dim: { opacity: 0.5 },
+		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingBottom: space.xs },
+		dim: { opacity: stateOpacity.disabled },
 	});
