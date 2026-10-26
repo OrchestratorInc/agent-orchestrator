@@ -241,10 +241,10 @@ func TestHibernateChatKeepsBackgroundWorkAlive(t *testing.T) {
 func TestChatViewLeaveStartsGracePeriod(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()
-	if err := h.svc.SetChatView(ctx, testSession, "viewer", true); err != nil {
+	if _, err := h.svc.SetChatView(ctx, testSession, "viewer", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.svc.SetChatView(ctx, testSession, "viewer", false); err != nil {
+	if _, err := h.svc.SetChatView(ctx, testSession, "viewer", false); err != nil {
 		t.Fatal(err)
 	}
 	if slept, err := h.svc.HibernateChat(ctx, testSession); err != nil || slept || conv.calls.Load() != 0 {
@@ -333,22 +333,22 @@ func TestChatViewKeepsCompletedSessionWarmUntilReleasedOrExpired(t *testing.T) {
 	t.Run("released", func(t *testing.T) {
 		h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 		ctx := context.Background()
-		if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
+		if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
 			t.Fatal(err)
 		}
-		if err := h.svc.SetChatView(ctx, testSession, "viewer-2", true); err != nil {
+		if _, err := h.svc.SetChatView(ctx, testSession, "viewer-2", true); err != nil {
 			t.Fatal(err)
 		}
 		if hibernated, err := h.svc.HibernateChat(ctx, testSession); err != nil || hibernated {
 			t.Fatalf("hibernate viewed chat = %v, %v", hibernated, err)
 		}
-		if err := h.svc.SetChatView(ctx, testSession, "viewer-1", false); err != nil || conv.calls.Load() != 0 {
+		if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", false); err != nil || conv.calls.Load() != 0 {
 			t.Fatalf("release view = %v; provider hibernations = %d", err, conv.calls.Load())
 		}
-		if err := h.svc.SetChatView(ctx, testSession, "viewer-2", false); err != nil || conv.calls.Load() != 0 {
+		if _, err := h.svc.SetChatView(ctx, testSession, "viewer-2", false); err != nil || conv.calls.Load() != 0 {
 			t.Fatalf("release final view = %v; provider hibernations = %d", err, conv.calls.Load())
 		}
-		if err := h.svc.SetChatView(ctx, testSession, "viewer-1", false); err != nil {
+		if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", false); err != nil {
 			t.Fatalf("repeat release = %v", err)
 		}
 		h.advance(30 * time.Second)
@@ -359,7 +359,7 @@ func TestChatViewKeepsCompletedSessionWarmUntilReleasedOrExpired(t *testing.T) {
 	t.Run("expired", func(t *testing.T) {
 		h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
 		ctx := context.Background()
-		if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
+		if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
 			t.Fatal(err)
 		}
 		h.advance(61 * time.Second)
@@ -381,19 +381,19 @@ func TestChatViewRenewalDoesNotRetryFailedWake(t *testing.T) {
 		calls.Add(1)
 		return wakeErr
 	})
-	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); !errors.Is(err, wakeErr) {
+	if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); !errors.Is(err, wakeErr) {
 		t.Fatalf("initial wake = %v, want %v", err, wakeErr)
 	}
-	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
+	if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
 		t.Fatalf("view renewal = %v, want nil", err)
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("wake calls after renewal = %d, want 1", calls.Load())
 	}
-	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", false); err != nil {
+	if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", false); err != nil {
 		t.Fatalf("close view = %v", err)
 	}
-	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); !errors.Is(err, wakeErr) {
+	if _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); !errors.Is(err, wakeErr) {
 		t.Fatalf("reopened view wake = %v, want %v", err, wakeErr)
 	}
 	if calls.Load() != 2 {
@@ -424,10 +424,10 @@ func TestConcurrentFailedWakeSharesAttemptWithoutReadingStaleMarker(t *testing.T
 		return wakeErr
 	})
 	results := make(chan error, 2)
-	go func() { results <- h.svc.SetChatView(ctx, testSession, "view-1", true) }()
+	go func() { _, err := h.svc.SetChatView(ctx, testSession, "view-1", true); results <- err }()
 	<-started
 	conv.sessionReads.Store(0)
-	go func() { results <- h.svc.SetChatView(ctx, testSession, "view-2", true) }()
+	go func() { _, err := h.svc.SetChatView(ctx, testSession, "view-2", true); results <- err }()
 	deadline := time.Now().Add(2 * time.Second)
 	for conv.sessionReads.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -456,8 +456,8 @@ func TestOpeningViewDoesNotResumeExplicitlyStoppedAgent(t *testing.T) {
 		wakeCalls.Add(1)
 		return nil
 	})
-	if err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
-		t.Fatal(err)
+	if woke, err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); err != nil || woke {
+		t.Fatalf("SetChatView = %v, %v; want no wake", woke, err)
 	}
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "do not restart"}); !errors.Is(err, chatsvc.ErrNoController) {
 		t.Fatalf("Send after stop = %v, want no controller", err)
@@ -523,8 +523,11 @@ func TestOpeningViewWakesNativeConversation(t *testing.T) {
 		})
 		return err
 	})
-	if err := wakeService.SetChatView(ctx, testSession, "viewer-1", true); err != nil {
-		t.Fatal(err)
+	if woke, err := wakeService.SetChatView(ctx, testSession, "viewer-1", true); err != nil || !woke {
+		t.Fatalf("SetChatView = %v, %v; want woke", woke, err)
+	}
+	if woke, err := wakeService.SetChatView(ctx, testSession, "viewer-1", true); err != nil || woke {
+		t.Fatalf("renewal = %v, %v; want no wake", woke, err)
 	}
 	if resumeConfig.ProviderConversationID != old.ProviderConversationID() || !wakeService.HasLiveChatController(testSession) {
 		t.Fatalf("native wake = %q, live=%v", resumeConfig.ProviderConversationID, wakeService.HasLiveChatController(testSession))
@@ -556,7 +559,7 @@ func TestOpeningViewDoesNotReportStoppedDuringNativeWake(t *testing.T) {
 		return errors.New("provider unavailable")
 	})
 	result := make(chan error, 1)
-	go func() { result <- wakeService.SetChatView(ctx, testSession, "viewer-1", true) }()
+	go func() { _, err := wakeService.SetChatView(ctx, testSession, "viewer-1", true); result <- err }()
 	select {
 	case <-started:
 	case err := <-result:
@@ -603,7 +606,7 @@ func TestOpeningViewWaitsForHibernationThenWakes(t *testing.T) {
 		return errors.New("wake reached native provider")
 	})
 	viewResult := make(chan error, 1)
-	go func() { viewResult <- h.svc.SetChatView(ctx, testSession, "viewer-1", true) }()
+	go func() { _, err := h.svc.SetChatView(ctx, testSession, "viewer-1", true); viewResult <- err }()
 	select {
 	case err := <-viewResult:
 		t.Fatalf("view opened before hibernation finished: %v", err)
@@ -850,7 +853,7 @@ func testSendWhileHibernatedReturnsBeforeWakeAndDrainsQueue(t *testing.T, cancel
 	if cancelView {
 		viewCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		go func() { _ = wakeService.SetChatView(viewCtx, testSession, "cancelled-view", true) }()
+		go func() { _, _ = wakeService.SetChatView(viewCtx, testSession, "cancelled-view", true) }()
 		select {
 		case <-wakeEntered:
 		case <-time.After(time.Second):
@@ -1040,7 +1043,7 @@ func TestBackgroundInventoryDoesNotBlockChatOperations(t *testing.T) {
 			var err error
 			switch operation {
 			case "open":
-				err = h.svc.SetChatView(ctx, testSession, "opened-during-inventory", true)
+				_, err = h.svc.SetChatView(ctx, testSession, "opened-during-inventory", true)
 			case "send":
 				_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "new work", ClientMessageID: "during-inventory"})
 			case "kill":

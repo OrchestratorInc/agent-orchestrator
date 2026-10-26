@@ -123,7 +123,7 @@ func (c *ProjectsController) list(w http.ResponseWriter, r *http.Request) {
 	if projects == nil {
 		projects = []projectsvc.Summary{}
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListProjectsResponse{Projects: projects})
+	envelope.WriteRevalidatedJSON(w, r, ListProjectsResponse{Projects: projects})
 }
 
 func (c *ProjectsController) add(w http.ResponseWriter, r *http.Request) {

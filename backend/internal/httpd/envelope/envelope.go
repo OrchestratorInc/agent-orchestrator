@@ -1,10 +1,14 @@
 package envelope
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5/middleware"
 
@@ -90,6 +94,40 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// WriteRevalidatedJSON writes v as a 200 JSON body with a weak ETag computed
+// from the encoded bytes, or a bodyless 304 when the request's If-None-Match
+// already names that ETag. Hashing the body keeps the validator exact: any
+// change to the response, including fields derived at read time, changes it.
+// "no-cache" lets a browser keep the body but revalidate it on every use, so
+// the renderer's ordinary fetch sends If-None-Match without extra code.
+func WriteRevalidatedJSON(w http.ResponseWriter, r *http.Request, v any) {
+	var body bytes.Buffer
+	_ = json.NewEncoder(&body).Encode(v)
+	sum := sha256.Sum256(body.Bytes())
+	etag := `W/"` + hex.EncodeToString(sum[:16]) + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, no-cache")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body.Bytes())
+}
+
+// etagMatches applies the weak comparison If-None-Match uses (RFC 9110 13.1.2).
+func etagMatches(header, etag string) bool {
+	opaque := strings.TrimPrefix(etag, "W/")
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || strings.TrimPrefix(candidate, "W/") == opaque {
+			return true
+		}
+	}
+	return false
 }
 
 // WriteAPIError emits the locked envelope for any non-2xx response.
