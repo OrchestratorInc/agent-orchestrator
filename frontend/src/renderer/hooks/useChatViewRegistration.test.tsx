@@ -210,14 +210,15 @@ it("releases StrictMode registrations and performs one row refresh for the survi
 	}
 });
 
-it("does not refetch stopped history on a failed lease and can register again when reopened", async () => {
+it("refreshes after a failed lease and can register again when reopened", async () => {
 	const { wrapper } = setup();
 	const registration = deferred<{ error: { code: string } }>();
 	post.mockImplementationOnce(() => registration.promise);
 	const view = renderHook(({ active }) => useOpen("chat", active), { wrapper, initialProps: { active: true } });
 	await waitFor(() => expect(view.result.current.snapshot?.controller.state).toBe("stopped"));
 	await act(async () => { registration.resolve({ error: { code: "CHAT_RESUME_FAILED" } }); });
-	expect(requests(conversationPath)).toHaveLength(1);
+	await waitFor(() => expect(requests(conversationPath)).toHaveLength(2));
+	expect(requests("/api/v1/sessions")).toHaveLength(0);
 	view.rerender({ active: false });
 	view.rerender({ active: true });
 	await waitFor(() => expect(post.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
@@ -235,4 +236,40 @@ it.each(["unloaded", "missing-project"])("does not fall back to a list fetch whe
 	expect(requests("/api/v1/sessions")).toHaveLength(0);
 	expect(client.getQueryData(workspaceQueryKey)).toEqual(before);
 	view.unmount();
+});
+
+
+it("refreshes a hibernated snapshot again when the clear-marker event precedes a failed wake", async () => {
+	const { client, wrapper } = setup();
+	let snapshot = wire("chat", "hibernated");
+	const registration = deferred<{ error: { code: string } }>();
+	post.mockImplementationOnce(() => registration.promise);
+	get.mockImplementation(async (path) => path === conversationPath ? { data: snapshot } : { data: {} });
+	const view = renderHook(() => useOpen("chat"), { wrapper });
+	await waitFor(() => expect(view.result.current.snapshot?.controller.state).toBe("hibernated"));
+	// Clearing HibernatedAt emits CDC before native resume finishes. Its read
+	// still sees isWaking and caches hibernated with staleTime: Infinity.
+	await act(async () => { await client.invalidateQueries({ queryKey: conversationQueryKey("chat") }); });
+	expect(requests(conversationPath)).toHaveLength(2);
+	expect(view.result.current.snapshot?.controller.state).toBe("hibernated");
+	// No completion event follows the failed native resume.
+	snapshot = wire("chat", "stopped");
+	await act(async () => { registration.resolve({ error: { code: "CHAT_RESUME_FAILED" } }); });
+	await waitFor(() => expect(view.result.current.snapshot?.controller.state).toBe("stopped"));
+	expect(requests(conversationPath)).toHaveLength(3);
+	expect(requests("/api/v1/sessions")).toHaveLength(0);
+	view.unmount();
+});
+
+it.each(["left", "remote"])("does not refresh local history after a failed wake for a %s view", async (state) => {
+	const { client, wrapper } = setup();
+	const registration = deferred<{ error: { code: string } }>();
+	post.mockImplementationOnce(() => registration.promise);
+	const invalidate = vi.spyOn(client, "invalidateQueries");
+	const view = renderHook(() => useChatViewRegistration("chat", true, state === "remote" ? "remote" : undefined), { wrapper });
+	await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+	if (state === "left") view.unmount();
+	await act(async () => { registration.resolve({ error: { code: "CHAT_RESUME_FAILED" } }); });
+	expect(invalidate).not.toHaveBeenCalled();
+	if (state === "remote") view.unmount();
 });

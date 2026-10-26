@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clientForSessionHost } from "../lib/host-clients";
 import { patchWorkspaceSession } from "./useWorkspaceQuery";
+import { conversationQueryKey } from "./useConversation";
 
 /** Own the primary Chat tab's wake/keep-alive lease across navigation. */
 export function useChatViewRegistration(sessionId: string, chatViewActive: boolean, hostId?: string): void {
@@ -29,8 +30,7 @@ export function useChatViewRegistration(sessionId: string, chatViewActive: boole
 					body: { viewId, active },
 				});
 				if (error) throw error;
-				// Registration does not change stopped history. Waking and failed wakes
-				// publish their own conversation events; those own live-page refresh.
+				// Successful registration leaves history refresh to conversation events.
 				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
 					void refreshSession().catch(() => {});
@@ -46,8 +46,14 @@ export function useChatViewRegistration(sessionId: string, chatViewActive: boole
 			});
 			return pending;
 		};
-		void renewView().catch(() => {});
-		const renewal = window.setInterval(() => { void renewView().catch(() => {}); }, 10_000);
+		const refreshAfterWakeError = () => {
+			// The clear-marker event can arrive while waking. A failed resume may
+			// then stop the controller without another event, leaving that snapshot stale.
+			if (left || hostId) return;
+			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) }).catch(() => {});
+		};
+		void renewView().catch(refreshAfterWakeError);
+		const renewal = window.setInterval(() => { void renewView().catch(refreshAfterWakeError); }, 10_000);
 		return () => {
 			left = true;
 			window.clearInterval(renewal);
