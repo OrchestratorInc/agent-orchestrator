@@ -43,6 +43,7 @@ func isolateVersionResolver(t *testing.T) {
 }
 
 func TestResolveBinaryForMajor(t *testing.T) {
+	isolateVersionResolver(t)
 	for _, tc := range []struct {
 		name, output, wantErr string
 		major, wantFoundMajor int
@@ -91,6 +92,7 @@ func TestResolveBinaryForMajor(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorBoundedAndCanceled(t *testing.T) {
+	isolateVersionResolver(t)
 	for _, canceled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "timeout", true: "canceled"}[canceled], func(t *testing.T) {
 			versionBinary(t, "exec /bin/sleep 30\n")
@@ -116,6 +118,7 @@ func TestResolveBinaryForMajorBoundedAndCanceled(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorAcceptsSlowShim(t *testing.T) {
+	isolateVersionResolver(t)
 	dir := t.TempDir()
 	name, body := "opencode", "#!/bin/sh\nsleep 4\nprintf '2.0.0\\n'\n"
 	if runtime.GOOS == "windows" {
@@ -134,6 +137,7 @@ func TestResolveBinaryForMajorAcceptsSlowShim(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorMissing(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix resolver paths")
 	}
@@ -169,6 +173,7 @@ func TestV1RejectsWrongMajorBeforeOverlay(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorPicksMatchingBinaryFromSeveralOnPath(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -192,6 +197,7 @@ func TestResolveBinaryForMajorPicksMatchingBinaryFromSeveralOnPath(t *testing.T)
 }
 
 func TestResolveBinaryForMajorPrefersMismatchOverEarlierProbeFailure(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -211,6 +217,7 @@ func TestResolveBinaryForMajorPrefersMismatchOverEarlierProbeFailure(t *testing.
 }
 
 func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -230,6 +237,7 @@ func TestResolveBinaryForMajorSharesOneProbeDeadline(t *testing.T) {
 }
 
 func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -246,13 +254,16 @@ func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("VOLTA_HOME", t.TempDir())
 	t.Setenv("FNM_DIR", t.TempDir())
-	oldPaths := opencodeUnixPaths
-	opencodeUnixPaths = nil
-	t.Cleanup(func() { opencodeUnixPaths = oldPaths })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		<-finished
+	})
 	go func() {
+		defer close(finished)
 		_, err := ResolveBinaryForMajor(ctx, 2)
 		done <- err
 	}()
@@ -277,6 +288,7 @@ func TestResolveBinaryForMajorReturnsCancellationOverEarlierMismatch(t *testing.
 }
 
 func TestResolveBinaryForMajorUsesDistinctManagedLaunchers(t *testing.T) {
+	isolateVersionResolver(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixtures")
 	}
