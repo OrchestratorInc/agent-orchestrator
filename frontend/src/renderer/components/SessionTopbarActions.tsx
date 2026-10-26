@@ -17,7 +17,6 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 import { useWorkspaceScope, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import {
 	clearTerminateSessionState,
@@ -25,7 +24,6 @@ import {
 	useTerminateSession,
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
-import { inspectorIsOpen, useUiStore } from "../stores/ui-store";
 import { OrchestratorIcon } from "./icons";
 import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
@@ -64,9 +62,6 @@ export function SessionTopbarActions({
 	const workspaceScope = workspaceQuery.data;
 	const session = startingOrchestrator ? undefined : workspaceScope?.session;
 	const isOrchestrator = startingOrchestrator || (session ? isOrchestratorSession(session) : false);
-	const isInspectorOpen = useUiStore((state) =>
-		currentSessionId ? inspectorIsOpen(state.inspectorSessions, sessionUiKey(currentSessionId, hostId)) : false,
-	);
 	// The session's workspace wins over the route param so the cross-project
 	// /sessions/$sessionId route still resolves its project.
 	const projectId = session?.workspaceId ?? params.projectId;
@@ -238,14 +233,6 @@ export function SessionTopbarActions({
 					<TooltipContent side="bottom">{orchestratorTooltip}</TooltipContent>
 				</Tooltip>
 			) : null}
-			{/* The pinned controls are owned by SessionView so they stay at the
-			    window's right edge. Reserve their width only when the rail is closed. */}
-			{startingOrchestrator ? null : <div
-				className="session-pinned-actions-reserve"
-				data-state={isInspectorOpen ? "collapsed" : "expanded"}
-				data-testid="session-pinned-actions-reserve"
-				aria-hidden="true"
-			/>}
 		</PageTopbarActions>
 	);
 }

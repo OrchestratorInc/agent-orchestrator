@@ -1,6 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { PageTopbar, PageTopbarTitle, SessionTabsTopbar } from "./PageTopbar";
+import { act, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../stores/ui-store";
+import { PageTopbar, PageTopbarSurface, PageTopbarTitle, PageTopbarTrailingAction, SessionTabsTopbar } from "./PageTopbar";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
@@ -19,11 +20,69 @@ describe("PageTopbar", () => {
 		expect(within(screen.getByTestId("workspace-topbar-actions")).getByRole("button", { name: "New task" })).toBeInTheDocument();
 	});
 
-	it("keeps notifications visible when a page has no actions", () => {
+	it("leaves notifications off utility page headers", () => {
 		render(<PageTopbar lead={<PageTopbarTitle>Archive</PageTopbarTitle>} />);
 
-		expect(within(screen.getByTestId("workspace-topbar-actions")).getByRole("button", { name: "Notifications" })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+	});
+});
+
+describe("PageTopbarSurface", () => {
+	beforeEach(() => useUiStore.setState({ settingsModal: null }));
+	afterEach(() => useUiStore.setState({ settingsModal: null }));
+
+	it("only mounts notifications for workspace panels", () => {
+		const view = render(<PageTopbarSurface><PageTopbar /></PageTopbarSurface>);
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+
+		view.rerender(<PageTopbarSurface notifications><PageTopbar /></PageTopbarSurface>);
 		expect(screen.getAllByRole("button", { name: "Notifications" })).toHaveLength(1);
+
+		view.rerender(<PageTopbarSurface><PageTopbar /></PageTopbarSurface>);
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+	});
+
+	it("keeps the same bell when the workspace changes from a board to session tabs", () => {
+		const view = render(<PageTopbarSurface notifications><PageTopbar /></PageTopbarSurface>);
+		const bell = screen.getByRole("button", { name: "Notifications" });
+
+		view.rerender(<PageTopbarSurface notifications><SessionTabsTopbar tabs={<div role="tablist" />} /></PageTopbarSurface>);
+
+		expect(screen.getByRole("button", { name: "Notifications" })).toBe(bell);
+		expect(screen.getAllByRole("button", { name: "Notifications" })).toHaveLength(1);
+	});
+
+	it("places session controls immediately before the panel-owned bell", () => {
+		render(
+			<PageTopbarSurface notifications>
+				<PageTopbarTrailingAction><button type="button">Toggle inspector</button></PageTopbarTrailingAction>
+			</PageTopbarSurface>,
+		);
+
+		expect(within(screen.getByTestId("panel-topbar-controls")).getAllByRole("button")).toEqual([
+			screen.getByRole("button", { name: "Toggle inspector" }),
+			screen.getByRole("button", { name: "Notifications" }),
+		]);
+	});
+
+	it("hides workspace controls when settings replaces a still-mounted session", () => {
+		render(
+			<PageTopbarSurface notifications>
+				<SessionTabsTopbar tabs={<div role="tablist" />} />
+				<PageTopbarTrailingAction><button type="button">Toggle inspector</button></PageTopbarTrailingAction>
+			</PageTopbarSurface>,
+		);
+		expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Toggle inspector" })).toBeVisible();
+
+		act(() => useUiStore.getState().openGlobalSettings("harness"));
+		expect(screen.getByRole("tablist")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Toggle inspector" })).not.toBeInTheDocument();
+
+		act(() => useUiStore.getState().closeSettings());
+		expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Toggle inspector" })).toBeVisible();
 	});
 });
 
@@ -47,7 +106,7 @@ describe("SessionTabsTopbar", () => {
 	});
 
 	it("keeps global notifications when fullscreen hides session actions", () => {
-		render(<SessionTabsTopbar actions={<button type="button">Archive</button>} hideActions tabs={<div role="tablist" />} />);
+		render(<SessionTabsTopbar actions={<button type="button">Archive</button>} fullscreen hideActions tabs={<div role="tablist" />} />);
 
 		expect(screen.getByRole("button", { name: "Notifications" })).toBeVisible();
 		expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();

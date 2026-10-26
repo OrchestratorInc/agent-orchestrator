@@ -3,6 +3,7 @@ import { cn } from "../lib/utils";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
+import { PageTopbarSurface } from "./PageTopbar";
 
 /**
  * Shared inset center panel: sidebar-colored outer frame with a bordered inner
@@ -18,15 +19,15 @@ export function CenterPanelShell({
 	className,
 	children,
 	titlebarAlign = true,
-	draggableSessionFrame = false,
+	notifications = false,
 }: {
 	/** Extra classes on the outer frame. */
 	className?: string;
 	children: ReactNode;
 	/** When false, keep the default panel insets (Settings). */
 	titlebarAlign?: boolean;
-	/** Adds a macOS/Linux window-drag strip outside the session surface. */
-	draggableSessionFrame?: boolean;
+	/** Workspace pages opt in; utility and settings pages keep quiet chrome. */
+	notifications?: boolean;
 }) {
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const isFullScreen = useWindowFullScreen();
@@ -35,7 +36,6 @@ export function CenterPanelShell({
 	const align = titlebarAlign && isMac;
 	const titlebarClearance = align && !isSidebarOpen;
 	const linuxTitlebarClearance = titlebarAlign && isLinux && !isSidebarOpen;
-	const showDraggableSessionFrame = draggableSessionFrame && !isFullScreen;
 
 	return (
 		<div
@@ -46,12 +46,10 @@ export function CenterPanelShell({
 				titlebarClearance && isFullScreen && "center-panel-shell--titlebar-clearance-fullscreen",
 				linuxTitlebarClearance && "center-panel-shell--titlebar-clearance-linux",
 				align && isFullScreen && "center-panel-shell--fullscreen",
-				showDraggableSessionFrame && "center-panel-shell--draggable-session-frame",
 				className,
 			)}
 		>
-			{showDraggableSessionFrame ? <div aria-hidden="true" className="center-panel-session-drag-strip" /> : null}
-			<div className="center-panel-surface">{children}</div>
+			<PageTopbarSurface notifications={notifications}>{children}</PageTopbarSurface>
 		</div>
 	);
 }

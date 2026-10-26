@@ -252,6 +252,7 @@ const macTrafficLightBand = hidesShellTopbar();
  */
 const ShellCenter = memo(function ShellCenter({
 	isSessionRoute,
+	isBoardRoute,
 	selfFramedCenterPanel,
 	startingOrchestrator,
 	startingCloudOrchestrator,
@@ -259,6 +260,7 @@ const ShellCenter = memo(function ShellCenter({
 	startingCoderWorkspaceUrl,
 }: {
 	isSessionRoute: boolean;
+	isBoardRoute: boolean;
 	selfFramedCenterPanel: boolean;
 	startingOrchestrator: boolean;
 	startingCloudOrchestrator: boolean;
@@ -266,20 +268,16 @@ const ShellCenter = memo(function ShellCenter({
 	startingCoderWorkspaceUrl?: string;
 }) {
 	const panelClassName = isSessionRoute || startingOrchestrator ? "center-panel-shell--session" : undefined;
-	// Linux retains an outer drag strip. macOS uses the shared header itself;
-	// an extra strip there would displace session tabs from the native controls.
-	// Windows already owns a separate WindowTitlebar.
-	const draggableSessionFrame = (isSessionRoute || startingOrchestrator) && isLinux;
 	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
-		{startingChat ? <CenterPanelShell>{startingChat}</CenterPanelShell> : null}
+		{startingChat ? <CenterPanelShell notifications>{startingChat}</CenterPanelShell> : null}
 	</>;
-	// Pages own their topbar (PageTopbar); the shell only frames the center panel.
+	// Pages own their header content; the panel owns the shared workspace controls.
 	if (selfFramedCenterPanel) return selfFramedOutlet;
 	return (
-		<CenterPanelShell className={panelClassName} draggableSessionFrame={draggableSessionFrame}>
+		<CenterPanelShell className={panelClassName} notifications={isBoardRoute || isSessionRoute || startingOrchestrator}>
 			<ShellOutlet startingChat={startingChat} />
 		</CenterPanelShell>
 	);
@@ -555,6 +553,8 @@ function ShellLayout() {
 	const newChatProject = useRouterState({
 		select: (state) => (isNewChatRoute ? (state.location.search as { project?: string }).project : undefined),
 	});
+	const isBoardRoute = Boolean(matchRoute({ to: "/projects/$projectId" })) ||
+		Boolean(matchRoute({ to: "/host/$hostId/project/$projectId" }));
 	useEffect(() => {
 		if (!routeParams.hostId && routeParams.projectId) recordProjectOpened(routeParams.projectId);
 	}, [routeParams.hostId, routeParams.projectId]);
@@ -1544,6 +1544,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 							{/* Board/session routes render inside the same inset box the welcome board and settings paint for themselves, so every screen sits within the app's outer boundary. */}
 							<ShellCenter
 								isSessionRoute={Boolean(routeParams.sessionId) || isNewChatRoute}
+								isBoardRoute={isBoardRoute}
 								selfFramedCenterPanel={selfFramedCenterPanel}
 								startingOrchestrator={openingOrchestrator}
 								startingCloudOrchestrator={!routeParams.hostId && startingWorkspace?.kind === CLOUD_PROJECT_KIND}

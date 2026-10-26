@@ -8,6 +8,7 @@ import { SessionView } from "./SessionView";
 import { appShortcutBus } from "../test/app-shortcut-bus";
 import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
+import { PageTopbarSurface } from "./PageTopbar";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey } from "../hooks/useConversation";
@@ -903,7 +904,7 @@ function render(ui: ReactNode) {
 			wrapper: ({ children }) => (
 				<QueryClientProvider client={client}>
 					<TooltipProvider>
-						<SessionTopbarProvider>{children}</SessionTopbarProvider>
+						<SessionTopbarProvider><PageTopbarSurface notifications>{children}</PageTopbarSurface></SessionTopbarProvider>
 					</TooltipProvider>
 				</QueryClientProvider>
 			),
@@ -4993,7 +4994,7 @@ describe("SessionView", () => {
 	it("keeps the inspector toggle and trailing notification pinned while the panel changes state", () => {
 		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
 		render(<SessionView sessionId="sess-1" />);
-		const actions = screen.getByTestId("session-pinned-actions");
+		const actions = screen.getByTestId("panel-topbar-controls");
 		const toggle = within(actions).getByRole("button", { name: "Close inspector panel" });
 		const notification = within(actions).getByRole("button", { name: "Notifications" });
 		const buttons = within(actions).getAllByRole("button");
@@ -5003,7 +5004,7 @@ describe("SessionView", () => {
 		fireEvent.click(toggle);
 
 		expect(inspectorOpen("sess-1")).toBe(false);
-		expect(screen.getByTestId("session-pinned-actions")).toBe(actions);
+		expect(screen.getByTestId("panel-topbar-controls")).toBe(actions);
 		expect(screen.getByRole("button", { name: "Notifications" })).toBe(notification);
 		expect(screen.getByRole("button", { name: "Open inspector panel" })).toBe(toggle);
 		expect(toggle).toHaveAttribute("aria-pressed", "false");
