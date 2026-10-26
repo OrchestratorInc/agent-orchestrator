@@ -1,7 +1,7 @@
 /// <reference path="../../src/renderer/global.d.ts" />
 // Browser-only workload fixture: real AO rendering, deterministic synthetic data.
 // This entry is never imported by the application or included in its build.
-import { type ReactNode } from "react";
+import { Profiler, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import {
@@ -22,6 +22,8 @@ import { useUiStore } from "../../src/renderer/stores/ui-store";
 import { setApiBaseUrl } from "../../src/renderer/lib/api-client";
 import type { ConversationMessage } from "../../src/renderer/types/conversation";
 import type { ReviewTarget } from "../../src/renderer/hooks/useSessionWorkspaceFiles";
+import { measureChatOpen } from "./chat-open-measurement";
+import { largeTurnFixture } from "./large-turn-fixture";
 import "../../src/renderer/styles.css";
 
 const root = createRoot(document.getElementById("performance-root")!);
@@ -80,6 +82,57 @@ export const performanceHarness = {
 		};
 		const noop = () => {};
 		render(<WorkspaceReviewPane annotation={{ targets: [], status: "idle", error: "", begin: noop, draftFor: () => "", statusFor: () => "idle", setDraft: noop, cancel: noop, submit: async () => {} }} target={target} filter="" sessionId="large-review" split={false} />);
+	},
+	async largeTurn() {
+		// Build the fixture before starting: this measures mounting, not fixture construction.
+		const snapshot = largeTurnFixture();
+		render(null);
+		await document.fonts.ready;
+		await frame();
+		const measurement = measureChatOpen();
+		try {
+			render(
+				<Profiler id="synthetic-chat-workspace" onRender={measurement.onRender}>
+					<ChatWorkspace snapshot={snapshot} sessionTitle="Synthetic large-turn workload" />
+				</Profiler>,
+			);
+			const result = await measurement.finish(() => document.querySelector<HTMLElement>('[data-chat-message-id="large-final"]'));
+			return {
+				workload: "synthetic-large-turn",
+				measurementScope: "render-to-last-message-visible; whole ChatWorkspace React render durations",
+				toolRows: snapshot.items.filter((item) => item.kind === "activity").length,
+				mountedMessages: document.querySelectorAll("[data-chat-message-id]").length,
+				...result,
+			};
+		} finally {
+			measurement.cancel();
+		}
+	},
+	async largeTurnDisclosure() {
+		const snapshot = largeTurnFixture(50);
+		render(<ChatWorkspace key="disclosure-workload" snapshot={snapshot} />);
+		await frame();
+		const log = document.querySelector<HTMLElement>('[role="log"][aria-label="Conversation"]')!;
+		const worked = log.querySelector<HTMLButtonElement>(".chat-worked-trigger")!;
+		const collapsedBodiesMounted = log.textContent!.includes("Inspected batch 24.")
+			|| log.textContent!.includes("export const value0 = 0;");
+		worked.click();
+		await frame();
+		// Open nested runs, subgroups and command bodies as a reader would.
+		for (let depth = 0; depth < 4; depth++) {
+			const toggles = log.querySelectorAll<HTMLButtonElement>(
+				'.activity-run-toggle[aria-expanded="false"], .activity-subgroup-toggle[aria-expanded="false"], .activity-row-toggle[aria-expanded="false"]',
+			);
+			if (!toggles.length) break;
+			for (const toggle of toggles) toggle.click();
+			await frame();
+		}
+		const openedText = log.textContent!;
+		const missingOutputs = snapshot.items.filter((item) => item.kind === "activity"
+			&& !openedText.includes(item.detail!.output!.trim())).length;
+		const missingNotes = snapshot.items.filter((item) => item.kind === "message"
+			&& item.id.startsWith("large-note-") && !openedText.includes(item.text.split("\n")[0]!)).length;
+		return { workload: "synthetic-large-turn-disclosure", toolRows: 50, collapsedBodiesMounted, missingOutputs, missingNotes };
 	},
 	async events() {
 		const original = window.EventSource;

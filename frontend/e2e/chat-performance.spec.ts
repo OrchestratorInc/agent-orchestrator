@@ -19,6 +19,8 @@ test.describe("live renderer performance workloads", () => {
 	);
 	test.use({ viewport: { width: 1440, height: 1000 } });
 	for (const workload of [
+		"largeTurn",
+		"largeTurnDisclosure",
 		"events",
 		"streaming",
 		"markdownBlocks",
@@ -38,6 +40,11 @@ test.describe("live renderer performance workloads", () => {
 			);
 			if ("exact" in result) expect(result.exact).toBe(true);
 			if ("textPreserved" in result) expect(result.textPreserved).toBe(true);
+			if ("collapsedBodiesMounted" in result) {
+				expect(result.collapsedBodiesMounted).toBe(false);
+				expect(result.missingOutputs).toBe(0);
+				expect(result.missingNotes).toBe(0);
+			}
 			if ("mountedTurns" in result) expect(result.mountedTurns).toBe(250);
 			const label = process.env.AO_PERF_LABEL ?? "sample";
 			const record = {
