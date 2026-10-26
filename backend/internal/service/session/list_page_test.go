@@ -154,7 +154,14 @@ func TestListPageSummarisesTheArchiveBehindAnActiveList(t *testing.T) {
 	if len(ids) != 2 {
 		t.Fatalf("live workers = %v, want live and legacy-live", ids)
 	}
-	want := &ArchiveSummary{Total: 4, ByProject: map[domain.ProjectID]int{"ao": 2, "web": 1, "": 1}}
+	allKinds, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allKinds.Archived.Total != 5 || allKinds.Archived.ByProject["ao"] != 3 || allKinds.Archived.WorkerByProject["ao"] != 2 {
+		t.Fatalf("worker counts must exclude the ended orchestrator: %+v", allKinds.Archived)
+	}
+	want := &ArchiveSummary{Total: 4, ByProject: map[domain.ProjectID]int{"ao": 2, "web": 1, "": 1}, WorkerByProject: map[domain.ProjectID]int{"ao": 2, "web": 1, "": 1}}
 	if !reflect.DeepEqual(page.Archived, want) {
 		t.Fatalf("archive summary = %+v, want %+v", page.Archived, want)
 	}

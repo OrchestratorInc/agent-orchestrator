@@ -6589,6 +6589,9 @@ export interface components {
                 [key: string]: number;
             } | null;
             total: number;
+            workerByProject: {
+                [key: string]: number;
+            } | null;
         };
         SessionArtifact: {
             inlineUrl?: string;

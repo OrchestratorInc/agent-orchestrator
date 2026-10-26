@@ -274,18 +274,27 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 	}
 
 	const [{ data: projectsData, error: projectsError }, { data: sessionsData, error: sessionsError }] =
-		await Promise.all([apiClient.GET("/api/v1/projects"), apiClient.GET("/api/v1/sessions")]);
+		await Promise.all([apiClient.GET("/api/v1/projects"), apiClient.GET("/api/v1/sessions", { params: { query: { active: true } } })]);
 
 	if (projectsError || sessionsError) {
 		throw projectsError ?? sessionsError;
 	}
 
-	const sessions = sessionsData?.sessions ?? [];
+	let listData = sessionsData;
+	// Older daemons do not expose worker-only counts. Preserve their complete list.
+	if (listData?.archived && !listData.archived.workerByProject) {
+		const fallback = await apiClient.GET("/api/v1/sessions");
+		if (fallback.error) throw fallback.error;
+		listData = fallback.data;
+	}
+	const sessions = listData?.sessions ?? [];
 	const standaloneName = standaloneWorkspaceName();
 	const projects = (projectsData?.projects ?? []).map((project) => {
 		const kind = toProjectKind(project.kind);
 		return {
 			id: project.id,
+			archiveSummary: listData?.archived,
+			archivedCount: listData?.archived ? (listData.archived.workerByProject ?? listData.archived.byProject)?.[project.id] ?? 0 : undefined,
 			name: project.name,
 			kind,
 			path: project.path,
@@ -298,6 +307,8 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 	});
 	const standalone: WorkspaceSummary = {
 		id: STANDALONE_WORKSPACE_ID,
+		archiveSummary: listData?.archived,
+		archivedCount: (listData?.archived?.workerByProject ?? listData?.archived?.byProject)?.[""] ?? (listData?.archived ? 0 : undefined),
 		name: standaloneName,
 		kind: STANDALONE_PROJECT_KIND,
 		path: "Not attached to a project",
@@ -306,7 +317,7 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 			.map((session) => toLocalWorkspaceSession(session, STANDALONE_WORKSPACE_ID, standaloneName)),
 	};
 	const workspaces =
-		standalone.sessions.length > 0 ? placeStandaloneWorkspaceLast([...projects, standalone]) : projects;
+		standalone.sessions.length > 0 || (standalone.archivedCount ?? 0) > 0 ? placeStandaloneWorkspaceLast([...projects, standalone]) : projects;
 	// Pending optimistic kills must survive CDC/refetch while the daemon kill is in flight.
 	return applyOptimisticSessionKills(workspaces) ?? workspaces;
 }

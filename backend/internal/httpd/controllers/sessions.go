@@ -318,7 +318,11 @@ func archiveSummaryView(in *sessionsvc.ArchiveSummary) *SessionArchiveSummary {
 	for project, count := range in.ByProject {
 		byProject[string(project)] = count
 	}
-	return &SessionArchiveSummary{Total: in.Total, ByProject: byProject}
+	workers := make(map[string]int, len(in.WorkerByProject))
+	for project, count := range in.WorkerByProject {
+		workers[string(project)] = count
+	}
+	return &SessionArchiveSummary{Total: in.Total, ByProject: byProject, WorkerByProject: workers}
 }
 
 func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {

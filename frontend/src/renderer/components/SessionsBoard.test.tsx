@@ -74,7 +74,8 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 });
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
+	apiClient: { POST: (...args: unknown[]) => postMock(...args), GET: vi.fn().mockResolvedValue({ data: { sessions: [] } }) },
+	hasTrustedApiBaseUrl: () => true,
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
@@ -152,6 +153,13 @@ beforeEach(() => {
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	window.localStorage.removeItem("ao.board.archive.layout");
 	boardActionsInPanelMock.mockReset().mockReturnValue(false);
+});
+
+it("keeps an archive-only project's count and entry point before loading history", () => {
+	workspaceQueryMock.mockReturnValue({ data: [{ ...workspaceWithSessions([]), archivedCount: 6, archiveSummary: { total: 7, byProject: { p1: 7 } } }], isSuccess: true, isError: false });
+	renderBoard("p1");
+	expect(screen.getByRole("button", { name: "Archive, 6 sessions" })).toBeInTheDocument();
+	expect(screen.queryByText("No worker sessions yet")).not.toBeInTheDocument();
 });
 
 describe("SessionsBoard", () => {

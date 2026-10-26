@@ -1096,7 +1096,7 @@ func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 	svc.listPage = &sessionsvc.ListPage{
 		Sessions:   []domain.Session{svc.sessions["ao-1"]},
 		NextCursor: "next-page",
-		Archived:   &sessionsvc.ArchiveSummary{Total: 3, ByProject: map[domain.ProjectID]int{"ao": 2, "": 1}},
+		Archived:   &sessionsvc.ArchiveSummary{Total: 3, ByProject: map[domain.ProjectID]int{"ao": 2, "": 1}, WorkerByProject: map[domain.ProjectID]int{"ao": 1, "": 1}},
 	}
 	srv := newSessionTestServer(t, svc)
 
@@ -1111,15 +1111,16 @@ func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 		Sessions   []sessionBody `json:"sessions"`
 		NextCursor string        `json:"nextCursor"`
 		Archived   *struct {
-			Total     int            `json:"total"`
-			ByProject map[string]int `json:"byProject"`
+			WorkerByProject map[string]int `json:"workerByProject"`
+			Total           int            `json:"total"`
+			ByProject       map[string]int `json:"byProject"`
 		} `json:"archived"`
 	}
 	mustJSON(t, body, &page)
 	if len(page.Sessions) != 1 || page.NextCursor != "next-page" {
 		t.Fatalf("page = %d sessions, cursor %q", len(page.Sessions), page.NextCursor)
 	}
-	if page.Archived == nil || page.Archived.Total != 3 || page.Archived.ByProject["ao"] != 2 || page.Archived.ByProject[""] != 1 {
+	if page.Archived == nil || page.Archived.Total != 3 || page.Archived.ByProject["ao"] != 2 || page.Archived.ByProject[""] != 1 || page.Archived.WorkerByProject["ao"] != 1 || page.Archived.WorkerByProject[""] != 1 {
 		t.Fatalf("archived = %+v, want 3 (ao 2, standalone 1)", page.Archived)
 	}
 

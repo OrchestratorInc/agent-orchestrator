@@ -523,7 +523,9 @@ type ListSessionsResponse struct {
 
 // SessionArchiveSummary sizes the archive behind an active-only session list.
 type SessionArchiveSummary struct {
-	Total int `json:"total"`
+	// WorkerByProject excludes orchestrators, matching desktop board archive cards.
+	WorkerByProject map[string]int `json:"workerByProject"`
+	Total           int            `json:"total"`
 	// ByProject counts per project id. Standalone sessions count under "".
 	ByProject map[string]int `json:"byProject"`
 }

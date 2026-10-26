@@ -18812,7 +18812,14 @@ components:
           - "null"
         total:
           type: integer
+        workerByProject:
+          additionalProperties:
+            type: integer
+          type:
+          - object
+          - "null"
       required:
+      - workerByProject
       - total
       - byProject
       type: object
