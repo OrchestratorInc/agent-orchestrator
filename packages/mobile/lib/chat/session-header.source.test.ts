@@ -38,6 +38,9 @@ describe("session header controls", () => {
 		expect(session).toContain("const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({");
 		expect(session).toContain("const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);");
 		expect(session).toContain("const headerItems = useMemo(() => menuGroups ? (");
+		// The conversation refreshes itself after every streamed event; only a
+		// refresh asked for from the menu shows in it.
+		expect(session).toContain("const menuRefreshing = manualRefreshing;");
 	});
 
 	it("restores the folded PR card from a bar item beside the menu", () => {

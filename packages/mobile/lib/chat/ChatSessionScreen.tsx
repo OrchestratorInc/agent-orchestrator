@@ -117,6 +117,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
+	const [manualRefreshing, setManualRefreshing] = useState(false);
 	const [renameRequest, setRenameRequest] = useState<ConversationRenameRequest>();
 	const closeRename = useCallback(() => setRenameRequest(undefined), []);
 	const [resuming, setResuming] = useState(false);
@@ -464,7 +465,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuHasUsage = Boolean(menuSnapshot?.usage || menuSnapshot?.rateLimits);
 	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
 	const menuModelLabel = menuSnapshot ? turnSettingsModelLabel(menuSnapshot, conversation.models, conversation.configOptions) : "";
-	const menuRefreshing = conversation.refreshing;
+	// Only a refresh asked for from the menu: the conversation also refreshes
+	// itself after every streamed event, and a menu that followed those would be
+	// rebuilt, and closed under the finger, all through a running turn.
+	const menuRefreshing = manualRefreshing;
 	const menuCompacting = conversation.pendingActions.includes("compact");
 	const menuMcpReloading = conversation.pendingActions.includes("mcp");
 	const menuInterfaceSupported = Boolean(interfaceSwitch.status?.supported);
@@ -509,7 +513,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			const snapshot = latestSnapshot.current;
 			if (snapshot) void presentSheet({ kind: "conversation-map", markers: conversationMarkers(snapshot), onSelect: setJumpToSequence });
 		},
-		refresh: () => void conversation.refresh(),
+		refresh: () => {
+			setManualRefreshing(true);
+			void conversation.refresh().finally(() => setManualRefreshing(false));
+		},
 		settings: () => void openTurnSettings(),
 		usage: openUsage,
 		rename: () => setRenameRequest((current) => ({
