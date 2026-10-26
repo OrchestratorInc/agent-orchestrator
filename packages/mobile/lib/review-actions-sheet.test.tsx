@@ -60,6 +60,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 	};
 });
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
+	alpha: (value: number) => ({ alpha: value }),
 	clickable: (handler: () => void) => ({ clickable: handler }),
 	size: (width: number, height: number) => ({ size: [width, height] }),
 	testID: (tag: string) => ({ testID: tag }),
@@ -101,6 +102,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 import { ReviewActionsSheet } from "./review-actions-sheet";
 import { ReviewActionsSheet as IOSReviewActionsSheet } from "./review-actions-sheet.ios";
 import type { ReviewActionsSheetProps } from "./review-actions-sheet.types";
+import { stateOpacity } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -180,6 +182,15 @@ describe("review actions sheet on Android", () => {
 		expect(rows[1].findByType("Trailing" as never).findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
 		rows[0].props.modifiers.find((entry: { clickable?: () => void }) => entry.clickable).clickable();
 		expect(onRerequest).toHaveBeenCalledWith("octocat");
+		expect(rows[0].props.modifiers.some((entry: { alpha?: number }) => entry.alpha !== undefined)).toBe(false);
+	});
+
+	it("dims the reviewer rows that wait while another action runs", async () => {
+		const root = await render(<ReviewActionsSheet {...sheet({ locked: true })} />);
+		const [waiting, running] = root.findAllByType("ListItem" as never).slice(2);
+		expect(waiting.props.modifiers).toEqual([{ alpha: stateOpacity.disabled }]);
+		// The running row keeps full strength so its spinner reads, and takes no second press.
+		expect(running.props.modifiers).toEqual([]);
 	});
 
 	it("titles sections in sentence case as headers, with the hint underneath", async () => {

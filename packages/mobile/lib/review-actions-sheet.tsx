@@ -1,5 +1,5 @@
 import { CircularProgressIndicator, Column, Host, Icon, ListItem, Switch, Text as ComposeText, type ListItemColors } from "@expo/ui/jetpack-compose";
-import { clickable, size, testID, toggleable } from "@expo/ui/jetpack-compose/modifiers";
+import { alpha, clickable, size, testID, toggleable } from "@expo/ui/jetpack-compose/modifiers";
 import type { ReactNode } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
@@ -10,7 +10,7 @@ import { reviewDrawable } from "./review-drawables";
 import { ReviewerPicker } from "./reviewer-picker";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
-import { font, iconSize, radius, space, type } from "./tokens";
+import { font, iconSize, radius, space, stateOpacity, type } from "./tokens";
 import { SHEET_SCROLL_CONTENT, SheetHeader } from "./ui";
 
 /**
@@ -107,8 +107,11 @@ function PolicyItem({ policy, locked, onChange }: { policy: ReviewPolicyRow; loc
 /** Asks a GitHub reviewer again. It acts in place, so it ends in a spinner while it runs, never a disclosure arrow. */
 function RerequestItem({ item, locked, onPress }: { item: ExternalReviewerRow; locked: boolean; onPress: () => void }) {
 	const t = useTheme();
+	// While another action runs the row dims as a disabled one; the row that is
+	// running keeps full strength so its spinner reads.
+	const modifiers = locked ? (item.busy ? [] : [alpha(stateOpacity.disabled)]) : [clickable(onPress)];
 	return (
-		<ListItem colors={listColors(t)} modifiers={locked ? [] : [clickable(onPress)]}>
+		<ListItem colors={listColors(t)} modifiers={modifiers}>
 			<ListItem.HeadlineContent><ComposeText style={headline}>{item.id}</ComposeText></ListItem.HeadlineContent>
 			<ListItem.SupportingContent><ComposeText style={supporting}>{item.detail}</ComposeText></ListItem.SupportingContent>
 			<ListItem.LeadingContent><Icon source={reviewDrawable("refresh")} size={iconSize.xl} contentDescription="Request another review" /></ListItem.LeadingContent>
