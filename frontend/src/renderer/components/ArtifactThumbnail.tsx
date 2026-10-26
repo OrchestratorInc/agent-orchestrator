@@ -14,14 +14,14 @@ const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 625;
 
 /** Gallery previews load near the viewport; pages keep the isolated inline origin. */
-export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
+export function ArtifactThumbnail({ row, previewHtml = true }: { row: ArtifactRow; previewHtml?: boolean }) {
 	const { t } = useTranslation();
 	const container = useRef<HTMLSpanElement>(null);
 	const [visible, setVisible] = useState(false);
 	const [width, setWidth] = useState(0);
 	const [failed, setFailed] = useState(false);
 	const [pageAvailable, setPageAvailable] = useState<boolean>();
-	const page = row.kind === "html" && row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined;
+	const page = previewHtml && row.kind === "html" && row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined;
 	const contentUrl = artifactContentUrl(row.sessionId, row.path, row.rawUrl);
 	const image = isRasterImagePath(row.path) || isSvgPath(row.path)
 		? contentUrl : undefined;
@@ -102,7 +102,6 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 						sandbox="allow-scripts allow-same-origin"
 						loading="eager"
 						tabIndex={-1}
-						onError={() => setFailed(true)}
 						className="absolute left-0 top-0 origin-top-left border-0 bg-[var(--solid-muted,var(--muted))]"
 						style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / PAGE_WIDTH})` }}
 					/>
