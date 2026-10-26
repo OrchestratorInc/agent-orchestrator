@@ -17,6 +17,7 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
+vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: "KeyboardAvoidingView" }));
 vi.mock("@expo/ui/jetpack-compose", async () => (await import("./nativeFormTestDoubles")).composeDouble());
 vi.mock("@expo/ui/jetpack-compose/modifiers", async () => (await import("./nativeFormTestDoubles")).composeModifierDouble());
 vi.mock("./formDrawables.android", () => ({ formDrawables: { visibility: "visibility.xml", visibilityOff: "visibility_off.xml" } }));
@@ -88,6 +89,15 @@ describe("the Android machine editor", () => {
 		expect(supporting(byTag("environment-password-a"))).toEqual(["That password was rejected. Check it and try again."]);
 		expect(supporting(byTag("environment-port-a"))).toEqual(["Enter a port from 1 to 65535."]);
 		expect(byTag("environment-host-a").props.isError).toBe(false);
+	});
+
+	// The keyboard controller stops the window resizing for the IME, so without
+	// this the port, password and TLS rows sit under the keyboard, unscrollable.
+	it("pads itself above the keyboard, so every field can scroll into sight", () => {
+		act(() => { renderer = create(<MachineEditorForm host={host} editor={editor()} />); });
+		const avoider = renderer!.root.findByType("KeyboardAvoidingView" as never);
+		expect(avoider.props).toMatchObject({ behavior: "padding", automaticOffset: true });
+		expect(avoider.findByType("ScrollView" as never).props.keyboardShouldPersistTaps).toBe("handled");
 	});
 
 	it("leaves an account machine's route to the account", () => {
