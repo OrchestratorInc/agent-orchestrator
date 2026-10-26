@@ -179,8 +179,8 @@ export function FileContentPane({
 		const generation = ++refreshGeneration.current;
 		if (annotationRequest) setAnnotationReadyRequest(undefined);
 		const results = await Promise.all([
-			query.refetch().then(result => !result.isError),
-			...(annotationRequest && canReadLiveText ? [liveText.refetch().then(result => !result.isError)] : []),
+			query.refetch({ cancelRefetch: false }).then(result => !result.isError),
+			...(annotationRequest && canReadLiveText ? [liveText.refetch({ cancelRefetch: false }).then(result => !result.isError)] : []),
 		]);
 		if (generation === refreshGeneration.current && annotationRequest && active && !editing && !selectionOrMenuActive && results.every(Boolean)) {
 			setAnnotationReadyRequest(annotationRequest);
@@ -299,6 +299,9 @@ export function FileContentPane({
 	}
 	if (outsideWorkspace) {
 		return <PanelMessage>{t("files.error.outsideWorkspace")}</PanelMessage>;
+	}
+	if (annotationRange && canReadLiveText && liveText.error) {
+		return <PanelMessage action={retryAction}>{liveText.error.message || t("chat.fileAnnotationLoadFailed")}</PanelMessage>;
 	}
 	// File navigation can paint live text independently of repository status.
 	// Editing, annotations and comparison controls wait for their real metadata.
@@ -593,9 +596,10 @@ function CompleteFileView({ annotationReady = true, annotationRange, annotation,
 	});
 	if (mediaKind && !editing) return <FileMediaPreview hostId={hostId} kind={mediaKind} path={detail.path} sessionId={sessionId} source={source} side={detail.deleted ? "before" : "after"} version={version} />;
 	if (needsRevision && revision.isPending && revision.isFetching) return <PanelMessage>{t("files.loading")}</PanelMessage>;
-	if (needsRevision && revision.error) return <PanelMessage>{revision.error.message}</PanelMessage>;
+	const retryRevision = <span data-file-annotation-retry={annotationRange?.requestKey}><RetryButton onClick={() => void revision.refetch({ cancelRefetch: false })} /></span>;
+	if (needsRevision && revision.error) return <PanelMessage action={retryRevision}>{revision.error.message}</PanelMessage>;
 	if (needsRevision && revision.data) {
-		if (!revision.data.exists) return <PanelMessage>{t("files.error.loadFile")}</PanelMessage>;
+		if (!revision.data.exists) return <PanelMessage action={retryRevision}>{t("files.error.loadFile")}</PanelMessage>;
 		return (
 			<ReadOnlyFileView annotationRange={annotationRange} annotationReady={annotationReady && !revision.isFetching} source={source} commitSha={commitSha}
 				annotation={annotation}

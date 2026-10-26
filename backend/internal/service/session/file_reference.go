@@ -3,8 +3,6 @@ package session
 import (
 	"context"
 	"io"
-	"regexp"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -55,7 +53,7 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 			return FileReferenceResolution{State: "unavailable", Reason: "snapshot_changed"}, nil
 		}
 	}
-	read := func(side WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
+	readSource := func(side WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
 		switch ref.Source.Kind {
 		case "artifact":
 			root, err := s.ArtifactLocation(ctx, id)
@@ -84,12 +82,13 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 			return s.GetWorkspaceFileRevision(ctx, id, ref.Path, WorkspaceDiffScope(ref.Scope), side, "", "")
 		}
 	}
+	read := memoizeFileReferenceRead(func() string { return ref.Path }, readSource)
 	result := resolveCapturedFileRows(ref, read)
 	// Follow only the exact previous-path identity reported by Git, never a filename guess.
 	if ref.Source.Kind == "workspace" && ref.CommitSHA == "" {
 		current, currentErr := read(WorkspaceBlobAfter)
 		if currentErr == nil && current.Exists {
-			return s.verifyFileReferenceDiff(ctx, id, ref, result), nil
+			return s.verifyFileReferenceDiff(ctx, id, ref, result, read), nil
 		}
 		manifest, err := s.GetWorkspaceManifest(ctx, id)
 		if err == nil {
@@ -114,7 +113,7 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 				if relocated.State == "unchanged" || relocated.State == "moved" {
 					relocated.State = "moved"
 					relocated.Reason = "renamed"
-					return s.verifyFileReferenceDiff(ctx, id, ref, relocated), nil
+					return s.verifyFileReferenceDiff(ctx, id, ref, relocated, read), nil
 				}
 				if relocated.State == "changed" {
 					// Git established the new identity even though the selection no
@@ -130,12 +129,34 @@ func (s *Service) ResolveFileReference(ctx context.Context, id domain.SessionID,
 			}
 		}
 	}
-	return s.verifyFileReferenceDiff(ctx, id, ref, result), nil
+	return s.verifyFileReferenceDiff(ctx, id, ref, result, read), nil
+}
+
+// Revision reads are bounded and shared only within this resolution request.
+func memoizeFileReferenceRead(path func() string, readSource func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error)) func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
+	type sourceKey struct {
+		path string
+		side WorkspaceFileBlobSide
+	}
+	type sourceResult struct {
+		revision WorkspaceFileRevision
+		err      error
+	}
+	cache := map[sourceKey]sourceResult{}
+	return func(side WorkspaceFileBlobSide) (WorkspaceFileRevision, error) {
+		key := sourceKey{path(), side}
+		if saved, ok := cache[key]; ok {
+			return saved.revision, saved.err
+		}
+		revision, err := readSource(side)
+		cache[key] = sourceResult{revision, err}
+		return revision, err
+	}
 }
 
 // A range is navigable only when its complete row sequence is still one
 // continuous diff interval. Independent exact matches on each side are not enough.
-func (s *Service) verifyFileReferenceDiff(ctx context.Context, id domain.SessionID, ref ports.ChatFileReference, result FileReferenceResolution) FileReferenceResolution {
+func (s *Service) verifyFileReferenceDiff(ctx context.Context, id domain.SessionID, ref ports.ChatFileReference, result FileReferenceResolution, read func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error)) FileReferenceResolution {
 	if ref.Side == "file" || (result.State != "unchanged" && result.State != "moved") || ref.Source.Kind == "artifact" {
 		return result
 	}
@@ -161,76 +182,18 @@ func (s *Service) verifyFileReferenceDiff(ctx context.Context, id domain.Session
 			patch, complete = group.Patch, !group.Truncated && len(group.Errors) == 0 && len(group.Deferred) == 0
 		}
 	}
-	if !complete || !capturedDiffIntervalMatches(ref, result, patch) {
-		return FileReferenceResolution{State: "changed", Reason: "range_changed", Path: ref.Path}
+	changed := FileReferenceResolution{State: "changed", Reason: "range_changed", Path: ref.Path}
+	if !complete {
+		return changed
 	}
-	return result
-}
-
-var capturedDiffHunk = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
-
-func capturedDiffIntervalMatches(ref ports.ChatFileReference, result FileReferenceResolution, patch string) bool {
-	type diffRow struct {
-		old, new, hunk int
-		kind, text     string
-	}
-	var rows []diffRow
-	oldNo, newNo, hunk := 0, 0, 0
-	for _, line := range strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n") {
-		if header := capturedDiffHunk.FindStringSubmatch(line); header != nil {
-			oldNo, _ = strconv.Atoi(header[1])
-			newNo, _ = strconv.Atoi(header[2])
-			hunk++
-			continue
-		}
-		if strings.HasPrefix(line, "diff --git ") {
-			oldNo, newNo = 0, 0
-			continue
-		}
-		if hunk == 0 || line == "" || (oldNo == 0 && newNo == 0) {
-			continue
-		}
-		switch line[0] {
-		case ' ':
-			rows = append(rows, diffRow{oldNo, newNo, hunk, "context", line[1:]})
-			oldNo++
-			newNo++
-		case '-':
-			rows = append(rows, diffRow{old: oldNo, hunk: hunk, kind: "del", text: line[1:]})
-			oldNo++
-		case '+':
-			rows = append(rows, diffRow{new: newNo, hunk: hunk, kind: "add", text: line[1:]})
-			newNo++
+	before, beforeErr := read(WorkspaceBlobBefore)
+	after, afterErr := read(WorkspaceBlobAfter)
+	if beforeErr == nil && afterErr == nil {
+		if verified, ok := resolveCapturedDiffInterval(ref, result, patch, before, after); ok {
+			return verified
 		}
 	}
-	match := func(actual diffRow, expected ports.ChatFileReferenceLine) bool {
-		if actual.kind != expected.Kind || actual.text != expected.Text {
-			return false
-		}
-		old := expected.Side == "old" || (expected.Side != "new" && (expected.Kind == "del" || (ref.Side == "old" && expected.Kind != "add")))
-		if old {
-			return expected.OldNo != nil && actual.old == *expected.OldNo+result.OldLineOffset
-		}
-		return expected.NewNo != nil && actual.new == *expected.NewNo+result.NewLineOffset
-	}
-	if len(ref.Lines) == 0 {
-		return false
-	}
-	for start, row := range rows {
-		if !match(row, ref.Lines[0]) {
-			continue
-		}
-		if start+len(ref.Lines) > len(rows) {
-			return false
-		}
-		for i, expected := range ref.Lines {
-			if rows[start+i].hunk != row.hunk || !match(rows[start+i], expected) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
+	return changed
 }
 
 // Each side keeps its own line numbering. A recorded match wins before relocation.

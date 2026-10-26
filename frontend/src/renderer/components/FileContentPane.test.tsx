@@ -19,6 +19,7 @@ vi.mock("../hooks/usePierreFileHighlight", () => ({
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, PUT: putMock },
 	getApiBaseUrl: () => "",
+	apiErrorCode: () => undefined,
 	apiErrorMessage: (error: unknown, fallback = "Request failed") => {
 		if (error instanceof Error) return error.message;
 		return fallback;
@@ -991,5 +992,21 @@ it("waits for fresh content on an annotation open instead of verifying cached ro
  await waitFor(()=>expect(pending.length).toBeGreaterThan(0));
  expect(screen.getByText("cached row")).toHaveAttribute("data-annotation-ready","false");
  await act(async()=>{for(const finish of pending)finish()});
+ await waitFor(()=>expect(screen.getByText("captured();")).toHaveAttribute("data-annotation-ready","true"));
+});
+
+
+it("offers Retry when only the live revision fails during annotation navigation", async () => {
+ const detail={sessionId:"sess-1",path:"src/revision.ts",status:"modified",content:"captured();",size:11,binary:false,deleted:false,contentTruncated:false,diff:"",diffTruncated:false};
+ let failing=true;
+ getMock.mockImplementation(async(path:string)=>path.endsWith("/revision")
+  ? failing?{error:new Error("revision failed")}:{data:{exists:true,binary:false,truncated:false,content:detail.content,size:11,revision:"fresh"}}
+  :{data:detail});
+ const range={requestKey:21,side:"file" as const,line:1,endLine:1,lines:[{kind:"context" as const,oldNo:1,newNo:1,text:"captured();"}]};
+ renderWithQuery(<FileContentPane annotation={noopAnnotation()} sessionId="sess-1" path={detail.path} split={false} initialMode="file" annotationRange={range}/>);
+ const retry=await screen.findByRole("button",{name:"Retry"});
+ expect(screen.getByText("revision failed")).toBeInTheDocument();
+ expect(retry.closest('[data-file-annotation-retry]')).toHaveAttribute("data-file-annotation-retry","21");
+ failing=false;await userEvent.click(retry);
  await waitFor(()=>expect(screen.getByText("captured();")).toHaveAttribute("data-annotation-ready","true"));
 });

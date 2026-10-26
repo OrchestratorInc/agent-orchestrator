@@ -74,7 +74,8 @@ func TestCapturedDiffIntervalRequiresEveryRow(t *testing.T) {
 		{"different hunks", "@@ -2 +2 @@\n-old();\n@@ -2 +2 @@\n+new();\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := capturedDiffIntervalMatches(ref, FileReferenceResolution{}, tc.patch); got != tc.want {
+			_, got := resolveCapturedDiffInterval(ref, FileReferenceResolution{}, tc.patch, WorkspaceFileRevision{Exists: true, Content: "keep\nold();\n"}, WorkspaceFileRevision{Exists: true, Content: "keep\nnew();\n"})
+			if got != tc.want {
 				t.Fatalf("match=%v want %v", got, tc.want)
 			}
 		})

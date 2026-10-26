@@ -8,6 +8,7 @@ export function CapturedFileAnnotation({ reference, children, onOpen, opening = 
 	const [expanded, setExpanded] = useState(false);
 	const [wrappedOverflow, setWrappedOverflow] = useState(false);
 	const previewRef = useRef<HTMLPreElement>(null);
+	const cardRef = useRef<HTMLDivElement>(null);
 	const previewId = useId();
 	const pointerStart = useRef<{ x: number; y: number } | null>(null);
 	const dragged = useRef(false);
@@ -32,12 +33,15 @@ export function CapturedFileAnnotation({ reference, children, onOpen, opening = 
 		<span className="shrink-0 rounded bg-background/60 px-1.5 py-0.5 font-mono text-[10px]">{location}</span>
 	</>;
 	const headerClass = "mb-1 flex min-w-0 items-center gap-2 border-b border-border/60 pb-1.5";
+	const open = () => {
+		if (!onOpen || opening || dragged.current) return;
+		const selection = window.getSelection();
+		if (selection && !selection.isCollapsed && selection.rangeCount && cardRef.current && selection.getRangeAt(0).intersectsNode(cardRef.current)) return;
+		onOpen();
+	};
 	return <div
-		role={onOpen ? "button" : undefined}
-		tabIndex={onOpen ? 0 : undefined}
-		aria-label={onOpen ? `${t("chat.fileAnnotationOpenFile")}: ${reference.path} · ${location}` : undefined}
-		aria-disabled={onOpen && opening ? true : undefined}
-		className={onOpen ? "cursor-pointer rounded bg-transparent text-left text-popover-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring aria-disabled:opacity-50" : undefined}
+		ref={cardRef}
+		className={onOpen ? `cursor-pointer rounded bg-transparent text-left text-popover-foreground hover:text-foreground ${opening ? "opacity-50" : ""}` : undefined}
 		onPointerDownCapture={event => {
 			pointerStart.current = { x: event.clientX, y: event.clientY };
 			dragged.current = false;
@@ -48,22 +52,12 @@ export function CapturedFileAnnotation({ reference, children, onOpen, opening = 
 		}}
 		onPointerUpCapture={() => { pointerStart.current = null; }}
 		onClick={event => {
-			if (!onOpen || opening || dragged.current) return;
-			// Nested controls and selecting/copying code must not navigate.
 			if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
-			const selection = window.getSelection();
-			if (selection && !selection.isCollapsed && selection.rangeCount && selection.getRangeAt(0).intersectsNode(event.currentTarget)) return;
-			onOpen();
-		}}
-		onKeyDown={event => {
-			if (event.target !== event.currentTarget || !onOpen || opening) return;
-			if (event.key === "Enter" || event.key === " ") {
-				event.preventDefault();
-				onOpen();
-			}
+			open();
 		}}
 	>
-		<div className={headerClass} title={reference.path}>{header}</div>
+		{onOpen ? <button type="button" className={`${headerClass} w-full text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`} title={reference.path} aria-label={`${t("chat.fileAnnotationOpenFile")}: ${reference.path} · ${location}`} disabled={opening} onClick={event => { if (event.detail === 0) dragged.current = false; open(); }}>{header}</button>
+			: <div className={headerClass} title={reference.path}>{header}</div>}
 		<pre ref={previewRef} id={previewId} className={`whitespace-pre-wrap break-words text-xs leading-5 select-text ${expanded ? "max-h-48 overflow-auto" : "line-clamp-6"}`}>{expanded ? full : shortened + (clipped ? "…" : "")}</pre>
 		{clipped || wrappedOverflow ? <button type="button" className="mt-1 text-xs text-muted-foreground underline underline-offset-2" aria-expanded={expanded} aria-controls={previewId} onClick={() => setExpanded(value => !value)}>{t(expanded ? "chat.fileAnnotationShowLess" : "chat.fileAnnotationShowMore")}</button> : null}
 		{reference.truncated ? <span className="block text-muted-foreground">{t("chat.capturedSelectionTruncated")}</span> : null}

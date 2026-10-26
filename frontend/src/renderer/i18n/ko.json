@@ -3501,6 +3501,8 @@
 	"chat.fileAnnotationCheckFailed": "원본 확인에 실패했습니다. 나중에 다시 시도하세요.",
 	"chat.fileAnnotationOpen": "Open selected lines",
 	"chat.fileAnnotationOpenFile": "Open file",
+	"chat.fileAnnotationLoading": "Loading selected lines…",
+	"chat.fileAnnotationLoadFailed": "Could not load the selected lines.",
 	"chat.fileAnnotationChangedDuringOpen": "The selected lines could not be verified in this view. Reopen the annotation to view the captured selection.",
 	"chat.fileAnnotationMoved": "Source moved.",
 	"chat.fileAnnotationAmbiguous": "Selected code appears in more than one location.",

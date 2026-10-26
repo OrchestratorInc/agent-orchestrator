@@ -10,7 +10,7 @@ import { parseUnifiedDiff, type DiffRow } from "../../lib/diff-parser";
 import { useAskInChat } from "../../lib/chat-context-bus";
 import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useUiStore } from "../../stores/ui-store";
-import { FileAnnotationComposer, LineFeedbackButtonControl, type FileAnnotationModel } from "../WorkspaceDiffView";
+import { FileAnnotationComposer, LineFeedbackButtonControl, RetryButton, type FileAnnotationModel } from "../WorkspaceDiffView";
 import { AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
 import { SelectionAskButton } from "./SelectionAskButton";
 import { endsAtLastHunk, hydratedCopy, patchIdentity } from "./trailingContext";
@@ -142,6 +142,7 @@ export function AoDiffFile({
 		queryFn: () => loadDiffFiles(metadata as FileDiffMetadata),
 		enabled: Boolean(metadata) && (endsAtEndOfFile || Boolean(annotationRange)),
 		retry: false,
+		refetchOnWindowFocus: false,
 		staleTime: Infinity,
 	});
 	const fileDiff = useMemo(
@@ -224,7 +225,11 @@ export function AoDiffFile({
 					/>
 				)}
 			/>
-			{annotationReveal.changed ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
+			{annotationRange && endOfFileContents.isError ? <div role="alert" className="px-3 py-2 text-xs text-muted-foreground">
+				{t("chat.fileAnnotationLoadFailed")}
+				<span data-file-annotation-retry={annotationRange.requestKey}><RetryButton onClick={() => void endOfFileContents.refetch({cancelRefetch:false})}/></span>
+			</div> : annotationReveal.loading ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationLoading")}</p>
+			: annotationReveal.changed || annotationReveal.unverified ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
 			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 			{detail.diffTruncated ? (
 				<div className="border-t border-border bg-warning/10 px-3 py-1.5 text-xs text-warning">

@@ -6,6 +6,8 @@ import type { FileAnnotationRange } from "../../../shared/chat-file-reference";
 export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>, range?: FileAnnotationRange, { ready = true, contentKey }: { ready?: boolean; contentKey?: unknown } = {}) {
 	const [selectedLines, setSelectedLines] = useState<SelectedLineRange | null>(null);
 	const [changed, setChanged] = useState(false);
+	const [unverified, setUnverified] = useState(false);
+	const [dismissedRequest, setDismissedRequest] = useState<number>();
 	const consumed = useRef<number | undefined>(undefined);
 	const dismissed = useRef<number | undefined>(undefined);
 	const highlightedRows = useRef<HTMLElement[]>([]);
@@ -37,8 +39,9 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 			if (number == null) continue;
 			const element = (old ? oldRows : newRows).get(number);
 			if (!element || normalizeCodeRowText(element.textContent ?? "") !== row.text) {
+				setChanged(Boolean(element));
+				if (element) setUnverified(false);
 				if (element || alreadyRevealed) {
-					setChanged(true);
 					setSelectedLines(null);
 					highlightedRows.current = [];
 					// A stale first render must not consume an unverified request.
@@ -78,6 +81,7 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 		const startLine = oldSide(expected[0]) ? expected[0].oldNo! : expected[0].newNo!;
 		const endLine = oldSide(expected[expected.length - 1]) ? expected[expected.length - 1].oldNo! : expected[expected.length - 1].newNo!;
 		setChanged(false);
+		setUnverified(false);
 		// Post-render verification can recover a redraw without starting another
 		// render cycle when Pierre already has the same verified selection.
 		setSelectedLines(current => current?.start === startLine && current.end === endLine && current.side === side && current.endSide === endSide
@@ -97,27 +101,35 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 	useEffect(() => {
 		consumed.current = undefined;
 		dismissed.current = undefined;
+		setDismissedRequest(undefined);
+		setUnverified(false);
 		highlightedRows.current = [];
 		setChanged(false);
 		setSelectedLines(null);
 		const frame = requestAnimationFrame(() => latestReveal.current());
-		const timeout = setTimeout(() => {
-			if (range && dismissed.current !== range.requestKey && consumed.current !== range.requestKey) setChanged(true);
-		}, 5000);
-		return () => {
-			cancelAnimationFrame(frame);
-			clearTimeout(timeout);
-		};
+		return () => cancelAnimationFrame(frame);
 	}, [range?.requestKey]);
  useEffect(() => {
   if (!ready) return;
   const frame = requestAnimationFrame(() => latestReveal.current());
   return () => cancelAnimationFrame(frame);
  }, [ready, contentKey]);
+	const verified = Boolean(range && selectedLines && consumed.current === range.requestKey);
+	// Transport/hydration delays have no render deadline. Late rows can still
+	// verify this same request after the advisory deadline, without polling.
+	useEffect(() => {
+		if (!range || !ready || verified || changed || dismissedRequest === range.requestKey) return;
+		const key = range.requestKey;
+		const timeout = setTimeout(() => {
+			if (currentRequest.current === key && dismissed.current !== key) setUnverified(true);
+		}, 5000);
+		return () => clearTimeout(timeout);
+	}, [range?.requestKey, ready, verified, changed, dismissedRequest]);
 	useEffect(() => {
 		if (!range) return;
 		const dismiss = () => {
 			dismissed.current = range.requestKey;
+			setDismissedRequest(range.requestKey);
 			highlightedRows.current = [];
 			setSelectedLines(null);
 		};
@@ -136,5 +148,5 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 			document.removeEventListener("keydown", onKeyDown, true);
 		};
 	}, [range?.requestKey]);
-	return { selectedLines: ready && range && consumed.current === range.requestKey ? selectedLines : null, changed, reveal };
+	return { selectedLines: ready && range && consumed.current === range.requestKey ? selectedLines : null, changed: ready && changed, unverified: ready && unverified, loading: Boolean(range && dismissedRequest !== range.requestKey && (!ready || (!verified && !changed && !unverified))), reveal };
 }

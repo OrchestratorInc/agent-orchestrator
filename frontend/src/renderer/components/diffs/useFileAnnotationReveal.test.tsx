@@ -182,7 +182,8 @@ it("clears a timeout warning when delayed rows finally verify", () => {
  vi.useFakeTimers();
  const view=setup("",range);
  act(()=>vi.advanceTimersByTime(5001));
- expect(view.result.current.changed).toBe(true);
+ expect(view.result.current.changed).toBe(false);
+ expect(view.result.current.unverified).toBe(true);
  const root=document.querySelector("diffs-container")!.shadowRoot!;
  root.innerHTML='<div data-line="2" data-line-type="context">captured();</div>';
  act(()=>view.result.current.reveal());
@@ -280,10 +281,10 @@ it("waits for readiness and every captured row before recovering a consumed requ
  expect(view.result.current.changed).toBe(true);
  view.rerender({selection,ready:false});view.redraw(markup);act(()=>view.result.current.reveal());
  expect(view.result.current.selectedLines).toBeNull();
- expect(view.result.current.changed).toBe(true);
+ expect(view.result.current.changed).toBe(false);
  view.redraw(row(1)+row(3));view.rerender({selection,ready:true});act(()=>view.result.current.reveal());
  expect(view.result.current.selectedLines).toBeNull();
- expect(view.result.current.changed).toBe(true);
+ expect(view.result.current.changed).toBe(false);
  view.redraw(markup);act(()=>view.result.current.reveal());
  expect(view.result.current.selectedLines).toMatchObject({start:1,end:3});
  expect(view.result.current.changed).toBe(false);
@@ -324,4 +325,35 @@ it("ignores an older request's render callback after opening another annotation"
  expect(view.result.current.selectedLines).toBeNull();
  expect(view.result.current.changed).toBe(true);
  view.cleanup();
+});
+
+
+it("starts the render deadline only after a slow source becomes ready", () => {
+ vi.useFakeTimers();
+ const view=setup("",range,false,false);
+ act(()=>vi.advanceTimersByTime(30000));
+ expect(view.result.current).toMatchObject({loading:true,changed:false,unverified:false,selectedLines:null});
+ view.rerender({selection:range,ready:true});
+ act(()=>vi.advanceTimersByTime(4999));
+ expect(view.result.current.unverified).toBe(false);
+ act(()=>vi.advanceTimersByTime(2));
+ expect(view.result.current).toMatchObject({loading:false,changed:false,unverified:true,selectedLines:null});
+ view.redraw('<div data-line="2" data-line-type="context">captured();</div>');
+ act(()=>view.result.current.reveal());
+ expect(view.result.current.selectedLines).not.toBeNull();
+ expect(view.result.current.unverified).toBe(false);
+ view.cleanup();vi.useRealTimers();
+});
+it("cancels the old render deadline when readiness or navigation changes", () => {
+ vi.useFakeTimers();
+ const view=setup("",range);
+ act(()=>vi.advanceTimersByTime(4000));
+ view.rerender({selection:{...range,requestKey:2},ready:false});
+ act(()=>vi.advanceTimersByTime(10000));
+ expect(view.result.current).toMatchObject({loading:true,changed:false,unverified:false});
+ fireEvent.keyDown(document,{key:"Escape"});
+ view.rerender({selection:{...range,requestKey:2},ready:true});
+ act(()=>vi.advanceTimersByTime(10000));
+ expect(view.result.current).toMatchObject({loading:false,changed:false,unverified:false});
+ view.cleanup();vi.useRealTimers();
 });

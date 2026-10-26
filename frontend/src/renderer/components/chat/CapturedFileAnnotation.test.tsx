@@ -74,3 +74,24 @@ it("keeps expansion, code selection, and drag gestures separate from navigation"
  await user.keyboard(" ");
  expect(onOpen).toHaveBeenCalledTimes(2);
 });
+
+
+it("exposes a standalone header button while keeping preview content readable", async () => {
+ const user=userEvent.setup(),onOpen=vi.fn();
+ const ref=reference(Array.from({length:9},(_,i)=>`readable line ${i}`));
+ const view=render(<CapturedFileAnnotation reference={ref} onOpen={onOpen}><span>Source verified</span></CapturedFileAnnotation>);
+ const header=screen.getByRole("button",{name:/^Open file:/});
+ const pre=document.querySelector("pre")!;
+ expect(header.tagName).toBe("BUTTON");
+ expect(header.contains(pre)).toBe(false);
+ expect(pre.closest('[role="button"],button')).toBeNull();
+ expect(screen.getByText("Source verified").closest('button,[role="button"]')).toBeNull();
+ expect(header.contains(screen.getByRole("button",{name:"Show more"}))).toBe(false);
+ header.focus();await user.keyboard("{Enter}");expect(onOpen).toHaveBeenCalledOnce();
+ await user.keyboard(" ");expect(onOpen).toHaveBeenCalledTimes(2);
+ await user.click(header);expect(onOpen).toHaveBeenCalledTimes(3);
+ await user.click(screen.getByRole("button",{name:"Show more"}));expect(onOpen).toHaveBeenCalledTimes(3);
+ view.rerender(<CapturedFileAnnotation reference={ref} onOpen={onOpen} opening/>);
+ expect(screen.getByRole("button",{name:/^Open file:/})).toBeDisabled();
+ fireEvent.click(pre);expect(onOpen).toHaveBeenCalledTimes(3);
+});
