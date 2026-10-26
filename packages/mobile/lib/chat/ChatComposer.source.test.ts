@@ -140,8 +140,26 @@ describe("PR review composer", () => {
 	it("uses supported PR and navigation symbols instead of a blank icon tile", () => {
 		const prompt = source("./PRReviewPrompt.tsx");
 		expect(prompt).toContain('name="git-pull-request"');
-		expect(prompt).toContain('name="chevron-right"');
+		expect(prompt).toContain('<AppSymbol name="chevronForward"');
 		expect(prompt).not.toContain('name="arrow-up-right"');
+	});
+
+	// A 30x3 bar that looked like a sheet grabber was really a 16pt collapse
+	// button. It is a real one now, beside the card rather than inside it.
+	it("collapses the card from a full-size chevron button", () => {
+		const prompt = source("./PRReviewPrompt.tsx");
+		expect(prompt).toContain('accessibilityLabel="Collapse pull request card"');
+		expect(prompt).toContain('<AppSymbol name="chevronDown"');
+		expect(prompt).toContain("collapse: { width: touchTarget, height: touchTarget");
+		expect(prompt).not.toContain("dragHandle");
+	});
+
+	it("folds the card on a UI-thread drag that honours Reduce Motion", () => {
+		expect(composer).not.toContain("PanResponder");
+		expect(composer).toContain("<GestureDetector gesture={reviewCardPan}>");
+		expect(composer).toContain("Gesture.Pan()");
+		expect(composer).toContain("const reviewCollapseMs = reduceMotion ? 0 : REVIEW_COLLAPSE_MS;");
+		expect(composer).toContain("duration: reduceMotion ? 0 : REVIEW_EXPAND_MS");
 	});
 });
 

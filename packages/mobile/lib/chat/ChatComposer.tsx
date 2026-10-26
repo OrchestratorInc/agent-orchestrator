@@ -5,14 +5,18 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Image, Keyboard, PanResponder, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import Animated, { Easing, interpolateColor, runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import { ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, { Easing, interpolateColor, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
-import { fontScaleCap, iconSize, press, space, type } from "../tokens";
+import { fontScaleCap, iconSize, press, radius, space, type } from "../tokens";
+import { useReducedMotion } from "../useReducedMotion";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
@@ -51,6 +55,15 @@ const MAX_ATTACHMENTS = 8;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
+
+/** How far the PR card's drag runs from open to folded into the composer. */
+const REVIEW_COLLAPSE_DISTANCE = 180;
+/** A drag released past this folds the card; short of it, the card springs back. */
+const REVIEW_COLLAPSE_THRESHOLD = 72;
+const REVIEW_COLLAPSE_MS = 150;
+const REVIEW_EXPAND_MS = 240;
+/** The PR card's corner, which eases into the pill's as it folds. */
+const REVIEW_CARD_RADIUS = radius.xxl;
 
 export function ChatComposer({
 	quoteRequest,
@@ -165,6 +178,7 @@ export function ChatComposer({
 	// The keyboard's own progress, 0 closed to 1 open. This is the same value the
 	// keyboard is animating with, so the dock moves in lockstep with it.
 	const keyboard = useReanimatedKeyboardAnimation();
+	const reduceMotion = useReducedMotion();
 	const reviewPromptAvailable = Boolean(reviewPR && onOpenReview);
 	const reviewCardDragY = useSharedValue(0);
 	const reviewCardHeaderHeight = useSharedValue(0);
@@ -172,7 +186,7 @@ export function ChatComposer({
 	const wasReviewPromptCollapsed = useRef(Boolean(reviewPRCollapsed));
 	const reviewCardHeaderStyle = useAnimatedStyle(() => {
 		if (!reviewCardHeaderMeasured.value) return {};
-		const progress = Math.max(0, Math.min(reviewCardDragY.value / 180, 1));
+		const progress = Math.max(0, Math.min(reviewCardDragY.value / REVIEW_COLLAPSE_DISTANCE, 1));
 		return {
 			height: reviewCardHeaderHeight.value * (1 - progress),
 			opacity: 1 - progress,
@@ -180,54 +194,56 @@ export function ChatComposer({
 		};
 	});
 	const finishReviewCardCollapse = useCallback(() => { onCollapseReviewPR?.(); }, [onCollapseReviewPR]);
+	const reviewCollapseMs = reduceMotion ? 0 : REVIEW_COLLAPSE_MS;
+	// Folds the card into the composer, then lets the screen record it. A worklet,
+	// so the drag below can finish it on the UI thread as well as the button.
 	const collapseReviewCard = useCallback(() => {
-		haptics.tap();
-		reviewCardDragY.value = withTiming(180, { duration: 150 }, (finished) => {
-			if (finished) runOnJS(finishReviewCardCollapse)();
+		"worklet";
+		reviewCardDragY.value = withTiming(REVIEW_COLLAPSE_DISTANCE, { duration: reviewCollapseMs }, (finished) => {
+			if (finished) scheduleOnRN(finishReviewCardCollapse);
 		});
-	}, [finishReviewCardCollapse, reviewCardDragY]);
-	const reviewCardPan = useMemo(() => PanResponder.create({
-		onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dy > 5 && gesture.dy > Math.abs(gesture.dx),
-		onPanResponderTerminationRequest: () => false,
-		onPanResponderGrant: () => { reviewCardDragY.value = 0; },
-		onPanResponderMove: (_event, gesture) => { reviewCardDragY.value = Math.max(0, gesture.dy); },
-		onPanResponderRelease: (_event, gesture) => {
-			if (gesture.dy > 72) collapseReviewCard();
-			else reviewCardDragY.value = withSpring(0, { damping: 18, stiffness: 220 });
-		},
-		onPanResponderTerminate: () => {
-			if (reviewCardDragY.value > 72) collapseReviewCard();
-			else reviewCardDragY.value = withSpring(0, { damping: 18, stiffness: 220 });
-		},
-	}), [collapseReviewCard, reviewCardDragY]);
+	}, [finishReviewCardCollapse, reviewCardDragY, reviewCollapseMs]);
+	// Dragging the card down folds it too. It runs on the UI thread with the
+	// finger, and only a mostly vertical drag claims the touch, so the controls
+	// inside the card keep their taps.
+	const reviewCardPan = useMemo(() => Gesture.Pan()
+		.enabled(!reviewPRCollapsed)
+		.activeOffsetY(5)
+		.failOffsetX([-12, 12])
+		.onStart(() => { reviewCardDragY.value = 0; })
+		.onUpdate((event) => { reviewCardDragY.value = Math.max(0, event.translationY); })
+		.onEnd(() => {
+			if (reviewCardDragY.value > REVIEW_COLLAPSE_THRESHOLD) collapseReviewCard();
+			else reviewCardDragY.value = reduceMotion ? 0 : withSpring(0, { damping: 18, stiffness: 220 });
+		}), [collapseReviewCard, reduceMotion, reviewCardDragY, reviewPRCollapsed]);
 	const reviewCardDragStyle = useAnimatedStyle(() => {
-		const progress = Math.max(0, Math.min(reviewCardDragY.value / 180, 1));
+		const progress = Math.max(0, Math.min(reviewCardDragY.value / REVIEW_COLLAPSE_DISTANCE, 1));
 		const expandedSurface = composerGlassSupported ? "transparent" : t.bgElevated;
 		return {
 			// Keep only the composer pill elevated while dragging. If this shell stays
 			// elevated too, it reads as a gray slab behind the composer until release.
 			backgroundColor: interpolateColor(progress, [0, 1], [expandedSurface, t.bgBase]),
 			borderColor: interpolateColor(progress, [0, 1], [t.accentBorder, t.bgBase]),
-			borderWidth: StyleSheet.hairlineWidth * (1 - progress),
-			borderRadius: 24 + (COMPOSER_RADIUS - 24) * progress,
+			borderWidth: rowDividerWidth * (1 - progress),
+			borderRadius: REVIEW_CARD_RADIUS + (COMPOSER_RADIUS - REVIEW_CARD_RADIUS) * progress,
 			paddingHorizontal: space.sm * (1 - progress),
 			paddingVertical: space.xs * (1 - progress),
 		};
 	});
-	const reviewCardGlassStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.max(0, Math.min(reviewCardDragY.value / 180, 1)) }));
+	const reviewCardGlassStyle = useAnimatedStyle(() => ({ opacity: 1 - Math.max(0, Math.min(reviewCardDragY.value / REVIEW_COLLAPSE_DISTANCE, 1)) }));
 	const reviewComposerSurfaceStyle = useAnimatedStyle(() => ({
-		backgroundColor: interpolateColor(Math.max(0, Math.min(reviewCardDragY.value / 180, 1)), [0, 1], ["transparent", t.bgElevated]),
+		backgroundColor: interpolateColor(Math.max(0, Math.min(reviewCardDragY.value / REVIEW_COLLAPSE_DISTANCE, 1)), [0, 1], ["transparent", t.bgElevated]),
 	}));
-	const reviewComposerGlassStyle = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(reviewCardDragY.value / 180, 1)) }));
+	const reviewComposerGlassStyle = useAnimatedStyle(() => ({ opacity: Math.max(0, Math.min(reviewCardDragY.value / REVIEW_COLLAPSE_DISTANCE, 1)) }));
 	useEffect(() => {
 		if (reviewPRCollapsed) {
-			reviewCardDragY.value = 180;
+			reviewCardDragY.value = REVIEW_COLLAPSE_DISTANCE;
 		} else if (wasReviewPromptCollapsed.current && reviewPromptAvailable) {
 			// Glide the card up from the composer shape without a spring or bounce.
-			reviewCardDragY.value = withTiming(0, { duration: 240, easing: Easing.out(Easing.cubic) });
+			reviewCardDragY.value = withTiming(0, { duration: reduceMotion ? 0 : REVIEW_EXPAND_MS, easing: Easing.out(Easing.cubic) });
 		}
 		wasReviewPromptCollapsed.current = Boolean(reviewPRCollapsed);
-	}, [reviewCardDragY, reviewPRCollapsed, reviewPromptAvailable]);
+	}, [reduceMotion, reviewCardDragY, reviewPRCollapsed, reviewPromptAvailable]);
 	const dockRise = useAnimatedStyle(() => ({
 		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
 	}));
@@ -629,10 +645,12 @@ export function ChatComposer({
 		// the keyboard has finished moving.
 		<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
 			{showReviewPrompt ? <Animated.View style={[styles.reviewArea, styles.reviewAreaWithPrompt]}>
-				<Animated.View style={[styles.reviewContainer, reviewCardDragStyle]} {...(reviewPRCollapsed ? {} : reviewCardPan.panHandlers)}>
-					{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewCardGlassStyle]}><ComposerGlass radius={24} /></Animated.View> : null}
-					{composerContents}
-				</Animated.View>
+				<GestureDetector gesture={reviewCardPan}>
+					<Animated.View style={[styles.reviewContainer, reviewCardDragStyle]}>
+						{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewCardGlassStyle]}><ComposerGlass radius={REVIEW_CARD_RADIUS} /></Animated.View> : null}
+						{composerContents}
+					</Animated.View>
+				</GestureDetector>
 			</Animated.View> : composerContents}
 		</Animated.View>
 	);
@@ -642,8 +660,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	...composerStyleRules(t),
 	reviewArea: { width: "100%", gap: space.xs },
 	reviewAreaWithPrompt: { gap: 0 },
-	reviewDivider: { width: "100%", borderTopWidth: 1, borderTopColor: t.borderStrong },
-	reviewContainer: { width: "100%", paddingHorizontal: space.sm, paddingVertical: space.xs, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.accentBorder, borderRadius: 24, borderCurve: "continuous", overflow: "hidden" },
+	reviewDivider: { width: "100%", borderTopWidth: rowDividerWidth, borderTopColor: t.borderStrong },
+	reviewContainer: { width: "100%", paddingHorizontal: space.sm, paddingVertical: space.xs, backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.accentBorder, borderRadius: REVIEW_CARD_RADIUS, borderCurve: "continuous", overflow: "hidden" },
 	reviewCardHeader: { overflow: "hidden" },
 	// Three things can share this row — the turn settings, the queued-message note
 	// and the context meter — and the settings label is the only one that can be

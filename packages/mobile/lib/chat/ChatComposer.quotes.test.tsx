@@ -12,7 +12,13 @@ vi.mock("react-native", () => ({
 	PanResponder: { create: () => ({ panHandlers: {} }) }, Pressable: "Pressable", ScrollView: "ScrollView", Text: "Text", TextInput: "TextInput", View: "View",
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1, absoluteFill: {} },
 }));
-vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, Easing: { out: () => {}, cubic: () => {} }, interpolateColor: () => "gray", runOnJS: (cb: unknown) => cb, useAnimatedStyle: () => ({}), useSharedValue: (value: unknown) => ({ value }), withSpring: () => {}, withTiming: () => {} }));
+vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, Easing: { out: () => {}, cubic: () => {} }, interpolateColor: () => "gray", useAnimatedStyle: () => ({}), useSharedValue: (value: unknown) => ({ value }), withSpring: () => {}, withTiming: () => {} }));
+vi.mock("react-native-worklets", () => ({ scheduleOnRN: (cb: () => void) => cb() }));
+vi.mock("react-native-gesture-handler", () => {
+	const pan = (): object => new Proxy({}, { get: () => () => pan() });
+	return { Gesture: { Pan: pan }, GestureDetector: ({ children }: { children: unknown }) => children };
+});
+vi.mock("../useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }) }));
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("expo-secure-store", () => ({}));
