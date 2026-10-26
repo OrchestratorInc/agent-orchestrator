@@ -819,6 +819,7 @@ func (m *Service) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult
 	}
 	row, ok, err := m.store.GetProject(ctx, string(id))
 	if err != nil {
+		m.logger.Error("project: remove: load failed", "project_id", id, "error", err)
 		return RemoveResult{}, apierr.Internal("PROJECT_REMOVE_FAILED", "Failed to remove project")
 	}
 	if !ok || !row.ArchivedAt.IsZero() {
@@ -829,8 +830,11 @@ func (m *Service) Remove(ctx context.Context, id domain.ProjectID) (RemoveResult
 			return RemoveResult{}, err
 		}
 	}
-	ok, err = m.store.ArchiveProject(ctx, string(id), time.Now())
+	// Teardown may have used up the request budget; the archive is one cheap
+	// UPDATE and must still land so a fully torn-down project is not left half-removed.
+	ok, err = m.store.ArchiveProject(context.WithoutCancel(ctx), string(id), time.Now())
 	if err != nil {
+		m.logger.Error("project: remove: archive failed", "project_id", id, "error", err)
 		return RemoveResult{}, apierr.Internal("PROJECT_REMOVE_FAILED", "Failed to remove project")
 	}
 	if !ok {
