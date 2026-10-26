@@ -171,14 +171,14 @@ describe("shared session chat", () => {
 
 	it("shares the worker's model with the session when it replaces the owner's choice", async () => {
 		mocks.setSessionChatSettings.mockResolvedValue({ chatSettings: {} });
-		mocks.listChatModels.mockResolvedValue({ models: [{ id: "gpt-5.5" }], model: "gpt-5.5", reasoningEffort: "high" });
+		mocks.listChatModels.mockResolvedValue({ models: [{ id: "gpt-5.5", displayName: "GPT-5.5" }], model: "gpt-5.5", reasoningEffort: "high" });
 		mocks.live = liveState({}, [me, alice], true, "user-me", {}, true);
 		renderSurface({ ...session, runtimeConnected: true });
 		await waitFor(() => expect(mocks.setSessionChatSettings).toHaveBeenLastCalledWith("org-1", session.id, { model: "gpt-5.5", reasoningEffort: "high" }));
 	});
 
 	it("never shares the worker's model from a guest's window", async () => {
-		mocks.listChatModels.mockResolvedValue({ models: [{ id: "gpt-5.5" }], model: "gpt-5.5", reasoningEffort: "high" });
+		mocks.listChatModels.mockResolvedValue({ models: [{ id: "gpt-5.5", displayName: "GPT-5.5" }], model: "gpt-5.5", reasoningEffort: "high" });
 		mocks.live = liveState({}, [me, alice], false, "user-me", { model: "opus" }, false);
 		renderSurface({ ...session, runtimeConnected: true });
 		await waitFor(() => expect(mocks.listChatModels).toHaveBeenCalled());

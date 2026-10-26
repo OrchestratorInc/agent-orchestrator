@@ -130,8 +130,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
 	// Who is in each shared cloud session, read without joining any of them.
-	const participantsBySession = useSessionParticipants(activeSessions);
-	const { userId: cloudUserId } = useCloudCp();
+	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
+	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
 	const boardSessions = activeSessions.map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }

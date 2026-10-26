@@ -13,9 +13,9 @@ const MAX_PER_REQUEST = 100;
  * request per organization (and per hundred sessions); sessions nobody shared
  * are absent. Reading it never marks this person present in a session.
  */
-export function useSessionParticipants(sessions: readonly WorkspaceSession[]): ReadonlyMap<string, CloudCpSessionParticipant[]> {
-	const { client, baseUrl, ready } = useCloudCp();
+export function useSessionParticipants(sessions: readonly WorkspaceSession[], enabled = true): ReadonlyMap<string, CloudCpSessionParticipant[]> {
 	const batches = useMemo(() => {
+		if (!enabled) return [];
 		const byOrg = new Map<string, string[]>();
 		for (const session of sessions) {
 			const orgId = session.cloud?.orgId;
@@ -32,7 +32,8 @@ export function useSessionParticipants(sessions: readonly WorkspaceSession[]): R
 			}
 		}
 		return result;
-	}, [sessions]);
+	}, [enabled, sessions]);
+	const { client, baseUrl, ready } = useCloudCp(batches.length > 0);
 	return useQueries({
 		queries: batches.map((batch) => ({
 			queryKey: ["cloud-session-participants", baseUrl, batch.orgId, batch.sessionIds.join(",")],
