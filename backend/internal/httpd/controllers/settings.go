@@ -56,7 +56,7 @@ func (c *SettingsController) get(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+	envelope.WriteRevalidatedJSON(w, r, c.response(snapshot))
 }
 
 func (c *SettingsController) setSessionInterface(w http.ResponseWriter, r *http.Request) {

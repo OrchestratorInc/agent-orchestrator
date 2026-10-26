@@ -304,7 +304,7 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{
+	envelope.WriteRevalidatedJSON(w, r, ListSessionsResponse{
 		Sessions:   sessionViews(r, page.Sessions),
 		NextCursor: page.NextCursor,
 		Archived:   archiveSummaryView(page.Archived),
@@ -2651,7 +2651,7 @@ func (c *SessionsController) listOrchestrators(w http.ResponseWriter, r *http.Re
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
+	envelope.WriteRevalidatedJSON(w, r, ListSessionsResponse{Sessions: sessionViews(r, sessions)})
 }
 
 func (c *SessionsController) getOrchestrator(w http.ResponseWriter, r *http.Request) {
