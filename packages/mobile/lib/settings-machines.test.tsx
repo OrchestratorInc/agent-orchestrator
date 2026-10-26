@@ -14,8 +14,9 @@ const fixtures = vi.hoisted(() => ({
 	account: null as { email: string } | null,
 	signOut: vi.fn(async () => {}),
 	clearAccountHosts: vi.fn(async () => {}),
+	switchHost: vi.fn(async (_id: string) => {}),
 	platform: { OS: "android" },
-	hosts: [{ id: "dev", name: "Dev", endpoints: [], token: "token", platform: "darwin", lastConnected: 1 }],
+	hosts: [] as { id: string; name: string; endpoints: never[]; token: string; platform: string; lastConnected: number }[],
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 vi.mock("expo-router", async () => {
@@ -63,7 +64,7 @@ vi.mock("./push", () => ({
 	getPushStatus: async () => ({ osPermission: "undetermined", registered: false, localToken: null }),
 	openNotificationSettings: vi.fn(), registerForPush: vi.fn(), unregisterFromPush: vi.fn(),
 }));
-vi.mock("./store", () => ({ useApp: () => ({ config: null, configured: false, selectedHostName: "Dev", connection: "closed", activeEndpoints: [], reloadConfig: async () => null }) }));
+vi.mock("./store", () => ({ useApp: () => ({ config: null, configured: false, selectedHostName: "Dev", connection: "closed", activeEndpoints: [], reloadConfig: async () => null, switchHost: fixtures.switchHost }) }));
 vi.mock("./ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
 	useThemeState: () => ({ preference: "system", scheme: "dark", style: "orchestrate", setPreference: fixtures.setPreference }),
@@ -74,11 +75,16 @@ vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import SettingsScreen from "../app/settings/index";
 
+const DEV = { id: "dev", name: "Dev", endpoints: [], token: "token", platform: "darwin", lastConnected: 1 };
+const LAB = { ...DEV, id: "lab", name: "Lab", lastConnected: 2 };
+
 let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("__DEV__", false);
 	for (const mock of [fixtures.navigate, fixtures.push, fixtures.back, fixtures.alert, fixtures.prompt, fixtures.openOrStartUpdate, fixtures.checkStore, fixtures.setPreference, fixtures.select, fixtures.signOut, fixtures.clearAccountHosts]) mock.mockClear();
+	fixtures.switchHost.mockReset();
+	fixtures.hosts = [DEV];
 	fixtures.account = null;
 	fixtures.platform.OS = "android";
 	const error = console.error;
@@ -145,6 +151,36 @@ describe("Settings", () => {
 		expect(fixtures.navigate).toHaveBeenCalledWith("/pair");
 		act(() => row(root, "Scan new code").props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/pair", params: { repairHostId: "dev" } });
+	});
+
+	it("switches the default machine from its picker", async () => {
+		fixtures.hosts = [DEV, LAB];
+		const root = await renderSettings();
+		const picker = row(root, "Default machine");
+		expect(picker.props.selectedValue).toBe("dev");
+
+		await act(async () => { picker.props.onValueChange("lab"); });
+		expect(fixtures.switchHost).toHaveBeenCalledWith("lab");
+		expect(fixtures.alert).not.toHaveBeenCalled();
+		// The same picker, now on the new default.
+		expect(row(root, "Default machine")).toBe(picker);
+		expect(picker.props.selectedValue).toBe("lab");
+	});
+
+	// SwiftUI's menu picker keeps the pick it showed until its selection changes,
+	// so a failed switch remounts it on the machine that is still the default.
+	it("puts the default machine picker back when a switch fails", async () => {
+		fixtures.hosts = [DEV, LAB];
+		fixtures.switchHost.mockRejectedValueOnce(new Error("offline"));
+		const root = await renderSettings();
+		const picker = row(root, "Default machine");
+
+		await act(async () => { picker.props.onValueChange("lab"); });
+		expect(fixtures.switchHost).toHaveBeenCalledWith("lab");
+		expect(fixtures.alert).toHaveBeenCalledWith("Could not change default machine", "Try again from Settings.");
+		const remounted = row(root, "Default machine");
+		expect(remounted).not.toBe(picker);
+		expect(remounted.props).toMatchObject({ selectedValue: "dev", disabled: false });
 	});
 
 	it("opens Environments and Theme as pages from link rows", async () => {

@@ -69,6 +69,10 @@ export default function SettingsScreen() {
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [switchingHostId, setSwitchingHostId] = useState<string | null>(null);
+	// SwiftUI's menu picker keeps showing a pick until its selection prop
+	// changes, which a failed switch never does; a new key remounts it on the
+	// machine that is still the default.
+	const [machinePickerKey, setMachinePickerKey] = useState(0);
 	const [loaded, setLoaded] = useState(false);
 	const [account, setAccount] = useState<Account | null>(null);
 	const [accountBusy, setAccountBusy] = useState(false);
@@ -100,6 +104,7 @@ export default function SettingsScreen() {
 			await switchHost(id);
 			setSelectedHostId(id);
 		} catch {
+			setMachinePickerKey((key) => key + 1);
 			Alert.alert("Could not change default machine", "Try again from Settings.");
 		} finally {
 			setSwitchingHostId(null);
@@ -163,6 +168,7 @@ export default function SettingsScreen() {
 			<SettingsForm testID="settings-form">
 				<SettingsSection title="Machines">
 					<MachineSelector
+						key={machinePickerKey}
 						hosts={pairedHosts}
 						selectedHostId={selectedHostId}
 						selectedHostName={selectedHostName}
