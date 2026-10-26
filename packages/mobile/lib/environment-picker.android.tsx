@@ -3,7 +3,7 @@ import { padding, testID } from "@expo/ui/jetpack-compose/modifiers";
 import { startTransition, useState } from "react";
 import type { EnvironmentPickerProps } from "./environment-picker.types";
 import { haptics } from "./haptics";
-import { machineDrawable } from "./machine-drawable.android";
+import { machineMenuImage } from "./machine-menu-image.android";
 import { machineAppearance } from "./machineAppearance";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -55,7 +55,7 @@ export function EnvironmentPicker({ environments, selectedEnvironmentId, onSelec
 								modifiers={[testID(`environment-picker-${option.id}`)]}
 							>
 								<DropdownMenuItem.LeadingIcon>
-									<Icon source={machineDrawable(option.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: option.id, name: option.label, appearance: option.appearance }).symbol)} size={MENU_ICON_SIZE} />
+									<Icon source={machineMenuImage(option.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: option.id, name: option.label, appearance: option.appearance }).symbol)} size={MENU_ICON_SIZE} />
 								</DropdownMenuItem.LeadingIcon>
 								<DropdownMenuItem.Text>
 									<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: "Geist_400Regular" }}>

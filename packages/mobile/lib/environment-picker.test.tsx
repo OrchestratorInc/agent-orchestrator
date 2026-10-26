@@ -9,7 +9,7 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ scheme: "dark" }),
 }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
-vi.mock("./machine-drawable.android", () => ({ machineDrawable: (symbol: string) => `machine:${symbol}` }));
+vi.mock("./machine-menu-image.android", () => ({ machineMenuImage: (symbol: string) => `machine:${symbol}` }));
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
