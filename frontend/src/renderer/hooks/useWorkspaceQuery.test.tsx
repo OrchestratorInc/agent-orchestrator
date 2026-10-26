@@ -39,7 +39,7 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { patchWorkspaceSession, toWorkspaceSession, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { beginWorkspaceRead, workspaceQueryOptions, patchWorkspaceSession, toWorkspaceSession, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -1028,6 +1028,50 @@ describe("cloud projects made elsewhere", () => {
 
 describe("patchWorkspaceSession", () => {
 	const row = { id: "row", projectId: "p", harness: "codex", status: "working", activity: { state: "active" }, prs: [] } as unknown as import("../../api/schema").components["schemas"]["ControllersSessionView"];
+	it("ignores a late live row after a newer list reports a CLI termination without an optimistic marker", async () => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [toWorkspaceSession(row, { id: "p", name: "Project" })] }]);
+		const oldRowRead = beginWorkspaceRead(client);
+		respondWith({ projects: { data: { projects: [{ id: "p", name: "Project" }] } }, sessions: { data: { sessions: [{ ...row, isTerminated: true }] } } });
+		await client.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(true);
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: false }, oldRowRead)).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(true);
+		client.clear();
+	});
+	it.each([false, true])("reconciles a newer CLI termination row when an older live list completes last (commit window: %s)", async (commitWindow) => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [toWorkspaceSession(row, { id: "p", name: "Project" })] }]);
+		let finishList!: (value: unknown) => void;
+		getMock.mockImplementation((path: string) => path === "/api/v1/projects"
+			? Promise.resolve({ data: { projects: [{ id: "p", name: "Renamed project" }] } })
+			: new Promise((resolve) => { finishList = resolve; }));
+		const terminate = () => patchWorkspaceSession(client, { ...row, isTerminated: true }, beginWorkspaceRead(client));
+		const pendingList = client.fetchQuery({ ...workspaceQueryOptions, staleTime: 0, queryFn: async (context) => {
+			const snapshot = await workspaceQueryOptions.queryFn(context);
+			if (commitWindow) terminate();
+			return snapshot;
+		} });
+		if (!commitWindow) terminate();
+		finishList({ data: { sessions: [{ ...row, isTerminated: false }] } });
+		await pendingList;
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0]).toMatchObject({ name: "Renamed project", sessions: [{ id: row.id, isTerminated: true }] });
+		// A subsequent authoritative read may legitimately restore the session.
+		respondWith({ projects: { data: { projects: [{ id: "p", name: "Project" }] } }, sessions: { data: { sessions: [{ ...row, isTerminated: false }] } } });
+		await client.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(false);
+		client.clear();
+	});
+	it("does not let an older same-session read replace a newer accepted row", () => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [] }]);
+		const old = beginWorkspaceRead(client);
+		const newer = beginWorkspaceRead(client);
+		patchWorkspaceSession(client, { ...row, isTerminated: true }, newer);
+		patchWorkspaceSession(client, { ...row, isTerminated: false }, old);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(true);
+		client.clear();
+	});
 	it("replaces by project and id, adds missing rows, and retains other row references", () => {
 		const client = new QueryClient();
 		const other = toWorkspaceSession({ ...row, id: "other" }, { id: "p", name: "Project" });

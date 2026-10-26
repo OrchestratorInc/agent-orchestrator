@@ -3,7 +3,7 @@ import { aoBridge } from "./bridge";
 import { apiClient, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
-import { patchWorkspaceSession, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { beginWorkspaceRead, patchWorkspaceSession, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
 import {
@@ -173,9 +173,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					do {
 						state.dirty = false;
 						try {
+							const readVersion = beginWorkspaceRead(queryClient);
 							const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}", { params: { path: { sessionId } } });
 							if (disposed || getApiBaseUrl() !== baseUrl) break;
-							if (error || !data?.session || !patchWorkspaceSession(queryClient, data.session)) {
+							if (error || !data?.session || !patchWorkspaceSession(queryClient, data.session, readVersion)) {
 								queueIdOnlyWorkspaceRefresh();
 								scheduleFlush();
 							}
