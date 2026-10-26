@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
 	ARCHIVE_SESSION_HINT,
 	ARCHIVE_SESSION_CONFIRM,
+	workerAccessibilityActions,
+	workerActionNamed,
 	workerActionSymbol,
 	workerActionSymbols,
 	workerContextActions,
@@ -89,6 +91,28 @@ describe("workerContextActions", () => {
 
 	it("opens with Open, so the menu's first item is the row's own tap", () => {
 		expect(ids({ terminated: true, hasPr: true, pinned: true })[0]).toBe("open");
+	});
+});
+
+describe("workerAccessibilityActions", () => {
+	// A screen reader can neither swipe a row open nor long-press it, so the
+	// menu's actions have to be the row's own accessibility actions.
+	it("offers every menu action but Open, which is the row's activation", () => {
+		const actions = workerContextActions(state({ hasPr: true, stopped: true }));
+		expect(workerAccessibilityActions(actions)).toEqual([
+			{ name: "resume", label: "Resume agent" },
+			{ name: "pin", label: "Pin" },
+			{ name: "rename", label: "Rename" },
+			{ name: "openPr", label: "Review pull request" },
+			{ name: "delete", label: "Archive session" },
+		]);
+	});
+
+	it("routes only the actions the row offers", () => {
+		const actions = workerContextActions(state());
+		expect(workerActionNamed(actions, "delete")).toBe("delete");
+		expect(workerActionNamed(actions, "activate")).toBeUndefined();
+		expect(workerActionNamed(actions, "restore")).toBeUndefined();
 	});
 });
 

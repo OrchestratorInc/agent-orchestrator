@@ -55,6 +55,21 @@ export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 	return actions;
 }
 
+/**
+ * The row's menu as screen-reader actions, for VoiceOver's Actions rotor and
+ * TalkBack's actions menu: neither reader can swipe a row open or long-press
+ * it, so without these pin, rename and archive were out of reach. Open is the
+ * row's own activation and is not repeated.
+ */
+export function workerAccessibilityActions(actions: readonly WorkerAction[]): { name: WorkerActionId; label: string }[] {
+	return actions.filter((action) => action.id !== "open").map((action) => ({ name: action.id, label: action.title }));
+}
+
+/** The action a screen reader asked for, if the row offers it. */
+export function workerActionNamed(actions: readonly WorkerAction[], name: string): WorkerActionId | undefined {
+	return actions.find((action) => action.id === name)?.id;
+}
+
 /** Confirmation copy for every Archive entry point, word for word desktop's (SessionArchiveDialog). */
 export const ARCHIVE_SESSION_CONFIRM = {
 	title: "Are you sure you want to archive this session?",

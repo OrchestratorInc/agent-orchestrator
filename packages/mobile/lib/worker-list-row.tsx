@@ -185,8 +185,9 @@ export const WorkerListRow = memo(
 			shellStyle={styles.shell}
 			foregroundStyle={styles.foreground}
 			rowStyle={styles.row}
+			// No gesture hint: a screen reader reaches pin, rename and archive as
+			// the row's actions, and announces that it has them.
 			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
-			accessibilityHint="Swipe left for pin and delete actions. Long press for more."
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}

@@ -1,7 +1,7 @@
 import { MenuView, type MenuAction, type NativeActionEvent } from "@expo/ui/community/menu";
 import { Pressable } from "react-native";
 import { usePressFeedback } from "./pressFeedback";
-import { workerActionSymbol, type WorkerActionId } from "./worker-action-model";
+import { workerAccessibilityActions, workerActionNamed, workerActionSymbol, type WorkerActionId } from "./worker-action-model";
 import type { WorkerRowContextMenuProps } from "./worker-row-interaction.types";
 
 /** The row and its long-press menu: SwiftUI's context menu, lifting the row. */
@@ -38,6 +38,11 @@ export function WorkerRowContextMenu({
 				accessibilityRole="button"
 				accessibilityLabel={accessibilityLabel}
 				accessibilityHint={accessibilityHint}
+				accessibilityActions={workerAccessibilityActions(actions)}
+				onAccessibilityAction={(event) => {
+					const id = workerActionNamed(actions, event.nativeEvent.actionName);
+					if (id) onAction(id);
+				}}
 				onPress={onPress}
 				style={({ pressed }) => [style, pressed && feedback.pressed]}
 			>

@@ -3,7 +3,7 @@ import { Pressable } from "react-native";
 import { usePressFeedback } from "./pressFeedback";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { workerActionDrawable } from "./worker-action-drawables";
-import type { WorkerActionId } from "./worker-action-model";
+import { workerAccessibilityActions, workerActionNamed, type WorkerActionId } from "./worker-action-model";
 import type { WorkerRowContextMenuProps } from "./worker-row-interaction.types";
 
 // The web build. MenuView draws the trigger there but fires no actions, so the
@@ -46,6 +46,11 @@ export function WorkerRowContextMenu({
 				accessibilityRole="button"
 				accessibilityLabel={accessibilityLabel}
 				accessibilityHint={accessibilityHint}
+				accessibilityActions={workerAccessibilityActions(actions)}
+				onAccessibilityAction={(event) => {
+					const id = workerActionNamed(actions, event.nativeEvent.actionName);
+					if (id) onAction(id);
+				}}
 				onPress={onPress}
 				style={({ pressed }) => [style, pressed && feedback.pressed]}
 			>

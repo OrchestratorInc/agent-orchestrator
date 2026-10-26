@@ -5,7 +5,7 @@ import { haptics } from "./haptics";
 import { usePressFeedback } from "./pressFeedback";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { workerActionDrawable } from "./worker-action-drawables";
-import type { WorkerActionId } from "./worker-action-model";
+import { workerAccessibilityActions, workerActionNamed, type WorkerActionId } from "./worker-action-model";
 import type { WorkerRowContextMenuProps } from "./worker-row-interaction.types";
 
 /**
@@ -57,6 +57,11 @@ export function WorkerRowContextMenu({
 				accessibilityRole="button"
 				accessibilityLabel={accessibilityLabel}
 				accessibilityHint={accessibilityHint}
+				accessibilityActions={workerAccessibilityActions(actions)}
+				onAccessibilityAction={(event) => {
+					const id = workerActionNamed(actions, event.nativeEvent.actionName);
+					if (id) onAction(id);
+				}}
 				android_ripple={feedback.android_ripple}
 				onPress={onPress}
 				onLongPress={() => {

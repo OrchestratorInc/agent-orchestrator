@@ -70,6 +70,17 @@ it("lists every action with its Material Symbol, and Archive as destructive", ()
 	expect(view.root.findByType("MenuView" as never).props.shouldOpenOnLongPress).toBe(true);
 });
 
+// TalkBack cannot long-press the row into its menu, so the menu's actions are
+// the row's own accessibility actions too.
+it("offers the menu's actions to TalkBack", () => {
+	const onAction = vi.fn();
+	const row = mount(vi.fn(), onAction).root.findByType("Pressable" as never);
+	expect(row.props.accessibilityActions).toEqual([{ name: "pin", label: "Pin" }, { name: "delete", label: "Archive session" }]);
+	act(() => row.props.onAccessibilityAction({ nativeEvent: { actionName: "delete" } }));
+	act(() => row.props.onAccessibilityAction({ nativeEvent: { actionName: "longpress" } }));
+	expect(onAction.mock.calls).toEqual([["delete"]]);
+});
+
 it("routes a chosen action by its id", () => {
 	const onAction = vi.fn();
 	const view = mount(vi.fn(), onAction);
