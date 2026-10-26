@@ -546,7 +546,7 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 		</>;
 	}
 	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={space.md} onPress={() => setFailedLoad(undefined)} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
-		<Feather name="refresh-cw" size={iconSize.xs} color={t.textTertiary} />
+		<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />
 		<Text numberOfLines={1} style={styles.attachmentName}>{name}</Text>
 		<Text style={styles.attachmentRetry}>Tap to retry</Text>
 	</Pressable>;

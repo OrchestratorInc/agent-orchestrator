@@ -188,6 +188,13 @@ describe("timeline rows", () => {
 		expect(source).not.toContain("<ActivityIndicator");
 	});
 
+	// Retry is a control, so it takes the system's glyph rather than a timeline one.
+	it("retry a failed attachment under the system refresh glyph", () => {
+		const attachment = source.slice(source.indexOf("function StagedAttachment"), source.indexOf("function deliveryCopy"));
+		expect(attachment).toContain('<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />');
+		expect(attachment).not.toContain("refresh-cw");
+	});
+
 	// The status row matches the startup checklist header it hands off to.
 	it("set nothing below 13pt but the status row", () => {
 		expect(styles).not.toContain("type.caption2");
