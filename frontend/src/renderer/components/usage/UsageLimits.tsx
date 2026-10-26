@@ -53,7 +53,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 							) : null}
 						</div>
 						{entry.windows.length > 0 ? (
-							<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_6rem] items-center gap-x-4 gap-y-3">
+							<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
 								{entry.windows.map((window) => (
 									<LimitWindowRow key={window.id} window={window} accounts={entry.accounts} now={now} />
 								))}
@@ -106,7 +106,7 @@ function LimitWindowRow({ window, accounts, now }: { window: PooledWindow; accou
 					/>
 				))}
 			</div>
-			<span className="text-end text-xs tabular-nums text-muted-foreground">
+			<span className="whitespace-nowrap text-end text-xs tabular-nums text-muted-foreground">
 				{countdown ? t("usage.limits.resetsIn", { value: countdown }) : ""}
 			</span>
 		</>
