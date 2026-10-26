@@ -65,6 +65,17 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).not.toContain("restoreCta");
 	});
 
+	it("floats a native scroll-to-top button that drives the WebView", () => {
+		// The jump stays in the page; the button, its colours and its visibility are React Native's.
+		expect(screen).toContain("window.__aoScrollTop = function ()");
+		expect(screen).toContain("'AO_SCROLLTOP ' + (show ? 1 : 0)");
+		expect(screen).toContain("{canScrollTop && !dead ? <ScrollTopButton onPress={scrollToTop} /> : null}");
+		expect(screen).not.toContain("ao-scrolltop");
+		expect(screen).not.toContain("setInterval(update");
+		expect(screen).not.toContain("rgba(16,17,20");
+		expect(screen).not.toContain("no inject hook");
+	});
+
 	it("keeps pinch and double-tap zoom, and adds a fit-to-width step", () => {
 		expect(screen).toContain("window.__aoAdjustTerminalZoom = function (direction)");
 		expect(screen).toContain("window.__aoFitTerminalWidth = function ()");

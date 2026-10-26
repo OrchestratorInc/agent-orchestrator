@@ -1,6 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { adjustTerminalViewport, fitTerminalViewport } from "./terminalViewport";
+import { adjustTerminalViewport, fitTerminalViewport, scrollTerminalToTop, scrollTopReport } from "./terminalViewport";
+
+describe("terminal scroll to top", () => {
+	it("asks the WebView to jump to the oldest output", () => {
+		const injectJavaScript = vi.fn();
+		expect(scrollTerminalToTop({ injectJavaScript })).toBe(true);
+		expect(injectJavaScript).toHaveBeenCalledWith("window.__aoScrollTop(); true;");
+		expect(scrollTerminalToTop(null)).toBe(false);
+	});
+
+	it("reads the WebView's visibility reports and ignores every other message", () => {
+		expect(scrollTopReport("AO_SCROLLTOP 1")).toBe(true);
+		expect(scrollTopReport("AO_SCROLLTOP 0")).toBe(false);
+		expect(scrollTopReport("FRESSH_DIMS 80 24")).toBeUndefined();
+		expect(scrollTopReport(undefined)).toBeUndefined();
+	});
+});
 
 describe("terminal viewport zoom", () => {
 	it("adjusts the live WebView viewport without replacing the terminal renderer", () => {

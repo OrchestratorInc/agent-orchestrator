@@ -36,7 +36,8 @@ import {
 	useInterfaceTransition,
 } from "./useInterfaceTransition";
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
-import { adjustTerminalViewport, fitTerminalViewport } from "./terminalViewport";
+import { adjustTerminalViewport, fitTerminalViewport, scrollTerminalToTop, scrollTopReport } from "./terminalViewport";
+import { ScrollTopButton } from "./ScrollTopButton";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
 import { font, fontScaleCap, iconSize, radius, space, touchTarget, type } from "../tokens";
 import { toolbarIcon } from "../toolbarIcon";
@@ -321,10 +322,6 @@ const TERMINAL_ENHANCE_JS = `
   }
 
   document.addEventListener('touchstart', function (e) {
-    // Taps on the scroll-to-top button are handled by the button itself; don't
-    // let this capture-phase listener consume them as a terminal tap/long-press.
-    var _tt = e.target;
-    if (_tt && _tt.closest && _tt.closest('#ao-scrolltop')) return;
     if (e.touches && e.touches.length >= 2) {
       // Second finger down -> pinch. Cancel any pending tap/long-press/scroll.
       clearLP(); mode = 'pinch';
@@ -447,43 +444,33 @@ const TERMINAL_ENHANCE_JS = `
     mode = 'idle';
   }, { capture: true, passive: true });
 
-  // ---- Scroll-to-top button ------------------------------------------------
-  // A floating button that scrolls back to the oldest output. It lives in the
-  // terminal DOM (not RN) because the WebView package exposes no inject hook.
-  // Two regimes, mirroring the drag handler above:
+  // ---- Scroll to top -------------------------------------------------------
+  // The button is React Native's, floating over the WebView; RN calls
+  // __aoScrollTop() through injectJavaScript and learns whether to show the
+  // button from the AO_SCROLLTOP reports below. Two regimes, mirroring the
+  // drag handler above:
   //  • normal buffer  -> xterm owns the scrollback; scrollToTop() is a true jump,
   //    and viewportY tells us whether there's anything above (hide at the top).
   //  • alt buffer / mouse-tracking (Claude Code, Codex, aider, vim, less, ...) ->
   //    the APP owns its scrollback, so scrollToTop() can't reach it. Send the same
   //    wheel notches a drag produces. We can't query the app's scroll position, so
   //    the button always shows there and the jump is a generous burst.
-  (function scrollTopBtn() {
-    var btn = document.createElement('div');
-    btn.id = 'ao-scrolltop';
-    btn.setAttribute('aria-label', 'Scroll to top');
-    btn.innerHTML = '↑'; // up arrow
-    var s = btn.style;
-    s.position = 'fixed'; s.right = '12px'; s.bottom = '12px';
-    s.width = '36px'; s.height = '36px'; s.lineHeight = '36px';
-    s.textAlign = 'center'; s.borderRadius = '18px';
-    s.background = 'rgba(16,17,20,0.72)'; s.color = '#f4f5f7';
-    s.fontSize = '18px'; s.fontWeight = '600';
-    s.border = '1px solid rgba(255,255,255,0.18)';
-    s.boxShadow = '0 2px 8px rgba(0,0,0,0.4)';
-    s.webkitBackdropFilter = 'blur(6px)'; s.backdropFilter = 'blur(6px)';
-    s.zIndex = '2147483647'; s.display = 'none'; s.cursor = 'pointer';
-    s.pointerEvents = 'auto'; s.userSelect = 'none'; s.webkitUserSelect = 'none';
-    (document.getElementById('terminal') || document.body).appendChild(btn);
-
+  (function scrollTop() {
     function atTop() {
       try { var b = term().buffer.active; return !b || b.viewportY <= 0; }
       catch (_) { return true; }
     }
+    // Reported through fressh's debug channel like FRESSH_DIMS, and only when
+    // the answer changes, so a stream of output costs a comparison per write.
+    var shown = null;
     function update() {
       // When the app drives scrolling we can't read its position, so always offer
       // the button; otherwise hide it once xterm's viewport is at the top.
       var show = appDrivesScroll() ? true : !atTop();
-      btn.style.display = show ? 'block' : 'none';
+      if (show === shown || !window.ReactNativeWebView) return;
+      shown = show;
+      window.ReactNativeWebView.postMessage(
+        JSON.stringify({ type: 'debug', message: 'AO_SCROLLTOP ' + (show ? 1 : 0) }));
     }
     // Walk the app's scrollback up with the same wheel notches a drag produces,
     // chunked across frames so a few hundred events don't block the renderer.
@@ -499,28 +486,26 @@ const TERMINAL_ENHANCE_JS = `
         if (left > 0) requestAnimationFrame(step);
       })();
     }
-    // Tap -> back to the oldest output. Swallow the event so nothing else reacts.
-    function go(e) {
-      if (e.stopPropagation) e.stopPropagation();
-      if (e.cancelable && e.preventDefault) e.preventDefault();
+    // The RN button's tap: back to the oldest output.
+    window.__aoScrollTop = function () {
       if (appDrivesScroll()) burstUp();
       else { try { term().scrollToTop(); } catch (_) {} }
       update();
-    }
-    btn.addEventListener('touchstart', go, { capture: true });
-    btn.addEventListener('click', go, { capture: true });
+    };
 
-    // Re-evaluate on xterm scroll and buffer switches; poll as a cheap fallback
-    // for transitions those miss (our drag handler moves the viewport directly).
+    // Re-evaluate on xterm scroll and buffer switches, after each write (an app
+    // turning mouse tracking on or off changes the answer without scrolling),
+    // and when a finger lifts, since the drag handler moves the viewport itself.
     (function wire() {
       var T = term();
       if (T && T.onScroll) {
         T.onScroll(update);
         try { if (T.buffer && T.buffer.onBufferChange) T.buffer.onBufferChange(update); } catch (_) {}
+        try { if (T.onWriteParsed) T.onWriteParsed(update); } catch (_) {}
+        document.addEventListener('touchend', update, { passive: true });
         update();
       } else { setTimeout(wire, 200); }
     })();
-    setInterval(update, 500);
   })();
 
   // Disable the WebView's hidden textarea so it can NEVER show a keyboard or
@@ -852,8 +837,13 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		// did not change, so this also handles two hosts sharing one URL.
 	}, [terminalHandleId, activeConfig]);
 
+	// Whether there is older output to jump to, as the WebView last reported it.
+	const [canScrollTop, setCanScrollTop] = useState(false);
+
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
+		// The replacement WebView reports its own answer once it is up.
+		setCanScrollTop(false);
 	}, [scheme, style]);
 
 	// Poll the daemon's on-demand preview detector while the terminal is open, just
@@ -900,8 +890,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	);
 
 	// fressh routes WebView {type:'debug'} messages to logger.log(prefix, message).
-	// We piggyback on it for the FRESSH_DIMS report (using a custom onMessage would
-	// clobber fressh's own bridge).
+	// We piggyback on it for the FRESSH_DIMS and AO_SCROLLTOP reports (using a
+	// custom onMessage would clobber fressh's own bridge).
 	const logger = useMemo(
 		() => ({
 			log: (...args: unknown[]) => {
@@ -911,7 +901,10 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					const cols = parseInt(parts[1], 10);
 					const rows = parseInt(parts[2], 10);
 					if (cols > 0 && rows > 0) applyDims(cols, rows);
+					return;
 				}
+				const scrollTop = scrollTopReport(m);
+				if (scrollTop !== undefined) setCanScrollTop(scrollTop);
 			},
 		}),
 		[applyDims],
@@ -1243,6 +1236,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const fitWidth = useCallback(() => {
 		fitTerminalViewport(xtermRef.current);
 	}, []);
+	const scrollToTop = useCallback(() => {
+		scrollTerminalToTop(xtermRef.current);
+	}, []);
 
 	// The header items reach their handlers through a ref. The transition hook
 	// returns a new object every render, so `requestInterfaceSwitch` is new every
@@ -1445,6 +1441,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						</View>
 					</View>
 				) : null}
+				{canScrollTop && !dead ? <ScrollTopButton onPress={scrollToTop} /> : null}
 				{interfaceTransitionActive ? (
 					<View style={styles.interfaceOverlay}>
 						<View style={styles.interfaceCard} accessibilityViewIsModal>
