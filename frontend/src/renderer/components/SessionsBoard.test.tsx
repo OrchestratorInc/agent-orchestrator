@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -670,34 +670,6 @@ describe("SessionsBoard", () => {
 		const card = screen.getByText("failed-setup-task").closest('[data-testid="board-session-card"]') as HTMLElement;
 		expect(within(card).getByTestId("session-status")).toHaveTextContent("Start failed");
 		expect(within(card).queryByText("Awaiting PR")).not.toBeInTheDocument();
-	});
-
-	it("shows switch progress instead of the exited source on a card", () => {
-		const worker = boardSession({
-			id: "s-switching",
-			title: "switching worker",
-			status: "exited",
-			activity: {
-				state: "exited",
-				lastActivityAt: "2026-01-01T00:00:00Z",
-			},
-		});
-		worker.activeAgentSwitch = activeAgentSwitch(worker.id);
-		workspaceQueryMock.mockReturnValue({
-			data: [workspaceWithSessions([worker])],
-			isError: false,
-			isSuccess: true,
-		});
-
-		renderBoard("p1");
-
-		const card = screen.getByText("switching worker").closest('[data-testid="board-session-card"]') as HTMLElement;
-		const status = within(card).getByText("Switching to Codex").parentElement as HTMLElement;
-		expect(status).toHaveClass("text-status-working");
-		expect(status).not.toHaveAttribute("data-kanban-column");
-		expect(status.style.getPropertyValue("--session-status-tone")).toBe("");
-		expect(status.querySelector(".animate-status-pulse")).toBeNull();
-		expect(within(card).queryByText("Exited")).not.toBeInTheDocument();
 	});
 
 	it("styles legacy statuses from their status-implied Kanban columns", () => {
@@ -1650,6 +1622,10 @@ describe("SessionsBoard", () => {
 });
 
 describe("SessionsBoard artifacts", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {}, workspaceFileOpenRequest: null });
+	});
+
 	const artifact = (name: string, updatedAt: string, kind: "html" | "markdown" = "markdown") => ({
 		kind,
 		name,
@@ -1682,7 +1658,7 @@ describe("SessionsBoard artifacts", () => {
 		renderBoard("p1");
 
 		const list = await screen.findByTestId("board-session-artifacts");
-		const links = within(list).getAllByRole("button");
+		const links = within(list).getAllByRole("button", { name: /^Open artifact / });
 		expect(links.map((link) => link.textContent)).toEqual(["newest.html", "middle.md"]);
 		expect(list).toHaveTextContent("+2 more");
 
@@ -1698,6 +1674,97 @@ describe("SessionsBoard artifacts", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "p1", sessionId: "s-art" },
 		});
+	});
+
+	it.each([3, 10, 12])("expands and collapses %i artifacts in place, capped at ten", async (count) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art",
+				title: "Write the report",
+				status: "working",
+				outputType: "artifact",
+				artifactFiles: Array.from({ length: count }, (_, index) =>
+					artifact(`file-${String(index + 1).padStart(2, "0")}.md`, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+
+		const list = await screen.findByTestId("board-session-artifacts");
+		const more = within(list).getByRole("button", { name: `+${count - 2} more` });
+		expect(more).toHaveAttribute("aria-expanded", "false");
+		more.focus();
+		await userEvent.keyboard("{Enter}");
+
+		expect(more).toHaveAttribute("aria-expanded", "true");
+		expect(document.getElementById(more.getAttribute("aria-controls")!)).toBeInTheDocument();
+		expect(within(list).getAllByRole("button", { name: /^Open artifact / })).toHaveLength(Math.min(count, 10));
+		expect(navigateMock).not.toHaveBeenCalled();
+		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+
+		if (count > 10) {
+			await userEvent.click(within(list).getByRole("button", { name: "Open in inspector" }));
+			// SessionView initializes the inspector when navigation mounts a session.
+			useUiStore.getState().initializeInspectorSession("s-art", false, true);
+			expect(useUiStore.getState().inspectorSessions["s-art"]).toMatchObject({
+				initialized: true, isOpen: true, view: "artifacts",
+			});
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+			expect(navigateMock).toHaveBeenCalledTimes(1);
+		} else {
+			expect(within(list).queryByRole("button", { name: "Open in inspector" })).not.toBeInTheDocument();
+		}
+
+		await userEvent.click(within(list).getByRole("button", { name: "Show less" }));
+		expect(within(list).getAllByRole("button", { name: /^Open artifact / })).toHaveLength(2);
+		expect(more).toHaveAttribute("aria-expanded", "false");
+	});
+
+	it.each([1, 2])("shows %i artifacts without expansion controls", async (count) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art", title: "Write the report", status: "working", outputType: "artifact",
+				artifactFiles: Array.from({ length: count }, (_, index) => artifact(`file-${index}.md`, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+		const list = await screen.findByTestId("board-session-artifacts");
+		expect(within(list).getAllByRole("button")).toHaveLength(count);
+		expect(within(list).queryByRole("button", { name: /more|Show less|Open in inspector/ })).not.toBeInTheDocument();
+	});
+
+	it.each(["pointer", "keyboard"])("suppresses previews after expansion until intentional %s interaction", async (interaction) => {
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({
+				id: "s-art", title: "Write the report", status: "working", outputType: "artifact",
+				artifactFiles: ["a.md", "b.md", "c.md"].map((name) => artifact(name, "2026-01-01T00:00:00Z")),
+			})])],
+			isError: false,
+			isSuccess: true,
+		});
+		renderBoard("p1");
+		await userEvent.click(await screen.findByRole("button", { name: "+1 more" }));
+		const row = screen.getByRole("button", { name: "Open artifact c.md" });
+		fireEvent.pointerOver(row, { pointerType: "mouse", clientX: 0, clientY: 0 });
+		fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 0, clientY: 0 });
+		await act(() => new Promise((resolve) => setTimeout(resolve, 350)));
+		expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+
+		if (interaction === "pointer") {
+			fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 10, clientY: 10 });
+			expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+			await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+			fireEvent.pointerMove(row, { pointerType: "mouse", clientX: 20, clientY: 20 });
+			await act(() => new Promise((resolve) => setTimeout(resolve, 200)));
+			expect(screen.queryByRole("status", { name: "c.md" })).not.toBeInTheDocument();
+		} else {
+			fireEvent.focus(row);
+		}
+		expect(await screen.findByRole("status", { name: "c.md" })).toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("orders artifacts with equal or unparseable timestamps by path", () => {
@@ -1755,20 +1822,6 @@ function boardSession(
 		kanbanColumn: toKanbanColumn(undefined, overrides.status),
 		updatedAt: "2026-01-01T00:00:00Z",
 		prs: [],
-		...overrides,
-	};
-}
-
-function activeAgentSwitch(
-	sessionId: string,
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: `switch-${sessionId}`,
-		state: "starting_target",
-		targetHarness: "codex",
 		...overrides,
 	};
 }

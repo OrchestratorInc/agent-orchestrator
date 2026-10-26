@@ -1,17 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Bell, Loader2, Smartphone, Trash2 } from "lucide-react";
+import { Loader2, Smartphone, Trash2 } from "lucide-react";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { usesPreviewWorkspaceData } from "../../lib/preview-mode";
-import { Switch } from "../ui/switch";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
 export const mobileDevicesQueryKey = ["mobile-devices"] as const;
 
 /**
- * Error code the daemon returns from all three roster routes (list/mute/remove)
+ * Error code the daemon returns from both roster routes (list/remove)
  * when the on-disk device registry (~/.ao/data/mobile/push-devices.json) failed
  * to load — e.g. it's corrupt. This is distinct from "you have no devices": an
  * unreadable registry must be surfaced explicitly, never rendered as the empty
@@ -20,9 +19,9 @@ export const mobileDevicesQueryKey = ["mobile-devices"] as const;
 const DEVICE_REGISTRY_UNAVAILABLE_CODE = "DEVICE_REGISTRY_UNAVAILABLE";
 
 /**
- * How long a removed row offers Undo before the DELETE is actually sent. Removal
- * is soft on the daemon side (a re-registering phone comes back muted), so an
- * undo window replaces a separate confirm step.
+ * How long a removed row offers Undo before the DELETE is actually sent. A
+ * removed phone that is still in use simply re-pairs the next time its app
+ * connects, so an undo window replaces a separate confirm step.
  */
 export const REMOVE_UNDO_MS = 2000;
 
@@ -30,9 +29,7 @@ interface MobileDevice {
 	installId: string;
 	deviceName?: string;
 	platform?: string;
-	muted: boolean;
 	live: boolean;
-	notificationsEnabled: boolean;
 	lastSeenAt: string;
 }
 
@@ -48,9 +45,9 @@ class MobileDevicesQueryError extends Error {
 // The web preview build (dev:web) has no daemon, so it manages a fixed set of
 // sample phones in memory instead of hitting the real roster.
 let previewDevices: MobileDevice[] = [
-	{ installId: "preview-1", deviceName: "iPhone 17 Pro", platform: "ios", muted: false, live: true, notificationsEnabled: true, lastSeenAt: new Date().toISOString() },
-	{ installId: "preview-2", deviceName: "Pixel 10", platform: "android", muted: true, live: false, notificationsEnabled: true, lastSeenAt: new Date().toISOString() },
-	{ installId: "preview-3", deviceName: "iPad Air", platform: "ios", muted: false, live: false, notificationsEnabled: false, lastSeenAt: new Date().toISOString() },
+	{ installId: "preview-1", deviceName: "iPhone 17 Pro", platform: "ios", live: true, lastSeenAt: new Date().toISOString() },
+	{ installId: "preview-2", deviceName: "Pixel 10", platform: "android", live: false, lastSeenAt: new Date().toISOString() },
+	{ installId: "preview-3", deviceName: "iPad Air", platform: "ios", live: false, lastSeenAt: new Date().toISOString() },
 ];
 
 export async function fetchDevices(): Promise<MobileDevice[]> {
@@ -60,9 +57,8 @@ export async function fetchDevices(): Promise<MobileDevice[]> {
 	return data.devices as MobileDevice[];
 }
 
-// MobileDevicesSection lists every paired phone with whether its app is open right
-// now, a per-device mute switch, and a remove action. Live status comes from the
-// daemon's presence tracker, which is fed by each phone's own REST poll.
+// MobileDevicesSection lists every paired phone with a remove action. Whether a
+// phone gets push notifications is decided on the phone itself, not here.
 export function MobileDevicesSection() {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -71,10 +67,6 @@ export function MobileDevicesSection() {
 	// DELETE is in flight, so Undo can no longer cancel it.
 	const [pendingRemovals, setPendingRemovals] = useState<ReadonlySet<string>>(() => new Set());
 	const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(() => new Set());
-	// Devices with a mute PATCH in flight. Tracked per device because the
-	// mutation's own isPending/variables only describe the latest call, so a
-	// second toggle would otherwise unlock the first device's switch early.
-	const [mutingIds, setMutingIds] = useState<ReadonlySet<string>>(() => new Set());
 	const removalTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
 	const trashButtons = useRef(new Map<string, HTMLButtonElement>());
 
@@ -87,27 +79,6 @@ export function MobileDevicesSection() {
 	const invalidate = () => {
 		void queryClient.invalidateQueries({ queryKey: mobileDevicesQueryKey });
 	};
-
-	const mute = useMutation({
-		mutationFn: async ({ installId, muted }: { installId: string; muted: boolean }) => {
-			if (usesPreviewWorkspaceData) {
-				previewDevices = previewDevices.map((d) => (d.installId === installId ? { ...d, muted } : d));
-				return;
-			}
-			const { error } = await apiClient.PATCH("/api/v1/mobile/devices/{installId}", {
-				params: { path: { installId } },
-				body: { muted },
-			});
-			if (error) throw new Error(apiErrorMessage(error));
-		},
-		onMutate: ({ installId }) => {
-			setMutingIds((prev) => new Set(prev).add(installId));
-		},
-		onSuccess: invalidate,
-		onSettled: (_data, _error, { installId }) => {
-			setMutingIds((prev) => without(prev, installId));
-		},
-	});
 
 	const remove = useMutation({
 		mutationFn: async (installId: string) => {
@@ -122,7 +93,7 @@ export function MobileDevicesSection() {
 		},
 		onSuccess: async (_data, installId) => {
 			// Drop the row from the cached roster rather than hiding its id, so a
-			// later poll that lists it again (the phone re-registered, muted) shows
+			// later poll that lists it again (the phone re-registered) shows
 			// it. Cancel first so a poll that started before the DELETE landed
 			// cannot write the stale row back.
 			await queryClient.cancelQueries({ queryKey: mobileDevicesQueryKey });
@@ -203,10 +174,7 @@ export function MobileDevicesSection() {
 	// No paired devices (or still loading with nothing cached) → no section at
 	// all. Errors and an unreadable registry still render so they stay visible.
 	if (!registryUnavailable && !queryError && devices.length === 0) return null;
-	const mutationError =
-		(mute.error instanceof Error && mute.error.message) ||
-		(remove.error instanceof Error && remove.error.message) ||
-		null;
+	const mutationError = remove.error instanceof Error ? remove.error.message : null;
 
 	return (
 		<SettingsSection title={t("mobile.devices.title")} grouped>
@@ -231,7 +199,9 @@ export function MobileDevicesSection() {
 						if (pendingRemovals.has(device.installId)) {
 							return (
 								<SettingsRow
-									key={device.installId}
+									// Its own key so the row remounts: the Undo button would otherwise
+									// reuse the trash button's element and autoFocus would never fire.
+									key={`${device.installId}:removed`}
 									role="listitem"
 									className="relative"
 									icon={Smartphone}
@@ -260,24 +230,8 @@ export function MobileDevicesSection() {
 								</SettingsRow>
 							);
 						}
-						const tokenless = !device.notificationsEnabled;
-						const notificationsTitle = tokenless
-							? t("mobile.devices.notificationsOffOnPhone", { name })
-							: t("mobile.devices.notificationsFor", { name });
 						return (
 							<SettingsRow key={device.installId} role="listitem" icon={Smartphone} label={name}>
-								<div className="flex items-center gap-2" title={notificationsTitle}>
-									<Bell className="size-4 text-settings-muted" aria-hidden="true" data-testid="bell" />
-									<Switch
-										checked={device.notificationsEnabled && !device.muted}
-										disabled={tokenless || mutingIds.has(device.installId)}
-										aria-label={t("mobile.devices.notificationsFor", { name })}
-										onCheckedChange={(next) =>
-											mute.mutate({ installId: device.installId, muted: !next })
-										}
-									/>
-								</div>
-
 								<button
 									type="button"
 									ref={(el) => {
@@ -286,7 +240,7 @@ export function MobileDevicesSection() {
 									}}
 									aria-label={t("mobile.devices.removeAria", { name })}
 									title={t("mobile.devices.removeAria", { name })}
-									className="ml-2 grid size-8 place-items-center rounded-md text-settings-muted transition-colors hover:bg-interactive-hover hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+									className="grid size-8 place-items-center rounded-md text-settings-muted transition-colors hover:bg-interactive-hover hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 									onClick={() => startRemoval(device.installId)}
 								>
 									<Trash2 className="size-4" />

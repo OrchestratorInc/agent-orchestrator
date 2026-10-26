@@ -76,13 +76,27 @@ type claimGitHubInstallationRequest struct {
 }
 
 type createGitHubScratchProjectRequest struct {
-	DisplayName          string `json:"displayName"`
-	GitHubInstallationID string `json:"githubInstallationId"`
-	Private              *bool  `json:"private,omitempty"`
-	Orchestrator         struct {
-		Harness string `json:"harness"`
-		Prompt  string `json:"prompt,omitempty"`
-	} `json:"orchestrator"`
+	DisplayName          string                     `json:"displayName"`
+	GitHubInstallationID string                     `json:"githubInstallationId"`
+	Private              *bool                      `json:"private,omitempty"`
+	Orchestrator         scratchOrchestratorRequest `json:"orchestrator"`
+}
+
+// scratchOrchestratorRequest is a scratch project's first orchestrator.
+type scratchOrchestratorRequest struct {
+	Harness string `json:"harness"`
+	Prompt  string `json:"prompt,omitempty"`
+	// DefaultInterfaceMode is the user's default session interface, as on a
+	// session create: with it the orchestrator starts in Chat where its
+	// harness can (without it, in the TUI), and the workers it spawns resolve
+	// their interface from this default.
+	DefaultInterfaceMode string `json:"defaultInterfaceMode,omitempty"`
+}
+
+// validDefaultInterface reports whether the default interface is empty, tui
+// or chat.
+func (o scratchOrchestratorRequest) validDefaultInterface() bool {
+	return o.DefaultInterfaceMode == "" || domain.SessionInterface(o.DefaultInterfaceMode).Valid()
 }
 
 type githubProjectStore interface {
@@ -508,6 +522,7 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request.DisplayName = strings.TrimSpace(request.DisplayName)
+	ok := true
 	githubRepositoryID, err := strconv.ParseInt(
 		strings.TrimSpace(request.GitHubRepositoryID),
 		10,
@@ -532,6 +547,9 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminForProjectScripts(w, r, orgID, config) {
 		return
 	}
+	if config, ok = s.prepareGitHubProjectRepos(w, r, orgID, githubRepositoryID, config); !ok {
+		return
+	}
 	if !s.validateProjectSandboxProvider(w, r, principalFrom(r), orgID, config) {
 		return
 	}
@@ -542,8 +560,8 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Project configuration is invalid.")
 		return
 	}
-	store, ok := s.store.(githubProjectStore)
-	if !ok {
+	store, isGitHubStore := s.store.(githubProjectStore)
+	if !isGitHubStore {
 		writeError(w, r, http.StatusNotImplemented, "not_implemented", "GitHub project creation is unavailable.")
 		return
 	}
@@ -602,7 +620,8 @@ func (s *Server) createGitHubScratchProject(
 		request.DisplayName == "" || len(request.DisplayName) > 80 ||
 		request.Orchestrator.Harness == "" ||
 		len(request.Orchestrator.Harness) > 120 ||
-		len(request.Orchestrator.Prompt) > 65536 {
+		len(request.Orchestrator.Prompt) > 65536 ||
+		!request.Orchestrator.validDefaultInterface() {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The scratch project request is invalid.")
 		return
 	}
@@ -678,6 +697,7 @@ func (s *Server) createGitHubScratchProject(
 				Harness:             request.Orchestrator.Harness,
 				DisplayName:         "Orchestrator",
 				Prompt:              request.Orchestrator.Prompt,
+				DefaultInterface:    domain.SessionInterface(request.Orchestrator.DefaultInterfaceMode),
 				Mode:                "trusted",
 				DeniedCommands:      []string{},
 				Provider:            plan.Provider,

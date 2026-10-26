@@ -289,9 +289,11 @@ func TestConfigureWorkerGitContinuesRemoteBranch(t *testing.T) {
 	}
 }
 
-// Local changes that block switching to the remote branch do not stop the
-// worker: the branch is cut at HEAD as before and the changes are kept.
-func TestConfigureWorkerGitFallsBackWhenLocalChangesBlockRemoteBranch(t *testing.T) {
+// Local changes that block switching to the pushed branch stop the startup
+// with ErrSessionBranchSwitch instead of quietly cutting the branch from the
+// default branch (which would hide the remote work and fail every push); the
+// local changes are kept.
+func TestConfigureWorkerGitFailsWhenLocalChangesBlockRemoteBranch(t *testing.T) {
 	t.Parallel()
 	requireGit(t)
 	upstream := upstreamRepository(t)
@@ -309,19 +311,146 @@ func TestConfigureWorkerGitFallsBackWhenLocalChangesBlockRemoteBranch(t *testing
 	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("local edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	base := gitOutput(t, workspace, "rev-parse", "HEAD")
-	if err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
-		filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x"); err != nil {
-		t.Fatalf("ConfigureWorkerGit: %v", err)
+	err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+		filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x")
+	if !errors.Is(err, ErrSessionBranchSwitch) {
+		t.Fatalf("ConfigureWorkerGit = %v, want ErrSessionBranchSwitch", err)
 	}
-	if branch := gitOutput(t, workspace, "symbolic-ref", "--short", "HEAD"); branch != "feature/x" {
-		t.Fatalf("branch = %q, want feature/x", branch)
+	if !strings.Contains(err.Error(), "feature/x") {
+		t.Fatalf("error %q does not name the branch", err)
 	}
-	if head := gitOutput(t, workspace, "rev-parse", "HEAD"); head != base {
-		t.Fatalf("HEAD = %s, want the cloned base %s", head, base)
+	if _, err := exec.Command("git", "-C", workspace, "rev-parse", "--verify", "--quiet", "refs/heads/feature/x").Output(); err == nil {
+		t.Fatal("a feature/x branch was cut from the default branch")
 	}
 	if content, err := os.ReadFile(filepath.Join(workspace, "README.md")); err != nil || string(content) != "local edit\n" {
 		t.Fatalf("local change lost: %q, %v", content, err)
+	}
+}
+
+// The session's own generated branch, pushed before its sandbox was
+// re-created, starts from the default branch when local files block
+// continuing it: the session was not asked to continue that branch, so it
+// starts as sessions always did and the worker only logs it.
+func TestConfigureWorkerGitFallsBackForTheGeneratedBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	pusher := filepath.Join(home, "pusher")
+	templateCheckout(t, upstream, pusher, upstream)
+	if err := os.WriteFile(filepath.Join(pusher, "README.md"), []byte("remote edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, pusher, "commit", "-qam", "remote edit")
+	gitRun(t, pusher, "push", "-q", "origin", "HEAD:refs/heads/ao/1234abcd")
+
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+		filepath.Join(home, ".ao"), "https://cp.example.com", "1234abcd-0000-4000-8000-000000000000", "ao/1234abcd")
+	if !errors.Is(err, ErrSessionBranchFellBack) || errors.Is(err, ErrSessionBranchSwitch) {
+		t.Fatalf("ConfigureWorkerGit = %v, want ErrSessionBranchFellBack", err)
+	}
+	head, err := exec.Command("git", "-C", workspace, "symbolic-ref", "--short", "HEAD").Output()
+	if err != nil || strings.TrimSpace(string(head)) != "ao/1234abcd" {
+		t.Fatalf("HEAD is on %q (%v), want the generated branch", head, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(workspace, "README.md")); err != nil || string(content) != "local edit\n" {
+		t.Fatalf("local change lost: %q, %v", content, err)
+	}
+}
+
+func TestGeneratedSessionBranch(t *testing.T) {
+	id := "1234abcd-0000-4000-8000-000000000000"
+	for branch, want := range map[string]bool{
+		"ao/1234abcd": true, "team/1234abcd": true, "ao/1234abce": false,
+		"feature/x": false, "1234abcd": false, "ao/x/1234abcd": false, "": false,
+	} {
+		if got := GeneratedSessionBranch(id, branch); got != want {
+			t.Fatalf("GeneratedSessionBranch(%q) = %v, want %v", branch, got, want)
+		}
+	}
+	if GeneratedSessionBranch("short", "ao/short") {
+		t.Fatal("a session id shorter than 8 characters matched")
+	}
+}
+
+// A restarted worker whose agent left HEAD on another branch switches back to
+// the session branch as it is, instead of resetting it to that HEAD.
+func TestConfigureWorkerGitRestartKeepsSessionBranchCommits(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	configure := func() error {
+		return ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1")
+	}
+	if err := configure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "WORK.md"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, workspace, "add", "WORK.md")
+	gitRun(t, workspace, "commit", "-qm", "session work")
+	work := gitOutput(t, workspace, "rev-parse", "HEAD")
+	gitRun(t, workspace, "checkout", "-q", "main")
+	if err := configure(); err != nil {
+		t.Fatal(err)
+	}
+	if branch := gitOutput(t, workspace, "symbolic-ref", "--short", "HEAD"); branch != "ao/session-1" {
+		t.Fatalf("branch = %q, want ao/session-1", branch)
+	}
+	if head := gitOutput(t, workspace, "rev-parse", "HEAD"); head != work {
+		t.Fatalf("restart reset the session branch to %s, want its commit %s", head, work)
+	}
+}
+
+// A restart whose switch back to the session branch is blocked by changes the
+// agent left on another branch stashes them under a session-named message and
+// switches back, keeping both the branch's commits and the changes.
+func TestConfigureWorkerGitRestartStashesChangesThatBlockTheSessionBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	configure := func() error {
+		return ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
+			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1")
+	}
+	if err := configure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "WORK.md"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, workspace, "add", "WORK.md")
+	gitRun(t, workspace, "commit", "-qm", "session work")
+	work := gitOutput(t, workspace, "rev-parse", "HEAD")
+	gitRun(t, workspace, "checkout", "-q", "main")
+	// An untracked file on main that the session branch tracks blocks the switch.
+	if err := os.WriteFile(filepath.Join(workspace, "WORK.md"), []byte("left on main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := configure(); !errors.Is(err, ErrSessionBranchStashed) {
+		t.Fatalf("restart = %v, want ErrSessionBranchStashed", err)
+	}
+	if branch := gitOutput(t, workspace, "symbolic-ref", "--short", "HEAD"); branch != "ao/session-1" {
+		t.Fatalf("branch = %q, want ao/session-1", branch)
+	}
+	if head := gitOutput(t, workspace, "rev-parse", "HEAD"); head != work {
+		t.Fatalf("restart moved the session branch to %s, want %s", head, work)
+	}
+	if stashes := gitOutput(t, workspace, "stash", "list"); !strings.Contains(stashes, "ao-session session-1: changes found before switching back to ao/session-1") {
+		t.Fatalf("stash list = %q", stashes)
 	}
 }
 
@@ -594,5 +723,34 @@ func TestCheckoutKeepsAnEmptyRepositorySnapshot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, ".git", ProjectSnapshotMarker)); !os.IsNotExist(err) {
 		t.Fatalf("marker still present (err=%v)", err)
+	}
+}
+
+// A reused checkout asked to continue a pushed branch must contain its commits.
+func TestCheckoutContinuesRemoteBranch(t *testing.T) {
+	t.Parallel()
+	requireGit(t)
+	upstream := upstreamRepository(t)
+	home := t.TempDir()
+	pusher := filepath.Join(home, "pusher")
+	templateCheckout(t, upstream, pusher, upstream)
+	if err := os.WriteFile(filepath.Join(pusher, "README.md"), []byte("remote edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, pusher, "commit", "-qam", "remote edit")
+	gitRun(t, pusher, "push", "-q", "origin", "HEAD:refs/heads/feature/x")
+	workspace := filepath.Join(home, "repository")
+	templateCheckout(t, upstream, workspace, upstream)
+	gitRun(t, workspace, "fetch", "-q", "origin")
+	gitRun(t, workspace, "checkout", "-q", "-b", "feature/x")
+	if err := CheckoutContinuesRemoteBranch(context.Background(), ExecGitRunner{}, workspace, "feature/x"); !errors.Is(err, ErrSessionBranchSwitch) {
+		t.Fatalf("a branch without the pushed commits = %v, want ErrSessionBranchSwitch", err)
+	}
+	gitRun(t, workspace, "reset", "-q", "--hard", "origin/feature/x")
+	if err := CheckoutContinuesRemoteBranch(context.Background(), ExecGitRunner{}, workspace, "feature/x"); err != nil {
+		t.Fatalf("a branch on the pushed commits = %v", err)
+	}
+	if err := CheckoutContinuesRemoteBranch(context.Background(), ExecGitRunner{}, workspace, "never-pushed"); err != nil {
+		t.Fatalf("a branch not on the remote = %v", err)
 	}
 }

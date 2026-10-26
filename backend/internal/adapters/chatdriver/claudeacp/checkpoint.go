@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -90,17 +91,28 @@ type checkpointRecord struct {
 		Type      string          `json:"type"`
 		HookEvent string          `json:"hookEvent"`
 		Content   json.RawMessage `json:"content"`
+		Prompt    json.RawMessage `json:"prompt"`
 	} `json:"attachment"`
 	Message struct {
 		Content    json.RawMessage `json:"content"`
 		StopReason string          `json:"stop_reason"`
+		Model      string          `json:"model"`
 	} `json:"message"`
 }
 
 type checkpointTurn struct {
 	promptID, userID, user, assistant string
 	complete, notice                  bool
+	// interrupted is a turn Esc ended: Claude records the interrupt marker in
+	// the prompt's own cycle and fires no Stop, so the turn never gets an
+	// end_turn reply. The marker is its settled boundary.
+	interrupted bool
 }
+
+// claudeSyntheticModel names the assistant records Claude Code writes itself
+// rather than receiving from the API, such as the "No response requested."
+// reply it adds after an interrupt marker when the conversation resumes.
+const claudeSyntheticModel = "<synthetic>"
 
 // claudeTranscriptNotice reports a note Claude Code writes into its transcript
 // as a user message: a background task's <task-notification>, which can carry
@@ -176,12 +188,23 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	slices.Reverse(chain)
 	var turns []checkpointTurn
 	submissions := make(map[string]int)
+	// Input sent while Claude is mid-turn is written as a queued_command
+	// attachment inside that turn, followed by its submission hook, rather
+	// than as a new user record. The hook's parent is that queued record, so
+	// the pair is bound by ancestry, never by position in the chain.
+	queuedTexts := make(map[string]string)
+	queuedByUUID := make(map[string]string)
 	for _, record := range chain {
 		if record.Type == "user" {
 			if record.Meta && record.TurnCompanion {
 				continue
 			}
 			if checkpointToolResults(record.Message.Content) {
+				// A tool result after an interrupt marker means the turn went on.
+				if len(turns) > 0 && turns[len(turns)-1].interrupted {
+					turns[len(turns)-1].interrupted = false
+					turns[len(turns)-1].complete = false
+				}
 				continue
 			}
 			if record.PromptID == "" {
@@ -197,6 +220,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 			// cycle keeps its prompt for Stop evidence; the boundary skips it.
 			notice := record.Meta || claudeTranscriptNotice(text)
 			if notice && len(turns) > 0 && turns[len(turns)-1].promptID == record.PromptID {
+				// Esc settles the turn it interrupts, whether Claude was replying
+				// or running a tool (its tool_use may have no result). Only the
+				// exact marker shape counts, as for the terminal interrupt
+				// detector; a typed prompt with the same text is a string.
+				if !record.Meta && claudecode.IsInterruptMarker(record.Message.Content) {
+					turns[len(turns)-1].interrupted = true
+					turns[len(turns)-1].complete = true
+				}
 				continue
 			}
 			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice})
@@ -208,6 +239,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		turn := &turns[len(turns)-1]
 		switch record.Type {
 		case "attachment":
+			if record.Attachment.Type == "queued_command" {
+				text, err := checkpointContent(record.Attachment.Prompt)
+				if err != nil {
+					return ports.NativeCheckpointBoundary{}, err
+				}
+				queuedByUUID[record.UUID] = text
+				continue
+			}
 			if record.Attachment.Type == "hook_additional_context" && record.Attachment.HookEvent == "UserPromptSubmit" {
 				var contents []string
 				if json.Unmarshal(record.Attachment.Content, &contents) != nil {
@@ -221,17 +260,27 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 						return ports.NativeCheckpointBoundary{}, checkpointUnsettled("ambiguous native submission attachment")
 					}
 					submissions[content] = len(turns) - 1
+					if queued, ok := queuedByUUID[record.ParentUUID]; ok {
+						queuedTexts[content] = queued
+					}
 				}
 			}
 		case "assistant":
+			if turn.interrupted && record.Message.Model == claudeSyntheticModel {
+				// Claude's own filler after the marker does not reopen the turn.
+				break
+			}
 			text, err := checkpointContent(record.Message.Content)
 			if err != nil {
 				return ports.NativeCheckpointBoundary{}, err
 			}
+			// A real reply after the marker means the turn is running again.
+			turn.interrupted = false
 			turn.assistant = text
 			turn.complete = record.Message.StopReason == "end_turn"
 		case "system":
 			if record.Subtype == "stop_hook_summary" && record.PreventedContinuation {
+				turn.interrupted = false
 				turn.complete = false
 			}
 		}
@@ -252,9 +301,17 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 		index, found := byPrompt[observation.PromptID]
 		if observation.Submission {
-			index, found = submissions[domain.NativeSubmissionContext(observation.SubmissionID)]
+			submission := domain.NativeSubmissionContext(observation.SubmissionID)
+			index, found = submissions[submission]
+			submitted := ""
+			if found {
+				submitted = turns[index].user
+				if text, ok := queuedTexts[submission]; ok {
+					submitted = text
+				}
+			}
 			if observation.SubmissionID == "" || !found ||
-				(!observation.Coordination && !domain.NativeCheckpointTextMatches(observation.Text, turns[index].user)) {
+				(!observation.Coordination && !domain.NativeCheckpointTextMatches(observation.Text, submitted)) {
 				return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native submission attachment not flushed")
 			}
 		} else if !found {
@@ -278,7 +335,10 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	if owner < 0 {
 		return ports.NativeCheckpointBoundary{}, checkpointUnsettled("no native user boundary")
 	}
-	return ports.NativeCheckpointBoundary{UserMessageID: turns[owner].userID, UserText: turns[owner].user, AssistantText: latest.assistant}, nil
+	return ports.NativeCheckpointBoundary{
+		UserMessageID: turns[owner].userID, UserText: turns[owner].user,
+		AssistantText: latest.assistant, Interrupted: latest.interrupted,
+	}, nil
 }
 
 func checkpointToolResults(raw json.RawMessage) bool {

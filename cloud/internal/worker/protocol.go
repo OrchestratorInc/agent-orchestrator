@@ -46,9 +46,15 @@ type LaunchContext struct {
 	DeniedCommands  []string                  `json:"deniedCommands"`
 	RepositoryURL   string                    `json:"repositoryUrl"`
 	DefaultBranch   string                    `json:"defaultBranch"`
-	// ExtraRepos are additional repositories the worker clones alongside the
-	// primary repo (multi-repo dev kit). Empty for a single-repo session.
+	// ExtraRepos are the project's additional repositories, which the worker
+	// clones beside the main repository's checkout (domain.RepoDirName) and
+	// checks out on the session branch. Empty for a single-repo session.
 	ExtraRepos []RepoRef `json:"extraRepos,omitempty"`
+	// AgentStartsIn is where the coding agent starts: "" or
+	// domain.ProjectAgentStartsInRepository for the main repository's
+	// checkout, domain.ProjectAgentStartsInParent for the folder holding every
+	// repository's checkout.
+	AgentStartsIn string `json:"agentStartsIn,omitempty"`
 	// SystemPrompt carries control-plane-authored project context and rules. It
 	// remains separate from Prompt, which is the user's visible task input.
 	SystemPrompt string `json:"systemPrompt"`
@@ -58,6 +64,56 @@ type LaunchContext struct {
 	// Cleanup runs before the workspace is deleted.
 	PostCreate []string `json:"postCreate,omitempty"`
 	PreRemove  []string `json:"preRemove,omitempty"`
+	// RequestedOutput is "artifact" when the session asks the agent for a file
+	// deliverable; empty for the ordinary task flow.
+	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// Artifacts asks the worker to sync the session's artifact directory to
+	// the control plane.
+	Artifacts bool `json:"artifacts,omitempty"`
+	// PostCreateTimeoutMinutes and PreRemoveTimeoutMinutes are each Setup and
+	// Cleanup command's own time limit in minutes, by index; 0 or a missing
+	// entry is the kind's default (domain.DefaultSetupStepTimeoutMinutes or
+	// domain.DefaultCleanupStepTimeoutMinutes). Absent when no step sets its
+	// own. A worker that predates per-step limits ignores them and gives every
+	// step its own default; a worker given none (an older control plane) gives
+	// every step the kind's default.
+	PostCreateTimeoutMinutes []int `json:"postCreateTimeoutMinutes,omitempty"`
+	PreRemoveTimeoutMinutes  []int `json:"preRemoveTimeoutMinutes,omitempty"`
+}
+
+// ProjectScripts are the launch's Setup and Cleanup commands, each led by its
+// time limit's marker when it sets one (domain.TimedScriptCommand), as
+// SetupRunner.Run and WriteCleanupHook take them.
+func (l LaunchContext) ProjectScripts() (postCreate, preRemove []string) {
+	return domain.JoinTimedScriptCommands(l.PostCreate, l.PostCreateTimeoutMinutes),
+		domain.JoinTimedScriptCommands(l.PreRemove, l.PreRemoveTimeoutMinutes)
+}
+
+// Error codes of the interface notice a session moved off Chat at its start
+// carries (POST /worker/interface/chat-start-fallback and the control plane's
+// own move for a worker without CapabilityChatStart).
+const (
+	// ChatStartUnsupported: the session's worker predates CapabilityChatStart,
+	// so it cannot set up Chat for Claude (the control plane's move, for a
+	// Claude session only).
+	ChatStartUnsupported = "CHAT_START_UNSUPPORTED"
+	// ChatStartAdapterUnavailable: Claude's Chat controller needs the Claude
+	// ACP adapter, which the workspace lacks and the worker could not install
+	// in time (no npm, an install that failed, or one still running).
+	ChatStartAdapterUnavailable = "CHAT_ADAPTER_UNAVAILABLE"
+)
+
+// ChatStartFallbackRequest is a worker reporting it cannot start its
+// session's Chat controller, for the reason Code names.
+type ChatStartFallbackRequest struct {
+	Code string `json:"code"`
+}
+
+// ChatStartFallbackResponse says whether the session moved to the TUI. A
+// session the person switched to Chat does not move, and its worker stays on
+// Chat.
+type ChatStartFallbackResponse struct {
+	MovedToTUI bool `json:"movedToTui"`
 }
 
 // RepoRef is one additional repository the worker clones beside the primary
@@ -127,6 +183,10 @@ type RaisePullRequestRequest struct {
 	Body       string `json:"body"`
 	HeadBranch string `json:"headBranch"`
 	BaseBranch string `json:"baseBranch,omitempty"`
+	// Repository is the owner/name of the project repository the branch was
+	// pushed to; empty means the main repository. Any other value must be one
+	// of the project's additional repositories.
+	Repository string `json:"repository,omitempty"`
 }
 
 // RaisePullRequestResponse describes the pull request the control plane
@@ -234,6 +294,12 @@ type ChatModel struct {
 	Default       bool     `json:"default"`
 	Efforts       []string `json:"efforts,omitempty"`
 	DefaultEffort string   `json:"defaultEffort,omitempty"`
+	// ApprovalModes are the approval modes ("default", "accept-edits", "auto",
+	// "bypass-permissions") a turn on this model can run, as its provider
+	// offers them for the model. Absent means unknown (an older worker, or a
+	// provider that did not say): a client then offers every mode the session
+	// allows, and the worker still steps down from one the model lacks.
+	ApprovalModes []string `json:"approvalModes,omitempty"`
 }
 
 type ChatModelsResponse struct {
@@ -312,6 +378,13 @@ type TransportRequest struct {
 	Kind    string `json:"kind"`
 	Attempt int    `json:"attempt"`
 	Payload any    `json:"payload"`
+}
+
+// WorkWaitResponse is the answer to a WaitForWork long-poll. ArtifactsChanged
+// is set when the session's committed artifacts changed without the worker,
+// as when a user deleted one, so it checks its files against them.
+type WorkWaitResponse struct {
+	ArtifactsChanged bool `json:"artifactsChanged,omitempty"`
 }
 
 type ClaimTransportResponse struct {
@@ -448,18 +521,26 @@ type TerminalCommand struct {
 	Rows        uint16                  `json:"rows,omitempty"`
 	ReviewRunID string                  `json:"reviewRunId,omitempty"`
 	Reviewer    *domain.ProjectReviewer `json:"reviewer,omitempty"`
+	// Repaint on a terminal.resize carries no size: it asks the worker to make
+	// the program redraw at its current size. A worker that predates it sees a
+	// zero-size resize, rejects it as invalid, and changes nothing.
+	Repaint bool `json:"repaint,omitempty"`
 }
 
 // TerminalStreamFrame is one message on the persistent duplex terminal
 // stream between a worker and the control plane. "output" carries PTY bytes
-// up with the terminal-local, gap-free ID used for durable replay; "input"
-// pushes user keystrokes down; "error" tells the worker to fall back to the
-// polled transport.
+// up with the terminal-local ID used for durable replay; "ack" confirms the
+// control plane stored output up to ID; "input" pushes user keystrokes down;
+// "error" tells the worker to fall back to the polled transport. A worker that
+// dials with TerminalStreamControlFeature also receives "resize" (Columns and
+// Rows) and "repaint" frames down the stream instead of the durable queue.
 type TerminalStreamFrame struct {
 	Type       string          `json:"type"`
 	Data       []byte          `json:"data,omitempty"`
 	ID         int64           `json:"id,omitempty"`
 	Sequence   int64           `json:"sequence,omitempty"`
+	Columns    uint16          `json:"columns,omitempty"`
+	Rows       uint16          `json:"rows,omitempty"`
 	Code       string          `json:"code,omitempty"`
 	EventID    string          `json:"eventId,omitempty"`
 	EventType  string          `json:"eventType,omitempty"`
@@ -467,6 +548,11 @@ type TerminalStreamFrame struct {
 	Payload    json.RawMessage `json:"payload,omitempty"`
 	Duplicate  bool            `json:"duplicate,omitempty"`
 }
+
+// TerminalStreamControlFeature is the stream dial's "features" query value a
+// worker sends when it understands "resize" and "repaint" stream frames. A
+// control plane that predates it ignores the query and keeps the durable path.
+const TerminalStreamControlFeature = "control"
 
 type TerminalOutputRequest struct {
 	ID   int64  `json:"id,omitempty"`

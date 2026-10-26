@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
+import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -57,10 +58,6 @@ import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
-import {
-	AGENT_SWITCH_VISIBILITY_IPC_CHANNEL,
-	type AgentSwitchVisibilitySignalBody,
-} from "./shared/agent-switch-observability";
 import type {
 	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
@@ -73,6 +70,8 @@ import type {
 import type {
 	BrowserProfile,
 	BrowserProfileListState,
+	BrowserProfileUsageResult,
+	BrowserProfileDeleteResult,
 	BrowserProfileMenuInput,
 	BrowserProfileSelectInput,
 	BrowserProfileViewState,
@@ -235,6 +234,16 @@ const api = {
 				ipcRenderer.off(KEYBOARD_SHORTCUTS_HELP_CHANNEL, wrapped);
 			};
 		},
+		// ⌘Q on macOS: show the quit confirm, then answer with resolveQuitConfirm.
+		onQuitConfirmRequest: (listener: (request: QuitConfirmRequest) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, request?: Partial<QuitConfirmRequest>) =>
+				listener({ keepsRunning: request?.keepsRunning === true });
+			ipcRenderer.on(QUIT_CONFIRM_REQUEST_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(QUIT_CONFIRM_REQUEST_CHANNEL, wrapped);
+			};
+		},
+		resolveQuitConfirm: (confirmed: boolean) => ipcRenderer.send(QUIT_CONFIRM_RESULT_CHANNEL, confirmed),
 		// Fired by the main process when ⌘T / Ctrl+T is pressed in any web contents,
 		// including while focus is inside a terminal pane.
 		onNewShellTerminalShortcut: (listener: () => void) => {
@@ -297,6 +306,13 @@ const api = {
 			ipcRenderer.on(APP_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+		onScrollPhase: (listener: (phase: ScrollPhase) => void) => {
+			const wrapped = (_event: unknown, phase: ScrollPhase) => listener(phase);
+			ipcRenderer.on(SCROLL_PHASE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(SCROLL_PHASE_CHANNEL, wrapped);
 			};
 		},
 	},
@@ -365,6 +381,16 @@ const api = {
 		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
 		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
 	},
+	cloudArtifact: {
+		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
+		onFrameNavigated: (listener: (navigation: { url: string; status: number }) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, navigation: { url: string; status: number }) => listener(navigation);
+			ipcRenderer.on("cloudArtifact:frameNavigated", wrapped);
+			return () => {
+				ipcRenderer.off("cloudArtifact:frameNavigated", wrapped);
+			};
+		},
+	},
 	daemon: {
 		getStatus: () => ipcRenderer.invoke("daemon:getStatus") as Promise<DaemonStatus>,
 		start: () => ipcRenderer.invoke("daemon:start") as Promise<DaemonStatus>,
@@ -397,6 +423,17 @@ const api = {
 			if (bootstrap && currentTelemetryPolicy) currentTelemetryPolicy = { ...currentTelemetryPolicy, eventsEnabled: bootstrap.eventsEnabled, consentGeneration: bootstrap.consentGeneration };
 			return bootstrap;
 		},
+		getAnalyticsOptOut: () => ipcRenderer.invoke("telemetry:getAnalyticsOptOut") as Promise<boolean>,
+		setAnalyticsOptOut: (optedOut: boolean) => ipcRenderer.invoke("telemetry:setAnalyticsOptOut", optedOut) as Promise<boolean>,
+		onAnalyticsOptOut: (listener: (optedOut: boolean) => void) => {
+			const wrapped = (_event: unknown, optedOut: boolean) => listener(optedOut);
+			ipcRenderer.on("telemetry:analyticsOptOutChanged", wrapped);
+			return () => {
+				ipcRenderer.off("telemetry:analyticsOptOutChanged", wrapped);
+			};
+		},
+		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
+		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			currentTelemetryPolicy = view;
@@ -409,11 +446,6 @@ const api = {
 		capture: (input: RendererTelemetryCaptureInput) => {
 			if (!currentTelemetryPolicy) return Promise.resolve(false);
 			return ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: currentTelemetryPolicy.consentGeneration }) as Promise<boolean>;
-		},
-		signalAgentSwitchVisibility: (signal: AgentSwitchVisibilitySignalBody) => {
-			if (!currentTelemetryPolicy) return false;
-			ipcRenderer.send(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, { consentGeneration: currentTelemetryPolicy.consentGeneration, signal });
-			return true;
 		},
 	},
 	browser: {
@@ -608,7 +640,8 @@ const api = {
 		rename: (input: { id: string; name: string }) =>
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
-		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
+		usage: (id: string) => ipcRenderer.invoke("browserProfiles:usage", { id }) as Promise<BrowserProfileUsageResult>,
+		delete: (id: string, confirmedViewIds: string[]) => ipcRenderer.invoke("browserProfiles:delete", { id, confirmedViewIds }) as Promise<BrowserProfileDeleteResult>,
 		setDefault: (id: string | null) => ipcRenderer.invoke("browserProfiles:setDefault", { id }) as Promise<void>,
 		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
 			(input === undefined
@@ -735,6 +768,8 @@ const api = {
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
 		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		// The name this machine is listed under on the account's other devices.
+		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>

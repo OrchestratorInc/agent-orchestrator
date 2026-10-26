@@ -161,7 +161,11 @@ function isRootSession(ctx: any): boolean {
   return ctx.hasUI === true;
 }
 
+` + hookutil.FinalAssistantTextJS + `
 export default function (omp: ExtensionAPI) {
+  // The final message of the current run, kept across continuations until
+  // the run really stops.
+  let lastAssistantText = "";
   omp.on("session_start", async (_event, ctx) => {
     if (!isRootSession(ctx)) return;
     callHookSync("session-start", { session_id: sessionID(ctx) });
@@ -172,6 +176,7 @@ export default function (omp: ExtensionAPI) {
   });
   omp.on("before_agent_start", async (event, ctx) => {
     if (!isRootSession(ctx)) return;
+    lastAssistantText = "";
     callHookSync("user-prompt-submit", { session_id: sessionID(ctx), prompt: event.prompt });
   });
   omp.on("tool_approval_requested", async (event, ctx) => {
@@ -193,8 +198,9 @@ export default function (omp: ExtensionAPI) {
   });
   omp.on("agent_end", async (event, ctx) => {
     if (!isRootSession(ctx)) return;
+    lastAssistantText = finalAssistantText(event) || lastAssistantText;
     if (!event.willContinue) {
-      callHookSync("stop", { session_id: sessionID(ctx) });
+      callHookSync("stop", { session_id: sessionID(ctx), last_assistant_message: lastAssistantText });
     }
   });
   omp.on("session_shutdown", async (_event, ctx) => {

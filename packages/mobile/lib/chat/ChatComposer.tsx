@@ -11,7 +11,8 @@ import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller
 import { haptics } from "../haptics";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { fontScaleCap, iconSize, space, type } from "../tokens";
+import { textSelectionColors } from "../textSelection";
+import { fontScaleCap, iconSize, press, space, type } from "../tokens";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
@@ -25,7 +26,9 @@ import {
 import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
+import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
+import { compactCount } from "../files/model";
 import { composerDeliveryPresentation, composerDeliveryRoute, composerPrimaryAction, type ComposerDeliveryIntent } from "./composerDeliveryModel";
 import { contextMeterModel } from "./contextMeter";
 import { RequestCard } from "./RequestCard";
@@ -37,28 +40,11 @@ import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRReviewPrompt } from "./PRReviewPrompt";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
-
-type Attachment =
-	| { id: string; kind: "image"; name: string; bytes: number; image: ChatImage }
-	| { id: string; kind: "resource"; name: string; bytes: number; resource: ChatResource };
+import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
+import { sniffImageMimeType } from "../imageMime";
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
 
-/** Resting panel height without quotes; the input row grows up to COMPOSER_MAX_HEIGHT. */
-export const COMPOSER_HEIGHT = 56;
-export const COMPOSER_FIELD_HEIGHT = 44;
-/**
- * Where the pill stops growing and the field starts scrolling instead.
- *
- * Main's numbers, kept because they were tuned against the same transcript: about
- * six lines of a reply's worth of prompt, so the composer can never swallow the
- * conversation it is writing into.
- */
-const COMPOSER_MAX_HEIGHT = 150;
-const COMPOSER_FIELD_MAX_HEIGHT = 138;
-const COMPOSER_LINE_HEIGHT = type.subheadline.lineHeight;
-/** The pill's corner, and so also the radius of the glass drawn behind it. */
-const COMPOSER_RADIUS = 28;
 const MAX_ATTACHMENTS = 8;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
@@ -74,6 +60,7 @@ export function ChatComposer({
 	onOpenReview,
 	sessionId,
 	config,
+	changes,
 	snapshot,
 	skills,
 	filePaths,
@@ -97,6 +84,7 @@ export function ChatComposer({
 	onSettings,
 	onConfigOption,
 	restingInset,
+	dockRiseOverride,
 	quotaActive,
 	request,
 	requestDismissed,
@@ -105,6 +93,8 @@ export function ChatComposer({
 	onShowRequest,
 	onDismissRequest,
 	onRestoreRequest,
+	openingTurnId,
+	startingAgentName,
 }: {
 	quoteRequest?: ResponseQuoteRequest;
 	onQuoteHandled?(id: string): void;
@@ -115,6 +105,8 @@ export function ChatComposer({
 	onOpenReview?(): void;
 	sessionId: string;
 	config: ServerConfig | null;
+	/** What this session changed, from git. Present only when it changed something. */
+	changes?: { files: number; additions: number; deletions: number; onOpen(): void };
 	snapshot: ConversationSnapshot;
 	skills: ChatSkill[];
 	filePaths: string[];
@@ -143,6 +135,12 @@ export function ChatComposer({
 	 * itself; see `dockRise` below.
 	 */
 	restingInset: number;
+	/**
+	 * Pins the dock's rise (0 resting, 1 against the keyboard) when the keyboard's
+	 * own progress missed a transition and is stuck at the old end. Leave it
+	 * unset to ride the progress. See `chatDockRiseOverride`.
+	 */
+	dockRiseOverride?: number;
 	/** The account-quota banner is up, so the context meter stands down. */
 	quotaActive?: boolean;
 	/** A pending request, which takes the composer's place until it is answered. */
@@ -154,6 +152,10 @@ export function ChatComposer({
 	onShowRequest(sequence: number): void;
 	onDismissRequest(): void;
 	onRestoreRequest(): void;
+	/** A starting session's brief, which the timeline shows as sent. */
+	openingTurnId?: string;
+	/** Set while the session starts, for the placeholder. */
+	startingAgentName?: string;
 }) {
 	const t = useTheme();
 	const router = useRouter();
@@ -225,7 +227,7 @@ export function ChatComposer({
 		wasReviewPromptCollapsed.current = Boolean(reviewPRCollapsed);
 	}, [reviewCardDragY, reviewPRCollapsed, reviewPromptAvailable]);
 	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * keyboard.progress.value }],
+		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
 	}));
 	const [text, setText] = useState("");
 	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);
@@ -234,14 +236,19 @@ export function ChatComposer({
 	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);
 	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
-	const [attachments, setAttachments] = useState<Attachment[]>([]);
+	// Not component state: an Android pick can resolve after this composer has
+	// unmounted (see composerAttachments.ts).
+	const attachmentKey = config ? `${machineIdentity(config)}.${sessionId}` : sessionId;
+	const { items: attachments, notice: attachmentNotice } = useComposerAttachments(attachmentKey);
+	const clearAttachments = useCallback(() => updateComposerAttachments(attachmentKey, () => ({ items: [] })), [attachmentKey]);
+	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
 	const [localError, setLocalError] = useState<string>();
 	const [submitting, setSubmitting] = useState(false);
 	const [promotingQueuedTurnId, setPromotingQueuedTurnId] = useState<string>();
 	const [cancellingQueuedTurnId, setCancellingQueuedTurnId] = useState<string>();
 	const [hiddenQueuedTurnIds, setHiddenQueuedTurnIds] = useState<Set<string>>(() => new Set());
 	const active = Boolean(activeTurn(snapshot));
-	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot), [snapshot]);
+	const queuedMessages = useMemo(() => queuedConversationMessages(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	const visibleQueuedMessages = useMemo(() => queuedMessages.filter((entry) => !hiddenQueuedTurnIds.has(entry.turnId)), [hiddenQueuedTurnIds, queuedMessages]);
 	// Absent below 70%: a permanent token gauge is chrome nobody reads.
 	const contextMeter = contextMeterModel(snapshot.usage, Boolean(quotaActive));
@@ -325,7 +332,7 @@ export function ChatComposer({
 			setText("");
 			latestQuotes.current = [];
 			setQuotes([]);
-			setAttachments([]);
+			clearAttachments();
 		}
 		void (async () => {
 			if (draftKey) {
@@ -333,7 +340,7 @@ export function ChatComposer({
 			}
 			await onAcknowledgeSend(completedRetry.id);
 		})().catch((cause) => setLocalError(userFacingError(cause)));
-	}, [completedRetry, draftKey, onAcknowledgeSend]);
+	}, [completedRetry, draftKey, onAcknowledgeSend, clearAttachments]);
 
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
 
@@ -341,11 +348,16 @@ export function ChatComposer({
 		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
 		const trimmed = responseReplyText(text, quotes);
 		if (!trimmed && attachments.length === 0) return;
+		// This send owns these attachments and no others: it can finish after the
+		// conversation was left and reopened, and the new composer may have added more.
+		const sentKey = attachmentKey;
+		const sent = new Set(attachments.map((item) => item.id));
 		// Dismissed on the tap, not after the send lands. Waiting for the request
 		// tied the keyboard's exit to the network, so it dropped whenever the
 		// answer arrived — which read as the keyboard being taken away mid-sentence.
 		Keyboard.dismiss();
 		setLocalError(undefined);
+		dismissAttachmentNotice();
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		try {
@@ -373,30 +385,37 @@ export function ChatComposer({
 				setFieldHeight(COMPOSER_FIELD_HEIGHT);
 				latestQuotes.current = [];
 				setQuotes([]);
-				setAttachments([]);
 			}
+			forgetComposerAttachments(sentKey, sent);
 			haptics.success();
 		} catch (cause) {
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
+	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
 
 	const addImage = async () => {
+		// Captured now: the pick can outlive this composer, and the stored list may
+		// have changed while the picker was open.
+		const key = attachmentKey;
 		setLocalError(undefined);
+		dismissAttachmentNotice();
 		try {
 			const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.82, allowsMultipleSelection: true, selectionLimit: 4 });
 			if (result.canceled) return;
 			const errors = new Set<string>();
 			const next = result.assets.flatMap((asset): Attachment[] => {
 				if (!asset.base64) { errors.add("Some images couldn't be read and were skipped."); return []; }
-				const mimeType = (asset.mimeType || "image/jpeg").toLowerCase();
+				// The picker reports the original file's type, but the base64 is
+				// re-encoded (JPEG on both platforms at quality < 1). Agents reject an
+				// image whose bytes don't match its declared type.
+				const mimeType = (sniffImageMimeType(asset.base64) ?? (asset.mimeType || "image/jpeg")).toLowerCase();
 				if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) { errors.add("Only PNG, JPEG, GIF, WebP, and BMP images are supported."); return []; }
 				const bytes = asset.fileSize ?? Math.floor(asset.base64.length * 0.75);
 				if (bytes > MAX_IMAGE_BYTES) { errors.add("Each image must be under 10 MB."); return []; }
 				return [{ id: `${asset.assetId ?? asset.uri}-${Date.now()}`, kind: "image", name: asset.fileName || "Image", bytes, image: { mimeType, data: asset.base64 } }];
 			});
-			const accepted = [...attachments];
+			const accepted = [...readComposerAttachments(key).items];
 			let imageBytes = accepted.filter((item) => item.kind === "image").reduce((sum, item) => sum + item.bytes, 0);
 			for (const item of next) {
 				if (accepted.length >= MAX_ATTACHMENTS) { errors.add(`You can attach up to ${MAX_ATTACHMENTS} items.`); break; }
@@ -404,28 +423,34 @@ export function ChatComposer({
 				accepted.push(item);
 				imageBytes += item.bytes;
 			}
-			setAttachments(accepted);
-			setLocalError(errors.size ? [...errors].join(" ") : undefined);
+			updateComposerAttachments(key, () => ({ items: accepted, notice: errors.size ? [...errors].join(" ") : undefined }));
 		} catch (cause) {
-			setLocalError(userFacingError(cause, "Couldn't open your photo library."));
+			const notice = userFacingError(cause, "Couldn't open your photo library.");
+			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
 		}
 	};
 	const addFile = async () => {
+		const key = attachmentKey;
 		setLocalError(undefined);
+		dismissAttachmentNotice();
 		const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
 		if (result.canceled) return;
 		try {
+			const existing = readComposerAttachments(key).items.length;
 			const added: Attachment[] = [];
 			for (const asset of result.assets) {
-				if (attachments.length + added.length >= MAX_ATTACHMENTS) throw new Error(`You can attach up to ${MAX_ATTACHMENTS} items.`);
+				if (existing + added.length >= MAX_ATTACHMENTS) throw new Error(`You can attach up to ${MAX_ATTACHMENTS} items.`);
 				if ((asset.size ?? 0) > MAX_EMBEDDED_FILE_BYTES) throw new Error(`${asset.name} is larger than 500 KB. Reference a worktree file with @ instead.`);
 				const body = await fetch(asset.uri).then((response) => response.text());
 				const bytes = new TextEncoder().encode(body).byteLength;
 				if (bytes > MAX_EMBEDDED_FILE_BYTES) throw new Error(`${asset.name} is too large to embed. Reference a worktree file with @ instead.`);
 				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: `mobile-attachment://${encodeURIComponent(asset.name)}`, name: asset.name, mimeType: asset.mimeType || "text/plain", text: body } });
 			}
-			setAttachments((old) => [...old, ...added]);
-		} catch (cause) { setLocalError(userFacingError(cause)); }
+			updateComposerAttachments(key, (current) => ({ items: [...current.items, ...added], notice: current.notice }));
+		} catch (cause) {
+			const notice = userFacingError(cause);
+			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
+		}
 	};
 
 	const openPicker = useCallback(async (kind: "skills" | "files", activeTrigger?: ComposerSuggestion) => {
@@ -469,15 +494,33 @@ export function ChatComposer({
 					<View style={styles.reviewDivider} />
 				</Animated.View> : null}
 			{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><Feather name="mic" size={12} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
-			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((old) => old.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
+			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); updateComposerAttachments(attachmentKey, (current) => ({ items: current.items.filter((candidate) => candidate.id !== item.id), notice: current.notice })); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
 			{/* Composer-local only. Conversation and action failures are banners above
 			    the timeline; echoing them here showed one failure twice. */}
-			{localError || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || voice.error}</Text> : null}
+			{localError || attachmentNotice || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || attachmentNotice || voice.error}</Text> : null}
 			<View style={styles.metaRow}>
 				<View style={styles.settingsSlot}>
 				<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} onOpenFallback={onOpenSettings} />
 				</View>
-				{deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>
+				{/* The changes pill takes the queue note's place: the placeholder already
+				    says a message waits for the turn. Attachments keep their note, and
+				    the steer action stays either way. */}
+				{changes && !(deliveryPresentation.showQueueNote && attachments.length) ? <View style={styles.deliveryNote}>
+					<Pressable
+						accessibilityRole="button"
+						accessibilityLabel={changesAccessibilityLabel(changes)}
+						accessibilityHint="Opens the changed files"
+						onPress={() => { haptics.tap(); changes.onOpen(); }}
+						style={({ pressed }) => [styles.changesPill, pressed && { opacity: press.opacity }]}
+					>
+						<Feather name="file-diff" size={12} color={t.textSecondary} />
+						<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.changesPillText}>{changes.files}</Text>
+						{/* The model picker keeps its room: line counts drop out when the context meter needs the row. */}
+						{!contextMeter && changes.additions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.changesPillCount, { color: t.green }]}>+{compactCount(changes.additions)}</Text> : null}
+						{!contextMeter && changes.deletions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.changesPillCount, { color: t.red }]}>−{compactCount(changes.deletions)}</Text> : null}
+					</Pressable>
+					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
+				</View> : deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>
 					<Feather name="clock" size={12} color={t.textTertiary} />
 					<Text numberOfLines={1} style={styles.deliveryNoteText}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
 					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
@@ -587,13 +630,14 @@ export function ChatComposer({
 							const contentHeight = Math.ceil(event.nativeEvent.contentSize.height);
 							setFieldHeight(Math.max(COMPOSER_FIELD_HEIGHT, Math.min(COMPOSER_FIELD_MAX_HEIGHT, contentHeight)));
 						}}
-						placeholder={stopped ? "Agent is stopped" : deliveryPresentation.placeholder}
+						placeholder={stopped ? "Agent is stopped" : startingAgentName ? `${startingAgentName} is starting…` : deliveryPresentation.placeholder}
 						placeholderTextColor={t.textFaint}
+						{...textSelectionColors(t)}
 						style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 						multiline
 						maxLength={40_000}
 					/>
-					<MicKey variant="plain" size={44} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+					<MicKey variant="plain" size={44} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
 					{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
 				</View>
 			</Animated.View>}
@@ -616,7 +660,7 @@ export function ChatComposer({
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs, backgroundColor: t.bgBase },
+	...composerStyleRules(t),
 	reviewArea: { width: "100%", gap: space.xs },
 	reviewAreaWithPrompt: { gap: 0 },
 	reviewDivider: { width: "100%", borderTopWidth: 1, borderTopColor: t.borderStrong },
@@ -634,29 +678,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	quote: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
 	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.xs, color: t.textSecondary },
 	removeQuote: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-	// One glass panel for selected quotes, attach, the field, dictation and the filled
-	// control that commits. The pill's radius is half its resting height, so a
-	// single line reads as a capsule; quotes and long replies grow a rounded panel —
-	// no second border, no second surface.
-	//
-	// The fill goes transparent where the glass layer is drawing behind it: an
-	// opaque pill under a material is the one arrangement that turns glass grey.
-	//
-	// Bottom-align the controls so attach, mic and send stay anchored while the
-	// text field grows above them. The panel grows around both rows; the glass fills
-	// that panel rather than receiving a separately measured height.
-	composer: { minHeight: COMPOSER_HEIGHT, flexDirection: "column", paddingHorizontal: space.xs, paddingVertical: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
-	composerRow: { maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
 	reviewComposer: { backgroundColor: "transparent" },
-	// The native content-size event grows this from its one-line resting height;
-	// at the cap, the multiline field scrolls while the controls remain in place.
-	input: { fontFamily: "Geist_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, textAlignVertical: "top" },
-	send: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
-	stop: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	attachments: { gap: space.xs, paddingBottom: space.xs },
-	attachment: { maxWidth: 180, flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.bgElevated, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
-	attachmentImage: { width: 28, height: 28, borderRadius: 4, backgroundColor: t.bgSubtle },
-	attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 	// The way back to a request the user pushed aside to type instead.
 	restore: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: 12, backgroundColor: t.tintAmber },
 	restoreText: { fontFamily: "Geist_600SemiBold", flex: 1, minWidth: 0, color: t.amber, fontSize: type.caption1.fontSize, fontWeight: "600" },
@@ -668,6 +690,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	contextText: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
 	deliveryNote: { flexShrink: 0, maxWidth: "46%", height: 32, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xxs, paddingRight: space.xxs },
 	deliveryNoteText: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	changesPill: { minHeight: 30, flexShrink: 1, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: 15, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
+	changesPillText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	changesPillCount: { fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
 	steerAction: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: t.accentTint },
 	queueDock: { overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 16, borderCurve: "continuous" },
 	queueRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xxs },
@@ -675,7 +700,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	queueText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 	queueSteer: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 20 },
 	queueDelete: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
-	error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginBottom: space.xs, paddingHorizontal: space.hair },
-	voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs, marginBottom: space.xs },
-	voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 });
+
+function changesAccessibilityLabel(changes: { files: number; additions: number; deletions: number }): string {
+	const files = `${changes.files} ${changes.files === 1 ? "file" : "files"} changed`;
+	return `${files}, ${changes.additions} ${changes.additions === 1 ? "line" : "lines"} added, ${changes.deletions} removed`;
+}

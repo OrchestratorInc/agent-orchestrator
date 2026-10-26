@@ -236,9 +236,24 @@ func TestAgentBrowserRelayUnavailableAndInvalidTails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
 
+	// No connected agent browser is a state of the session, not a gateway
+	// failure: 409 with when to ask again, never a 5xx.
 	status, got := relay.desktopRequest(t, ctx, http.MethodGet, "v/cdp", nil)
-	if status != http.StatusBadGateway || got["code"] != "AGENT_BROWSER_UNAVAILABLE" {
+	if status != http.StatusConflict || got["code"] != "AGENT_BROWSER_UNAVAILABLE" {
 		t.Fatalf("no relay: status %d, body %v", status, got)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, relay.desktopURL("stats"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer ao_local_desktop")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusConflict || response.Header.Get("Retry-After") != "30" {
+		t.Fatalf("no relay stats: status %d, Retry-After %q", response.StatusCode, response.Header.Get("Retry-After"))
 	}
 	for _, tail := range []string{"", "../secret", "a/%2e%2e/b"} {
 		if status, got := relay.desktopRequest(t, ctx, http.MethodGet, tail, nil); status != http.StatusNotFound {

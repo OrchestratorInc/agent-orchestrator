@@ -188,7 +188,7 @@ func TestProjectSettingsScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	postCreate, preRemove := ProjectScripts(merged)
+	postCreate, preRemove := ProjectScripts(merged, "")
 	if strings.Join(postCreate, "|") != "npm ci|make up" || strings.Join(preRemove, "|") != "make down" ||
 		settings.Coder == nil || settings.Coder.TemplateID != "t" {
 		t.Fatalf("settings = %+v, scripts = %q %q", settings, postCreate, preRemove)
@@ -202,7 +202,7 @@ func TestProjectSettingsScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, preRemove := ProjectScripts(cleared); preRemove != nil {
+	if _, preRemove := ProjectScripts(cleared, ""); preRemove != nil {
 		t.Fatalf("cleared preRemove = %q", preRemove)
 	}
 	tooMany := make([]string, MaxProjectScriptCommands+1)
@@ -225,6 +225,40 @@ func TestProjectSettingsScripts(t *testing.T) {
 	}
 	if err := ValidateProjectScriptsConfig(json.RawMessage(`{"postCreate":["npm ci"],"preRemove":["make down"]}`)); err != nil {
 		t.Fatalf("valid scripts rejected: %v", err)
+	}
+}
+
+// A refused branch says why, so the orchestrator can pick another name.
+func TestSessionBranchProblemSaysWhy(t *testing.T) {
+	bases := []string{"develop", "", "release"}
+	for name, want := range map[string]string{
+		"feature/x":         "",
+		"ao/1a2b3c4d":       "",
+		"Feature/Main-fix":  "",
+		"main":              SessionBranchDefault,
+		"MAIN":              SessionBranchDefault,
+		"ao":                SessionBranchPrefix,
+		"AO":                SessionBranchPrefix,
+		"develop":           SessionBranchRepositoryBase,
+		"Release":           SessionBranchRepositoryBase,
+		"refs/heads/x":      SessionBranchInvalidName,
+		"heads/main":        SessionBranchInvalidName,
+		"remotes/origin/x":  SessionBranchInvalidName,
+		"tags/v1":           SessionBranchInvalidName,
+		"origin/main":       SessionBranchInvalidName,
+		"Origin/feature":    SessionBranchInvalidName,
+		"FETCH_HEAD":        SessionBranchInvalidName,
+		"ORIG_HEAD":         SessionBranchInvalidName,
+		"MERGE_HEAD":        SessionBranchInvalidName,
+		"head":              SessionBranchInvalidName,
+		"feature/AUTO_HEAD": "",
+		"fix/table_head":    "",
+		"-x":                SessionBranchInvalidName,
+		"a..b":              SessionBranchInvalidName,
+	} {
+		if got := SessionBranchProblem(name, "main", "ao", bases); got != want {
+			t.Errorf("SessionBranchProblem(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 

@@ -178,7 +178,7 @@ func approvalToolDetail(tool acpsdk.ToolCallUpdate, activityKind domain.Activity
 		"subjectKind": string(activityKind),
 	}
 	if tool.RawInput != nil {
-		detail["input"] = cappedInput(tool.RawInput)
+		detail["input"] = cappedPayload(tool.RawInput)
 	}
 	if claude := nestedMap(tool.Meta, "claudeCode"); claude != nil {
 		copyDetail(detail, claude, "toolName", "providerToolName")
@@ -424,15 +424,24 @@ func validateInputResponse(request ports.ChatInputRequest, response ports.ChatIn
 }
 
 func validateFormContent(schema, content map[string]any) error {
+	properties, _ := schema["properties"].(map[string]any)
+	customAnswers := formCustomAnswers(properties)
 	for _, name := range formRequired(schema["required"]) {
 		if name == "" {
 			continue
 		}
-		if _, present := content[name]; !present {
-			return fmt.Errorf("required input %q is missing", name)
+		if _, present := content[name]; present {
+			continue
 		}
+		// A typed "Other" answer stands in for the choice it replaces; the adapter
+		// records it as the question's answer.
+		if custom, ok := customAnswers[name]; ok {
+			if text, _ := content[custom].(string); strings.TrimSpace(text) != "" {
+				continue
+			}
+		}
+		return fmt.Errorf("required input %q is missing", name)
 	}
-	properties, _ := schema["properties"].(map[string]any)
 	for name, value := range content {
 		rawProperty, known := properties[name]
 		if !known {
@@ -488,6 +497,34 @@ func validateFormValue(value any, property map[string]any) error {
 		return fmt.Errorf("uses unsupported type %q", typeName)
 	}
 	return nil
+}
+
+// askUserQuestionCustomAnswerMetaKey marks the free-text "Other" field an
+// AskUserQuestion bridge (claude-agent-acp) adds after each question, naming the
+// question it answers. Only this marker makes a field an alternative answer, so a
+// generic form's required fields stay strictly required.
+const askUserQuestionCustomAnswerMetaKey = "_askUserQuestionCustomAnswer"
+
+// formCustomAnswers maps each marked question to the field that answers it in free text.
+func formCustomAnswers(properties map[string]any) map[string]string {
+	var out map[string]string
+	for name, raw := range properties {
+		property, _ := raw.(map[string]any)
+		meta, _ := property["_meta"].(map[string]any)
+		marker, _ := meta[askUserQuestionCustomAnswerMetaKey].(map[string]any)
+		question, _ := marker["questionId"].(string)
+		if marker["isCustomAnswer"] != true || question == "" || question == name {
+			continue
+		}
+		if _, known := properties[question]; !known {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[question] = name
+	}
+	return out
 }
 
 func formRequired(value any) []string {
@@ -692,7 +729,9 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
 		c.emitDiffs(turnID, tool.id, tool.content, emit)
 	case update.Plan != nil:
-		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: normalizePlan(update.Plan.Entries)})
+		plan := normalizePlan(update.Plan.Entries)
+		plan.SpansTurns = c.plansSpanTurns
+		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
 	case update.SessionInfoUpdate != nil:
 		if update.SessionInfoUpdate.Title != nil {
 			emit(ports.ChatEvent{Kind: ports.ChatEventThreadRenamed, Title: *update.SessionInfoUpdate.Title})
@@ -795,10 +834,23 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 	activityKind := activityKindFromTool(tool.kind)
 	// The detail is rewritten on every tool update and carried by every snapshot,
 	// so a page an agent hands html_render and the screenshot html_preview hands
-	// back are not stored whole.
+	// back are not stored whole, and neither is output or a diff that a provider
+	// re-sends in full on every update.
+	output, outputCut := commanddetail.TailChars(output, commanddetail.MaxOutputChars)
+	var content any = contentWithoutImageData(tool.content)
+	if activityKind != domain.ActivityKindMCPTool {
+		// Only an MCP-style row renders its content, and for a read or a fetch that
+		// is all the timeline shows of the result. Other rows render other fields (a
+		// command its output, a file change its files), so their content is held to
+		// the tool payload cap.
+		content = cappedPayload(content)
+	}
 	detailMap := map[string]any{
 		"protocol": "acp", "toolKind": tool.kind, "locations": tool.locations,
-		"input": cappedInput(tool.rawInput), "output": output, "content": contentWithoutImageData(tool.content),
+		"input": cappedPayload(tool.rawInput), "output": output, "content": content,
+	}
+	if outputCut {
+		detailMap["outputTruncated"] = true
 	}
 	if activityKind == domain.ActivityKindFileChange {
 		files := make([]map[string]any, 0)
@@ -807,12 +859,24 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 				continue
 			}
 			stats := diffFileFromSnapshot(item.Diff.Path, item.Diff.OldText, item.Diff.NewText)
-			files = append(files, map[string]any{
+			patch := acpFilePatch(item.Diff.Path, item.Diff.OldText, item.Diff.NewText)
+			file := map[string]any{
 				"path": item.Diff.Path, "status": stats.Status,
 				"additions": stats.Additions, "deletions": stats.Deletions,
-				"patch":   acpFilePatch(item.Diff.Path, item.Diff.OldText, item.Diff.NewText),
-				"oldText": item.Diff.OldText, "newText": item.Diff.NewText,
-			})
+				"patch": patch, "oldText": item.Diff.OldText, "newText": item.Diff.NewText,
+			}
+			if len(patch) > commanddetail.MaxPatchChars {
+				// A client reads the full texts only for a file with no patch, so
+				// past the cap they are not stored.
+				capped, cut := cappedACPPatch(item.Diff.Path, item.Diff.OldText, item.Diff.NewText)
+				file["patch"] = capped
+				if cut {
+					file["patchTruncated"] = true
+				}
+				delete(file, "oldText")
+				delete(file, "newText")
+			}
+			files = append(files, file)
 		}
 		if len(files) > 0 {
 			detailMap["files"] = files
@@ -885,11 +949,72 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 }
 
 func acpFilePatch(path string, oldText *string, newText string) string {
-	oldLines := []string{}
+	oldLines, newLines := acpPatchLines(oldText, newText)
+	return acpPatch(path, oldLines, newLines)
+}
+
+func acpPatchLines(oldText *string, newText string) (oldLines, newLines []string) {
+	oldLines = []string{}
 	if oldText != nil {
 		oldLines = strings.Split(strings.ReplaceAll(*oldText, "\r\n", "\n"), "\n")
 	}
-	newLines := strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n")
+	return oldLines, strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n")
+}
+
+// cappedACPPatch is the patch for a file past the per-file cap. The full form lists
+// every old line before any new one, so cutting it would keep only removals and read
+// as though the file had been emptied. Lines both sides share at the start and the
+// end are dropped first; if the rest still does not fit, the removed and the added
+// lines share the budget, each side keeping its first lines. Reports whether any of
+// the change itself was cut.
+func cappedACPPatch(path string, oldText *string, newText string) (string, bool) {
+	oldLines, newLines := acpPatchLines(oldText, newText)
+	for len(oldLines) > 0 && len(newLines) > 0 && oldLines[0] == newLines[0] {
+		oldLines, newLines = oldLines[1:], newLines[1:]
+	}
+	for len(oldLines) > 0 && len(newLines) > 0 && oldLines[len(oldLines)-1] == newLines[len(newLines)-1] {
+		oldLines, newLines = oldLines[:len(oldLines)-1], newLines[:len(newLines)-1]
+	}
+	// The full path is stored separately; reserve room for both sides of the change.
+	if len(path) > commanddetail.MaxPatchChars/4 {
+		path = commanddetail.Head(path, commanddetail.MaxPatchChars/4-3) + "..."
+	}
+	if patch := acpPatch(path, oldLines, newLines); len(patch) <= commanddetail.MaxPatchChars {
+		return patch, false
+	}
+	budget := commanddetail.MaxPatchChars - len(acpPatch(path, nil, nil))
+	// Half each, and whatever one side does not need goes to the other.
+	oldBudget := max(min(patchLinesSize(oldLines), budget/2), budget-patchLinesSize(newLines))
+	return acpPatch(path, keepPatchLines(oldLines, oldBudget), keepPatchLines(newLines, budget-oldBudget)), true
+}
+
+// patchLinesSize is what lines add to a patch: each line, its marker and a newline.
+func patchLinesSize(lines []string) int {
+	size := 0
+	for _, line := range lines {
+		size += len(line) + 2
+	}
+	return size
+}
+
+// keepPatchLines keeps the first lines that fit in budget bytes of patch. A first
+// line that alone does not fit is cut on a character boundary.
+func keepPatchLines(lines []string, budget int) []string {
+	kept := 0
+	for _, line := range lines {
+		if len(line)+2 > budget {
+			break
+		}
+		budget -= len(line) + 2
+		kept++
+	}
+	if kept == 0 && len(lines) > 0 && budget > 2 {
+		return []string{commanddetail.Head(lines[0], budget-2)}
+	}
+	return lines[:kept]
+}
+
+func acpPatch(path string, oldLines, newLines []string) string {
 	lines := make([]string, 0, 2+len(oldLines)+len(newLines))
 	lines = append(lines, "--- "+path, "+++ "+path)
 	for _, line := range oldLines {
@@ -901,9 +1026,10 @@ func acpFilePatch(path string, oldText *string, newText string) string {
 	return strings.Join(lines, "\n")
 }
 
-// cappedInput keeps a tool's input only while it fits the tool payload cap,
-// as the Codex driver does for MCP arguments.
-func cappedInput(raw any) any {
+// cappedPayload keeps a tool payload (its input, or content its row does not
+// render) only while it fits the tool payload cap, as the Codex driver does for
+// MCP arguments and results.
+func cappedPayload(raw any) any {
 	encoded, err := json.Marshal(raw)
 	if err != nil {
 		return nil

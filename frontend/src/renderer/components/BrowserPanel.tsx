@@ -1,3 +1,4 @@
+import { BrowserIcon } from "./icons";
 import {
 	memo,
 	useCallback,
@@ -45,7 +46,6 @@ import {
 	Download,
 	Eye,
 	ExternalLink,
-	Globe2,
 	Maximize2,
 	Minimize2,
 	RotateCcw,
@@ -65,6 +65,7 @@ import {
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
+import { useBrowserRuntimeState } from "../hooks/useBrowserRuntimeState";
 import { useTabScrollEdges } from "../hooks/useTabScrollEdges";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import type { BrowserProfile } from "../../shared/browser-profiles";
@@ -438,8 +439,6 @@ export function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
-		browserRuntimeConnected,
-		reconnectBrowserRuntime = async () => undefined,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -935,15 +934,20 @@ export function BrowserPanelView({
 							? error
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
-	const runtimeDisconnected = hasNativeBrowser && browserRuntimeConnected === false;
+	const runtimeState = useBrowserRuntimeState();
+	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
+	// not a disconnect yet; alarming then would flash the alert on every relink.
+	const runtimeDisconnected =
+		hasNativeBrowser && runtimeState !== null && !runtimeState.connected && !runtimeState.connecting;
+	const runtimeRejectedMessage = runtimeState?.rejected ? t(browserRuntimeRejectedKey(runtimeState.rejectionCode)) : null;
 	const reconnectRuntime = useCallback(async () => {
 		setRuntimeReconnectPending(true);
 		try {
-			await reconnectBrowserRuntime();
+			await window.ao?.browser.reconnectRuntime();
 		} finally {
 			setRuntimeReconnectPending(false);
 		}
-	}, [reconnectBrowserRuntime]);
+	}, []);
 	const suggestionsOpen = urlEditing && historySuggestions.length > 0;
 	const currentURLIsWeb = isWebLink(navState.url);
 	const copyURLLabel = t(urlCopied ? "browser.urlCopied" : "browser.copyUrl");
@@ -1291,17 +1295,22 @@ export function BrowserPanelView({
 				<div className="browser-panel__toolbar" data-testid="browser-toolbar">
 							{runtimeDisconnected ? (
 								<div className="flex min-w-0 items-center gap-1.5 text-2xs text-destructive" data-testid="browser-runtime-alert" role="alert">
-									<span className="truncate">{t("browser.runtimeDisconnected")}</span>
-									<Button
-										className="shrink-0"
-										disabled={runtimeReconnectPending}
-										onClick={() => void reconnectRuntime()}
-										size="sm"
-										type="button"
-										variant="outline"
-									>
-										{t("browser.reconnectRuntime")}
-									</Button>
+									<span className="truncate" title={runtimeRejectedMessage ?? undefined}>
+										{runtimeRejectedMessage ?? t("browser.runtimeDisconnected")}
+									</span>
+									{/* Reconnecting sends the same token, which the daemon would refuse again. */}
+									{runtimeState.rejected ? null : (
+										<Button
+											className="shrink-0"
+											disabled={runtimeReconnectPending}
+											onClick={() => void reconnectRuntime()}
+											size="sm"
+											type="button"
+											variant="outline"
+										>
+											{t("browser.reconnectRuntime")}
+										</Button>
+									)}
 								</div>
 							) : null}
 							<BrowserControlTooltip label={t("browser.back")}>
@@ -1448,19 +1457,17 @@ export function BrowserPanelView({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
-				{poppedOut ? (
-					<BrowserControlTooltip label={t("browser.returnToPanel")}>
-						<Button
-							aria-label={t("browser.returnToPanel")}
-							onClick={() => onTogglePopOut(false)}
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<Minimize2 aria-hidden="true" className="size-icon-base" />
-						</Button>
-					</BrowserControlTooltip>
-				) : null}
+				<BrowserControlTooltip label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}>
+					<Button
+						aria-label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}
+						onClick={() => onTogglePopOut(!poppedOut)}
+						size="icon-sm"
+						type="button"
+						variant="ghost"
+					>
+						{poppedOut ? <Minimize2 aria-hidden="true" className="size-icon-base" /> : <Maximize2 aria-hidden="true" className="size-icon-base" />}
+					</Button>
+				</BrowserControlTooltip>
 				<DropdownMenu
 					onOpenChange={(open) => {
 						setControlsOpen(open);
@@ -1606,18 +1613,6 @@ export function BrowserPanelView({
 							</>
 						) : (
 							<>
-								{!poppedOut ? (
-									<>
-										<DropdownMenuItem
-											className="gap-2"
-											onSelect={() => onTogglePopOut(true)}
-										>
-										<Maximize2 aria-hidden="true" className="size-icon-base shrink-0" />
-											<span className="flex-1">{t("browser.popOut")}</span>
-										</DropdownMenuItem>
-										<div className="my-1 h-px bg-border" role="separator" />
-									</>
-								) : null}
 								<DropdownMenuItem
 									className="gap-2"
 									onSelect={(event) => {
@@ -1874,7 +1869,7 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					{tab.favicon ? (
 						<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
 					) : (
-						<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
+						<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
 					)}
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
@@ -1909,7 +1904,7 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				{tab.favicon ? (
 					<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
 				) : (
-					<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
+					<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
@@ -1925,6 +1920,19 @@ function agentActivityLabel(activity: BrowserViewModel["agentBrowserActivity"], 
 	const action = activity?.active ? activity.action : "";
 	if (!action) return appI18n.t("browser.agentUsing");
 	return appI18n.t("browser.agentAction", { verb: browserActionVerb(action) });
+}
+
+// The daemon's refusal codes (backend/internal/browserruntime/broker.go). Name a
+// cause only for a code that identifies one; any other refusal stays generic.
+function browserRuntimeRejectedKey(code: string | undefined): MessageKey {
+	switch (code) {
+		case "BROWSER_RUNTIME_TOKEN_REJECTED":
+			return "browser.runtimeRejectedToken";
+		case "BROWSER_RUNTIME_PROTOCOL_MISMATCH":
+			return "browser.runtimeRejectedVersion";
+		default:
+			return "browser.runtimeRejected";
+	}
 }
 
 function browserActionVerb(action: string): string {
@@ -2016,7 +2024,7 @@ function BrowserSuggestionIcon({ cachedFavicon, url, viewId }: { cachedFavicon?:
 		};
 	}, [cachedFavicon, directFavicon, nativeCompositionEnabled, url, viewId]);
 	if (!favicon) {
-		return <Globe2 aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
+		return <BrowserIcon aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
 	}
 	return (
 		<img

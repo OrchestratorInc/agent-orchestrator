@@ -1,3 +1,4 @@
+import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
 /**
  * GitHub-accurate rendered view of a `.md` file's current worktree content.
  *
@@ -13,10 +14,9 @@
  *     is no schema to get wrong — except ```mermaid fences, which render as
  *     diagrams through the shared `MermaidBlock` (strict mode plus DOMPurify,
  *     active-content tags forbidden), matching the chat surface.
- *   - Fenced code reuses the app's existing lowlight/highlight.js engine
- *     (`lib/code-highlight.ts`) rather than Shiki: the renderer's CSP
- *     (`script-src 'self'`, no `wasm-unsafe-eval`) blocks Shiki's default WASM
- *     engine.
+ *   - Fenced code reuses the app's Shiki engine (`lib/code-highlight.ts`).
+ *     Its JavaScript regex engine needs no WASM or CSP exception, and its
+ *     syntax classes use AO's existing palette in both themes.
  *
  * No explicit light/dark plumbing is needed for `github-markdown-css`: its
  * combined stylesheet follows `prefers-color-scheme`, and `main.ts` already
@@ -73,6 +73,7 @@ export function MarkdownFileView({
 	truncated,
 	version,
 	artifactOrigin,
+ snapshotSource,
 }: {
 	sessionId: string;
 	hostId?: string;
@@ -84,10 +85,11 @@ export function MarkdownFileView({
 	version: number;
 	/** Origin serving the artifact directory, for artifact markdown images. */
 	artifactOrigin?: string;
+ snapshotSource?: Extract<FilesSource,{kind:"snapshot"}>;
 }) {
 	const { t } = useTranslation();
 	const bodyRef = useRef<HTMLDivElement>(null);
-	const contextValue = useMemo(() => ({ sessionId, hostId, filePath, version, artifactOrigin }), [sessionId, hostId, filePath, version, artifactOrigin]);
+	const contextValue = useMemo(() => ({ sessionId, hostId, filePath, version, artifactOrigin, snapshotSource }), [sessionId, hostId, filePath, version, artifactOrigin,snapshotSource]);
 
 	// Heading slugs are unique per rendered file, not per document, and the Files
 	// tab expands many files at once — two open READMEs both containing

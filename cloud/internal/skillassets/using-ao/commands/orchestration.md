@@ -30,11 +30,16 @@ ao spawn --name "<label>" --prompt "<clear worker task>" [--agent <harness>] [--
   asks for a specific branch, or to resume work a stopped worker already
   pushed (`ao list --all` shows each worker's branch). A branch that already
   exists on the remote is checked out with its commits; a new name starts from
-  the default branch. It cannot be the project's default branch. Omit it for
-  ordinary tasks. To resume another worker's branch, `ao kill` that worker
-  first so the two never share the branch, and if it already opened a pull
-  request, tell the new worker to run `ao claim-pr <number>` instead of
-  opening another one.
+  the default branch. It cannot be the project's default branch, the session
+  prefix, a base branch of one of the project's repositories, or a name that
+  reads as another ref (`refs/...`, `origin/...`, `FETCH_HEAD`); a refused
+  name fails with `invalid_branch` and says why. Omit it for ordinary tasks.
+  A branch belongs to one live worker at a time. To resume another worker's
+  branch, first ask that worker to commit and push its work (unpushed work is
+  lost when it is killed), then `ao kill` it; spawning on a branch a live
+  worker still holds fails with `branch_in_use` naming that worker. If it
+  already opened a pull request, tell the new worker to run
+  `ao claim-pr <number>` instead of opening another one.
 
 Prints `spawned <session-id> (<status>)`. The worker provisions its own
 sandbox, checks out the project repository on a fresh branch (or the
@@ -53,11 +58,17 @@ ao list [--json] [--all]
 ```
 
 Shows the workers this orchestrator spawned: id, name, harness, branch,
-status, whether the worker runtime is connected, and its pull request (number
-and CI state) once one exists. Terminated workers are hidden unless `--all`.
+status, whether the worker runtime is connected, its pull request (number
+and CI state) once one exists, and the files in its artifact directory once it
+has written any. Terminated workers are hidden unless `--all`.
 
 `--json` includes per-PR detail (`prs`: url, number, state, ci, review,
-mergeability, source/target branch) plus `activityState` and `isTerminated`.
+mergeability, source/target branch), the worker's artifact files
+(`artifactCount`, `artifactsUpdatedAt`, and `artifactFiles` with path, kind,
+size, and updatedAt for the most recently changed: at most 10, fewer when
+their paths are very long, with `artifactFilesTruncated` set when there are
+more), plus `activityState` and
+`isTerminated`.
 
 Status vocabulary: `working`, `idle`, `needs_input`, `pr_open`, `draft`,
 `ci_failed`, `review_pending`, `changes_requested`, `commented`, `approved`,

@@ -106,6 +106,23 @@ describe("native runtime resources", () => {
 		expect(extraResourcesForPlatform("win32")).not.toContain("wake-helper");
 	});
 
+	it("bundles cloudflared only on macOS", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("cloudflared");
+		expect(extraResourcesForPlatform("linux")).not.toContain("cloudflared");
+		expect(extraResourcesForPlatform("win32")).not.toContain("cloudflared");
+	});
+
+	it("fails packaging when cloudflared was not copied into Resources", async () => {
+		const resources = join(fixtureDir, "AO.app", "Contents", "Resources");
+		mkdirSync(join(resources, "update-helper"), { recursive: true });
+		mkdirSync(join(resources, "wake-helper"), { recursive: true });
+		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
+		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		const hook = config.hooks?.postPackage;
+		if (typeof hook !== "function") throw new Error("postPackage hook missing");
+		await expect(hook(config, { platform: "darwin", arch: "arm64", outputPaths: [fixtureDir] })).rejects.toThrow("packaged cloudflared missing");
+	});
+
 	it.each(["darwin", "linux"] as const)("bundles tmux on %s", (platform) => {
 		expect(extraResourcesForPlatform(platform)).toContain("tmux");
 	});
