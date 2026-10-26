@@ -12,6 +12,35 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
+func TestFileOnlyLegacyReceiptRetryKeepsItsQueuedPrompt(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	n := 1
+	ref := ports.ChatFileReference{ID: "capture", SessionID: string(testSession), Path: "a.ts", Source: ports.ChatFileReferenceSource{Kind: "workspace"}, Side: "file", Line: 1, EndLine: 1, Lines: []ports.ChatFileReferenceLine{{Kind: "context", NewNo: &n, Text: "frozen code"}}}
+	msg := ports.ChatUserMessage{ClientMessageID: "legacy-file-only", Text: "question", Content: []ports.ChatContent{{Type: "file_reference", FileReference: &ref}}}
+	queued, err := h.svc.Send(ctx, testSession, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg.Content[0].Text = chatsvc.FileReferenceQuotedPath
+	duplicate, err := h.svc.Send(ctx, testSession, msg)
+	if err != nil || duplicate.ID != "" {
+		t.Fatalf("legacy retry duplicated/conflicted: %+v %v", duplicate, err)
+	}
+	if _, err = h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatal(err)
+	}
+	calls := provider.steers()
+	prompt := calls[len(calls)-1].msg.Text
+	if !strings.Contains(prompt, "a.ts#L1-L1") || strings.Contains(prompt, `"a.ts"#L1-L1`) {
+		t.Fatal("retry reformatted the frozen queued prompt")
+	}
+	ref.Lines[0].Text = "changed code"
+	if _, err = h.svc.Send(ctx, testSession, msg); !errors.Is(err, domain.ErrClientMessageConflict) {
+		t.Fatalf("changed capture reused receipt: %v", err)
+	}
+}
+
 func TestPromoteQueuedFileCaptureFormatsOnceAndRetainsProvenance(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()
