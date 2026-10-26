@@ -33,6 +33,12 @@ vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useCloudArtifacts")>(),
 	useCloudArtifactAccess: (session: Pick<WorkspaceSession, "cloud">) => ({ data: session.cloud ? "https://cp.test/artifact-files/token/" : undefined }),
 }));
+vi.mock("./CloudArtifactFrame", () => ({
+	CloudArtifactFrame: ({ title, url }: { title: string; url: string }) => <iframe data-testid="cloud-artifact-preview" title={title} src={url} />,
+}));
+vi.mock("./ArtifactFileView", () => ({
+	ArtifactFileView: ({ cloud, rawUrl, readOnly }: { cloud?: boolean; rawUrl?: string; readOnly?: boolean }) => <div data-testid="cloud-file-preview" data-cloud={cloud} data-raw-url={rawUrl} data-read-only={readOnly} />,
+}));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
@@ -244,6 +250,24 @@ describe("ArtifactsView", () => {
 		await waitFor(() => expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "notes.md"));
 	});
 
+
+	it.each(["html", "markdown"] as const)("previews a cloud %s artifact using cloud access", async (kind) => {
+		const name = kind === "html" ? "report.html" : "notes.md";
+		const cloud = session("cloud-1", "Cloud notes", [{ name, kind, updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
+		const dialog = screen.getByRole("dialog", { name });
+		if (kind === "html") {
+			expect(within(dialog).getByTestId("cloud-artifact-preview")).toHaveAttribute("src", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
+		} else {
+			const preview = within(dialog).getByTestId("cloud-file-preview");
+			expect(preview).toHaveAttribute("data-cloud", "true");
+			expect(preview).toHaveAttribute("data-read-only", "true");
+			expect(preview).toHaveAttribute("data-raw-url", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
+		}
+	});
 
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
 		const user = userEvent.setup();
