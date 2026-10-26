@@ -169,7 +169,7 @@ describe("createEventTransport", () => {
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "review-1"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-a"] }, { cancelRefetch: false });
 		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", {
-			params: { path: { sessionId: "same" }, query: { beforeSequence: undefined, limit: 200 } },
+			params: { path: { sessionId: "same" }, query: { beforeSequence: undefined, limit: 200, compactDetails: "1", dedupeBodies: "1" } },
 		}));
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-b"] }, { cancelRefetch: false });
