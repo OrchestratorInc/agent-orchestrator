@@ -33,6 +33,7 @@ type WorkOSVerifier interface {
 type WorkOSProfile struct {
 	Email       string
 	DisplayName string
+	AvatarURL   string
 	LegacyID    string
 }
 
@@ -117,6 +118,7 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 	// copied from an earlier WorkOS environment carries that ID as external_id,
 	// so they keep their account, organizations, and repository grants.
 	externalID := claims.Subject
+	var avatarURL string
 	if v.profiles != nil {
 		profile, err := v.profiles(ctx, claims.Subject)
 		if err != nil {
@@ -128,6 +130,7 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 		if profile.DisplayName != "" {
 			displayName = strings.TrimSpace(profile.DisplayName)
 		}
+		avatarURL = strings.TrimSpace(profile.AvatarURL)
 		if profile.LegacyID != "" {
 			externalID = profile.LegacyID
 		}
@@ -154,6 +157,7 @@ func (v *OIDCVerifier) Verify(ctx context.Context, token string) (domain.Princip
 		ExternalID:      externalID,
 		Email:           email,
 		DisplayName:     displayName,
+		AvatarURL:       avatarURL,
 		ExternalOrgID:   orgID,
 		OrgName:         strings.TrimSpace(organization.DisplayName),
 		OrgRole:         normalizeOrganizationRole(claims.Role),

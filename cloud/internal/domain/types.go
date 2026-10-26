@@ -16,6 +16,7 @@ type Principal struct {
 	ExternalID    string
 	Email         string
 	DisplayName   string
+	AvatarURL     string
 	ExternalOrgID string
 	OrgName       string
 	OrgRole       string

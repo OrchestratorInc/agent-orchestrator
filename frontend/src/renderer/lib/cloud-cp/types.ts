@@ -1545,6 +1545,8 @@ export interface CloudCpComposerAnswer {
 export interface CloudCpSessionViewer {
 	userId: string;
 	name: string;
+	/** Profile photo from the sign-in provider, absent when unavailable. */
+	avatarUrl?: string;
 	/** member: an organization member; editor/viewer: a share grant's role. */
 	role: "member" | "editor" | "viewer";
 }
@@ -1569,6 +1571,8 @@ export interface CloudCpSessionLive {
 export interface CloudCpSessionParticipant {
 	userId: string;
 	name: string;
+	/** Profile photo from the sign-in provider, absent when unavailable. */
+	avatarUrl?: string;
 	/** "owner" is the session's creator. */
 	role: "owner" | "member" | "editor" | "viewer";
 	/** Whether they have the session open now. */

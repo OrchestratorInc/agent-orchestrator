@@ -96,7 +96,7 @@ func (s *Store) SessionLiveState(
 func listSessionViewersTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) ([]domain.SessionViewer, error) {
 	// A person with several streams appears once, with their strongest role.
 	rows, err := tx.Query(ctx,
-		`SELECT viewer.user_id::text, COALESCE(person.display_name, ''),
+		`SELECT viewer.user_id::text, COALESCE(person.display_name, ''), COALESCE(person.avatar_url, ''),
 			CASE
 				WHEN bool_or(viewer.role = 'member') THEN 'member'
 				WHEN bool_or(viewer.role = 'editor') THEN 'editor'
@@ -106,7 +106,7 @@ func listSessionViewersTx(ctx context.Context, tx pgx.Tx, orgID, sessionID strin
 		LEFT JOIN ao_users person ON person.id = viewer.user_id
 		WHERE viewer.org_id = $1 AND viewer.session_id = $2
 		  AND viewer.seen_at > now() - $3::interval
-		GROUP BY viewer.user_id, person.display_name
+		GROUP BY viewer.user_id, person.display_name, person.avatar_url
 		ORDER BY min(viewer.connected_at), viewer.user_id`,
 		orgID, sessionID, intervalString(SessionViewerTTL),
 	)
@@ -117,7 +117,7 @@ func listSessionViewersTx(ctx context.Context, tx pgx.Tx, orgID, sessionID strin
 	viewers := []domain.SessionViewer{}
 	for rows.Next() {
 		var viewer domain.SessionViewer
-		if err := rows.Scan(&viewer.UserID, &viewer.Name, &viewer.Role); err != nil {
+		if err := rows.Scan(&viewer.UserID, &viewer.Name, &viewer.AvatarURL, &viewer.Role); err != nil {
 			return nil, err
 		}
 		viewers = append(viewers, viewer)

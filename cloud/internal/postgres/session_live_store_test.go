@@ -29,6 +29,10 @@ func TestSessionViewersJoinAndLeave(t *testing.T) {
 	ctx := context.Background()
 	owner := domain.Principal{UserID: fixture.userID, Provider: "local"}
 	guest := shareSessionWith(t, store, admin, fixture, "editor", "Guest Editor")
+	const photo = "https://lh3.googleusercontent.com/guest"
+	if _, err := admin.Exec(ctx, `UPDATE ao_users SET avatar_url = $2 WHERE id = $1`, guest.UserID, photo); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := liveViewers(t, store, owner, fixture); len(got) != 0 {
 		t.Fatalf("viewers before anyone joined = %+v", got)
@@ -44,7 +48,7 @@ func TestSessionViewersJoinAndLeave(t *testing.T) {
 	}
 	want := []domain.SessionViewer{
 		{UserID: fixture.userID, Name: "Notification Test", Role: "member"},
-		{UserID: guest.UserID, Name: "Guest Editor", Role: "editor"},
+		{UserID: guest.UserID, Name: "Guest Editor", AvatarURL: photo, Role: "editor"},
 	}
 	if got := liveViewers(t, store, owner, fixture); !reflect.DeepEqual(got, want) {
 		t.Fatalf("viewers = %+v, want %+v", got, want)

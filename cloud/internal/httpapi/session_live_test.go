@@ -215,7 +215,7 @@ func TestEventStreamWithoutLiveSendsNoLiveFrames(t *testing.T) {
 func TestLiveEventStreamTracksViewers(t *testing.T) {
 	t.Parallel()
 	store := newLiveTestStore()
-	alice := domain.SessionViewer{UserID: "user-1", Name: "Alice", Role: "member"}
+	alice := domain.SessionViewer{UserID: "user-1", Name: "Alice", AvatarURL: "https://lh3.googleusercontent.com/alice", Role: "member"}
 	bob := domain.SessionViewer{UserID: "user-2", Name: "Bob", Role: "editor"}
 	store.setViewers(alice)
 	server, httpServer := liveTestServer(t, store)
@@ -225,7 +225,7 @@ func TestLiveEventStreamTracksViewers(t *testing.T) {
 	if first.You != "user-1" {
 		t.Fatalf("first frame names the stream's user %q, want user-1", first.You)
 	}
-	if len(first.Viewers) != 1 || first.Viewers[0] != (sessionViewerResponse{UserID: "user-1", Name: "Alice", Role: "member"}) {
+	if len(first.Viewers) != 1 || first.Viewers[0] != (sessionViewerResponse{UserID: "user-1", Name: "Alice", AvatarURL: "https://lh3.googleusercontent.com/alice", Role: "member"}) {
 		t.Fatalf("first frame viewers = %+v", first.Viewers)
 	}
 	joined := store.joinedIDs()

@@ -17,11 +17,12 @@ type sessionParticipantsStore interface {
 }
 
 type sessionParticipantResponse struct {
-	UserID  string `json:"userId"`
-	Name    string `json:"name"`
-	Role    string `json:"role"`
-	Present bool   `json:"present"`
-	State   string `json:"state"`
+	UserID    string `json:"userId"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	Role      string `json:"role"`
+	Present   bool   `json:"present"`
+	State     string `json:"state"`
 }
 
 type sharedSessionParticipantsResponse struct {
@@ -68,7 +69,7 @@ func (s *Server) listSessionParticipants(w http.ResponseWriter, r *http.Request)
 		entry := sharedSessionParticipantsResponse{SessionID: sessionID, Participants: make([]sessionParticipantResponse, 0, len(people))}
 		for _, person := range people {
 			entry.Participants = append(entry.Participants, sessionParticipantResponse{
-				UserID: person.UserID, Name: person.Name, Role: person.Role, Present: person.Present, State: person.State,
+				UserID: person.UserID, Name: person.Name, AvatarURL: person.AvatarURL, Role: person.Role, Present: person.Present, State: person.State,
 			})
 		}
 		sessions = append(sessions, entry)

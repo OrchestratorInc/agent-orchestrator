@@ -74,9 +74,10 @@ func (s *Server) HandleSessionLiveNotify(sessionID string) {
 }
 
 type sessionViewerResponse struct {
-	UserID string `json:"userId"`
-	Name   string `json:"name"`
-	Role   string `json:"role"`
+	UserID    string `json:"userId"`
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	Role      string `json:"role"`
 }
 
 type sessionLiveResponse struct {
@@ -114,7 +115,7 @@ func toSessionLiveResponse(state domain.SessionLiveState) sessionLiveResponse {
 		CanConfigure: state.CanConfigure,
 	}
 	for _, viewer := range state.Viewers {
-		response.Viewers = append(response.Viewers, sessionViewerResponse{UserID: viewer.UserID, Name: viewer.Name, Role: viewer.Role})
+		response.Viewers = append(response.Viewers, sessionViewerResponse{UserID: viewer.UserID, Name: viewer.Name, AvatarURL: viewer.AvatarURL, Role: viewer.Role})
 	}
 	return response
 }

@@ -8,6 +8,8 @@ type SessionViewer struct {
 	// Name is the person's display name, never an email address, since a
 	// shared session shows it to people outside the organization.
 	Name string
+	// AvatarURL is the profile photo from the sign-in provider, empty if absent.
+	AvatarURL string
 	// Role is "member" for an organization member, otherwise the share
 	// grant's "editor" or "viewer".
 	Role string
@@ -64,6 +66,8 @@ type SessionParticipant struct {
 	UserID string
 	// Name is the display name, never an email address.
 	Name string
+	// AvatarURL is the profile photo from the sign-in provider, empty if absent.
+	AvatarURL string
 	// Role is "owner" for the session's creator, "member" for another member
 	// of its organization who has it open, else the share grant's "editor" or
 	// "viewer".

@@ -6444,6 +6444,9 @@ components:
         name:
           type: string
           description: Display name. Never an email address.
+        avatarUrl:
+          type: string
+          description: Profile photo from the sign-in provider. Omitted when unavailable.
         role:
           type: string
           enum: [member, editor, viewer]
@@ -6498,6 +6501,9 @@ components:
         name:
           type: string
           description: Display name, never an email address.
+        avatarUrl:
+          type: string
+          description: Profile photo from the sign-in provider. Omitted when unavailable.
         role:
           type: string
           enum: [owner, member, editor, viewer]

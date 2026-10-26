@@ -4,7 +4,7 @@
 
 import type { CloudCpSessionLive, CloudCpSessionParticipant } from "./cloud-cp";
 
-export type SessionPerson = Pick<CloudCpSessionParticipant, "userId" | "name" | "present" | "state">;
+export type SessionPerson = Pick<CloudCpSessionParticipant, "userId" | "name" | "avatarUrl" | "present" | "state">;
 
 /** At most this many circles show; the rest fold into "+N". */
 export const SESSION_PEOPLE_SHOWN = 2;
@@ -28,6 +28,7 @@ export function sessionPeopleFromLive(live: CloudCpSessionLive): SessionPerson[]
 	return live.viewers.map((viewer) => ({
 		userId: viewer.userId,
 		name: viewer.name,
+		...(viewer.avatarUrl ? { avatarUrl: viewer.avatarUrl } : {}),
 		present: true,
 		state: live.composer.holder?.userId === viewer.userId ? "working" : waiting.has(viewer.userId) ? "waiting" : "idle",
 	}));

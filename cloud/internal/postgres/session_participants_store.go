@@ -51,7 +51,7 @@ func sessionParticipantsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID stri
 	// A grant for this session wins over one for its whole project.
 	rows, err := tx.Query(ctx,
 		`SELECT DISTINCT ON (grant_row.user_id)
-			grant_row.user_id::text, COALESCE(person.display_name, ''), grant_row.role, grant_row.redeemed_at
+			grant_row.user_id::text, COALESCE(person.display_name, ''), COALESCE(person.avatar_url, ''), grant_row.role, grant_row.redeemed_at
 		FROM ao_project_share_grants grant_row
 		JOIN ao_sessions session_row
 		  ON session_row.org_id = grant_row.org_id AND session_row.project_id = grant_row.project_id
@@ -71,7 +71,7 @@ func sessionParticipantsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID stri
 	var guests []guest
 	for rows.Next() {
 		var g guest
-		if err := rows.Scan(&g.participant.UserID, &g.participant.Name, &g.participant.Role, &g.joinedAt); err != nil {
+		if err := rows.Scan(&g.participant.UserID, &g.participant.Name, &g.participant.AvatarURL, &g.participant.Role, &g.joinedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -88,12 +88,12 @@ func sessionParticipantsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID stri
 
 	var owner domain.SessionParticipant
 	if err := tx.QueryRow(ctx,
-		`SELECT COALESCE(session_row.created_by_user_id::text, ''), COALESCE(person.display_name, '')
+		`SELECT COALESCE(session_row.created_by_user_id::text, ''), COALESCE(person.display_name, ''), COALESCE(person.avatar_url, '')
 		FROM ao_sessions session_row
 		LEFT JOIN ao_users person ON person.id = session_row.created_by_user_id
 		WHERE session_row.org_id = $1 AND session_row.id = $2`,
 		orgID, sessionID,
-	).Scan(&owner.UserID, &owner.Name); err != nil {
+	).Scan(&owner.UserID, &owner.Name, &owner.AvatarURL); err != nil {
 		return nil, err
 	}
 	owner.Role = "owner"
@@ -122,7 +122,7 @@ func sessionParticipantsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID stri
 	}
 	for _, viewer := range viewers {
 		if _, seen := index[viewer.UserID]; !seen {
-			add(domain.SessionParticipant{UserID: viewer.UserID, Name: viewer.Name, Role: viewer.Role})
+			add(domain.SessionParticipant{UserID: viewer.UserID, Name: viewer.Name, AvatarURL: viewer.AvatarURL, Role: viewer.Role})
 		}
 		participants[index[viewer.UserID]].Present = true
 	}

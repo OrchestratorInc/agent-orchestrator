@@ -46,7 +46,7 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 					className={cn(circleClassName, index > 0 && "-ml-1.5", person.state === "working" ? "ring-status-working" : ringClassName)}
 					data-person-state={person.state}
 				>
-					{personInitials(person.name)}
+					<SessionPersonAvatar key={person.avatarUrl} person={person} />
 				</span>
 			))}
 			{more > 0 ? (
@@ -90,6 +90,20 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 			</HoverCardContent>
 		</HoverCard>
 	);
+}
+
+/** The sign-in photo, with initials when it is absent or cannot load. */
+function SessionPersonAvatar({ person }: { person: SessionPerson }) {
+	const [broken, setBroken] = useState(false);
+	return person.avatarUrl && !broken ? (
+		<img
+			src={person.avatarUrl}
+			alt=""
+			className="size-full rounded-full object-cover"
+			referrerPolicy="no-referrer"
+			onError={() => setBroken(true)}
+		/>
+	) : personInitials(person.name);
 }
 
 /**

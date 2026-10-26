@@ -21,7 +21,7 @@ func (s *participantsTestStore) SessionParticipants(_ context.Context, _ domain.
 	s.asked = sessionIDs
 	return map[string][]domain.SessionParticipant{
 		composerTestSession: {
-			{UserID: "u-owner", Name: "Vaibhaav", Role: "owner", State: "idle"},
+			{UserID: "u-owner", Name: "Vaibhaav", AvatarURL: "https://lh3.googleusercontent.com/owner", Role: "owner", State: "idle"},
 			{UserID: "u-guest", Name: "Vaanya", Role: "editor", Present: true, State: "working"},
 		},
 	}, nil
@@ -53,7 +53,7 @@ func TestListSessionParticipantsRoute(t *testing.T) {
 		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
 	}
 	want := `{"sessions":[{"sessionId":"` + composerTestSession + `","participants":[` +
-		`{"userId":"u-owner","name":"Vaibhaav","role":"owner","present":false,"state":"idle"},` +
+		`{"userId":"u-owner","name":"Vaibhaav","avatarUrl":"https://lh3.googleusercontent.com/owner","role":"owner","present":false,"state":"idle"},` +
 		`{"userId":"u-guest","name":"Vaanya","role":"editor","present":true,"state":"working"}]}]}`
 	if got := strings.TrimSpace(recorder.Body.String()); got != want {
 		t.Fatalf("body\n got %s\nwant %s", got, want)

@@ -21,7 +21,7 @@ describe("session people", () => {
 			type: "session.live",
 			viewers: [
 				{ userId: "a", name: "Alice", role: "member" },
-				{ userId: "b", name: "Bob", role: "editor" },
+				{ userId: "b", name: "Bob", avatarUrl: "https://lh3.googleusercontent.com/bob", role: "editor" },
 				{ userId: "c", name: "Carol", role: "viewer" },
 			],
 			composer: { holder: { userId: "b", name: "Bob" }, epoch: 3, waitlist: [{ userId: "a", name: "Alice" }] },
@@ -29,7 +29,7 @@ describe("session people", () => {
 		};
 		expect(sessionPeopleFromLive(live)).toEqual([
 			{ userId: "a", name: "Alice", present: true, state: "waiting" },
-			{ userId: "b", name: "Bob", present: true, state: "working" },
+			{ userId: "b", name: "Bob", avatarUrl: "https://lh3.googleusercontent.com/bob", present: true, state: "working" },
 			{ userId: "c", name: "Carol", present: true, state: "idle" },
 		]);
 	});

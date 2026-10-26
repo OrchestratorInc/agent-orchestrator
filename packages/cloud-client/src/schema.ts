@@ -3406,6 +3406,8 @@ export interface components {
             userId: string;
             /** @description Display name. Never an email address. */
             name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
             /**
              * @description member is an organization member; editor and viewer are share-grant roles.
              * @enum {string}
@@ -3440,6 +3442,8 @@ export interface components {
             userId: string;
             /** @description Display name, never an email address. */
             name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
             /** @enum {string} */
             role: "owner" | "member" | "editor" | "viewer";
             /** @description Whether they have the session open now. */
