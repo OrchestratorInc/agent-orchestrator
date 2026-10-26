@@ -91,6 +91,7 @@ vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import FleetScreen from "../app/(tabs)/(workers)/index";
 import { WorkerBoardList } from "./worker-board-list";
+import { WorkerEnvironmentFilter } from "./worker-environment-filter";
 
 let renderer: ReactTestRenderer;
 
@@ -377,20 +378,26 @@ describe("Workers spawn action", () => {
 });
 
 describe("Workers environment chips", () => {
-	it("shows the machine chips only once two machines are paired", () => {
+	// Material's filter chips on Android (worker-environment-filter.android.test);
+	// iOS draws nothing for them and keeps the choice in the header's menu.
+	it("offers the machine chips only once two machines are paired", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findAllByProps({ testID: "worker-environment-strip" })).toHaveLength(1);
+		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(1);
+		expect(renderer.root.findAllByProps({ testID: "worker-environment-strip" })).toHaveLength(0);
 
 		fixtures.hostStates = fixtures.hostStates.slice(0, 1);
 		act(() => renderer.update(<FleetScreen />));
-		expect(renderer.root.findAllByProps({ testID: "worker-environment-strip" })).toHaveLength(0);
+		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(0);
 	});
 
 	it("lists the machine chips by name", () => {
 		fixtures.hostStates = [snapshot({ hostId: "z", name: "Zeta" }), snapshot({ hostId: "a", name: "alpha" })];
 		act(() => { renderer = create(<FleetScreen />); });
-		const chips = renderer.root.findAll((node) => (node.type as unknown) === "Pressable" && /^worker-environment-chip-(?!all$)/.test(node.props.testID ?? ""));
-		expect(chips.map((chip) => chip.props.testID)).toEqual(["worker-environment-chip-a", "worker-environment-chip-z"]);
+		const chips = renderer.root.findByType(WorkerEnvironmentFilter);
+		expect(chips.props.environments.map((environment: { id: string }) => environment.id)).toEqual(["a", "z"]);
+		act(() => chips.props.onSelectEnvironment("z"));
+		expect(selectedEnvironment()).toBe("Zeta");
+		expect(renderer.root.findByType(WorkerEnvironmentFilter).props.selectedEnvironmentId).toBe("z");
 	});
 });
 

@@ -93,14 +93,3 @@ export function sortWorkerEnvironments<T extends WorkerEnvironment>(environments
 export function showsEnvironmentFilter(environments: readonly WorkerEnvironment[]): boolean {
 	return environments.length > 1;
 }
-
-/**
- * Where a horizontal chip row must scroll so a chip is fully visible with `inset`
- * of breathing room, or null when it already is.
- */
-export function chipRevealOffset(chip: { x: number; width: number }, view: { offset: number; width: number; inset: number }): number | null {
-	if (chip.x - view.inset < view.offset) return Math.max(0, chip.x - view.inset);
-	const end = chip.x + chip.width + view.inset;
-	if (end > view.offset + view.width) return end - view.width;
-	return null;
-}

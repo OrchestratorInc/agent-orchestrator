@@ -9,7 +9,6 @@ import {
 	workerProjectForEnvironment,
 	workerProjectLabel,
 	workerProjectOptions,
-	chipRevealOffset,
 	showsEnvironmentFilter,
 	sortWorkerEnvironments,
 } from "./worker-controls";
@@ -130,19 +129,5 @@ describe("showsEnvironmentFilter", () => {
 		expect(showsEnvironmentFilter([])).toBe(false);
 		expect(showsEnvironmentFilter([{ id: "h1", name: "Studio" }])).toBe(false);
 		expect(showsEnvironmentFilter([{ id: "h1", name: "Studio" }, { id: "h2", name: "Laptop" }])).toBe(true);
-	});
-});
-
-describe("chipRevealOffset", () => {
-	const view = { offset: 100, width: 300, inset: 16 };
-	it("leaves a fully visible chip alone", () => {
-		expect(chipRevealOffset({ x: 150, width: 40 }, view)).toBeNull();
-	});
-	it("scrolls back so a chip cut off on the left shows with its inset", () => {
-		expect(chipRevealOffset({ x: 90, width: 40 }, view)).toBe(74);
-		expect(chipRevealOffset({ x: 10, width: 40 }, view)).toBe(0);
-	});
-	it("scrolls forward so a chip cut off on the right ends one inset from the edge", () => {
-		expect(chipRevealOffset({ x: 380, width: 60 }, view)).toBe(156);
 	});
 });
