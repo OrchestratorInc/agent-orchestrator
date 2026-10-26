@@ -1466,9 +1466,14 @@ describe("local conversation deltas", () => {
 		const refresh = refreshLocalConversation(queryClient, "ao-1");
 		const pagination = observer.fetchNextPage({ cancelRefetch: false });
 		expect(getMock).toHaveBeenCalledTimes(2);
-		const delta = { ...WIRE, continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, changeCursor: 11, afterSequence: 4, latestSequence: 4, oldestSequence: 2, hasMoreBefore: true,
+		const wire: Parameters<typeof toSnapshot>[0] = {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready",
+			continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0,
+			latestSequence: 3, oldestSequence: 2, hasMoreBefore: true, settings: {}, turns: [], messages: [], activities: [],
+		};
+		const delta: Parameters<typeof toSnapshot>[0] = { ...wire, changeCursor: 11, afterSequence: 4, latestSequence: 4, oldestSequence: 2, hasMoreBefore: true,
 			messages: [{ kind: "message" as const, id: "final-message", turnId: "turn-1", sequence: 4, revision: 2, role: "assistant" as const, origin: "provider" as const, createdAt: "2026-10-26T00:00:00Z", editAvailable: false, text: "finished", streaming: false }] };
-		const older = { ...WIRE, continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, oldestSequence: 1, hasMoreBefore: false,
+		const older: Parameters<typeof toSnapshot>[0] = { ...wire, oldestSequence: 1, hasMoreBefore: false,
 			messages: [{ kind: "message" as const, id: "older-message", turnId: "turn-1", sequence: 1, revision: 1, role: "user" as const, origin: "human" as const, createdAt: "2026-10-26T00:00:00Z", editAvailable: false, text: "history", streaming: false }] };
 		if (order === "delta-first") {
 			deltaResponse.resolve({ data: delta, error: undefined });
