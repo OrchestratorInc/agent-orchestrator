@@ -15,11 +15,14 @@ import (
 )
 
 var (
+	// ErrFileReferenceInvalid rejects invalid or foreign-session captured context.
 	ErrFileReferenceInvalid = errors.New("invalid captured file reference")
-	ErrAnnotationLimit      = errors.New("at most eight annotations may be attached")
+	// ErrAnnotationLimit rejects more than eight combined chat/file annotations.
+	ErrAnnotationLimit = errors.New("at most eight annotations may be attached")
 )
 
-// Stored in the existing content text field, not in the public reference DTO.
+// FileReferenceQuotedPath marks the prompt format in the existing content text
+// field, not in the public reference DTO.
 // Empty text identifies receipts dispatched by older daemons.
 const FileReferenceQuotedPath = "ao_file_reference_quoted_path_v1"
 
