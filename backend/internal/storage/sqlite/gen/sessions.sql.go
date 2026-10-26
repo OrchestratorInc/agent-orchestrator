@@ -990,6 +990,52 @@ func (q *Queries) ListChatHibernationCandidates(ctx context.Context) ([]domain.S
 	return items, nil
 }
 
+const listPreviewPollSessions = `-- name: ListPreviewPollSessions :many
+SELECT id, kind, workspace_path, preview_url, preview_revision
+FROM sessions
+WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY project_id, num
+`
+
+type ListPreviewPollSessionsRow struct {
+	ID              domain.SessionID
+	Kind            domain.SessionKind
+	WorkspacePath   string
+	PreviewURL      string
+	PreviewRevision int64
+}
+
+// Live worker sessions with only the columns the preview poller reads. The
+// poller runs every 250 ms, so it must not decode whole session rows.
+func (q *Queries) ListPreviewPollSessions(ctx context.Context) ([]ListPreviewPollSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPreviewPollSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPreviewPollSessionsRow{}
+	for rows.Next() {
+		var i ListPreviewPollSessionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.WorkspacePath,
+			&i.PreviewURL,
+			&i.PreviewRevision,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionsByProject = `-- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
