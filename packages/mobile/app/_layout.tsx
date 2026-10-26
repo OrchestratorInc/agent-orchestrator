@@ -53,6 +53,7 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 	{ name: "sheets/conversation-usage", detents: "fitToContents" },
 	{ name: "sheets/composer-picker", detents: [0.6, 0.95] },
 	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
+	{ name: "files/[sessionId]/review", detents: [0.5, 1] },
 ];
 
 // The manual-connect form — the only sheet with text inputs, and the only one

@@ -1,6 +1,7 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppSymbol } from "../../../lib/AppSymbol";
 import { hostRouteMatches } from "../../../lib/hostRoute";
 import { Feather } from "../../../lib/icons";
@@ -13,9 +14,11 @@ import { ToastHost } from "../../../lib/Toast";
 import { font, fontScaleCap, iconSize, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
-import { LineCounts, ReviewTray } from "../../../lib/files/components";
+import { LineCounts } from "../../../lib/files/components";
 import { FolderList, SearchResults, useWorkspaceSearch } from "../../../lib/files/FolderList";
 import { changeGroups, plural, type ChangeEntry } from "../../../lib/files/model";
+import { REVIEW_BUTTON_CLEARANCE, REVIEW_BUTTON_RISE } from "../../../lib/files/ReviewButton.types";
+import { ReviewButton } from "../../../lib/files/ReviewButton";
 import { reviewKey } from "../../../lib/files/reviewStore";
 import { ChangeRow, FileRowDivider } from "../../../lib/files/rows";
 import { SegmentedChoice } from "../../../lib/files/SegmentedChoice";
@@ -49,7 +52,8 @@ function SessionFilesContent() {
 	const key = reviewKey(currentHostId, id);
 	const review = useReviewSender(config, key, id);
 	const toast = useToast();
-	const { openFile, openFolder, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
+	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
+	const insets = useSafeAreaInsets();
 	const search = useWorkspaceSearch(hostMatches && tab === "all" ? config : null, id, query);
 	const groups = useMemo(() => manifest ? changeGroups(manifest) : [], [manifest]);
 	const commentsByPath = useMemo(() => {
@@ -81,7 +85,7 @@ function SessionFilesContent() {
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
 
 	const summary = manifest?.summary;
-	const bottomInset = review.comments.length ? 96 : space.xxl;
+	const bottomInset = review.comments.length ? REVIEW_BUTTON_CLEARANCE : space.xxl;
 	const header = (
 		<View style={styles.header}>
 			<SegmentedChoice<Tab>
@@ -152,8 +156,8 @@ function SessionFilesContent() {
 				/>
 			) : null}
 			{body}
-			<ReviewTray comments={review.comments} sending={review.sending} error={review.error} onSend={() => void review.send()} onRemove={review.remove} />
-			<ToastHost toast={toast} />
+			<ReviewButton count={review.comments.length} onPress={openReview} />
+			<ToastHost toast={toast} bottomOffset={review.comments.length ? insets.bottom + REVIEW_BUTTON_RISE : undefined} />
 		</View>
 	);
 }

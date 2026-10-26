@@ -26,3 +26,8 @@ const drawables: Record<FileIconName, ImageSourcePropType> = {
 export function fileIcon(name: FileIconName): ToolbarIcon {
 	return drawables[name];
 }
+
+/** The bundled drawable itself, for Compose `Icon`. Import it from this file, in .android files only. */
+export function fileDrawable(name: FileIconName): ImageSourcePropType {
+	return drawables[name];
+}

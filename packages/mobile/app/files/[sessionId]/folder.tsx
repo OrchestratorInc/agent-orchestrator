@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect } from "react";
 import { StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { hostRouteMatches } from "../../../lib/hostRoute";
 import { Spinner } from "../../../lib/Spinner";
 import { HostScope, useApp } from "../../../lib/store";
@@ -10,10 +11,11 @@ import { ToastHost } from "../../../lib/Toast";
 import { space } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
-import { ReviewTray } from "../../../lib/files/components";
 import type { FileRowAction } from "../../../lib/files/FileRowMenu.types";
 import { FolderList } from "../../../lib/files/FolderList";
 import { splitPath } from "../../../lib/files/model";
+import { REVIEW_BUTTON_CLEARANCE, REVIEW_BUTTON_RISE } from "../../../lib/files/ReviewButton.types";
+import { ReviewButton } from "../../../lib/files/ReviewButton";
 import { reviewKey } from "../../../lib/files/reviewStore";
 import { useFileActions } from "../../../lib/files/useFileActions";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
@@ -42,7 +44,8 @@ function SessionFolderContent() {
 	const styles = useThemedStyles(makeStyles);
 	const review = useReviewSender(config, reviewKey(currentHostId, id), id);
 	const toast = useToast();
-	const { openFile, openFolder, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
+	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
+	const insets = useSafeAreaInsets();
 	const name = splitPath(dir).name || "Worktree";
 
 	useLayoutEffect(() => {
@@ -64,13 +67,13 @@ function SessionFolderContent() {
 				config={config}
 				sessionId={id}
 				dir={dir}
-				bottomInset={review.comments.length ? 96 : space.xxl}
+				bottomInset={review.comments.length ? REVIEW_BUTTON_CLEARANCE : space.xxl}
 				onOpenFile={openPath}
 				onOpenFolder={openFolder}
 				onAction={pathAction}
 			/>
-			<ReviewTray comments={review.comments} sending={review.sending} error={review.error} onSend={() => void review.send()} onRemove={review.remove} />
-			<ToastHost toast={toast} />
+			<ReviewButton count={review.comments.length} onPress={openReview} />
+			<ToastHost toast={toast} bottomOffset={review.comments.length ? insets.bottom + REVIEW_BUTTON_RISE : undefined} />
 		</View>
 	);
 }

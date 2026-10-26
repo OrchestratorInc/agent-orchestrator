@@ -22,6 +22,10 @@ export function useFileActions({ sessionId, hostId, toast }: { sessionId: string
 	const openFolder = useCallback((dir: string) => {
 		router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId } });
 	}, [hostId, router, sessionId]);
+	/** The queued review, in a sheet over the page. */
+	const openReview = useCallback(() => {
+		router.push({ pathname: "/files/[sessionId]/review", params: { sessionId, hostId } });
+	}, [hostId, router, sessionId]);
 	const act = useCallback((action: FileRowAction, file: { path: string; previousPath?: string }) => {
 		switch (action) {
 			case "openDiff":
@@ -41,5 +45,5 @@ export function useFileActions({ sessionId, hostId, toast }: { sessionId: string
 				return;
 		}
 	}, [openFile, showToast]);
-	return { openFile, openFolder, act };
+	return { openFile, openFolder, openReview, act };
 }

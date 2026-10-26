@@ -22,7 +22,7 @@ import { font, fontScaleCap, radius, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
 import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
-import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
+import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
 import { fileIcon } from "../../../lib/files/fileIcons";
 import {
 	annotationTarget,
@@ -45,6 +45,9 @@ import {
 	type DisplayRow,
 } from "../../../lib/files/model";
 import { addReviewComment, reviewKey } from "../../../lib/files/reviewStore";
+import { REVIEW_BUTTON_RISE } from "../../../lib/files/ReviewButton.types";
+import { ReviewButton } from "../../../lib/files/ReviewButton";
+import { useFileActions } from "../../../lib/files/useFileActions";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
@@ -105,6 +108,7 @@ function SessionFileContent() {
 	// `show` is stable where the controller is not, so callbacks keep their identity.
 	const showToast = toast.show;
 	const insets = useSafeAreaInsets();
+	const { openReview } = useFileActions({ sessionId: id, hostId: params.hostId, toast });
 	const list = useRef<FlatList<DisplayRow>>(null);
 	const request = useRef(0);
 
@@ -475,10 +479,15 @@ function SessionFileContent() {
 			) : (
 				<>
 					{stepper}
-					<ReviewTray comments={review.comments} sending={review.sending} error={review.error} bottomOffset={stepperClearance} onSend={() => void review.send()} onRemove={review.remove} />
+					<ReviewButton count={review.comments.length} bottomOffset={stepperClearance} onPress={openReview} />
 				</>
 			)}
-			<ToastHost toast={toast} bottomOffset={composing ? composerHeight + space.sm : stepper ? insets.bottom + stepperClearance + space.md : undefined} />
+			<ToastHost
+				toast={toast}
+				bottomOffset={composing
+					? composerHeight + space.sm
+					: stepper || review.comments.length ? insets.bottom + stepperClearance + (review.comments.length ? REVIEW_BUTTON_RISE : space.md) : undefined}
+			/>
 		</View>
 	);
 }

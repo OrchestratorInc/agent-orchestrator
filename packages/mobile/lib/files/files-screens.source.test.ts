@@ -47,6 +47,24 @@ describe("the Files list", () => {
 	});
 });
 
+// RN's Modal has no sheet gestures and no detents, and the pill's shadow was a
+// hard-coded black; the queue is a form sheet route opened from a native button.
+describe("the review queue", () => {
+	it("is a form sheet route at half and full height", () => {
+		expect(source("../../app/_layout.tsx")).toContain('{ name: "files/[sessionId]/review", detents: [0.5, 1] }');
+		expect(source("./useFileActions.ts")).toContain('router.push({ pathname: "/files/[sessionId]/review", params: { sessionId, hostId } })');
+		const components = source("./components.tsx");
+		expect(components).not.toContain("<Modal");
+		expect(components).not.toContain("#000");
+	});
+
+	it("floats as the platform's own prominent button on every Files page", () => {
+		for (const page of ["index", "folder", "file"]) {
+			expect(source(`../../app/files/[sessionId]/${page}.tsx`)).toMatch(/<ReviewButton count=\{review\.comments\.length\}[^>]*onPress=\{openReview\} \/>/);
+		}
+	});
+});
+
 describe("the file viewer", () => {
 	const file = source("../../app/files/[sessionId]/file.tsx");
 
@@ -76,7 +94,7 @@ describe("the file viewer", () => {
 	});
 
 	it("confirms with the shared toast", () => {
-		expect(file).toContain("<ToastHost toast={toast}");
+		expect(file).toMatch(/<ToastHost\s+toast=\{toast\}/);
 		expect(file).not.toContain("setNotice");
 		expect(file).not.toContain("announceForAccessibility");
 	});

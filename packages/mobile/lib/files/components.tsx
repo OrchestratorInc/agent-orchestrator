@@ -1,9 +1,5 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
-	ActivityIndicator,
-	FlatList,
-	Modal,
-	Platform,
 	Pressable,
 	StyleSheet,
 	Text,
@@ -22,13 +18,12 @@ import { highlightCode, type SyntaxTokenKind } from "../chat/syntaxHighlight";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
-import { Feather } from "../icons";
 import { usePressFeedback } from "../pressFeedback";
 import { Spinner } from "../Spinner";
 import type { Theme } from "../theme";
 import { textSelectionColors } from "../textSelection";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { font, fontScaleCap, iconSize, press, radius, space, stateOpacity, touchTarget, type } from "../tokens";
+import { font, fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import type { WorkspaceFileStatus } from "./api";
 import { CODE_FONT_SIZE, CODE_LINE_HEIGHT, CODE_MAX_SCALE, codeScale, gutterWidth, MARKER_WIDTH } from "./codeMetrics";
 import { fileIconSvg, folderIconSvg } from "./fileTypeIcon";
@@ -380,92 +375,6 @@ export const InlineComment = memo(function InlineComment({ comment, digits, onRe
 	);
 });
 
-// ---- Review tray ---------------------------------------------------------------------
-
-/**
- * The floating "Send N comments" pill and the sheet behind it. It stays above
- * the content without covering the line being reviewed, the way GitHub's
- * Finish Review pill does, and is reachable from every Files screen.
- */
-export function ReviewTray({
-	comments,
-	sending,
-	error,
-	bottomOffset = 0,
-	onSend,
-	onRemove,
-}: {
-	comments: readonly ReviewComment[];
-	sending: boolean;
-	error?: string;
-	bottomOffset?: number;
-	onSend: () => void;
-	onRemove: (id: string) => void;
-}) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const insets = useSafeAreaInsets();
-	const [open, setOpen] = useState(false);
-	useEffect(() => { if (!comments.length) setOpen(false); }, [comments.length]);
-	if (!comments.length) return null;
-	const count = plural(comments.length, "comment");
-	return (
-		<>
-			<View pointerEvents="box-none" style={[styles.trayDock, { bottom: Math.max(insets.bottom, space.md) + bottomOffset }]}>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel={`Review ${count} before sending`}
-					onPress={() => { haptics.tap(); setOpen(true); }}
-					style={({ pressed }) => [styles.trayPill, pressed && { opacity: press.opacity }]}
-				>
-					<Feather name="message-square" size={iconSize.sm} color={t.onAccent} />
-					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.trayPillText}>{`Send ${count}`}</Text>
-				</Pressable>
-			</View>
-			<Modal visible={open} animationType="slide" presentationStyle={Platform.OS === "ios" ? "pageSheet" : undefined} onRequestClose={() => setOpen(false)}>
-				{/* Android draws the modal edge to edge, under the status bar; iOS's page sheet starts below it. */}
-				<View style={[styles.sheet, { paddingTop: Platform.OS === "android" ? insets.top + space.lg : space.xl, paddingBottom: Math.max(insets.bottom, space.lg) }]}>
-					<View style={styles.sheetHead}>
-						<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} style={styles.sheetTitle}>Review comments</Text>
-						<Pressable accessibilityRole="button" accessibilityLabel="Close" hitSlop={10} onPress={() => setOpen(false)} style={styles.composerIcon}>
-							<Feather name="x" size={iconSize.lg} color={t.textSecondary} />
-						</Pressable>
-					</View>
-					<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.sheetLead}>Sent to the agent as one message, with the file and line for each.</Text>
-					<FlatList
-						data={comments}
-						keyExtractor={(comment) => comment.id}
-						contentContainerStyle={{ paddingBottom: space.lg }}
-						renderItem={({ item }) => (
-							<View style={styles.queued}>
-								<View style={{ flex: 1 }}>
-									<Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.queuedLabel}>{item.label}</Text>
-									<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.queuedText}>{item.feedback}</Text>
-								</View>
-								<Pressable accessibilityRole="button" accessibilityLabel={`Remove comment on ${item.label}`} hitSlop={8} onPress={() => { haptics.tap(); onRemove(item.id); }} style={styles.composerIcon}>
-									<Feather name="trash-2" size={iconSize.md} color={t.textTertiary} />
-								</Pressable>
-							</View>
-						)}
-					/>
-					{error ? <Text accessibilityRole="alert" style={styles.composerError}>{error}</Text> : null}
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel={`Send ${count} to the agent`}
-						accessibilityState={{ busy: sending, disabled: sending }}
-						disabled={sending}
-						onPress={() => { haptics.tap(); onSend(); }}
-						style={({ pressed }) => [styles.sheetSend, sending && styles.disabled, pressed && { opacity: press.opacity }]}
-					>
-						{sending ? <ActivityIndicator size="small" color={t.onAccent} /> : <Feather name="send" size={iconSize.md} color={t.onAccent} />}
-						<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.sheetSendText}>{`Send ${count}`}</Text>
-					</Pressable>
-				</View>
-			</Modal>
-		</>
-	);
-}
-
 // ---- Styles ------------------------------------------------------------------------
 
 const makeStyles = (t: Theme) => StyleSheet.create({
@@ -515,17 +424,5 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	inlineState: { ...type.footnote, fontFamily: font.medium, color: t.textTertiary },
 	inlineAction: { width: INLINE_ACTION, height: INLINE_ACTION, borderRadius: INLINE_ACTION / 2, marginRight: -space.xs, alignItems: "center", justifyContent: "center" },
 	inlineText: { ...type.subheadline, color: t.textPrimary, paddingLeft: 20 + space.xs },
-	trayDock: { position: "absolute", left: 0, right: 0, alignItems: "center" },
-	trayPill: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xl, borderRadius: radius.pill, backgroundColor: t.accent, shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
-	trayPillText: { fontFamily: font.semibold, fontSize: type.subheadline.fontSize, color: t.onAccent },
 
-	sheet: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.lg },
-	sheetHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-	sheetTitle: { ...type.title3, color: t.textPrimary },
-	sheetLead: { ...type.footnote, color: t.textTertiary, marginTop: space.xxs, marginBottom: space.md },
-	queued: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, paddingVertical: space.md, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-	queuedLabel: { fontFamily: t.fontMono, fontSize: type.caption1.fontSize, color: t.textTertiary, marginBottom: space.xxs },
-	queuedText: { ...type.subheadline, color: t.textPrimary },
-	sheetSend: { minHeight: touchTarget + space.xxs, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, borderRadius: radius.md, backgroundColor: t.accent },
-	sheetSendText: { fontFamily: font.semibold, fontSize: type.body.fontSize, color: t.onAccent },
 });
