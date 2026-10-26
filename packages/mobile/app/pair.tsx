@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
@@ -113,6 +113,10 @@ export default function PairScreen() {
 		});
 		return () => { current = false; };
 	}, [repairHostId]);
+	// The iOS bar names the task, so a reconnect must not read as a new pairing.
+	// Only the title changes, which updates the bar without rebuilding the modal.
+	const title = repairHostId ? (repairHost ? `Reconnect ${repairHost.name}` : "Reconnect machine") : "Pair a machine";
+	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
 	// The camera keeps running under the manual-connect sheet, so a QR code in
 	// frame would otherwise pair behind it. This replaces the old `manualOpen`
 	// flag now that the sheet is a route pushed on top rather than local state.
@@ -356,7 +360,8 @@ export default function PairScreen() {
 
 			{repairHost ? (
 				<View style={styles.repairIntro}>
-					<Text accessibilityRole="header" style={styles.repairTitle}>Reconnect {repairHost.name}</Text>
+					{/* iOS shows this in the bar (see `title`); Android has no bar. */}
+					{NATIVE_BAR ? null : <Text accessibilityRole="header" style={styles.repairTitle}>Reconnect {repairHost.name}</Text>}
 					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
 				</View>
 			) : <View style={styles.steps}>
@@ -493,9 +498,9 @@ const makeStyles = (t: Theme) =>
 	topBar: { paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.sm },
 
 	steps: { paddingHorizontal: space.xl, paddingBottom: space.lg },
-	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg },
+	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg, gap: space.xs },
 	repairTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
-	repairText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.xs },
+	repairText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
 	// A card in the theme until the camera runs: the permission prompt inside it
 	// is themed text, which the dark preview backdrop would swallow in light mode.

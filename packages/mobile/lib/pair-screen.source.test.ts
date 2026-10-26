@@ -15,6 +15,14 @@ describe("pair screen", () => {
 		expect(page).not.toMatch(/icon="back"|chevron/);
 	});
 
+	// One name for the task: the reconnect flow's bar names the machine, and
+	// the body repeats it only on Android, which has no bar.
+	it("titles a reconnect after the machine instead of as a new pairing", () => {
+		expect(page).toContain('const title = repairHostId ? (repairHost ? `Reconnect ${repairHost.name}` : "Reconnect machine") : "Pair a machine";');
+		expect(page).toContain("useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);");
+		expect(page).toContain('{NATIVE_BAR ? null : <Text accessibilityRole="header" style={styles.repairTitle}>Reconnect {repairHost.name}</Text>}');
+	});
+
 	it("frames the code with one reticle in the on-camera colours", () => {
 		expect(page).toContain("<View style={styles.reticle} />");
 		expect(page).toContain("borderColor: onCamera.reticle");
