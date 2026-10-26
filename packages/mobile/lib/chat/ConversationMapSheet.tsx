@@ -1,15 +1,16 @@
 import { Feather } from "../icons";
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import { haptics } from "../haptics";
+import { AppSymbol } from "../AppSymbol";
+import { rowDividerWidth } from "../divider";
+import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { SheetHeader } from "../ui";
+import { EmptyState, SheetHeader } from "../ui";
 import { conversationMarkerPresentation } from "./chatPresentation";
 import type { ConversationMarker } from "./timelineModel";
 import { iconSize, space, type } from "../tokens";
 
 export function ConversationMapSheet({ markers, onSelect }: { markers: ConversationMarker[]; onSelect(sequence: number): void }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return <FlatList
 		style={styles.list}
@@ -21,47 +22,50 @@ export function ConversationMapSheet({ markers, onSelect }: { markers: Conversat
 		nestedScrollEnabled
 		ListHeaderComponent={<>
 			<View style={styles.header}><SheetHeader title="Conversation history" subtitle={markers.length ? `${markers.length} ${markers.length === 1 ? "exchange" : "exchanges"}` : "Jump between the important moments in this conversation."} /></View>
-			{markers.length ? <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>History</Text><View style={styles.sectionRule} /></View> : null}
+			{markers.length ? <View style={styles.sectionHeader}><Text accessibilityRole="header" style={styles.sectionTitle}>History</Text><View style={styles.sectionRule} /></View> : null}
 		</>}
-		ListEmptyComponent={<View style={styles.empty}><View style={styles.emptyIcon}><Feather name="message-circle" size={iconSize.lg} color={t.textTertiary} /></View><Text style={styles.emptyTitle}>No exchanges yet</Text><Text style={styles.emptyCopy}>Messages and completed work will appear here as the conversation grows.</Text></View>}
-		renderItem={({ item }) => {
-			const presentation = conversationMarkerPresentation(item.state);
-			const color = presentation.tone === "working" ? t.orange : presentation.tone === "success" ? t.green : presentation.tone === "danger" ? t.red : presentation.tone === "accent" ? t.accent : t.textTertiary;
-			return <Pressable
-				accessibilityRole="button"
-				accessibilityLabel={`Jump to ${item.title}, ${presentation.label}`}
-				onPress={() => { haptics.select(); onSelect(item.sequence); }}
-				style={({ pressed }) => [styles.row, pressed && styles.pressed]}
-			>
-				<View style={styles.eyebrow}>
-					<Feather name={presentation.icon} size={iconSize.xs} color={color} />
-					<Text style={[styles.state, { color }]}>{presentation.label}</Text>
-					<View style={styles.spacer} />
-					<Feather name="chevron-right" size={iconSize.sm} color={t.textFaint} />
-				</View>
-				<Text numberOfLines={2} style={styles.title}>{item.title}</Text>
-				{item.detail ? <Text numberOfLines={2} style={styles.detail}>{item.detail}</Text> : null}
-			</Pressable>;
-		}}
+		ListEmptyComponent={<EmptyState icon="chat" title="No exchanges yet" message="Messages and completed work will appear here as the conversation grows." />}
+		renderItem={({ item }) => <MarkerRow marker={item} onSelect={onSelect} />}
 	/>;
+}
+
+// Jumping is moving through the conversation, not a moment worth a haptic.
+function MarkerRow({ marker, onSelect }: { marker: ConversationMarker; onSelect(sequence: number): void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
+	const presentation = conversationMarkerPresentation(marker.state);
+	const color = presentation.tone === "working" ? t.orange : presentation.tone === "success" ? t.green : presentation.tone === "danger" ? t.red : presentation.tone === "accent" ? t.accent : t.textTertiary;
+	return <Pressable
+		accessibilityRole="button"
+		accessibilityLabel={`Jump to ${marker.title}, ${presentation.label}`}
+		android_ripple={feedback.android_ripple}
+		onPress={() => onSelect(marker.sequence)}
+		style={({ pressed }) => [styles.row, pressed && feedback.pressed]}
+	>
+		<View style={styles.eyebrow}>
+			<Feather name={presentation.icon} size={iconSize.xs} color={color} />
+			<Text style={[styles.state, { color }]}>{presentation.label}</Text>
+			<View style={styles.spacer} />
+			<AppSymbol name="chevronForward" size={iconSize.sm} color={t.textFaint} />
+		</View>
+		<Text numberOfLines={2} style={styles.title}>{marker.title}</Text>
+		{marker.detail ? <Text numberOfLines={2} style={styles.detail}>{marker.detail}</Text> : null}
+	</Pressable>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	list: { flex: 1, backgroundColor: t.bgBase },
-	content: { paddingTop: space.xl, paddingBottom: space.xxl },
+	// Grows to the sheet so an empty history centres its message.
+	content: { flexGrow: 1, paddingTop: space.xl, paddingBottom: space.xxl },
 	header: { paddingHorizontal: space.xl },
 	sectionHeader: { flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.xl, paddingTop: space.xl, paddingBottom: space.xxs },
-	sectionTitle: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
-	sectionRule: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle },
-	row: { minHeight: 76, paddingHorizontal: space.xl, paddingVertical: space.sm, gap: space.hair, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
-	pressed: { backgroundColor: t.bgSubtle },
-	eyebrow: { minHeight: 17, flexDirection: "row", alignItems: "center", gap: space.xs },
+	sectionTitle: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+	sectionRule: { flex: 1, height: rowDividerWidth, backgroundColor: t.borderSubtle },
+	row: { minHeight: 76, paddingHorizontal: space.xl, paddingVertical: space.sm, gap: space.hair, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
+	eyebrow: { minHeight: 18, flexDirection: "row", alignItems: "center", gap: space.xs },
 	spacer: { flex: 1 },
-	state: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-	title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600", lineHeight: type.callout.lineHeight, letterSpacing: -0.15 },
-	detail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	empty: { alignItems: "center", paddingHorizontal: space.xxl, paddingVertical: 70 },
-	emptyIcon: { width: 44, height: 44, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgSubtle, alignItems: "center", justifyContent: "center", marginBottom: space.md },
-	emptyTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600" },
-	emptyCopy: { fontFamily: "Geist_400Regular", maxWidth: 270, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center", marginTop: space.xs },
+	state: { fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+	title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600", lineHeight: type.callout.lineHeight, letterSpacing: type.callout.letterSpacing },
+	detail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });
