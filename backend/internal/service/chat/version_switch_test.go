@@ -145,7 +145,7 @@ func TestVersionRefreshLeavesCurrentAndViewedSessionsAlone(t *testing.T) {
 		t.Fatalf("refresh of a current session = %v, %v", stopped, err)
 	}
 	markStale(t, h)
-	if err := h.svc.SetChatView(ctx, testSession, "view-1", true); err != nil {
+	if _, err := h.svc.SetChatView(ctx, testSession, "view-1", true); err != nil {
 		t.Fatal(err)
 	}
 	if stopped, err := h.svc.HibernateChatForVersionRefresh(ctx, testSession, refreshIdle); err != nil || stopped || conv.calls.Load() != 0 {
@@ -170,7 +170,7 @@ func TestSendMovesQuietStaleSessionAndDeliversOnceOnNewRelease(t *testing.T) {
 	markStale(t, h)
 	h.advance(refreshIdle)
 	// The user is looking at the session; the message they send moves it.
-	if err := h.svc.SetChatView(ctx, testSession, "view-1", true); err != nil {
+	if _, err := h.svc.SetChatView(ctx, testSession, "view-1", true); err != nil {
 		t.Fatal(err)
 	}
 	woke := wakeOnNewRelease(t, h, old, nil)

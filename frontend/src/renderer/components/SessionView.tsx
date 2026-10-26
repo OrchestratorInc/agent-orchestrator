@@ -1479,16 +1479,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		let pending = Promise.resolve();
 		const setViewActive = async (active: boolean) => {
 			try {
-				const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/chat-view", {
+				const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/chat-view", {
 					params: { path: { sessionId } },
 					body: { viewId, active },
 				});
 				if (error) throw error;
-				// Remote conversations already refresh every two seconds. A ready or
-				// working chat hears every change through events, and a wake emits
-				// one, so only a chat still waking or stopped is refreshed here;
-				// refreshing a settled one reloaded every page it had on each return.
-				if (active && !left && !refreshed && !hostId) {
+				// Remote conversations already refresh every two seconds. Only a
+				// wake changes the session; a daemon that predates `woke` answers
+				// 204, so refresh for it as before. A ready or working chat hears
+				// every change through events, and a wake emits one, so only a chat
+				// still waking or stopped reloads its pages here.
+				if (active && !left && !refreshed && !hostId && (data?.woke ?? true)) {
 					refreshed = true;
 					if (!conversationSettled(queryClient, sessionId)) {
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });

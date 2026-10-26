@@ -63,27 +63,29 @@ func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) e
 // SetChatView records a short-lived view lease. Registration and the final
 // hibernation check use the same controller gate, so opening a view either
 // prevents shutdown or waits for shutdown and then wakes the native session.
-func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID string, active bool) error {
+// woke reports that this call resumed a hibernated provider, which is the only
+// case in which the session and its conversation changed.
+func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID string, active bool) (woke bool, err error) {
 	gate := s.controllerGate(domain.SessionConversationOwner(id))
 	if err := gate.lock(ctx); err != nil {
-		return err
+		return false, err
 	}
 	if !active {
 		s.setViewLease(id, viewID, false)
 		gate.unlock()
-		return nil
+		return false, nil
 	}
 	rec, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		gate.unlock()
-		return err
+		return false, err
 	}
 	if rec.IsTerminated {
 		s.viewMu.Lock()
 		delete(s.viewLeases, id)
 		s.viewMu.Unlock()
 		gate.unlock()
-		return nil
+		return false, nil
 	}
 	newView := s.setViewLease(id, viewID, true)
 	gate.unlock()
@@ -91,11 +93,11 @@ func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID s
 	// sleeping provider. A failed resume must not spawn another process on
 	// every heartbeat. Explicit sends and newly opened views can still retry.
 	if !newView || !s.hasChatView(id) {
-		return nil
+		return false, nil
 	}
 	if rec.ProvisionState.WithDefault() != domain.SessionProvisionReady ||
 		rec.HibernatedAt == nil || rec.Metadata.ProviderConversationID == "" {
-		return nil
+		return false, nil
 	}
 	err = s.wakeHibernated(ctx, id)
 	// A slow native reconnect can outlive one lease interval. Extend this
@@ -107,7 +109,7 @@ func (s *Service) SetChatView(ctx context.Context, id domain.SessionID, viewID s
 		}
 	}
 	s.viewMu.Unlock()
-	return err
+	return err == nil, err
 }
 
 func (s *Service) setViewLease(id domain.SessionID, viewID string, active bool) (newView bool) {

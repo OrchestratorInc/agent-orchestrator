@@ -6620,8 +6620,12 @@ paths:
               $ref: '#/components/schemas/SetChatViewRequest'
         required: true
       responses:
-        "204":
-          description: No Content
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetChatViewResponse'
+          description: OK
         "400":
           content:
             application/json:
@@ -20427,6 +20431,13 @@ components:
       required:
       - viewId
       - active
+      type: object
+    SetChatViewResponse:
+      properties:
+        woke:
+          type: boolean
+      required:
+      - woke
       type: object
     SetConversationConfigOptionRequest:
       properties:
