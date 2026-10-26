@@ -95,18 +95,6 @@ export const prose: TypeToken = {
 
 export type TypeName = keyof typeof type;
 
-/**
- * An uppercase micro-label: the one place small caps are worth the tracking.
- * Pair with the color the section actually means — never with the accent.
- */
-export const microLabel: TypeToken = {
-	fontFamily: font.semibold,
-	fontSize: type.caption2.fontSize,
-	lineHeight: type.caption2.lineHeight,
-	fontWeight: "600",
-	letterSpacing: 0.9,
-};
-
 /** 4pt grid, with a 2pt half-step for hairline gaps inside a row. */
 export const space = {
 	none: 0,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { sheetCornerRadius as androidSheetCornerRadius, touchTarget as androidTouchTarget } from "./platformTokens.android";
-import { fontScaleCap, microLabel, press, radius, sheetCornerRadius, space, stateOpacity, touchTarget, type } from "./tokens";
+import { fontScaleCap, press, radius, sheetCornerRadius, space, stateOpacity, touchTarget, type } from "./tokens";
 
 // These tests are a regression fence, not a description of taste. A scale that
 // stops ascending has been edited carelessly, and the anchors below are the
@@ -109,10 +109,7 @@ describe("type scale", () => {
 		expect(type.footnote.fontSize).toBe(13);
 	});
 
-	it("gives micro-labels positive tracking and large titles negative", () => {
-		// Optical tracking flips sign at the ends of the ramp; that, not the size,
-		// is what makes a small label read as a label.
-		expect(microLabel.letterSpacing).toBeGreaterThan(0);
+	it("tightens the tracking of body text", () => {
 		expect(type.body.letterSpacing).toBeLessThan(0);
 	});
 });
