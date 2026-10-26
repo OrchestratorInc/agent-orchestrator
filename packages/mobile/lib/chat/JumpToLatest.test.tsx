@@ -80,11 +80,21 @@ describe("JumpToLatest on iOS", () => {
 		expect(onPress).toHaveBeenCalledOnce();
 	});
 
-	// Dynamic Type has to reach the label, which a bare point size would not.
-	it("sizes its label by text style", async () => {
+	// Dynamic Type has to reach the label and its arrow, which a bare point size would not.
+	it("sizes its label and arrow by text style", async () => {
+		const button = await renderIOS();
+		const fontOf = (type: string) => button.findByType(type as never).props.modifiers.find((modifier: { font?: object }) => modifier.font).font;
+		expect(fontOf("SwiftText")).toMatchObject({ textStyle: "subheadline" });
+		expect(fontOf("SwiftImage")).toEqual({ textStyle: "subheadline", weight: "semibold" });
+		expect(button.findByType("SwiftImage" as never).props.size).toBeUndefined();
+	});
+
+	// SwiftUI finds a custom font by the name inside the font file; expo-font's
+	// alias would leave the label in the system face.
+	it("names Geist by its PostScript name", async () => {
 		const button = await renderIOS();
 		const font = button.findByType("SwiftText" as never).props.modifiers.find((modifier: { font?: object }) => modifier.font).font;
-		expect(font).toMatchObject({ textStyle: "subheadline", family: "Geist_600SemiBold" });
+		expect(font.family).toBe("Geist-SemiBold");
 	});
 
 	// Before iOS 26 the glass styles draw no material at all.
