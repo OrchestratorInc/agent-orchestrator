@@ -20,7 +20,7 @@ vi.mock("expo-document-picker", () => ({}));
 vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: vi.fn() }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("../api", () => ({ apiRequest: request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
-vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
+vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {}, conversationStreamState: () => "open", watchConversationStream: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), success: vi.fn(), error: vi.fn() } }));

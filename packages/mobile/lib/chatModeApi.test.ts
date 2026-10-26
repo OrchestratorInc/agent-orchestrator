@@ -665,10 +665,11 @@ describe("mobile Chat API boundaries", () => {
 			cfg, Number.MAX_SAFE_INTEGER, new AbortController().signal,
 			(event) => { if (event.sessionId) sessions.push(event.sessionId); },
 			(reset) => resets.push(reset),
+			{ onOpen: () => sessions.push("open") },
 		);
 		expect(vi.mocked(expoFetch).mock.lastCall?.[0]).toBe(`http://ao.test:3011/api/v1/events?after=${Number.MAX_SAFE_INTEGER}`);
 		expect(resets).toEqual([7]);
-		expect(sessions).toEqual(["w-1"]);
+		expect(sessions).toEqual(["open", "w-1"]);
 		expect(cursor).toBe(8);
 	});
 

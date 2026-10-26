@@ -7,6 +7,8 @@ const state = vi.hoisted(() => ({
 	request: vi.fn(),
 	listener: undefined as ((event: ConversationEvent) => void) | undefined,
 	pollEvery: null as number | null,
+	stream: "open" as "open" | "failed" | undefined,
+	watchers: new Set<(state: "open" | "failed" | undefined) => void>(),
 }));
 vi.mock("../api", () => ({ apiRequest: state.request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
 vi.mock("../config", () => ({ machineIdentity: () => "qa-host", authHeaders: () => ({}), httpBase: () => "http://qa-host" }));
@@ -17,9 +19,18 @@ vi.mock("./conversationEvents", () => ({
 		state.listener = listener;
 		return () => { state.listener = undefined; };
 	},
+	conversationStreamState: () => state.stream,
+	watchConversationStream: (_cfg: unknown, watcher: (s: "open" | "failed" | undefined) => void) => {
+		state.watchers.add(watcher);
+		return () => state.watchers.delete(watcher);
+	},
 }));
+function setStream(next: "open" | "failed" | undefined) {
+	state.stream = next;
+	for (const watcher of [...state.watchers]) watcher(next);
+}
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => state.pollEvery }));
-import { useMobileConversation, type MobileConversation } from "./useConversation";
+import { STREAM_OPEN_WAIT_MS, useMobileConversation, type MobileConversation } from "./useConversation";
 
 const config = { host: "qa-host" } as ServerConfig;
 let renderer: ReactTestRenderer | undefined;
@@ -40,6 +51,8 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	pages = [];
 	state.pollEvery = null;
+	state.stream = "open";
+	state.watchers.clear();
 	state.request.mockImplementation((_cfg, _path, init?: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
 		init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { name: "AbortError" })));
 		pages.push({ signal: init?.signal, finish: () => resolve({ json: async () => page }) });
@@ -108,4 +121,38 @@ it("counts a load an event started as the tunnel poll's", async () => {
 	expect(pages).toHaveLength(2);
 	await act(async () => { await vi.advanceTimersByTimeAsync(400); });
 	expect(pages).toHaveLength(3);
+});
+
+it("loads once, after the event stream opens, when a chat opens with the stream down", async () => {
+	state.stream = undefined;
+	await act(async () => { renderer = create(<Harness />); });
+	expect(pages).toHaveLength(0);
+	await act(async () => { setStream("open"); });
+	expect(pages).toHaveLength(1);
+	// A change after the stream's head arrives as an event and reloads once.
+	await act(async () => { state.listener!(chatEvent(1)); await vi.advanceTimersByTimeAsync(200); });
+	await act(async () => { pages[0].finish(); await vi.advanceTimersByTimeAsync(0); });
+	expect(pages).toHaveLength(2);
+	await act(async () => { pages[1].finish(); await vi.advanceTimersByTimeAsync(STREAM_OPEN_WAIT_MS); });
+	expect(pages).toHaveLength(2);
+});
+
+it("loads at once when the stream fails to open, and once more when it opens later", async () => {
+	state.stream = undefined;
+	await act(async () => { renderer = create(<Harness />); });
+	await act(async () => { setStream("failed"); });
+	expect(pages).toHaveLength(1);
+	await act(async () => { pages[0].finish(); await vi.advanceTimersByTimeAsync(0); });
+	// The load predates the stream's head, so changes in between are only in a reload.
+	await act(async () => { setStream("open"); });
+	expect(pages).toHaveLength(2);
+});
+
+it("does not wait for a stream that never answers longer than the open timeout", async () => {
+	state.stream = undefined;
+	await act(async () => { renderer = create(<Harness />); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(STREAM_OPEN_WAIT_MS - 1); });
+	expect(pages).toHaveLength(0);
+	await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+	expect(pages).toHaveLength(1);
 });

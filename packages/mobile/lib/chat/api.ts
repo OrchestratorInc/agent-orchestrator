@@ -411,6 +411,11 @@ export type ConversationStreamOptions = {
 	wantsPayload?: () => boolean;
 	/** A frame that advanced the cursor without being parsed. */
 	onCursorAdvance?: (seq: number) => void;
+	/**
+	 * The daemon accepted the stream. It fixed the cursor before sending these
+	 * headers, so every later change arrives as a frame.
+	 */
+	onOpen?: () => void;
 };
 
 /**
@@ -446,6 +451,7 @@ export async function streamGlobalConversationEvents(
 		? advertisedAfter
 		: after;
 	if (effectiveAfter !== after) onCursorReset?.(effectiveAfter);
+	options?.onOpen?.();
 
 	const decoder = new TextDecoder();
 	const reader = res.body.getReader();

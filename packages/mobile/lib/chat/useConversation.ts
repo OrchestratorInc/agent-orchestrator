@@ -33,7 +33,7 @@ import {
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
-import { subscribeConversationEvents } from "./conversationEvents";
+import { conversationStreamState, subscribeConversationEvents, watchConversationStream } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
@@ -44,6 +44,12 @@ import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
+/**
+ * How long an opening chat waits for its machine's event stream before it
+ * loads anyway. The stream starts after the board's first poll succeeds, so
+ * on a slow link this covers that poll plus one round trip.
+ */
+export const STREAM_OPEN_WAIT_MS = 5_000;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, { models: ChatModel[]; configOptions: ChatConfigOption[] }>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -156,6 +162,9 @@ export function useMobileConversation(
 	const refreshRef = useRef<() => Promise<void>>(async () => {});
 	// When the latest page load started; the tunnel poll is timed from it.
 	const lastLoadStartedAt = useRef(0);
+	// A load ran before this machine's event stream opened, so changes between
+	// its read and the stream's head may be missing; see the mount effect.
+	const loadedBeforeStream = useRef(false);
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
@@ -165,6 +174,7 @@ export function useMobileConversation(
 		const controller = new AbortController();
 		inFlight.current = controller;
 		lastLoadStartedAt.current = Date.now();
+		if (conversationStreamState(cfg) !== "open") loadedBeforeStream.current = true;
 		const request = refreshGate.begin();
 		setRefreshing(true);
 		try {
@@ -239,8 +249,41 @@ export function useMobileConversation(
 		setPages(cached.pages);
 		setLoading(cached.loading);
 		setUnavailable(undefined);
-		void refresh();
+		loadedBeforeStream.current = false;
+		// Load once the event stream is open, not before. The daemon fixes the
+		// stream's head before it answers, so a load started after that holds
+		// every change up to the head and the stream delivers every one after:
+		// one load, no replay. Loading first would leave a gap only a second
+		// load could close. A stream that fails to open, or takes too long, does
+		// not hold the chat back; it reloads once when the stream opens later.
+		let waiting = false;
+		let stopWatching = () => {};
+		let fallback: ReturnType<typeof setTimeout> | undefined;
+		if (!cfg || conversationStreamState(cfg) === "open") void refresh();
+		else {
+			waiting = true;
+			const loadNow = () => {
+				if (!waiting) return;
+				waiting = false;
+				clearTimeout(fallback);
+				refreshOrQueue();
+			};
+			fallback = setTimeout(loadNow, STREAM_OPEN_WAIT_MS);
+			const onState = (state: string | undefined) => {
+				if (state === "failed") loadNow();
+				if (state !== "open") return;
+				stopWatching();
+				if (waiting) loadNow();
+				else if (loadedBeforeStream.current) refreshOrQueue();
+				loadedBeforeStream.current = false;
+			};
+			stopWatching = watchConversationStream(cfg, onState);
+			onState(conversationStreamState(cfg));
+		}
 		return () => {
+			waiting = false;
+			clearTimeout(fallback);
+			stopWatching();
 			mounted.current = false;
 			refreshGate.invalidate();
 			inFlight.current?.abort();
@@ -248,7 +291,7 @@ export function useMobileConversation(
 			refreshAgain.current = false;
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		};
-	}, [cacheKey, refresh, refreshGate]);
+	}, [cacheKey, cfg, refresh, refreshOrQueue, refreshGate]);
 
 	useEffect(() => {
 		setPendingSends([]);

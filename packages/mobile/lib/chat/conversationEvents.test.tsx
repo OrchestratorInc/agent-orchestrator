@@ -1,74 +1,83 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ServerConfig } from "../config";
+import type { ConversationStreamOptions } from "./api";
 
 const state = vi.hoisted(() => ({
 	stream: vi.fn(),
 	getItem: vi.fn(async () => "42"),
-	setItem: vi.fn(async () => {}),
 }));
 vi.mock("./api", () => ({ streamGlobalConversationEvents: state.stream }));
 vi.mock("../config", () => ({ isConfigured: () => true, machineIdentity: () => "qa-host" }));
-vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: state.getItem, setItem: state.setItem, removeItem: vi.fn() } }));
-import { subscribeConversationEvents, useConversationEventTransport } from "./conversationEvents";
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: state.getItem, setItem: vi.fn(), removeItem: vi.fn() } }));
+import { conversationStreamState, subscribeConversationEvents, useConversationEventTransport, watchConversationStream } from "./conversationEvents";
 import { HEAD_CURSOR } from "./eventCursor";
-import { LISTENER_GRACE_MS } from "./sse";
 
 const config = { host: "qa-host" } as ServerConfig;
 let renderer: ReactTestRenderer | undefined;
 function Harness() { useConversationEventTransport(config); return null; }
 
-function streamUntilAborted() {
-	return (_cfg: unknown, _after: number, signal: AbortSignal) =>
-		new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted"))));
+function untilAborted(signal: AbortSignal) {
+	return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted"))));
 }
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.useFakeTimers();
 	vi.clearAllMocks();
-	state.stream.mockImplementation(streamUntilAborted());
 });
 afterEach(async () => {
 	if (renderer) await act(async () => renderer!.unmount());
 	renderer = undefined;
-	// Let the registry's listener grace from the previous test run out.
-	vi.advanceTimersByTime(LISTENER_GRACE_MS);
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
 
-it("starts at head while no chat is open, although a cursor is stored", async () => {
-	await act(async () => { renderer = create(<Harness />); });
-	expect(state.getItem).toHaveBeenCalled();
-	expect(state.stream).toHaveBeenCalledTimes(1);
-	expect(state.stream.mock.calls[0][1]).toBe(HEAD_CURSOR);
-});
-
-it("replays from the stored cursor while a chat is open, so the chat misses nothing", async () => {
+it("opens at head with a chat open, without reading a cursor an older build stored", async () => {
+	state.stream.mockImplementation((_cfg, _after, signal: AbortSignal) => untilAborted(signal));
 	const unsubscribe = subscribeConversationEvents(config, "qa-session", () => {});
 	try {
 		await act(async () => { renderer = create(<Harness />); });
-		expect(state.stream.mock.calls[0][1]).toBe(42);
+		expect(state.stream.mock.calls[0][1]).toBe(HEAD_CURSOR);
+		expect(state.getItem).not.toHaveBeenCalled();
 	} finally { unsubscribe(); }
 });
 
-it("stores the head it started at, so the next start with a chat open replays only from there", async () => {
-	state.stream.mockImplementationOnce((_cfg, _after, signal: AbortSignal, _onEvent, onReset: (cursor: number) => void) => {
-		onReset(500);
-		return streamUntilAborted()(_cfg, _after, signal);
+it("reports the stream open once the daemon accepts it, and clears it when it stops", async () => {
+	let options!: ConversationStreamOptions;
+	state.stream.mockImplementation((_cfg, _after, signal: AbortSignal, _onEvent, _onReset, opts: ConversationStreamOptions) => {
+		options = opts;
+		return untilAborted(signal);
 	});
-	await act(async () => { renderer = create(<Harness />); });
-	expect(state.setItem).toHaveBeenCalledWith("ao.chat.events.qa-host", "500");
+	const seen: Array<string | undefined> = [];
+	const stop = watchConversationStream(config, (s) => seen.push(s));
+	try {
+		await act(async () => { renderer = create(<Harness />); });
+		expect(conversationStreamState(config)).toBeUndefined();
+		options.onOpen?.();
+		expect(conversationStreamState(config)).toBe("open");
+		await act(async () => renderer!.unmount());
+		renderer = undefined;
+		expect(seen).toEqual(["open", undefined]);
+	} finally { stop(); }
 });
 
-it("resumes a reconnect within one start from its cursor", async () => {
-	state.stream.mockImplementationOnce(async (_cfg, _after, _signal, _onEvent, onReset: (cursor: number) => void) => {
-		onReset(100);
-		return 120;
-	});
+it("reports a first attempt that fails, and stays open across reconnects after it opened", async () => {
+	state.stream
+		.mockImplementationOnce(async () => { throw new Error("401"); })
+		.mockImplementationOnce(async (_cfg, _after, _signal, _onEvent, onReset: (cursor: number) => void, opts: ConversationStreamOptions) => {
+			onReset(100);
+			opts.onOpen?.();
+			return 120;
+		})
+		.mockImplementation((_cfg, _after, signal: AbortSignal) => untilAborted(signal));
 	await act(async () => { renderer = create(<Harness />); });
+	expect(conversationStreamState(config)).toBe("failed");
 	await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-	expect(state.stream).toHaveBeenCalledTimes(2);
-	expect(state.stream.mock.calls[1][1]).toBe(120);
+	expect(conversationStreamState(config)).toBe("open");
+	await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+	// A reconnect within one start resumes from its cursor; the state stays open.
+	expect(state.stream).toHaveBeenCalledTimes(3);
+	expect(state.stream.mock.calls[2][1]).toBe(120);
+	expect(conversationStreamState(config)).toBe("open");
 });
