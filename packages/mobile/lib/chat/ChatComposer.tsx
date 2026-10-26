@@ -557,7 +557,7 @@ export function ChatComposer({
 					<Text numberOfLines={1} style={styles.deliveryNoteText} maxFontSizeMultiplier={fontScaleCap.chrome}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
 					{steerAction}
 				</View> : null}
-				{contextMeter ? <View accessibilityRole="progressbar" accessibilityLabel={`Context window ${contextMeter.percent}% used`} accessibilityValue={{ min: 0, max: 100, now: contextMeter.percent }} style={styles.contextMeter}>
+				{contextMeter ? <View accessible accessibilityRole="progressbar" accessibilityLabel="Context window" accessibilityValue={contextMeter.accessibilityValue} style={styles.contextMeter}>
 					<View style={styles.contextTrack}>
 						<View style={[styles.contextFill, { width: `${contextMeter.fillPercent}%`, backgroundColor: contextMeter.severity === "critical" ? t.red : t.amber }]} />
 					</View>
@@ -714,9 +714,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// long. It is the one that yields: `flex: 1` with `minWidth: 0` to allow the
 	// squeeze, and `overflow: "hidden"` so a label that does not truncate cleanly
 	// cannot paint over its neighbours. The `gap` is the floor under that: even
-	// when everything fits, the two never touch.
-	metaRow: { width: "100%", height: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm },
-	settingsSlot: { flex: 1, minWidth: 0, height: touchTarget, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
+	// when everything fits, the two never touch. Both are at least a touch target
+	// tall and grow with the trigger, so its target is never clipped.
+	metaRow: { width: "100%", minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm },
+	settingsSlot: { flex: 1, minWidth: 0, minHeight: touchTarget, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
 	quotes: { maxHeight: 120, flexGrow: 0, marginTop: space.xxs, marginHorizontal: space.sm },
 	quote: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
 	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.xs, color: t.textSecondary },

@@ -121,8 +121,11 @@ describe("chat composer pill", () => {
 		expect(composer).toContain("hitSlop={{ top: CHANGES_PILL_SLOP, bottom: CHANGES_PILL_SLOP }}");
 		expect(composer).toContain("const CHANGES_PILL_SLOP = (touchTarget - CHANGES_PILL_HEIGHT) / 2");
 		expect(styleRule("deliveryNote")).toContain("height: touchTarget");
-		// The settings and delivery row is one fixed row of those targets.
-		expect(styleRule("metaRow")).toContain('width: "100%", height: touchTarget');
+		// The settings and delivery row is a row of those targets, and grows
+		// rather than clip the turn-settings trigger (48dp on Android).
+		expect(styleRule("metaRow")).toContain('width: "100%", minHeight: touchTarget');
+		expect(styleRule("settingsSlot")).toContain("minHeight: touchTarget");
+		expect(styleRule("settingsSlot")).not.toMatch(/(?<!min)[Hh]eight: /);
 		expect(composer).not.toContain("hitSlop={7}");
 	});
 
@@ -147,8 +150,10 @@ describe("chat composer pill", () => {
 		expect(composer).not.toContain("hairlineWidth");
 	});
 
+	// The level is otherwise only a bar's width and colour.
 	it("gives the context meter a value a screen reader can read", () => {
-		expect(composer).toContain("accessibilityValue={{ min: 0, max: 100, now: contextMeter.percent }}");
+		expect(composer).toContain('<View accessible accessibilityRole="progressbar" accessibilityLabel="Context window" accessibilityValue={contextMeter.accessibilityValue}');
+		expect(styleRule("contextText")).toContain("fontSize: type.footnote.fontSize");
 	});
 
 	it("opens the row with a plus rather than a paperclip", () => {
