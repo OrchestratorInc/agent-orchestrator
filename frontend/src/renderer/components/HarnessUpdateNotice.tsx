@@ -483,8 +483,6 @@ function VersionChange({ from, to }: { from: string; to: string }) {
 	</p>;
 }
 
-const NOTICE_MAX_WIDTH = 320;
-const NOTICE_EDGE = 12; // right-3, bottom-3, inside the center panel
 // A notice nobody is looking at or working with leaves on its own, which
 // quiets its harnesses like a swipe or × (see QUIET_MS).
 const AUTO_HIDE_MS = 10_000;
@@ -492,15 +490,16 @@ const AUTO_HIDE_MS = 10_000;
 const MOTION_SETTLE_MS = 260;
 const UPDATED_MS = 4_000;
 
-/** The notice's frame in the bottom-right corner of the framed center panel,
- * the same place on every page. A fixed box that tracks the panel clips it, so
- * the notice reads as part of the panel and a swipe slides it out under the
- * panel's edge instead of over the window frame.
+/** The notice's frame in the top-right corner of the framed center panel,
+ * below the tallest top bar a panel can have, so it is the same place on every
+ * page and never covers a page's own actions. A fixed box that tracks the panel
+ * clips it, so a swipe slides it out under the panel's edge instead of over the
+ * window frame.
  *
  * The live browser page is a native view: anything drawn over it has to raise
  * the whole transparent shell above the page, which then swallows every click
- * and scroll meant for the browser. This notice never does that. It steps aside
- * while the live page overlaps that corner. */
+ * and scroll meant for the browser. This notice never does that. It turns
+ * invisible while the live page overlaps it, and stays measurable meanwhile. */
 function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 	label: string;
 	holdOpen: boolean;
@@ -510,7 +509,7 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 	const browserRect = useLiveBrowserViewportRect();
 	const panel = useCenterPanelBox();
 	const frameRef = useRef<HTMLElement>(null);
-	const [height, setHeight] = useState(0);
+	const [box, setBox] = useState<ViewportRect | null>(null);
 	const [engaged, setEngaged] = useState(false);
 	// Electron reports focus for a hidden window too, so visibility is checked as well.
 	const [windowFocused, setWindowFocused] = useState(() => document.hasFocus() && document.visibilityState === "visible");
@@ -519,20 +518,16 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 	autoHide.current = onAutoHide;
 	useLayoutEffect(() => {
 		const element = frameRef.current;
-		if (!element) {
-			publishHarnessUpdateNoticeRect(null);
-			return;
-		}
-		// Session content in this corner reads this rect to keep itself clear.
+		if (!element) return;
 		// While a height transition runs (the list opening, a row closing) the
 		// size changes every frame; measuring then would re-render every reader
 		// of the rect each frame, so it measures once the motion has settled.
 		let settle: number | undefined;
 		const measure = () => {
 			if (settle !== undefined) return;
-			const box = element.getBoundingClientRect();
-			setHeight(box.height);
-			publishHarnessUpdateNoticeRect(box.width > 0 ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null);
+			const rect = element.getBoundingClientRect();
+			const next = rect.width > 0 ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom } : null;
+			setBox((current) => (current && next && current.left === next.left && current.top === next.top && current.right === next.right && current.bottom === next.bottom ? current : next));
 		};
 		const onTransition = (event: TransitionEvent) => {
 			if (event.propertyName !== "height") return;
@@ -553,7 +548,10 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 			window.removeEventListener("resize", measure);
 			element.removeEventListener("transitionrun", onTransition);
 		};
-	});
+	}, [panel]);
+	const covered = noticeCoversLiveBrowser(browserRect, box);
+	// Session content in this corner reads this rect to keep itself clear.
+	useLayoutEffect(() => publishHarnessUpdateNoticeRect(covered ? null : box), [box, covered]);
 	useLayoutEffect(() => () => publishHarnessUpdateNoticeRect(null), []);
 	useEffect(() => {
 		const sync = () => setWindowFocused(document.hasFocus() && document.visibilityState === "visible");
@@ -566,8 +564,6 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 			document.removeEventListener("visibilitychange", sync);
 		};
 	}, []);
-	const area = panel ?? { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
-	const covered = noticeCoversLiveBrowser(browserRect, area, height);
 	// The clock runs only while the notice is on screen in a focused window and
 	// nobody is reading or using it, so it never leaves unseen.
 	useEffect(() => {
@@ -581,13 +577,13 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 		const timer = window.setTimeout(() => autoHide.current(), 180);
 		return () => window.clearTimeout(timer);
 	}, [leaving]);
-	if (covered) return null;
+	const area = panel ?? { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
 	return <div className="pointer-events-none fixed isolate z-[calc(var(--z-overlay)-1)] overflow-hidden"
 		style={{ left: area.left, top: area.top, width: area.right - area.left, height: area.bottom - area.top, borderRadius: panel?.radius }}>
-		<aside ref={frameRef} role="region" aria-label={label}
+		<aside ref={frameRef} role="region" aria-label={label} inert={covered} aria-hidden={covered || undefined}
 			// Its own compositor layer: the card's height animation repaints only the card.
-			className={cn("harness-update-notice pointer-events-auto absolute right-3 bottom-3 w-[min(320px,calc(100%-24px))] text-card-foreground will-change-transform",
-				leaving ? "toast-exit" : "toast-enter")}
+			className={cn("harness-update-notice pointer-events-auto absolute top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))] right-3 w-[min(320px,calc(100%-24px))] text-card-foreground will-change-transform",
+				covered && "invisible", leaving ? "toast-exit" : "toast-enter")}
 			onPointerEnter={() => setEngaged(true)}
 			onPointerLeave={(event) => setEngaged(event.currentTarget.contains(document.activeElement))}
 			onFocus={() => setEngaged(true)}
@@ -599,13 +595,8 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 	</div>;
 }
 
-/** Whether the notice in the bottom-right corner of `area` overlaps the live native browser page. */
-export function noticeCoversLiveBrowser(browser: ViewportRect | null, area: ViewportRect, height: number): boolean {
-	if (!browser) return false;
-	const width = Math.min(NOTICE_MAX_WIDTH, area.right - area.left - 2 * NOTICE_EDGE);
-	const right = area.right - NOTICE_EDGE;
-	const bottom = area.bottom - NOTICE_EDGE;
-	const overlapsX = right - width < browser.right && right > browser.left;
-	const overlapsY = bottom - Math.max(height, 1) < browser.bottom && bottom > browser.top;
-	return overlapsX && overlapsY;
+/** Whether the notice overlaps the live native browser page. */
+export function noticeCoversLiveBrowser(browser: ViewportRect | null, notice: ViewportRect | null): boolean {
+	if (!browser || !notice) return false;
+	return notice.left < browser.right && notice.right > browser.left && notice.top < browser.bottom && notice.bottom > browser.top;
 }

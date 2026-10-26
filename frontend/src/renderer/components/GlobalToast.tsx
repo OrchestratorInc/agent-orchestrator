@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { type GlobalToast as Toast, useUiStore } from "../stores/ui-store";
 
 const TOAST_DISMISS_MS = 3_500;
@@ -21,10 +20,7 @@ export function GlobalToast() {
 }
 
 function GlobalToastStack({ placement, toasts }: { placement: NonNullable<Toast["placement"]>; toasts: Toast[] }) {
-	// The harness update notice shares the bottom-right corner; toasts stack above it.
-	const notice = useHarnessUpdateNoticeRect();
 	if (toasts.length === 0) return null;
-	const aboveNotice = placement !== "top-center" && notice ? { bottom: window.innerHeight - notice.top + 8 } : undefined;
 	return (
 		<div
 			className={`pointer-events-none fixed z-[calc(var(--z-overlay)+1)] flex w-[min(360px,calc(100vw-24px))] items-stretch gap-2 ${
@@ -32,7 +28,6 @@ function GlobalToastStack({ placement, toasts }: { placement: NonNullable<Toast[
 			}`}
 			data-browser-native-overlay="true"
 			data-state="open"
-			style={aboveNotice}
 		>
 			{toasts.slice().reverse().map((toast) => <GlobalToastItem key={toast.nonce} toast={toast} />)}
 		</div>

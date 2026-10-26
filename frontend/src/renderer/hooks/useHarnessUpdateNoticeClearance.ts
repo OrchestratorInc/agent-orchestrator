@@ -2,7 +2,7 @@ import { useLayoutEffect, useState, useSyncExternalStore } from "react";
 import type { ViewportRect } from "./useLiveBrowserViewportRect";
 
 /**
- * The window rect the harness update notice (pinned to the app's bottom-right
+ * The window rect the harness update notice (pinned to the center panel's top-right
  * corner) covers, or null while it is not shown. The notice publishes it, so
  * session content that sits in that corner can keep its own controls clear of
  * the notice instead of the notice moving over them.

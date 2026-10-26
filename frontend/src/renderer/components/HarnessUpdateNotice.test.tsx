@@ -76,7 +76,7 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
-		expect(notice).toHaveClass("absolute", "right-3", "bottom-3");
+		expect(notice).toHaveClass("absolute", "right-3", "top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))]");
 	});
 
 	it("publishes the corner it covers while shown, so session content can keep clear of it", async () => {
@@ -96,13 +96,13 @@ describe("startup harness update notice", () => {
 		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
 	});
 
-	it("stays in the bottom-right corner, hides for browser overlap, and returns after the inspector closes", async () => {
+	it("stays in the top-right corner, hides for browser overlap, and returns after the inspector closes", async () => {
 		vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
 		vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
 		let browserRect = new DOMRect();
 		const originalRect = HTMLElement.prototype.getBoundingClientRect;
 		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-			if (this.classList.contains("harness-update-notice")) return new DOMRect(948, 688, 320, 100);
+			if (this.classList.contains("harness-update-notice")) return new DOMRect(948, 60, 320, 100);
 			if (this.classList.contains("browser-panel__viewport")) return browserRect;
 			return originalRect.call(this);
 		});
@@ -116,7 +116,7 @@ describe("startup harness update notice", () => {
 		browser.append(viewport);
 		try {
 			for (const [rect, visible] of [
-				[new DOMRect(820, 40, 460, 400), true],
+				[new DOMRect(820, 200, 460, 600), true],
 				[new DOMRect(820, 40, 460, 760), false],
 				[new DOMRect(0, 40, 600, 760), true],
 				[new DOMRect(0, 40, 1280, 760), false],
@@ -130,12 +130,12 @@ describe("startup harness update notice", () => {
 				await waitFor(() => {
 					const notice = screen.queryByRole("region", { name: "Agent updates available" });
 					if (!visible) { expect(notice).toBeNull(); return; }
-					expect(notice, `browser ${rect.left},${rect.top},${rect.right},${rect.bottom}`).toHaveClass("absolute", "right-3", "bottom-3");
+					expect(notice, `browser ${rect.left},${rect.top},${rect.right},${rect.bottom}`).toHaveClass("absolute", "right-3", "top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))]");
 					expect(notice).not.toHaveAttribute("data-browser-native-overlay");
 				});
 			}
 			await act(async () => { browser.remove(); });
-			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("absolute", "right-3", "bottom-3"));
+			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("absolute", "right-3", "top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))]"));
 		} finally {
 			browser.remove();
 		}
@@ -773,28 +773,27 @@ describe("harness updates while sessions run", () => {
 });
 
 describe("noticeCoversLiveBrowser", () => {
-	const viewport = { left: 0, top: 0, right: 1280, bottom: 800 };
-	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], height = 100, area = viewport) => noticeCoversLiveBrowser(browser, area, height);
+	const notice = { left: 948, top: 60, right: 1268, bottom: 160 };
 
-	it("returns false when no live page overlaps the panel corner", () => {
-		expect(covers(null)).toBe(false);
-		expect(covers({ left: 200, top: 60, right: 700, bottom: 800 })).toBe(false);
-		expect(covers({ left: 820, top: 40, right: 1280, bottom: 400 })).toBe(false);
+	it("returns false without a live page or a measured notice", () => {
+		expect(noticeCoversLiveBrowser(null, notice)).toBe(false);
+		expect(noticeCoversLiveBrowser({ left: 0, top: 0, right: 1280, bottom: 800 }, null)).toBe(false);
 	});
 
-	it.each([820, 600, 300, 0])("hides instead of moving sideways when the page starts at %ipx", (left) => {
-		expect(covers({ left, top: 40, right: 1280, bottom: 800 })).toBe(true);
+	it.each([
+		["the page fills the window", { left: 0, top: 40, right: 1280, bottom: 800 }],
+		["the page fills the inspector", { left: 820, top: 40, right: 1280, bottom: 800 }],
+		["the page clips the notice's corner", { left: 1200, top: 150, right: 1280, bottom: 800 }],
+	])("returns true when %s", (_, browser) => {
+		expect(noticeCoversLiveBrowser(browser, notice)).toBe(true);
 	});
 
-	it("hides when expanding the stack reaches the browser page", () => {
-		const browser = { left: 820, top: 40, right: 1280, bottom: 500 };
-		expect(covers(browser)).toBe(false);
-		expect(covers(browser, 400)).toBe(true);
+	it("returns false when the page only touches or sits beside the notice", () => {
+		expect(noticeCoversLiveBrowser({ left: 0, top: 40, right: 948, bottom: 800 }, notice)).toBe(false);
+		expect(noticeCoversLiveBrowser({ left: 820, top: 160, right: 1280, bottom: 800 }, notice)).toBe(false);
 	});
 
-	it("measures from the center panel's corner, not the window's", () => {
-		const panel = { left: 260, top: 6, right: 900, bottom: 794 };
-		expect(covers({ left: 920, top: 0, right: 1280, bottom: 800 }, 100, panel)).toBe(false);
-		expect(covers({ left: 700, top: 0, right: 1280, bottom: 800 }, 100, panel)).toBe(true);
+	it("returns false when the notice sits above the page", () => {
+		expect(noticeCoversLiveBrowser({ left: 820, top: 200, right: 1280, bottom: 800 }, notice)).toBe(false);
 	});
 });
