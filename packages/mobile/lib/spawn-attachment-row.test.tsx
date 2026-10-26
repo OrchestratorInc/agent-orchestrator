@@ -101,5 +101,13 @@ describe("SpawnAttachmentRow", () => {
 		const reach = (node: (typeof removes)[number], glyph: number) => glyph + node.props.hitSlop * 2;
 		expect(reach(removes[0], iconSize.lg)).toBe(touchTarget);
 		expect(reach(removes[1], iconSize.sm)).toBe(touchTarget);
+
+		// The scroll view drops touches outside its bounds, so the row keeps room
+		// for the slop the thumbnail's corner disc reaches past its top and right.
+		const disc = removes[0].props.style({ pressed: false })[0];
+		const content = root.findAll((node) => String(node.type) === "ScrollView")[0].props.contentContainerStyle;
+		expect(disc).toMatchObject({ width: iconSize.lg, height: iconSize.lg });
+		expect(content.paddingTop).toBeGreaterThanOrEqual(-disc.top + removes[0].props.hitSlop);
+		expect(content.paddingRight).toBeGreaterThanOrEqual(-disc.right + removes[0].props.hitSlop);
 	});
 });

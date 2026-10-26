@@ -14,7 +14,12 @@ const THUMB_SIZE = 56;
 // The remove disc on a thumbnail's corner stays small so it covers little of
 // the photo; its hit area is grown to a full touch target around it.
 const REMOVE_DISC_SIZE = iconSize.lg;
+const REMOVE_OVERHANG = space.xs;
 const removeSlop = (glyph: number) => (touchTarget - glyph) / 2;
+// How far that target reaches past the thumbnail's top and right edges. The
+// scroll view drops touches outside its bounds, so the row keeps this much room
+// there; the last disc's overhang is no longer cut off at the scroll's end either.
+const REMOVE_REACH = REMOVE_OVERHANG + removeSlop(REMOVE_DISC_SIZE);
 const CHIP_MAX_WIDTH = 190;
 
 /**
@@ -88,7 +93,7 @@ export function SpawnAttachmentRow({ attachments, onRemove }: {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	row: { flexGrow: 0, flexShrink: 0 },
-	content: { gap: space.sm, alignItems: "center", paddingTop: space.xs },
+	content: { gap: space.sm, alignItems: "center", paddingTop: REMOVE_REACH, paddingRight: REMOVE_REACH },
 	thumb: { width: THUMB_SIZE, height: THUMB_SIZE },
 	thumbOpen: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden" },
 	thumbImage: { width: THUMB_SIZE, height: THUMB_SIZE, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },
@@ -96,8 +101,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// the mark reads on any image without a fixed scrim colour.
 	thumbRemove: {
 		position: "absolute",
-		top: -space.xs,
-		right: -space.xs,
+		top: -REMOVE_OVERHANG,
+		right: -REMOVE_OVERHANG,
 		width: REMOVE_DISC_SIZE,
 		height: REMOVE_DISC_SIZE,
 		borderRadius: radius.pill,
