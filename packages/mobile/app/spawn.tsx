@@ -503,7 +503,7 @@ function SpawnModalContent() {
 function spawnErrorCopy(e: unknown): string {
 	if (isChatPreflightError(e)) return chatErrorCopy(e);
 	if (e instanceof ApiError && e.code === "PROMPT_TOO_LONG") {
-		return "Task prompt is too long. Keep it to 16 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
+		return "Task prompt is too long. Keep it to 100 KiB or fewer (emoji and other non-English characters use more than one byte). Shorten it and try again.";
 	}
 	return userFacingError(e, "Couldn't start the worker. Try again.");
 }

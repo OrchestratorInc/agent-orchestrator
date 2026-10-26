@@ -16367,7 +16367,7 @@ components:
             $ref: '#/components/schemas/AttachmentInput'
           type: array
         brief:
-          maxLength: 16384
+          maxLength: 102400
           type: string
         clientRequestId:
           maxLength: 128
@@ -20431,7 +20431,7 @@ components:
         projectId:
           type: string
         prompt:
-          maxLength: 16384
+          maxLength: 102400
           type: string
         requestedOutput:
           enum:
