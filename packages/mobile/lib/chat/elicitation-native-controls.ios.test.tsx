@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -12,10 +12,11 @@ vi.mock("@expo/ui/swift-ui", () => ({
 	Button: "Button", Divider: "Divider", HStack: "HStack", Image: "Image", Spacer: "Spacer",
 	Text: "Text", TextField: "TextField", VStack: "VStack", useNativeState: () => native,
 }));
+// Each modifier records its name and arguments, so a test can read what a view was given.
 vi.mock("@expo/ui/swift-ui/modifiers", () => Object.fromEntries([
 	"accessibilityAddTraits", "accessibilityHidden", "buttonStyle", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
 	"multilineTextAlignment", "padding", "textFieldStyle", "tint",
-].map((name) => [name, () => ({})])));
+].map((name) => [name, (...args: unknown[]) => ({ [name]: args })])));
 vi.mock("../glass", () => ({ glassPanel: () => ({}) }));
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemeState: () => ({ scheme: "light" }) }));
@@ -105,14 +106,60 @@ it.each([false, true])("handles repeated native values followed by an external r
 	expect(native.value).toBe(numeric ? "12" : "AB");
 });
 
+// The measuring copy renders first, then the button people see.
+function actionParts() {
+	const [measure, visible] = renderer!.root.findAllByType(Host);
+	const [probe, button] = renderer!.root.findAllByType(Button);
+	return { measure, visible, probe, button };
+}
+function modifier(node: ReactTestInstance, name: string): unknown {
+	return (node.props.modifiers as Record<string, unknown>[]).find((entry) => name in entry)?.[name];
+}
+function measure(row: number, label: number) {
+	act(() => {
+		actionParts().measure.props.onLayout({ nativeEvent: { layout: { width: row } } });
+		actionParts().measure.props.onLayoutContent({ nativeEvent: { width: label, height: 50 } });
+	});
+}
+
 it("lets an action take its label's width instead of a guessed one", () => {
 	const onPress = vi.fn();
-	act(() => { renderer = create(<ElicitationAction label="Allow for this session and every later one" primary onPress={onPress} />); });
-	const host = renderer!.root.findByType(Host);
-	expect(host.props.matchContents).toBe(true);
-	expect(host.props.style).toBeUndefined();
-	const button = renderer!.root.findByType(Button);
-	expect(button.props.label).toBe("Allow for this session and every later one");
-	act(() => button.props.onPress());
+	act(() => { renderer = create(<ElicitationAction label="Allow once" primary width={82} onPress={onPress} />); });
+	const { measure: copy, visible, probe, button } = actionParts();
+	expect(visible.props.matchContents).toBe(true);
+	expect(visible.props.style).toEqual({ maxWidth: "100%" });
+	expect(button.props.label).toBe("Allow once");
+	expect(modifier(button, "frame")).toEqual([{ minWidth: 82 }]);
+	// The copy spans the row at its natural width, out of reach of touch and screen readers.
+	expect(copy.props.matchContents).toBeUndefined();
+	expect(copy.props.pointerEvents).toBe("none");
+	expect(copy.props.accessibilityElementsHidden).toBe(true);
+	expect(copy.props.importantForAccessibility).toBe("no-hide-descendants");
+	expect(modifier(probe, "fixedSize")).toEqual([]);
+	expect(modifier(probe, "accessibilityHidden")).toEqual([true]);
+	expect(probe.props.onPress).toBeUndefined();
+	measure(320, 140);
+	expect(modifier(actionParts().button, "frame")).toEqual([{ minWidth: 82 }]);
+	act(() => actionParts().button.props.onPress());
 	expect(onPress).toHaveBeenCalledOnce();
+});
+
+it("wraps a decision wider than its row instead of running past the card", () => {
+	const decision = "No, and tell me what to do differently (esc)";
+	const action = (label: string) => <ElicitationAction label={label} primary onPress={vi.fn()} />;
+	act(() => { renderer = create(action(decision)); });
+	measure(300.6, 420);
+	expect(modifier(actionParts().button, "frame")).toEqual([{ width: 300 }]);
+	expect(modifier(actionParts().button, "multilineTextAlignment")).toEqual(["center"]);
+	// The copy is never held, so it keeps reporting the label's own width.
+	expect(modifier(actionParts().probe, "frame")).toBeUndefined();
+	// Given room, it goes back to its own size.
+	measure(480, 420);
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
+	// A new label is measured afresh; the old one's width says nothing about it.
+	measure(300, 420);
+	act(() => renderer!.update(action("Sending…")));
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
+	measure(300, 96);
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
 });

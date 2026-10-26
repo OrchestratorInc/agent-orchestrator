@@ -14,11 +14,13 @@ import {
 	padding,
 	textFieldStyle,
 	tint,
+	type ViewModifier,
 } from "@expo/ui/swift-ui/modifiers";
 import { glassPanel } from "../glass";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import type { ElicitationActionProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
+import { useActionFit } from "./elicitationActionFit";
 import { iconSize, touchTarget } from "../tokens";
 import { useNativeTextInput } from "../useNativeTextInput";
 
@@ -82,22 +84,43 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 	</Host>;
 }
 
+// Spans the row behind the actions, unseen and untouchable: it only measures.
+const measureStyle = { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0 } as const;
+
 export function ElicitationAction({ label, primary, disabled, width, onPress }: ElicitationActionProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	// The host takes the button's own size, so a long decision is never cut
-	// short. `width` only reserves a slot the button may outgrow.
-	return <Host matchContents colorScheme={scheme}>
-		<Button
-			label={label}
-			onPress={() => { haptics.tap(); onPress(); }}
-			modifiers={[
-				buttonStyle(primary ? "borderedProminent" : "plain"),
-				controlSize("regular"),
-				...(width ? [frame({ minWidth: width })] : []),
-				tint(primary ? t.accent : t.textSecondary),
-				disabledModifier(disabled),
-			]}
-		/>
-	</Host>;
+	const fit = useActionFit(label);
+	const button = (cap: number | undefined, extra: ViewModifier[], press?: () => void) => <Button
+		label={label}
+		onPress={press}
+		modifiers={[
+			buttonStyle(primary ? "borderedProminent" : "plain"),
+			controlSize("regular"),
+			...(cap !== undefined ? [frame({ width: cap })] : width ? [frame({ minWidth: width })] : []),
+			multilineTextAlignment("center"),
+			tint(primary ? t.accent : t.textSecondary),
+			disabledModifier(disabled),
+			...extra,
+		]}
+	/>;
+	// The button takes its label's own width, so a long decision is never cut
+	// short, and wraps only when that is wider than the row. `width` reserves a
+	// slot the button may outgrow.
+	return <>
+		<Host
+			pointerEvents="none"
+			accessibilityElementsHidden
+			importantForAccessibility="no-hide-descendants"
+			style={measureStyle}
+			colorScheme={scheme}
+			onLayout={fit.onRowLayout}
+			onLayoutContent={fit.onLabelLayout}
+		>
+			{button(undefined, [fixedSize(), accessibilityHidden(true)])}
+		</Host>
+		<Host matchContents style={{ maxWidth: "100%" }} colorScheme={scheme}>
+			{button(fit.cap, [], () => { haptics.tap(); onPress(); })}
+		</Host>
+	</>;
 }

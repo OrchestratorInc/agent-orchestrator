@@ -1,9 +1,11 @@
 import { Button, Checkbox, Column, Host, ListItem, OutlinedTextField, RadioButton, Text, TextButton, useNativeState } from "@expo/ui/jetpack-compose";
-import { defaultMinSize, fillMaxWidth, selectable, selectableGroup, testID, toggleable } from "@expo/ui/jetpack-compose/modifiers";
+import { defaultMinSize, fillMaxWidth, selectable, selectableGroup, testID, toggleable, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
+import { StyleSheet, View } from "react-native";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { font, type } from "../tokens";
 import { useNativeTextInput } from "../useNativeTextInput";
+import { useActionFit } from "./elicitationActionFit";
 
 // The Material 3 controls Android draws for a request's choices, typed answers
 // and actions; iOS has its own SwiftUI file. Compose gives each row its 48dp
@@ -112,21 +114,44 @@ export function ElicitationTextField({ value, label, autoFocus, numeric, maxLeng
 export function ElicitationAction({ label, primary, disabled, width, onPress }: ElicitationActionProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const press = () => { haptics.tap(); onPress(); };
-	const modifiers = width ? [defaultMinSize({ minWidth: width })] : undefined;
-	const title = <Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.semibold }}>{label}</Text>;
-	// Sized by its label, so a long decision is never cut short.
+	const fit = useActionFit(label);
+	const button = (cap: number | undefined, press?: () => void) => {
+		const modifiers = cap !== undefined ? [fixedWidth(cap)] : width ? [defaultMinSize({ minWidth: width })] : undefined;
+		const title = <Text style={{ typography: "labelLarge", fontFamily: font.semibold, textAlign: "center" }}>{label}</Text>;
+		return primary ? (
+			<Button onClick={press} enabled={!disabled} colors={{ containerColor: t.accent, contentColor: t.onAccent }} modifiers={modifiers}>
+				{title}
+			</Button>
+		) : (
+			<TextButton onClick={press} enabled={!disabled} colors={{ contentColor: t.accent }} modifiers={modifiers}>
+				{title}
+			</TextButton>
+		);
+	};
+	// Sized by its label, so a long decision is never cut short, and wrapped only
+	// when that is wider than the row.
 	return (
-		<Host matchContents colorScheme={scheme}>
-			{primary ? (
-				<Button onClick={press} enabled={!disabled} colors={{ containerColor: t.accent, contentColor: t.onAccent }} modifiers={modifiers}>
-					{title}
-				</Button>
-			) : (
-				<TextButton onClick={press} enabled={!disabled} colors={{ contentColor: t.accent }} modifiers={modifiers}>
-					{title}
-				</TextButton>
-			)}
-		</Host>
+		<>
+			<View
+				pointerEvents="none"
+				accessibilityElementsHidden
+				importantForAccessibility="no-hide-descendants"
+				style={styles.measure}
+				onLayout={fit.onRowLayout}
+			>
+				<Host matchContents colorScheme={scheme} onLayoutContent={fit.onLabelLayout}>
+					{button(undefined)}
+				</Host>
+			</View>
+			<Host matchContents colorScheme={scheme} style={styles.action}>
+				{button(fit.cap, () => { haptics.tap(); onPress(); })}
+			</Host>
+		</>
 	);
 }
+
+const styles = StyleSheet.create({
+	// Spans the row behind the actions, unseen and untouchable: it only measures.
+	measure: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0 },
+	action: { maxWidth: "100%" },
+});
