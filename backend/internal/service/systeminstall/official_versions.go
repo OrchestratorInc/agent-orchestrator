@@ -38,8 +38,10 @@ const (
 	officialPage
 )
 
-// officialSource is where a vendor's installer resolves its latest release.
-// Each entry mirrors the lookup the vendor's own install script performs.
+// officialSource is where a vendor's installer resolves its latest release,
+// which AO pins its managed update to. Each entry follows the lookup the
+// vendor's own install script performs; for an npm source, match, when set,
+// must match the release, so a release the installer refuses is never offered.
 type officialSource struct {
 	kind  officialSourceKind
 	ref   string
@@ -48,6 +50,10 @@ type officialSource struct {
 }
 
 var cursorDownloadVersion = regexp.MustCompile(`downloads\.cursor\.com/lab/(\d[0-9A-Za-z.-]*)/`)
+
+// opencodeV1Release matches an OpenCode 1 release, the only kind
+// opencode.ai/install installs: it exits for any 2.x.
+var opencodeV1Release = regexp.MustCompile(`^1\.`)
 
 func officialSourceFor(target Target, goos, goarch string) (officialSource, bool) {
 	switch target {
@@ -79,7 +85,20 @@ func officialSourceFor(target Target, goos, goarch string) (officialSource, bool
 	case TargetCursor:
 		return officialSource{kind: officialPage, ref: "https://cursor.com/install", match: cursorDownloadVersion}, true
 	case TargetOpencode:
-		return officialSource{kind: officialGitHub, ref: "anomalyco/opencode"}, true
+		// GitHub's Latest release may be OpenCode 2, which opencode.ai/install
+		// refuses; it resolves the opencode-ai npm package, OpenCode 1 only.
+		return officialSource{kind: officialNPM, ref: "opencode-ai", match: opencodeV1Release}, true
+	case TargetOpencodeV2:
+		// opencode.ai/v2/install reads the same release document.
+		return officialSource{kind: officialJSON, ref: "https://opencode.ai/update/api/latest/cli/npm", field: "version"}, true
+	case TargetMemcode:
+		// memcode.ai/install.sh downloads through memcode.ai/dl, which
+		// redirects to this repository's latest release.
+		return officialSource{kind: officialGitHub, ref: "memcode-ai/memcode"}, true
+	case TargetQwen:
+		// The standalone installer's latest is this repository's latest
+		// release, mirrored under the same tag on Aliyun.
+		return officialSource{kind: officialGitHub, ref: "QwenLM/qwen-code"}, true
 	case TargetGoose:
 		return officialSource{kind: officialGitHub, ref: "aaif-goose/goose"}, true
 	case TargetKimchi:
@@ -125,6 +144,9 @@ func officialReleaseVersionWith(client *http.Client, goos, goarch string) func(c
 			raw, err = pypiLatestRelease(ctx, client, source.ref)
 		case officialNPM:
 			raw, err = npmLatestTag(ctx, client, source.ref)
+			if err == nil && source.match != nil && !source.match.MatchString(strings.TrimPrefix(strings.TrimSpace(raw), "v")) {
+				return "", fmt.Errorf("%s latest %q is not a release its installer installs", source.ref, raw)
+			}
 		case officialGitHub:
 			if tag, tagErr := githubLatestReleaseTag(ctx, client, source.ref); tagErr == nil {
 				return parseOfficialVersion(officialSource{kind: officialText}, []byte(tag))

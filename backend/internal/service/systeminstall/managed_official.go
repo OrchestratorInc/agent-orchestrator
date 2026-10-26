@@ -38,9 +38,12 @@ const managedInstallerPath = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 // officialInstallerEnv is the environment every recipe shares: a private HOME
 // inside the release, so any profile or config an installer writes lands
-// there instead of in the user's files, and a PATH of system tools.
+// there instead of in the user's files, a PATH of system tools, and a plain
+// sh as SHELL. Installers pick the profile they append PATH to from SHELL;
+// fx, for one, writes $HOME/.config/fish/config.fish for fish users without
+// creating its folder, and fails under set -e.
 func officialInstallerEnv(dir string, extra ...string) []string {
-	return append([]string{"HOME=" + filepath.Join(dir, ".install-home"), "PATH=" + managedInstallerPath}, extra...)
+	return append([]string{"HOME=" + filepath.Join(dir, ".install-home"), "PATH=" + managedInstallerPath, "SHELL=/bin/sh"}, extra...)
 }
 
 func withV(pin string) string {
@@ -246,6 +249,46 @@ func (s *Service) officialManagedRecipeFor(plan Plan) (officialManagedRecipe, bo
 		return officialManagedRecipe{}, false
 	}
 	return recipe, true
+}
+
+// officialManagedScript returns the vendor installer that installs plan as a
+// release of AO's own: installScript, plan's official installer, or for a
+// cask in officialManagedCasks the installer AO runs instead of the cask.
+func (s requestPlanner) officialManagedScript(plan Plan, installScript *ports.InstallScriptCommand) (*ports.InstallScriptCommand, bool) {
+	if s.managedRoot == "" {
+		return nil, false
+	}
+	script := installScript
+	if entry, ok := officialManagedCaskFor(s.goos, plan); ok {
+		script = s.planShellInstaller(plan.Target, entry.url, entry.shell).Script
+	}
+	if script == nil {
+		return nil, false
+	}
+	plan.Script = script
+	if _, ok := s.officialManagedRecipeFor(plan); !ok {
+		return nil, false
+	}
+	return script, true
+}
+
+// officialManagedUpdate reports whether one of plans, a target's install
+// plans, is an official installer AO runs into a release of its own. Such an
+// update maintains the copy sessions run wherever the vendor's installer put
+// the user's copy, since it never writes there.
+func (s *Service) officialManagedUpdate(plans []Plan) bool {
+	if s.managedRoot == "" {
+		return false
+	}
+	for _, plan := range plans {
+		if plan.Method != "official-installer" || plan.Unsupported {
+			continue
+		}
+		if _, ok := s.officialManagedRecipeFor(plan); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // runOfficialManagedInstall installs one release into dir: the vendor's

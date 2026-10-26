@@ -69,6 +69,11 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 			if path := envValue(env, "PATH"); path != managedInstallerPath {
 				t.Fatalf("PATH = %q, want system tools only", path)
 			}
+			// A fish user's SHELL sends fx's PATH line to a profile folder
+			// the private HOME does not have, and the install fails.
+			if shell := envValue(append([]string{"SHELL=/opt/homebrew/bin/fish"}, env...), "SHELL"); shell != "/bin/sh" {
+				t.Fatalf("SHELL = %q, want a plain sh whatever the user's shell", shell)
+			}
 			for key, value := range want.env {
 				if got := envValue(env, key); got != value {
 					t.Fatalf("%s = %q, want %q", key, got, value)
@@ -152,8 +157,20 @@ func TestOfficialInstallerUpdatesBesideARunningSession(t *testing.T) {
 	if got := envValue(scripts[0].Env, "VERSION"); got != "1.19.3" {
 		t.Fatalf("installer VERSION = %q, want the advisory's release", got)
 	}
-	if target, err := filepath.EvalSymlinks(launcher); err != nil || !strings.HasPrefix(target, release) {
-		t.Fatalf("launcher resolves to %q (%v), want the new release", target, err)
+	assertResolvesInto(t, launcher, release)
+}
+
+// assertResolvesInto fails unless launcher resolves to a file inside release.
+// Both sides are resolved: on macOS t.TempDir is under /var, a link to
+// /private/var, and only the launcher's resolved form says so.
+func assertResolvesInto(t *testing.T, launcher, release string) {
+	t.Helper()
+	target, err := filepath.EvalSymlinks(launcher)
+	if err == nil {
+		release, err = filepath.EvalSymlinks(release)
+	}
+	if err != nil || !strings.HasPrefix(target, release+string(filepath.Separator)) {
+		t.Fatalf("launcher resolves to %q (%v), want inside the new release %s", target, err, release)
 	}
 }
 
@@ -266,7 +283,222 @@ func TestCodexCaskUpdatesWithItsInstallerBesideARunningSession(t *testing.T) {
 	if got := envValue(scripts[0].Env, "CODEX_RELEASE"); got != "0.163.0" {
 		t.Fatalf("CODEX_RELEASE = %q, want the advisory's release", got)
 	}
-	if target, err := filepath.EvalSymlinks(launcher); err != nil || !strings.HasPrefix(target, release) {
-		t.Fatalf("launcher resolves to %q (%v), want the new release", target, err)
+	assertResolvesInto(t, launcher, release)
+}
+
+// managedOfficialFixture is a Linux service that updates target with its
+// official installer into AO's releases. The fake installer writes the CLI
+// where the recipe says, reporting the release it was pinned to; sessions run
+// the user's copy until AO's launcher exists.
+type managedOfficialFixture struct {
+	s        *Service
+	root     string
+	launcher string
+	mu       sync.Mutex
+	latest   string
+	scripts  []ports.InstallScriptCommand
+}
+
+func newManagedOfficialFixture(t *testing.T, target Target, userCopy, userVersion, latest string, pin func(env []string) string) *managedOfficialFixture {
+	t.Helper()
+	f := &managedOfficialFixture{root: t.TempDir(), latest: latest}
+	s := newTestService("linux", "bash", "sh")
+	s.managedRoot = f.root
+	s.releases = &releaseStoreStub{}
+	// No package manager owns the copy.
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
+	s.managedVersion = fixedManagedVersion("9.9.9", nil)
+	s.officialVersion = func(context.Context, Target) (string, error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.latest, nil
 	}
+	recipe := officialManagedRecipes[target]
+	f.launcher = filepath.Join(f.root, "bin", filepath.Base(userCopy))
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		if resolved, err := filepath.EvalSymlinks(f.launcher); err == nil {
+			return VerifyResult{ResolvedPath: f.launcher, Output: strings.TrimSpace(readFile(resolved))}, nil
+		}
+		return VerifyResult{ResolvedPath: userCopy, Output: userVersion}, nil
+	})
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, _, _ io.Writer) (ports.InstallScriptResult, error) {
+		f.mu.Lock()
+		f.scripts = append(f.scripts, command)
+		f.mu.Unlock()
+		// The release directory is the private HOME's parent.
+		binary := filepath.Join(filepath.Dir(envValue(command.Env, "HOME")), recipe.binRel)
+		if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+			return ports.InstallScriptResult{}, err
+		}
+		return ports.InstallScriptResult{}, os.WriteFile(binary, []byte(pin(command.Env)+"\n"), 0o755)
+	})
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+		if len(argv) == 2 && argv[1] == "--version" {
+			_, err := io.WriteString(stdout, strings.TrimSpace(readFile(argv[0]))+"\n")
+			return err
+		}
+		return nil
+	})
+	f.s = s
+	return f
+}
+
+func (f *managedOfficialFixture) setLatest(latest string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.latest = latest
+}
+
+// After AO updates Kimi into a release of its own, sessions run AO's
+// launcher, which is not where Kimi's installer puts kimi. The next advisory
+// must still name the official installer, or AO stays on that release.
+func TestManagedOfficialReleaseStaysUpdatable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed launchers are symlinks on Unix")
+	}
+	f := newManagedOfficialFixture(t, TargetKimi, "/Users/me/.kimi-code/bin/kimi", "kimi, version 1.19.2", "1.19.3",
+		func(env []string) string { return "kimi, version " + envValue(env, "KIMI_VERSION") })
+	ctx := context.Background()
+	for i, latest := range []string{"1.19.3", "1.19.4"} {
+		f.setLatest(latest)
+		advisory, err := f.s.UpdateAdvisory(ctx, TargetKimi, true)
+		if err != nil || advisory.Status != UpdateStatusBehindLatest || advisory.MaintenanceMethod != "official-installer" || advisory.LatestVersion != latest {
+			t.Fatalf("update %d: advisory = %+v, %v; want official-installer behind %s", i+1, advisory, err, latest)
+		}
+		if _, err := f.s.StartAgentOperation(ctx, TargetKimi, "", AgentOperationUpdate, ""); err != nil {
+			t.Fatalf("update %d: %v", i+1, err)
+		}
+		f.s.workers.Wait()
+		if job, _ := f.s.Status(ctx, TargetKimi); job.Status != StatusSucceeded {
+			t.Fatalf("update %d: job = %+v", i+1, job)
+		}
+	}
+	var pins []string
+	for _, script := range f.scripts {
+		pins = append(pins, envValue(script.Env, "KIMI_VERSION"))
+	}
+	if !slices.Equal(pins, []string{"1.19.3", "1.19.4"}) {
+		t.Fatalf("installer pins = %q, want one per update", pins)
+	}
+	assertResolvesInto(t, f.launcher, filepath.Join(f.root, string(TargetKimi), "versions", "v2"))
+	if advisory, err := f.s.UpdateAdvisory(ctx, TargetKimi, true); err != nil || advisory.Status != UpdateStatusCurrent || advisory.MaintenanceMethod != "official-installer" {
+		t.Fatalf("advisory after the second update = %+v, %v", advisory, err)
+	}
+}
+
+// Harnesses with a managed recipe but no update command of their own are
+// offered their official installer, which installs into AO's releases
+// wherever the user's copy is, and are compared with the release that
+// installer would install.
+func TestOfficialInstallsOfferTheirManagedRecipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed launchers are symlinks on Unix")
+	}
+	for _, tt := range []struct {
+		target   Target
+		userCopy string
+	}{
+		{TargetMemcode, "/Users/me/.local/bin/memcode"},
+		{TargetOpencodeV2, "/Users/me/.opencode/bin/opencode-v2"},
+		{TargetQwen, "/Users/me/.local/bin/qwen"},
+		{TargetAgy, "/Users/me/.local/bin/agy"},
+	} {
+		t.Run(string(tt.target), func(t *testing.T) {
+			f := newManagedOfficialFixture(t, tt.target, tt.userCopy, "0.4.0", "0.5.0", func([]string) string { return "0.5.0" })
+			var looked []Target
+			f.s.officialVersion = func(_ context.Context, target Target) (string, error) {
+				looked = append(looked, target)
+				return "0.5.0", nil
+			}
+			advisory, err := f.s.UpdateAdvisory(context.Background(), tt.target, false)
+			if err != nil || advisory.Status != UpdateStatusBehindLatest || advisory.MaintenanceMethod != "official-installer" ||
+				advisory.Source != officialReleaseSource || !slices.Equal(looked, []Target{tt.target}) {
+				t.Fatalf("advisory = %+v, %v, looked up %v", advisory, err, looked)
+			}
+			// Without AO's releases only a harness's own update command can
+			// update the user's copy.
+			want := ""
+			if _, ok := vendorUpdateCommands[tt.target]; ok {
+				want = "official-installer"
+			}
+			f.s.managedRoot = ""
+			advisory, err = f.s.UpdateAdvisory(context.Background(), tt.target, true)
+			if err != nil || advisory.MaintenanceMethod != want {
+				t.Fatalf("advisory without managed installs = %+v, %v; want method %q", advisory, err, want)
+			}
+		})
+	}
+}
+
+// Reinstall repairs the Codex copy sessions run: AO's release, installed by
+// Codex's own installer at the recorded release, never brew's cask.
+func TestCodexCaskReinstallRepairsTheManagedRelease(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed launchers are symlinks on Unix")
+	}
+	root := t.TempDir()
+	s := newTestService("darwin", "brew", "sh")
+	s.managedRoot = root
+	s.releases = &releaseStoreStub{}
+	record := managedRecord{Method: "homebrew", Package: "codex", CLI: "codex", Version: "0.163.0", Dir: "v1", BinRel: filepath.Join("bin", "codex")}
+	writeFileAt(t, filepath.Join(root, string(TargetCodex), "managed.json"), string(mustJSON(record)))
+	launcher := filepath.Join(root, "bin", "codex")
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		resolved, err := filepath.EvalSymlinks(launcher)
+		if err != nil {
+			return VerifyResult{ResolvedPath: launcher}, err
+		}
+		return VerifyResult{ResolvedPath: launcher, Output: strings.TrimSpace(readFile(resolved))}, nil
+	})
+	var mu sync.Mutex
+	var scripts []ports.InstallScriptCommand
+	var commands []ports.InstallCommand
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, _, _ io.Writer) (ports.InstallScriptResult, error) {
+		mu.Lock()
+		scripts = append(scripts, command)
+		mu.Unlock()
+		bin := envValue(command.Env, "CODEX_INSTALL_DIR")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			return ports.InstallScriptResult{}, err
+		}
+		return ports.InstallScriptResult{}, os.WriteFile(filepath.Join(bin, "codex"), []byte(envValue(command.Env, "CODEX_RELEASE")+"\n"), 0o755)
+	})
+	s.installCommands = installCommandRunnerFunc(func(_ context.Context, command ports.InstallCommand, _, _ io.Writer) error {
+		mu.Lock()
+		defer mu.Unlock()
+		commands = append(commands, command)
+		return nil
+	})
+	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
+		if len(argv) == 2 && argv[1] == "--version" {
+			_, err := io.WriteString(stdout, strings.TrimSpace(readFile(argv[0]))+"\n")
+			return err
+		}
+		return nil
+	})
+
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.resolveAgentMethod(TargetCodex, "homebrew", AgentOperationReinstall)
+	if err != nil || !plan.managed || plan.managedPin != "0.163.0" || plan.Script == nil || plan.Script.URL != codexInstallScriptURL || slices.Contains(plan.Command, "brew") {
+		t.Fatalf("reinstall plan = %+v, %v; want Codex's installer into a managed release at 0.163.0", plan, err)
+	}
+	if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "homebrew", AgentOperationReinstall, ""); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+	if job, _ := s.Status(context.Background(), TargetCodex); job.Status != StatusSucceeded {
+		t.Fatalf("job = %+v", job)
+	}
+	for _, command := range commands {
+		if slices.Contains(command.Argv, "brew") {
+			t.Fatalf("ran %q, want the cask left alone", command.Argv)
+		}
+	}
+	if len(scripts) != 1 || envValue(scripts[0].Env, "CODEX_RELEASE") != "0.163.0" {
+		t.Fatalf("installer runs = %+v, want one pinned to the recorded release", scripts)
+	}
+	assertResolvesInto(t, launcher, filepath.Join(root, string(TargetCodex), "versions", "v1"))
 }

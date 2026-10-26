@@ -13,7 +13,9 @@ import (
 )
 
 // idleCoordinatorStub stands in for Session Manager. Stopping a session puts
-// it to sleep, so the installer no longer sees it as live.
+// it to sleep, so the installer no longer sees it as live. With terminals set
+// it stops them the way Session Manager stops a terminal: the process ends,
+// but the row stays idle and unhibernated.
 type idleCoordinatorStub struct {
 	mu        sync.Mutex
 	sessions  *[]domain.SessionRecord
@@ -22,6 +24,9 @@ type idleCoordinatorStub struct {
 	resumed   [][]domain.SessionID
 	stopErr   error
 	resumeErr error
+	terminals bool
+	// unstopped is left running and not reported as stopped.
+	unstopped domain.SessionID
 }
 
 func (c *idleCoordinatorStub) BusyHarnessSessions(context.Context, domain.AgentHarness) ([]domain.SessionWait, error) {
@@ -40,7 +45,12 @@ func (c *idleCoordinatorStub) StopHarnessSessions(context.Context, domain.AgentH
 	now := time.Now()
 	var stopped []domain.SessionID
 	for i := range *c.sessions {
-		(*c.sessions)[i].HibernatedAt = &now
+		if (*c.sessions)[i].ID == c.unstopped {
+			continue
+		}
+		if !c.terminals {
+			(*c.sessions)[i].HibernatedAt = &now
+		}
 		stopped = append(stopped, (*c.sessions)[i].ID)
 	}
 	return stopped, nil
@@ -196,6 +206,51 @@ func TestIdleUpdateNeverRunsNPMWhileASessionStillRuns(t *testing.T) {
 		coordinator.mu.Lock()
 		defer coordinator.mu.Unlock()
 		return coordinator.stops > 0
+	})
+	if len(*ran) != 0 {
+		t.Fatalf("npm ran while a session still ran: %v", *ran)
+	}
+	if _, err := s.CancelAgentOperation(context.Background(), TargetAuggie); err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Wait()
+}
+
+// A stopped terminal's row stays idle and unhibernated: only its process
+// ended. The update must still run instead of resuming the old release and
+// trying again every poll.
+func TestIdleUpdateRunsAfterStoppingTerminalSessions(t *testing.T) {
+	s, coordinator, ran := windowsIdleService(t, false)
+	coordinator.terminals = true
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	job := waitForJob(t, s, TargetAuggie, func(job Job) bool { return job.Status == StatusSucceeded || job.Status == StatusFailed })
+	if job.Status != StatusSucceeded {
+		t.Fatalf("job = %+v", job)
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.stops != 1 || len(coordinator.resumed) != 1 || coordinator.resumed[0][0] != "auggie-1" || len(*ran) == 0 {
+		t.Fatalf("stops=%d resumed=%v ran=%v", coordinator.stops, coordinator.resumed, *ran)
+	}
+}
+
+// A live session the coordinator did not stop still keeps the installer out.
+func TestIdleUpdateNeverRunsBesideASessionThatWasNotStopped(t *testing.T) {
+	s, coordinator, ran := windowsIdleService(t, false)
+	coordinator.terminals = true
+	coordinator.mu.Lock()
+	*coordinator.sessions = append(*coordinator.sessions, domain.SessionRecord{ID: "auggie-2", Harness: domain.AgentHarness(TargetAuggie), Activity: domain.Activity{State: domain.ActivityIdle}})
+	coordinator.unstopped = "auggie-2"
+	coordinator.mu.Unlock()
+	if _, err := s.StartAgentOperation(context.Background(), TargetAuggie, "npm", AgentOperationUpdate, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitForJob(t, s, TargetAuggie, func(Job) bool {
+		coordinator.mu.Lock()
+		defer coordinator.mu.Unlock()
+		return len(coordinator.resumed) > 0
 	})
 	if len(*ran) != 0 {
 		t.Fatalf("npm ran while a session still ran: %v", *ran)

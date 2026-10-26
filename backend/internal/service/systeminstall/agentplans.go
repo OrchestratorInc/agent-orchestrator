@@ -372,14 +372,23 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
-		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method && s.managedEligible(plan) {
-			// Sessions run AO's managed copy, so a reinstall repairs that one:
-			// the same release, installed fresh beside it.
-			plan.managed = true
-			plan.managedPin = record.Version
-			argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
-			plan.Command, plan.Prepare = argv, nil
-			return plan
+		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method {
+			managed := plan
+			// A release the vendor's installer put there is reinstalled with
+			// that installer (for a Codex cask, its official one, not brew).
+			if script, ok := s.officialManagedScript(plan, installScript); ok {
+				managed.Script = script
+			}
+			if s.managedEligible(managed) {
+				// Sessions run AO's managed copy, so a reinstall repairs that one:
+				// the same release, installed fresh beside it.
+				plan = managed
+				plan.managed = true
+				plan.managedPin = record.Version
+				argv, _ := managedInstallCommand(plan.Method, record.Package, record.Version, filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
+				plan.Command, plan.Prepare = argv, nil
+				return plan
+			}
 		}
 		switch plan.Method {
 		case "homebrew":
@@ -410,13 +419,9 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "homebrew":
 			// A cask whose upgrade would delete files running sessions load is
 			// updated with the vendor's installer into a release of AO's own.
-			if entry, ok := officialManagedCaskFor(s.goos, plan); ok && s.managedRoot != "" {
-				if script := s.planShellInstaller(plan.Target, entry.url, entry.shell).Script; script != nil {
-					if _, ok := s.officialManagedRecipeFor(Plan{Target: plan.Target, Method: plan.Method, Package: plan.Package, PackageCask: true, Script: script}); ok {
-						plan.Script = script
-						break
-					}
-				}
+			if script, ok := s.officialManagedScript(plan, nil); ok {
+				plan.Script = script
+				break
 			}
 			// The runner sets HOMEBREW_NO_AUTO_UPDATE, and the advisory reads the
 			// live Homebrew API, so refresh local metadata before upgrading.
@@ -440,12 +445,10 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "official-installer":
 			// A vendor installer AO can run into a release of its own updates
 			// beside the copy sessions run (officialManagedRecipes).
-			if installScript != nil && s.managedRoot != "" {
-				if _, ok := s.officialManagedRecipeFor(Plan{Target: plan.Target, Method: plan.Method, Script: installScript}); ok {
-					plan.Command = nil
-					plan.Script = installScript
-					break
-				}
+			if script, ok := s.officialManagedScript(plan, installScript); ok {
+				plan.Command = nil
+				plan.Script = script
+				break
 			}
 			// These self-updaters do not reliably replace the installed binary
 			// headlessly: installerUpdateTargets on every platform, and these
