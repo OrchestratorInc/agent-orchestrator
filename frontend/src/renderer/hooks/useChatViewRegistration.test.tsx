@@ -149,8 +149,8 @@ it("does not overwrite a newer row with a delayed registration detail response",
 	const view = renderHook(() => useChatViewRegistration("chat", true), { wrapper });
 	await waitFor(() => expect(requests(sessionPath)).toHaveLength(1));
 	const row = { id: "chat", projectId: "project", mode: "chat", harness: "codex", status: "idle", activity: { state: "idle" } } as const;
-	patchWorkspaceSession(client, { ...row, title: "Newer event" });
-	await act(async () => { detail.resolve({ data: { session: { ...row, title: "Stale registration" } } }); });
+	patchWorkspaceSession(client, { ...row, displayName: "Newer event" });
+	await act(async () => { detail.resolve({ data: { session: { ...row, displayName: "Stale registration" } } }); });
 	expect(client.getQueryData(workspaceQueryKey)).toEqual([
 		expect.objectContaining({ sessions: [expect.objectContaining({ id: "chat", title: "Newer event" })] }),
 	]);
