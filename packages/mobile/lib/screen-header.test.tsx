@@ -44,7 +44,7 @@ vi.mock("./ThemeProvider", () => {
 });
 
 import { fontScaleCap, space, type } from "./tokens";
-import { ListSectionHeader, NumberedStep, SheetHeader } from "./ui";
+import { ListSectionHeader, NumberedStep, SheetHeader, STEP_TITLE_INSET } from "./ui";
 
 describe("SheetHeader", () => {
 	it("marks its title as a heading", () => {
@@ -131,6 +131,14 @@ describe("NumberedStep", () => {
 		expect(full.minWidth).toBe(full.minHeight);
 		const number = render(<NumberedStep n={1} title="Pair" />).root.findAll((node) => (node.type as unknown) === "Text" && node.children.includes("1" as never))[0];
 		expect(number.props.maxFontSizeMultiplier).toBe(fontScaleCap.chrome);
+	});
+
+	// A list of steps starts its dividers under the titles, from this value
+	// rather than a copy of the badge and gap.
+	it("says where its title starts: the badge's floor and the gap after it", () => {
+		const views = render(<NumberedStep n={1} title="Pair" />).root.findAllByType("View" as never);
+		const step = Object.assign({}, ...[views[0].props.style].flat().filter(Boolean));
+		expect(STEP_TITLE_INSET).toBe(views[1].props.style.minWidth + step.gap);
 	});
 });
 

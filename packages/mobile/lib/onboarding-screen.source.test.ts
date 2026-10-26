@@ -26,16 +26,16 @@ describe("onboarding screen", () => {
 		expect(page).not.toMatch(/HOW IT WORKS|letterSpacing: 1\.3/);
 	});
 
-	// The inset is computed from how NumberedStep lays out its badge and gap, so
-	// a change there has to come back here.
+	// NumberedStep owns where its title starts, so the dividers follow its badge
+	// and gap instead of a copy of them that could drift.
 	it("starts the step dividers under the step titles, on the shared divider width", () => {
-		expect(page).toContain("divider: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginLeft: STEP_TEXT_INSET }");
-		expect(page).toContain("const STEP_TEXT_INSET = Math.ceil(type.footnote.lineHeight * fontScaleCap.chrome) + 2 * space.hair + space.md;");
+		expect(page).toContain('import { Button, MASCOT_ASPECT, NumberedStep, STEP_TITLE_INSET } from "../lib/ui";');
+		expect(page).toContain("divider: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginLeft: STEP_TITLE_INSET }");
+		expect(page).not.toMatch(/STEP_TEXT_INSET|STEP_BADGE|fontScaleCap|height: 1\b|marginLeft: 43/);
 		const ui = source("./ui.tsx");
-		expect(ui).toContain("const STEP_BADGE = Math.ceil(type.footnote.lineHeight * fontScaleCap.chrome) + 2 * space.hair;");
-		expect(ui).toMatch(/step: \{\s*flexDirection: "row",\s*alignItems: "flex-start",\s*gap: space\.md,/);
+		expect(ui).toContain("export const STEP_TITLE_INSET = STEP_BADGE + STEP_GAP;");
+		expect(ui).toMatch(/step: \{\s*flexDirection: "row",\s*alignItems: "flex-start",\s*gap: STEP_GAP,/);
 		expect(ui).toContain("minWidth: STEP_BADGE,");
-		expect(page).not.toMatch(/height: 1\b|marginLeft: 43/);
 	});
 
 	it("describes where paired work shows up in the tabbed app", () => {

@@ -5,19 +5,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { setOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
 import { useApp } from "../lib/store";
-import { Button, MASCOT_ASPECT, NumberedStep } from "../lib/ui";
+import { Button, MASCOT_ASPECT, NumberedStep, STEP_TITLE_INSET } from "../lib/ui";
 import MASCOT from "../assets/mascot.png";
 import { rowDividerWidth } from "../lib/divider";
 import { useThemedStyles } from "../lib/ThemeProvider";
 import type { Theme } from "../lib/theme";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
-import { fontScaleCap, space, type } from "../lib/tokens";
-
-// Where a step's title starts: NumberedStep's badge at its floor (one line of
-// footnote at the chrome cap, plus its padding) and the gap after it. The
-// dividers between steps start there, under the titles rather than the badges.
-const STEP_TEXT_INSET = Math.ceil(type.footnote.lineHeight * fontScaleCap.chrome) + 2 * space.hair + space.md;
+import { space, type } from "../lib/tokens";
 
 export default function OnboardingScreen() {
 	const styles = useThemedStyles(makeStyles);
@@ -141,7 +136,7 @@ const makeStyles = (t: Theme) =>
 		fontWeight: "600",
 		marginBottom: space.xxs,
 	},
-	divider: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginLeft: STEP_TEXT_INSET },
+	divider: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginLeft: STEP_TITLE_INSET },
 
 	footer: { paddingHorizontal: space.xxl, paddingTop: space.md },
 	cta: { alignSelf: "center", width: "100%", maxWidth: 400 },

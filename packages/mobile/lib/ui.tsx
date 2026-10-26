@@ -540,6 +540,12 @@ export function EmptyState({
 }
 
 const STEP_BADGE = Math.ceil(type.footnote.lineHeight * fontScaleCap.chrome) + 2 * space.hair;
+const STEP_GAP = space.md;
+/**
+ * Where a `NumberedStep`'s title starts: the badge at its floor and the gap
+ * after it. A list of steps starts its dividers here, under the titles.
+ */
+export const STEP_TITLE_INSET = STEP_BADGE + STEP_GAP;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
@@ -596,10 +602,10 @@ const makeStyles = (t: Theme) =>
 		step: {
 			flexDirection: "row",
 			alignItems: "flex-start",
-			gap: space.md,
+			gap: STEP_GAP,
 			paddingVertical: space.md,
 		},
-		stepCompact: { paddingVertical: space.xs, alignItems: "center", gap: space.md },
+		stepCompact: { paddingVertical: space.xs, alignItems: "center", gap: STEP_GAP },
 		// No fixed box for the number to overflow. The floor is the number's line
 		// at the largest scale it allows plus the padding, so one digit always
 		// sits in a circle, and two stretch it into a capsule.
