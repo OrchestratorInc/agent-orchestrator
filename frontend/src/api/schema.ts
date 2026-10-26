@@ -73,6 +73,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/auth/operations/{operationId}/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit a one-time Claude sign-in code to the existing native login */
+        post: operations["submitAgentUILoginCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/chat/prewarm": {
         parameters: {
             query?: never;
@@ -4701,6 +4718,7 @@ export interface components {
             secret: boolean;
         };
         AgentLoginSnapshot: {
+            acceptsCode?: boolean;
             agentId: string;
             deviceCode?: string;
             /** Format: date-time */
@@ -7697,6 +7715,9 @@ export interface components {
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
+        SubmitAgentUILoginCodeRequest: {
+            code: string;
+        };
         SubmitReviewInput: {
             /** @description Review body recorded by AO. Required for changes_requested. */
             body?: string;
@@ -8428,6 +8449,79 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    submitAgentUILoginCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitAgentUILoginCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginSnapshot"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

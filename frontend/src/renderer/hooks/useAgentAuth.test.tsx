@@ -4,7 +4,7 @@ import type { PropsWithChildren } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../lib/api-client";
 import { shellTerminalsQueryKey } from "./useShellTerminals";
-import { cancelAgentUILogin, probeAgentAuth, startAgentUILogin, useAgentAuthPlans, useStartAgentAuth } from "./useAgentAuth";
+import { cancelAgentUILogin, getAgentUILogin, probeAgentAuth, startAgentUILogin, submitAgentUILoginCode, useAgentAuthPlans, useStartAgentAuth } from "./useAgentAuth";
 
 function wrapper(queryClient: QueryClient) {
 	return ({ children }: PropsWithChildren) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -27,6 +27,12 @@ describe("agent authentication hooks", () => {
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations", { params: { path: { agent: "codex" } }, body: { method: "api_key", secret: "test-secret" } });
 	});
 
+	it("submits one-time codes directly without a mutation-cache entry", async () => {
+		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: { id: "login-1", agentId: "claude-code", status: "running", acceptsCode: false } } as never);
+		await submitAgentUILoginCode("claude-code", "login-1", "one-time-code#state");
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations/{operationId}/code", { params: { path: { agent: "claude-code", operationId: "login-1" } }, body: { code: "one-time-code#state" } });
+	});
+
 	it("treats an already-removed login as cancelled but preserves other errors", async () => {
 		const remove = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ error: { code: "AGENT_AUTH_OPERATION_NOT_FOUND" } } as never);
 		await expect(cancelAgentUILogin("codex", "old")).resolves.toBeUndefined();
@@ -45,6 +51,11 @@ describe("agent authentication hooks", () => {
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 		expect(result.current.data?.[0]).toMatchObject({ agentId: "codex", action: "login" });
 		expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/auth-plans");
+	});
+
+	it("preserves the code and HTTP status when a login operation disappeared", async () => {
+		vi.spyOn(apiClient, "GET").mockResolvedValue({ error: { code: "AGENT_AUTH_OPERATION_NOT_FOUND" }, response: new Response(null, { status: 404 }) } as never);
+		await expect(getAgentUILogin("codex", "missing")).rejects.toMatchObject({ code: "AGENT_AUTH_OPERATION_NOT_FOUND", status: 404 });
 	});
 
 	it("starts a fixed agent flow and adds its terminal to an existing cache before navigation", async () => {

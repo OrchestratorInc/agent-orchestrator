@@ -3724,5 +3724,10 @@
 	"settings.harness.loginUi.createDeviceCode": "サインインコードを取得",
 	"settings.harness.loginUi.otherOptions": "その他のオプション",
 	"settings.harness.loginUi.connectedDescription": "このハーネスでアカウントを使用できます。",
-	"settings.harness.loginUi.waitingForCode": "サインインページにこのコードを入力してください。承認を待っています…"
+	"settings.harness.loginUi.waitingForCode": "サインインページにこのコードを入力してください。承認を待っています…",
+	"settings.harness.loginUi.signInCode": "サインインコード",
+	"settings.harness.loginUi.codeHint": "サインインページにコードが表示されたら、ここに貼り付けてください。",
+	"settings.harness.loginUi.submitCode": "コードを送信",
+	"settings.harness.loginUi.remoteCodex": "リモートホストではデバイスコードまたは認証情報を使用してください。ブラウザーのコールバックはそのホストで実行されます。",
+	"settings.harness.loginUi.remoteClaude": "サインインページを開き、表示されたコードをここに貼り付けて、選択したホストで完了してください。"
 }

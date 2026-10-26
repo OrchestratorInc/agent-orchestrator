@@ -27,6 +27,7 @@ type AgentUILoginService interface {
 	StartLogin(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 	Login(context.Context, string, string) (agentauth.LoginSnapshot, error)
 	CancelLogin(context.Context, string, string) (agentauth.LoginSnapshot, error)
+	SubmitLoginCode(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 }
 
 // AgentAuthController owns the safe native authentication routes.
@@ -42,6 +43,33 @@ func (c *AgentAuthController) Register(r chi.Router) {
 	r.Post("/agents/{agent}/auth/operations", c.startUILogin)
 	r.Get("/agents/{agent}/auth/operations/{operationId}", c.uiLogin)
 	r.Delete("/agents/{agent}/auth/operations/{operationId}", c.uiLogin)
+	r.Post("/agents/{agent}/auth/operations/{operationId}/code", c.submitUILoginCode)
+}
+
+func (c *AgentAuthController) submitUILoginCode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	svc, ok := c.Svc.(AgentUILoginService)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, "/api/v1/agents/{agent}/auth/operations/{operationId}/code")
+		return
+	}
+	var req SubmitAgentUILoginCodeRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 20*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Invalid sign-in code request.", nil))
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Expected one sign-in code request.", nil))
+		return
+	}
+	result, err := svc.SubmitLoginCode(r.Context(), chi.URLParam(r, "agent"), chi.URLParam(r, "operationId"), req.Code)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, result)
 }
 
 func (c *AgentAuthController) startUILogin(w http.ResponseWriter, r *http.Request) {

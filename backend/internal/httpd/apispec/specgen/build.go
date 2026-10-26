@@ -528,6 +528,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
 	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
 	"ControllersStartAgentUILoginRequest":         "StartAgentUILoginRequest",
+	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
 	"AgentauthLoginMethod":                        "AgentLoginMethod",
 	"AgentauthLoginSnapshot":                      "AgentLoginSnapshot",
 	"PortsAgentModelCatalog":                      "AgentModelsResponse",
@@ -1928,6 +1929,13 @@ func cueOperations() []operation {
 
 func agentOperations() []operation {
 	return []operation{
+		{
+			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations/{operationId}/code", id: "submitAgentUILoginCode", tag: "agents",
+			summary:    "Submit a one-time Claude sign-in code to the existing native login",
+			pathParams: []any{controllers.AgentIDParam{}, controllers.AgentUILoginIDParam{}},
+			reqBody:    controllers.SubmitAgentUILoginCodeRequest{},
+			resps:      []respUnit{{http.StatusAccepted, agentauth.LoginSnapshot{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/{agent}/auth/operations", id: "startAgentUILogin", tag: "agents",
 			summary:    "Start a fixed native login in the background without exposing a terminal",
