@@ -7,6 +7,7 @@ const fixtures = vi.hoisted(() => ({
 	navigation: { setOptions: vi.fn() },
 	getPreview: vi.fn(),
 	platform: { OS: "ios" },
+	router: { navigate: vi.fn(), dismissTo: vi.fn() },
 	backHandlers: [] as Array<() => boolean>,
 	web: { reload: vi.fn(), goBack: vi.fn() },
 }));
@@ -41,7 +42,7 @@ vi.mock("expo-router", async () => {
 		useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
 		useLocalSearchParams: () => fixtures.params,
 		useNavigation: () => fixtures.navigation,
-		useRouter: () => ({ navigate: vi.fn() }),
+		useRouter: () => fixtures.router,
 	};
 });
 vi.mock("react-native-webview", async () => {
@@ -130,6 +131,8 @@ beforeEach(() => {
 	fixtures.navigation.setOptions.mockClear();
 	fixtures.getPreview.mockReset().mockResolvedValue(appPreview);
 	fixtures.platform.OS = "ios";
+	fixtures.router.navigate.mockClear();
+	fixtures.router.dismissTo.mockClear();
 	fixtures.backHandlers.length = 0;
 	fixtures.web.reload.mockClear();
 	fixtures.web.goBack.mockClear();
@@ -285,6 +288,19 @@ describe("session preview mode", () => {
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
 		expect(mobileView().checked).toBe(false);
+	});
+});
+
+describe("a preview from another machine", () => {
+	it("goes back to the board beneath rather than stacking a second one", async () => {
+		fixtures.params.hostId = "host-2";
+		await openPreview();
+		const [empty] = nodes("EmptyState");
+		expect(empty.props.title).toBe("Preview belongs to another machine");
+		expect(nodes("StackToolbar")).toHaveLength(0);
+		await act(async () => empty.props.action.props.onPress());
+		expect(fixtures.router.dismissTo).toHaveBeenCalledWith("/");
+		expect(fixtures.router.navigate).not.toHaveBeenCalled();
 	});
 });
 

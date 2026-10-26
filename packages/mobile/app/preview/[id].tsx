@@ -138,7 +138,9 @@ function SessionPreviewContent() {
 		return () => clearInterval(poll);
 	}, [hostMatches, refreshPreview]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.navigate("/")} />} /></View>;
+	// Preview is pushed over the board, so the way back to it pops rather than
+	// stacking a second board on top.
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
 	if (!config) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
 
