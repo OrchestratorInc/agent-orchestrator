@@ -475,7 +475,7 @@ describe("Workers selected-machine reachability", () => {
 		const status = renderer.root.findByProps({ testID: "worker-machine-status" });
 		expect(status.findByType("ActivityIndicator" as never).props.size).toBe("small");
 		expect(status.findByType("Text" as never).props.children).toBe("Connecting…");
-		expect(renderer.root.findByType("EnvironmentPicker" as never).findAllByType("ActivityIndicator" as never)).toHaveLength(0);
+		expect(status.findAllByType("EnvironmentPicker" as never)).toHaveLength(0);
 		expect(renderer.root.findAllByType("SymbolView" as never).some((node) => node.props.name?.android === "laptop")).toBe(true);
 		expect(renderer.root.findByType("EnvironmentPicker" as never).props.environments[1].appearance).toEqual({ symbol: "laptop" });
 	});
