@@ -10,7 +10,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { fileMediaKind } from "../lib/file-media";
 import { artifactContentUrl } from "../lib/artifact-content-url";
-import { WORKSPACE_REVIEW_BATCH_SIZE } from "../lib/workspace-review";
+import { WORKSPACE_REVIEW_BATCH_SIZE, WORKSPACE_REVIEW_PAGE_SIZE } from "../lib/workspace-review";
 import { useUiStore } from "../stores/ui-store";
 import {
 	getWorkspaceFileConnectionState,
@@ -510,8 +510,9 @@ export function sessionWorkspaceDiffsQueryOptions({
 }) {
 	return {
 		queryKey: sessionWorkspaceDiffsQueryKey(sessionId, scope, paths, contextLines, ignoreWhitespace, workspaceVersion, selectionKeyFor(view, commitSha, commitShas), hostId),
-		queryFn: async (): Promise<WorkspaceDiffsResponse> => {
+		queryFn: async ({ signal }: { signal?: AbortSignal } = {}): Promise<WorkspaceDiffsResponse> => {
 			const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/workspace/diffs", {
+				signal,
 				params: { path: { sessionId } },
 				body: { ...view, ...commitParams(commitSha, commitShas), contextLines, ignoreWhitespace, paths: [...paths], scope, workspaceVersion },
 			});
@@ -860,7 +861,6 @@ export function useSessionWorkspaceFilesChangedCount(sessionId: string | undefin
 // Must match WorkspaceReviewPane: the Files tab requests these batches, with
 // this context size, and then full contents for files whose patch ends on the
 // last hunk. A mismatch leaves the tab on "Loading diff…".
-const REVIEW_PREFETCH_BATCHES = 4;
 const REVIEW_PREFETCH_EOF_MAX = 40;
 const REVIEW_PREFETCH_EOF_MAX_BYTES = 128 * 1024;
 const lastPrefetchedReview = new Map<string, string>();
@@ -886,7 +886,7 @@ export async function prefetchDefaultWorkspaceReviewDiffs(queryClient: QueryClie
 	// runs against a full workspace response.
 	if (!data.sections) return;
 	const target = defaultWorkspaceReviewTarget(data);
-	const files = (target.files ?? []).filter((file) => !isDeferredReviewFile(file)).slice(0, WORKSPACE_REVIEW_BATCH_SIZE * REVIEW_PREFETCH_BATCHES);
+	const files = (target.files ?? []).slice(0, WORKSPACE_REVIEW_PAGE_SIZE).filter((file) => !isDeferredReviewFile(file));
 	if (files.length === 0) return;
 	const token = `${target.workspaceVersion ?? ""}:${target.scope}:${target.selectionKey}:${files.map((file) => file.path).join("\n")}`;
 
