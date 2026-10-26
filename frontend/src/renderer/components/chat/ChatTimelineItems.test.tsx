@@ -15,7 +15,7 @@ import {
 } from "./ChatTimelineItems";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
-import type { ConversationMessage } from "../../types/conversation";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
@@ -623,7 +623,9 @@ describe("ActivityRow", () => {
 		return <ActivityRow activity={{
 			kind: "activity", id: "read-image", sequence: 1, revision: 1,
 			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool",
-			status: "completed", summary: "Read", detail: { toolName: "Read", content },
+			status: "completed", summary: "Read",
+			// Historical provider wire shapes are wider than the typed message-content intersection.
+			detail: { toolName: "Read", content: content as NonNullable<ConversationActivity["detail"]>["content"] },
 		}} />;
 	}
 
