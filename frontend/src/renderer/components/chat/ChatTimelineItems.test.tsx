@@ -410,6 +410,26 @@ describe("ActivityRow", () => {
 		expect(container.querySelector("pre")?.textContent).toBe("Synthetic PNG");
 	});
 
+	it.each([
+		{ type: "image", data: png, mimeType: "image/png" },
+		{ type: "image", mimeType: "image/png", bytes: 1800 },
+	])("preserves wrapped ACP resources beside detail.content images or placeholders", (image) => {
+		const content = [
+			{ type: "content", content: image },
+			{ type: "content", content: { type: "resource", resource: { uri: "fixture:///report", text: "report body" } } },
+			{ type: "content", content: { type: "resource_link", uri: "https://example.test/report", name: "Report link" } },
+		];
+		const { container } = render(tool(content));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		for (const text of ["fixture:///report", "report body", "https://example.test/report", "Report link"]) {
+			expect(container).toHaveTextContent(text);
+		}
+		if ("data" in image) expect(screen.getByRole("img")).toBeInTheDocument();
+		else expect(container).toHaveTextContent("Tool image (image/png, 1800 bytes)");
+		expect(container.textContent).not.toContain("iVBOR");
+		expect(content[0].content).toEqual(image);
+	});
+
 	it("renders a Codex MCP result image without sending its data to JSON text", () => {
 		const { container } = render(<ActivityRow activity={{
 			kind: "activity", id: "codex-result", sequence: 1, revision: 1,

@@ -1,7 +1,7 @@
 import { ChatImage } from "./ChatImage";
 
 type ToolImagePart = { kind: "image"; src?: string; label: string };
-type ToolContentPart = { kind: "text"; text: string } | ToolImagePart;
+type ToolContentPart = { kind: "text"; text: string } | { kind: "json"; value: unknown } | ToolImagePart;
 
 function toolImage(record: Record<string, unknown>, truncated: boolean): ToolImagePart | undefined {
 	const source = record.source && typeof record.source === "object"
@@ -35,11 +35,20 @@ export function normalizeToolContent(value: unknown, truncated = false): ToolCon
 	for (const key of ["content", "output"]) {
 		parts.push(...normalizeToolContent(record[key], incomplete));
 	}
+	// Preserve fields not handled by the text/image paths, including ACP resources.
+	const handled = ["text", "content", "output", "truncated"];
+	if (image) handled.push("type", "data", "mimeType", "source", "bytes");
+	else if (record.type === "content" || record.type === "text") handled.push("type");
+	const rest = Object.fromEntries(Object.entries(record).filter(([key]) => !handled.includes(key)));
+	if (Object.keys(rest).length) {
+		const sanitized = splitToolResult(rest, incomplete);
+		parts.push(...sanitized.images, { kind: "json", value: sanitized.value });
+	}
 	return parts;
 }
 
 /** Preserve arbitrary MCP result fields while removing image bytes from the JSON text view. */
-export function splitToolResult(value: unknown): { images: ToolImagePart[]; value: unknown } {
+export function splitToolResult(value: unknown, truncated = false): { images: ToolImagePart[]; value: unknown } {
 	const images: ToolImagePart[] = [];
 	function sanitize(item: unknown, truncated = false): unknown {
 		if (Array.isArray(item)) return item.map((child) => sanitize(child, truncated));
@@ -55,7 +64,7 @@ export function splitToolResult(value: unknown): { images: ToolImagePart[]; valu
 		}
 		return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, sanitize(child, incomplete)]));
 	}
-	return { images, value: sanitize(value) };
+	return { images, value: sanitize(value, truncated) };
 }
 
 export function ToolImage({ image }: { image: ToolImagePart }) {

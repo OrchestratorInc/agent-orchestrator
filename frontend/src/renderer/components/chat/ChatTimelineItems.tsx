@@ -2032,7 +2032,8 @@ function ToolContent({ value }: { value: unknown }) {
 			<div className="flex max-w-full flex-col gap-2">
 				{parts.map((part, index) => part.kind === "image"
 					? <ToolImage key={index} image={part} />
-					: <ToolTextContent key={index} value={part.text} />)}
+					: part.kind === "text" ? <ToolTextContent key={index} value={part.text} />
+					: <ToolTextContent key={index} value={formatJson(part.value)} />)}
 			</div>
 		);
 	}
