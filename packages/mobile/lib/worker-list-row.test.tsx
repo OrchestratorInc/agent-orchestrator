@@ -98,6 +98,7 @@ vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./reviewView", () => ({ reviewRouteForSession: () => undefined }));
 
 import { WorkerListRow } from "./worker-list-row";
+import { ArchivedWorkerRow } from "./archived-worker-row";
 import { WorkerBoardList } from "./worker-board-list";
 
 const session: DashboardSession = {
@@ -243,6 +244,34 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+
+	// Metadata is footnote, the 13pt floor: the project, time or status and the
+	// pull request or branch, on live and archived rows alike.
+	it("sets no row text below 13pt", () => {
+		const fontSizes = (element: React.ReactElement) => {
+			let renderer!: ReactTestRenderer;
+			act(() => { renderer = create(element); });
+			const sizes = renderer.root.findAllByType("Text" as never)
+				.map((node) => Object.assign({}, ...[node.props.style].flat().filter(Boolean)).fontSize as number);
+			act(() => renderer.unmount());
+			return sizes;
+		};
+		const live = fontSizes(
+			<WorkerListRow
+				session={session} projectName="Agent Orchestrator" isRenaming={false} nowBucket={1}
+				onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={vi.fn()}
+				onRename={vi.fn(async () => {})} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+			/>,
+		);
+		const archived = fontSizes(
+			<ArchivedWorkerRow session={{ ...session, status: "terminated", isTerminated: true }} projectName="Agent Orchestrator"
+				nowBucket={1} restoring={false} restoreDisabled={false} offline={false} onRestore={vi.fn()} />,
+		);
+		for (const sizes of [live, archived]) {
+			expect(sizes).toHaveLength(4);
+			expect(Math.min(...sizes)).toBeGreaterThanOrEqual(13);
+		}
 	});
 });
 
