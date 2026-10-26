@@ -8,6 +8,9 @@ package claudecode
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,17 +70,55 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		Prompt:           inv.Prompt,
 		SystemPrompt:     inv.SystemPrompt,
 		SystemPromptFile: inv.SystemPromptFile,
-		// Launch off bypassPermissions so the allow/deny lists are enforced.
-		// Set an explicit non-bypass mode instead of deferring to the user's
-		// Claude defaultMode, which may itself be bypassPermissions.
-		Permissions:     ports.PermissionModeAuto,
+		// AO's default mode adds no flag; pinDefaultMode then pins Claude's.
+		Permissions:     ports.PermissionModeDefault,
 		AllowedTools:    workeragent.ReviewerAllowedTools,
 		DisallowedTools: workeragent.ReviewerDisallowedTools,
 	})
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
+	if argv, err = pinDefaultMode(argv); err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	return ports.ReviewCommandSpec{Argv: argv, AgentSessionID: agentSessionID}, nil
+}
+
+// pinDefaultMode starts the reviewer pane in Claude's default ("Manual") mode,
+// whatever the user's own defaultMode is. Not bypassPermissions, which ignores
+// the allow list; not auto, whose classifier approves shell commands no rule
+// names (touch, printf > file) without raising the PermissionRequest prompt the
+// reviewer hook answers. In default mode every such call reaches that hook,
+// which denies all but the exact submit commands. The flag-settings defaultMode
+// keeps Claude's one-time auto-mode dialog out of the pane, as AO does for its
+// explicit modes (see the worker adapter's autoDefaultNudgeGuardArgs).
+func pinDefaultMode(argv []string) ([]string, error) {
+	argv = slices.Clone(argv)
+	end := slices.Index(argv, "--")
+	if end < 0 {
+		end = len(argv)
+	}
+	extra := []string{"--permission-mode", "default"}
+	if i := slices.Index(argv[:end], "--settings"); i >= 0 && i+1 < end {
+		settings := map[string]any{}
+		if err := json.Unmarshal([]byte(argv[i+1]), &settings); err != nil {
+			return nil, fmt.Errorf("claude-code reviewer: read launch settings: %w", err)
+		}
+		permissions, _ := settings["permissions"].(map[string]any)
+		if permissions == nil {
+			permissions = map[string]any{}
+		}
+		permissions["defaultMode"] = "default"
+		settings["permissions"] = permissions
+		encoded, err := json.Marshal(settings)
+		if err != nil {
+			return nil, fmt.Errorf("claude-code reviewer: write launch settings: %w", err)
+		}
+		argv[i+1] = string(encoded)
+	} else {
+		extra = append(extra, "--settings", `{"permissions":{"defaultMode":"default"}}`)
+	}
+	return slices.Insert(argv, end, extra...), nil
 }
 
 // PreLaunch runs reviewer-specific preflight. For Claude Code this installs the
@@ -101,7 +142,8 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 		Config:        inv.Config,
 		SessionID:     workeragent.SessionUUID(inv.ReviewerID),
 		WorkspacePath: inv.WorkspacePath,
-		// The mode ReviewCommand launches with.
+		// Any explicit mode: the pane pins its mode in flag settings
+		// (pinDefaultMode), so the user's global config must not be marked.
 		Permissions: ports.PermissionModeAuto,
 	})
 }
@@ -123,12 +165,15 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 		inv.AgentSessionID = migratedID
 	}
 	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{
-		Permissions:     ports.PermissionModeAuto,
+		Permissions:     ports.PermissionModeDefault,
 		AllowedTools:    workeragent.ReviewerAllowedTools,
 		DisallowedTools: workeragent.ReviewerDisallowedTools,
 	})
 	if err != nil || !ok {
 		return cmd, ok, err
+	}
+	if cmd.Argv, err = pinDefaultMode(cmd.Argv); err != nil {
+		return ports.ReviewCommandSpec{}, false, err
 	}
 	if cmd.AgentSessionID == "" {
 		cmd.AgentSessionID = workeragent.SessionUUID(inv.ReviewerID)
