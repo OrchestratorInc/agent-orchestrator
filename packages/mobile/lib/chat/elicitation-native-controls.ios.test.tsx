@@ -26,6 +26,7 @@ vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemeState: () => 
 
 import { Host } from "@expo/ui";
 import { Button, Text, TextField } from "@expo/ui/swift-ui";
+import { haptics } from "../haptics";
 import { touchTarget } from "../tokens";
 import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls.ios";
 
@@ -180,4 +181,16 @@ it("gives every action at least a touch target", () => {
 	expect(modifier(actionParts().button, "buttonStyle")).toEqual(["borderedProminent"]);
 	expect(modifier(actionParts().button, "controlSize")).toEqual(["large"]);
 	expect(actionParts().label.props.modifiers).toEqual([]);
+});
+
+it("taps on press unless the caller buzzes for the outcome", () => {
+	const onPress = vi.fn();
+	vi.mocked(haptics.tap).mockClear();
+	act(() => { renderer = create(<ElicitationAction label="Cancel" onPress={onPress} />); });
+	act(() => actionParts().button.props.onPress());
+	expect(haptics.tap).toHaveBeenCalledOnce();
+	act(() => renderer!.update(<ElicitationAction label="Save" primary reportsOutcome onPress={onPress} />));
+	act(() => actionParts().button.props.onPress());
+	expect(haptics.tap).toHaveBeenCalledOnce();
+	expect(onPress).toHaveBeenCalledTimes(2);
 });

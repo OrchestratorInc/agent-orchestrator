@@ -14,6 +14,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => Object.fromEntries([
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({ accent: "#0a84ff", onAccent: "#ffffff" }), useThemeState: () => ({ scheme: "light" }) }));
 
+import { haptics } from "../haptics";
 import { ElicitationAction } from "./elicitation-native-controls";
 
 let renderer: ReactTestRenderer | undefined;
@@ -65,4 +66,15 @@ it("holds a decision wider than its row to the row, so its label wraps", () => {
 	expect(modifiers(actionParts().copy)).toBeUndefined();
 	act(() => renderer!.update(action("Sending…")));
 	expect(modifiers(actionParts().button)).toBeUndefined();
+});
+
+it("taps on press unless the caller buzzes for the outcome", () => {
+	const onPress = vi.fn();
+	act(() => { renderer = create(<ElicitationAction label="Cancel" onPress={onPress} />); });
+	act(() => actionParts().button.props.onClick());
+	expect(haptics.tap).toHaveBeenCalledOnce();
+	act(() => renderer!.update(<ElicitationAction label="Save" primary reportsOutcome onPress={onPress} />));
+	act(() => actionParts().button.props.onClick());
+	expect(haptics.tap).toHaveBeenCalledOnce();
+	expect(onPress).toHaveBeenCalledTimes(2);
 });

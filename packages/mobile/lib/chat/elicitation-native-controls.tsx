@@ -33,6 +33,8 @@ export type ElicitationActionProps = {
 	disabled?: boolean;
 	/** The least room the button keeps, so a label that changes (Save, Saving…) does not move its neighbours. It still grows to fit its label. */
 	width?: number;
+	/** The caller buzzes when the work lands (success or error), so the press itself stays silent and the action gives one haptic. */
+	reportsOutcome?: boolean;
 	onPress(): void;
 };
 
@@ -111,7 +113,7 @@ export function ElicitationTextField({ value, label, autoFocus, numeric, maxLeng
 	);
 }
 
-export function ElicitationAction({ label, primary, disabled, width, onPress }: ElicitationActionProps) {
+export function ElicitationAction({ label, primary, disabled, width, reportsOutcome, onPress }: ElicitationActionProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const fit = useActionFit(label);
@@ -144,7 +146,10 @@ export function ElicitationAction({ label, primary, disabled, width, onPress }: 
 				</Host>
 			</View>
 			<Host matchContents colorScheme={scheme} style={styles.action}>
-				{button(fit.cap, () => { haptics.tap(); onPress(); })}
+				{button(fit.cap, () => {
+					if (!reportsOutcome) haptics.tap();
+					onPress();
+				})}
 			</Host>
 		</>
 	);

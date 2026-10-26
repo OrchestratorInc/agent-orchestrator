@@ -89,7 +89,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 // Spans the row behind the actions, unseen and untouchable: it only measures.
 const measureStyle = { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0 } as const;
 
-export function ElicitationAction({ label, primary, disabled, width, onPress }: ElicitationActionProps) {
+export function ElicitationAction({ label, primary, disabled, width, reportsOutcome, onPress }: ElicitationActionProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const fit = useActionFit(label);
@@ -125,7 +125,10 @@ export function ElicitationAction({ label, primary, disabled, width, onPress }: 
 			{button(undefined, [fixedSize(), accessibilityHidden(true)])}
 		</Host>
 		<Host matchContents style={{ maxWidth: "100%" }} colorScheme={scheme}>
-			{button(fit.cap, [], () => { haptics.tap(); onPress(); })}
+			{button(fit.cap, [], () => {
+				if (!reportsOutcome) haptics.tap();
+				onPress();
+			})}
 		</Host>
 	</>;
 }
