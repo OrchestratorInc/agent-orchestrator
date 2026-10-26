@@ -269,6 +269,15 @@ describe("normalizeApiOperation", () => {
 		);
 	});
 
+	it.each([
+		["POST", "/api/v1/agents/claude-code/auth/operations", "POST /api/v1/agents/:id/auth/operations"],
+		["GET", "/api/v1/agents/claude-code/auth/operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6", "GET /api/v1/agents/:id/auth/operations/:id"],
+		["DELETE", "/api/v1/agents/codex/auth/operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6", "DELETE /api/v1/agents/:id/auth/operations/:id"],
+		["POST", "/api/v1/agents/codex/auth/operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6/code", "POST /api/v1/agents/:id/auth/operations/:id/code"],
+	])("normalizes sign-in operation identifiers for %s %s", (method, path, expected) => {
+		expect(normalizeApiOperation(method, path)).toBe(expected);
+	});
+
 	it("keeps workspace file routes aligned with the generated API schema", () => {
 		expect(normalizeApiOperation("GET", "/api/v1/sessions/ao-42/workspace/files")).toBe(
 			"GET /api/v1/sessions/:id/workspace/files",
