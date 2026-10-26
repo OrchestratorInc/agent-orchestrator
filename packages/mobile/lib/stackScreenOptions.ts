@@ -11,17 +11,20 @@ import type { Theme } from "./theme";
  * No `animation`: Android then runs the system's own push transition, the one
  * every other app on the device uses, instead of a slide picked for it.
  *
- * iOS gets a transparent bar rather than the default opaque one, so a page's
- * header is its own background with the controls on it, as on iOS 26, rather
- * than a separate slab. The page is still laid out below the bar, so nothing
- * draws under it. A large-title stack is the exception: native-stack makes that
- * bar translucent and lays the page out under it, so its scroll view needs
- * `contentInsetAdjustmentBehavior="automatic"` to start below the title.
- * Android keeps the navigation theme's `card` surface behind its top app bar.
+ * The iOS bar is painted in the page's own background rather than the
+ * navigation theme's `card` surface, so the header reads as part of the page
+ * instead of a separate slab. It stays opaque: the page is laid out below the
+ * bar, and a clear bar showed the page underneath through it for the length of
+ * every push and pop, such as the board's own header behind a session's back
+ * button. A large-title page sets `headerStyle: undefined` beside
+ * `headerLargeTitleEnabled`, because iOS 26 hides a large title drawn over a set
+ * background; native-stack then makes that bar transparent and lays the page out
+ * under it, so its scroll view needs `contentInsetAdjustmentBehavior="automatic"`.
+ * Android keeps the `card` surface behind its top app bar.
  */
 export function stackScreenOptions(t: Theme): NativeStackNavigationOptions {
 	return {
-		...(Platform.OS === "ios" ? { headerStyle: { backgroundColor: "transparent" } } : null),
+		...(Platform.OS === "ios" ? { headerStyle: { backgroundColor: t.bgBase } } : null),
 		// The app's tint: the system back button and every native header item
 		// draw in it, as bar buttons do in any app on either platform.
 		headerTintColor: t.accent,

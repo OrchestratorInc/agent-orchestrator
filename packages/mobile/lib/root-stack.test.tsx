@@ -74,12 +74,13 @@ describe("root stack", () => {
 		}
 	});
 
-	// No opaque slab on iOS: the bar shows the page's own background behind its
-	// controls. Android's top app bar keeps the navigation theme's card surface.
-	it("draws the iOS bar without a background of its own", async () => {
+	// No slab on iOS: the bar is the page's own colour. It stays opaque, because
+	// a clear bar showed the page underneath through it during every push and
+	// pop. Android's top app bar keeps the navigation theme's card surface.
+	it("paints the iOS bar in the page's background", async () => {
 		const ios = await renderRoot("ios");
 		try {
-			expect(ios.root.findByType("Stack" as never).props.screenOptions.headerStyle).toEqual({ backgroundColor: "transparent" });
+			expect(ios.root.findByType("Stack" as never).props.screenOptions.headerStyle).toEqual({ backgroundColor: "#bgBase" });
 			expect(ios.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("headerTransparent");
 		} finally {
 			act(() => ios.unmount());
