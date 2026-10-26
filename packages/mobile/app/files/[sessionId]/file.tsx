@@ -302,7 +302,7 @@ function SessionFileContent() {
 	// The composer covers the bottom of the list. When the end of a selection
 	// lands among the last rows on screen, lift it into view above the composer.
 	const lastVisible = useRef(0);
-	const onViewable = useRef(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
+	const onViewable = useRef(({ viewableItems }: { viewableItems: Array<{ index: number | null | undefined }> }) => {
 		lastVisible.current = viewableItems.reduce((max, item) => Math.max(max, item.index ?? 0), 0);
 	}).current;
 	useEffect(() => {

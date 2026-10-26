@@ -1,7 +1,7 @@
 import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions, type HostInstance } from "react-native";
 import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
 import { AppSymbol } from "../AppSymbol";
@@ -75,7 +75,7 @@ export function RenderDocument({ path, displayMode, onHeight, onReady, onGone, o
 }) {
 	const styles = useThemedStyles(makeStyles);
 	const { config } = useApp();
-	const web = useRef<WebView>(null);
+	const web = useRef<WebView<object>>(null);
 	const lastTouch = useRef(0);
 	const loaded = useRef(false);
 	const theme = useRenderTheme();
@@ -170,7 +170,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	// iOS highlights the chip that marks it.
 	const expandFeedback = usePressFeedback("row", { foreground: true });
 	const { config, currentHostId } = useApp();
-	const frame = useRef<View>(null);
+	const frame = useRef<HostInstance>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
 	const [contentHeight, setContentHeight] = useState<number>();

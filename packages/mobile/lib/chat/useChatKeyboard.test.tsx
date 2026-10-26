@@ -19,7 +19,7 @@ vi.mock("react-native-keyboard-controller", () => ({
 	KeyboardEvents: { addListener: (name: string, listener: Listener) => { fixture.controller.set(name, listener); return { remove: () => fixture.controller.delete(name) }; } },
 }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 24 }) }));
-vi.mock("expo-router/build/react-navigation/elements", () => ({ useHeaderHeight: () => 64 }));
+vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 64 }));
 import { PLATFORM_KEYBOARD_SETTLE_MS } from "../session/keyboardInset";
 import { useChatKeyboard } from "./useChatKeyboard";
 

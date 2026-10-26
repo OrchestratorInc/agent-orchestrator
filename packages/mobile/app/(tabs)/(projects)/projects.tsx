@@ -78,7 +78,7 @@ export default function ProjectsScreen() {
 
 	// In the list, not above it: the list has to be the page's first view under
 	// the translucent header.
-	const staleBanner = hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null;
+	const staleBanner = hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : undefined;
 
 	return (
 		<View style={styles.screen}>

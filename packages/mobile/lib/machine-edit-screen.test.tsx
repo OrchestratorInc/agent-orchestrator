@@ -30,15 +30,13 @@ vi.mock("expo-router", async () => {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), View: host("StackToolbarView") }) },
 		useLocalSearchParams: () => ({ id: "a" }),
 		useNavigation: () => navigation,
+		usePreventRemove: (prevent: boolean, callback: (event: { data: { action: unknown } }) => void) => {
+			fixtures.preventRemove.prevent = prevent;
+			fixtures.preventRemove.callback = callback;
+		},
 		useRouter: () => router,
 	};
 });
-vi.mock("expo-router/build/react-navigation/core", () => ({
-	usePreventRemove: (prevent: boolean, callback: (event: { data: { action: unknown } }) => void) => {
-		fixtures.preventRemove.prevent = prevent;
-		fixtures.preventRemove.callback = callback;
-	},
-}));
 vi.mock("react-native", () => ({
 	AccessibilityInfo: { announceForAccessibilityWithOptions: fixtures.announce },
 	Alert: { alert: fixtures.alert },

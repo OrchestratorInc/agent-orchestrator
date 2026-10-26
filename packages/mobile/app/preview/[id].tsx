@@ -36,7 +36,7 @@ function SessionPreviewContent() {
 	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
-	const web = useRef<WebView>(null);
+	const web = useRef<WebView<object>>(null);
 	// An explicit choice wins over the initial disabled-sharing fallback.
 	const [active, setActive] = useState<"browser" | "app" | null>(null);
 	const [loaded, setLoaded] = useState<{ config: NonNullable<typeof config>; id: string; value: Awaited<ReturnType<typeof getPreview>> } | null>(null);

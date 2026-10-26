@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
@@ -83,31 +83,28 @@ export function WorkerRowInteraction({
 	}, [close, onAction]);
 	const fullSwipe = useCallback(() => runAction(FULL_SWIPE_ACTION), [runAction]);
 	const arm = useCallback(() => haptics.armed(), []);
-	const fullSwipeWatch = useMemo(
-		() =>
-			Gesture.Pan()
-				.enabled(canFullSwipe)
-				// A full swipe only ever runs leftward.
-				.activeOffsetX([-DRAG_DISTANCE, NEVER])
-				.onStart(() => {
-					dragOrigin.value = railOpen.value ? -WORKER_ACTION_REVEAL_WIDTH : 0;
-				})
-				.onUpdate((event) => {
-					const next = isFullSwipe(dragOrigin.value + event.translationX, rowWidth.value);
-					if (next === armed.value) return;
-					armed.value = next;
-					if (next) scheduleOnRN(arm);
-				})
-				// Only a finger lifted while armed archives. A drag the system or
-				// another handler cancels ends here too, with success false.
-				.onEnd((_event, success) => {
-					if (success && armed.value) scheduleOnRN(fullSwipe);
-				})
-				.onFinalize(() => {
-					armed.value = false;
-				}),
-		[canFullSwipe, dragOrigin, railOpen, rowWidth, armed, arm, fullSwipe],
-	);
+	const fullSwipeWatch = usePanGesture({
+		enabled: canFullSwipe,
+		// A full swipe only ever runs leftward.
+		activeOffsetX: [-DRAG_DISTANCE, NEVER],
+		onActivate: () => {
+			dragOrigin.value = railOpen.value ? -WORKER_ACTION_REVEAL_WIDTH : 0;
+		},
+		onUpdate: (event) => {
+			const next = isFullSwipe(dragOrigin.value + event.translationX, rowWidth.value);
+			if (next === armed.value) return;
+			armed.value = next;
+			if (next) scheduleOnRN(arm);
+		},
+		// Only a finger lifted while armed archives. A drag the system or
+		// another handler cancels ends here too, marked canceled.
+		onDeactivate: (event) => {
+			if (!event.canceled && armed.value) scheduleOnRN(fullSwipe);
+		},
+		onFinalize: () => {
+			armed.value = false;
+		},
+	});
 	const measure = useCallback((event: LayoutChangeEvent) => {
 		rowWidth.value = event.nativeEvent.layout.width;
 	}, [rowWidth]);
@@ -121,12 +118,12 @@ export function WorkerRowInteraction({
 					enabled={enabled}
 					containerStyle={shellStyle}
 					childrenContainerStyle={foregroundStyle}
-					dragOffsetFromRightEdge={DRAG_DISTANCE}
-					dragOffsetFromLeftEdge={open ? DRAG_DISTANCE : NEVER}
+					dragOffsetFromRight={-DRAG_DISTANCE}
+					dragOffsetFromLeft={open ? DRAG_DISTANCE : NEVER}
 					rightThreshold={WORKER_ACTION_REVEAL_WIDTH / 2}
 					// The row travels past the rail only toward a full swipe.
 					overshootRight={canFullSwipe}
-					simultaneousWithExternalGesture={fullSwipeWatch}
+					simultaneousWith={fullSwipeWatch}
 					onSwipeableOpenStartDrag={() => setRailMounted(true)}
 					onSwipeableWillOpen={() => {
 						railOpen.value = true;

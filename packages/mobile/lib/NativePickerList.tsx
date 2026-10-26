@@ -79,8 +79,8 @@ export function NativePickerList({ header, options, selected, onSelect, refreshi
 			contentContainerStyle={styles.content}
 			refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} {...refreshControlColors(t)} />}
 			ListHeaderComponent={<View style={styles.header}>{header}</View>}
-			ListEmptyComponent={empty ? <Text style={styles.empty}>{empty}</Text> : null}
-			ListFooterComponent={footer ? <View style={styles.footer}>{footer}</View> : null}
+			ListEmptyComponent={empty ? <Text style={styles.empty}>{empty}</Text> : undefined}
+			ListFooterComponent={footer ? <View style={styles.footer}>{footer}</View> : undefined}
 			renderItem={({ item }) => (
 				<Host matchContents={{ vertical: true }} style={styles.row} colorScheme={scheme}>
 					<OptionRow option={item} selected={item.id === selected} onSelect={onSelect} />

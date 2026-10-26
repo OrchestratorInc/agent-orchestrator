@@ -482,7 +482,7 @@ function NotificationsContent() {
 										: `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} unavailable. Showing activity from the available machines.`}
 								</Text>
 							</View>
-						) : null
+						) : undefined
 					}
 					renderSectionHeader={({ section }) => (
 						section.title
@@ -506,7 +506,7 @@ function NotificationsContent() {
 							<View style={styles.footer}>
 								<ActivityIndicator color={t.accent} />
 							</View>
-						) : null
+						) : undefined
 					}
 					ListEmptyComponent={
 						hostStates.length > 0 && unavailableFeeds.length === hostStates.length ? (

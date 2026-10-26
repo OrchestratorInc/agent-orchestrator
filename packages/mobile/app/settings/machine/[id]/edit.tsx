@@ -1,5 +1,4 @@
-import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { usePreventRemove } from "expo-router/build/react-navigation/core";
+import { Stack, useLocalSearchParams, useNavigation, usePreventRemove, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, StyleSheet, View } from "react-native";
 import { backOr } from "../../../../lib/backNavigation";

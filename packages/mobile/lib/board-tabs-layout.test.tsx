@@ -30,7 +30,10 @@ import BoardTabsLayout from "../app/(tabs)/_layout";
 
 // Exercise the installed Expo router, not a fake navigation state machine.
 // NativeTabs' router is this one, with expo-router's own params on top.
-const { TabRouter } = createRequire(import.meta.url)("expo-router/build/react-navigation/routers/TabRouter.js");
+const require = createRequire(import.meta.url);
+const { TabRouter } = require("expo-router/build/react-navigation/routers/TabRouter.js");
+const { createInitialState } = require("expo-router/build/react-navigation/core/createInitialState.js");
+const { RouterActionHandling } = require("expo-router/build/react-navigation/routers/types.js");
 
 function session(id: string, status: string): DashboardSession {
 	return { id, projectId: "p", status, lastActivityAt: "2026-10-26T00:00:00Z" } as DashboardSession;
@@ -129,29 +132,37 @@ describe("board tabs", () => {
 });
 
 describe("board tab lifecycle", () => {
-	const options = { routeNames: ["(workers)", "(projects)", "(prs)"], routeParamList: {}, routeGetIdList: {} };
+	const options = { routeNames: ["(workers)", "(projects)", "(prs)"], routeGetIdList: {} };
+	const initial = () => createInitialState({ routeNames: options.routeNames, parentChain: "board" });
+	const reduce = (router: any, state: any, action: object) => router.getStateForAction(state, action, options);
 
+	// The router mounts a tab on its first visit; from then on it must keep that
+	// tab's route, and the navigator its own key, however often the tabs change.
 	it("keeps route and navigator keys when moving among the three tabs", () => {
 		const router = TabRouter({ backBehavior: "initialRoute" });
-		let state = router.getInitialState(options);
+		let state = initial();
 		const key = state.key;
-		const routes = state.routes.map((route: { key: string }) => route.key);
+		const seen = new Map<string, string>();
 		expect(state.routes[state.index].name).toBe("(workers)");
 		for (const name of ["(projects)", "(workers)", "(prs)", "(workers)", "(prs)"]) {
-			state = router.getStateForAction(state, { type: "NAVIGATE", payload: { name } }, options);
+			state = reduce(router, state, { type: "NAVIGATE", payload: { name } }).state;
 			expect(state.key).toBe(key);
-			expect(state.routes.map((route: { key: string }) => route.key)).toEqual(routes);
+			for (const route of state.routes as { key: string; name: string }[]) {
+				expect(route.key).toBe(seen.get(route.name) ?? route.key);
+				seen.set(route.name, route.key);
+			}
 			expect(state.routes[state.index].name).toBe(name);
 		}
+		expect(seen.size).toBe(3);
 	});
 
 	// NativeTabs' Android default, and Material's: Back from another tab returns
 	// to the first, and Back there leaves the board.
 	it("goes back to Workers before leaving the board", () => {
 		const router = TabRouter({ backBehavior: "initialRoute" });
-		let state = router.getStateForAction(router.getInitialState(options), { type: "NAVIGATE", payload: { name: "(prs)" } }, options);
-		state = router.getStateForAction(state, { type: "GO_BACK" }, options);
+		let state = reduce(router, initial(), { type: "NAVIGATE", payload: { name: "(prs)" } }).state;
+		state = reduce(router, state, { type: "GO_BACK" }).state;
 		expect(state.routes[state.index].name).toBe("(workers)");
-		expect(router.getStateForAction(state, { type: "GO_BACK" }, options)).toBeNull();
+		expect(reduce(router, state, { type: "GO_BACK" })).toBe(RouterActionHandling.Unhandled);
 	});
 });
