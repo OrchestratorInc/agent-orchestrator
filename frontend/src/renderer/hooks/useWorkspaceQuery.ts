@@ -165,7 +165,9 @@ export function patchWorkspaceSession(
 		// still contain terminated rows and keep their previous semantics.
 		const activeOnly = "archivedCount" in project && project.archivedCount !== undefined;
 		const previous = project.sessions.find((candidate) => candidate.id === session.id);
-		archiveMembershipChanged = activeOnly && (session.isTerminated === true ? previous !== undefined : previous === undefined);
+		const wasArchived = activeOnly && previous === undefined && queryClient.getQueriesData<components["schemas"]["ControllersSessionView"][]>({ queryKey: ["archived-sessions"] })
+			.some(([, rows]) => rows?.some((candidate) => candidate.id === session.id));
+		archiveMembershipChanged = activeOnly && (session.isTerminated === true ? previous !== undefined : wasArchived);
 		const row = session.projectId ? toWorkspaceSession(session, project) : toLocalWorkspaceSession(session, project.id, project.name);
 		const next = current.map((workspace) => {
 			if (workspace.id !== projectId) {

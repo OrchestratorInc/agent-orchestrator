@@ -1006,6 +1006,7 @@ describe("patchWorkspaceSession", () => {
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["archived-sessions"] }, { cancelRefetch: false });
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
 		invalidate.mockClear();
+		client.setQueryData(["archived-sessions", "p"], [{ ...row, isTerminated: true }]);
 		expect(patchWorkspaceSession(client, { ...row, isTerminated: false })).toBe(true);
 		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toHaveLength(1);
 		expect(invalidate).toHaveBeenCalledTimes(2);
