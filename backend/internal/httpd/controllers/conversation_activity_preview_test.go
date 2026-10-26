@@ -113,8 +113,9 @@ func TestConversationPreviewCutsSettledActivityBodies(t *testing.T) {
 	if settled["detailOmitted"] != true || settled["detailBytes"].(float64) < 4000 {
 		t.Fatalf("settled omission = %v / %v", settled["detailOmitted"], settled["detailBytes"])
 	}
-	if len(settled["summary"].(string)) > 512 || len(detail["command"].(string)) > 512 || len(detail["output"].(string)) > 512 {
-		t.Fatalf("settled row kept long text: summary %d, command %d, output %d", len(settled["summary"].(string)), len(detail["command"].(string)), len(detail["output"].(string)))
+	// The summary was the command, so it is sent empty rather than twice.
+	if settled["summary"] != "" || len(detail["command"].(string)) > 300 || len(detail["output"].(string)) > 300 {
+		t.Fatalf("settled row kept long text: summary %q, command %d, output %d", settled["summary"], len(detail["command"].(string)), len(detail["output"].(string)))
 	}
 	// Collapsed rows read these: the command category, the spawn line, the exit state.
 	if !strings.HasPrefix(detail["command"].(string), "cat > notes.md") || !strings.HasPrefix(detail["output"].(string), "spawned session del-9") {
@@ -132,15 +133,15 @@ func TestConversationPreviewCutsSettledActivityBodies(t *testing.T) {
 
 	running := activities["running"]
 	runningDetail := running["detail"].(map[string]any)
-	if running["detailOmitted"] != nil || runningDetail["output"] != fixture.Activities[1].CommandOutput {
-		t.Fatalf("running row must stream full output: %v", running)
+	if running["detailOmitted"] != nil || runningDetail["output"] != fixture.Activities[1].CommandOutput || running["summary"] != "" {
+		t.Fatalf("running row must stream full output and drop its summary copy: %v", running)
 	}
 	if _, ok := runningDetail["rawCommand"]; ok {
 		t.Fatalf("running row kept a rawCommand identical to command")
 	}
 
 	small := activities["small"]
-	if small["detailOmitted"] != nil || small["detail"].(map[string]any)["rawCommand"] != "/bin/zsh -lc 'go vet ./...'" {
+	if small["detailOmitted"] != nil || small["summary"] != "" || small["detail"].(map[string]any)["rawCommand"] != "/bin/zsh -lc 'go vet ./...'" {
 		t.Fatalf("small row changed: %v", small)
 	}
 

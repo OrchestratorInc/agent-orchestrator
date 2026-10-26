@@ -9,7 +9,7 @@ import (
 
 // activityPreviewLimit is the most bytes a preview page keeps of one summary or
 // one body field.
-const activityPreviewLimit = 512
+const activityPreviewLimit = 300
 
 // activityBodyKeys are the detail fields of a settled activity that only an
 // expanded row shows in full. Everything else in detail is small and read by
@@ -33,18 +33,28 @@ var fileBodyKeys = []string{"patch", "oldText", "newText"}
 
 // previewActivity slims one activity for a page read with activityDetail=preview.
 //
-// A rawCommand identical to command is dropped on every row: it is a pure copy.
-// Running rows keep everything else, so live output still streams. Settled rows
-// of the heavy kinds lose their large bodies and say so with DetailOmitted; the
-// client fetches the full row when someone expands it.
+// Pure copies of detail.command go on every row: a rawCommand identical to it is
+// dropped, and a summary identical to it is sent empty (the client reads an empty
+// summary as the command). Running rows keep everything else, so live output
+// still streams. Settled rows of the heavy kinds lose their large bodies and say
+// so with DetailOmitted; the client fetches the full row when someone expands it.
 func previewActivity(a *ConversationActivityResponse) {
-	if raw, ok := a.Detail["rawCommand"].(string); ok && raw == a.Detail["command"] {
+	command, hasCommand := a.Detail["command"].(string)
+	if raw, ok := a.Detail["rawCommand"].(string); ok && hasCommand && raw == command {
 		delete(a.Detail, "rawCommand")
 	}
+	summaryIsCommand := hasCommand && a.Summary == command
 	keys, heavy := activityBodyKeys[a.ActivityKind]
-	if !heavy || a.Status == string(domain.ActivityStatusRunning) || a.Status == string(domain.ActivityStatusPending) {
-		return
+	if heavy && a.Status != string(domain.ActivityStatusRunning) && a.Status != string(domain.ActivityStatusPending) {
+		omitBody(a, keys)
 	}
+	if summaryIsCommand {
+		a.Summary = ""
+	}
+}
+
+// omitBody cuts a settled row's summary and body fields to the preview limit.
+func omitBody(a *ConversationActivityResponse, keys []string) {
 	fullBytes := 0
 	if a.Detail != nil {
 		encoded, _ := json.Marshal(a.Detail)
