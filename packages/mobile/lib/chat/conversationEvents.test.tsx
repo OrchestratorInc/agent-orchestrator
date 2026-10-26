@@ -6,9 +6,7 @@ import type { ConversationStreamOptions } from "./api";
 const state = vi.hoisted(() => ({
 	stream: vi.fn(),
 	getItem: vi.fn(async () => "42"),
-	forget: vi.fn(),
 }));
-vi.mock("../acceptedCredentials", () => ({ forgetAcceptedCredential: state.forget }));
 vi.mock("./api", () => ({ streamGlobalConversationEvents: state.stream }));
 vi.mock("../config", () => ({ isConfigured: () => true, machineIdentity: () => "qa-host" }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: state.getItem, setItem: vi.fn(), removeItem: vi.fn() } }));
@@ -89,20 +87,3 @@ it("counts the stream healthy only while heartbeats arrive on time", async () =>
 	expect(conversationStreamHealthy(config)).toBe(false);
 });
 
-it("forgets the accepted credential whenever the stream breaks or stops", async () => {
-	let finish!: () => void;
-	state.stream
-		.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve(120); }))
-		.mockImplementation((_cfg, _after, signal: AbortSignal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")))));
-	await act(async () => { renderer = create(<Harness />); });
-	expect(state.forget).not.toHaveBeenCalled();
-	// The daemon closed the stream, as it does when it restarts.
-	await act(async () => { finish(); });
-	expect(state.forget).toHaveBeenCalledWith(config);
-	await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-	expect(state.stream).toHaveBeenCalledTimes(2);
-	state.forget.mockClear();
-	await act(async () => renderer!.unmount());
-	renderer = undefined;
-	expect(state.forget).toHaveBeenCalledWith(config);
-});

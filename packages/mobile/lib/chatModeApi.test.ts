@@ -7,7 +7,6 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 import { fetch as expoFetch } from "expo/fetch";
 import { ApiError, apiRequest, delegateTask, getAgentModels, getArchivedSessions, getPreview, getSessions, getSettings, launchOrchestrator, mobileReachablePreviewURL, pinSession, renameSession, restoreSession, resumeSessionAgent, setSessionAutoInjectCI, setSessionAutoInjectReview, setSessionAutoReview, spawnSession, unpinSession, resetArchivePagingProbes } from "./api";
 import * as chatApi from "./chat/api";
-import { forgetAcceptedCredential, isCredentialAccepted } from "./acceptedCredentials";
 import { UNREACHABLE_ACTION_COPY, UnreachableError, userFacingError } from "./connectionError";
 import type { ServerConfig } from "./config";
 
@@ -132,23 +131,22 @@ describe("mobile Chat API boundaries", () => {
 
 	it("falls back to the full list on a daemon that predates paging, and remembers it", async () => {
 		const archived = { id: "w-0", projectId: "p-1", mode: "chat", isTerminated: true };
-		vi.mocked(fetch)
+		const answers: Record<string, unknown> = {
 			// It understood active=true but has no summary: the archive is missing.
-			.mockResolvedValueOnce(response({ sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }] }))
-			.mockResolvedValueOnce(response({ sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }, archived] }))
-			.mockResolvedValueOnce(response({ sessions: [] }))
-			.mockResolvedValueOnce(response({ projects: [] }));
+			"/sessions?active=true&kind=worker": { sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }] },
+			"/sessions": { sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }, archived] },
+			"/orchestrators": { sessions: [] },
+			"/projects": { projects: [] },
+		};
+		vi.mocked(fetch).mockImplementation(async (url) => response(answers[String(url).replace("http://ao.test:3011/api/v1", "")]));
 		const first = await getSessions(cfg);
-		expect(vi.mocked(fetch).mock.calls.map(([url]) => url).slice(0, 2)).toEqual([
-			"http://ao.test:3011/api/v1/sessions?active=true&kind=worker",
-			"http://ao.test:3011/api/v1/sessions",
-		]);
+		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toContain("http://ao.test:3011/api/v1/sessions");
 		expect(first.archive).toBeNull();
 		expect(first.sessions.map((s) => s.id)).toEqual(["w-1", "w-0"]);
 
 		// The full list already carries the orchestrators, so /orchestrators is skipped.
 		const orchestrator = { id: "o-1", projectId: "p-1", mode: "chat", kind: "orchestrator" };
-		vi.mocked(fetch).mockClear()
+		vi.mocked(fetch).mockReset()
 			.mockResolvedValueOnce(response({ sessions: [archived, orchestrator] }))
 			.mockResolvedValueOnce(response({ projects: [{ id: "p-1", name: "One" }] }));
 		const second = await getSessions(cfg);
@@ -160,67 +158,47 @@ describe("mobile Chat API boundaries", () => {
 		expect(second.orchestrators).toMatchObject([{ id: "o-1", projectName: "One" }]);
 	});
 
-	it("probes /sessions alone until the credential is accepted, then loads the board in one batch", async () => {
+	it("sends the rest of the board once the /sessions headers accept the credential, before its body", async () => {
 		const pending: Array<(value: Response) => void> = [];
 		vi.mocked(fetch).mockImplementation(() => new Promise<Response>((resolve) => { pending.push(resolve); }));
 		const urls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url).replace("http://ao.test:3011/api/v1", ""));
 
-		const first = getSessions(cfg, "all", undefined, { unread: true });
+		const board = getSessions(cfg, "all", undefined, { unread: true });
 		await vi.waitFor(() => expect(urls()).toEqual(["/sessions?active=true&kind=worker"]));
-		pending.shift()!(response({ archived: NO_ARCHIVE, sessions: [] }));
-		await vi.waitFor(() => expect(urls()).toHaveLength(4));
-		for (const body of [{ sessions: [] }, { projects: [] }, { notifications: [], unreadCount: 4 }]) pending.shift()!(response(body));
-		expect((await first).notificationsUnread).toBe(4);
-
-		vi.mocked(fetch).mockClear();
-		const second = getSessions(cfg, "all", undefined, { unread: true });
+		let finishSessions!: () => void;
+		pending.shift()!(new Response(new ReadableStream({
+			start(controller) {
+				finishSessions = () => {
+					controller.enqueue(new TextEncoder().encode(JSON.stringify({ archived: NO_ARCHIVE, sessions: [] })));
+					controller.close();
+				};
+			},
+		})));
 		await vi.waitFor(() => expect(urls()).toEqual([
 			"/sessions?active=true&kind=worker",
 			"/orchestrators",
 			"/projects",
 			"/notifications?status=unread&limit=1",
 		]));
-		pending.shift()!(response({ archived: NO_ARCHIVE, sessions: [] }));
+		finishSessions();
 		pending.shift()!(response({ sessions: [] }));
 		pending.shift()!(response({ projects: [] }));
 		pending.shift()!(response({ error: "not found" }, 404));
 		// An older daemon without /notifications still loads the board.
-		expect((await second).notificationsUnread).toBeNull();
+		expect((await board).notificationsUnread).toBeNull();
 	});
 
-	it("goes back to probing alone after the daemon rejects the credential", async () => {
+	it("sends nothing else when the daemon rejects the credential, every tick", async () => {
 		vi.mocked(fetch)
 			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [] }))
 			.mockResolvedValueOnce(response({ sessions: [] }))
 			.mockResolvedValueOnce(response({ projects: [] }));
 		await getSessions(cfg);
 		vi.mocked(fetch).mockReset().mockImplementation(async () => response({ message: "bad password" }, 401));
-		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
-		vi.mocked(fetch).mockClear();
-		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
+		await expect(getSessions(cfg, "all", undefined, { unread: true })).rejects.toMatchObject({ status: 401 });
 		expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
-	});
-
-	it.each([
-		["a failed poll", async () => {
-			vi.mocked(fetch).mockRejectedValueOnce(new TypeError("Network request failed"));
-			await expect(getSessions(cfg)).rejects.toBeInstanceOf(UnreachableError);
-		}],
-		["a broken connection", async () => { forgetAcceptedCredential(cfg); }],
-	])("probes /sessions alone again after %s", async (_reason, breakConnection) => {
-		const board = () => vi.mocked(fetch)
-			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [] }))
-			.mockResolvedValueOnce(response({ sessions: [] }))
-			.mockResolvedValueOnce(response({ projects: [] }));
-		board();
-		await getSessions(cfg);
-		expect(isCredentialAccepted(cfg)).toBe(true);
-		await breakConnection();
-		expect(isCredentialAccepted(cfg)).toBe(false);
-		// A daemon restarted with a new password: the first tick spends one attempt.
-		vi.mocked(fetch).mockReset().mockImplementation(async () => response({ message: "bad password" }, 401));
-		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
-		expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+		await expect(getSessions(cfg, "all", undefined, { unread: true })).rejects.toMatchObject({ status: 401 });
+		expect(vi.mocked(fetch).mock.calls).toHaveLength(2);
 	});
 
 	it("uses the first answer from a daemon too old to filter by state", async () => {

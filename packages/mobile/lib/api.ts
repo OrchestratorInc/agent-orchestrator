@@ -1,4 +1,3 @@
-import { forgetAcceptedCredential, isCredentialAccepted, markCredentialAccepted, resetAcceptedCredentials } from "./acceptedCredentials";
 import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
@@ -211,10 +210,9 @@ export const ARCHIVE_PAGE_SIZE = 50;
 const legacyArchiveHosts = new Map<string, number>();
 const LEGACY_ARCHIVE_RECHECK_MS = 15 * 60_000;
 
-/** Forget which machines answered like an older daemon, and which credentials were accepted. For tests. */
+/** Forget which machines answered like an older daemon. For tests. */
 export function resetArchivePagingProbes(): void {
 	legacyArchiveHosts.clear();
-	resetAcceptedCredentials();
 }
 
 function archiveHostKey(cfg: ServerConfig): string {
@@ -461,7 +459,17 @@ function rememberRevalidated(url: string, etag: string | null, body: string): vo
 	if (revalidated.size > REVALIDATED_LIMIT) revalidated.delete(revalidated.keys().next().value!);
 }
 
-async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+/**
+ * `onAccepted` runs as soon as the daemon's headers accept the request (2xx or
+ * 304), before the body arrives.
+ */
+async function req(
+	cfg: ServerConfig,
+	path: string,
+	init?: RequestInit,
+	timeoutMs = REQUEST_TIMEOUT_MS,
+	onAccepted?: () => void,
+): Promise<Response> {
 	const url = `${httpBase(cfg)}${path}`;
 	const isGet = (init?.method ?? "GET").toUpperCase() === "GET";
 	const cached = isGet ? revalidated.get(url) : undefined;
@@ -504,9 +512,10 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...(init?.headers ?? {}),
 				},
 			});
+			if (received.ok || received.status === 304) onAccepted?.();
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
-			// timer, and /sessions cannot fan out while its body is still stalled.
+			// timer.
 			// An error envelope is tiny, so it keeps the plain timeout.
 			// On iOS and Android the global fetch is expo/fetch (Expo's runtime
 			// installs it), whose body streams, as the event stream relies on. A
@@ -618,17 +627,14 @@ export async function getSessions(
 	// The daemon exposes sessions and orchestrators as two lists. Fetch both,
 	// keep worker sessions for the board, and map orchestrators for their screen.
 	//
-	// Until this credential has been accepted since the connection last broke
-	// (see acceptedCredentials.ts), /sessions is probed FIRST, alone. The daemon
-	// locks a device out for a minute after 5 failed auths, so a stale password
-	// used to cost 4 failures per poll tick — enough to arm the
-	// lockout in one or two ticks and make the user's next action, typically
-	// scanning a fresh pairing code, fail with 429 before the new password was
-	// ever checked. Probing first caps a bad-credential tick at one failed
-	// attempt. Once accepted, every request goes out in one batch, which saves
-	// two round trips a tick: a password the daemon has since rotated counts as
-	// retired, not as a failed attempt, and a daemon restart (which forgets the
-	// retired ones) breaks the connection, so the next tick probes again.
+	// /sessions is probed FIRST, alone. The daemon locks a device out for a
+	// minute after 5 failed auths, so a stale password used to cost 4 failures
+	// per poll tick — enough to arm the lockout in one or two ticks and make the
+	// user's next action, typically scanning a fresh pairing code, fail with 429
+	// before the new password was ever checked. Probing first caps a
+	// bad-credential tick at one failed attempt. The rest of the board goes out
+	// as soon as the /sessions headers accept this credential, without waiting
+	// for its body, so a tick costs two round trips rather than three.
 	//
 	// The poll asks for live workers only, with the archive's size: the archive is
 	// most of a long-running machine's sessions, and over a tunnel the poll runs
@@ -637,10 +643,11 @@ export async function getSessions(
 	const hostKey = archiveHostKey(cfg);
 	const legacySince = legacyArchiveHosts.get(hostKey);
 	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
-	const sessionsRead = req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init)
+	let accepted!: () => void;
+	const sessionsAccepted = new Promise<void>((resolve) => { accepted = resolve; });
+	const sessionsRead = req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init, undefined, accepted)
 		.then((res) => res.json())
 		.then(async (data) => {
-			markCredentialAccepted(cfg);
 			const archive = tryPaged ? wireArchiveSummary(data?.archived) : null;
 			if (!tryPaged) return { data, archive };
 			if (archive) {
@@ -652,26 +659,20 @@ export async function getSessions(
 			// archived rows included; only one that filtered must be asked again.
 			const ignoredFilter = Array.isArray(data?.sessions) && data.sessions.some((s: WireSession) => s.isTerminated);
 			return { data: ignoredFilter ? data : await (await req(cfg, `${API}/sessions`, init)).json(), archive };
-		})
-		.catch((error: unknown) => {
-			// Any failure (a rejection, a lockout, a lost path) means probe again.
-			forgetAcceptedCredential(cfg);
-			throw error;
 		});
-	if (!isCredentialAccepted(cfg)) await sessionsRead;
 	// A failed /projects is reported as null rather than [] so a caller can tell
 	// "this daemon has no projects" from "we could not ask". It and the unread
 	// count stay caught: an older daemon, or one blip on that one route, must not
 	// knock the board offline when /sessions answered fine. The unfiltered list
 	// of an older daemon already carries its orchestrators.
-	const [{ data: sessData, archive }, orchData, projects, notificationsUnread] = await Promise.all([
-		sessionsRead,
+	const rest = sessionsAccepted.then(() => Promise.all([
 		tryPaged ? req(cfg, `${API}/orchestrators`, init).then((res) => res.json()) : null,
 		getProjects(cfg, init).catch(() => null),
 		opts.unread
 			? getNotifications(cfg, { status: "unread", limit: 1 }, init).then((page) => page.unreadCount, () => null)
 			: undefined,
-	]);
+	]));
+	const [{ data: sessData, archive }, [orchData, projects, notificationsUnread]] = await Promise.all([sessionsRead, rest]);
 	const nameOf = new Map((projects ?? []).map((p) => [p.id, p.name]));
 
 	const rawSessions: WireSession[] = Array.isArray(sessData?.sessions) ? sessData.sessions : [];

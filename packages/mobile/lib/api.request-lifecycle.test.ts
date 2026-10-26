@@ -139,7 +139,7 @@ it("keeps the daemon error envelope and clears completed request timers", async 
 	expect(vi.getTimerCount()).toBe(0);
 });
 
-it("does not fan out board requests after the sessions body is cancelled", async () => {
+it("cancels every board request with the board load's lifecycle", async () => {
 	vi.mocked(fetch).mockImplementation(async (_url, init) => {
 		if (init?.signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
 		return stalledResponse();
@@ -149,10 +149,12 @@ it("does not fan out board requests after the sessions body is cancelled", async
 	// Third argument scopes every request in this board load to one lifecycle.
 	void getSessions(config, "all", { signal: controller.signal }).catch((error) => { failure = error; });
 	await vi.advanceTimersByTimeAsync(1);
+	// The /sessions headers accepted the credential, so the rest went out.
+	expect(fetch).toHaveBeenCalledTimes(3);
 	controller.abort();
 	await vi.advanceTimersByTimeAsync(1);
 	expect(failure).toMatchObject({ name: "AbortError" });
-	expect(fetch).toHaveBeenCalledTimes(1);
+	expect(vi.mocked(fetch).mock.calls.every(([, init]) => init?.signal?.aborted)).toBe(true);
 });
 
 it("revalidates a polled GET with its ETag and reuses the body on 304", async () => {
