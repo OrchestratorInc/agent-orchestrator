@@ -128,8 +128,9 @@ func testLifecycleNudgeWakesHibernatedChat(
 			asleep.HibernatedAt, asleep.Activity.State, asleep.Metadata.ProviderConversationID)
 	}
 
-	// Wired as daemon.go wires them: Chat wakes through Session Manager, and
-	// lifecycle writes through a guard whose input lease is Session Manager.
+	// Chat wakes through Session Manager, as daemon.go wires it. The guard
+	// holds Session Manager's input lease, as lifecycle's guard once did: a
+	// relay must not deadlock under any caller that holds it.
 	chat := newChat()
 	t.Cleanup(func() { chat.StopAll(context.Background()) })
 	mgr := newManager(chat)
