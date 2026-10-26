@@ -33,6 +33,9 @@ type hibernationConversation struct {
 	backgroundErr     error
 	backgroundChecks  atomic.Int32
 	onBackgroundCheck func(context.Context)
+	// afterNextRead runs once, after the next session read and before that
+	// read's (now possibly stale) record is returned.
+	afterNextRead atomic.Pointer[func()]
 }
 
 type hibernationSessionStore struct {
@@ -42,7 +45,11 @@ type hibernationSessionStore struct {
 
 func (s *hibernationSessionStore) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	s.conversation.sessionReads.Add(1)
-	return s.Store.GetSession(ctx, id)
+	rec, found, err := s.Store.GetSession(ctx, id)
+	if hook := s.conversation.afterNextRead.Swap(nil); hook != nil {
+		(*hook)()
+	}
+	return rec, found, err
 }
 
 func (s *hibernationSessionStore) SetSessionHibernated(ctx context.Context, id domain.SessionID, revision int64, at *time.Time) (bool, error) {
@@ -657,7 +664,13 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 		NewID: func() string { return fmt.Sprintf("relay-wake-%d", nextID.Add(1)) },
 	})
 	t.Cleanup(func() { _ = wakeService.Stop(context.Background(), testSession) })
+	releaseWake := make(chan struct{})
 	wakeService.SetWakeCallback(func(ctx context.Context, id domain.SessionID) error {
+		select {
+		case <-releaseWake:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		rec, found, err := h.st.GetSession(ctx, id)
 		if err != nil || !found || rec.HibernatedAt == nil {
 			return fmt.Errorf("read hibernated session: found=%v, marker=%v, err=%w", found, rec.HibernatedAt, err)
@@ -673,9 +686,19 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 		return err
 	})
 
+	// The relay returns while the wake is still blocked: a caller holding the
+	// session's input lease must not wait on the resume that needs it drained.
 	turnID, err := wakeService.RelayChatTurnWithID(ctx, testSession, "CI failed; fix it", "ci-nudge-1")
 	if err != nil || turnID == "" {
 		t.Fatalf("RelayChatTurnWithID = %q, %v", turnID, err)
+	}
+	if got := resumed.sentTexts(); len(got) != 0 {
+		t.Fatalf("relay reached the provider before the wake finished: %v", got)
+	}
+	close(releaseWake)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(resumed.sentTexts()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	if resumeConfig.ProviderConversationID != old.ProviderConversationID() {
 		t.Fatalf("native resume id = %q, want %q", resumeConfig.ProviderConversationID, old.ProviderConversationID())
@@ -688,6 +711,83 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 	rec, found, err := h.st.GetSession(ctx, testSession)
 	if err != nil || !found || rec.HibernatedAt != nil {
 		t.Fatalf("session after relay wake: found=%v, marker=%v, err=%v", found, rec.HibernatedAt, err)
+	}
+}
+
+// A relay that read the session just before hibernation recorded its marker
+// waits on the controller gate, then finds the session asleep. It must queue
+// and return rather than wake inline: its caller may hold the session's input
+// lease, which the resume waits to drain.
+func TestRelayRacingHibernationQueuesInsteadOfWakingInline(t *testing.T) {
+	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
+	ctx := context.Background()
+	stopping, releaseStop := make(chan struct{}), make(chan struct{})
+	conv.started, conv.release = stopping, releaseStop
+	wakeEntered, releaseWake := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { close(releaseWake) })
+	h.svc.SetWakeCallback(func(ctx context.Context, _ domain.SessionID) error {
+		close(wakeEntered)
+		select {
+		case <-releaseWake:
+			return errors.New("test finished")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
+	// The relay's first session read returns the pre-marker record; hibernation
+	// then takes the gate, writes the marker and blocks stopping the provider.
+	hibernated := make(chan error, 1)
+	startHibernation := func() {
+		go func() {
+			slept, err := h.svc.HibernateChat(ctx, testSession)
+			if err == nil && !slept {
+				err = errors.New("hibernation declined")
+			}
+			hibernated <- err
+		}()
+		<-stopping
+	}
+	conv.afterNextRead.Store(&startHibernation)
+	type relayResult struct {
+		turnID string
+		err    error
+	}
+	relayed := make(chan relayResult, 1)
+	go func() {
+		turnID, err := h.svc.RelayChatTurnWithID(ctx, testSession, "CI failed; fix it", "ci-race-1")
+		relayed <- relayResult{turnID, err}
+	}()
+	select {
+	case <-stopping:
+	case <-time.After(2 * time.Second):
+		t.Fatal("hibernation did not start during the relay's read")
+	}
+	close(releaseStop)
+	if err := <-hibernated; err != nil {
+		t.Fatalf("HibernateChat: %v", err)
+	}
+
+	select {
+	case got := <-relayed:
+		if got.err != nil || got.turnID == "" {
+			t.Fatalf("RelayChatTurnWithID = %q, %v", got.turnID, got.err)
+		}
+		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+			for _, turn := range s.Turns {
+				if turn.ID == got.turnID {
+					return turn.State == domain.TurnStateQueued
+				}
+			}
+			return false
+		})
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay waited on the wake instead of queueing")
+	}
+	select {
+	case <-wakeEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background wake did not start")
 	}
 }
 

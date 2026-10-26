@@ -11,7 +11,7 @@ import { textSelectionColors } from "../textSelection";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
-import { parseBlocks, type MarkdownBlock } from "./markdownBlocks";
+import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBlocks";
 import { iconSize, microLabel, prose, radius, space, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
 
@@ -57,11 +57,14 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	const selectionColor = textSelectionColors(t).selectionColor;
 	const blocks = parseBlocks(text);
 	if (continuousSelection) {
-		// Native selection cannot cross sibling views. Keep every response text block
-		// in one text surface, then show image previews without repeating captions.
+		// Native selection cannot cross sibling views. Keep each run of response text
+		// in one text surface; only a table breaks the run, because a grid cannot
+		// live inside text. Image previews follow without repeating captions.
 		const images = blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			<SelectableResponseText text={text} source={selectionSource} />
+			{splitAtTables(blocks).map((run, index) => Array.isArray(run)
+				? <SelectableResponseText key={index} blocks={run} source={selectionSource} />
+				: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} />)}
 			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} />)}
 		</View>;
 	}
@@ -85,7 +88,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		const index = content.length;
 		if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} />);
 		else if (block.kind === "image") content.push(<MarkdownImage key={index} alt={block.alt} url={block.url} selectionColor={selectionColor} />);
-		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} rows={block.rows} selectionColor={selectionColor} />);
+		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
 		else if (block.kind === "quote") content.push(<View key={index} style={styles.quote}><SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} /></View>);
 		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><Text style={styles.marker}>{item.checked !== undefined ? (item.checked ? "☑" : "☐") : block.ordered ? `${itemIndex + 1}.` : "•"}</Text><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
@@ -95,6 +98,19 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		<View style={styles.root}>{content}</View>
 	);
 });
+
+type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
+
+function splitAtTables(blocks: MarkdownBlock[]): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock> {
+	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock> = [];
+	for (const block of blocks) {
+		const last = runs[runs.length - 1];
+		if (block.kind === "table") runs.push(block);
+		else if (Array.isArray(last)) last.push(block);
+		else runs.push([block]);
+	}
+	return runs;
+}
 
 function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>): boolean {
 	return inline(value, styles).some((node) => isValidElement(node) && node.type === MarkdownLink);
@@ -108,8 +124,8 @@ function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Arra
 	</Text>;
 }
 
-/** One native text surface for selecting across every part of a response. */
-export function SelectableResponseText({ text, source }: { text: string; source?: Omit<ChatExcerpt, "text"> }) {
+/** One native text surface for selecting across a run of response blocks. */
+export function SelectableResponseText({ blocks, source }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text"> }) {
 	const t = useTheme();
 	const addToChat = useContext(AddResponseToChat);
 	const select = useCallback((selected: string) => source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, source]);
@@ -117,22 +133,21 @@ export function SelectableResponseText({ text, source }: { text: string; source?
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat && source)} onAddToChat={(event) => select(event.nativeEvent.text)}>
-		{parseBlocks(text).map((block, index) => {
+		{blocks.map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
 			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;
 			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles)}</Text>;
 			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles)}</Text>;
 			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles)}</Text>)}</Text>;
 			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "table") return <Text key={index}>{separator}{[block.headers, ...block.rows].map((row, rowIndex) => <Text key={rowIndex}>{rowIndex > 0 ? "\n" : ""}{row.map((cell, cellIndex) => <Text key={cellIndex}>{cellIndex > 0 ? "  |  " : ""}{inline(cell, styles)}</Text>)}</Text>)}</Text>;
 			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles)}</Text>;
 			return <Text key={index}>{separator}────────</Text>;
 		})}
 	</Text>;
 }
 
-function SelectableInlineText({ value, selectionColor, style, styles }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles> }) {
-	const content = inline(value, styles);
+function SelectableInlineText({ value, selectionColor, style, styles, codeStyle }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles>; codeStyle?: StyleProp<TextStyle> }) {
+	const content = inline(value, styles, true, codeStyle);
 	// The native UITextView flattens inline children into one accessibility node.
 	// Keep links on RN Text on iOS so VoiceOver can focus their link role.
 	const hasLink = content.some((node) => isValidElement(node) && node.type === MarkdownLink);
@@ -148,9 +163,33 @@ function MarkdownImage({ alt, url, selectionColor, showCaption = true }: { alt: 
 	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
 }
 
-function MarkdownTable({ headers, rows, selectionColor }: { headers: string[]; rows: string[][]; selectionColor: string }) {
+// React Native has no grid layout, so a column's width is estimated from its
+// longest cell and every row uses that width; that keeps columns aligned.
+// Columns then grow in proportion to fill a wide screen, or scroll when they
+// overflow a narrow one. It must be `width`, not `flexBasis`: inside a
+// horizontal ScrollView the row's width is undefined, and Yoga then ignores a
+// numeric basis and sizes each cell to its own content.
+const TABLE_CHAR_WIDTH = 7.4;
+const TABLE_COLUMN_MIN = 72;
+const TABLE_COLUMN_MAX = 220;
+
+function tableColumnWidth(cells: string[]): number {
+	const chars = Math.max(0, ...cells.map((cell) => cell.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[*`~]/g, "").length));
+	return Math.min(TABLE_COLUMN_MAX, Math.max(TABLE_COLUMN_MIN, Math.ceil(chars * TABLE_CHAR_WIDTH) + space.sm * 2));
+}
+
+function MarkdownTable({ headers, align, rows, selectionColor }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string }) {
 	const styles = useThemedStyles(makeStyles);
-	return <ScrollView horizontal showsHorizontalScrollIndicator><View style={styles.table}><View style={[styles.tableRow, styles.tableHeader]}>{headers.map((cell, index) => <Text key={index} selectable uiTextView selectionColor={selectionColor} style={[styles.tableCell, styles.tableHeaderText]}>{cell}</Text>)}</View>{rows.map((row, rowIndex) => <View key={rowIndex} style={styles.tableRow}>{headers.map((_, cellIndex) => <Text key={cellIndex} selectable uiTextView selectionColor={selectionColor} style={styles.tableCell}>{row[cellIndex] ?? ""}</Text>)}</View>)}</View></ScrollView>;
+	const widths = headers.map((header, column) => tableColumnWidth([header, ...rows.map((row) => row[column] ?? "")]));
+	const row = (cells: string[], header: boolean) => headers.map((_, column) => <View key={column} style={[styles.tableCell, column === 0 && styles.tableFirstCell, { width: widths[column], flexGrow: widths[column] }]}>
+		<SelectableInlineText value={cells[column] ?? ""} selectionColor={selectionColor} style={[header ? styles.tableHeaderText : styles.tableText, align[column] && { textAlign: align[column] }]} styles={styles} codeStyle={styles.tableCode} />
+	</View>);
+	return <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
+		<View style={styles.table}>
+			<View style={[styles.tableRow, styles.tableHeader]}>{row(headers, true)}</View>
+			{rows.map((cells, index) => <View key={index} style={styles.tableRow}>{row(cells, false)}</View>)}
+		</View>
+	</ScrollView>;
 }
 
 function CodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
@@ -190,7 +229,7 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 	return <Text accessibilityRole="link" style={style} onPress={() => { haptics.tap(); open(url); }}>{label}</Text>;
 }
 
-function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true): ReactNode[] {
+function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
 	const pattern = /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|<(https?:\/\/[^\s>]+)>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+))/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
@@ -204,7 +243,7 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 			const label = match[2] ?? url;
 			nodes.push(linksPressable ? <MarkdownLink key={`${match.index}-link`} url={url} label={label} style={styles.link} /> : <Text key={`${match.index}-link`} style={styles.link}>{label}</Text>);
 		} else if (match[5]) {
-			nodes.push(<Text key={`${match.index}-code`} style={styles.inlineCode}>{match[5]}</Text>);
+			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{match[5]}</Text>);
 		} else if (match[6] || match[7]) {
 			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{match[6] ?? match[7]}</Text>);
 		} else if (match[8]) {
@@ -255,9 +294,13 @@ const makeStyles = (t: Theme) =>
 		image: { width: "100%", minHeight: 190, maxHeight: 420 },
 		imageCaption: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, paddingHorizontal: space.sm, paddingVertical: space.xs, borderTopWidth: 1, borderTopColor: t.borderSubtle },
 		imageFallback: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, fontStyle: "italic" },
-		table: { borderWidth: 1, borderColor: t.borderSubtle, borderRadius: radius.sm, borderCurve: "continuous", overflow: "hidden" },
+		tableScroll: { flexGrow: 1 },
+		table: { flexGrow: 1, borderWidth: 1, borderColor: t.borderSubtle, borderRadius: radius.sm, borderCurve: "continuous", overflow: "hidden" },
 		tableRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
 		tableHeader: { borderTopWidth: 0, backgroundColor: t.bgSubtle },
-		tableCell: { fontFamily: "Geist_400Regular", minWidth: 110, maxWidth: 260, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: t.borderSubtle },
-		tableHeaderText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600" },
+		tableCell: { flexShrink: 0, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: t.borderSubtle },
+		tableFirstCell: { borderLeftWidth: 0 },
+		tableText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		tableHeaderText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		tableCode: { fontSize: type.caption1.fontSize },
 	});

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { $getRoot, type LexicalEditor } from "lexical";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { readChatSessionDraft, writeChatComposerText } from "../../lib/chat-drafts";
@@ -12,6 +13,15 @@ function renderComposer(props: Partial<Parameters<typeof ChatComposer>[0]> = {})
 	const onSend = vi.fn();
 	const view = render(<ChatComposer onSend={onSend} promptSuggestion={suggestion} {...props} />, { wrapper: TooltipProvider });
 	return { ...view, onSend, field: screen.getByRole("combobox") };
+}
+
+async function clearDraft(field: HTMLElement) {
+	await act(async () => {
+		const editor = (field as HTMLElement & { __lexicalEditor: LexicalEditor }).__lexicalEditor;
+		editor.update(() => {
+			$getRoot().select(0, $getRoot().getChildrenSize()).removeText();
+		}, { discrete: true });
+	});
 }
 
 describe("next-message suggestion", () => {
@@ -30,6 +40,46 @@ describe("next-message suggestion", () => {
 		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
 		await userEvent.keyboard("{Enter}");
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith(suggestion.text, undefined, expect.any(String)));
+	});
+
+	it("restores the same suggestion whenever an unsent draft is cleared", async () => {
+		const onDismiss = vi.fn();
+		const sessionId = "prompt-suggestion-cleared";
+		const { field, onSend } = renderComposer({ draftSessionId: sessionId, promptSuggestion: { ...suggestion, onDismiss } });
+		for (const text of ["My own message", "Another draft"]) {
+			await typeInLexicalEditor(field, text);
+			expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+			expect(field).not.toHaveAttribute("aria-describedby");
+			await clearDraft(field);
+			expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(suggestion.text);
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+			expect(onDismiss).not.toHaveBeenCalled();
+		}
+		expect(onSend).not.toHaveBeenCalled();
+		await userEvent.keyboard("{Tab}");
+		expect(lexicalEditorText(field)).toBe(suggestion.text);
+		expect(onDismiss).not.toHaveBeenCalled();
+	});
+
+	it("restores a Tab-accepted suggestion after deleting its text until Escape dismisses it", async () => {
+		const onDismiss = vi.fn();
+		const sessionId = "prompt-suggestion-cleared-after-tab";
+		const { field, onSend } = renderComposer({ draftSessionId: sessionId, promptSuggestion: { ...suggestion, onDismiss } });
+		for (let attempt = 0; attempt < 2; attempt++) {
+			await userEvent.keyboard("{Tab}");
+			expect(lexicalEditorText(field)).toBe(suggestion.text);
+			expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+			await clearDraft(field);
+			expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(suggestion.text);
+			expect(readChatSessionDraft(sessionId).composer.text).toBe("");
+			expect(onDismiss).not.toHaveBeenCalled();
+		}
+		fireEvent.keyDown(field, { key: "Escape" });
+		expect(onDismiss).toHaveBeenCalledOnce();
+		await typeInLexicalEditor(field, "Another draft");
+		await clearDraft(field);
+		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		expect(onSend).not.toHaveBeenCalled();
 	});
 
 	it("does not accept or send ghost text on Enter", async () => {
@@ -99,7 +149,7 @@ describe("next-message suggestion", () => {
 		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
 	});
 
-	it("keeps existing skill completion after typing dismisses the suggestion", async () => {
+	it("keeps existing skill completion while typing hides the suggestion", async () => {
 		const { field } = renderComposer({ skills: [{ name: "review", displayName: "review", description: "Review changes", source: "user" }] });
 		await typeInLexicalEditor(field, "/rev");
 		await userEvent.keyboard("{Tab}");
@@ -130,13 +180,19 @@ describe("next-message suggestion", () => {
 		fireEvent.keyDown(field, { key: "Tab" });
 		expect(lexicalEditorText(field)).toBe("Saved message");
 		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		await clearDraft(field);
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(suggestion.text);
+		fireEvent.keyDown(field, { key: "Escape" });
+		await typeInLexicalEditor(field, "Another draft");
+		await clearDraft(field);
+		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
 	});
 
-	it("undoes accepted suggestion text without restoring the ghost", async () => {
+	it("restores the suggestion when Tab-accepted text is undone", async () => {
 		const { field } = renderComposer();
 		await userEvent.keyboard("{Tab}");
 		await userEvent.keyboard("{Control>}z{/Control}");
 		expect(lexicalEditorText(field)).toBe("");
-		expect(screen.queryByTestId("prompt-suggestion")).not.toBeInTheDocument();
+		expect(screen.getByTestId("prompt-suggestion")).toHaveTextContent(suggestion.text);
 	});
 });

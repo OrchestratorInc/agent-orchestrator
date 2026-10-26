@@ -18,7 +18,7 @@ import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
 /** How long a revealed line stays marked, matching the chat and settings focus highlights. */
 export const REVEALED_LINE_HIGHLIGHT_MS = 2_000;
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
 	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;

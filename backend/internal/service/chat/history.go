@@ -1021,8 +1021,8 @@ func (s *Service) restoreClosedSourceController(
 	conversation.Settings = source.Settings()
 	provider, err := driver.Resume(recoveryCtx, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: providerConversationID,
-		// A switch target that never answered may have no native session to resume.
-		FreshIfMissing: s.switchBranchUnanswered(recoveryCtx, conversation.ID, branch),
+		// A branch whose agent never answered may have no native session to resume.
+		FreshIfMissing: s.branchUnanswered(recoveryCtx, id, conversation.ID, branch),
 		DataDir:        cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: launchEnv,
 		Model: cmp.Or(conversation.Settings.Model, cfg.Model), Effort: conversation.Settings.ReasoningEffort,
 		Permissions:           cmp.Or(conversation.Settings.ApprovalMode, cfg.Permissions),

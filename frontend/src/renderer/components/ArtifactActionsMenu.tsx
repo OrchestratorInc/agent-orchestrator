@@ -225,7 +225,7 @@ export function ArtifactActionsMenu({
 								<SquareTerminal aria-hidden="true" />
 								{t("artifacts.showIn", { name: terminalName() })}
 							</DropdownMenuItem>
-							<DropdownMenuSeparator />
+							{copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 						</>
 					) : null}
 					{copyable ? (
@@ -240,7 +240,7 @@ export function ArtifactActionsMenu({
 							{t("artifacts.download")}
 						</DropdownMenuItem>
 					) : null}
-					<DropdownMenuSeparator />
+					{local || copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 					<DropdownMenuItem
 						className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
 						onSelect={confirmDelete}
