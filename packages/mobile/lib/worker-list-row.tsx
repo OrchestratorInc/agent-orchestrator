@@ -6,7 +6,9 @@ import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
 import { sessionHostId } from "./hostedRows";
-import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
+import { prLine, workerRowPresentation, workerStatusGlyph, type WorkerStatusGlyph } from "./agentsView";
+import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolName, PlatformSymbol } from "./symbols";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
@@ -312,13 +314,13 @@ function WorkerRowContents({
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
 				    showing an elapsed time instead, there is no state to depict.
-				    A working row shows the system's spinner: a still circle reads as
-				    stuck, and a pulse says "waiting", which is what the row above it
-				    says for a different state. */}
+				    A working or starting row shows the system's spinner: a still
+				    circle reads as stuck, and a pulse says "waiting", which is what
+				    the row above it says for a different state. */}
 				{glyph && row.trailingKind === "status" ? (
-					visual.breathing
+					visual.breathing || glyph === "loader"
 						? <Spinner size={iconSize.xs} color={visual.color} />
-						: <Feather name={glyph} size={12} color={visual.color} />
+						: <StatusGlyph glyph={glyph} color={visual.color} />
 				) : null}
 				<Text
 					style={[styles.trailing, { color: row.trailingKind === "status" ? visual.color : t.textTertiary }]}
@@ -372,6 +374,23 @@ function WorkerRowContents({
 			) : null}
 		</>
 	);
+}
+
+/**
+ * Status glyphs are chrome, so each draws as its platform's own symbol. The
+ * pull request keeps its Lucide glyph: a domain mark with no system symbol.
+ */
+const STATUS_SYMBOLS: Record<Exclude<WorkerStatusGlyph, "git-pull-request" | "loader">, AppSymbolName | PlatformSymbol> = {
+	"alert-circle": "error",
+	"message-square": "chat",
+	"x-octagon": { ios: "xmark.octagon", android: "dangerous" },
+	"check-circle": "checkCircle",
+	moon: "idle",
+};
+
+function StatusGlyph({ glyph, color }: { glyph: Exclude<WorkerStatusGlyph, "loader">; color: string }) {
+	if (glyph === "git-pull-request") return <Feather name={glyph} size={iconSize.xs} color={color} />;
+	return <AppSymbol name={STATUS_SYMBOLS[glyph]} size={iconSize.xs} color={color} />;
 }
 
 const makeStyles = (t: Theme) =>

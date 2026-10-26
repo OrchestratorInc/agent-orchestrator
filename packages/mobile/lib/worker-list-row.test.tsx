@@ -51,11 +51,16 @@ vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
 vi.mock("./haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn(), warning: vi.fn(), success: vi.fn(), error: vi.fn() } }));
+// A row shows a status glyph only beside a status; set one to draw it.
+const status = vi.hoisted(() => ({ glyph: undefined as string | undefined }));
 vi.mock("./agentsView", async (importOriginal) => ({
 	...await importOriginal<typeof import("./agentsView")>(),
 	prLine: () => undefined,
-	workerRowPresentation: () => { counters.renders++; return { title: "Polish workers", project: "Agent Orchestrator", branch: "feat/mobile", trailing: "2m", trailingKind: "time" }; },
-	workerStatusGlyph: () => undefined,
+	workerRowPresentation: () => {
+		counters.renders++;
+		return { title: "Polish workers", project: "Agent Orchestrator", branch: "feat/mobile", trailing: status.glyph ? "Status" : "2m", trailingKind: status.glyph ? "status" : "time" };
+	},
+	workerStatusGlyph: () => status.glyph,
 }));
 vi.mock("./prView", () => ({ toneColor: () => "tone" }));
 vi.mock("./theme", () => ({ statusVisual: () => ({ label: "Working", color: "orange", breathing: false }) }));
@@ -238,6 +243,46 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+});
+
+// Status reads by shape as well as colour, in each platform's own symbols; a
+// starting row turns the system spinner rather than standing a loader still.
+describe("worker status glyphs", () => {
+	function glyphFor(glyph: string) {
+		status.glyph = glyph;
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerListRow
+					session={session} projectName="Agent Orchestrator" isRenaming={false} nowBucket={1}
+					onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={vi.fn()}
+					onRename={vi.fn(async () => {})} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+				/>,
+			);
+		});
+		status.glyph = undefined;
+		const found = {
+			spinner: renderer.root.findAllByType("ActivityIndicator" as never).length,
+			symbol: renderer.root.findAllByType("SymbolView" as never).map((node) => node.props.name),
+			lucide: renderer.root.findAllByType("Feather" as never).map((node) => node.props.name),
+		};
+		act(() => renderer.unmount());
+		return found;
+	}
+
+	it("spins for a starting worker", () => {
+		expect(glyphFor("loader")).toEqual({ spinner: 1, symbol: [], lucide: [] });
+	});
+
+	it("draws status as system symbols", () => {
+		expect(glyphFor("alert-circle").symbol).toEqual([{ ios: "exclamationmark.circle", android: "error" }]);
+		expect(glyphFor("x-octagon").symbol).toEqual([{ ios: "xmark.octagon", android: "dangerous" }]);
+		expect(glyphFor("moon")).toMatchObject({ lucide: [] });
+	});
+
+	it("keeps Lucide only for the pull request, a domain glyph", () => {
+		expect(glyphFor("git-pull-request")).toEqual({ spinner: 0, symbol: [], lucide: ["git-pull-request"] });
 	});
 });
 

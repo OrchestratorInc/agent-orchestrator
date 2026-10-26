@@ -55,9 +55,10 @@ describe("worker row working indicator", () => {
 
 	// A still circle reads as stuck or decided rather than live. It shipped as a
 	// bare glyph, then as a pulse (a waiting signal, not a working one), then as
-	// a turning Lucide loader, which only imitated the system's indicator.
-	it("shows the system spinner in a working row's status slot", () => {
-		expect(row).toMatch(/visual\.breathing\s*\?\s*<Spinner size=\{iconSize\.xs\} color=\{visual\.color\} \/>/);
+	// a turning Lucide loader, which only imitated the system's indicator. A
+	// starting row does not breathe, and was left with that loader standing still.
+	it("shows the system spinner in a working or starting row's status slot", () => {
+		expect(row).toMatch(/visual\.breathing \|\| glyph === "loader"\s*\?\s*<Spinner size=\{iconSize\.xs\} color=\{visual\.color\} \/>/);
 		expect(row).not.toContain("<Spinning");
 		expect(row).not.toContain("<Breathing");
 		expect(spinner).toContain("<ActivityIndicator");
