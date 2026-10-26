@@ -82,6 +82,14 @@ describe("ProjectSwitcher", () => {
 		expect(trigger.props.accessibilityLabel).toBe("Project, API");
 	});
 
+	// The menu's host keeps the width it first measured, so its trigger spans
+	// the row: a longer name chosen later still has the room to show.
+	it("opens from anywhere on the row", () => {
+		const trigger = render().findByType("MenuView" as never).children[0] as ReactTestInstance;
+		expect(trigger.props.accessibilityLabel).toBe("Project, API");
+		expect(trigger.findAllByType("Text" as never).map((node) => node.props.children)).toEqual(["Project", "API"]);
+	});
+
 	// A project the machine no longer lists falls back to All, and the check
 	// follows what the list actually shows.
 	it("checks All when the saved project is gone", () => {
