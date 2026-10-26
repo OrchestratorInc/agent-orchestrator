@@ -506,8 +506,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				: undefined;
 			if (route) openPage(route);
 			// The board is already under this page: going back to it, rather than
-			// pushing a second board on top.
-			else router.dismissTo({ pathname: "/prs", params: { hostId: currentHostId, projectId: session.projectId } });
+			// pushing a second board on top. Unfiltered, because params written to
+			// the board's own tab stay on it and nothing there clears them.
+			else router.dismissTo("/prs");
 		},
 		map: () => {
 			const snapshot = latestSnapshot.current;
