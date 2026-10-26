@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -699,19 +700,40 @@ func (s *Service) sendRetireNotice(ctx context.Context, id domain.SessionID) err
 
 func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, sess domain.Session) error {
 	if sess.IsTerminated {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s is terminated", sess.ID)
+		return orchestratorReplacementUnverified("new session %s is terminated", sess.ID)
 	}
 	if sess.Kind != domain.KindOrchestrator {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s has kind %q", sess.ID, sess.Kind)
+		return orchestratorReplacementUnverified("new session %s has kind %q", sess.ID, sess.Kind)
 	}
 	if expected := project.Config.Orchestrator.Harness; expected != "" && sess.Harness != expected {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
+		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
 	}
 	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
-	if sess.Metadata.Branch != "" && sess.Metadata.Branch != expectedBranch {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s uses branch %q, want %q", sess.ID, sess.Metadata.Branch, expectedBranch)
+	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {
+		return orchestratorReplacementUnverified("new session %s uses branch %q, want %q", sess.ID, branch, expectedBranch)
 	}
 	return nil
+}
+
+// orchestratorReplacementUnverified carries a code so a failed check is not
+// reported as a bare INTERNAL_ERROR, which telemetry cannot tell apart.
+func orchestratorReplacementUnverified(format string, args ...any) error {
+	return apierr.Internal("ORCHESTRATOR_REPLACEMENT_UNVERIFIED",
+		"orchestrator replacement verification failed: "+fmt.Sprintf(format, args...))
+}
+
+// isOrchestratorBranch accepts the canonical branch and the <branch>-N branch
+// the spawn moves to when another worktree has the canonical one checked out.
+func isOrchestratorBranch(branch, expected string) bool {
+	if branch == expected {
+		return true
+	}
+	n, ok := strings.CutPrefix(branch, expected+"-")
+	if !ok || n == "" {
+		return false
+	}
+	_, err := strconv.Atoi(n)
+	return err == nil
 }
 
 func serviceSessionPrefix(project domain.ProjectRecord) string {

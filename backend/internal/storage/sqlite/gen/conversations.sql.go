@@ -8,6 +8,7 @@ package gen
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -2744,6 +2745,40 @@ func (q *Queries) SelectConversationDeliveryContent(ctx context.Context, convers
 		return nil, err
 	}
 	return items, nil
+}
+
+const selectConversationEarliestTurnPrompt = `-- name: SelectConversationEarliestTurnPrompt :one
+SELECT CAST(COALESCE(MIN(sequence), 0) AS INTEGER) AS first_sequence
+FROM conversation_messages
+WHERE conversation_id = ?1
+  AND role = 'user'
+  AND turn_id IN (/*SLICE:turn_ids*/?)
+`
+
+type SelectConversationEarliestTurnPromptParams struct {
+	ConversationID string
+	TurnIds        []sql.NullString
+}
+
+// Earliest prompt of the named turns. A page that ends among interleaved turns
+// (a prompt queued while another turn runs) reaches back to it, so a turn is not
+// shown without its prompt. Zero when none of the turns has a prompt.
+func (q *Queries) SelectConversationEarliestTurnPrompt(ctx context.Context, arg SelectConversationEarliestTurnPromptParams) (int64, error) {
+	query := selectConversationEarliestTurnPrompt
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.ConversationID)
+	if len(arg.TurnIds) > 0 {
+		for _, v := range arg.TurnIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:turn_ids*/?", strings.Repeat(",?", len(arg.TurnIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:turn_ids*/?", "NULL", 1)
+	}
+	row := q.db.QueryRowContext(ctx, query, queryParams...)
+	var first_sequence int64
+	err := row.Scan(&first_sequence)
+	return first_sequence, err
 }
 
 const selectConversationEditAnchor = `-- name: SelectConversationEditAnchor :one

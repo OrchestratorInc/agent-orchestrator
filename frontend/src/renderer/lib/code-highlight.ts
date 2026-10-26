@@ -1,28 +1,13 @@
 /**
- * Syntax highlighting for fenced code in chat prose.
- *
- * Three constraints picked the engine, and each one rules out the obvious
- * choice:
- *
- *   - The renderer runs under `script-src 'self'` with no `wasm-unsafe-eval`
- *     (see the CSP in `vite.renderer.config.ts`). Shiki's default engine
- *     instantiates a WebAssembly module, which that policy blocks outright, so
- *     TextMate grammars would cost either a weakened CSP or Shiki's slower
- *     JavaScript engine plus its grammar payload. highlight.js is plain JS.
- *   - Grammars are shipped, never fetched. Nothing here reaches the network, and
- *     the language set is deliberately short — see `code-highlight-engine.ts`.
- *   - Tokens come out as class names, not inline colours. `code-theme.css` maps
- *     them onto the terminal palette, so AO's light/dark switch costs nothing:
- *     no second theme in the bundle and no re-tokenizing when the theme flips.
- *
- * Tokenizing is memoized because the timeline re-renders on every poll (one
- * second while a turn runs) and code blocks are remounted by scrolling. Without
- * the cache every block would be re-parsed once a second for the life of the
- * conversation.
+ * Shared syntax highlighting for chat, Markdown previews and file diffs.
+ * Shiki uses the JavaScript regex engine with bundled grammars and AO's CSS
+ * palette. Settled trees use a bounded LRU; live fences send only appended
+ * complete lines to a worker that retains their grammar state.
  */
 
 import type { Root } from "hast";
 import type { CodeEngine } from "./code-highlight-engine";
+import type { CodeLine, HighlightWorkerRequest, HighlightWorkerResponse, StreamingCode } from "./code-highlight-protocol";
 
 /**
  * Fence label → grammar. Labels are what agents type, so the aliases matter
@@ -47,16 +32,16 @@ const GRAMMARS = {
 	udiff: "diff",
 	go: "go",
 	golang: "go",
-	html: "xml",
+	html: "html",
 	xml: "xml",
 	svg: "xml",
 	javascript: "javascript",
 	js: "javascript",
-	jsx: "javascript",
+	jsx: "jsx",
 	mjs: "javascript",
 	cjs: "javascript",
 	json: "json",
-	jsonc: "json",
+	jsonc: "jsonc",
 	json5: "json",
 	markdown: "markdown",
 	md: "markdown",
@@ -67,7 +52,7 @@ const GRAMMARS = {
 	sql: "sql",
 	typescript: "typescript",
 	ts: "typescript",
-	tsx: "typescript",
+	tsx: "tsx",
 	mts: "typescript",
 	cts: "typescript",
 	yaml: "yaml",
@@ -77,9 +62,10 @@ const GRAMMARS = {
 export type GrammarName = (typeof GRAMMARS)[keyof typeof GRAMMARS];
 
 /** The grammar for a fence label, or undefined when there is nothing to load. */
+const grammarAliases = new Map<string, GrammarName>(Object.entries(GRAMMARS));
+
 export function canonicalLanguage(label: string | undefined): GrammarName | undefined {
-	if (!label) return undefined;
-	return GRAMMARS[label.toLowerCase() as keyof typeof GRAMMARS];
+	return label ? grammarAliases.get(label.toLowerCase()) : undefined;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -145,8 +131,8 @@ export async function highlight(code: string, language: GrammarName): Promise<Ro
 async function loadEngine(): Promise<CodeEngine | undefined> {
 	if (engine) return engine;
 	loading ??= import("./code-highlight-engine")
-		.then((module) => {
-			engine = module.createEngine();
+		.then(async (module) => {
+			engine = await module.createEngine();
 			return engine;
 		})
 		.catch((cause: unknown) => {
@@ -214,13 +200,14 @@ const WORKER_TIMEOUT_MS = 10_000;
 let worker: Worker | undefined;
 let workerUnavailable = false;
 let nextRequestId = 0;
+let nextStreamId = 0;
 let pendingChars = 0;
+const MAX_STREAM_CHARS = 100_000;
 const pending = new Map<number, {
-	key: string;
+	key?: string;
 	chars: number;
-	cacheResult: boolean;
-	promise: Promise<Root | undefined>;
-	resolve: (tree: Root | undefined) => void;
+	promise: Promise<HighlightWorkerResponse | undefined>;
+	resolve: (response: HighlightWorkerResponse | undefined) => void;
 	timer: ReturnType<typeof setTimeout>;
 }>();
 
@@ -236,19 +223,57 @@ function stopWorker(): void {
 	pendingChars = 0;
 }
 
-// Live snapshots never enter the settled-block LRU. The whole prefix is sent
-// because lowlight has no public continuation API for multiline grammar state.
-export function highlightStreaming(code: string, language: GrammarName): Promise<Root | undefined> {
-	if (code.length > 100_000) return Promise.resolve(undefined);
-	return highlightInWorker(code, language, false);
+/** A fence owns its worker state until disposed; a rewrite resets that state. */
+export function createCodeHighlightStream() {
+	const streamId = ++nextStreamId;
+	let committed: { source: string; language: GrammarName } | undefined;
+	let lines: CodeLine[] = [];
+	let disposed = false;
+	let running = false;
+	return {
+		async update(code: string, language: GrammarName): Promise<StreamingCode | undefined> {
+			if (disposed || running || code.length > MAX_STREAM_CHARS || !code.endsWith("\n")) return undefined;
+			running = true;
+			try {
+				const reset = !committed || committed.language !== language || !code.startsWith(committed.source);
+				const offset = reset ? 0 : committed?.source.length ?? 0;
+				if (!reset && offset === code.length) return { source: code, language, lines };
+				let response = await sendWorker({ kind: "stream", id: ++nextRequestId, streamId, offset, reset, code: code.slice(offset), language });
+				if (disposed) return undefined;
+				// Worker LRU eviction is transparent: replay once from the source.
+				let replace = reset;
+				if (response?.kind === "reset") {
+					replace = true;
+					response = await sendWorker({ kind: "stream", id: ++nextRequestId, streamId, offset: 0, reset: true, code, language });
+				}
+				if (disposed || response?.kind !== "stream") return undefined;
+				lines = replace ? response.lines : [...lines, ...response.lines];
+				committed = { source: code, language };
+				return { source: code, language, lines };
+			} finally {
+				running = false;
+			}
+		},
+		dispose() {
+			disposed = true;
+			committed = undefined;
+			lines = [];
+			try { worker?.postMessage({ kind: "release", streamId } satisfies HighlightWorkerRequest); }
+			catch { stopWorker(); }
+		},
+	};
 }
 
-function highlightInWorker(code: string, language: GrammarName, cacheResult = true): Promise<Root | undefined> {
-	const key = `${cacheResult ? "settled" : "live"}:${cacheKey(code, language)}`;
-	for (const request of pending.values()) {
-		if (request.key === key) return request.promise;
+async function highlightInWorker(code: string, language: GrammarName): Promise<Root | undefined> {
+	const response = await sendWorker({ kind: "highlight", id: ++nextRequestId, code, language }, cacheKey(code, language));
+	return response?.kind === "highlight" ? response.tree : undefined;
+}
+
+function sendWorker(request: Exclude<HighlightWorkerRequest, { kind: "release" }>, key?: string): Promise<HighlightWorkerResponse | undefined> {
+	if (key) {
+		for (const entry of pending.values()) if (entry.key === key) return entry.promise;
 	}
-	if (workerUnavailable || typeof Worker === "undefined" || pending.size >= MAX_PENDING || pendingChars + code.length > MAX_CHARS) {
+	if (workerUnavailable || typeof Worker === "undefined" || pending.size >= MAX_PENDING || pendingChars + request.code.length > MAX_CHARS) {
 		return Promise.resolve(undefined);
 	}
 	try {
@@ -256,22 +281,21 @@ function highlightInWorker(code: string, language: GrammarName, cacheResult = tr
 			worker = new Worker(new URL("./code-highlight.worker.ts", import.meta.url), { type: "module" });
 			worker.onerror = stopWorker;
 			worker.onmessageerror = stopWorker;
-			worker.onmessage = (event: MessageEvent<{ id: number; tree?: Root }>) => {
-				const request = pending.get(event.data.id);
-				if (!request) return;
-				clearTimeout(request.timer);
+			worker.onmessage = (event: MessageEvent<HighlightWorkerResponse>) => {
+				const entry = pending.get(event.data.id);
+				if (!entry) return;
+				clearTimeout(entry.timer);
 				pending.delete(event.data.id);
-				pendingChars -= request.chars;
-				if (event.data.tree && request.cacheResult) store(request.key.slice("settled:".length), event.data.tree, request.chars);
-				request.resolve(event.data.tree);
+				pendingChars -= entry.chars;
+				if (event.data.kind === "highlight" && event.data.tree && entry.key) store(entry.key, event.data.tree, entry.chars);
+				entry.resolve(event.data);
 			};
 		}
-		const id = ++nextRequestId;
-		let resolve!: (tree: Root | undefined) => void;
-		const promise = new Promise<Root | undefined>((done) => { resolve = done; });
-		pending.set(id, { key, chars: code.length, cacheResult, promise, resolve, timer: setTimeout(stopWorker, WORKER_TIMEOUT_MS) });
-		pendingChars += code.length;
-		worker.postMessage({ id, code, language });
+		let resolve!: (response: HighlightWorkerResponse | undefined) => void;
+		const promise = new Promise<HighlightWorkerResponse | undefined>((done) => { resolve = done; });
+		pending.set(request.id, { key, chars: request.code.length, promise, resolve, timer: setTimeout(stopWorker, WORKER_TIMEOUT_MS) });
+		pendingChars += request.code.length;
+		worker.postMessage(request);
 		return promise;
 	} catch {
 		stopWorker();

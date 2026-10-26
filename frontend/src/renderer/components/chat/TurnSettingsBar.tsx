@@ -95,9 +95,9 @@ export interface ApprovalModeLimits {
 	requested?: ApprovalMode;
 }
 
-const TRIGGER_CLASS =
+export const TRIGGER_CLASS =
 	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
-const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
+export const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
 	models,
@@ -1521,7 +1521,7 @@ function Picker({
 	disabled?: boolean;
 	/** The current choice will not hold for the next message: marked red. */
 	alert?: boolean;
-	/** Set on the permission control when it leads the row: marked with this, with a caret, opening rightwards. */
+	/** Set on the permission control when it leads the row: marked with this, opening rightwards. */
 	leadIcon?: LucideIcon;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
 	badge?: React.ReactNode;
@@ -1531,7 +1531,7 @@ function Picker({
 	return (
 		<OptionMenu>
 				<OptionMenuTrigger
-					showCaret={Boolean(LeadIcon)}
+					showCaret={false}
 					aria-label={title}
 					title={title}
 					disabled={disabled}
@@ -1613,7 +1613,7 @@ export function hasProviderPermissionMode(options: ChatConfigOption[]): boolean 
 	return Boolean(partitionConfigOptions(options).mode);
 }
 
-function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
+export function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
 	model: ChatConfigOption[];
 	effort: ChatConfigOption[];
 	/** Provider plan/agent modes, placed with model selection rather than permissions. */
@@ -1759,8 +1759,9 @@ function addAgentModeChoice(
 	permissionChoices: ChatConfigOption["choices"],
 ): ChatConfigOption["choices"] {
 	// OpenCode names its ordinary agent mode "build", so its catalog already has
-	// one and must not gain a synthetic duplicate.
-	if (executionChoices.some((choice) => executionChoiceMatches(choice, "agent|build"))) {
+	// one and must not gain a synthetic duplicate. With no execution mode to leave
+	// for, an Agent choice alone would be a picker with nothing to pick.
+	if (executionChoices.length === 0 || executionChoices.some((choice) => executionChoiceMatches(choice, "agent|build"))) {
 		return executionChoices;
 	}
 	const standard = permissionChoices.find((choice) => choiceMatches(choice, "manual"))

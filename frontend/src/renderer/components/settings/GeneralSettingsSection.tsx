@@ -170,6 +170,8 @@ export function GeneralSettingsSection({
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
 	const navigationGestures = useUiStore((state) => state.navigationGestures);
 	const setNavigationGestures = useUiStore((state) => state.setNavigationGestures);
+	const renderMath = useUiStore((state) => state.renderMath);
+	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 
@@ -237,6 +239,9 @@ export function GeneralSettingsSection({
 							void setLocale(next);
 						}}
 					/>
+				</SettingsRow>
+				<SettingsRow label={t("settings.renderMath")} description={t("settings.renderMathHint")}>
+					<Switch aria-label={t("settings.renderMath")} checked={renderMath} onCheckedChange={setRenderMath} />
 				</SettingsRow>
 			</SettingsSection>
 

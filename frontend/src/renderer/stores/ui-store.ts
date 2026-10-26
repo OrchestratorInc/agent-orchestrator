@@ -178,6 +178,8 @@ export type UiState = {
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
 	navigationGestures: boolean;
+	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
+	renderMath: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -189,10 +191,10 @@ export type UiState = {
 	globalToasts: GlobalToast[];
 	globalToast: GlobalToast | null;
 	globalToastSequence: number;
-	// Transient "open the New Task dialog for this project" signal. The nonce
-	// bumps on every request so a repeat press (even for the same project) still
-	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
-	// still lives in the URL — this is a one-shot action, not persisted state.
+	// Transient "start a new task for this project" signal. The nonce bumps on
+	// every request so a repeat press (even for the same project) still re-fires;
+	// the always-mounted NewTaskNavigator consumes it by opening the new chat
+	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
@@ -232,6 +234,7 @@ export type UiState = {
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setNavigationGestures: (enabled: boolean) => void;
+	setRenderMath: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -299,6 +302,7 @@ const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const navigationGesturesStorageKey = "ao.navigationGestures";
+const renderMathStorageKey = "ao.renderMath";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -393,6 +397,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) === "true",
+	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -459,6 +464,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setNavigationGestures: (navigationGestures) => {
 		getLocalStorage()?.setItem(navigationGesturesStorageKey, String(navigationGestures));
 		set({ navigationGestures });
+	},
+	setRenderMath: (renderMath) => {
+		getLocalStorage()?.setItem(renderMathStorageKey, String(renderMath));
+		set({ renderMath });
 	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));

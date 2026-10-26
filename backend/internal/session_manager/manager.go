@@ -490,6 +490,9 @@ type Manager struct {
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
 	inputDrained              map[domain.SessionID]chan struct{}
+	// inputLeaseSince is when a session's current run of input leases began,
+	// for diagnosing an operation that cannot drain them.
+	inputLeaseSince map[domain.SessionID]time.Time
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context
@@ -6159,17 +6162,17 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 	}
 	inThread := ""
 	if chat {
-		inThread = "In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory. "
+		inThread = "In a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory.\n\n"
 	}
 	return "## Session Artifacts\n\n" +
-		"Any deliverable that is not part of a pull request — a one-pager, analysis, plan, design doc, report, or other generated file — must be written to `" + dir + "`, never into the git workspace, even temporarily. " +
-		"This applies even when a workspace-relative path like `docs/`, `docs/plans/`, or `notes/` would otherwise feel like the natural place for it: if it is not shipping in a PR, it does not belong in the workspace at all. " +
+		"Write deliverables that are not part of a pull request to `" + dir + "`, never into the git workspace, even temporarily or under `docs/` or `notes/`.\n\n" +
+		"Only two kinds of file belong there: a finished deliverable the user asked for or will open directly, such as a document, page, dashboard, image, video, dataset, or export; and files a deliverable needs to work, such as images a page links to. Keep relative links between them intact. " +
+		"Everything produced along the way is working material and goes in the system temp directory unless the user asked for it: intermediate outputs such as frames or partial renders, drafts, downloaded inputs, caches, build output, logs, and the scripts that generate the deliverable. " +
+		"If a file is neither opened on its own nor needed by a deliverable, it is working material.\n\n" +
 		inThread +
-		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
-		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in chat or AO report notes; do not create files solely because a response is a summary, plan, analysis, or report. " +
-		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Keep them out of report attachments unless requested or needed to explain an actionable failure. Prefer one consolidated deliverable over many diagnostic files. " +
-		"Scripts, source code, and other helper files you use to produce a deliverable are working material too: keep them in the system temp directory, not in the artifact directory, unless the user asked for that code as the deliverable. " +
-		"This directory is local storage. Saving a file here or attaching its reference to an AO report does not authorize external publishing; follow the user's publishing scope."
+		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in chat or AO report notes. " +
+		"Prefer one consolidated deliverable, and revise it in place instead of adding copies. " +
+		"Saving a file here or attaching it to an AO report does not authorize external publishing."
 }
 
 // artifactOutputPrompt is added for a session spawned with the artifact output

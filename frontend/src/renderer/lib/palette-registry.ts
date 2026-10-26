@@ -77,6 +77,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "color-theme", section: "general", label: "settings.colorTheme", keywords: ["palette", "colors", "accent"] },
 	{ id: "language", section: "general", label: "settings.language", keywords: ["locale", "translation", "chinese", "japanese", "spanish"] },
 	{ id: "transparency", section: "general", label: "settings.windowTranslucency", keywords: ["translucency", "vibrancy", "blur"] },
+	{ id: "render-math", section: "general", label: "settings.renderMath", keywords: ["latex", "katex", "equations", "formulas", "tex"] },
 	{ id: "session-interface", section: "general", label: "settings.sessionInterface.label", keywords: ["chat or terminal", "default view"] },
 	{ id: "version-refresh", section: "general", label: "settings.versionRefresh.label", keywords: ["auto upgrade sessions", "version refresh"] },
 	{ id: "terminal-shell", section: "general", label: "settings.terminalShell.label", keywords: ["zsh", "bash", "fish", "powershell", "shell path"] },

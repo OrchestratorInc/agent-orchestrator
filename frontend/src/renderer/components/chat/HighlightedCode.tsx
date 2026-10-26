@@ -14,11 +14,12 @@
 
 import { memo, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type { ElementContent, Root, RootContent } from "hast";
-import { highlight, highlightSync, highlightStreaming, type GrammarName } from "../../lib/code-highlight";
+import { highlight, highlightSync, createCodeHighlightStream, type GrammarName } from "../../lib/code-highlight";
 // The token colours live with the engine rather than with one caller: they are
 // scoped under `.chat-code`/`.markdown-code`, so anything rendering these class
 // names has to be inside one of those containers and has to have loaded this sheet.
 import "./code-theme.css";
+import type { CodeLine, StreamingCode } from "../../lib/code-highlight-protocol";
 
 /**
  * Code, highlighted when it can be, plain otherwise.
@@ -39,26 +40,35 @@ export const HighlightedCode = memo(function HighlightedCode({
 }) {
 	const tokens = useHighlighted(code, language, Boolean(streaming));
 	const snapshot = useStreamingHighlight(code, language, Boolean(streaming));
-	const prefix = snapshot && snapshot.language === language && code.startsWith(snapshot.code) ? snapshot : undefined;
-	const tree = tokens ?? prefix?.tree;
-	const lines = useMemo(() => tree ? tokenLines(tree.children).map((tokens) => ({ tokens, signature: JSON.stringify(tokens) })) : [], [tree]);
-	const plain = tokens ? "" : code.slice(prefix?.code.length ?? 0);
+	const prefix = snapshot && snapshot.language === language && code.startsWith(snapshot.source) ? snapshot : undefined;
+	const settledLines = useMemo(() => tokens ? tokenLines(tokens.children).map((tokens) => ({ tokens, signature: JSON.stringify(tokens) })) : undefined, [tokens]);
+	// Worker lines already carry signatures; appending a line neither walks nor
+	// serializes tokens in the completed prefix on the renderer thread.
+	const lines = settledLines ?? prefix?.lines ?? [];
+	const plain = tokens ? "" : code.slice(prefix?.source.length ?? 0);
 	return <>{lines.map((line, index) => <HighlightedLine key={index} {...line} />)}{plain}</>;
 });
 
-type HighlightSnapshot = { code: string; language: GrammarName; tree: Root };
-
 function useStreamingHighlight(code: string, language: GrammarName | undefined, streaming: boolean) {
 	const completed = code.slice(0, code.lastIndexOf("\n") + 1);
-	const [snapshot, setSnapshot] = useState<HighlightSnapshot>();
+	const [snapshot, setSnapshot] = useState<StreamingCode>();
 	const [busy, setBusy] = useState(false);
 	const attempted = useRef<{ code: string; language: GrammarName }>(undefined);
 	const next = useRef<{ code: string; language: GrammarName }>(undefined);
 	const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const mounted = useRef(false);
+	const stream = useRef<ReturnType<typeof createCodeHighlightStream>>(undefined);
 	useEffect(() => {
 		mounted.current = true;
-		return () => { mounted.current = false; clearTimeout(timer.current); timer.current = undefined; };
+		stream.current = createCodeHighlightStream();
+		attempted.current = undefined;
+		return () => {
+			mounted.current = false;
+			clearTimeout(timer.current);
+			timer.current = undefined;
+			stream.current?.dispose();
+			stream.current = undefined;
+		};
 	}, []);
 	useEffect(() => {
 		next.current = streaming && language && completed ? { code: completed, language } : undefined;
@@ -70,12 +80,13 @@ function useStreamingHighlight(code: string, language: GrammarName | undefined, 
 		timer.current = setTimeout(() => {
 			timer.current = undefined;
 			const request = next.current;
-			if (!request) return;
+			const session = stream.current;
+			if (!request || !session) return;
 			attempted.current = request;
 			setBusy(true);
-			void highlightStreaming(request.code, request.language).then((tree) => {
+			void session.update(request.code, request.language).then((result) => {
 				if (!mounted.current) return;
-				if (tree) setSnapshot({ ...request, tree });
+				if (result && stream.current === session) setSnapshot(result);
 				setBusy(false);
 			});
 		}, 50);
@@ -122,7 +133,7 @@ function renderTokenNodes(nodes: readonly ElementContent[]): ReactNode {
 	});
 }
 
-const HighlightedLine = memo(function HighlightedLine({ tokens }: { signature: string; tokens: ElementContent[] }) {
+const HighlightedLine = memo(function HighlightedLine({ tokens }: CodeLine) {
 	return <span>{renderTokenNodes(tokens)}</span>;
 }, (previous, next) => previous.signature === next.signature);
 
