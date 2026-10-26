@@ -30,7 +30,7 @@ export function WorkerRowContextMenu({
 	const menuActions: MenuAction[] = actions.map((action) => ({
 		id: action.id,
 		title: action.title,
-		image: workerActionSymbol(action.id),
+		image: workerActionSymbol(action.id).ios,
 		attributes: action.destructive ? { destructive: true } : undefined,
 	}));
 

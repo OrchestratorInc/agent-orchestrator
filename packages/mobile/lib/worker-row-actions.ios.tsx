@@ -80,7 +80,7 @@ export function WorkerRowActions({
 					]}
 				>
 					<Image
-						systemName={workerActionSymbol("delete")}
+						systemName={workerActionSymbol("delete").ios}
 						size={iconSize.lg}
 						color={t.textPrimary}
 						modifiers={[frame({ width: GLYPH_BOX, height: GLYPH_BOX })]}

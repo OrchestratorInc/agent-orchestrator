@@ -1,14 +1,19 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
 	ARCHIVE_SESSION_HINT,
 	ARCHIVE_SESSION_CONFIRM,
-	hasWorkerActionDrawable,
 	workerActionGlyph,
 	workerActionSymbol,
+	workerActionSymbols,
 	workerContextActions,
+	type WorkerActionId,
 	type WorkerActionState,
 } from "./worker-action-model";
+
+const ALL_ACTIONS: readonly WorkerActionId[] = ["open", "pin", "unpin", "rename", "resume", "restore", "openPr", "delete"];
 
 const state = (over: Partial<WorkerActionState> = {}): WorkerActionState => ({
 	pinned: false,
@@ -89,18 +94,33 @@ describe("workerContextActions", () => {
 });
 
 describe("workerActionSymbol", () => {
-	it("gives every action an SF Symbol, since iOS resolves them by name", () => {
-		for (const action of workerContextActions(state({ hasPr: true, stopped: true }))) {
-			expect(workerActionSymbol(action.id).length).toBeGreaterThan(0);
+	it("gives every action a symbol on each platform", () => {
+		for (const id of ALL_ACTIONS) {
+			expect(workerActionSymbol(id).ios.length).toBeGreaterThan(0);
+			expect(workerActionSymbol(id).android.length).toBeGreaterThan(0);
 		}
 	});
 
 	it("distinguishes pin from unpin", () => {
-		expect(workerActionSymbol("pin")).not.toBe(workerActionSymbol("unpin"));
+		expect(workerActionSymbol("pin")).not.toEqual(workerActionSymbol("unpin"));
 	});
 
 	it("uses the archive box for the restorable session action", () => {
-		expect(workerActionSymbol("delete")).toBe("archivebox");
+		expect(workerActionSymbol("delete")).toEqual({ ios: "archivebox", android: "archive" });
+	});
+
+	// Android's menu takes a bundled drawable, and a missing file is a
+	// bundle-time failure rather than a blank icon, so every action's Material
+	// Symbol needs its file, written from the font by the generator, and its
+	// require in both menus that bundle them.
+	it.each(ALL_ACTIONS)("bundles %s's Material Symbol as a drawable", (id) => {
+		const name = workerActionSymbols[id].android;
+		const path = fileURLToPath(new URL(`../assets/icons/${name}.xml`, import.meta.url));
+		expect(existsSync(path)).toBe(true);
+		expect(readFileSync(path, "utf8")).toContain('android:viewportWidth="960"');
+		for (const menu of ["./worker-rename-context-menu.android.tsx", "./worker-rename-context-menu.tsx"]) {
+			expect(readFileSync(fileURLToPath(new URL(menu, import.meta.url)), "utf8")).toContain(`${name}: require("../assets/icons/${name}.xml")`);
+		}
 	});
 });
 
@@ -131,17 +151,5 @@ describe("workerActionGlyph", () => {
 	it("keeps delete, resume and restore distinct", () => {
 		const names = [workerActionGlyph("delete"), workerActionGlyph("resume"), workerActionGlyph("restore")].map((glyph) => glyph.name);
 		expect(new Set(names).size).toBe(3);
-	});
-});
-
-describe("hasWorkerActionDrawable", () => {
-	// Android and the fallback menu require() a bundled drawable, and a missing
-	// file is a bundle-time failure rather than a blank icon — so this list has to
-	// track assets/icons exactly. Every action now ships one, so the Android menu
-	// reads like the iOS one rather than a half-iconned list.
-	it("claims an icon for every action", () => {
-		for (const id of ["pin", "unpin", "rename", "delete", "open", "openPr", "resume", "restore"] as const) {
-			expect(hasWorkerActionDrawable(id)).toBe(true);
-		}
 	});
 });

@@ -13,7 +13,7 @@ import type { FeatherIconName } from "./icons";
  * the branch's commits stay, which is what Restore rebuilds from. A "Stop" entry
  * would therefore be a second name for the same call.
  */
-import type { SFSymbol } from "sf-symbols-typescript";
+import { symbols, type PlatformSymbol } from "./symbols";
 
 export type WorkerActionId = "open" | "pin" | "unpin" | "rename" | "resume" | "restore" | "openPr" | "delete";
 
@@ -67,43 +67,32 @@ export const ARCHIVE_SESSION_CONFIRM = {
 export const ARCHIVE_SESSION_HINT = "Stops the agent and moves it to Archive. Deletes the worktree folder unless it has uncommitted changes.";
 
 /**
- * SF Symbol per action, for iOS's native menu.
+ * Each action's glyph as each platform's own symbol: the SF Symbol iOS's menu
+ * resolves by name, and the Material Symbol Android's menu draws from a bundled
+ * drawable named after it (assets/icons/<android name>.xml).
  *
- * Typed as SFSymbol rather than string so a name that does not exist is a
- * compile error instead of a blank icon on the device — MenuAction.image takes
- * `SFSymbol | ImageSourcePropType`, and a plain string satisfies neither. Same
- * approach as notification-type-icon.ios.tsx. The import is type-only, so this
- * module still runs under Node for its tests.
+ * Typed against the symbol registry's types, so a name iOS 16.4 cannot draw or
+ * a Material name that does not exist is a compile error rather than a blank
+ * icon on the device. The registry is plain data, so this module still runs
+ * under Node for its tests.
  */
-export function workerActionSymbol(id: WorkerActionId): SFSymbol {
-	switch (id) {
-		case "open":
-			return "arrow.forward";
-		case "restore":
-		case "resume":
-			return "arrow.clockwise";
-		case "pin":
-			return "pin";
-		case "unpin":
-			return "pin.slash";
-		case "rename":
-			return "pencil";
-		case "openPr":
-			return "arrow.up.forward.square";
-		default:
-			return "archivebox";
-	}
-}
+export const workerActionSymbols = {
+	open: { ios: "arrow.forward", android: "arrow_forward" },
+	pin: symbols.pin,
+	unpin: symbols.unpin,
+	rename: symbols.rename,
+	resume: symbols.refresh,
+	restore: symbols.refresh,
+	openPr: { ios: "arrow.up.forward.square", android: "open_in_new" },
+	delete: symbols.archive,
+} as const satisfies Record<WorkerActionId, PlatformSymbol>;
 
-/**
- * Which actions Android and the web fallback can show an icon for.
- *
- * Those menus take a bundled drawable via `require`, and a missing file fails at
- * bundle time rather than degrading — so this list has to track assets/icons
- * exactly. Every action now has one, which matches iOS, where the menu resolves
- * an SF Symbol by name for each.
- */
-export const WORKER_ACTION_DRAWABLES: readonly WorkerActionId[] = ["pin", "unpin", "rename", "open", "resume", "restore", "openPr", "delete"];
+/** The Material Symbols Android's menu bundles a drawable for, one per action. */
+export type WorkerActionDrawable = (typeof workerActionSymbols)[WorkerActionId]["android"];
+
+export function workerActionSymbol(id: WorkerActionId): PlatformSymbol {
+	return workerActionSymbols[id];
+}
 
 /**
  * Icon for each action, for Android's own action sheet.
@@ -134,8 +123,4 @@ export function workerActionGlyph(id: WorkerActionId): WorkerActionGlyph {
 		case "openPr": return { family: "feather", name: "git-pull-request" };
 		case "delete": return { family: "feather", name: "archive" };
 	}
-}
-
-export function hasWorkerActionDrawable(id: WorkerActionId): boolean {
-	return WORKER_ACTION_DRAWABLES.includes(id);
 }

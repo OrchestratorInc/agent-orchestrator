@@ -1,22 +1,22 @@
 import { MenuView, type MenuAction, type NativeActionEvent } from "@expo/ui/community/menu";
 import { type MutableRefObject, type ReactNode } from "react";
-import { Pressable } from "react-native";
+import { Pressable, type ImageSourcePropType } from "react-native";
 import type { GestureType } from "react-native-gesture-handler";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { hasWorkerActionDrawable, type WorkerAction, type WorkerActionId } from "./worker-action-model";
+import { workerActionSymbols, type WorkerAction, type WorkerActionDrawable, type WorkerActionId } from "./worker-action-model";
 
-// Android's drawables are bundled, not resolved by name, so every action needs a
-// file here. `require` of a missing one fails at bundle time rather than
-// rendering blank, so this map and assets/icons must agree exactly.
-const DRAWABLES: Partial<Record<WorkerActionId, number>> = {
-	pin: require("../assets/icons/pin.xml"),
-	unpin: require("../assets/icons/unpin.xml"),
-	rename: require("../assets/icons/rename.xml"),
-	open: require("../assets/icons/open.xml"),
-	resume: require("../assets/icons/resume.xml"),
-	restore: require("../assets/icons/restore.xml"),
-	openPr: require("../assets/icons/openPr.xml"),
-	delete: require("../assets/icons/delete.xml"),
+// Android's menu icons are bundled drawables, not resolved by name: each is the
+// action's Material Symbol, written by scripts/generate-material-drawables.mjs.
+// A `require` of a missing file fails at bundle time rather than rendering
+// blank, and the type keeps this map complete for every action.
+const DRAWABLES: Record<WorkerActionDrawable, ImageSourcePropType> = {
+	arrow_forward: require("../assets/icons/arrow_forward.xml"),
+	keep: require("../assets/icons/keep.xml"),
+	keep_off: require("../assets/icons/keep_off.xml"),
+	edit: require("../assets/icons/edit.xml"),
+	refresh: require("../assets/icons/refresh.xml"),
+	open_in_new: require("../assets/icons/open_in_new.xml"),
+	archive: require("../assets/icons/archive.xml"),
 };
 
 // MenuView owns Android's long-press natively. It must remain the trigger while
@@ -49,9 +49,8 @@ export function WorkerRowContextMenu({
 	const menuActions: MenuAction[] = actions.map((action) => ({
 		id: action.id,
 		title: action.title,
-		...(hasWorkerActionDrawable(action.id)
-			? { image: DRAWABLES[action.id], imageColor: action.destructive ? t.red : t.accent }
-			: {}),
+		image: DRAWABLES[workerActionSymbols[action.id].android],
+		imageColor: action.destructive ? t.red : t.textSecondary,
 		titleColor: action.destructive ? t.red : t.textPrimary,
 		attributes: action.destructive ? { destructive: true } : undefined,
 	}));
