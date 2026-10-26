@@ -5,6 +5,7 @@ import type { components } from "../../../../api/schema";
 import { cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot } from "../../../hooks/useAgentAuth";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiErrorCode } from "../../../lib/api-client";
+import { runAgentLoginTask } from "../../../lib/agent-login-lifecycle";
 import { aoBridge } from "../../../lib/bridge";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { Button } from "../../ui/button";
@@ -52,7 +53,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		return () => {
 			mounted.current = false;
 			const current = operationRef.current;
-			if (current) void cancelAgentUILogin(agentId, current.id, hostId).catch(() => undefined);
+			if (current) void runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId)).catch(() => undefined);
 		};
 	}, [agentId, hostId]);
 
@@ -107,13 +108,16 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		setSecret("");
 		setLoginCode("");
 		try {
-			const next = await startAgentUILogin(agentId, selectedMethodId, credential, hostId);
-			if (!mounted.current) {
-				await cancelAgentUILogin(agentId, next.id, hostId);
-				return;
-			}
-			setMethodId(next.method);
-			updateOperation(next);
+			await runAgentLoginTask(agentId, hostId, async () => {
+				if (!mounted.current) return;
+				const next = await startAgentUILogin(agentId, selectedMethodId, credential, hostId);
+				if (!mounted.current) {
+					await cancelAgentUILogin(agentId, next.id, hostId);
+					return;
+				}
+				setMethodId(next.method);
+				updateOperation(next);
+			});
 		} catch (err) {
 			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
 		} finally {
@@ -149,7 +153,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		setLoginCode("");
 		try {
 			const current = operationRef.current;
-			if (current) await cancelAgentUILogin(agentId, current.id, hostId);
+			if (current) await runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId));
 			if (!mounted.current) return;
 			operationRef.current = undefined;
 			if (terminal) await onTerminal(); else onClose();

@@ -78,22 +78,15 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 	if err := ctx.Err(); err != nil {
 		return LoginSnapshot{}, err
 	}
+	release, err := s.reserveLogin(ctx, agentID)
+	if err != nil {
+		return LoginSnapshot{}, err
+	}
+	defer release()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "Authentication service is stopping.")
-	}
-	if s.terminalStarts[agentID] {
-		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "A terminal login is starting for this harness.", nil)
-	}
-	for _, op := range s.operations {
-		if op.snapshot.AgentID == agentID {
-			select {
-			case <-op.done:
-			default:
-				return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "A login is already in progress for this harness.", map[string]any{"operationId": op.snapshot.ID})
-			}
-		}
 	}
 	// Retain only the latest operation per harness. A stale tab cannot cancel
 	// its replacement, and repeated logins cannot grow the registry unbounded.

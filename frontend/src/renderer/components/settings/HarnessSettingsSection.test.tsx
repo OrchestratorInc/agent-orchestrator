@@ -806,6 +806,43 @@ describe("HarnessSettingsSection", () => {
 		expect(within(await findAgentRow("cursor")).queryByRole("button", { name: "Log out" })).toBeNull();
 	});
 
+	it("blocks updates during inline login and its cleanup after leaving the page", async () => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		const operation = { id: "inline-login", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-27T12:00:00Z" };
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true, methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never;
+			if (path === "/api/v1/agents/{agent}/auth/operations/{operationId}") return { data: operation } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth/operations" ? { data: operation } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		let finishStop!: () => void;
+		const stopped = new Promise<never>((resolve) => { finishStop = () => resolve({} as never); });
+		const remove = vi.spyOn(apiClient, "DELETE").mockReturnValue(stopped);
+		try {
+			renderSection();
+			let page = await findAgentRow("codex");
+			expect(await within(page).findByRole("button", { name: "Update" })).toBeEnabled();
+			await userEvent.click(within(page).getByRole("button", { name: "Log in again" }));
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await userEvent.click(within(page).getByRole("button", { name: "Continue in browser" }));
+			await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations", expect.anything()));
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+			backToList();
+			await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+			page = await findAgentRow("codex");
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await act(async () => finishStop());
+			await waitFor(() => expect(within(page).getByRole("button", { name: "Update" })).toBeEnabled());
+			await userEvent.click(within(page).getByRole("button", { name: "Update" }));
+			expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } });
+		} finally {
+			finishStop();
+		}
+	});
+
 	it("offers to log in again for a signed-in harness", async () => {
 		mockInstalledOperations("npm");
 		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
