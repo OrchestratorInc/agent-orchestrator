@@ -51,7 +51,7 @@ export function StandaloneArchiveView() {
 	);
 	const archivedCount = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID)?.archivedCount ?? archivedSessions.length;
 	const headerInPanel = usesBoardActionsInPanel();
-	const showStartup = (!workspaceQuery.isSuccess && !workspaceQuery.isError) || archive.isFetching;
+	const showStartup = (!workspaceQuery.isSuccess && !workspaceQuery.isError) || (archive.isFetching && archive.data === undefined);
 
 	useEffect(() => {
 		return () => {
@@ -127,11 +127,11 @@ export function StandaloneArchiveView() {
 				</div>
 			) : null}
 
-			{workspaceQuery.isError || archive.isError ? (
+			{workspaceQuery.isError || (archive.isError && archive.data === undefined) ? (
 				<p className="py-10 text-center text-xs text-passive">
 					<button type="button" onClick={() => void archive.refetch()}>{t("shell.couldNotLoadSessions")}</button>
 				</p>
-			) : archivedSessions.length === 0 && workspaceQuery.isSuccess && !archive.isFetching ? (
+			) : archivedSessions.length === 0 && workspaceQuery.isSuccess && (!archive.isFetching || archive.data !== undefined) ? (
 				<StandaloneArchiveEmpty />
 			) : (
 				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">

@@ -151,8 +151,8 @@ function NotificationWorkspaceState({
 	}, [remoteWorkspaces.refetch, workspaceQuery.refetch, archive.refetch]);
 	const { sessionsReady, terminatedIds, workspaceError } = useSessionTerminationLookup(
 		[...(archive.workspaces), ...remoteWorkspaces.data],
-		workspaceQuery.isError || archive.isError,
-		workspaceQuery.isSuccess && !archive.isFetching && !archive.isError,
+		workspaceQuery.isError || (archive.isError && archive.data === undefined),
+		workspaceQuery.isSuccess && (archive.data !== undefined || (!archive.isFetching && !archive.isError)),
 		retryWorkspace,
 	);
 	const sessionMeta = useMemo(() => {
@@ -816,7 +816,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 										projectId={cloudMeta?.projectId}
 										projectName={cloudMeta?.projectName}
 										sessionName={cloudMeta?.sessionName}
-										sessionsReady={sessionsReady}
+										sessionsReady={sessionsReady || Boolean(cloudMeta)}
 										terminated={cloudTerminated}
 										offerRestore={cloudOfferRestore}
 									/>
@@ -825,7 +825,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							const { hostId, label, notification } = row;
 							const sessionId = notification.target.sessionId || notification.sessionId;
 							const sessionKey = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
-							const sessionReady = hostId === LOCAL_HOST ? sessionsReady : Boolean(sessionKey && loadedRemoteSessionIds.has(sessionKey));
+							const sessionReady = hostId === LOCAL_HOST ? sessionsReady || Boolean(sessionKey && sessionMeta.has(sessionKey)) : Boolean(sessionKey && loadedRemoteSessionIds.has(sessionKey));
 							const meta = sessionKey ? sessionMeta.get(sessionKey) : undefined;
 							const terminated = Boolean(sessionKey) && terminatedIds.has(sessionKey ?? "");
 							const key = notificationKey(hostId, notification.id);

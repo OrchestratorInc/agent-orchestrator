@@ -24,6 +24,15 @@ const {
 	notificationShowMock: vi.fn(),
 }));
 
+const archiveQueryMock = vi.hoisted(() => vi.fn());
+vi.mock("../hooks/useArchivedSessions", () => ({
+	archivedSessionsQueryKey: ["archived-sessions"],
+	useArchivedWorkspaces: (workspaces: unknown) => {
+		const state = archiveQueryMock();
+		return { ...state, workspaces: state.workspaces ?? workspaces };
+	},
+}));
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 }));
@@ -84,6 +93,7 @@ function renderArchive() {
 }
 
 beforeEach(() => {
+	archiveQueryMock.mockReset().mockReturnValue({ isFetching: false, isError: false, data: undefined, refetch: vi.fn() });
 	navigateMock.mockReset();
 	postMock.mockReset().mockResolvedValue({ data: {} });
 	workspaceQueryMock
@@ -94,6 +104,16 @@ beforeEach(() => {
 });
 
 describe("StandaloneArchiveView", () => {
+	it("keeps cached history and restore accessible during a background archive refetch", () => {
+		const cached = [standaloneWorkspaceWithSessions([terminatedSession({ id: "standalone-dead", title: "cached archive", workspaceId: STANDALONE_WORKSPACE_ID })])];
+		workspaceQueryMock.mockReturnValue({ data: [{ ...cached[0], sessions: [], archivedCount: 1 }], isSuccess: true, isError: false });
+		archiveQueryMock.mockReturnValue({ workspaces: cached, data: [{}], isFetching: true, isError: false, refetch: vi.fn() });
+		renderArchive();
+		expect(screen.queryByTestId("daemon-startup-loader")).not.toBeInTheDocument();
+		expect(screen.getByText("cached archive")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Restore cached archive" })).toBeEnabled();
+	});
+
 	it("shows archived standalone sessions as a list without kanban lanes", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
