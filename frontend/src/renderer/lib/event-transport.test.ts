@@ -14,6 +14,7 @@ const {
 	subscribeConnectedHostsMock,
 	unsubscribeConnectedHostsMock,
 	remoteGetMock,
+	discardPendingAgentModelReadsMock,
 } = vi.hoisted(() => ({
 	onStatusMock: vi.fn(),
 	removeStatusMock: vi.fn(),
@@ -26,6 +27,7 @@ const {
 	subscribeConnectedHostsMock: vi.fn(),
 	unsubscribeConnectedHostsMock: vi.fn(),
 	remoteGetMock: vi.fn(),
+	discardPendingAgentModelReadsMock: vi.fn((_queryKey: readonly unknown[]) => {}),
 }));
 
 vi.mock("./bridge", () => ({
@@ -44,6 +46,10 @@ vi.mock("./host-clients", () => ({
 	baseUrlForHost: baseUrlForHostMock,
 	subscribeConnectedHosts: subscribeConnectedHostsMock,
 	clientForSessionHost: () => ({ GET: remoteGetMock }),
+}));
+vi.mock("../hooks/useAgentModelsQuery", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../hooks/useAgentModelsQuery")>()),
+	discardPendingAgentModelReads: discardPendingAgentModelReadsMock,
 }));
 
 import { createEventTransport } from "./event-transport";
@@ -107,6 +113,7 @@ beforeEach(() => {
 	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
 	subscribeConnectedHostsMock.mockReset().mockReturnValue(unsubscribeConnectedHostsMock);
 	unsubscribeConnectedHostsMock.mockReset();
+	discardPendingAgentModelReadsMock.mockReset();
 	remoteGetMock.mockReset().mockResolvedValue({ data: {
 		conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle",
 		latestSequence: 0, messages: [], activities: [],
@@ -562,6 +569,41 @@ describe("createEventTransport", () => {
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "codex"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("evicts pending catalog reads for a catalog event that only queues a catch-up", async () => {
+		vi.useFakeTimers();
+		let disconnect: (() => void) | undefined;
+		try {
+			const queryClient = fakeQueryClient();
+			const catalogKey = JSON.stringify(["agent-models", "opencode"]);
+			const settleRefresh: Array<() => void> = [];
+			vi.mocked(queryClient.invalidateQueries).mockImplementation(((filters?: { queryKey?: readonly unknown[] }) =>
+				JSON.stringify(filters?.queryKey) === catalogKey
+					? new Promise<void>((resolve) => { settleRefresh.push(resolve); })
+					: Promise.resolve()) as never);
+			const evictions = () => discardPendingAgentModelReadsMock.mock.calls.filter(([queryKey]) => JSON.stringify(queryKey) === catalogKey).length;
+			disconnect = createEventTransport(queryClient).connect();
+			const emit = (seq: number) => cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq, projectId: "", type: "session_updated",
+				payload: { kind: "model_catalog", agentId: "opencode", projectId: "" },
+				createdAt: "2026-10-26T08:00:00Z",
+			}));
+			emit(50);
+			vi.advanceTimersByTime(200);
+			expect([evictions(), settleRefresh.length]).toEqual([1, 1]);
+			// The first refresh is still running, so this event only marks it
+			// dirty. Its pending reads must still stop being shared.
+			emit(51);
+			vi.advanceTimersByTime(200);
+			expect([evictions(), settleRefresh.length]).toEqual([2, 1]);
+			settleRefresh[0]();
+			await vi.waitFor(() => expect(settleRefresh).toHaveLength(2));
+			expect(evictions()).toBe(3);
+		} finally {
+			disconnect?.();
 			vi.useRealTimers();
 		}
 	});

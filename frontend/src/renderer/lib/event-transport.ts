@@ -15,6 +15,7 @@ import { sessionUsageQueryRoot } from "../hooks/useSessionUsageSummaries";
 import { codexAccountsQueryKey, writeCodexAccounts } from "../hooks/codex-accounts-state";
 import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
+import { discardPendingAgentModelReads } from "../hooks/useAgentModelsQuery";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
 
@@ -128,6 +129,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const refreshes = new Map<string, { dirty: boolean }>();
 			const invalidate = (queryKey: QueryKey) => {
 				if (disposed) return;
+				// TanStack skips a repeat invalidation while a query is still marked
+				// invalidated, and an unmounted catalog read gets no catch-up. Stop
+				// sharing those reads on every event, including coalesced ones.
+				discardPendingAgentModelReads(queryKey);
 				const key = JSON.stringify(queryKey);
 				const running = refreshes.get(key);
 				if (running) {

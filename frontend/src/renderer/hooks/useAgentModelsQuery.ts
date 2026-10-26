@@ -1,4 +1,4 @@
-import { queryOptions, type QueryClient } from "@tanstack/react-query";
+import { partialMatchKey, queryOptions, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { foldClaudeAliasDefault } from "../lib/agent-model-choices";
@@ -14,9 +14,20 @@ const MODEL_CATALOG_REFRESH_POLL_MS = 3_000;
 
 // Survive observer teardown during a session open, while keeping hosts and
 // credential scopes separate. Login invalidation drops pending reads too.
-type PendingOpenCodeCatalog = { promise: Promise<AgentModelCatalog>; invalidated: boolean };
+type PendingOpenCodeCatalog = { promise: Promise<AgentModelCatalog>; queryKey: QueryKey; invalidated: boolean };
 const pendingOpenCodeCatalogs = new Map<string, PendingOpenCodeCatalog>();
 const openCodeRequestPrefix = (agentId: string, hostId?: string) => JSON.stringify([hostId || LOCAL_HOST, agentId]) + ":";
+
+/**
+ * Stop sharing pending OpenCode reads for queries an invalidation covers.
+ * TanStack emits no invalidate event while a query is still invalidated, so
+ * catalog events call this directly instead of relying on the cache listener.
+ */
+export function discardPendingAgentModelReads(queryKey: QueryKey): void {
+	for (const [requestKey, pending] of pendingOpenCodeCatalogs) {
+		if (partialMatchKey(pending.queryKey, queryKey)) pendingOpenCodeCatalogs.delete(requestKey);
+	}
+}
 
 
 /** Whether the daemon is still refreshing this catalog in the background. */
@@ -88,7 +99,7 @@ export function agentModelsQueryOptions(agentId: string, scope: string, hostId?:
 				for (;;) {
 					let pending = pendingOpenCodeCatalogs.get(requestKey);
 					if (!pending) {
-						pending = { promise: requestAgentModels(agentId, catalogScope, "cached", hostId), invalidated: false };
+						pending = { promise: requestAgentModels(agentId, catalogScope, "cached", hostId), queryKey: key, invalidated: false };
 						pendingOpenCodeCatalogs.set(requestKey, pending);
 						const active = pending;
 						void active.promise.finally(() => {
