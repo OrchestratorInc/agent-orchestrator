@@ -44,6 +44,9 @@ import { toolbarIcon } from "../lib/toolbarIcon";
 import { UnpairedState } from "../lib/UnpairedState";
 import { space, type } from "../lib/tokens";
 import { userFacingError } from "../lib/connectionError";
+import { ToastHost } from "../lib/Toast";
+import type { ToastDuration } from "../lib/Toast.types";
+import { useToast } from "../lib/useToast";
 import { NotificationSwipeRow } from "../lib/NotificationSwipeRow";
 import { MachineIdentity } from "../lib/MachineIdentity";
 import { machineAppearance } from "../lib/machineAppearance";
@@ -77,8 +80,11 @@ function NotificationsContent() {
 	const { hostStates, configForHost, refreshHost, restore } = useApp();
 	const [restoringId, setRestoringId] = useState<string>();
 	// A brief line rather than an Alert: the row is still there to act on, and
-	// a modal would make a dead tap feel like an error.
-	const [notice, setNotice] = useState<string>();
+	// a modal would make a dead tap feel like an error. Every one of these says
+	// why something did not happen, so they all carry the warning tone.
+	const toast = useToast();
+	const showToast = toast.show;
+	const notify = useCallback((text: string, duration?: ToastDuration) => showToast(text, { tone: "warning", duration }), [showToast]);
 	const now = useNow(MINUTE_MS);
 	const [feeds, setFeeds] = useState<Record<string, HostFeed>>({});
 	const feedsRef = useRef(feeds);
@@ -256,7 +262,7 @@ function NotificationsContent() {
 					// in a loop. Pull-to-refresh retries.
 					const owned = new Set(ids.filter((id) => ackOwnerRef.current.get(notificationIdentity(feed.hostId, id)) === attempt));
 					if (owned.size === 0) return;
-					setNotice(`Couldn't mark notifications read on ${feed.hostName}.`);
+					notify(`Couldn't mark notifications read on ${feed.hostName}.`);
 					updateFeeds((previous) => {
 						const current = previous[feed.hostId];
 						if (!current) return previous;
@@ -270,13 +276,13 @@ function NotificationsContent() {
 				},
 			);
 		}
-	}, [configForHost, feeds, focused, refreshHost, updateFeeds]);
+	}, [configForHost, feeds, focused, notify, refreshHost, updateFeeds]);
 
 	function open(notification: FeedItem) {
 		const source = configForHost(notification.hostId);
 		if (!source) {
 			haptics.warning();
-			setNotice(`${notification.hostName} is offline.`);
+			notify(`${notification.hostName} is offline.`);
 			return;
 		}
 		haptics.tap();
@@ -300,10 +306,10 @@ function NotificationsContent() {
 		else if (action.kind === "prs") router.navigate({ pathname: "/prs", params: { hostId: notification.hostId } });
 		else if (action.kind === "restore") {
 			haptics.warning();
-			setNotice("This session is terminated. Tap restore to bring it back.");
+			notify("This session is terminated. Tap restore to bring it back.");
 		} else if (action.kind === "none") {
 			haptics.warning();
-			setNotice("That session is not available yet.");
+			notify("That session is not available yet.");
 		}
 	}
 
@@ -311,7 +317,7 @@ function NotificationsContent() {
 		const source = configForHost(notification.hostId);
 		if (!source) {
 			haptics.warning();
-			setNotice(`${notification.hostName} is offline.`);
+			notify(`${notification.hostName} is offline.`);
 			return false;
 		}
 		haptics.warning();
@@ -326,7 +332,7 @@ function NotificationsContent() {
 		});
 		void clearNotification(source, notification.id).catch((cause) => {
 			haptics.error();
-			setNotice(userFacingError(cause, "Couldn't clear that notification."));
+			notify(userFacingError(cause, "Couldn't clear that notification."));
 			updateFeeds((previous) => {
 				const feed = previous[notification.hostId];
 				if (!feed || feed.items.some((item) => item.id === notification.id)) return previous;
@@ -385,7 +391,7 @@ function NotificationsContent() {
 		const offline = feedList.filter((feed) => !configForHost(feed.hostId) && feed.items.length > 0);
 		if (targets.length === 0) {
 			haptics.warning();
-			setNotice("Notifications are on machines that are currently offline.");
+			notify("Notifications are on machines that are currently offline.");
 			return;
 		}
 		haptics.warning();
@@ -408,19 +414,13 @@ function NotificationsContent() {
 		const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (failure) {
 			haptics.error();
-			setNotice(failure.reason instanceof Error ? failure.reason.message : "Couldn't clear notifications.");
+			notify(failure.reason instanceof Error ? failure.reason.message : "Couldn't clear notifications.");
 		} else if (offline.length > 0) {
-			setNotice(`${offline.map((feed) => feed.hostName).join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so ${offline.length === 1 ? "its" : "their"} notifications were not cleared.`);
+			notify(`${offline.map((feed) => feed.hostName).join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so ${offline.length === 1 ? "its" : "their"} notifications were not cleared.`, "long");
 		}
 		// Also releases pagination that the generation bump cut off.
 		void load("refresh");
 	}
-
-	useEffect(() => {
-		if (!notice) return;
-		const timer = setTimeout(() => setNotice(undefined), 2800);
-		return () => clearTimeout(timer);
-	}, [notice]);
 
 	// Memoized on whether there is anything to clear: the screen re-renders on
 	// every poll, and each new toolbar element registers the header's options
@@ -530,12 +530,7 @@ function NotificationsContent() {
 
 			{/* Sits above the list rather than replacing it: the row that prompted
 			    this is still on screen and still has a restore button to press. */}
-			{notice ? (
-				<View pointerEvents="none" style={[styles.notice, { bottom: insets.bottom + 24 }]}>
-					<Feather name="alert-circle" size={15} color={t.amber} />
-					<Text style={styles.noticeText}>{notice}</Text>
-				</View>
-			) : null}
+			<ToastHost toast={toast} />
 		</View>
 	);
 }
@@ -661,22 +656,6 @@ const makeStyles = (t: Theme) =>
 		restoreButton: { width: 56, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
 		restorePressed: { backgroundColor: t.bgElevated },
 		rowInert: { opacity: 0.55 },
-		notice: {
-			position: "absolute",
-			left: 18,
-			right: 18,
-			flexDirection: "row",
-			alignItems: "center",
-			gap: space.sm,
-			paddingHorizontal: space.md,
-			paddingVertical: space.md,
-			borderRadius: 12,
-			borderCurve: "continuous",
-			backgroundColor: t.bgElevated,
-			borderWidth: StyleSheet.hairlineWidth,
-			borderColor: t.borderDefault,
-		},
-		noticeText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		rowPressed: { backgroundColor: t.bgElevated },
 		rowCopy: { flex: 1, gap: space.hair },
 		metaRow: { flexDirection: "row", alignItems: "center", gap: space.sm },

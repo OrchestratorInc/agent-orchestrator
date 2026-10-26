@@ -138,6 +138,16 @@ vi.mock("./UnpairedState", async () => {
 	return { UnpairedState: () => React.createElement("UnpairedState") };
 });
 vi.mock("./connectionError", () => ({ userFacingError: (_cause: unknown, fallback: string) => fallback }));
+// The host's own drawing and announcement are Toast.test's; this screen only
+// decides what it hands the host.
+vi.mock("./Toast", async () => {
+	const React = await import("react");
+	return {
+		ToastHost: ({ toast }: { toast: { current?: { text: string; tone: string; duration: string } } }) => toast.current
+			? React.createElement("ToastHost", { tone: toast.current.tone, duration: toast.current.duration }, React.createElement("Text", {}, toast.current.text))
+			: null,
+	};
+});
 vi.mock("./NotificationSwipeRow", async () => {
 	const React = await import("react");
 	return { NotificationSwipeRow: ({ children, ...props }: { children: React.ReactNode; onClear: () => boolean }) => React.createElement("NotificationSwipeRow", props, children) };
@@ -223,6 +233,8 @@ describe("NotificationsScreen", () => {
 		expect(fixtures.clearAllNotifications).toHaveBeenCalledTimes(1);
 		expect(fixtures.clearAllNotifications).toHaveBeenCalledWith(fixtures.configs.dev);
 		expect(renderer!.root.findAll((node) => String(node.type) === "Text" && String(node.props.children).includes("Mac is offline"))).toHaveLength(1);
+		// A sentence that explains a partial result: the shared toast, warned and held long enough to read.
+		expect(renderer!.root.findByType("ToastHost" as never).props).toEqual(expect.objectContaining({ tone: "warning", duration: "long" }));
 	});
 
 	it("marks the loaded unread rows read on open and keeps them highlighted for the visit", async () => {
