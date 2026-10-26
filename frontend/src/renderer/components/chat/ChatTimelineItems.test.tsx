@@ -418,8 +418,32 @@ describe("ActivityRow", () => {
 		}} />);
 		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
 		expect(screen.getByRole("img")).toBeInTheDocument();
-		expect(screen.getByText("Codex caption")).toBeInTheDocument();
+		expect(container.querySelector("pre")).toHaveTextContent("Codex caption");
 		expect(container.textContent).not.toContain("iVBOR");
+	});
+
+	it("preserves structured content and resource blocks beside MCP result images", () => {
+		const result = {
+			content: [
+				{ type: "image", data: png, mimeType: "image/png" },
+				{ type: "resource", resource: { uri: "fixture:///report", mimeType: "text/plain", text: "embedded body" } },
+				{ type: "resource_link", uri: "https://example.test/report", name: "Report link" },
+			],
+			structuredContent: { answer: 42 }, _meta: { trace: "retained" },
+		};
+		const { container } = render(<ActivityRow activity={{
+			kind: "activity", id: "mixed-result", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
+			summary: "Read", detail: { toolName: "Read", result },
+		}} />);
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toBeInTheDocument();
+		const json = container.querySelector("pre");
+		for (const text of ['"answer": 42', "embedded body", "Report link", "fixture:///report", "retained"]) {
+			expect(json).toHaveTextContent(text);
+		}
+		expect(container.textContent).not.toContain("iVBOR");
+		expect(result.content[0]).toHaveProperty("data", png);
 	});
 
 	it("keeps text-only MCP output in its existing code block", () => {

@@ -15,6 +15,7 @@ const samples: unknown[] = [
 	{ text: "Malformed image", content: { ...image, data: "iVBOR-invalid" } },
 	{ type: "text", text: "Text-only result" },
 	{ type: "text", text: "-old\n+new" },
+	{ content: [image, { type: "resource", resource: { uri: "fixture:///report", text: "resource body" } }], structuredContent: { answer: 42 } },
 ];
 createRoot(document.getElementById("root")!).render(
 	<TooltipProvider><main className="mx-auto max-w-2xl space-y-4 bg-background p-6 text-foreground">
@@ -25,7 +26,8 @@ createRoot(document.getElementById("root")!).render(
 				createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
 				summary: `Read fixture ${index + 1}`,
 				// Exercise historical provider wire shapes beyond the typed message-content intersection.
-				detail: { toolName: `Read fixture ${index + 1}`, content: content as NonNullable<ConversationActivity["detail"]>["content"] },
+				detail: index === 6 ? { toolName: `Read fixture ${index + 1}`, result: content }
+					: { toolName: `Read fixture ${index + 1}`, content: content as NonNullable<ConversationActivity["detail"]>["content"] },
 			}} />
 		</section>)}
 	</main></TooltipProvider>,
