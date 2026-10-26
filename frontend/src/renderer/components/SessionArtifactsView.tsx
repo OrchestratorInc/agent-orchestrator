@@ -313,33 +313,35 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} hostId={hostId} key={selected.path} session={session} />
-					<div className="ml-auto flex shrink-0 items-center" ref={setToolbarHost} />
-					{hasHtmlPreview && previewVersion === null ? (
-						<div className="flex shrink-0 items-center gap-0.5">
-							<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
-							<Button className="transition-none" aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
-						</div>
-					) : null}
-					{session.cloud || selectedFile.data?.binary ? null : (
-						<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
-					)}
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								aria-label={fullscreenLabel}
-								aria-pressed={fullscreen}
-								className="text-muted-foreground hover:text-foreground"
-								onClick={() => setFullscreen((current) => !current)}
-								size="icon-sm"
-								type="button"
-								variant="ghost"
-							>
-								<FullscreenIcon aria-hidden="true" className="size-icon-sm" />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">{fullscreenLabel}</TooltipContent>
-					</Tooltip>
+					<ArtifactActionsMenu artifact={selected} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session} />
+					<div className="flex shrink-0 items-center gap-0.5">
+						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
+						{hasHtmlPreview && previewVersion === null ? (
+							<div className="flex shrink-0 items-center gap-0.5">
+								<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
+								<Button className="transition-none" aria-label={t("chat.render.viewSource")} aria-pressed={showingHtmlSource} onClick={() => setHtmlSourcePath(selected.path)} size="icon-sm" variant="ghost"><Code2 aria-hidden="true" className="size-icon-sm" /></Button>
+							</div>
+						) : null}
+						{session.cloud || selectedFile.data?.binary ? null : (
+							<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
+						)}
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<Button
+									aria-label={fullscreenLabel}
+									aria-pressed={fullscreen}
+									className="text-muted-foreground hover:text-foreground"
+									onClick={() => setFullscreen((current) => !current)}
+									size="icon-sm"
+									type="button"
+									variant="ghost"
+								>
+									<FullscreenIcon aria-hidden="true" className="size-icon-sm" />
+								</Button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom">{fullscreenLabel}</TooltipContent>
+						</Tooltip>
+					</div>
 				</div>
 				<div className="min-h-0 flex-1">
 					<ArtifactViewerBody
