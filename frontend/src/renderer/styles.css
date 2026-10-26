@@ -342,6 +342,35 @@
 	backdrop-filter: blur(var(--blur-overlay));
 }
 
+/* In a translucent window, Chromium's backdrop blur cannot see content drawn
+ * over the transparent window base, so text behind would show through sharp.
+ * There the surface turns nearly solid instead. */
+html[data-window-translucent="true"] .overlay-glass {
+	background-color: color-mix(in oklch, var(--popover) 96%, transparent);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+/* See-through modal surface: the app shows through, blurred and slightly
+ * saturated so colour behind it reads as depth rather than noise. */
+@utility overlay-glass {
+	background-color: var(--color-bg-overlay-glass);
+	-webkit-backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	@media (prefers-reduced-transparency: reduce) {
+		background-color: var(--popover);
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+	}
+}
+
+/* While one modal hands the screen to the next (lib/modal-handoff.ts), the
+ * backdrops appear and leave at full strength so the dim never dips. */
+html[data-modal-handoff] .dialog-overlay,
+.dialog-overlay[data-modal-handoff]:not([data-state="closed"]) {
+	animation: none !important;
+}
+
 @utility modal-shake {
 	animation: project-import-shake 280ms ease-in-out;
 }
