@@ -4,11 +4,13 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
+import { AppSymbol } from "./AppSymbol";
 import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import type { WorkerActionId } from "./worker-action-model";
+import { iconSize, space } from "./tokens";
+import { workerActionSymbol, type WorkerActionId } from "./worker-action-model";
 import { isFullSwipe, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { WorkerRowContextMenu } from "./worker-rename-context-menu";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
@@ -32,8 +34,8 @@ const FULL_SWIPE_ACTION: WorkerActionId = "delete";
  *
  * The swipeable has no full swipe of its own. A second pan, recognised with
  * its own, watches the same drag: past the full-swipe point it arms (a haptic,
- * and the uncovered rail takes the destructive tint), and letting go armed
- * archives the row through the same confirmation as the Archive button.
+ * and the uncovered rail turns destructive), and letting go armed archives the
+ * row through the same confirmation as the Archive button.
  */
 export function WorkerRowInteraction({
 	sessionId,
@@ -169,8 +171,9 @@ export function WorkerRowInteraction({
 
 /**
  * What the swipe uncovers: the controls in a fixed rail at the trailing edge,
- * over a fill that follows the row past the rail and takes the destructive
- * tint once letting go would archive.
+ * over a fill that follows the row past the rail. Once letting go would
+ * archive, the fill takes the destructive tint and the archive glyph rides its
+ * leading edge, so the armed state reads by shape as well as colour.
  */
 function SwipeRail({ translation, armed, children }: {
 	translation: SharedValue<number>;
@@ -183,9 +186,14 @@ function SwipeRail({ translation, armed, children }: {
 		width: Math.max(WORKER_ACTION_REVEAL_WIDTH, -translation.value),
 		backgroundColor: armed.value ? t.tintRed : t.bgElevated,
 	}));
+	const armedGlyph = useAnimatedStyle(() => ({ opacity: armed.value ? 1 : 0 }));
 	return (
 		<>
-			<Animated.View pointerEvents="none" style={[styles.fill, fill]} />
+			<Animated.View pointerEvents="none" style={[styles.fill, fill]}>
+				<Animated.View style={[styles.armedGlyph, armedGlyph]}>
+					<AppSymbol name={workerActionSymbol(FULL_SWIPE_ACTION)} size={iconSize.xl} color={t.red} />
+				</Animated.View>
+			</Animated.View>
 			{/* The rail keeps its width before its controls mount: the swipeable
 			    measures it to resolve the very first drag. */}
 			<View style={styles.rail}>{children}</View>
@@ -202,6 +210,13 @@ const makeStyles = (t: Theme) =>
 			bottom: 0,
 			borderLeftWidth: rowDividerWidth,
 			borderLeftColor: t.borderSubtle,
+		},
+		armedGlyph: {
+			position: "absolute",
+			top: 0,
+			bottom: 0,
+			left: space.xl,
+			justifyContent: "center",
 		},
 		rail: {
 			width: WORKER_ACTION_REVEAL_WIDTH,

@@ -11,7 +11,7 @@ import {
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { iconSize, touchTarget } from "./tokens";
+import { iconSize, space, touchTarget } from "./tokens";
 import { workerActionSymbol } from "./worker-action-model";
 import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 
@@ -22,7 +22,7 @@ const CONTROL_SIZE = touchTarget;
 const HOST_HEIGHT = 76;
 // The glass button hugs its label, so each glyph gets the same box. Without
 // it the taller `pin` symbol drew a larger circle than the archive box.
-const GLYPH_BOX = 24;
+const GLYPH_BOX = iconSize.xl;
 
 export function WorkerRowActions({
 	title,
@@ -45,7 +45,7 @@ export function WorkerRowActions({
 			    system blends their material as they approach, so pin and archive
 			    morphed into a single blob mid-swipe. Each button keeps its own glass
 			    here, and the 16pt gap is what separates them. */}
-			<HStack spacing={16} modifiers={[frame({ width: ACTION_WIDTH * 2, height: HOST_HEIGHT })]}>
+			<HStack spacing={space.lg} modifiers={[frame({ width: ACTION_WIDTH * 2, height: HOST_HEIGHT })]}>
 				<Button
 					onPress={() => onSetPinned(!pinned)}
 					modifiers={[

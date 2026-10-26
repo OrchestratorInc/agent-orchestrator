@@ -46,7 +46,7 @@ vi.mock("react-native-worklets", () => ({ scheduleOnRN: (fn: (...args: unknown[]
 vi.mock("./haptics", () => ({ haptics }));
 vi.mock("./worker-rename-context-menu", () => ({ WorkerRowContextMenu: "ContextMenu" }));
 vi.mock("./ThemeProvider", () => {
-	const theme = { bgElevated: "elevated", borderSubtle: "divider", tintRed: "red-tint" };
+	const theme = { bgElevated: "elevated", borderSubtle: "divider", tintRed: "red-tint", red: "red", textSecondary: "secondary" };
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
 });
 
@@ -183,13 +183,17 @@ it("measures a full swipe from the open rail when the drag starts there", () => 
 	expect(onAction).toHaveBeenCalledWith("delete");
 });
 
-// The fill follows the row past the rail and takes the destructive tint once
-// letting go would archive.
-it("tints the uncovered rail while a full swipe is armed", () => {
+// The fill follows the row past the rail. Armed, it takes the destructive tint
+// and shows the archive glyph, so the state reads by shape as well as colour.
+it("tints the uncovered rail and shows the archive glyph while a full swipe is armed", () => {
 	const view = mount();
-	const fill = () => view.root.findByType("AnimatedView" as never).props.style[1];
-	expect(fill()).toMatchObject({ width: 128, backgroundColor: "elevated" });
+	const [fill, glyph] = view.root.findAllByType("AnimatedView" as never);
+	expect(fill.props.style[1]).toMatchObject({ width: 128, backgroundColor: "elevated" });
+	expect(glyph.props.style[1]).toEqual({ opacity: 0 });
+	expect(glyph.findByType("SymbolView" as never).props).toMatchObject({ name: { ios: "archivebox", android: "archive" }, tintColor: "red" });
 	drag(-300);
 	act(() => view.update(<WorkerRowInteraction {...props} />));
-	expect(fill()).toMatchObject({ backgroundColor: "red-tint" });
+	const [armedFill, armedGlyph] = view.root.findAllByType("AnimatedView" as never);
+	expect(armedFill.props.style[1]).toMatchObject({ backgroundColor: "red-tint" });
+	expect(armedGlyph.props.style[1]).toEqual({ opacity: 1 });
 });
