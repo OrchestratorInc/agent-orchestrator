@@ -154,3 +154,17 @@ it("does not fan out board requests after the sessions body is cancelled", async
 	expect(failure).toMatchObject({ name: "AbortError" });
 	expect(fetch).toHaveBeenCalledTimes(1);
 });
+
+it("revalidates a polled GET with its ETag and reuses the body on 304", async () => {
+	const body = JSON.stringify({ projects: [{ id: "p1", name: "One" }] });
+	vi.mocked(fetch)
+		.mockResolvedValueOnce(new Response(body, { status: 200, headers: { ETag: 'W/"v1"' } }))
+		.mockResolvedValueOnce(new Response(null, { status: 304, headers: { ETag: 'W/"v1"' } }));
+	const first = await apiRequest(config, "/api/v1/projects");
+	expect(await first.json()).toEqual(JSON.parse(body));
+	const second = await apiRequest(config, "/api/v1/projects");
+	expect(second.status).toBe(200);
+	expect(await second.json()).toEqual(JSON.parse(body));
+	const headers = vi.mocked(fetch).mock.calls.map(([, init]) => (init?.headers as Record<string, string>)["If-None-Match"]);
+	expect(headers).toEqual([undefined, 'W/"v1"']);
+});

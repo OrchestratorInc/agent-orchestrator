@@ -448,8 +448,23 @@ export class ApiError extends Error {
 	}
 }
 
+// Last body and ETag per GET URL. The daemon answers an unchanged poll of a
+// list route with a bodyless 304, so the board poll re-downloads nothing while
+// nothing changed. A daemon without ETags never fills this.
+const revalidated = new Map<string, { etag: string; body: string }>();
+const REVALIDATED_LIMIT = 32;
+
+function rememberRevalidated(url: string, etag: string | null, body: string): void {
+	revalidated.delete(url);
+	if (!etag) return;
+	revalidated.set(url, { etag, body });
+	if (revalidated.size > REVALIDATED_LIMIT) revalidated.delete(revalidated.keys().next().value!);
+}
+
 async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
 	const url = `${httpBase(cfg)}${path}`;
+	const isGet = (init?.method ?? "GET").toUpperCase() === "GET";
+	const cached = isGet ? revalidated.get(url) : undefined;
 	// Without a timeout a sleeping/unreachable host (common over Tailscale) hangs
 	// the call for the OS TCP timeout (~75-120s), freezing Kill/send and the poll.
 	const controller = new AbortController();
@@ -485,6 +500,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...authHeaders(cfg),
 					"Content-Type": "application/json",
 					...(installId ? { "X-AO-Install-Id": installId } : {}),
+					...(cached ? { "If-None-Match": cached.etag } : {}),
 					...(init?.headers ?? {}),
 				},
 			});
@@ -530,7 +546,13 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		init?.signal?.removeEventListener("abort", cancel);
 		controller.signal.removeEventListener("abort", rejectAbort);
 	}
-	const res = received!;
+	let res = received!;
+	if (res.status === 304 && cached) {
+		bodyText = cached.body;
+		res = new Response(null, { status: 200, statusText: "OK", headers: res.headers });
+	} else if (isGet && res.ok) {
+		rememberRevalidated(url, res.headers.get("etag"), bodyText);
+	}
 	if (!res.ok) {
 		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";
