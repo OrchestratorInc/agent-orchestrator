@@ -19,6 +19,12 @@ const mocks = vi.hoisted(() => ({
 	hideShellTopbar: true,
 }));
 
+vi.mock("./PdfPreview", () => ({
+	PdfPreview: ({ firstPageOnly, path, src }: { firstPageOnly?: boolean; path: string; src: string }) => <div data-testid="pdf-thumbnail" data-first-page-only={firstPageOnly} data-src={src}>{path}</div>,
+}));
+vi.mock("./chat/MermaidBlock", () => ({
+	MermaidBlock: ({ code }: { code: string }) => <div data-testid="mermaid-thumbnail">{code}</div>,
+}));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
@@ -37,7 +43,7 @@ vi.mock("./CloudArtifactFrame", () => ({
 	CloudArtifactFrame: ({ title, url }: { title: string; url: string }) => <iframe data-testid="cloud-artifact-preview" title={title} src={url} />,
 }));
 vi.mock("./ArtifactFileView", () => ({
-	ArtifactFileView: ({ cloud, rawUrl, readOnly }: { cloud?: boolean; rawUrl?: string; readOnly?: boolean }) => <div data-testid="cloud-file-preview" data-cloud={cloud} data-raw-url={rawUrl} data-read-only={readOnly} />,
+	ArtifactFileView: ({ cloud, path, rawUrl, readOnly }: { cloud?: boolean; path: string; rawUrl?: string; readOnly?: boolean }) => <div data-testid="artifact-file-preview" data-cloud={cloud} data-path={path} data-raw-url={rawUrl} data-read-only={readOnly} />,
 }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
@@ -262,7 +268,7 @@ describe("ArtifactsView", () => {
 		if (kind === "html") {
 			expect(within(dialog).getByTestId("cloud-artifact-preview")).toHaveAttribute("src", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
 		} else {
-			const preview = within(dialog).getByTestId("cloud-file-preview");
+			const preview = within(dialog).getByTestId("artifact-file-preview");
 			expect(preview).toHaveAttribute("data-cloud", "true");
 			expect(preview).toHaveAttribute("data-read-only", "true");
 			expect(preview).toHaveAttribute("data-raw-url", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
@@ -381,6 +387,44 @@ describe("ArtifactsView", () => {
 		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
+	it.each([
+		{ name: "metrics.csv", content: 'Name,Value\n"Alpha, Inc",42\nBeta,7\n', text: "Alpha, Inc", type: "table" },
+		{ name: "metrics.tsv", content: "Name\tValue\nAlpha\t42\n", text: "Alpha", type: "table" },
+		{ name: "flow.mmd", content: "flowchart LR\n A --> B", text: "A --> B", type: "mermaid" },
+		{ name: "flow.mermaid", content: "flowchart LR\n A --> B", text: "A --> B", type: "mermaid" },
+	])("renders a $name thumbnail with the shared renderer", async ({ name, content, text, type }) => {
+		const file = session("ao-format", "Preview formats", [{ name, kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
+		file.artifactFiles![0].rawUrl = `http://127.0.0.1:3002/${name}`;
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [file] }];
+		vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(content)));
+		const { container } = renderView();
+
+		await waitFor(() => expect(container.textContent).toContain(text));
+		expect(container.querySelector(type === "table" ? "table" : '[data-testid="mermaid-thumbnail"]')).not.toBeNull();
+		expect(container.querySelector("[inert]")).not.toBeNull();
+	});
+
+	it("renders Mermaid fences inside Markdown thumbnails", async () => {
+		const file = session("ao-diagram", "Architecture", [{ name: "architecture.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		file.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/architecture.md";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [file] }];
+		vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("```mermaid\nflowchart LR\n A --> B\n```")));
+		const { container } = renderView();
+
+		await waitFor(() => expect(container.querySelector('[data-testid="mermaid-thumbnail"]')).toHaveTextContent("A --> B"));
+	});
+
+	it("renders the first PDF page as a thumbnail with its file version", () => {
+		const file = session("ao-pdf", "Report", [{ name: "report.pdf", kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
+		file.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/report.pdf";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [file] }];
+		const { container } = renderView();
+
+		const preview = container.querySelector('[data-testid="pdf-thumbnail"]');
+		expect(preview).toHaveAttribute("data-first-page-only", "true");
+		expect(preview).toHaveAttribute("data-src", "http://127.0.0.1:3002/report.pdf?v=2026-10-11T10%3A00%3A00Z");
+	});
+
 	it("shows image previews and falls back to a placeholder when the image fails", () => {
 		const image = session("ao-image", "Cover image", [{ name: "cover.png", kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
 		image.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/cover.png";
@@ -431,6 +475,20 @@ describe("ArtifactsView", () => {
 		await user.click(within(screen.getByRole("dialog", { name: "caching-options.md" })).getByRole("button", { name: "Open in session" }));
 
 		expect(mocks.navigate).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-1" } });
+	});
+
+	it.each(["report.pdf", "metrics.csv", "metrics.tsv", "flow.mmd", "flow.mermaid", "notes.md", "diagram.svg", "recording.mp4", "audio.mp3"])("opens %s in the shared file viewer", async (name) => {
+		const file = session("ao-formats", "Preview formats", [{ name, kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
+		file.artifactFiles![0].rawUrl = `http://127.0.0.1:3002/${name}`;
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [file] }];
+		renderView();
+
+		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
+		const preview = within(screen.getByRole("dialog", { name })).getByTestId("artifact-file-preview");
+		expect(preview).toHaveAttribute("data-path", name);
+		expect(preview).toHaveAttribute("data-raw-url", file.artifactFiles![0].rawUrl);
+		expect(preview).toHaveAttribute("data-read-only", "true");
+		expect(preview).not.toHaveAttribute("data-cloud", "true");
 	});
 
 	it("opens a session directly from the card arrow without opening a modal", async () => {
