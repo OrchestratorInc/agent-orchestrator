@@ -498,7 +498,11 @@ export function SheetHeader({
 	subtitle,
 	right,
 }: {
-	title: string;
+	/**
+	 * Left out when a native bar above the sheet already carries the title; the
+	 * title row goes with it, `right` included.
+	 */
+	title?: string;
 	subtitle?: string;
 	/** Trailing control on the title row — the agent sheet's Refresh lives here. */
 	right?: ReactNode;
@@ -506,10 +510,12 @@ export function SheetHeader({
 	const s = useThemedStyles(makeStyles);
 	return (
 		<View style={s.sheetHeader}>
-			<View style={s.sheetTitleRow}>
-				<Text accessibilityRole="header" style={[s.sheetTitle, { flex: 1 }]}>{title}</Text>
-				{right}
-			</View>
+			{title ? (
+				<View style={s.sheetTitleRow}>
+					<Text accessibilityRole="header" style={[s.sheetTitle, { flex: 1 }]}>{title}</Text>
+					{right}
+				</View>
+			) : null}
 			{subtitle ? <Text style={s.sheetSubtitle}>{subtitle}</Text> : null}
 		</View>
 	);
@@ -532,7 +538,8 @@ export function SheetScreen({
 	right,
 	children,
 }: {
-	title: string;
+	/** Left out when a native bar above the sheet already carries the title. */
+	title?: string;
 	subtitle?: string;
 	right?: ReactNode;
 	children: ReactNode;

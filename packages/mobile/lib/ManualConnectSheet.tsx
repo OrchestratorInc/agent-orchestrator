@@ -1,5 +1,6 @@
+import { Stack } from "expo-router";
 import { Feather } from "./icons";
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
@@ -19,6 +20,7 @@ import {
 import { setLocalNetworkConfirmed } from "./localNetworkStore";
 import type { Theme } from "./theme";
 import { haptics } from "./haptics";
+import { Spinner } from "./Spinner";
 import { Button, SHEET_SCROLL_CONTENT, SheetHeader, SheetScreen } from "./ui";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { textSelectionColors } from "./textSelection";
@@ -116,6 +118,30 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 	}
 
 	const validPort = /^\d+$/.test(cfg.httpPort) && Number(cfg.httpPort) >= 1 && Number(cfg.httpPort) <= 65535;
+	const canConnect = !!machineName.trim() && !!cfg.host.trim() && validPort;
+	const editing = !!editingHost;
+	// iOS confirms from the sheet's native bar (app/sheets/connect.tsx titles it
+	// and holds Cancel), with a spinner in the button's place while it works.
+	// Memoized on what the item shows, so typing does not register the header
+	// again on every key; the item calls the latest connect. Semibold rather
+	// than the done style, which iOS 26 fills with the tint, near white in the
+	// dark theme.
+	const ios = Platform.OS === "ios";
+	const connectRef = useRef(connect);
+	connectRef.current = connect;
+	const headerItems = useMemo(() => ios ? (
+		<Stack.Toolbar placement="right">
+			{busy ? (
+				<Stack.Toolbar.View hidesSharedBackground>
+					<Spinner accessibilityLabel={editing ? "Saving changes" : "Connecting"} />
+				</Stack.Toolbar.View>
+			) : (
+				<Stack.Toolbar.Button accessibilityLabel={editing ? "Save changes" : "Connect"} disabled={!canConnect} style={{ fontWeight: "600" }} onPress={() => void connectRef.current()}>
+					{editing ? "Save" : "Connect"}
+				</Stack.Toolbar.Button>
+			)}
+		</Stack.Toolbar>
+	) : null, [busy, canConnect, editing, ios]);
 	const title = editingHost ? "Edit connection" : "Connect manually";
 	const subtitle = editingHost
 		? "Update this machine's name, address, port, password, or TLS setting."
@@ -198,14 +224,16 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 				</View>
 			) : null}
 
-			<Button
-				title={editingHost ? "Save changes" : "Connect"}
-				icon={editingHost ? "check" : "link"}
-				loading={busy}
-				disabled={!machineName.trim() || !cfg.host.trim() || !validPort}
-				onPress={connect}
-				style={{ marginTop: space.lg }}
-			/>
+			{ios ? null : (
+				<Button
+					title={editingHost ? "Save changes" : "Connect"}
+					icon={editingHost ? "check" : "link"}
+					loading={busy}
+					disabled={!canConnect}
+					onPress={connect}
+					style={{ marginTop: space.lg }}
+				/>
+			)}
 		</>
 	);
 
@@ -229,11 +257,15 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 		);
 	}
 
-	// iOS lifts a presented form sheet over the keyboard by itself.
+	// iOS lifts a presented form sheet over the keyboard by itself. The title is
+	// the native bar's.
 	return (
-		<SheetScreen title={title} subtitle={subtitle}>
-			{form}
-		</SheetScreen>
+		<>
+			{headerItems}
+			<SheetScreen subtitle={subtitle}>
+				{form}
+			</SheetScreen>
+		</>
 	);
 }
 

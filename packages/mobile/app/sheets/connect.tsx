@@ -1,6 +1,6 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Platform, Text, View } from "react-native";
 import { ManualConnectSheet } from "../../lib/ManualConnectSheet";
 import { activeHost, findHost, type Host } from "../../lib/hosts";
 import { loadAccount } from "../../lib/account";
@@ -17,6 +17,17 @@ export default function ConnectSheetRoute() {
 	const { config, currentHostId, reloadConfig } = useApp();
 	const theme = useTheme();
 	const [editingHost, setEditingHost] = useState<Host | null | undefined>(hostId === undefined ? null : undefined);
+	// iOS: the sheet's native bar carries the title, known from the link before
+	// the machine loads, and Cancel in every state. The form adds its own
+	// confirm on the right.
+	const header = useMemo(() => Platform.OS === "ios" ? (
+		<>
+			<Stack.Screen options={{ title: hostId === undefined ? "Connect manually" : "Edit connection" }} />
+			<Stack.Toolbar placement="left">
+				<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
+			</Stack.Toolbar>
+		</>
+	) : null, [hostId, router]);
 
 	useEffect(() => () => releaseSheetResult(resultKey), [resultKey]);
 	useEffect(() => {
@@ -26,16 +37,18 @@ export default function ConnectSheetRoute() {
 		return () => { current = false; };
 	}, [hostId]);
 
-	if (editingHost === undefined) return <ActivityIndicator style={{ flex: 1 }} color={theme.accent} />;
-	if (hostId !== undefined && !editingHost) return <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}><Text style={{ color: theme.textPrimary }}>This machine is no longer paired.</Text></View>;
+	if (editingHost === undefined) return <>{header}<ActivityIndicator style={{ flex: 1 }} color={theme.accent} /></>;
+	if (hostId !== undefined && !editingHost) return <>{header}<View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}><Text style={{ color: theme.textPrimary }}>This machine is no longer paired.</Text></View></>;
 	const activeEndpointIndex = editingHost && editingHost.id === currentHostId
 		? editingHost.endpoints.findIndex((endpoint) => endpoint.host === config?.host && endpoint.port === Number(config.httpPort) && endpoint.secure === !!config.secure)
 		: -1;
 
 	return (
-		<ManualConnectSheet
-			editingHost={editingHost ?? undefined}
-			editingEndpointIndex={activeEndpointIndex < 0 ? 0 : activeEndpointIndex}
+		<>
+			{header}
+			<ManualConnectSheet
+				editingHost={editingHost ?? undefined}
+				editingEndpointIndex={activeEndpointIndex < 0 ? 0 : activeEndpointIndex}
 				onConnected={() => {
 					void loadAccount().then(async (account) => {
 						if (account) {
@@ -44,12 +57,13 @@ export default function ConnectSheetRoute() {
 							await syncAccountHosts(account);
 						}
 					}).catch(() => {});
-				const done = takeSheetResult<void>(resultKey);
-				if (editingHost) void reloadConfig().catch(() => {});
-				backOr(router);
-				done?.();
-			}}
-		/>
+					const done = takeSheetResult<void>(resultKey);
+					if (editingHost) void reloadConfig().catch(() => {});
+					backOr(router);
+					done?.();
+				}}
+			/>
+		</>
 	);
 }
 

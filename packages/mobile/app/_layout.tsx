@@ -71,12 +71,17 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 // So Android opens at the smaller detent and is expanded to the larger one by the
 // OS as soon as a field is focused, then restored when the keyboard hides. iOS
 // lifts a presented sheet by itself, so it keeps the exact-fit sizing.
+//
+// iOS heads these forms with a native bar: an inline title, Cancel and the
+// confirm action, as a form sheet's are. Shown from the start rather than by
+// the page, because a modal whose header appears after it mounts is rebuilt.
+// Android keeps the title in the sheet's body.
 const CONNECT_SHEET_OPTIONS = {
 	presentation: "formSheet",
 	sheetAllowedDetents: Platform.OS === "ios" ? "fitToContents" : [0.6, 0.95],
 	sheetGrabberVisible: true,
 	sheetCornerRadius,
-	headerShown: false,
+	headerShown: Platform.OS === "ios",
 } as const;
 
 // The board sits under every route the app is opened on. A deep link or a
@@ -272,7 +277,13 @@ function Shell() {
 				))}
 				<Stack.Screen
 					name="sheets/connect"
-					options={{ ...CONNECT_SHEET_OPTIONS, contentStyle: { backgroundColor: t.bgSurface } }}
+					options={{
+						...CONNECT_SHEET_OPTIONS,
+						title: "Connect manually",
+						// The bar in the sheet's own colour, so the two read as one surface.
+						headerStyle: { backgroundColor: t.bgSurface },
+						contentStyle: { backgroundColor: t.bgSurface },
+					}}
 				/>
 				<Stack.Screen
 					name="sheets/machine-name"
@@ -283,7 +294,9 @@ function Shell() {
 						contentStyle: { backgroundColor: "transparent" },
 					} : {
 						...CONNECT_SHEET_OPTIONS,
+						title: "Name this machine",
 						sheetAllowedDetents: "fitToContents",
+						headerStyle: { backgroundColor: t.bgSurface },
 						contentStyle: { backgroundColor: t.bgSurface },
 					}}
 				/>

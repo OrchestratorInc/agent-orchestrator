@@ -1,5 +1,5 @@
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Platform, StyleSheet, Text, TextInput, View } from "react-native";
 import { backOr } from "../../lib/backNavigation";
@@ -75,8 +75,28 @@ export default function MachineNameSheetRoute() {
 		handler?.({ name: trimmed, appearance: { symbol } });
 	}
 
+	// iOS titles the sheet in its native bar, with Cancel and Save there as a
+	// form sheet's are. Memoized on whether Save is enabled, so typing does not
+	// register the header again on every key; Save reads the latest draft. Save
+	// is semibold rather than the done style, which iOS 26 fills with the tint,
+	// near white in the dark theme.
+	const ios = Platform.OS === "ios";
+	const canSave = name.trim().length > 0;
+	const saveRef = useRef(save);
+	saveRef.current = save;
+	const headerItems = useMemo(() => ios ? (
+		<>
+			<Stack.Toolbar placement="left">
+				<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
+			</Stack.Toolbar>
+			<Stack.Toolbar placement="right">
+				<Stack.Toolbar.Button accessibilityLabel="Save machine" disabled={!canSave} style={{ fontWeight: "600" }} onPress={() => saveRef.current()}>Save</Stack.Toolbar.Button>
+			</Stack.Toolbar>
+		</>
+	) : null, [canSave, ios, router]);
+
 	const content = (
-		<SheetScreen title="Name this machine" subtitle="Choose a name you'll recognize in Orchestrator.">
+		<SheetScreen title={ios ? undefined : "Name this machine"} subtitle="Choose a name you'll recognize in Orchestrator.">
 			<View style={styles.field}>
 				<Text style={styles.label}>MACHINE NAME</Text>
 				<TextInput
@@ -103,7 +123,7 @@ export default function MachineNameSheetRoute() {
 					</Text>
 				) : null}
 			</View>
-			<Button title="Save machine" disabled={!name.trim()} onPress={save} style={styles.button} />
+			{ios ? null : <Button title="Save machine" disabled={!canSave} onPress={save} style={styles.button} />}
 		</SheetScreen>
 	);
 
@@ -126,7 +146,12 @@ export default function MachineNameSheetRoute() {
 		);
 	}
 
-	return content;
+	return (
+		<>
+			{headerItems}
+			{content}
+		</>
+	);
 }
 
 function formatNames(names: readonly string[]): string {

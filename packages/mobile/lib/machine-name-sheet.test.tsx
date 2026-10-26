@@ -10,7 +10,16 @@ const fixtures = vi.hoisted(() => ({
 	theme: new Proxy({}, { get: () => "#000000" }),
 	hosts: [] as { id: string; name: string; appearance?: { symbol: string } }[],
 }));
-vi.mock("expo-router", () => ({ useRouter: () => ({ back: fixtures.back, canGoBack: () => true }), useLocalSearchParams: () => fixtures.params }));
+vi.mock("expo-router", async () => {
+	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	const router = { back: fixtures.back, canGoBack: () => true };
+	return {
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
+		useRouter: () => router,
+		useLocalSearchParams: () => fixtures.params,
+	};
+});
 vi.mock("react-native", () => ({
 	Platform: fixtures.platform, View: "View", Text: "Text", TextInput: "TextInput", Pressable: "Pressable",
 	Animated: { View: "AnimatedView" }, StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
@@ -161,4 +170,37 @@ it("lets the user keep a shared icon and names the machines that share it", asyn
 	expect(hint.props.children.join("")).toBe("Also used by MacBook Pro. The name will tell them apart.");
 	act(() => saveButton().props.onPress());
 	expect(selected).toHaveBeenCalledExactlyOnceWith({ name: "Studio Mac", appearance: { symbol: "laptop" } });
+});
+
+// iOS heads the form sheet with its native bar: the title there, Cancel on the
+// left and Save on the right. Android keeps its Material sheet with the title
+// and the Save button in the body.
+it("puts the title, Cancel and Save in the iOS bar and nowhere in the body", () => {
+	fixtures.platform.OS = "ios";
+	const selected = vi.fn();
+	fixtures.params.resultKey = parkSheetResult(selected);
+	open();
+	const texts = renderer!.root.findAllByType("Text" as never).map((node) => node.props.children);
+	expect(texts).not.toContain("Name this machine");
+	expect(renderer!.root.findAllByProps({ title: "Save machine" })).toHaveLength(0);
+	const [left, right] = renderer!.root.findAllByType("StackToolbar" as never);
+	expect(left.props.placement).toBe("left");
+	expect(right.props.placement).toBe("right");
+	expect(saveButton().props.children).toBe("Save");
+	act(() => input().props.onChangeText("   "));
+	expect(saveButton().props.disabled).toBe(true);
+	const cancel = left.findByType("StackToolbarButton" as never);
+	expect(cancel.props.children).toBe("Cancel");
+	act(() => cancel.props.onPress());
+	expect(fixtures.back).toHaveBeenCalledTimes(1);
+	act(() => renderer!.unmount());
+	renderer = undefined;
+	expect(selected).toHaveBeenCalledExactlyOnceWith(null);
+});
+
+it("keeps the Android title and Save button in the sheet body", () => {
+	open();
+	expect(renderer!.root.findAllByType("StackToolbar" as never)).toHaveLength(0);
+	expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === "Name this machine")).toHaveLength(1);
+	expect(renderer!.root.findAllByProps({ title: "Save machine" }).length).toBeGreaterThan(0);
 });

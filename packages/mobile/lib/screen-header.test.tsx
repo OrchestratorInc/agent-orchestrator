@@ -73,6 +73,14 @@ describe("SheetHeader", () => {
 		expect(textNode(renderer, "Choose a model").props.accessibilityRole).toBe("header");
 		expect(textNode(renderer, "Used for new turns").props.accessibilityRole).toBeUndefined();
 	});
+
+	// Under a native bar that already carries the title, only the subtitle stays.
+	it("draws no title row when the bar carries the title", () => {
+		const renderer = render(<SheetHeader subtitle="Choose a name you'll recognize." right="Refresh" />);
+		expect(renderer.root.findAll((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "header")).toHaveLength(0);
+		expect(textNode(renderer, "Choose a name you'll recognize.")).toBeDefined();
+		expect(renderer.root.findAll((node) => node.children.includes("Refresh" as never))).toHaveLength(0);
+	});
 });
 
 describe("ListSectionHeader", () => {
