@@ -70,7 +70,7 @@ describe("startup harness update notice", () => {
 		});
 		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: readiness } as never);
 	});
-	afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
+	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 	it("never raises the native shell, which would block the live browser page", async () => {
 		mountNotice();
@@ -560,47 +560,17 @@ describe("startup harness update notice", () => {
 		expect(screen.getByRole("button", { name: "View details" })).toBeEnabled();
 	});
 
-	it("keeps a dismissed harness quiet for a week, even through newer releases", async () => {
+	it("dismisses the shown release across remounts but shows a newer target", async () => {
 		const view = mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
 		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
 		view.unmount();
-		const first = mountNotice();
-		await waitFor(() => expect(first.client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
-		const newer = { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" };
-		act(() => first.client.setQueryData(updateAdvisoryQueryKey("claude-code"), newer));
-		await new Promise((resolve) => setTimeout(resolve, 50));
+		const { client } = mountNotice();
+		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
 		expect(screen.queryByRole("region")).toBeNull();
-		first.unmount();
-		const now = Date.now();
-		vi.spyOn(Date, "now").mockReturnValue(now + 8 * 24 * 60 * 60 * 1000);
-		const later = mountNotice();
-		await waitFor(() => expect(later.client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
-		act(() => later.client.setQueryData(updateAdvisoryQueryKey("claude-code"), newer));
+		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" }));
 		expect(await screen.findByText("v2.1.293")).toBeInTheDocument();
-	});
-
-	it("leaves on its own after a while in a focused, visible window and quiets that harness", async () => {
-		vi.useFakeTimers({ shouldAdvanceTime: true });
-		vi.spyOn(document, "hasFocus").mockReturnValue(true);
-		vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-		mountNotice();
-		await screen.findByRole("region", { name: "Agent updates available" });
-		await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
-		expect(Object.keys(JSON.parse(localStorage.getItem("ao.harness-update-quiet.v1")!))).toEqual([JSON.stringify(["local", "claude-code"])]);
-	});
-
-	it("never leaves on its own while the window is hidden", async () => {
-		vi.useFakeTimers({ shouldAdvanceTime: true });
-		vi.spyOn(document, "hasFocus").mockReturnValue(true);
-		vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-		mountNotice();
-		await screen.findByRole("region", { name: "Agent updates available" });
-		await act(async () => { await vi.advanceTimersByTimeAsync(10_400); });
-		expect(screen.getByRole("region", { name: "Agent updates available" })).toBeInTheDocument();
-		expect(localStorage.getItem("ao.harness-update-quiet.v1")).toBeNull();
 	});
 
 	it.each(["unknown", "current"])("does not notify for %s results", async (status) => {

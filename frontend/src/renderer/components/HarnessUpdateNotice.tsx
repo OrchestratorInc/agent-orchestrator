@@ -20,31 +20,12 @@ import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const DISMISSED_KEY = "ao.harness-update-dismissals.v1";
-const QUIET_KEY = "ao.harness-update-quiet.v1";
-// A harness the user waved away, or whose notice left on its own, is not
-// announced again for this long, whatever it ships meanwhile: some (Amp)
-// publish several builds a day. Settings › Harness keeps offering the update.
-const QUIET_MS = 7 * 24 * 60 * 60 * 1000;
 
 function readDismissals(): Set<string> {
 	try {
 		const saved: unknown = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]");
 		return new Set(Array.isArray(saved) ? saved.filter((entry): entry is string => typeof entry === "string").slice(-100) : []);
 	} catch { return new Set(); }
-}
-
-/** Harnesses (by host and agent) and the time each stays quiet until. */
-function readQuiet(): Record<string, number> {
-	try {
-		const saved: unknown = JSON.parse(localStorage.getItem(QUIET_KEY) ?? "{}");
-		if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
-		return Object.fromEntries(Object.entries(saved).filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > Date.now()));
-	} catch { return {}; }
-}
-
-/** The harness part of a notice key: quiet periods outlast its releases. */
-function quietKey(noticeKey: string): string {
-	return JSON.stringify((JSON.parse(noticeKey) as unknown[]).slice(0, 2));
 }
 
 /** Always mounted in the shell, not in a route or Settings. Read-only checks
@@ -62,7 +43,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const startHarnessUpdate = useStartHarnessUpdate();
 	const observedJobs = useRef(new Set<string>());
 	const [dismissed, setDismissed] = useState(readDismissals);
-	const [quiet, setQuiet] = useState(readQuiet);
 	const [expanded, setExpanded] = useState(false);
 	// Updates started from a notice run right here; the notice shows progress
 	// and any failure instead of sending the user to Settings.
@@ -202,7 +182,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
 		if (!method?.available || !method.updateAvailable || needsLogin) return [];
 		const key = harnessUpdateNoticeKey(agentId, advisory.latestVersion!);
-		return dismissed.has(key) || (quiet[quietKey(key)] ?? 0) > Date.now() ? [] : [{ agentId, advisory, key }];
+		return dismissed.has(key) ? [] : [{ agentId, advisory, key }];
 	}).sort((left, right) => {
 		const a = readinessById.get(left.agentId);
 		const b = readinessById.get(right.agentId);
@@ -218,15 +198,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...next])); } catch { /* In-memory dismissal still works. */ }
 			return next;
 		});
-		setQuiet((current) => {
-			const until = Date.now() + QUIET_MS;
-			const next = { ...current, ...Object.fromEntries(keys.map((key) => [quietKey(key), until])) };
-			try { localStorage.setItem(QUIET_KEY, JSON.stringify(next)); } catch { /* In-memory quiet still works. */ }
-			return next;
-		});
 		if (updates.length <= 2) setExpanded(false);
 	};
-
 	const isExpanded = expanded && updates.length > 1;
 	const ready = !authPlans.isPending && !authPlans.isError && !installers.isPending && !installers.isError && !jobs.isPending && !jobs.isError;
 	const updateAllTargets = ready ? updates.flatMap(({ agentId, advisory }) => {
@@ -275,11 +248,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	};
 
 	const jobFor = (agentId: AgentId) => jobs.data?.find((candidate) => candidate.target === agentId);
-	// The notice stays while it is reporting something: work in flight, a
-	// failure, sessions to end, or a list the user opened.
-	const holdOpen = isExpanded || startingAll || sessionsView !== null || updateAllSummary !== null || updatedCards.length > 0
-		|| updates.some(({ agentId }) => starting.has(agentId) || settling.has(agentId) || isActiveInstallJob(jobFor(agentId))
-			|| errors[agentId] !== undefined || inUse[agentId] !== undefined || failedUpdateAdvisory(agentId) !== undefined);
 	// While updates start the button stays solid: it reports progress, not an
 	// unavailable action.
 	const updateAllButton = <Button type="button" size="sm" className={cn("min-w-20 shrink-0", startingAll && "disabled:opacity-100")}
@@ -362,7 +330,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const dismissAll = () => dismiss(...updates.map((update) => update.key));
 	// Portaled to the end of <body>: Electron applies window drag regions in DOM
 	// order, so a later drag strip (the home page's) would otherwise override no-drag.
-	return createPortal(<NoticeFrame label={t("settings.harness.updateNoticeTitle")} holdOpen={holdOpen} onAutoHide={dismissAll}>
+	return createPortal(<NoticeFrame label={t("settings.harness.updateNoticeTitle")}>
 		<div className="space-y-2">
 		{updates.length > 1 ? <SwipeCard variant="card" role="group" label={t("settings.harness.updateNoticeTitle")} onDismiss={dismissAll} swipeable={!isExpanded}
 			dismissLabel={t("settings.harness.dismissAllUpdates")}
@@ -483,45 +451,32 @@ function VersionChange({ from, to }: { from: string; to: string }) {
 	</p>;
 }
 
-// A notice nobody is looking at or working with leaves on its own, which
-// quiets its harnesses like a swipe or × (see QUIET_MS).
-const AUTO_HIDE_MS = 10_000;
 // Longer than the list's, a closing row's and the top-bar slide's transitions (200ms, 180ms, 200ms).
 const MOTION_SETTLE_MS = 260;
 const UPDATED_MS = 4_000;
 
 /** The notice's frame in the top-right corner of the framed center panel, just
  * below the page's top bar when it has one, so it never covers a page's own
- * actions and slides, rather than jumps, between pages. A fixed box that tracks the panel
- * clips it, so a swipe slides it out under the panel's edge instead of over the
- * window frame.
+ * actions and slides, rather than jumps, between pages. A fixed box that
+ * tracks the panel clips it, so a swipe slides it out under the panel's edge
+ * instead of over the window frame.
  *
  * The live browser page is a native view: anything drawn over it has to raise
  * the whole transparent shell above the page, which then swallows every click
  * and scroll meant for the browser. This notice never does that. It turns
  * invisible while the live page overlaps it, and stays measurable meanwhile. */
-function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
-	label: string;
-	holdOpen: boolean;
-	onAutoHide: () => void;
-	children: ReactNode;
-}) {
+function NoticeFrame({ label, children }: { label: string; children: ReactNode }) {
 	const browserRect = useLiveBrowserViewportRect();
 	const panel = useCenterPanelBox();
 	const frameRef = useRef<HTMLElement>(null);
 	const [box, setBox] = useState<ViewportRect | null>(null);
-	const [engaged, setEngaged] = useState(false);
-	// Electron reports focus for a hidden window too, so visibility is checked as well.
-	const [windowFocused, setWindowFocused] = useState(() => document.hasFocus() && document.visibilityState === "visible");
-	const [leaving, setLeaving] = useState(false);
-	const autoHide = useRef(onAutoHide);
-	autoHide.current = onAutoHide;
 	useLayoutEffect(() => {
 		const element = frameRef.current;
 		if (!element) return;
 		// While a height or position transition runs (the list opening, a row
-		// closing, the notice following a top bar) the rect changes every frame; measuring then would re-render every reader
-		// of the rect each frame, so it measures once the motion has settled.
+		// closing, the notice following a top bar) the rect changes every frame;
+		// measuring then would re-render every reader of the rect each frame, so
+		// it measures once the motion has settled.
 		let settle: number | undefined;
 		const measure = () => {
 			if (settle !== undefined) return;
@@ -553,43 +508,15 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 	// Session content in this corner reads this rect to keep itself clear.
 	useLayoutEffect(() => publishHarnessUpdateNoticeRect(covered ? null : box), [box, covered]);
 	useLayoutEffect(() => () => publishHarnessUpdateNoticeRect(null), []);
-	useEffect(() => {
-		const sync = () => setWindowFocused(document.hasFocus() && document.visibilityState === "visible");
-		window.addEventListener("focus", sync);
-		window.addEventListener("blur", sync);
-		document.addEventListener("visibilitychange", sync);
-		return () => {
-			window.removeEventListener("focus", sync);
-			window.removeEventListener("blur", sync);
-			document.removeEventListener("visibilitychange", sync);
-		};
-	}, []);
-	// The clock runs only while the notice is on screen in a focused window and
-	// nobody is reading or using it, so it never leaves unseen.
-	useEffect(() => {
-		setLeaving(false);
-		if (holdOpen || engaged || !windowFocused || covered) return;
-		const timer = window.setTimeout(() => setLeaving(true), AUTO_HIDE_MS);
-		return () => window.clearTimeout(timer);
-	}, [holdOpen, engaged, windowFocused, covered]);
-	useEffect(() => {
-		if (!leaving) return;
-		const timer = window.setTimeout(() => autoHide.current(), 180);
-		return () => window.clearTimeout(timer);
-	}, [leaving]);
 	const area = panel ?? { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
 	return <div className="pointer-events-none fixed isolate z-[calc(var(--z-overlay)-1)] overflow-hidden"
 		style={{ left: area.left, top: area.top, width: area.right - area.left, height: area.bottom - area.top, borderRadius: panel?.radius }}>
 		<aside ref={frameRef} role="region" aria-label={label} inert={covered} aria-hidden={covered || undefined}
 			// Its own compositor layer: the card's height animation repaints only the card.
 			// Below the page's top bar when it has one, sliding to match as pages
-			// change; `translate` stays clear of the enter and exit transforms.
+			// change; `translate` stays clear of the enter animation's transform.
 			className={cn("harness-update-notice pointer-events-auto absolute top-3 right-3 w-[min(320px,calc(100%-24px))] text-card-foreground will-change-transform transition-[translate] duration-200 ease-out motion-reduce:transition-none",
-				covered && "invisible", leaving ? "toast-exit" : "toast-enter")}
-			onPointerEnter={() => setEngaged(true)}
-			onPointerLeave={(event) => setEngaged(event.currentTarget.contains(document.activeElement))}
-			onFocus={() => setEngaged(true)}
-			onBlur={(event) => setEngaged(event.currentTarget.contains(event.relatedTarget as Node | null) || event.currentTarget.matches(":hover"))}
+				covered && "invisible", "toast-enter")}
 			// The window's drag region would otherwise swallow the notice's clicks.
 			style={{ WebkitAppRegion: "no-drag", translate: `0 ${panel?.topInset ?? 0}px` } as CSSProperties}>
 			{children}
