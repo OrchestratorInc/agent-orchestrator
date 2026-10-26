@@ -450,7 +450,7 @@ export function SessionArtifactsView({
 					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
-						{artifactSharingAvailable(session, hostId) ? <ArtifactShareButton artifact={selected} key={selected.path} session={session} /> : null}
+						{artifactSharingAvailable(session, hostId) ? <ArtifactShareButton artifact={selected} key={`share:${selected.path}`} session={session} /> : null}
 						{hasHtmlPreview && previewVersion === null ? (
 							<div className="flex shrink-0 items-center gap-0.5">
 								<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>
