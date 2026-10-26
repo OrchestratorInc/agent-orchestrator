@@ -202,6 +202,19 @@ describe("timeline rows", () => {
 	});
 });
 
+describe("state in words", () => {
+	it("names a failed command or tool call instead of only turning it red", () => {
+		const command = source.slice(source.indexOf("function GenericActivityRow"), source.indexOf("function TerminalInput"));
+		const tool = source.slice(source.indexOf("function McpToolRow"), source.indexOf("function JsonPayload"));
+		expect(command).toContain('{activity.status === "failed" ? <Text style={styles.runFailed}>failed</Text> : null}');
+		expect(tool).toContain('{failed && activity.status !== "running" ? <Text style={styles.runFailed}>failed</Text> : null}');
+	});
+
+	it("heads the empty conversation", () => {
+		expect(source).toContain('<Text accessibilityRole="header" style={styles.emptyTitle}>');
+	});
+});
+
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");

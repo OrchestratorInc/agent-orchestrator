@@ -632,6 +632,8 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				</Text>
 				{activity.status === "running" ? <Spinner size={iconSize.sm} color={t.orange} /> : null}
 				{activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : null}
+				{/* Red alone would be the only sign the command failed. */}
+				{activity.status === "failed" ? <Text style={styles.runFailed}>failed</Text> : null}
 				{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 			</Pressable>
 			{open ? (
@@ -669,6 +671,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			<Text style={[styles.server, failed && { color: t.red }]}>{detail.server ?? detail.namespace ? `${detail.server ?? detail.namespace}/` : ""}</Text>
 			<Text numberOfLines={1} style={[styles.activitySummary, failed && { color: t.red }]}>{detail.toolName || activity.summary}</Text>
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
+			{failed && activity.status !== "running" ? <Text style={styles.runFailed}>failed</Text> : null}
 			{activity.status === "running" ? <Spinner size={iconSize.sm} color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 		</Pressable>
 		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailHeading}>Progress</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
@@ -1177,7 +1180,7 @@ function ErrorActivity({ activity }: { activity: ConversationActivity }) {
 
 function EmptyConversation({ controller }: { controller: string }) {
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.empty}><View style={styles.emptyMascot}><MascotLamp size={48} /></View><Text style={styles.emptyTitle}>{controller === "connecting" ? "Connecting to the agent…" : "Start with a task"}</Text></View>;
+	return <View style={styles.empty}><View style={styles.emptyMascot}><MascotLamp size={48} /></View><Text accessibilityRole="header" style={styles.emptyTitle}>{controller === "connecting" ? "Connecting to the agent…" : "Start with a task"}</Text></View>;
 }
 
 function LabelValue({ label, value }: { label: string; value: string }) { const styles = useThemedStyles(makeStyles); return <View style={styles.labelValue}><Text style={styles.detailLabel}>{label}</Text><Text selectable style={styles.detailValue}>{value}</Text></View>; }
