@@ -26,17 +26,16 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
 	const summary = turnSettingsSummary(snapshot, models, options);
-	// A SwiftUI picker shows the choice it was given even when the save fails and
-	// the setting stays put. Rebuilding the menu after each choice shows the
-	// setting as saved; the menu has closed by then, so nothing visibly moves.
+	// A SwiftUI picker keeps showing the choice it was given when the save fails
+	// and the setting stays put. Rebuilding the menu then shows the setting as
+	// saved; the menu has long closed, so nothing visibly moves.
 	const [generation, setGeneration] = useState(0);
 
 	const choose = (row: TurnSettingRow, choice: string | boolean) => {
 		haptics.select();
-		setGeneration((value) => value + 1);
 		const write = turnSettingWrite(snapshot.settings, row, choice);
-		if (write.kind === "option") void onOption(write.id, write.value).catch(() => {});
-		else void onSettings(write.settings).catch(() => {});
+		const saved = write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings);
+		void saved.then(() => {}, () => setGeneration((value) => value + 1));
 	};
 
 	// The whole row is the menu's own label, so every point of it opens the menu.
