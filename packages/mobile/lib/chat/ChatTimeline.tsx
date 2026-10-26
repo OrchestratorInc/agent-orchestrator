@@ -12,7 +12,7 @@ import {
 	Text,
 	View,
 } from "react-native";
-import { usePreventRemove } from "expo-router";
+import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
 import { rowDividerWidth } from "../divider";
@@ -230,7 +230,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// A checklist no loaded turn can host sits at the live edge instead.
 	const standaloneStartup = placement === "standalone" && startup ? (
 		<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
-	) : undefined;
+	) : null;
 	const olderControl = snapshot.hasMoreBefore ? (
 		<Pressable
 			accessibilityRole="button"
@@ -243,7 +243,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 			{loadingOlder ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name="history" size={iconSize.sm} color={t.textTertiary} />}
 			<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
 		</Pressable>
-	) : undefined;
+	) : null;
 
 	return (
 		<View style={styles.timelineWrap}>

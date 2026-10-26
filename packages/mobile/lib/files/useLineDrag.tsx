@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { View, type HostInstance, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from "react-native";
+import { View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
 import { haptics } from "../haptics";
 
@@ -150,7 +150,7 @@ export function useLineDrag({
 		return Gesture.Race(gutter, hold);
 	}, [begin, enabled, finish, gutterWidth, move]);
 
-	const CellRenderer = useMemo(() => forwardRef<HostInstance, { index: number; style?: StyleProp<ViewStyle>; onLayout?: (event: LayoutChangeEvent) => void; children?: ReactNode }>(
+	const CellRenderer = useMemo(() => forwardRef<View, { index: number; style?: StyleProp<ViewStyle>; onLayout?: (event: LayoutChangeEvent) => void; children?: ReactNode }>(
 		function LineCell({ index, style, onLayout, children, ...rest }, ref) {
 			return (
 				<View

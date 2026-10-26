@@ -96,7 +96,6 @@
 				}
 			],
 			"expo-document-picker",
-			"expo-web-browser",
 			[
 				"expo-speech-recognition",
 				{

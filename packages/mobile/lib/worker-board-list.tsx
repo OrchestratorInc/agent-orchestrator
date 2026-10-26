@@ -484,8 +484,8 @@ export function WorkerBoardList({
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} {...refreshControlColors(t)} />}
-					ListHeaderComponent={ListHeaderComponent ?? undefined}
-					ListEmptyComponent={ListEmptyComponent ?? undefined}
+					ListHeaderComponent={ListHeaderComponent}
+					ListEmptyComponent={ListEmptyComponent}
 					renderItem={renderItem}
 					// The next archive page loads as its end comes into view.
 					onEndReached={archiveOpen || searching ? pagedArchive.loadMore : undefined}

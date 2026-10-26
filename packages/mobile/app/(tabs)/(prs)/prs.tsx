@@ -197,7 +197,7 @@ export default function PRsScreen() {
 									message={filter === "open" ? "No open PRs right now." : "Nothing here yet."}
 								/>
 							)
-						) : undefined
+						) : null
 					}
 				/>
 			)}

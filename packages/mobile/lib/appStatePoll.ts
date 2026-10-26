@@ -11,9 +11,6 @@ import type { AppStateStatus } from "react-native";
 // Kept out of store.tsx (which pulls in React Native and can't be imported by
 // vitest — see appStatePoll.test.ts) so this predicate stays unit-testable,
 // mirroring shouldKeepPolling in connectionError.ts.
-//
-// The state is widened past AppStateStatus because RN types
-// AppState.currentState as `string | null | undefined`.
-export function shouldPoll(state: AppStateStatus | string | null | undefined): boolean {
+export function shouldPoll(state: AppStateStatus): boolean {
 	return state !== "background";
 }

@@ -1,4 +1,4 @@
-import { useHeaderHeight } from "expo-router/react-navigation";
+import { useHeaderHeight } from "expo-router/build/react-navigation/elements";
 import { useEffect, useReducer, useRef } from "react";
 import { Keyboard, Platform } from "react-native";
 import { KeyboardEvents } from "react-native-keyboard-controller";

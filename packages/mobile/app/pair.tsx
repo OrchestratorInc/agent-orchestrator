@@ -5,6 +5,7 @@ import { AppState, Linking, Platform, StyleSheet, Text, View } from "react-nativ
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
 import { AppSymbol } from "../lib/AppSymbol";
+import { pickNormalLens } from "../lib/cameraLens";
 import { saveConfig } from "../lib/config";
 import {
 	classifyConnectionFailure,
@@ -126,6 +127,20 @@ export default function PairScreen() {
 	);
 	const rejected = useRef<string | null>(null);
 	const pendingCode = useRef<string | null>(null);
+
+	const camera = useRef<CameraView>(null);
+	const [lens, setLens] = useState<string | undefined>(undefined);
+
+	async function onCameraReady() {
+		if (Platform.OS !== "ios" || lens) return;
+		try {
+			const lenses = (await camera.current?.getAvailableLensesAsync()) ?? [];
+			if (typeof __DEV__ !== "undefined" && __DEV__) console.log("[pair] available lenses", lenses);
+			setLens(pickNormalLens(lenses));
+		} catch {
+			/* keep the native default */
+		}
+	}
 
 	async function finish() {
 		await clearOnboardingSkipped();
@@ -355,8 +370,11 @@ export default function PairScreen() {
 				{live ? (
 					<>
 						<CameraView
+							ref={camera}
 							style={StyleSheet.absoluteFill}
 							facing="back"
+							selectedLens={lens}
+							onCameraReady={onCameraReady}
 							barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
 							onBarcodeScanned={onScan}
 						/>

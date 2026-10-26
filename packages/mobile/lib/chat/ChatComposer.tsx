@@ -4,7 +4,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputInstance } from "react-native";
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, interpolateColor, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
@@ -268,7 +268,7 @@ export function ChatComposer({
 	}));
 	const [text, setText] = useState("");
 	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);
-	const inputRef = useRef<TextInputInstance>(null);
+	const inputRef = useRef<TextInput>(null);
 	const consumedQuote = useRef<string | undefined>(undefined);
 	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);

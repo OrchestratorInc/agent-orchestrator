@@ -4,8 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
 
 const swipeable = vi.hoisted(() => ({ close: vi.fn() }));
-// The full-swipe pan's callbacks and settings, captured from its hook config.
-const watch = vi.hoisted(() => ({ handlers: {} as Record<string, (event?: any) => void>, enabled: true }));
+// The full-swipe pan's callbacks and settings, captured from its builder.
+const watch = vi.hoisted(() => ({ handlers: {} as Record<string, (event?: any, success?: boolean) => void>, enabled: true }));
 const haptics = vi.hoisted(() => ({ armed: vi.fn() }));
 
 vi.mock("react-native", () => ({
@@ -13,14 +13,22 @@ vi.mock("react-native", () => ({
 	StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 0.5 },
 	View: "View",
 }));
-vi.mock("react-native-gesture-handler", () => ({
-	usePanGesture: ({ enabled, activeOffsetX: _offset, ...handlers }: Record<string, any>) => {
-		watch.enabled = enabled;
-		watch.handlers = handlers;
-		return { handlers };
-	},
-	GestureDetector: ({ children }: { children: React.ReactNode }) => createElement("GestureDetector", null, children),
-}));
+vi.mock("react-native-gesture-handler", () => {
+	const pan = () => {
+		const self: Record<string, unknown> = {
+			enabled: (value: boolean) => { watch.enabled = value; return self; },
+			activeOffsetX: () => self,
+		};
+		for (const method of ["onStart", "onUpdate", "onEnd", "onFinalize"]) {
+			self[method] = (callback: (event?: any, success?: boolean) => void) => { watch.handlers[method] = callback; return self; };
+		}
+		return self;
+	};
+	return {
+		Gesture: { Pan: pan },
+		GestureDetector: ({ children }: { children: React.ReactNode }) => createElement("GestureDetector", null, children),
+	};
+});
 // Gesture Handler's swipeable, reduced to its props and its imperative close.
 vi.mock("react-native-gesture-handler/ReanimatedSwipeable", () => ({
 	default: function SwipeBoundary({ ref, ...props }: Record<string, any>) {
@@ -68,14 +76,14 @@ function mount(over: Partial<WorkerRowInteractionProps> = {}) {
 const boundary = (view: ReactTestRenderer) => view.root.findByType("SwipeBoundary" as never);
 const railControls = (view: ReactTestRenderer) => view.root.findAll((node) => node.type === ("RailControls" as never));
 const drag = (translationX: number) => {
-	act(() => watch.handlers.onActivate());
+	act(() => watch.handlers.onStart());
 	act(() => watch.handlers.onUpdate({ translationX }));
 };
-// Gesture Handler deactivates a pan uncanceled when the finger lifts, and
-// canceled when the system or another handler takes it.
+// Gesture Handler ends an active pan with success true when the finger lifts,
+// and false when the system or another handler cancels it.
 const release = (success = true) => {
-	act(() => watch.handlers.onDeactivate({ canceled: !success }));
-	act(() => watch.handlers.onFinalize({ canceled: !success }));
+	act(() => watch.handlers.onEnd({}, success));
+	act(() => watch.handlers.onFinalize({}, success));
 };
 
 it("does not build the rail's controls behind a resting row but keeps the rail measurable", () => {
@@ -113,12 +121,12 @@ it("releases the controls after a short swipe snaps back without opening", () =>
 // with the list and with iOS's edge-swipe back. An open row closes either way.
 it("claims a rightward drag only while the rail is open", () => {
 	const view = mount();
-	expect(boundary(view).props.dragOffsetFromLeft).toBeGreaterThan(1000);
-	expect(boundary(view).props.dragOffsetFromRight).toBe(-16);
+	expect(boundary(view).props.dragOffsetFromLeftEdge).toBeGreaterThan(1000);
+	expect(boundary(view).props.dragOffsetFromRightEdge).toBe(16);
 	act(() => boundary(view).props.onSwipeableWillOpen("left"));
-	expect(boundary(view).props.dragOffsetFromLeft).toBe(16);
+	expect(boundary(view).props.dragOffsetFromLeftEdge).toBe(16);
 	act(() => boundary(view).props.onSwipeableWillClose("right"));
-	expect(boundary(view).props.dragOffsetFromLeft).toBeGreaterThan(1000);
+	expect(boundary(view).props.dragOffsetFromLeftEdge).toBeGreaterThan(1000);
 });
 
 it("closes its rail when another row opens one", () => {

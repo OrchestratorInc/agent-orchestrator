@@ -83,5 +83,5 @@ const styles = StyleSheet.create({
 	iconButton: { width: touchTarget, height: touchTarget, borderRadius: radius.xl },
 	menuHost: { flex: 1, minWidth: 0, height: touchTarget },
 	spawnHost: { width: "100%", height: touchTarget },
-	spawnButton: { width: "100%" as const, height: touchTarget, borderRadius: radius.lg },
+	spawnButton: { width: "100%", height: touchTarget, borderRadius: radius.lg },
 });

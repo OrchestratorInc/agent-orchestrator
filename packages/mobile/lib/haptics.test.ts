@@ -10,8 +10,7 @@ const fixtures = vi.hoisted(() => ({
 vi.mock("react-native", () => ({ Platform: fixtures.platform }));
 vi.mock("expo-haptics", async () => {
 	// The enums are plain data; only the calls that reach native are faked.
-	// expo-haptics' exports map hides its submodules, so reach the file directly.
-	const types = await import("../node_modules/expo-haptics/build/Haptics.types.js");
+	const types = await import("expo-haptics/src/Haptics.types");
 	return {
 		...types,
 		impactAsync: fixtures.impact,

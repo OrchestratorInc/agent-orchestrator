@@ -5,6 +5,7 @@ import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+	InteractionManager,
 	Platform,
 	StyleSheet,
 	Text,
@@ -394,13 +395,12 @@ function SpawnModalContent() {
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the
 			// same tick overlaps their animations (the modal retracts while the session
-			// is already sliding in); requestIdleCallback defers the push until the JS
-			// thread has settled after the dismiss, as runAfterInteractions did before
-			// RN 0.88 removed InteractionManager. The session screen shows its own
-			// "connecting" state while the terminal attaches, so landing on it before
-			// the PTY is ready is expected.
+			// is already sliding in); runAfterInteractions waits for the modal's
+			// transition to finish so the two happen back-to-back, not on top of each
+			// other. The session screen shows its own "connecting" state while the
+			// terminal attaches, so landing on it before the PTY is ready is expected.
 			backOr(router);
-			requestIdleCallback(() => {
+			InteractionManager.runAfterInteractions(() => {
 				router.push({
 					pathname: "/session/[id]",
 					params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },

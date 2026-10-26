@@ -97,7 +97,7 @@ export function FolderList({ config, sessionId, dir, header, bottomInset, onOpen
 			data={loading ? [] : tree?.entries ?? []}
 			keyExtractor={(item) => item.path}
 			keyboardShouldPersistTaps="handled"
-			ListHeaderComponent={header ?? undefined}
+			ListHeaderComponent={header}
 			contentContainerStyle={{ flexGrow: 1, paddingBottom: bottomInset }}
 			refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void reload(true)} {...refreshControlColors(t)} />}
 			ItemSeparatorComponent={FileRowDivider}
@@ -106,7 +106,7 @@ export function FolderList({ config, sessionId, dir, header, bottomInset, onOpen
 			) : (
 				<PathRow path={item.path} name={item.name} status={item.status} onPress={onOpenFile} onAction={onAction} />
 			)}
-			ListFooterComponent={tree?.truncated ? <Text style={styles.footNote}>This folder has more entries than the daemon lists. Search for a file to reach the rest.</Text> : undefined}
+			ListFooterComponent={tree?.truncated ? <Text style={styles.footNote}>This folder has more entries than the daemon lists. Search for a file to reach the rest.</Text> : null}
 			ListEmptyComponent={loading ? (
 				<View style={styles.loading}><Spinner size="large" accessibilityLabel="Reading this folder" /></View>
 			) : error ? (
@@ -131,7 +131,7 @@ export function SearchResults({ query, results, searching, header, bottomInset, 
 			keyExtractor={(item) => item.path}
 			keyboardShouldPersistTaps="handled"
 			keyboardDismissMode="on-drag"
-			ListHeaderComponent={header ?? undefined}
+			ListHeaderComponent={header}
 			contentContainerStyle={{ flexGrow: 1, paddingBottom: bottomInset }}
 			ItemSeparatorComponent={FileRowDivider}
 			renderItem={({ item }) => <PathRow path={item.path} status={item.status} onPress={onOpenFile} onAction={onAction} />}
