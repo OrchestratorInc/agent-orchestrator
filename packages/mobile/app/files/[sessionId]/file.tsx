@@ -103,7 +103,7 @@ function SessionFileContent() {
 	const [selection, setSelection] = useState<Selection | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string>();
-	const [composerHeight, setComposerHeight] = useState(0);
+	const [composerRise, setComposerRise] = useState(0);
 	const toast = useToast();
 	// `show` is stable where the controller is not, so callbacks keep their identity.
 	const showToast = toast.show;
@@ -472,7 +472,7 @@ function SessionFileContent() {
 					onAction={(action, text) => void act(action, text)}
 					onCopy={copySelection}
 					onClose={() => setSelection(null)}
-					onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)}
+					onRise={setComposerRise}
 				/>
 			) : (
 				<>
@@ -483,7 +483,7 @@ function SessionFileContent() {
 			<ToastHost
 				toast={toast}
 				bottomOffset={composing
-					? composerHeight + space.sm
+					? composerRise + space.sm
 					: stepper || review.comments.length ? insets.bottom + stepperClearance + (review.comments.length ? REVIEW_BUTTON_RISE : space.md) : undefined}
 			/>
 		</View>

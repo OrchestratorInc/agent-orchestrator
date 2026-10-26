@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
 	Pressable,
 	StyleSheet,
@@ -7,9 +7,8 @@ import {
 	View,
 	useWindowDimensions,
 	type AccessibilityActionEvent,
-	type LayoutChangeEvent,
 } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { SvgXml } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
@@ -243,7 +242,7 @@ export function SelectionComposer({
 	onAction,
 	onCopy,
 	onClose,
-	onLayout,
+	onRise,
 }: {
 	label: string;
 	busy: boolean;
@@ -252,8 +251,11 @@ export function SelectionComposer({
 	onAction: (action: ComposerAction, text: string) => void;
 	onCopy: () => void;
 	onClose: () => void;
-	/** Its height, for whatever has to sit above it: the page's toasts. */
-	onLayout?: (event: LayoutChangeEvent) => void;
+	/**
+	 * How far its top stands above the bottom of the screen, the keyboard's lift
+	 * included: where whatever has to sit above it, the page's toasts, starts.
+	 */
+	onRise?: (rise: number) => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -265,10 +267,18 @@ export function SelectionComposer({
 	const trimmed = text.trim();
 	const ready = Boolean(trimmed) && !busy;
 	const restingInset = dockRestingInset(insets.bottom);
+	const [height, setHeight] = useState(0);
+	// What the sticky view below translates the dock by with the keyboard open.
+	// A transform moves it without a layout pass, so its own height never says.
+	const keyboard = useKeyboardState((state) => state.isVisible ? state.height : 0);
+	const lift = keyboard > 0 ? Math.max(0, keyboard - restingInset + KEYBOARD_DOCK_GAP) : 0;
+	useEffect(() => {
+		onRise?.(height + lift);
+	}, [height, lift, onRise]);
 	return (
 		// The session dock's spacing: it rests on the safe-area inset and, with the
 		// keyboard up, sits KEYBOARD_DOCK_GAP above it instead.
-		<KeyboardStickyView offset={{ closed: 0, opened: restingInset - KEYBOARD_DOCK_GAP }} onLayout={onLayout} style={styles.composerDock}>
+		<KeyboardStickyView offset={{ closed: 0, opened: restingInset - KEYBOARD_DOCK_GAP }} onLayout={(event) => setHeight(event.nativeEvent.layout.height)} style={styles.composerDock}>
 			<View accessibilityViewIsModal={false} style={[styles.composerShell, { paddingBottom: restingInset }]}>
 				{/* What the comment is about, where the session composer keeps its model row. */}
 				<View style={styles.composerMeta}>

@@ -115,4 +115,15 @@ describe("the file viewer", () => {
 		expect(file).not.toContain("setNotice");
 		expect(file).not.toContain("announceForAccessibility");
 	});
+
+	// The composer rides the keyboard by a transform, which no layout reports, so
+	// the toast over it counts the keyboard's lift as well as the composer's height.
+	it("keeps a toast above the composer while the keyboard is up", () => {
+		const components = source("./components.tsx");
+		expect(components).toContain("useKeyboardState((state) => state.isVisible ? state.height : 0)");
+		expect(components).toContain("keyboard - restingInset + KEYBOARD_DOCK_GAP");
+		expect(components).toContain("onRise?.(height + lift)");
+		expect(file).toContain("onRise={setComposerRise}");
+		expect(file).toContain("? composerRise + space.sm");
+	});
 });
