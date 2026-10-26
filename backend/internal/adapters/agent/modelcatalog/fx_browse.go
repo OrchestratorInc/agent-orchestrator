@@ -30,8 +30,16 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	result.Source = "cli"
 	result.FetchedAt = time.Now().UTC()
 	result.Providers = []string{"gateway", "codex", "grok"}
+	type modelSelection struct {
+		Provider   string            `json:"provider"`
+		Models     map[string]string `json:"models"`
+		CodexModel string            `json:"codex_model"`
+		GrokModel  string            `json:"grok_model"`
+	}
 	var settings struct {
-		Providers map[string]struct {
+		modelSelection
+		Workspaces map[string]modelSelection `json:"workspaces"`
+		Providers  map[string]struct {
 			ModelMetadata map[string]struct {
 				ContextWindow int64 `json:"context_window"`
 			} `json:"model_metadata"`
@@ -71,10 +79,41 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	var status struct {
 		ConnectedProviders []string `json:"connected_providers"`
 	}
+	// A built-in connection is set up when FX reports it connected, it is an
+	// explicitly selected provider, or it has a saved model. Gateway is FX's
+	// default. Listing fails for connections the user never set up (Grok without
+	// a selected model, for example); that is not worth a warning.
+	workingDir := request.WorkingDir
+	if workingDir == "" {
+		workingDir = "."
+	}
+	var workspace modelSelection
+	if absolute, err := filepath.Abs(workingDir); err == nil {
+		if canonical, err := filepath.EvalSymlinks(absolute); err == nil {
+			workspace = settings.Workspaces[canonical]
+		}
+	}
+	// FX_MODEL uses the selected provider (or gateway); only FX_PROVIDER can
+	// select another connection. Read the same merged environment as the CLI.
+	setUp := map[string]bool{"gateway": true, envValue(request.Env, "FX_PROVIDER"): true}
+	for _, selection := range []modelSelection{settings.modelSelection, workspace} {
+		setUp[selection.Provider] = true
+		// FX still reads the legacy keys; entries in models take precedence.
+		savedModels := map[string]string{"codex": selection.CodexModel, "grok": selection.GrokModel}
+		for provider, model := range selection.Models {
+			savedModels[provider] = model
+		}
+		for provider, model := range savedModels {
+			if strings.TrimSpace(model) != "" {
+				setUp[provider] = true
+			}
+		}
+	}
 	if statusErr == nil && json.Unmarshal(output, &status) == nil {
 		connected := map[string]bool{}
 		for _, provider := range status.ConnectedProviders {
 			connected[provider] = true
+			setUp[provider] = true
 		}
 		for _, provider := range result.Providers {
 			if connected[provider] {
@@ -126,7 +165,7 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	var unavailable []string
 	for index, provider := range result.Providers[:3] {
 		result.Models = append(result.Models, results[index].models...)
-		if results[index].failed {
+		if results[index].failed && setUp[provider] {
 			unavailable = append(unavailable, provider)
 		}
 	}

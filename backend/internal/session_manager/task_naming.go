@@ -23,11 +23,16 @@ type generatedTaskName struct {
 	Slug  string `json:"slug"`
 }
 
+// taskNamingApplies reports whether a start gets a generated branch name.
+func taskNamingApplies(cfg ports.SpawnConfig) bool {
+	return cfg.NameFromPrompt && cfg.Branch == "" && cfg.Kind == domain.KindWorker && strings.TrimSpace(cfg.Prompt) != ""
+}
+
 // startTaskNaming overlaps the one cosmetic model call with the whole start.
 // It runs under the daemon context because the rename that consumes it happens
 // after launch. The waiter also observes the deadline if a provider is slow to cancel.
 func (m *Manager) startTaskNaming(cfg ports.SpawnConfig, rec domain.SessionRecord, projectConfig domain.ProjectConfig) (func() generatedTaskName, context.CancelFunc) {
-	if !cfg.NameFromPrompt || cfg.Branch != "" || cfg.Kind != domain.KindWorker || strings.TrimSpace(cfg.Prompt) == "" {
+	if !taskNamingApplies(cfg) {
 		return nil, func() {}
 	}
 	fallback := generatedTaskName{Slug: taskSlug(cfg.Prompt)}

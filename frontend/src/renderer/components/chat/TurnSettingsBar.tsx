@@ -86,9 +86,18 @@ const CODEX_APPROVAL_ORDER: ApprovalMode[] = [
 	"bypass-permissions",
 ];
 
-const TRIGGER_CLASS =
+/** Approval modes the session allows that the selected model cannot run. */
+export interface ApprovalModeLimits {
+	/** The selected model's name, for the reason each unavailable mode shows. */
+	model: string;
+	unavailable: ApprovalMode[];
+	/** The mode asked for, when `settings.approvalMode` is the one that runs in its place. */
+	requested?: ApprovalMode;
+}
+
+export const TRIGGER_CLASS =
 	"h-7 gap-1 bg-transparent rounded-lg px-3 text-xs! leading-none text-muted-foreground hover:bg-interactive-active hover:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground";
-const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
+export const CHAT_MENU_CLASS = "chat-settings-menu text-xs!";
 
 export function TurnSettingsBar({
 	models,
@@ -96,6 +105,7 @@ export function TurnSettingsBar({
 	harness,
 	showApprovalMode = true,
 	approvalModes,
+	approvalModeLimits,
 	reroute,
 	onChange,
 	onRememberPermissions,
@@ -121,6 +131,12 @@ export function TurnSettingsBar({
 	/** Cloud permissions are fixed for the session, not a per-turn setting. */
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
+	/**
+	 * Modes shown disabled, with the reason, because the selected model cannot
+	 * run them. When the pick is one of them, settings.approvalMode is the mode
+	 * that runs instead and the menu says so.
+	 */
+	approvalModeLimits?: ApprovalModeLimits;
 	/**
 	 * The provider answered with a different model than the one chosen. Separate from
 	 * `settings` all the way down: settings are what the user asked for, this is what
@@ -206,6 +222,11 @@ export function TurnSettingsBar({
 	const approvalCopy = harness === "codex" ? CODEX_APPROVAL_COPY : harness === "agy" ? AGY_APPROVAL_COPY : APPROVAL_COPY;
 	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
+	const approvalUnavailable = (mode: ApprovalMode) =>
+		approvalModeLimits?.unavailable.includes(mode) ? `Not available for ${approvalModeLimits.model}` : undefined;
+	const approvalNote = approvalModeLimits?.requested
+		? `${approvalCopy[approvalModeLimits.requested].label} isn't available for ${approvalModeLimits.model}; using ${approvalLabel}.`
+		: undefined;
 	const modelGroupLabel = effortLabel
 		? `${modelLabel} ${formatEffortLabel(effortLabel, t)}`
 		: modelLabel;
@@ -532,14 +553,18 @@ export function TurnSettingsBar({
 													disabled={optionDisabled}
 								leadIcon={unified ? permissionIcon(permissionLook(harness, settings.approvalMode ?? "default")) : undefined}
 							>
-								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode)).map((mode) => (
+								{approvalNote ? (
+									<p role="note" className="px-3 py-2 text-[11px] leading-snug text-muted-foreground">{approvalNote}</p>
+								) : null}
+								{approvalOrder.filter((mode) => !approvalModes || approvalModes.includes(mode) || approvalUnavailable(mode)).map((mode) => (
 									unified ? (
 										<PermissionRow
 											key={mode}
 											mode={permissionLook(harness, mode)}
 											title={approvalCopy[mode].label}
-											description={approvalCopy[mode].description}
+											description={approvalUnavailable(mode) ?? approvalCopy[mode].description}
 											active={mode === (settings.approvalMode ?? "default")}
+											disabled={Boolean(approvalUnavailable(mode))}
 											onSelect={() => onChange({ ...settings, approvalMode: mode })}
 										/>
 									) : (
@@ -547,6 +572,7 @@ export function TurnSettingsBar({
 										key={mode}
 										active={mode === (settings.approvalMode ?? "default")}
 										radio
+										disabled={Boolean(approvalUnavailable(mode))}
 										onSelect={() => onChange({ ...settings, approvalMode: mode }, "approvalMode")}
 										className={cn("text-xs")}
 									>
@@ -560,6 +586,9 @@ export function TurnSettingsBar({
 										>
 											{approvalCopy[mode].label}
 										</span>
+										{approvalUnavailable(mode) ? (
+											<span className="ml-auto pl-3 text-[11px] text-muted-foreground">{approvalUnavailable(mode)}</span>
+										) : null}
 									</OptionMenuItem>
 									)
 								))}
@@ -1264,7 +1293,7 @@ function ConfigOptionChoices({
 				return (
 					<Fragment key={choice.value}>
 						{choice.group && choice.group !== previousGroup ? (
-							<OptionMenuLabel className="px-3 pb-1 pt-2 text-micro text-muted-foreground">
+							<OptionMenuLabel>
 								{choice.groupName || choice.group}
 							</OptionMenuLabel>
 						) : null}
@@ -1358,7 +1387,7 @@ function PermissionRow({
 	const Icon = permissionIcon(mode);
 	const unrestricted = mode === "bypass-permissions";
 	return (
-		<OptionMenuItem active={active} radio disabled={disabled} onSelect={onSelect} className="items-start gap-3 whitespace-normal px-3 py-2">
+		<OptionMenuItem active={active} radio disabled={disabled} onSelect={onSelect} className="items-start gap-3 whitespace-normal">
 			<Icon aria-hidden="true" className={cn("mt-0.5 size-4 shrink-0", unrestricted ? "text-warning" : "text-muted-foreground")} />
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className={cn("text-xs", unrestricted ? "text-warning" : "text-foreground")}>{title}</span>
@@ -1390,7 +1419,7 @@ export function ComposerMenuRow({
 	onSelect: () => void;
 }) {
 	return (
-		<OptionMenuItem disabled={disabled} onSelect={onSelect} className="gap-2 px-3 py-1.5 text-xs">
+		<OptionMenuItem disabled={disabled} onSelect={onSelect} className="gap-2">
 			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 			<span className="shrink-0 text-foreground">{title}</span>
 			{description ? <span className="min-w-0 truncate text-muted-foreground">{description}</span> : null}
@@ -1492,7 +1521,7 @@ function Picker({
 	disabled?: boolean;
 	/** The current choice will not hold for the next message: marked red. */
 	alert?: boolean;
-	/** Set on the permission control when it leads the row: marked with this, with a caret, opening rightwards. */
+	/** Set on the permission control when it leads the row: marked with this, opening rightwards. */
 	leadIcon?: LucideIcon;
 	/** A note that belongs on the trigger, e.g. the model that was overridden. */
 	badge?: React.ReactNode;
@@ -1502,7 +1531,7 @@ function Picker({
 	return (
 		<OptionMenu>
 				<OptionMenuTrigger
-					showCaret={Boolean(LeadIcon)}
+					showCaret={false}
 					aria-label={title}
 					title={title}
 					disabled={disabled}
@@ -1584,7 +1613,7 @@ export function hasProviderPermissionMode(options: ChatConfigOption[]): boolean 
 	return Boolean(partitionConfigOptions(options).mode);
 }
 
-function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
+export function partitionConfigOptions(options: ChatConfigOption[], includeExecutionModes = true): {
 	model: ChatConfigOption[];
 	effort: ChatConfigOption[];
 	/** Provider plan/agent modes, placed with model selection rather than permissions. */
@@ -1730,8 +1759,9 @@ function addAgentModeChoice(
 	permissionChoices: ChatConfigOption["choices"],
 ): ChatConfigOption["choices"] {
 	// OpenCode names its ordinary agent mode "build", so its catalog already has
-	// one and must not gain a synthetic duplicate.
-	if (executionChoices.some((choice) => executionChoiceMatches(choice, "agent|build"))) {
+	// one and must not gain a synthetic duplicate. With no execution mode to leave
+	// for, an Agent choice alone would be a picker with nothing to pick.
+	if (executionChoices.length === 0 || executionChoices.some((choice) => executionChoiceMatches(choice, "agent|build"))) {
 		return executionChoices;
 	}
 	const standard = permissionChoices.find((choice) => choiceMatches(choice, "manual"))

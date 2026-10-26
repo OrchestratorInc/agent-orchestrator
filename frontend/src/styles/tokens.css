@@ -374,15 +374,20 @@
 
 	/* Command palette */
 	--color-bg-command-palette: var(--popover);
-	--color-border-command-palette: var(--border);
+	--color-border-command-palette: var(--color-border-overlay);
 	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);
 	--radius-command-palette: 12px;
 	--radius-command-item: 6px;
-	--shadow-command-palette: var(--elevation-xl);
-	--shadow-popover: var(--elevation-xl);
+	--shadow-command-palette: var(--shadow-popover);
+	/* Overlay edge: a faint edge so a transient layer (menu, popover, dialog,
+	 * toast) separates from content without a drawn frame. */
+	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
+	/* Overlay shadow: a barely-there lift. Black, not --background, so it
+	 * reads on a graphite canvas. */
+	--shadow-popover: 0 4px 12px -4px oklch(0 0 0 / 14%);
 	--size-command-palette: 720px;
 	--size-command-palette-top: 14vh;
 	--size-command-palette-list-max: 420px;
@@ -424,7 +429,7 @@
 	--color-bg-import-card-hover: var(--accent);
 	--color-bg-import-illustration: var(--color-bg-import-chip);
 	--color-bg-import-chip: var(--secondary);
-	--shadow-import-modal: 0 0 0 1px var(--border), var(--elevation-md);
+	--shadow-import-modal: var(--shadow-popover);
 	--size-import-modal-max: 896px;
 	--size-import-folder-dialog: 640px;
 	--size-composer-prompt-min: 112px;
@@ -451,12 +456,12 @@
 	--color-text-settings-muted: var(--muted-foreground);
 	--color-text-settings-row: var(--foreground);
 	--color-border-settings: var(--color-border-welcome-panel);
-	--color-border-settings-menu: color-mix(in oklch, var(--border) 60%, var(--foreground) 40%);
+	--color-border-settings-menu: var(--color-border-overlay);
 	--font-size-settings-title: 28px;
 	--tracking-settings-title: -0.015em;
 	--tracking-settings-section: 0.06em;
 	--tracking-settings-mono: 0.08em;
-	--radius-settings-panel: 14px;
+	--radius-settings-panel: var(--radius-lg);
 	--radius-settings-row: 16px;
 	--size-settings-row: 52px;
 	--size-settings-section-gap: 40px;
@@ -476,10 +481,10 @@
 	--size-settings-dialog-wide: 920px;
 	--size-settings-dialog-height: 680px;
 	--size-settings-dialog-max-h: 680px;
-	--color-border-settings-dialog: oklch(1 0 0 / 3%);
-	--color-border-settings-dialog-header: oklch(1 0 0 / 3%);
+	--color-border-settings-dialog: var(--color-border-overlay);
+	--color-border-settings-dialog-header: var(--border);
 	--color-bg-settings-input: var(--input);
-	--color-border-settings-input: var(--color-border-settings-dialog);
+	--color-border-settings-input: oklch(1 0 0 / 3%);
 	--color-text-settings-input: var(--foreground);
 	--color-text-settings-placeholder: var(--muted-foreground);
 	--color-text-import-sep: var(--color-text-import-muted);
@@ -514,7 +519,7 @@
 	--size-composer-toolbar-height: var(--size-control-form);
 	--radius-settings-action: 16px;
 	--radius-settings-dialog-lg: 24px;
-	--shadow-settings-dialog: var(--elevation-xl);
+	--shadow-settings-dialog: var(--shadow-popover);
 	--shadow-settings-qr: var(--elevation-md);
 
 	--size-empty-offset-y: 5vh; /* board empty-state vertical nudge */
@@ -768,13 +773,14 @@
 
 	/* Command palette */
 	--color-bg-command-palette: var(--popover);
-	--color-border-command-palette: var(--border);
+	--color-border-command-palette: var(--color-border-overlay);
 	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);
-	--shadow-command-palette: var(--elevation-xl);
-	--shadow-popover: var(--elevation-xl);
+	--shadow-command-palette: var(--shadow-popover);
+	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
+	--shadow-popover: 0 4px 12px -4px color-mix(in oklch, var(--foreground) 5%, transparent);
 
 	/* Welcome / import radius alias */
 	--color-border-welcome-panel: var(--border);
@@ -788,7 +794,7 @@
 	--color-bg-import-card-hover: var(--accent);
 	--color-bg-import-illustration: var(--color-bg-import-chip);
 	--color-bg-import-chip: var(--secondary);
-	--shadow-import-modal: 0 0 0 1px var(--border), var(--elevation-md);
+	--shadow-import-modal: var(--shadow-popover);
 
 	/* Project / workspace agents sheet */
 	--color-border-agents-sheet: var(--border);
@@ -804,9 +810,10 @@
 	--color-text-settings-title: var(--foreground);
 	--color-text-settings-muted: var(--muted-foreground);
 	--color-text-settings-row: var(--foreground);
-	--color-border-settings-menu: color-mix(in oklch, var(--border) 70%, var(--foreground) 12%);
-	--color-border-settings-dialog: var(--border);
-	--color-border-settings-dialog-header: color-mix(in oklch, var(--border) 70%, transparent);
+	--color-border-settings-menu: var(--color-border-overlay);
+	--color-border-settings-dialog: var(--color-border-overlay);
+	--color-border-settings-dialog-header: var(--border);
+	--color-border-settings-input: var(--border);
 	--color-bg-settings-input: var(--input);
 	--color-text-settings-input: var(--foreground);
 	--color-text-settings-placeholder: var(--muted-foreground);

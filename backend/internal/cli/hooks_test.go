@@ -1571,7 +1571,11 @@ func TestHooks_GeminiBeforeAgentReturnsStandingInstructions(t *testing.T) {
 	}
 }
 
-func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
+// Command Code's SessionStart hook reports activity and the native session id,
+// but no longer carries AO's standing instructions. Memory is the delivery
+// channel now, so emitting context here would duplicate the role prompt in the
+// Terminal surface while Chat never received it at all.
+func TestHooks_CommandCodeSessionStartReportsActivityWithoutSystemPromptContext(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	promptDir := filepath.Join(cfg.dataDir, "prompts", "ao-7")
@@ -1591,15 +1595,8 @@ func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var got sessionStartHookOutput
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatalf("decode Command Code hook output: %v\n%s", err, out)
-	}
-	if got.HookSpecificOutput.HookEventName != "SessionStart" {
-		t.Fatalf("hookEventName = %q", got.HookSpecificOutput.HookEventName)
-	}
-	if got.HookSpecificOutput.AdditionalContext != "follow AO standing instructions" {
-		t.Fatalf("additionalContext = %q", got.HookSpecificOutput.AdditionalContext)
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("hook output = %q, want no SessionStart context payload", out)
 	}
 	if capture.hits != 1 {
 		t.Fatalf("daemon calls = %d, want 1", capture.hits)
@@ -1608,8 +1605,6 @@ func TestHooks_CommandCodeSessionStartInjectsSystemPromptContext(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
 		t.Fatalf("decode activity request: %v\n%s", err, capture.body)
 	}
-	// Context injection is the reason SessionStart runs at all; the activity
-	// report stays metadata-only for Command Code.
 	want := setActivityAPIRequest{Event: "session-start", AgentSessionID: "command-code-native-1"}
 	assertActivityRequest(t, request, want)
 }

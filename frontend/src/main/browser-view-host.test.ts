@@ -2304,6 +2304,30 @@ describe("browser:act", () => {
 });
 
 describe("ensureNativeActiveTab automation-runtime resync", () => {
+	it("resynchronizes after a failed explicit selection changes the native target", async () => {
+		const { activeTargets, host, invoke, runtime } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await invoke("browser:openTab", { viewId });
+		const runAction = runtime.runAction as unknown as ReturnType<typeof vi.fn>;
+		const originalRunAction = runAction.getMockImplementation()! as (...args: unknown[]) => Promise<unknown>;
+		const pageTargets: string[] = [];
+		runAction.mockImplementation(async (sessionId: string, action: string, args: Record<string, unknown>, provider: unknown) => {
+			if (action === "tab-select" && args.tabId === "t1") {
+				activeTargets.set(sessionId, "t1");
+				throw Object.assign(new Error("Returned target identity did not match"), { code: "AGENT_BROWSER_COMMAND_FAILED" });
+			}
+			if (action === "get") pageTargets.push(activeTargets.get(sessionId) ?? "");
+			return originalRunAction(sessionId, action, args, provider);
+		});
+
+		await expect(host.execute("sess-1", "tab-select", { tabId: "t1" })).rejects.toMatchObject({
+			code: "BROWSER_TARGET_MISMATCH",
+		});
+		expect(activeTargets.get("sess-1")).toBe("t1");
+		await host.execute("sess-1", "get", { property: "url" });
+		expect(pageTargets).toEqual(["t2"]);
+	});
+
 	// Regression, reported against the reopen-closed-tabs PR with a real repro
 	// log: the runtime's own tab registry drifted from session.tabs, and
 	// ensureNativeActiveTab's convergence loop just retried the identical
@@ -3874,6 +3898,137 @@ describe("agent browser runtime", () => {
 		await host.execute("sess-1", "tab-close", { tabId: "t2" });
 		const replacement = (await host.execute("sess-1", "tab-new")) as { id: string };
 		expect(replacement.id).toBe("t3");
+	});
+
+	it("updates the AO active tab when native selection only brings the page to front", async () => {
+		const { activeTargets, host, runtime } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select") {
+				// Native agent-browser uses Page.bringToFront, not Target.activateTarget.
+				activeTargets.set(sessionId, String(args.tabId));
+				return {};
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		for (const [tabId, url] of [["t1", "https://first.example.test/"], ["t2", "https://second.example.test/"]]) {
+			await host.execute("sess-1", "tab-select", { tabId });
+			expect(await host.execute("sess-1", "tabs")).toMatchObject({
+				activeTabId: tabId,
+				tabs: [
+					{ id: "t1", active: tabId === "t1" },
+					{ id: "t2", active: tabId === "t2" },
+				],
+			});
+			expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+				value: url,
+				target: { tabId },
+			});
+		}
+	});
+
+	it.each([
+		{ name: "a different tab", selections: ["t3"], expectedTabId: "t3", expectedURL: "https://third.example.test/" },
+		{ name: "away and back", selections: ["t3", "t2"], expectedTabId: "t2", expectedURL: "https://second.example.test/" },
+	])("preserves independent activation $name during a native tab selection", async ({ selections, expectedTabId, expectedURL }) => {
+		const { activeTargets, host, runtime } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://third.example.test/" });
+		await host.execute("sess-1", "tab-select", { tabId: "t2" });
+		let notifyStarted: (provider: import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider) => void = () => undefined;
+		const started = new Promise<import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider>((resolve) => { notifyStarted = resolve; });
+		let releaseSelect: () => void = () => undefined;
+		const pendingSelect = new Promise<void>((resolve) => { releaseSelect = resolve; });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		let blockNextSelect = true;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select") {
+				if (blockNextSelect) {
+					blockNextSelect = false;
+					notifyStarted(provider);
+					await pendingSelect;
+				}
+				activeTargets.set(sessionId, String(args.tabId));
+				return {};
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		const selection = host.execute("sess-1", "tab-select", { tabId: "t1" });
+		try {
+			const provider = await started;
+			for (const tabId of selections) await provider.activateTarget(tabId);
+		} finally {
+			releaseSelect();
+		}
+		await selection;
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: expectedTabId });
+		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+			value: expectedURL,
+			target: { tabId: expectedTabId },
+		});
+	});
+
+	it("keeps a newer independent activation while background popup synchronization completes", async () => {
+		const { activeTargets, host, runtime, views } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		let notifyStarted: (provider: import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider) => void = () => undefined;
+		const started = new Promise<import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider>((resolve) => { notifyStarted = resolve; });
+		let releaseSelect: () => void = () => undefined;
+		const pendingSelect = new Promise<void>((resolve) => { releaseSelect = resolve; });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select") {
+				if (args.tabId === "t2") {
+					notifyStarted(provider);
+					await pendingSelect;
+				}
+				activeTargets.set(sessionId, String(args.tabId));
+				return {};
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		views[0].webContents.openWindow("https://popup.example.test/");
+		try {
+			const provider = await started;
+			await provider.activateTarget("t1");
+		} finally {
+			releaseSelect();
+		}
+		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+			value: "https://first.example.test/",
+			target: { tabId: "t1" },
+		});
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t1" });
+	});
+
+	it("keeps the current AO tab after an explicit native selection fails", async () => {
+		const { host, runtime } = setupTabHost();
+		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const originalRunAction = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "tab-select" && args.tabId === "t1") {
+				throw Object.assign(new Error("Tab t1 not found"), { code: "AGENT_BROWSER_COMMAND_FAILED" });
+			}
+			return originalRunAction(sessionId, action, args, provider, signal);
+		});
+
+		await expect(host.execute("sess-1", "tab-select", { tabId: "t1" })).rejects.toMatchObject({ code: "BROWSER_TARGET_MISMATCH" });
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t2" });
+		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+			value: "https://second.example.test/",
+			target: { tabId: "t2" },
+		});
 	});
 
 	it("keeps popup reads and mutations on the reported tab and returns their AO target identity", async () => {

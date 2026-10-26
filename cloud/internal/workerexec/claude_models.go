@@ -63,6 +63,7 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 		if loadErr == nil {
 			models, model, effort := claudeModelsFromOptions(loaded.ConfigOptions)
 			if len(models) > 0 {
+				probeClaudeApprovalModes(ctx, conn, acp.SessionId(nativeConversationID), models, model, loaded.ConfigOptions, loaded.Modes)
 				return claudeModelCatalog(models, model, effort, provider, loaded.ConfigOptions, loaded.Modes), nil
 			}
 		}
@@ -77,7 +78,78 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 	if len(models) == 0 {
 		return worker.ChatModelsResponse{}, errors.New("Claude ACP did not advertise model choices")
 	}
+	probeClaudeApprovalModes(ctx, conn, session.SessionId, models, model, session.ConfigOptions, session.Modes)
 	return claudeModelCatalog(models, model, effort, provider, session.ConfigOptions, session.Modes), nil
+}
+
+// probeClaudeApprovalModes fills in each model's approval modes on the
+// discovery session (claudeApprovalModesByModel) by switching the session to
+// the model and reading the options Claude ACP then advertises. The probes
+// share one short budget so a slow adapter cannot hold up the catalog, and the
+// session is put back on its own model afterwards. No turn runs on this
+// session: it belongs to the discovery process, which ends with the request.
+func probeClaudeApprovalModes(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, models []worker.ChatModel, current string, options []acp.SessionConfigOption, modes *acp.SessionModeState) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	setModel := func(model string) ([]acp.SessionConfigOption, error) {
+		response, err := conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{ValueId: &acp.SetSessionConfigOptionValueId{
+			SessionId: sessionID, ConfigId: "model", Value: acp.SessionConfigValueId(model),
+		}})
+		if err != nil {
+			return nil, err
+		}
+		return response.ConfigOptions, nil
+	}
+	switched := false
+	claudeApprovalModesByModel(models, current, options, modes, func(model string) ([]acp.SessionConfigOption, error) {
+		switched = true
+		return setModel(model)
+	})
+	if switched && current != "" {
+		_, _ = setModel(current)
+	}
+}
+
+// claudeApprovalModesByModel sets each model's ApprovalModes to the approval
+// modes Claude ACP offers for it. The session's own options and modes describe
+// its current model; any other model is probed, since the adapter recomputes
+// its modes on a model change (auto only for a model that supports it).
+// Without a mode option a switch reports no modes, so other models are left
+// unknown rather than probed. A model whose probe fails keeps no modes, which
+// a client reads as unknown.
+func claudeApprovalModesByModel(models []worker.ChatModel, current string, options []acp.SessionConfigOption, modes *acp.SessionModeState, probe func(model string) ([]acp.SessionConfigOption, error)) {
+	modeOption := false
+	for _, option := range options {
+		if option.Select != nil && option.Select.Id == "mode" {
+			modeOption = true
+		}
+	}
+	for index := range models {
+		if models[index].ID == current {
+			models[index].ApprovalModes = claudeApprovalModesFromOptions(options, modes)
+			continue
+		}
+		if !modeOption {
+			continue
+		}
+		probed, err := probe(models[index].ID)
+		if err != nil {
+			continue
+		}
+		models[index].ApprovalModes = claudeApprovalModesFromOptions(probed, nil)
+	}
+}
+
+// claudeApprovalModesFromOptions lists AO's approval modes the session offers,
+// in the Chat menu's order.
+func claudeApprovalModesFromOptions(options []acp.SessionConfigOption, modes *acp.SessionModeState) []string {
+	var result []string
+	for _, mode := range []string{"default", "acceptEdits", "auto", "bypassPermissions"} {
+		if acpModeOffered(options, modes, mode) {
+			result = append(result, claudeACPModeApproval(mode))
+		}
+	}
+	return result
 }
 
 func claudeModelsFromOptions(options []acp.SessionConfigOption) ([]worker.ChatModel, string, string) {

@@ -65,7 +65,6 @@ export async function spawnOrchestrator(
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
 	hostId?: string,
 ): Promise<string> {
-	void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", { project_id: projectId, source });
 	try {
 		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
 			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },

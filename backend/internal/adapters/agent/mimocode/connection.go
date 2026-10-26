@@ -157,6 +157,7 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 	}
 	identity.Provider = provider
 	ports.RecordAuthEvidence(ctx, identity)
-	status, step := verifyConnection(ctx, authprobe.Connection{Provider: provider, BaseURL: baseURL, Model: modelID, APIKey: key}, nil)
+	var status ports.AgentAuthStatus
+	status, step = verifyConnection(ctx, authprobe.Connection{Provider: provider, BaseURL: baseURL, Model: modelID, APIKey: key}, nil)
 	return status
 }

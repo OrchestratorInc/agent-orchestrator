@@ -71,9 +71,13 @@ func TestAuthStatusVerifiesSelectedMiMoConnection(t *testing.T) {
 				}
 				return tc.result, domain.NewAgentAuthDiagnostic("provider_validation", "provider_accepted")
 			}
-			status, err := (&Plugin{resolvedBinary: "mimo"}).AuthStatus(t.Context())
+			ctx, evidence := ports.WithAuthEvidence(t.Context())
+			status, err := (&Plugin{resolvedBinary: "mimo"}).AuthStatus(ctx)
 			if err != nil || status != tc.result || calls != 1 {
 				t.Fatalf("status=%s err=%v calls=%d", status, err, calls)
+			}
+			if steps := evidence.Diagnostics(); len(steps) != 1 || steps[0].Code != "provider_accepted" {
+				t.Fatalf("diagnostics=%+v, want provider_accepted", steps)
 			}
 		})
 	}

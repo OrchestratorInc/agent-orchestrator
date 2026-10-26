@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
@@ -93,6 +94,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
 		HistoryNotice:         claudeTranscriptNotice,
+		// claude-agent-acp keeps one TaskCreate/TaskUpdate list for the session
+		// and re-sends it at the start of every prompt while a task is unfinished.
+		PlansSpanTurns: true,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming:    true,
 			ports.ChatCapabilityTools:        true,
@@ -130,16 +134,23 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 			if err := validateClaudeACPExecutable(claudeBinary, runtime.GOOS); err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
+			authStarted := time.Now()
 			if err := validateClaudeLaunchAuth(ctx, plugin, cfg.WorkspacePath, cfg.Env, log); err != nil {
 				return acpdriver.Launch{}, err
 			}
+			authDuration := time.Since(authStarted)
 			var models []ports.AgentModelInfo
+			modelsStarted := time.Now()
 			if _, preserve := claudeACPModelConfig(cfg.Env); !preserve {
 				var modelErr error
 				models, modelErr = claudecode.ProviderModels(ctx, claudeBinary, cfg.WorkspacePath, cfg.Env)
 				if modelErr != nil && log != nil {
 					log.Debug("Claude provider model discovery unavailable; using ACP defaults", "error", modelErr)
 				}
+			}
+			if log != nil {
+				log.Debug("Claude launch prepared", "sessionID", cfg.SessionID,
+					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
 			return acpdriver.Launch{
@@ -366,7 +377,7 @@ func validateClaudeACPExecutable(binary, goos string) error {
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	meta := map[string]any{}
 	standing := strings.TrimSpace(cfg.SystemPrompt)
-	if claudeTodoToolsEnabled(cfg.Env) {
+	if !cfg.DisableTools && claudeTodoToolsEnabled(cfg.Env) {
 		if standing != "" {
 			standing += "\n\n"
 		}
@@ -380,8 +391,17 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 		}
 	}
 	// Also per session, so a choice made after the adapter started still applies.
+	options := map[string]any{}
 	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
-		meta["claudeCode"] = map[string]any{"options": map[string]any{"env": map[string]string{claudeAutoCompactWindowEnv: window}}}
+		options["env"] = map[string]string{claudeAutoCompactWindowEnv: window}
+	}
+	if cfg.DisableTools {
+		options["tools"] = []string{}
+		options["strictMcpConfig"] = true
+		options["disallowedTools"] = []string{"mcp__*"}
+	}
+	if len(options) > 0 {
+		meta["claudeCode"] = map[string]any{"options": options}
 	}
 	if len(meta) == 0 {
 		return nil
@@ -509,7 +529,15 @@ func requireFile(path, label string) error {
 	return nil
 }
 
+// nodeVersionsChecked remembers which Node executables already passed the
+// version check. The packaged runtime does not change while the daemon runs,
+// and running `node --version` for every chat start cost a process spawn each.
+var nodeVersionsChecked sync.Map
+
 func requireNodeVersion(ctx context.Context, node string) error {
+	if _, ok := nodeVersionsChecked.Load(node); ok {
+		return nil
+	}
 	// node is the explicit AO override or the validated executable inside AO's
 	// packaged resources, never prompt/provider input.
 	out, err := aoprocess.CommandContext(ctx, node, "--version").Output() //nolint:gosec // Resolved local executable, not provider input.
@@ -522,5 +550,6 @@ func requireNodeVersion(ctx context.Context, node string) error {
 	if err != nil || major < minimumNodeMajor {
 		return fmt.Errorf("claude-agent-acp requires Node %d+; found %q", minimumNodeMajor, strings.TrimSpace(string(out)))
 	}
+	nodeVersionsChecked.Store(node, struct{}{})
 	return nil
 }

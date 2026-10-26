@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,14 @@ type ListFilter struct {
 	Active           *bool
 	OrchestratorOnly bool
 	Fresh            bool
+	// Kind keeps one kind of session. KindWorker matches every session that is
+	// not an orchestrator, so rows written before kinds existed still list.
+	Kind domain.SessionKind
+	// Limit pages the list: at most Limit sessions, pinned first and then most
+	// recently updated, resuming after Cursor. Zero lists every match in store
+	// order, as before paging.
+	Limit  int
+	Cursor string
 }
 
 // commander is the command-side surface Service delegates to: the
@@ -399,8 +408,11 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	rec, promptBytes, systemPromptBytes, err := s.spawnWithTelemetry(ctx, cfg, project)
 	if err != nil {
 		s.invalidateAgentReadinessAfterLaunchFailure(cfg.Harness, err)
-		return domain.Session{}, 0, 0, toSpawnAPIError(err)
+		apiErr := toSpawnAPIError(err)
+		s.recordSpawnOutcome(ctx, cfg, domain.SessionRecord{}, actionStatusForError(err), apiErr)
+		return domain.Session{}, 0, 0, apiErr
 	}
+	s.recordSpawnOutcome(ctx, cfg, rec, domain.ActivityStatusCompleted, nil)
 	sess, err := s.toSession(ctx, rec)
 	if err != nil {
 		return domain.Session{}, 0, 0, err
@@ -688,19 +700,40 @@ func (s *Service) sendRetireNotice(ctx context.Context, id domain.SessionID) err
 
 func (s *Service) verifyOrchestratorReplacement(project domain.ProjectRecord, sess domain.Session) error {
 	if sess.IsTerminated {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s is terminated", sess.ID)
+		return orchestratorReplacementUnverified("new session %s is terminated", sess.ID)
 	}
 	if sess.Kind != domain.KindOrchestrator {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s has kind %q", sess.ID, sess.Kind)
+		return orchestratorReplacementUnverified("new session %s has kind %q", sess.ID, sess.Kind)
 	}
 	if expected := project.Config.Orchestrator.Harness; expected != "" && sess.Harness != expected {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
+		return orchestratorReplacementUnverified("new session %s uses harness %q, want %q", sess.ID, sess.Harness, expected)
 	}
 	expectedBranch := sessionmanager.DefaultOrchestratorBranch(serviceSessionPrefix(project), s.dataDir)
-	if sess.Metadata.Branch != "" && sess.Metadata.Branch != expectedBranch {
-		return fmt.Errorf("orchestrator replacement verification failed: new session %s uses branch %q, want %q", sess.ID, sess.Metadata.Branch, expectedBranch)
+	if branch := sess.Metadata.Branch; branch != "" && !isOrchestratorBranch(branch, expectedBranch) {
+		return orchestratorReplacementUnverified("new session %s uses branch %q, want %q", sess.ID, branch, expectedBranch)
 	}
 	return nil
+}
+
+// orchestratorReplacementUnverified carries a code so a failed check is not
+// reported as a bare INTERNAL_ERROR, which telemetry cannot tell apart.
+func orchestratorReplacementUnverified(format string, args ...any) error {
+	return apierr.Internal("ORCHESTRATOR_REPLACEMENT_UNVERIFIED",
+		"orchestrator replacement verification failed: "+fmt.Sprintf(format, args...))
+}
+
+// isOrchestratorBranch accepts the canonical branch and the <branch>-N branch
+// the spawn moves to when another worktree has the canonical one checked out.
+func isOrchestratorBranch(branch, expected string) bool {
+	if branch == expected {
+		return true
+	}
+	n, ok := strings.CutPrefix(branch, expected+"-")
+	if !ok || n == "" {
+		return false
+	}
+	_, err := strconv.Atoi(n)
+	return err == nil
 }
 
 func serviceSessionPrefix(project domain.ProjectRecord) string {
@@ -754,12 +787,15 @@ func (s *Service) lockOrchestratorProject(projectID domain.ProjectID) func() {
 func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutcome, error) {
 	res, err := s.manager.RestoreWithMode(ctx, id)
 	if err != nil {
-		return RestoreOutcome{}, toAPIError(err)
+		apiErr := toAPIError(err)
+		s.recordRestored(ctx, id, domain.SessionRecord{}, actionStatusForError(err), apiErr)
+		return RestoreOutcome{}, apiErr
 	}
 	session, err := s.toSession(ctx, res.Session)
 	if err != nil {
 		return RestoreOutcome{}, err
 	}
+	s.recordRestored(ctx, id, res.Session, domain.ActivityStatusCompleted, nil)
 	return RestoreOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
 }
 
@@ -905,14 +941,30 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
 	freed, err := s.manager.Kill(ctx, id)
-	return freed, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
+		return freed, apiErr
+	}
+	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	return freed, nil
 }
 
 // RequestKill acknowledges terminal intent without waiting for cleanup scripts.
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
 	result, err := s.manager.RequestKill(ctx, id)
-	return result, toAPIError(err)
+	if err != nil {
+		apiErr := toAPIError(err)
+		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
+		return result, apiErr
+	}
+	// RequestKill can acknowledge terminal intent while cleanup still runs.
+	// A later cleanup failure must not leave a completed action in chat.
+	if !result.CleanupPending {
+		s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	}
+	return result, nil
 }
 
 // artifactDeleter deletes a session's artifact files and version rows. The
@@ -1008,11 +1060,16 @@ func (s *Service) Rename(ctx context.Context, id domain.SessionID, displayName s
 	}
 	renamed, err := s.store.RenameSession(ctx, id, displayName, time.Now().UTC())
 	if err != nil {
-		return fmt.Errorf("rename %s: %w", id, err)
+		wrapped := fmt.Errorf("rename %s: %w", id, err)
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, wrapped)
+		return wrapped
 	}
 	if !renamed {
-		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		missing := apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusFailed, missing)
+		return missing
 	}
+	s.recordRenamed(ctx, id, rec.DisplayName, displayName, domain.ActivityStatusCompleted, nil)
 	return nil
 }
 
@@ -1190,21 +1247,58 @@ func (s *Service) TeardownProject(ctx context.Context, project domain.ProjectID)
 
 // List returns sessions as enriched display models after applying API filters.
 func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session, error) {
-	recoveryRevision := s.statusRecoveryRevision()
-	recs, err := s.listRecords(ctx, filter.ProjectID)
+	page, err := s.ListPage(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]domain.SessionRecord, 0, len(recs))
-	ids := make([]domain.SessionID, 0, len(recs))
+	return page.Sessions, nil
+}
+
+// ListPage lists the sessions matching filter, one page at a time when
+// filter.Limit is set, and reports the archive an active-only list left out.
+// The page is chosen from the stored rows before any read-model facts are
+// loaded, so a page of an archive of thousands costs a page's worth of reads.
+func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, error) {
+	recoveryRevision := s.statusRecoveryRevision()
+	if filter.Limit < 0 || filter.Limit > MaxListLimit {
+		return ListPage{}, apierr.Invalid("INVALID_SESSION_LIMIT", fmt.Sprintf("Session list limit must be between 1 and %d", MaxListLimit), nil)
+	}
+	var after *listPageKey
+	if filter.Cursor != "" {
+		if filter.Limit == 0 {
+			return ListPage{}, invalidSessionCursor()
+		}
+		key, err := decodeSessionCursor(filter.Cursor)
+		if err != nil {
+			return ListPage{}, err
+		}
+		after = &key
+	}
+	recs, err := s.listRecords(ctx, filter.ProjectID)
+	if err != nil {
+		return ListPage{}, err
+	}
+	matched, archive := selectSessionRecords(recs, filter)
+	page := ListPage{Archived: archive}
+	if filter.Limit > 0 {
+		matched, page.NextCursor = pageSessionRecords(matched, after, filter.Limit)
+	}
+	page.Sessions, err = s.sessionsFromRecords(ctx, matched, recoveryRevision)
+	if err != nil {
+		return ListPage{}, err
+	}
+	return page, nil
+}
+
+// sessionsFromRecords builds the read model for already-selected rows, batching
+// every per-session fact read so the cost does not grow with the row count.
+func (s *Service) sessionsFromRecords(ctx context.Context, filtered []domain.SessionRecord, recoveryRevision uint64) ([]domain.Session, error) {
+	ids := make([]domain.SessionID, 0, len(filtered))
 	var archived []domain.SessionID
-	for _, rec := range recs {
-		if matchesSessionFilter(rec, filter) {
-			filtered = append(filtered, rec)
-			ids = append(ids, rec.ID)
-			if rec.IsTerminated {
-				archived = append(archived, rec.ID)
-			}
+	for _, rec := range filtered {
+		ids = append(ids, rec.ID)
+		if rec.IsTerminated {
+			archived = append(archived, rec.ID)
 		}
 	}
 	prsBySession, err := s.store.ListPRFactsForSessions(ctx, ids)
@@ -1270,6 +1364,16 @@ func matchesSessionFilter(rec domain.SessionRecord, filter ListFilter) bool {
 	}
 	if filter.Active != nil && rec.IsTerminated == *filter.Active {
 		return false
+	}
+	switch filter.Kind {
+	case domain.KindOrchestrator:
+		if rec.Kind != domain.KindOrchestrator {
+			return false
+		}
+	case domain.KindWorker:
+		if rec.Kind == domain.KindOrchestrator {
+			return false
+		}
 	}
 	if filter.OrchestratorOnly && rec.Kind != domain.KindOrchestrator {
 		return false
@@ -1344,7 +1448,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 			backfilledArtifactDir = true
 		}
 	}
-	artifactFiles, err := sessionartifacts.List(rec.Metadata.ArtifactDir)
+	artifactFiles, err := sessionartifacts.List(ctx, rec.Metadata.ArtifactDir)
 	if err != nil {
 		// An unwalkable artifact root must not fail the session read (and with
 		// it the whole board); the artifact list is simply empty for this read.
@@ -1410,6 +1514,8 @@ func mapSessionError(err error) error {
 		return nil
 	case errors.Is(err, sessionmanager.ErrNotFound):
 		return apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+	case errors.Is(err, ErrPRNotOpen):
+		return apierr.Conflict("PR_NOT_OPEN", "PR is not open", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnknown):
 		return apierr.NotFound("AGENT_ACCOUNT_NOT_FOUND", "Unknown agent account")
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
@@ -1472,6 +1578,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAwaitingDecision):
 		return apierr.Conflict("SESSION_AWAITING_DECISION",
 			"Session is paused on a permission decision; answer it in the session terminal first", nil)
+	case errors.Is(err, sessionmanager.ErrComposerBusy):
+		return apierr.Conflict("SESSION_COMPOSER_BUSY",
+			"Session composer has an unsent draft; retry after the draft is submitted or cleared", nil)
 	case errors.Is(err, sessionmanager.ErrStartupPending):
 		return apierr.Conflict("SESSION_STARTUP_PENDING",
 			"Session agent is still starting; retry after the agent prompt is ready", nil)
@@ -1495,6 +1604,9 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrTargetAgentUnauthorized):
 		return apierr.Invalid("TARGET_AGENT_UNAUTHORIZED",
 			"The target agent is not authenticated; authenticate it before switching", nil)
+	case errors.Is(err, sessionmanager.ErrDeliveryUnconfirmed):
+		return apierr.Conflict("SESSION_DELIVERY_UNCONFIRMED",
+			"Message was written to the terminal but the agent did not start a turn; prompt may be unsubmitted", nil)
 	case errors.Is(err, sessionmanager.ErrScratchBranchUnsupported):
 		return apierr.Invalid("SCRATCH_BRANCH_UNSUPPORTED", err.Error(), nil)
 	case errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere):

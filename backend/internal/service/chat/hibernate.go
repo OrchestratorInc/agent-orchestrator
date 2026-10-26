@@ -14,6 +14,12 @@ import (
 const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
+// IdleBeforeHibernate is how long a quiet provider stays parked, prompt
+// cache and all, before idle hibernation may stop it. Most follow-ups arrive
+// within a minute or two; stopping the process after 30 s made each of them
+// pay a full cold start for a few hundred megabytes of memory saved.
+const IdleBeforeHibernate = 90 * time.Second
+
 type wakeRun struct {
 	done chan struct{}
 	err  error
@@ -175,9 +181,10 @@ func (o hibernateOptions) enabled(s *Service) bool {
 // provider confirms it has no background work.
 func (o hibernateOptions) eligible(s *Service, rec domain.SessionRecord) bool {
 	candidate := rec
-	if o.forUpdate && candidate.Kind == domain.KindOrchestrator {
-		// Idle hibernation keeps orchestrators running. An update must stop
-		// them too, under the same turn, queue and approval checks.
+	if (o.forUpdate || o.versionRefresh) && candidate.Kind == domain.KindOrchestrator {
+		// Idle hibernation keeps orchestrators running. An update or a move to
+		// a new release stops them only to start them again, so they go too,
+		// under the same turn, queue and approval checks.
 		candidate.Kind = ""
 	}
 	if !candidate.EligibleForChatHibernation() || rec.Activity.LastActivityAt.Add(o.minIdle).After(s.now()) {
@@ -193,7 +200,7 @@ func (o hibernateOptions) viewed(s *Service, id domain.SessionID) bool {
 // HibernateChat stops a quiescent provider without ending its AO session. A
 // false result means the final locked eligibility check found useful work.
 func (s *Service) HibernateChat(ctx context.Context, id domain.SessionID) (bool, error) {
-	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: chatHibernateGrace})
+	return s.hibernateChat(ctx, id, hibernateOptions{minIdle: IdleBeforeHibernate})
 }
 
 // HibernateChatForVersionRefresh stops an idle provider that still runs a

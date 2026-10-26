@@ -8,7 +8,9 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
-const { postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+const { getMock, putMock, postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
+	getMock: vi.fn(),
+	putMock: vi.fn(),
 	postMock: vi.fn(),
 	cloudProjectsState: {
 		data: [] as Array<{ id: string; orgId?: string; displayName: string }> | undefined,
@@ -28,7 +30,7 @@ const accountsResponse = {
 };
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: postMock },
+	apiClient: { GET: getMock, PUT: putMock, POST: postMock },
 	apiErrorCode: (error: { code?: string }) => error?.code,
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
@@ -68,13 +70,22 @@ vi.mock("./ProjectSettingsForm", () => ({
 			<button type="button" onClick={() => onSaveState?.({ phase: "saved" })}>
 				Complete save
 			</button>
+			<button type="button" onClick={() => onSaveState?.({ phase: "pending", dirty: true, unsaveable: true, requestPending: true })}>
+				Start request with invalid draft
+			</button>
+			<button type="button" onClick={() => onSaveState?.({ phase: "saving", dirty: true, unsaveable: true })}>
+				Start saving invalid draft
+			</button>
 		</>
 	),
 }));
 
 vi.mock("./GlobalSettingsForm", () => ({
 	GlobalSettingsForm: ({ focusAgentId, hostId, section }: { focusAgentId?: string; hostId?: string; section: string }) => (
-		<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
+		<>
+			<div data-focus-agent={focusAgentId} data-host={hostId} data-testid="global-settings-section">{section}</div>
+			{section === "general" ? <div className="settings-row-bar" data-testid="copy-on-select-row"><span>Copy on select</span></div> : null}
+		</>
 	),
 }));
 
@@ -116,10 +127,12 @@ vi.mock("../lib/cloud-session", () => ({
 
 describe("SettingsDialog", () => {
 	beforeEach(() => {
+		getMock.mockReset().mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", name: "Example", config: { env: { EXISTING: "old" } } } } });
+		putMock.mockReset().mockResolvedValue({ data: { status: "ok" } });
 		postMock.mockReset().mockImplementation((path: string) => path === "/api/v1/agents/codex/accounts/ensure"
 			? Promise.resolve({ data: accountsResponse })
 			: Promise.resolve({ data: { operationId: "login-1", status: "cancelled" } }));
-		useUiStore.setState({ developerMode: false, settingsModal: null });
+		useUiStore.setState({ developerMode: false, settingsModal: null, navigationGestures: true });
 		cloudProjectsState.data = [];
 		cloudProjectsState.isLoading = false;
 		cloudProjectsState.isError = false;
@@ -132,6 +145,109 @@ describe("SettingsDialog", () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		return render(<QueryClientProvider client={queryClient}><SettingsDialog /></QueryClientProvider>);
 	}
+
+	async function swipeSettings(direction: "back" | "forward", target = screen.getByTestId("settings-page")) {
+		fireEvent.wheel(target, { deltaX: direction === "back" ? -150 : 150, deltaMode: 0 });
+		await act(() => new Promise((resolve) => setTimeout(resolve, 160)));
+	}
+
+	it("swipes through visited global sections, then returns to the app", async () => {
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		await screen.findByTestId("settings-page");
+		const sections = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		await userEvent.click(sections[1]);
+		await userEvent.click(sections[2]);
+		await swipeSettings("back");
+		expect(sections[1]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("forward");
+		expect(sections[2]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back");
+		await swipeSettings("back");
+		expect(sections[0]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back");
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("discards forward section history after a new selection and resets on reopen", async () => {
+		useUiStore.getState().openGlobalSettings();
+		renderSettingsDialog();
+		await screen.findByTestId("settings-page");
+		const sections = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
+		await userEvent.click(sections[1]);
+		await userEvent.click(sections[2]);
+		await swipeSettings("back");
+		await userEvent.click(sections[3]);
+		await swipeSettings("forward");
+		expect(sections[3]).toHaveAttribute("aria-current", "page");
+		act(() => { useUiStore.getState().closeSettings(); useUiStore.getState().openGlobalSettings(); });
+		await swipeSettings("forward");
+		expect(sections[0]).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back");
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("swipes through project sections and waits for an in-flight save before leaving", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await swipeSettings("back", dialog);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("forward", dialog);
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		await userEvent.click(screen.getByRole("button", { name: "Start pending save" }));
+		await swipeSettings("back", dialog);
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		await userEvent.click(screen.getByRole("button", { name: "Complete save" }));
+		await swipeSettings("back", dialog);
+		await swipeSettings("back", dialog);
+		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("discards invalid environment drafts when swiping back or forward between sections", async () => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		await userEvent.click(screen.getByRole("button", { name: "Environment" }));
+		fireEvent.change(await screen.findByLabelText("Name 1"), { target: { value: "BAD-NAME" } });
+		await swipeSettings("back", dialog);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("forward", dialog);
+		expect(await screen.findByLabelText("Name 1")).toHaveValue("EXISTING");
+
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await swipeSettings("back", dialog);
+		fireEvent.change(await screen.findByLabelText("Name 1"), { target: { value: "BAD-NAME" } });
+		await swipeSettings("forward", dialog);
+		expect(screen.getByRole("button", { name: "Agents" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back", dialog);
+		expect(await screen.findByLabelText("Name 1")).toHaveValue("EXISTING");
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("closes on a back swipe from the initial section with an invalid environment draft", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", { section: "environment" });
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		fireEvent.change(await screen.findByLabelText("Name 1"), { target: { value: "BAD-NAME" } });
+		await swipeSettings("back", dialog);
+		expect(useUiStore.getState().settingsModal).toBeNull();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["Start request with invalid draft", "Start saving invalid draft"])("blocks swipes for %s", async (saveAction) => {
+		useUiStore.getState().openProjectSettings("proj-1");
+		renderSettingsDialog();
+		const dialog = await screen.findByRole("dialog");
+		await userEvent.click(screen.getByRole("button", { name: "Agents" }));
+		await swipeSettings("back", dialog);
+		await userEvent.click(screen.getByRole("button", { name: saveAction }));
+		await swipeSettings("forward", dialog);
+		expect(screen.getByRole("button", { name: "General" })).toHaveAttribute("aria-current", "page");
+		await swipeSettings("back", dialog);
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+	});
 
 	it("offers setup and cleanup through one local Scripts page", async () => {
 		useUiStore.getState().openProjectSettings("proj-1");
@@ -266,22 +382,30 @@ describe("SettingsDialog", () => {
 		));
 	});
 
-	it("shows Remote hosts with Developer mode on even while the connection switch is off", async () => {
-		useUiStore.setState({ developerMode: true, remoteHosts: false });
+	it("scrolls to and briefly highlights the setting a deep link names", async () => {
+		const original = Element.prototype.scrollIntoView;
+		const scrollIntoView = vi.fn();
+		Element.prototype.scrollIntoView = scrollIntoView;
+		try {
+			useUiStore.getState().openGlobalSettings("general", { focusSetting: "Copy on select" });
+			renderSettingsDialog();
+
+			const row = await screen.findByTestId("copy-on-select-row");
+			await vi.waitFor(() => expect(row).toHaveClass("settings-focus-target"));
+			expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+			await vi.waitFor(() => expect(row).not.toHaveClass("settings-focus-target"), { timeout: 3_000 });
+		} finally {
+			Element.prototype.scrollIntoView = original;
+		}
+	});
+
+	it("shows Remote hosts without Developer mode even while the connection switch is off", async () => {
+		useUiStore.setState({ developerMode: false, remoteHosts: false });
 		useUiStore.getState().openGlobalSettings("remoteHosts");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("remoteHosts");
 		expect(screen.getByRole("button", { name: "Remote hosts" })).toHaveAttribute("data-active", "true");
-	});
-
-	it("hides Remote hosts and redirects its settings page when Developer mode is off", async () => {
-		useUiStore.setState({ developerMode: false, remoteHosts: true });
-		useUiStore.getState().openGlobalSettings("remoteHosts");
-		renderSettingsDialog();
-
-		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
-		expect(screen.queryByRole("button", { name: "Remote hosts" })).not.toBeInTheDocument();
 	});
 
 	it("opens Harness and forwards its agent focus target without redirecting to Codex Accounts", async () => {
