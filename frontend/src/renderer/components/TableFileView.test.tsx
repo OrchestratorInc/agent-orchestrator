@@ -21,4 +21,13 @@ describe("TableFileView", () => {
 		await userEvent.click(screen.getByRole("button", { name: "file" }));
 		expect(column(0)).toEqual(["item1", "Item2", "item10"]);
 	});
+
+	it("keeps empty cells last in a text column in both directions", async () => {
+		render(<TableFileView content={"owner,id\nbeta,1\n,2\nalpha,3\n"} path="owners.csv" />);
+		const sortButton = screen.getByRole("button", { name: "owner" });
+		await userEvent.click(sortButton);
+		expect(column(0)).toEqual(["alpha", "beta", ""]);
+		await userEvent.click(sortButton);
+		expect(column(0)).toEqual(["beta", "alpha", ""]);
+	});
 });

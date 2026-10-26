@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileMediaPreview } from "./FileMediaPreview";
 
 vi.mock("../lib/api-client", () => ({ getApiBaseUrl: () => "http://127.0.0.1:3001" }));
@@ -11,6 +11,10 @@ vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker
 vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn(), TextLayer: class {} }));
 
 describe("FileMediaPreview", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
 	it.each(["image", "video", "audio"] as const)("uses renderer-origin CORS for protected %s", (kind) => {
 		render(<FileMediaPreview kind={kind} path="media" sessionId="s1" source={{kind: "workspace"}} version={1} />);
 		expect(screen.getByLabelText("media")).toHaveAttribute("crossorigin", "anonymous");
@@ -85,6 +89,14 @@ describe("FileMediaPreview", () => {
 		vi.stubGlobal("fetch", vi.fn(async () => new Response("missing", { status: 404 })));
 		render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={{ kind: "artifact", rawUrl: "http://ao-preview-artifact.abc.localhost/report.pdf?raw=true" }} version={1} />);
 		expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
-		vi.unstubAllGlobals();
+	});
+
+	it("does not read a PDF over the preview size cap", async () => {
+		const cancel = vi.fn();
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream({ cancel }), { headers: { "Content-Length": String(200 * 1024 * 1024) } })));
+		render(<FileMediaPreview kind="pdf" path="huge.pdf" sessionId="session-1" source={{ kind: "artifact", rawUrl: "http://ao-preview-artifact.abc.localhost/huge.pdf?raw=true" }} version={1} />);
+		expect(await screen.findByText("File is too large to preview (200.0 MB).")).toBeInTheDocument();
+		expect(cancel).toHaveBeenCalled();
+		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
 	});
 });

@@ -44,6 +44,7 @@ vi.mock("pdfjs-dist", () => ({
 			getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale }),
 			render: () => ({ promise: Promise.resolve(), cancel: () => {} }),
 			streamTextContent: () => null,
+			cleanup: () => true,
 		};
 		return { promise: Promise.resolve({ numPages: 2, getPage: async () => page }), destroy: async () => {} };
 	},

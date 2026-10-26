@@ -11,10 +11,9 @@ type Sort = { column: number; direction: "ascending" | "descending" };
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const NUMBER = /^-?[\d,]*\.?\d+(?:e[+-]?\d+)?%?$/i;
 
-/** A numeric cell's value without thousands separators or a percent sign; null when empty. */
-function cellNumber(cell: string): number | null {
-	const trimmed = cell.trim();
-	return trimmed ? Number(trimmed.replace(/[,%]/g, "")) : null;
+/** A numeric cell's value without thousands separators or a percent sign. */
+function cellNumber(cell: string): number {
+	return Number(cell.trim().replace(/[,%]/g, ""));
 }
 
 /**
@@ -26,7 +25,7 @@ export function TableFileView({ content, path }: { content: string; path: string
 	const [sort, setSort] = useState<Sort | null>(null);
 	const { header, rows, numeric } = useMemo(() => {
 		const [first = [], ...rest] = parseDelimitedText(content, path);
-		const width = Math.max(first.length, ...rest.map((row) => row.length));
+		const width = rest.reduce((max, row) => Math.max(max, row.length), first.length);
 		const pad = (row: string[]) => Array.from({ length: width }, (_, index) => row[index] ?? "");
 		const body = rest.map(pad);
 		// Numeric columns right-align so their digits line up.
@@ -39,10 +38,12 @@ export function TableFileView({ content, path }: { content: string; path: string
 	const sortedRows = useMemo(() => {
 		if (!sort) return rows;
 		const order = sort.direction === "ascending" ? 1 : -1;
-		if (!numeric[sort.column]) return [...rows].sort((a, b) => order * collator.compare(a[sort.column], b[sort.column]));
-		// Numeric columns sort by value; empty cells stay last either way.
-		const keyed = rows.map((row) => ({ row, value: cellNumber(row[sort.column]) }));
-		keyed.sort((a, b) => a.value === null ? (b.value === null ? 0 : 1) : b.value === null ? -1 : order * (a.value - b.value));
+		// Numeric columns sort by value, text columns by the collator; empty cells stay last either way.
+		const compare = numeric[sort.column]
+			? (a: string, b: string) => cellNumber(a) - cellNumber(b)
+			: (a: string, b: string) => collator.compare(a, b);
+		const keyed = rows.map((row) => ({ row, cell: row[sort.column], empty: !row[sort.column].trim() }));
+		keyed.sort((a, b) => a.empty ? (b.empty ? 0 : 1) : b.empty ? -1 : order * compare(a.cell, b.cell));
 		return keyed.map(({ row }) => row);
 	}, [numeric, rows, sort]);
 

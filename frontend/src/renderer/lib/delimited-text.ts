@@ -5,12 +5,12 @@ export function isDelimitedTextPath(path: string): boolean {
 
 /**
  * Parses CSV (or TSV for a `.tsv` path) into rows of cells. Quoted fields may
- * hold the delimiter, newlines, and `""` for a literal quote. A trailing
- * newline does not add an empty row.
+ * hold the delimiter, newlines, and `""` for a literal quote, and may follow
+ * leading whitespace. A trailing newline does not add an empty row.
  */
 export function parseDelimitedText(content: string, path: string): string[][] {
 	const delimiter = /\.tsv$/i.test(path) ? "\t" : ",";
-	const text = content.startsWith("﻿") ? content.slice(1) : content;
+	const text = content.startsWith("\uFEFF") ? content.slice(1) : content;
 	const rows: string[][] = [];
 	let row: string[] = [];
 	let cell = "";
@@ -23,8 +23,10 @@ export function parseDelimitedText(content: string, path: string): string[][] {
 				cell += "\"";
 				index += 1;
 			} else quoted = false;
-		} else if (char === "\"" && cell === "") {
+		} else if (char === "\"" && cell.trim() === "") {
+			// A quote after only whitespace (`a, "b,c"`) still opens a quoted field.
 			quoted = true;
+			cell = "";
 		} else if (char === delimiter) {
 			row.push(cell);
 			cell = "";

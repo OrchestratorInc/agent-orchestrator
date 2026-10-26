@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask, TextLayer } from "pdfjs-dist";
+import { formatBytes } from "./ReadOnlyFileView";
 import { PanelMessage } from "./WorkspaceDiffView";
 
 type Pdfjs = typeof import("pdfjs-dist");
@@ -8,6 +9,14 @@ type PageSize = { width: number; height: number };
 
 const PAGE_GAP = 12;
 const MAX_SCALE = 2;
+/** The largest PDF read into memory for preview. */
+const MAX_PDF_BYTES = 100 * 1024 * 1024;
+
+class PdfTooLargeError extends Error {
+	constructor(readonly size: number) {
+		super("PDF too large to preview");
+	}
+}
 
 let pdfjsModule: Promise<Pdfjs> | null = null;
 
@@ -22,12 +31,14 @@ function loadPdfjs(): Promise<Pdfjs> {
 
 /**
  * A PDF's pages, fit to the pane width, with a text layer over each page so
- * its text can be selected. Pages draw as they near the viewport.
+ * its text can be selected. Pages draw as they near the viewport and release
+ * their drawing once they are far from it. A file over MAX_PDF_BYTES is not read.
  */
 export function PdfPreview({ onError, path, src }: { onError: () => void; path: string; src: string }) {
 	const { t } = useTranslation();
 	const [loaded, setLoaded] = useState<{ pdf: PDFDocumentProxy; pdfjs: Pdfjs; sizes: PageSize[] } | null>(null);
 	const [width, setWidth] = useState(0);
+	const [tooLarge, setTooLarge] = useState<number | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const onErrorRef = useRef(onError);
 	onErrorRef.current = onError;
@@ -36,11 +47,18 @@ export function PdfPreview({ onError, path, src }: { onError: () => void; path: 
 		let cancelled = false;
 		let loadingTask: PDFDocumentLoadingTask | null = null;
 		setLoaded(null);
+		setTooLarge(null);
 		void (async () => {
 			const pdfjs = await loadPdfjs();
 			const response = await fetch(src);
 			if (!response.ok) throw new Error(`HTTP ${response.status}`);
+			const declaredSize = Number(response.headers.get("content-length")) || 0;
+			if (declaredSize > MAX_PDF_BYTES) {
+				void response.body?.cancel();
+				throw new PdfTooLargeError(declaredSize);
+			}
 			const data = new Uint8Array(await response.arrayBuffer());
+			if (data.byteLength > MAX_PDF_BYTES) throw new PdfTooLargeError(data.byteLength);
 			if (cancelled) return;
 			loadingTask = pdfjs.getDocument({ data });
 			const pdf = await loadingTask.promise;
@@ -49,8 +67,10 @@ export function PdfPreview({ onError, path, src }: { onError: () => void; path: 
 				return { width, height };
 			}));
 			if (!cancelled) setLoaded({ pdf, pdfjs, sizes });
-		})().catch(() => {
-			if (!cancelled) onErrorRef.current();
+		})().catch((error: unknown) => {
+			if (cancelled) return;
+			if (error instanceof PdfTooLargeError) setTooLarge(error.size);
+			else onErrorRef.current();
 		});
 		return () => {
 			cancelled = true;
@@ -76,6 +96,7 @@ export function PdfPreview({ onError, path, src }: { onError: () => void; path: 
 		};
 	}, []);
 
+	if (tooLarge !== null) return <PanelMessage>{t("files.explorer.tooLarge", { size: formatBytes(tooLarge) })}</PanelMessage>;
 	return (
 		<div aria-label={path} className="board-scrollbar min-h-0 min-w-0 flex-1 overflow-auto bg-surface p-3" ref={scrollRef} role="document">
 			{!loaded ? (
@@ -103,20 +124,48 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const textRef = useRef<HTMLDivElement>(null);
 	const [near, setNear] = useState(false);
+	const drawnRef = useRef(false);
 
 	useEffect(() => {
 		const page = pageRef.current;
-		if (!page || near) return;
+		if (!page) return;
 		if (typeof IntersectionObserver === "undefined") {
 			setNear(true);
 			return;
 		}
 		const observer = new IntersectionObserver((entries) => {
-			if (entries.some((entry) => entry.isIntersecting)) setNear(true);
+			setNear(entries[entries.length - 1].isIntersecting);
 		}, { root: root.current, rootMargin: "100% 0px" });
 		observer.observe(page);
 		return () => observer.disconnect();
-	}, [near, root]);
+	}, [root]);
+
+	// A page far from the viewport drops its bitmap, text layer and parsed page data.
+	useEffect(() => {
+		const canvas = canvasRef.current;
+		const text = textRef.current;
+		if (near || !drawnRef.current || !canvas || !text) return;
+		drawnRef.current = false;
+		canvas.width = 0;
+		canvas.height = 0;
+		text.replaceChildren();
+		void pdf.getPage(pageNumber).then((page) => page.cleanup()).catch(() => {});
+	}, [near, pageNumber, pdf]);
+
+	// pdf.js's end-of-content marker: while a drag selection is in progress it
+	// covers the page so the selection doesn't jump to the end of the text.
+	useEffect(() => {
+		const text = textRef.current;
+		if (!text) return;
+		const start = () => text.classList.add("selecting");
+		const end = () => text.classList.remove("selecting");
+		text.addEventListener("pointerdown", start);
+		document.addEventListener("pointerup", end);
+		return () => {
+			text.removeEventListener("pointerdown", start);
+			document.removeEventListener("pointerup", end);
+		};
+	}, []);
 
 	useEffect(() => {
 		const canvas = canvasRef.current;
@@ -128,6 +177,7 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 		void (async () => {
 			const page = await pdf.getPage(pageNumber);
 			if (cancelled) return;
+			drawnRef.current = true;
 			const viewport = page.getViewport({ scale });
 			const ratio = window.devicePixelRatio || 1;
 			canvas.width = Math.floor(viewport.width * ratio);
@@ -138,6 +188,9 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 			text.replaceChildren();
 			textLayer = new pdfjs.TextLayer({ container: text, textContentSource: page.streamTextContent(), viewport });
 			await textLayer.render();
+			const endOfContent = document.createElement("div");
+			endOfContent.className = "endOfContent";
+			text.append(endOfContent);
 		})().catch(() => {
 			// A cancelled or failed page keeps its blank sheet; the others still draw.
 		});

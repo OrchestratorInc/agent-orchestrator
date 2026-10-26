@@ -14,6 +14,10 @@ describe("parseDelimitedText", () => {
 		]);
 	});
 
+	it("opens a quoted field after leading whitespace", () => {
+		expect(parseDelimitedText("a, \"b,c\"\n", "data.csv")).toEqual([["a", "b,c"]]);
+	});
+
 	it("splits a TSV on tabs and drops a byte order mark", () => {
 		expect(parseDelimitedText("﻿name\tnote\nalpha\thas, comma", "data.TSV")).toEqual([["name", "note"], ["alpha", "has, comma"]]);
 	});
