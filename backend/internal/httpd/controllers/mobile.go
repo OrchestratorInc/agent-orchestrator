@@ -1025,8 +1025,31 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 	}
 	if t := b.ensureTunnel(); t != nil {
 		t.Start(b.LAN.BoundPort())
+		// The desktop links this machine just before it asks for remote
+		// access; a quick tunnel already running can move to the fixed
+		// address now.
+		if n, ok := t.(interface{ Nudge() }); ok {
+			n.Nudge()
+		}
 	}
 	return b.Status(), nil
+}
+
+// ConnectorInstalled starts the connector once a cloudflared AO downloaded by
+// itself has landed, so remote access comes up without the user clicking
+// anything. It only finishes what the bridge already wanted: nothing while the
+// bridge is off or LAN-only, and the password is left alone.
+func (b *BridgeService) ConnectorInstalled() {
+	b.transitionMu.Lock()
+	defer b.transitionMu.Unlock()
+
+	st, err := mobilebridge.Load(b.ConfigPath)
+	if err != nil || !st.Enabled || st.NoPublicTunnel || !b.LAN.Running() {
+		return
+	}
+	if t := b.ensureTunnel(); t != nil {
+		t.Start(b.LAN.BoundPort())
+	}
 }
 
 // Regenerate rotates the connection password on the running listener, which

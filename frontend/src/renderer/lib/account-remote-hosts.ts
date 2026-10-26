@@ -19,7 +19,8 @@ export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRe
 	return body.hosts ?? [];
 }
 
-export async function saveAccountRemoteHost(baseUrl: string, host: AccountRemoteHost): Promise<void> {
+/** A host saved without a url is listed at its fixed address: AO Cloud knows it from the host id. */
+export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string }): Promise<void> {
 	await request(baseUrl, "PUT", `/${encodeURIComponent(host.hostId)}`, {
 		label: host.label, url: host.url, token: host.token,
 	});

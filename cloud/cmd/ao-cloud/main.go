@@ -21,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/config"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/hosttunnel"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/httpapi"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
@@ -516,6 +517,20 @@ func run(logger *slog.Logger) error {
 		logger.Info("cloud artifacts enabled", "bucket", cfg.ArtifactBucket, "region", cfg.ArtifactRegion)
 		go artifactstore.RunSweeper(ctx, store, artifacts, artifactstore.DefaultSweepInterval, logger)
 	}
+	var hostTunnels *hosttunnel.Cloudflare
+	if cfg.HostTunnelsEnabled() {
+		hostTunnels = &hosttunnel.Cloudflare{
+			AccountID: cfg.HostTunnelAccountID, ZoneID: cfg.HostTunnelZoneID,
+			Zone: cfg.HostTunnelZone, APIToken: cfg.HostTunnelAPIToken,
+		}
+		// Not fatal: machines fall back to quick tunnels while Cloudflare is
+		// unreachable, and a wrong zone is logged loudly here.
+		if err := hostTunnels.Verify(ctx); err != nil {
+			logger.Error("host tunnel zone check failed", "zone", cfg.HostTunnelZone, "error", err)
+		}
+		logger.Info("fixed machine addresses enabled", "zone", cfg.HostTunnelZone)
+		go hosttunnel.RunSweeper(ctx, store, hostTunnels, hosttunnel.DefaultSweepInterval, logger)
+	}
 	var artifactShares *httpapi.ArtifactShareOptions
 	if cfg.ArtifactSharesEnabled {
 		artifactShares = &httpapi.ArtifactShareOptions{Origin: cfg.ArtifactShareOrigin, Limit: cfg.ArtifactShareLimit}
@@ -561,6 +576,7 @@ func run(logger *slog.Logger) error {
 		Artifacts:            artifacts,
 		ArtifactAccessSecret: cfg.ProviderSecretKey,
 		ArtifactShares:       artifactShares,
+		HostTunnels:          hostTunnels,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {

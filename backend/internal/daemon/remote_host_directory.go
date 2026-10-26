@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
@@ -61,16 +60,11 @@ func accountTunnelAddress(bridge *controllers.BridgeService) (string, string) {
 }
 
 func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlPlaneURL, hostID, address, hash string) error {
-	base, err := url.Parse(controlPlaneURL)
+	target, err := mobilebridge.ControlPlaneTarget(controlPlaneURL, "/api/cloud/v1/remote-hosts/"+url.PathEscape(hostID)+"/address")
 	if err != nil {
-		return fmt.Errorf("invalid control-plane URL")
-	}
-	localHTTP := base.Scheme == "http" && (base.Hostname() == "localhost" || base.Hostname() == "127.0.0.1")
-	if base.Scheme != "https" && !localHTTP {
-		return fmt.Errorf("invalid control-plane URL")
+		return err
 	}
 	body, _ := json.Marshal(map[string]string{"url": address})
-	target := strings.TrimRight(controlPlaneURL, "/") + "/api/cloud/v1/remote-hosts/" + url.PathEscape(hostID) + "/address"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return err

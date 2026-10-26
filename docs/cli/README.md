@@ -47,8 +47,9 @@ address is ready.
 Running `enable` again prints the current details without rotating the
 password. `status` shows the password from the host's local shell. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.
-Cloudflare terminates tunnel TLS and can see its traffic; quick-tunnel
-addresses change on restart.
+Cloudflare terminates tunnel TLS and can see its traffic. Until a signed-in
+desktop adds the machine, it uses a quick tunnel whose address changes on
+restart; once added, it moves to a fixed address.
 
 ### Product commands
 

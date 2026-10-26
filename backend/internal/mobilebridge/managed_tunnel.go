@@ -17,9 +17,9 @@ type ManagedTunnelDeps struct {
 	// PIDPath records the connector's pid so a crashed daemon can reap it.
 	PIDPath string
 	Log     *slog.Logger
-	// Named and HostID switch the connector to this host's named tunnel. See
-	// ProvisionNamedTunnel.
-	Named  *NamedTunnelConfig
+	// Fixed and HostID serve this host's fixed address once a signed-in device
+	// links it. See FixedTunnelSource.
+	Fixed  *FixedTunnelSource
 	HostID string
 }
 
@@ -34,11 +34,22 @@ type ManagedTunnel struct {
 	cancel  context.CancelFunc
 	port    int
 	done    chan struct{}
+	// nudge asks a quick tunnel to ask AO Cloud for the fixed address now.
+	nudge chan struct{}
 }
 
 // NewManagedTunnel builds a stopped tunnel controller.
 func NewManagedTunnel(deps ManagedTunnelDeps) *ManagedTunnel {
-	return &ManagedTunnel{deps: deps, runtime: &TunnelRuntime{}}
+	return &ManagedTunnel{deps: deps, runtime: &TunnelRuntime{}, nudge: make(chan struct{}, 1)}
+}
+
+// Nudge has a quick tunnel ask AO Cloud for this machine's fixed address at
+// once, rather than at its next check: a device has just linked the machine.
+func (m *ManagedTunnel) Nudge() {
+	select {
+	case m.nudge <- struct{}{}:
+	default:
+	}
 }
 
 // Start ensures a connector is running for localPort. It returns immediately;
@@ -128,7 +139,8 @@ func (m *ManagedTunnel) runReal(ctx context.Context, localPort int, rt *TunnelRu
 		PIDPath:   m.deps.PIDPath,
 		Runtime:   rt,
 		Log:       m.deps.Log,
-		Named:     m.deps.Named,
+		Fixed:     m.deps.Fixed,
 		HostID:    m.deps.HostID,
+		nudge:     m.nudge,
 	}).Run(ctx)
 }

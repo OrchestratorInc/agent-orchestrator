@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/hosttunnel"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
@@ -212,6 +213,7 @@ type Server struct {
 	brokerAuthToken         string
 	environmentControlToken string
 	secretCipher            *secrets.Cipher
+	hostTunnels             *hosttunnel.Cloudflare
 	credentialValidator     credentialValidator
 	repositoryProbeClient   *http.Client
 	webhookMaxBody          int64
@@ -315,6 +317,9 @@ type Options struct {
 	// files (AO_CLOUD_ARTIFACT_SHARES); it needs Artifacts. Nil leaves the
 	// share routes unregistered.
 	ArtifactShares *ArtifactShareOptions
+	// HostTunnels gives linked machines fixed addresses. Nil leaves them on
+	// quick tunnels.
+	HostTunnels *hosttunnel.Cloudflare
 }
 
 // ProjectSnapshotter looks up and builds a project's prepared snapshot.
@@ -406,6 +411,7 @@ func New(options Options) *Server {
 		brokerAuthToken:           options.BrokerAuthToken,
 		environmentControlToken:   options.EnvironmentControlToken,
 		secretCipher:              options.SecretCipher,
+		hostTunnels:               options.HostTunnels,
 		credentialValidator:       options.CredentialValidator,
 		repositoryProbeClient:     options.RepositoryProbeClient,
 		webhookMaxBody:            webhookMaxBody,
@@ -505,6 +511,7 @@ func New(options Options) *Server {
 	router.Get("/billing/return", server.billingReturn)
 	router.Route("/api/cloud/v1", func(router chi.Router) {
 		router.Post("/remote-hosts/{hostId}/address", server.updateRemoteHostAddress)
+		router.Post("/remote-hosts/{hostId}/tunnel", server.remoteHostTunnel)
 		router.Post("/auth/local/register", server.registerLocal)
 		router.Post("/auth/local/login", server.loginLocal)
 		router.With(server.authenticate).Post("/auth/local/logout", server.logoutLocal)

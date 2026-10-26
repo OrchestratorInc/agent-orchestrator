@@ -4,8 +4,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, Coffee, Copy, Loader2, MonitorSmartphone, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
+import { useCloudSession } from "../../lib/cloud-session";
+import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
 import { reasonMessage, type SetupMode } from "./ConnectMobileSetup";
@@ -333,6 +336,21 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		};
 	}, []);
 
+	// Reaching this computer away from home needs an AO account: a signed-in
+	// computer is linked and gets a fixed address, a signed-out one pairs on
+	// this network only.
+	const { session } = useCloudSession();
+	const { settings } = useSettings();
+	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
+	const accountId = session?.user.id ?? "";
+	const signedIn = Boolean(cloudBaseUrl && accountId);
+	const linkIfSignedIn = async (password: string) => {
+		if (!signedIn || !password) return;
+		// Not fatal: an unlinked computer still gets a quick tunnel, whose
+		// address changes on restart.
+		await linkThisComputer(cloudBaseUrl, accountId, password).catch(() => undefined);
+	};
+
 	const query = useQuery({
 		queryKey: mobileStatusQueryKey,
 		queryFn: fetchMobileStatus,
@@ -375,9 +393,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const enable = useMutation({
 		mutationFn: async () => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
+			const { data, error } = await apiClient.POST("/api/v1/mobile/enable-lan-only");
 			if (error) throw new Error(apiErrorMessage(error));
-			return data;
+			if (!signedIn) return data;
+			// Linked before the tunnel starts, so the code carries this
+			// computer's fixed address and stays valid after restarts.
+			await linkIfSignedIn(data?.password ?? "");
+			const started = await apiClient.POST("/api/v1/mobile/remote-access");
+			if (started.error) throw new Error(apiErrorMessage(started.error));
+			return started.data;
 		},
 		onSuccess: invalidate,
 		onError: () => setOptimisticEnabled(null),
@@ -396,6 +420,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
 			if (error) throw new Error(apiErrorMessage(error));
+			// A new password revokes the account link with the old one; link
+			// again so the fixed address survives the next restart.
+			await linkIfSignedIn(data?.password ?? "");
 			return data;
 		},
 		onSuccess: invalidate,
@@ -738,7 +765,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
-				{remoteAccessUnavailable && (
+				{qrValue && !signedIn && status.noPublicTunnel === true && (
+					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-for-remote" role="status">
+						{t(
+							"mobile.signInForRemoteAccess",
+							"Works on this network only. Sign in to AO to reach this computer away from home.",
+						)}
+					</p>
+				)}
+
+				{remoteAccessUnavailable && (signedIn || status.noPublicTunnel !== true) && (
 					// Stated rather than hidden: pairing still works on this network,
 					// so this is a limitation of what the code can reach, not an
 					// error. Without it the QR looks entirely normal and the user

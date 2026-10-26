@@ -13,3 +13,25 @@ type RemoteHost struct {
 	TokenNonce     []byte
 	UpdatedAt      time.Time
 }
+
+// RemoteHostTunnel is the Cloudflare tunnel that gives one host its fixed
+// address. It belongs to the host, not to an account.
+type RemoteHostTunnel struct {
+	HostID            string
+	TunnelID          string
+	Hostname          string
+	EncryptedRunToken []byte
+	RunTokenNonce     []byte
+	UpdatedAt         time.Time
+	LastSeenAt        time.Time
+}
+
+// RemoteHostTunnelCandidate is a tunnel the sweep may delete: Registered is
+// false when no account lists its host any more.
+type RemoteHostTunnelCandidate struct {
+	HostID     string
+	TunnelID   string
+	Hostname   string
+	LastSeenAt time.Time
+	Registered bool
+}

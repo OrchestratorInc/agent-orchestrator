@@ -76,6 +76,13 @@ type Config struct {
 	// SupportToken gates the operator support lookup endpoint
 	// (AO_CLOUD_SUPPORT_TOKEN). Empty disables the endpoint.
 	SupportToken string
+	// HostTunnel* give linked machines fixed addresses in one Cloudflare zone
+	// (AO_CLOUD_HOST_TUNNEL_ACCOUNT_ID, _ZONE_ID, _ZONE and _API_TOKEN). Set
+	// all four or none; none leaves machines on quick tunnels.
+	HostTunnelAccountID string
+	HostTunnelZoneID    string
+	HostTunnelZone      string
+	HostTunnelAPIToken  string
 
 	// PublicURL is the origin a sandbox worker dials back to. A worker opens
 	// no inbound port, so this is the only way it can reach the control plane.
@@ -369,6 +376,11 @@ func Load() (Config, error) {
 			os.Getenv("AO_CLOUD_ENV_CONTROL_TOKEN"),
 		),
 		SupportToken: strings.TrimSpace(os.Getenv("AO_CLOUD_SUPPORT_TOKEN")),
+
+		HostTunnelAccountID: strings.TrimSpace(os.Getenv("AO_CLOUD_HOST_TUNNEL_ACCOUNT_ID")),
+		HostTunnelZoneID:    strings.TrimSpace(os.Getenv("AO_CLOUD_HOST_TUNNEL_ZONE_ID")),
+		HostTunnelZone:      strings.ToLower(strings.TrimSpace(os.Getenv("AO_CLOUD_HOST_TUNNEL_ZONE"))),
+		HostTunnelAPIToken:  strings.TrimSpace(os.Getenv("AO_CLOUD_HOST_TUNNEL_API_TOKEN")),
 
 		PublicURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/"),
 		WorkerSigningKey:       strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_SIGNING_KEY")),
@@ -816,6 +828,9 @@ func Load() (Config, error) {
 	if cfg.SupportToken != "" && len(cfg.SupportToken) < 32 {
 		return Config{}, errors.New("AO_CLOUD_SUPPORT_TOKEN must be at least 32 characters")
 	}
+	if err := cfg.validateHostTunnels(); err != nil {
+		return Config{}, err
+	}
 	brokerConfigured := cfg.RepositoryBrokerURL != "" ||
 		cfg.EnvironmentControlToken != ""
 	if cfg.Environment != "production" && brokerConfigured {
@@ -1144,4 +1159,25 @@ func resolveWorkOS(prefix, issuer, clientID, apiKey, jwksURL string) (string, st
 		}
 	}
 	return issuer, jwksURL, nil
+}
+
+// HostTunnelsEnabled reports whether linked machines get fixed addresses.
+func (c Config) HostTunnelsEnabled() bool { return c.HostTunnelAccountID != "" }
+
+func (c Config) validateHostTunnels() error {
+	set := 0
+	for _, v := range []string{c.HostTunnelAccountID, c.HostTunnelZoneID, c.HostTunnelZone, c.HostTunnelAPIToken} {
+		if v != "" {
+			set++
+		}
+	}
+	switch {
+	case set == 0:
+		return nil
+	case set < 4:
+		return errors.New("AO_CLOUD_HOST_TUNNEL_ACCOUNT_ID, _ZONE_ID, _ZONE and _API_TOKEN must be set together")
+	case strings.ContainsAny(c.HostTunnelZone, ":/") || !strings.Contains(c.HostTunnelZone, "."):
+		return errors.New("AO_CLOUD_HOST_TUNNEL_ZONE must be a zone apex such as useao.dev")
+	}
+	return nil
 }

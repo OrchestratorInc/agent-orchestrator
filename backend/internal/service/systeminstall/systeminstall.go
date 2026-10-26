@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -208,6 +209,9 @@ type Plan struct {
 	managed bool
 	// managedPin is the release a managed reinstall installs again.
 	managedPin string
+	// download is a pinned release binary AO installs itself; see
+	// planCloudflared.
+	download *ports.ManagedBinaryDownload
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -394,6 +398,7 @@ type Service struct {
 	commands            ports.CommandRunner
 	installCommands     ports.InstallCommandRunner
 	installScripts      ports.InstallScriptRunner
+	managedBinaries     ports.ManagedBinaryInstaller
 	installCapabilities ports.InstallCapabilityProbe
 	pathWritable        ports.PathWritableProbe
 	privateNPMPrefixes  map[Target]string
@@ -405,6 +410,8 @@ type Service struct {
 	// runtime.GOOS; tests override it to exercise every OS branch from one
 	// machine, the same seam lookPath provides for PATH probing.
 	goos string
+	// goarch picks the pinned cloudflared asset; tests override it like goos.
+	goarch string
 	// installTimeout bounds each run — see defaultInstallTimeout. Tests
 	// override it with a short duration to exercise the timeout path without
 	// a real multi-minute wait.
@@ -450,6 +457,13 @@ type Service struct {
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
 	officialVersion func(context.Context, Target) (string, error)
+	// cloudflaredDownloadFailed turns planCloudflared to the package-manager
+	// fallback for the rest of this daemon run.
+	cloudflaredDownloadFailed atomic.Bool
+	// cloudflaredAutoStarted records that remote access already asked for the
+	// connector once; onCloudflaredInstalled is its callback. Both under mu.
+	cloudflaredAutoStarted bool
+	onCloudflaredInstalled func()
 }
 
 // requestPlanner carries one immutable capability snapshot through all recipe
@@ -492,6 +506,7 @@ func New(executables ports.ExecutableFinder, commands ports.CommandRunner) *Serv
 func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunner, deps Deps) *Service {
 	installCommands, _ := commands.(ports.InstallCommandRunner)
 	installScripts, _ := commands.(ports.InstallScriptRunner)
+	managedBinaries, _ := commands.(ports.ManagedBinaryInstaller)
 	installCapabilities, _ := executables.(ports.InstallCapabilityProbe)
 	pathWritable, _ := executables.(ports.PathWritableProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
@@ -502,6 +517,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		commands:                   commands,
 		installCommands:            installCommands,
 		installScripts:             installScripts,
+		managedBinaries:            managedBinaries,
 		installCapabilities:        installCapabilities,
 		jobStore:                   deps.JobStore,
 		verifier:                   deps.Verifier,
@@ -513,6 +529,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		managedRoot:                deps.ManagedRoot,
 		releases:                   deps.Releases,
 		goos:                       runtime.GOOS,
+		goarch:                     runtime.GOARCH,
 		installTimeout:             defaultInstallTimeout,
 		persistenceTimeout:         defaultPersistenceTimeout,
 		stop:                       stop,
@@ -653,14 +670,19 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 	if job, ok := s.jobs[target]; ok && job.Status == StatusRunning {
 		return *job, nil
 	}
+	return s.startPlanLocked(target, s.resolvePlan(target)), nil
+}
 
-	plan := s.resolvePlan(target)
+// startPlanLocked records a job for plan and runs it in the background. The
+// caller holds s.mu and has checked that no run of target is in flight.
+func (s *Service) startPlanLocked(target Target, plan Plan) Job {
 	command := displayCommand(plan)
 	now := time.Now()
 	if plan.Unsupported {
 		job := &Job{
 			Target:     target,
 			Status:     StatusUnsupported,
+			Method:     plan.Method,
 			Command:    command,
 			Error:      plan.Reason,
 			Notice:     plan.Notice,
@@ -668,12 +690,13 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 			FinishedAt: &now,
 		}
 		s.jobs[target] = job
-		return *job, nil
+		return *job
 	}
 
 	job := &Job{
 		Target:    target,
 		Status:    StatusRunning,
+		Method:    plan.Method,
 		Command:   command,
 		Notice:    plan.Notice,
 		StartedAt: &now,
@@ -683,16 +706,20 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 		job.Status = StatusInterrupted
 		job.Error = "daemon shutdown interrupted the install"
 		job.FinishedAt = &now
-		return *job, nil
+		return *job
 	}
 	s.workers.Add(1)
 
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
+		if plan.download != nil {
+			s.runCloudflaredDownload(s.backgroundContext, *plan.download, job)
+			return
+		}
 		s.run(s.backgroundContext, plan.Command, job)
 	}()
 
-	return *job, nil
+	return *job
 }
 
 // StartAgent begins a harness install using one server-owned method ID. An
@@ -1549,6 +1576,9 @@ func (s *Service) resolvePlan(target Target) Plan {
 // displayCommand renders the plan for display. Prepare steps are joined with
 // "; " rather than "&&": a failed step is noted and Command still runs.
 func displayCommand(plan Plan) string {
+	if plan.download != nil {
+		return "download " + plan.download.URL
+	}
 	if plan.Script != nil {
 		display := fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
 		if len(plan.Script.Args) > 0 {
@@ -1691,16 +1721,19 @@ func (s *Service) planGH() Plan {
 	}
 }
 
-// planCloudflared mirrors planGH: Cloudflare publishes cloudflared through
-// Homebrew and winget, and Linux distributions package it too.
-//
-// Deliberately not a downloaded binary. Fetching a release archive ourselves
-// would mean pinning per-platform URLs, verifying checksums and clearing
-// macOS quarantine before executing it — a fourth install shape this package
-// does not have, for a tool the three it does have already cover. The one
-// curl-piped target here is opencode, and only because that is the vendor's
-// own documented installer.
+// planCloudflared downloads AO's pinned cloudflared release into the managed
+// bin directory: the user does not install cloudflared by hand. Homebrew,
+// winget and the Linux packages are only the fallback, for a platform with no
+// pinned asset, a Service without a downloader, or once the download failed
+// during this daemon run.
 func (s *Service) planCloudflared() Plan {
+	if download, ok := cloudflaredDownloads[s.goos+"/"+s.goarch]; ok && s.managedBinaries != nil && !s.cloudflaredDownloadFailed.Load() {
+		download.Name = "cloudflared"
+		if s.goos == "windows" {
+			download.Name += ".exe"
+		}
+		return Plan{Target: TargetCloudflared, Method: cloudflaredDownloadMethod, download: &download}
+	}
 	switch s.goos {
 	case "windows":
 		return s.planWinget(TargetCloudflared, "Cloudflare.cloudflared")

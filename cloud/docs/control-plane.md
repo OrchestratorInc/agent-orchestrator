@@ -262,6 +262,32 @@ persisted. Like the live terminal relay, the relay is process-local: a request
 is served only by the replica holding the worker's control connection, so the
 deployment keeps one control-plane replica for this path.
 
+## Fixed machine addresses
+
+With the four `AO_CLOUD_HOST_TUNNEL_*` settings, a machine that a signed-in
+device links to an account gets its own Cloudflare tunnel, so its address stays
+the same across restarts. The control plane holds the Cloudflare API token; a
+machine only ever receives its own tunnel's run token.
+
+- The address is `h-<hash of the host ID>.<zone>`, one level under the zone
+  apex because Universal SSL covers one level only. A host registered without
+  a URL (`PUT /api/cloud/v1/me/hosts/{hostId}`) is listed at it at once.
+- The machine fetches its run token from
+  `POST /api/cloud/v1/remote-hosts/{hostId}/tunnel`, proving the host with the
+  digest of its account token, as the address publish does. The first call
+  creates a locally configured tunnel and its proxied CNAME; later calls return
+  the stored token without calling Cloudflare. `{"repair":true}`, sent after the
+  machine's address answered 530 three times, makes the tunnel and record exist
+  again, at most once a minute per host.
+- `ao_remote_host_tunnels` keeps one row per host, whichever accounts list it,
+  with the run token encrypted like host tokens.
+- Removing the last registration deletes the tunnel and its record in the
+  background. A daily sweep deletes tunnels no account lists, tunnels Cloudflare
+  no longer has, and tunnels whose machine has had no connector for 90 days.
+  A deleted machine that comes back gets a new tunnel at the same address.
+- Zone records are the limit: a Free zone holds 200, Pro 3,500. A refused record
+  leaves the machine on a quick tunnel.
+
 ## Replica lifecycle
 
 - `/healthz` reports process liveness.

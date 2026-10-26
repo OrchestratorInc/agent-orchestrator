@@ -454,9 +454,9 @@ func CloudflaredArgs(localPort, metricsPort int) []string {
 	}
 }
 
-// NamedCloudflaredArgs runs a locally configured named tunnel (see
-// ProvisionNamedTunnel). Its run token arrives in TUNNEL_TOKEN, which keeps it
-// out of the process list.
+// NamedCloudflaredArgs runs this host's locally configured fixed-address
+// tunnel (see FixedTunnelSource). Its run token arrives in TUNNEL_TOKEN, which
+// keeps it out of the process list.
 func NamedCloudflaredArgs(localPort, metricsPort int) []string {
 	return append(CloudflaredArgs(localPort, metricsPort), "run")
 }

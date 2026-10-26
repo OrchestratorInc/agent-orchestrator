@@ -33,12 +33,22 @@ type TunnelRunner struct {
 	// SettleDelay overrides how long after registration the hostname is
 	// considered resolvable. Zero uses DefaultTunnelSettleDelay.
 	SettleDelay time.Duration
-	// Named, when set, runs this host's named tunnel instead of a quick tunnel.
-	Named  *NamedTunnelConfig
+	// Fixed, when set, serves this host's fixed address once a signed-in
+	// device links it, and a quick tunnel until then or while AO Cloud
+	// cannot hand out the tunnel.
+	Fixed  *FixedTunnelSource
 	HostID string
 
-	probeBase  string        // tests replace https://<hostname>
-	probeEvery time.Duration // zero uses namedProbeInterval
+	// repair asks AO Cloud to remake the tunnel on the next start, after the
+	// fixed address stopped being served. Run is the only goroutine using it.
+	repair bool
+	// nudge makes a quick tunnel ask AO Cloud for the fixed address now.
+	nudge <-chan struct{}
+
+	probeBase    string        // tests replace https://<hostname>
+	probeEvery   time.Duration // zero uses namedProbeInterval
+	upgradeEvery time.Duration // zero uses fixedUpgradeInterval
+	recheckEvery time.Duration // zero uses fixedRecheckInterval
 }
 
 // Run supervises the connector until ctx is cancelled. It blocks, so callers
@@ -51,6 +61,10 @@ func (t *TunnelRunner) Run(ctx context.Context) {
 		err := t.runOnce(ctx)
 		if ctx.Err() != nil {
 			return
+		}
+		if errors.Is(err, errFixedTunnelReady) || errors.Is(err, errFixedTunnelChanged) {
+			t.logger().Info("mobile tunnel restarting for its new address", "reason", err)
+			continue
 		}
 		// A connector that stayed up is not a failing one; only rapid exits
 		// should escalate the wait.
@@ -73,28 +87,38 @@ func (t *TunnelRunner) Run(ctx context.Context) {
 // treated as a fresh fault rather than a continuing failure.
 const stableTunnelRun = 60 * time.Second
 
-// namedProvisionTimeout bounds all of one named tunnel provision's API calls.
-// Every start provisions, and an unreachable API delays a cached start by this
-// much, so it is short: a provision is three to five calls of under a second.
+// namedProvisionTimeout bounds one request for the fixed tunnel. Every start
+// asks AO Cloud, and an unreachable AO Cloud delays a cached start by this
+// much, so it is short. A first request also has AO Cloud make the tunnel,
+// three to five Cloudflare calls of under a second.
 const namedProvisionTimeout = 15 * time.Second
+
+var (
+	// errFixedTunnelReady stops a quick tunnel because the fixed address can
+	// be served now.
+	errFixedTunnelReady = errors.New("fixed address ready")
+	// errFixedTunnelChanged stops a fixed tunnel AO Cloud no longer hands out.
+	errFixedTunnelChanged = errors.New("AO Cloud no longer hands out this fixed address")
+)
 
 func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	var named NamedTunnel
-	if t.Named != nil {
-		// Bounded well under stableTunnelRun, so a failing provision never
+	if t.Fixed != nil {
+		// Bounded well under stableTunnelRun, so a failing request never
 		// counts as a stable run that resets the backoff ladder.
 		provisionCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
 		var err error
-		named, err = NamedTunnelFor(provisionCtx, *t.Named, t.HostID)
+		named, err = t.Fixed.TunnelFor(provisionCtx, t.HostID, t.repair)
 		cancel()
-		if named.RunToken == "" {
-			t.Runtime.Exited(err)
-			return fmt.Errorf("provision named tunnel: %w", err)
-		}
-		if err != nil {
-			t.logger().Warn("could not provision the named tunnel; starting the cached one", "error", err)
+		t.repair = false
+		switch {
+		case named.RunToken != "" && err != nil:
+			t.logger().Warn("could not reach AO Cloud; starting the cached fixed tunnel", "error", err)
+		case named.RunToken == "" && !errors.Is(err, errNotLinked):
+			t.logger().Warn("no fixed address for this machine; starting a quick tunnel", "error", err)
 		}
 	}
+	fixed := named.RunToken != ""
 
 	// Reserved after provisioning, which can take seconds, to keep the
 	// bind-and-release window short.
@@ -108,11 +132,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	args := CloudflaredArgs(t.LocalPort, metricsPort)
-	if t.Named != nil {
+	if fixed {
 		args = NamedCloudflaredArgs(t.LocalPort, metricsPort)
 	}
 	cmd := aoprocess.CommandContext(runCtx, t.Binary, args...)
-	if t.Named != nil {
+	if fixed {
 		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+named.RunToken)
 	}
 	// cloudflared logs to stderr; the hostname is only available there.
@@ -140,18 +164,22 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// on an earlier start has nothing left to wait for.
 	settleCtx, stopSettle := context.WithCancel(ctx)
 	defer stopSettle()
-	if t.Named != nil {
+	if fixed {
 		t.Runtime.NamedHostname(named.Hostname)
 	}
-	if t.Named != nil && !named.NewRecord {
+	if fixed && !named.NewRecord {
 		t.Runtime.Settled()
 	} else {
 		go t.awaitSettled(settleCtx)
 	}
 
-	var unserved atomic.Bool
-	if t.Named != nil {
+	var unserved, upgraded, withdrawn atomic.Bool
+	switch {
+	case fixed:
 		go t.watchNamedAddress(runCtx, named.Hostname, func() { unserved.Store(true); stopRun() })
+		go t.watchFixedTunnel(runCtx, named, func() { withdrawn.Store(true); stopRun() })
+	case t.Fixed != nil:
+		go t.awaitFixedTunnel(runCtx, func() { upgraded.Store(true); stopRun() })
 	}
 
 	scanner := bufio.NewScanner(stderr)
@@ -163,8 +191,14 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	}
 
 	waitErr := cmd.Wait()
-	if unserved.Load() {
-		waitErr = errors.New("cloudflare kept answering the named address with 530: no connector serves the tunnel")
+	switch {
+	case unserved.Load():
+		waitErr = errors.New("cloudflare kept answering the fixed address with 530: no connector serves the tunnel")
+		t.repair = true
+	case upgraded.Load():
+		waitErr = errFixedTunnelReady
+	case withdrawn.Load():
+		waitErr = errFixedTunnelChanged
 	}
 	t.Runtime.Exited(waitErr)
 	// Only if this runner still owns the record: a replacement started while
@@ -201,7 +235,7 @@ func (t *TunnelRunner) watchNamedAddress(ctx context.Context, hostname string, s
 			return
 		case <-time.After(every):
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/identity", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/identity", http.NoBody)
 		if err != nil {
 			return
 		}
@@ -214,12 +248,93 @@ func (t *TunnelRunner) watchNamedAddress(ctx context.Context, hostname string, s
 			misses = 0
 			continue
 		}
-		if misses++; misses >= namedProbeMisses {
+		misses++
+		if misses >= namedProbeMisses {
 			stop()
 			return
 		}
 	}
 }
+
+// awaitFixedTunnel calls ready once AO Cloud hands out this host's tunnel,
+// while a quick tunnel serves the machine: a signed-in device linked it since
+// the connector started, or AO Cloud was unreachable then. The quick tunnel
+// keeps running until the fixed one can replace it, so a failing AO Cloud
+// never costs a working address. Waiting for a link only reads a local file;
+// asking AO Cloud backs off, except that a new link (a new account token)
+// is tried at once.
+func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func()) {
+	every := t.upgradeEvery
+	if every == 0 {
+		every = fixedUpgradeInterval
+	}
+	wait, tried, triedAt := every, "", time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		case <-t.nudge:
+			tried = ""
+		}
+		digest := t.Fixed.digest()
+		if digest == "" || (digest == tried && time.Since(triedAt) < wait) {
+			continue
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
+		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, false)
+		cancel()
+		if err == nil && named.RunToken != "" {
+			ready()
+			return
+		}
+		if digest != tried {
+			wait = every
+		} else if wait = 2 * wait; wait > maxFixedUpgradeWait {
+			wait = maxFixedUpgradeWait
+		}
+		tried, triedAt = digest, time.Now()
+	}
+}
+
+// watchFixedTunnel calls withdrawn once AO Cloud stops handing out the tunnel
+// this connector serves: every account removed the machine, its link was
+// revoked by a new pairing password, or the tunnel was remade with a new
+// token. Removal deletes the DNS record too, so the address stops answering
+// at all rather than with 530 and watchNamedAddress cannot see it. An
+// unreachable AO Cloud is not a withdrawal.
+func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel, withdrawn func()) {
+	every := t.recheckEvery
+	if every == 0 {
+		every = fixedRecheckInterval
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
+		requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
+		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, false)
+		cancel()
+		if errors.Is(err, errHostRefused) || errors.Is(err, errNotLinked) ||
+			(err == nil && (named.RunToken != serving.RunToken || named.Hostname != serving.Hostname)) {
+			withdrawn()
+			return
+		}
+	}
+}
+
+// fixedRecheckInterval spaces those checks: one AO Cloud call per machine
+// every 30 minutes.
+const fixedRecheckInterval = 30 * time.Minute
+
+// Asking for the fixed address while a quick tunnel serves: every 30s, backing
+// off to 30 minutes while AO Cloud cannot answer.
+const (
+	fixedUpgradeInterval = 30 * time.Second
+	maxFixedUpgradeWait  = 30 * time.Minute
+)
 
 // Probing the named address: about every 30s, and three 530s in a row.
 const (

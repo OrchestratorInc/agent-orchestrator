@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -72,7 +73,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Remote host enabled\nHost ID: %s\n", status.HostID); err != nil {
 					return err
 				}
-				publicAddress := false
+				publicAddress, quickTunnel := false, false
 				for _, endpoint := range status.Endpoints {
 					scheme := "http"
 					if endpoint.Secure {
@@ -80,13 +81,24 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					}
 					if endpoint.Kind == "tunnel" {
 						publicAddress = true
+						// The one tunnel whose address rotates; a linked machine's is fixed.
+						quickTunnel = strings.HasSuffix(strings.ToLower(endpoint.Host), ".trycloudflare.com")
 					}
 					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Address: %s://%s\n", scheme, net.JoinHostPort(endpoint.Host, strconv.Itoa(endpoint.Port))); err != nil {
 						return err
 					}
 				}
+				if publicAddress {
+					message := "Fixed address: it stays the same after restarts."
+					if quickTunnel {
+						message = "Quick tunnel: the address changes on restart and has no uptime guarantee. Add this machine from a signed-in AO desktop to give it a fixed address."
+					}
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
+						return err
+					}
+				}
 				if (tunnel || tunnelOnly) && action.name == "enable" {
-					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Cloudflare terminates TLS and can see the connection password and traffic. Quick-tunnel URLs change on restart and have no uptime guarantee."); err != nil {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Cloudflare terminates TLS and can see the connection password and traffic."); err != nil {
 						return err
 					}
 				}
@@ -97,7 +109,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						if status.LoopbackOnly || tunnelOnly {
 							flag = "--tunnel-only"
 						}
-						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable " + flag + "`"
+						message = "Tunnel: downloading cloudflared; run `ao remote-host status` for the HTTPS address. If none appears, install cloudflared and rerun `ao remote-host enable " + flag + "`"
 					} else if status.Tunnel.LastError != "" && !status.Tunnel.Running {
 						message = "Tunnel unavailable: " + status.Tunnel.LastError
 					}

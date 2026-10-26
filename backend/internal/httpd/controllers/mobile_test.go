@@ -1079,6 +1079,43 @@ func TestStartRemoteAccessWhileDisabledDoesNothing(t *testing.T) {
 	}
 }
 
+// The daemon downloads cloudflared itself when an enable finds none. Once it
+// lands, remote access must come up without another click, on the same
+// password, and only where the user asked for a public tunnel.
+func TestConnectorInstalledStartsTheTunnelTheBridgeWanted(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		enable    func(*BridgeService) (MobileStatusResponse, error)
+		wantStart bool
+	}{
+		{name: "public", enable: (*BridgeService).Enable, wantStart: true},
+		{name: "lan only", enable: (*BridgeService).EnableLANOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tun TunnelController // no connector yet, as at the first enable
+			b := &BridgeService{
+				ConfigPath: filepath.Join(t.TempDir(), "mobile.json"), LAN: &fakeLAN{}, DefaultPort: 3011,
+				ResolveTunnel: func() TunnelController { return tun },
+			}
+			before, err := tc.enable(b)
+			if err != nil {
+				t.Fatalf("enable: %v", err)
+			}
+
+			landed := &fakeTunnel{}
+			tun = landed
+			b.ConnectorInstalled()
+
+			if started := landed.startedOn == 3011; started != tc.wantStart {
+				t.Fatalf("connector started on %d, want started=%v", landed.startedOn, tc.wantStart)
+			}
+			if b.Status().Password != before.Password {
+				t.Fatal("password rotated: the phone paired a moment ago can no longer authenticate")
+			}
+		})
+	}
+}
+
 type startErrorLAN struct {
 	fakeLAN
 	err error

@@ -917,21 +917,21 @@ func Run(buildVersion string) error {
 	managedTunnel := func(res mobilebridge.CloudflaredResolution) controllers.TunnelController {
 		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
 		deps := mobilebridge.ManagedTunnelDeps{Binary: res.Path, PIDPath: tunnelPID, Log: log}
-		if named, err := mobilebridge.LoadNamedTunnelConfig(cfg.DataDir); err != nil {
-			log.Warn("ignoring named tunnel config; using a quick tunnel", "error", err)
-		} else if named != nil && hostIdentity.HostID == "" {
-			log.Warn("ignoring named tunnel config: no host identity; using a quick tunnel")
-		} else if named != nil {
-			log.Info("mobile remote access uses a named tunnel")
-			deps.Named, deps.HostID = named, hostIdentity.HostID
+		// A machine a signed-in device links gets a fixed address from AO
+		// Cloud; it needs the host identity that AO Cloud registered.
+		if cfg.CloudControlPlaneURL != "" && hostIdentity.HostID != "" {
+			deps.Fixed = mobilebridge.NewFixedTunnelSource(cfg.CloudControlPlaneURL, cfg.DataDir)
+			deps.HostID = hostIdentity.HostID
 		}
 		return mobilebridge.NewManagedTunnel(deps)
 	}
-	// Looked up again whenever the bridge is enabled, so a cloudflared the user
-	// installs from Connect Mobile is picked up without restarting AO.
+	// Looked up again whenever the bridge is enabled, so a cloudflared installed
+	// since boot is picked up without restarting AO. Finding none starts AO's
+	// own pinned download; the connector starts once it lands.
 	bs.ResolveTunnel = func() controllers.TunnelController {
 		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
 		if res.NeedsInstall {
+			systemInstall.DownloadCloudflaredInBackground(bs.ConnectorInstalled)
 			return nil
 		}
 		return managedTunnel(res)

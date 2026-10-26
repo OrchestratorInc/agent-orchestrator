@@ -2,10 +2,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
-import { deleteAccountRemoteHost, listAccountRemoteHosts, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost, listAccountRemoteHosts } from "../../lib/account-remote-hosts";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
-import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
+import { linkThisComputer } from "../../lib/link-this-computer";
 import { Switch } from "../ui/switch";
 import { fetchMobileStatus, mobileStatusQueryKey, mobileStatusRefetchInterval } from "./ConnectMobileContent";
 import { InstallCloudflared } from "./InstallCloudflared";
@@ -15,10 +15,8 @@ import { SettingsSection } from "./SettingsSection";
 type MobileStatus = Awaited<ReturnType<typeof fetchMobileStatus>>;
 
 const TUNNEL_POLL_MS = 2_000;
-// A quick tunnel usually has its address within half a minute.
+// A tunnel usually has its address within half a minute.
 const TUNNEL_WAIT_MS = 90_000;
-// AO Cloud rejects host labels longer than 64 bytes.
-const LABEL_MAX_BYTES = 64;
 
 /** The tunnel address in the form the daemon's address publisher sends, so a
  * later publish never rewrites the record and reconnects every device. */
@@ -27,20 +25,20 @@ function tunnelUrl(status: MobileStatus): string | null {
 	return tunnel ? `https://${tunnel.host}:${tunnel.port}` : null;
 }
 
-function fitLabel(name: string): string {
-	let chars = Array.from(name.trim());
-	while (new TextEncoder().encode(chars.join("")).length > LABEL_MAX_BYTES) chars = chars.slice(0, -1);
-	return chars.join("").trim();
+/** The daemon is downloading its own cloudflared, after which the tunnel starts by itself. */
+async function connectorDownloading(): Promise<boolean> {
+	const { data } = await apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "cloudflared" } } });
+	return data?.status === "running";
 }
 
-/** Polls until the quick tunnel has a public address; null when no connector is installed. */
+/** Polls until the tunnel has a public address; null when no connector is installed or on its way. */
 async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
 	const deadline = Date.now() + TUNNEL_WAIT_MS;
 	for (;;) {
 		const status = await fetchMobileStatus();
 		const url = tunnelUrl(status);
 		if (url) return { status, url };
-		if (status.tunnel?.supported === false) return null;
+		if (status.tunnel?.supported === false && !(await connectorDownloading())) return null;
 		if (status.tunnel?.lastError) throw new Error(status.tunnel.lastError);
 		if (Date.now() >= deadline) throw new Error(timeoutMessage);
 		await new Promise((resolve) => setTimeout(resolve, TUNNEL_POLL_MS));
@@ -105,32 +103,32 @@ export function ThisComputerAccess() {
 
 	const turnOn = async () => {
 		const before = await fetchMobileStatus();
-		let linked = false;
+		let hostId = "";
+		let shared = false;
 		try {
-			// remote-access keeps the password, so a phone paired over Connect Mobile stays paired.
-			const started = before.enabled
-				? await apiClient.POST("/api/v1/mobile/remote-access")
-				: await apiClient.POST("/api/v1/mobile/enable");
-			if (started.error) throw new Error(apiErrorMessage(started.error));
+			// A running bridge keeps its password, so a phone paired over Connect Mobile stays paired.
+			let password = before.password ?? "";
+			if (!before.enabled) {
+				const started = await apiClient.POST("/api/v1/mobile/enable-lan-only");
+				if (started.error || !started.data) throw new Error(apiErrorMessage(started.error));
+				password = started.data.password ?? "";
+			}
+			// Linked before the tunnel starts, so the tunnel is this computer's fixed address.
+			hostId = await linkThisComputer(cloudBaseUrl, accountId, password);
+			const access = await apiClient.POST("/api/v1/mobile/remote-access");
+			if (access.error) throw new Error(apiErrorMessage(access.error));
 			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
 			if (!ready) {
 				setNeedsConnector(true);
 				return;
 			}
-			const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
-				headers: { Authorization: `Bearer ${ready.status.password}`, "X-AO-Account-ID": accountId },
-			});
-			if (issued.error || !issued.data) throw new Error(apiErrorMessage(issued.error));
-			await saveAccountRemoteHost(cloudBaseUrl, {
-				hostId: issued.data.hostId,
-				label: fitLabel(await aoBridge.remotes.computerName()),
-				url: ready.url,
-				token: issued.data.token,
-			});
-			linked = true;
+			shared = true;
 		} finally {
-			// Unlinked, the switch shows off; leaving access on would keep this computer reachable while the switch says it is not.
-			if (!linked) await restoreRemoteAccess(before);
+			// Not shared, the switch shows off; leaving access on, or the account listing this computer, would contradict it.
+			if (!shared) {
+				if (hostId) await deleteAccountRemoteHost(cloudBaseUrl, hostId).catch(() => undefined);
+				await restoreRemoteAccess(before);
+			}
 		}
 	};
 
