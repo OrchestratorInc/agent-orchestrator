@@ -111,7 +111,14 @@ export function useArtifactShare(session: WorkspaceSession, artifact: SessionArt
 
 	const onOpenChange = (next: boolean) => {
 		setOpen(next);
-		if (!next || phase === "signingIn" || phase === "creating") return;
+		if (!next || phase === "creating") return;
+		if (phase === "signingIn") {
+			// Browser sign-in reports nothing when abandoned: reopening without a new
+			// session returns to the prompt. A sign-in that completes later still
+			// creates the link.
+			if (sessionKeyRef.current === signInFrom.current) setPhase("signedOut");
+			return;
+		}
 		if (status === "authenticated") void create();
 		else setPhase("signedOut");
 	};

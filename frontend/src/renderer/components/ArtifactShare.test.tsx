@@ -147,6 +147,30 @@ describe("ArtifactShareButton", () => {
 		expect(publishMock).not.toHaveBeenCalled();
 	});
 
+	it("returns to the sign-in prompt when the panel is reopened after an abandoned browser sign-in", async () => {
+		signedOut();
+		publishMock.mockResolvedValue({ id: "s1", url: LINK, name: "report.html", replaced: false });
+		const view = render(<ArtifactShareButton artifact={artifact} session={session} />);
+		await openPanel();
+		await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+		expect(signInMock).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Finish signing in to create the link.")).toBeInTheDocument();
+
+		// The browser flow is abandoned: no new session arrives. Close and reopen.
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByRole("dialog", { name: "Share report.html" })).toBeNull();
+		await openPanel();
+		expect(screen.getByText(SIGN_IN_TEXT)).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+		expect(signInMock).toHaveBeenCalledTimes(2);
+
+		// A sign-in that completes still creates the link.
+		sessionState.status = "authenticated";
+		sessionState.session = SIGNED_IN;
+		await act(async () => view.rerender(<ArtifactShareButton artifact={artifact} session={session} />));
+		expect(screen.getByRole("textbox", { name: "Share link" })).toHaveValue(LINK);
+	});
+
 	it("offers the upgrade at the link limit", async () => {
 		publishMock.mockRejectedValue(new ArtifactShareLimitError("limit"));
 		render(<ArtifactShareButton artifact={artifact} session={session} />);
