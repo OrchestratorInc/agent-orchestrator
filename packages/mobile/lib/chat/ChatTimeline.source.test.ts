@@ -88,6 +88,14 @@ describe("response copy control", () => {
 	});
 });
 
+describe("jump to latest", () => {
+	// Each platform's own floating control (see JumpToLatest), not a bordered pill.
+	it("floats the native control over the list", () => {
+		expect(source).toContain("{showJump ? <JumpToLatest onPress={() => { followsTail.current = true; setShowJump(false); scrollToLatest(true); }} /> : null}");
+		expect(source).not.toContain("styles.jump");
+	});
+});
+
 describe("turn rollback", () => {
 	const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function TurnPlan"));
 

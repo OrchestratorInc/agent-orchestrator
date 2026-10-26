@@ -33,7 +33,7 @@ import { RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
-import { jumpToLatestColors, userMessageSurfaceStyle } from "./chatChrome";
+import { userMessageSurfaceStyle } from "./chatChrome";
 import { actionControlWidth, requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
@@ -54,6 +54,7 @@ import { previewFilePath } from "../api";
 import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
+import { JumpToLatest } from "./JumpToLatest";
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -310,7 +311,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 			{detached && editDraft ? <View style={styles.detachedEditor}>
 				<InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked onCancel={cancelEdit} onEdit={submitEdit} />
 			</View> : null}
-			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
+			{showJump ? <JumpToLatest onPress={() => { followsTail.current = true; setShowJump(false); scrollToLatest(true); }} /> : null}
 		</View>
 	);
 });
@@ -1218,8 +1219,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// The glyph lines up with the reply's left edge. The target reaches into the
 	// row's bottom padding rather than up over the text, where a long press selects.
 	copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: touchTarget, height: touchTarget, marginLeft: -(touchTarget - iconSize.md) / 2, marginBottom: -space.md },
-	jump: { position: "absolute", right: 14, bottom: 12, minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 16, backgroundColor: jumpToLatestColors(t).backgroundColor, borderWidth: 1, borderColor: t.borderStrong },
-	jumpText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	systemSignal: { marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 8, backgroundColor: t.bgSurface, padding: space.sm },
 	systemTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	systemDetail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: space.hair },
