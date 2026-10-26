@@ -4225,6 +4225,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read token and estimated cost usage over a window, by day or hour, for the usage page */
+        get: operations["getUsageReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -5265,6 +5282,78 @@ export interface components {
         };
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
+        };
+        ControllersUsageReportResponse: {
+            days: number;
+            /** @description Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour. */
+            periods: string[];
+            /** @enum {string} */
+            resolution: "day" | "hour";
+            rows: components["schemas"]["ControllersUsageReportRowResponse"][];
+            sessions: components["schemas"]["ControllersUsageReportSessionResponse"][];
+            /** Format: date-time */
+            since: string;
+            timeZone: string;
+            /** Format: date-time */
+            until: string;
+        };
+        ControllersUsageReportRowResponse: {
+            /** Format: int64 */
+            cacheReadCostNanos: number;
+            /** Format: int64 */
+            cacheReadTokens: number;
+            /**
+             * Format: int64
+             * @description What cache reads saved against paying input rates for those tokens.
+             */
+            cacheSavingsNanos: number;
+            /** Format: int64 */
+            cacheWriteCostNanos: number;
+            /** Format: int64 */
+            cacheWriteTokens: number;
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: int64 */
+            inputCostNanos: number;
+            /**
+             * Format: int64
+             * @description Uncached input that was not written to the cache.
+             */
+            inputTokens: number;
+            model: string;
+            /** Format: int64 */
+            outputCostNanos: number;
+            /** Format: int64 */
+            outputTokens: number;
+            period: string;
+            /**
+             * Format: int64
+             * @description Part of costNanos above standard rates, from priority, fast or ultrafast processing.
+             */
+            premiumNanos: number;
+            /** Format: int64 */
+            pricedEvents: number;
+            /** @description standard, priority, fast, flex, ultrafast, or unknown. */
+            speed: string;
+        };
+        ControllersUsageReportSessionResponse: {
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: date-time */
+            lastUsedAt: string;
+            /** Format: int64 */
+            pricedEvents: number;
+            projectId?: string;
+            sessionId: string;
+            title: string;
+            /** Format: int64 */
+            tokens: number;
         };
         ConversationAccountPayload: {
             authFailureId?: string;
@@ -23231,6 +23320,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryPressureResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageReport: {
+        parameters: {
+            query?: {
+                /** @description Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7. */
+                days?: number;
+                /** @description IANA time zone that days and hours are bucketed in. Defaults to UTC. */
+                tz?: string;
+                /** @description Read one project only. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersUsageReportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

@@ -330,12 +330,15 @@ func (s *Snapshot) ProviderForModel(modelID string) string {
 //
 // InputNanos covers every non-cache-read input charge. Cache writes are input
 // that happens to be written to the cache, so folding their charge in here is
-// what keeps the three components disjoint and additive.
+// what keeps the three components disjoint and additive. CacheWriteNanos is
+// the part of InputNanos that the cache writes cost, for reports that show it
+// apart; it is never added to the total again.
 type Estimate struct {
 	InputNanos       *int64
 	CachedInputNanos *int64
 	OutputNanos      *int64
 	TotalNanos       *int64
+	CacheWriteNanos  *int64
 	PricingVersion   string
 }
 
@@ -374,7 +377,7 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 			return Estimate{}, errors.New("usage tokens must be nonnegative")
 		}
 	}
-	input, err := estimateInput(event, rates)
+	input, cacheWrite, err := estimateInput(event, rates)
 	if err != nil {
 		return Estimate{}, fmt.Errorf("input cost: %w", err)
 	}
@@ -386,7 +389,7 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	if err != nil {
 		return Estimate{}, fmt.Errorf("output cost: %w", err)
 	}
-	estimate := Estimate{InputNanos: input, CachedInputNanos: cached, OutputNanos: output, PricingVersion: version}
+	estimate := Estimate{InputNanos: input, CachedInputNanos: cached, OutputNanos: output, CacheWriteNanos: cacheWrite, PricingVersion: version}
 	if input != nil && cached != nil && output != nil {
 		total, err := checkedCostSum(*input, *cached, *output)
 		if err != nil {
@@ -395,6 +398,27 @@ func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 		estimate.TotalNanos = &total
 	}
 	return estimate, nil
+}
+
+// Speed tiers a report groups usage by. Unknown is a tier word AO has no
+// pricing rule for.
+const (
+	SpeedStandard = "standard"
+	SpeedUnknown  = "unknown"
+)
+
+// SpeedTier names the tier an event was billed at for reports: "standard", a
+// catalog tier (priority, flex, ultrafast, fast), or "unknown".
+func SpeedTier(providerID domain.UsageProviderID, reported string) string {
+	tier, known := catalogServiceTier(providerID, reported)
+	switch {
+	case !known:
+		return SpeedUnknown
+	case tier == "":
+		return SpeedStandard
+	default:
+		return tier
+	}
 }
 
 // catalogServiceTier maps the tier word a provider reported for one event to
@@ -430,38 +454,44 @@ func catalogServiceTier(providerID domain.UsageProviderID, reported string) (tie
 	return "", false
 }
 
-// estimateInput charges every non-cache-read input token.
+// estimateInput charges every non-cache-read input token, and reports the part
+// of that charge the cache writes make up.
 //
 // A catalog without a cache-write rate for the model is not missing data: the
 // provider does not bill writes separately, so the whole uncached bucket is
 // charged at the plain input rate. Only when a distinct write rate exists — as
 // Anthropic publishes, with its own five-minute and one-hour tiers — does the
 // split matter, and only then can an unavailable split leave the cost unknown.
-func estimateInput(event domain.ModelUsageEvent, rates exactRates) (*int64, error) {
+func estimateInput(event domain.ModelUsageEvent, rates exactRates) (input, cacheWrite *int64, err error) {
 	uncached := event.Tokens.UncachedInputTokens
+	split := cacheWriteSplitFor(event)
 	if rates.write == nil && rates.write1H == nil {
-		return chargeOptional(uncached, rates.input)
+		input, err = chargeOptional(uncached, rates.input)
+		if err != nil || input == nil || split.total == nil || uncached == nil || *split.total > *uncached {
+			return input, nil, err
+		}
+		cacheWrite, err = charge(*split.total, rates.input)
+		return input, cacheWrite, err
 	}
 	if uncached == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	split := cacheWriteSplitFor(event)
 	if split.total == nil || *split.total > *uncached {
-		return nil, nil
+		return nil, nil, nil
 	}
 	write, err := chargeCacheWrite(split, rates)
 	if err != nil || write == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	fresh, err := charge(*uncached-*split.total, rates.input)
 	if err != nil || fresh == nil {
-		return nil, err
+		return nil, nil, err
 	}
 	total, err := checkedCostSum(*fresh, *write)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return costPointer(total), nil
+	return costPointer(total), write, nil
 }
 
 func chargeCacheWrite(split cacheWriteSplit, rates exactRates) (*int64, error) {

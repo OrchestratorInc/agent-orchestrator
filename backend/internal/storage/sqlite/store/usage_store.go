@@ -1116,3 +1116,53 @@ func int64PtrWhen(v int64, ok bool) *int64 {
 	}
 	return &v
 }
+
+// ListUsageReportEvents reads every timestamped usage event in [since, until).
+func (s *Store) ListUsageReportEvents(ctx context.Context, since, until time.Time) ([]domain.UsageReportEvent, error) {
+	const layout = "2006-01-02 15:04:05"
+	rows, err := s.qr.ListUsageReportEvents(ctx, gen.ListUsageReportEventsParams{
+		SinceUtc: since.UTC().Format(layout),
+		UntilUtc: until.UTC().Format(layout),
+	})
+	if err != nil {
+		return nil, err
+	}
+	reported := func(value int64) *int64 {
+		if value < 0 {
+			return nil
+		}
+		return &value
+	}
+	out := make([]domain.UsageReportEvent, 0, len(rows))
+	for _, row := range rows {
+		event := domain.UsageReportEvent{
+			CreatedAt:         row.CreatedAt.Time,
+			ProviderID:        domain.UsageProviderID(row.ProviderID),
+			BillingProviderID: row.BillingProviderID.String,
+			ModelID:           row.ModelID,
+			ServiceTier:       row.ServiceTier.String,
+			Tokens: domain.UsageTokenMetrics{
+				CachedInputTokens:   nullInt64Ptr(row.CachedInputTokens),
+				UncachedInputTokens: nullInt64Ptr(row.UncachedInputTokens),
+				OutputTokens:        nullInt64Ptr(row.OutputTokens),
+			},
+			CacheWriteTokens:   reported(row.CacheWriteTokens),
+			CacheWrite5mTokens: reported(row.CacheWrite5mTokens),
+			CacheWrite1hTokens: reported(row.CacheWrite1hTokens),
+			Costs: domain.UsageEventCosts{
+				InputCostNanos:       nullInt64Ptr(row.InputCostNanos),
+				CachedInputCostNanos: nullInt64Ptr(row.CachedInputCostNanos),
+				OutputCostNanos:      nullInt64Ptr(row.OutputCostNanos),
+				EstimatedCostNanos:   nullInt64Ptr(row.EstimatedCostNanos),
+			},
+			Harness:      row.Harness,
+			SessionID:    row.SessionID,
+			SessionTitle: row.SessionTitle,
+		}
+		if row.ProjectID != nil {
+			event.ProjectID = *row.ProjectID
+		}
+		out = append(out, event)
+	}
+	return out, nil
+}

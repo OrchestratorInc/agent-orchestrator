@@ -1222,6 +1222,120 @@ func (q *Queries) ListUsageDiscoveryBindings(ctx context.Context, limit int64) (
 	return items, nil
 }
 
+const listUsageReportEvents = `-- name: ListUsageReportEvents :many
+SELECT
+    model_usage_events.created_at,
+    model_usage_events.provider_id,
+    model_usage_events.billing_provider_id,
+    model_usage_events.model_id,
+    model_usage_events.service_tier,
+    model_usage_events.cached_input_tokens,
+    model_usage_events.uncached_input_tokens,
+    model_usage_events.output_tokens,
+    model_usage_events.input_cost_nanos,
+    model_usage_events.cached_input_cost_nanos,
+    model_usage_events.output_cost_nanos,
+    model_usage_events.estimated_cost_nanos,
+    CAST(COALESCE(CASE WHEN json_valid(model_usage_events.provider_usage_json) THEN
+        CASE model_usage_events.provider_id
+            WHEN 'anthropic' THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens')
+            ELSE COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.last_token_usage.cache_write_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
+        END
+    END, -1) AS INTEGER) AS cache_write_tokens,
+    CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
+        THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_5m_input_tokens') END, -1) AS INTEGER) AS cache_write_5m_tokens,
+    CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
+        THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens') END, -1) AS INTEGER) AS cache_write_1h_tokens,
+    usage_bindings.harness,
+    usage_bindings.session_id,
+    sessions.project_id,
+    CAST(COALESCE(NULLIF(trim(sessions.display_name), ''), NULLIF(trim(sessions.issue_id), ''), sessions.id) AS TEXT) AS session_title
+FROM model_usage_events
+JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
+JOIN sessions ON sessions.id = usage_bindings.session_id
+WHERE model_usage_events.created_at IS NOT NULL
+  AND substr(model_usage_events.created_at, 1, 19) >= CAST(?1 AS TEXT)
+  AND substr(model_usage_events.created_at, 1, 19) < CAST(?2 AS TEXT)
+ORDER BY model_usage_events.id
+`
+
+type ListUsageReportEventsParams struct {
+	SinceUtc string
+	UntilUtc string
+}
+
+type ListUsageReportEventsRow struct {
+	CreatedAt            sql.NullTime
+	ProviderID           string
+	BillingProviderID    sql.NullString
+	ModelID              string
+	ServiceTier          sql.NullString
+	CachedInputTokens    sql.NullInt64
+	UncachedInputTokens  sql.NullInt64
+	OutputTokens         sql.NullInt64
+	InputCostNanos       sql.NullInt64
+	CachedInputCostNanos sql.NullInt64
+	OutputCostNanos      sql.NullInt64
+	EstimatedCostNanos   sql.NullInt64
+	CacheWriteTokens     int64
+	CacheWrite5mTokens   int64
+	CacheWrite1hTokens   int64
+	Harness              domain.AgentHarness
+	SessionID            domain.SessionID
+	ProjectID            *domain.ProjectID
+	SessionTitle         string
+}
+
+// Every timestamped usage event in a window, with the session it belongs to.
+// created_at is stored as Go's UTC text, so a range over its fixed-width
+// "YYYY-MM-DD HH:MM:SS" prefix is a time range. The cache-write counts are read
+// out of the bounded provider object, where each provider reports them; -1
+// means the object did not report that count.
+func (q *Queries) ListUsageReportEvents(ctx context.Context, arg ListUsageReportEventsParams) ([]ListUsageReportEventsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUsageReportEvents, arg.SinceUtc, arg.UntilUtc)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUsageReportEventsRow{}
+	for rows.Next() {
+		var i ListUsageReportEventsRow
+		if err := rows.Scan(
+			&i.CreatedAt,
+			&i.ProviderID,
+			&i.BillingProviderID,
+			&i.ModelID,
+			&i.ServiceTier,
+			&i.CachedInputTokens,
+			&i.UncachedInputTokens,
+			&i.OutputTokens,
+			&i.InputCostNanos,
+			&i.CachedInputCostNanos,
+			&i.OutputCostNanos,
+			&i.EstimatedCostNanos,
+			&i.CacheWriteTokens,
+			&i.CacheWrite5mTokens,
+			&i.CacheWrite1hTokens,
+			&i.Harness,
+			&i.SessionID,
+			&i.ProjectID,
+			&i.SessionTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsageSourcesForBinding = `-- name: ListUsageSourcesForBinding :many
 SELECT id, binding_id, kind, native_session_id, subagent_id, artifact_path, file_identity, generation, byte_offset, parser_state_json, state, failure_count, anomaly_count, next_retry_at, last_error_code, updated_at
 FROM usage_sources

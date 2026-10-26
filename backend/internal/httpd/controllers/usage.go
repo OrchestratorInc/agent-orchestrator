@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -19,6 +20,11 @@ import (
 type UsageSummaryService interface {
 	ListCompact(context.Context, domain.ProjectID) ([]domain.CompactSessionUsage, error)
 	Get(context.Context, domain.SessionID) (domain.SessionUsageSummary, error)
+}
+
+// UsageReportService builds the usage page's report.
+type UsageReportService interface {
+	Report(ctx context.Context, days int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error)
 }
 
 // SessionMemoryService samples resident memory per live session.
@@ -52,14 +58,64 @@ type UsageController struct {
 	Steps SessionStepsReader
 	// Pressure is optional: without it the pressure route is 501.
 	Pressure MemoryPressureReader
+	// Report is optional: without it the report route is 501.
+	Report UsageReportService
 }
 
 // Register mounts usage routes on the supplied router.
 func (c *UsageController) Register(r chi.Router) {
+	r.Get("/usage/report", c.getReport)
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/memory/pressure", c.getPressure)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
+}
+
+func (c *UsageController) getReport(w http.ResponseWriter, r *http.Request) {
+	if c.Report == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/report")
+		return
+	}
+	query := r.URL.Query()
+	days := 7
+	if raw := query.Get("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			envelope.WriteError(w, r, apierr.Invalid("INVALID_USAGE_WINDOW", "days must be a whole number", nil))
+			return
+		}
+		days = parsed
+	}
+	report, err := c.Report.Report(r.Context(), days, query.Get("tz"), domain.ProjectID(query.Get("projectId")))
+	if err != nil {
+		c.Log.WarnContext(r.Context(), "failed to read usage report", "error", err)
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := UsageReportResponse{
+		Days: report.Days, TimeZone: report.TimeZone, Resolution: report.Resolution,
+		Since: report.Since, Until: report.Until, Periods: report.Periods,
+		Rows: make([]UsageReportRowResponse, 0, len(report.Rows)), Sessions: make([]UsageReportSessionResponse, 0, len(report.Sessions)),
+	}
+	if out.Periods == nil {
+		out.Periods = []string{}
+	}
+	for _, row := range report.Rows {
+		out.Rows = append(out.Rows, UsageReportRowResponse{
+			Period: row.Period, Harness: string(row.Harness), Model: row.ModelID, Speed: row.Speed,
+			Events: row.Events, PricedEvents: row.PricedEvents,
+			InputTokens: row.InputTokens, CacheReadTokens: row.CacheReadTokens, CacheWriteTokens: row.CacheWriteTokens, OutputTokens: row.OutputTokens,
+			InputCostNanos: row.InputCostNanos, CacheReadCostNanos: row.CacheReadCostNanos, CacheWriteCostNanos: row.CacheWriteCostNanos,
+			OutputCostNanos: row.OutputCostNanos, CostNanos: row.CostNanos, PremiumNanos: row.PremiumNanos, CacheSavingsNanos: row.CacheSavingsNanos,
+		})
+	}
+	for _, session := range report.Sessions {
+		out.Sessions = append(out.Sessions, UsageReportSessionResponse{
+			SessionID: string(session.SessionID), ProjectID: string(session.ProjectID), Harness: string(session.Harness), Title: session.Title,
+			Events: session.Events, PricedEvents: session.PricedEvents, Tokens: session.Tokens, CostNanos: session.CostNanos, LastUsedAt: session.LastUsedAt,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, out)
 }
 
 func (c *UsageController) listSessions(w http.ResponseWriter, r *http.Request) {
