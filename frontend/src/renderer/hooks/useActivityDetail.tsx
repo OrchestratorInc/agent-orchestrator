@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { clientForSessionHost } from "../lib/host-clients";
 import { toActivity } from "./useConversation";
 import type { ConversationActivity } from "../types/conversation";
@@ -72,7 +73,10 @@ export function useActivityDetail(activity: ConversationActivity, visible: boole
 }
 
 export function ActivityDetailStatus({ error, retry }: { error: boolean; retry: () => void }) {
-	return <p className="px-2 py-1 text-caption text-muted-foreground" role="status">
-		{error ? <>Could not load full activity. <button type="button" onClick={retry}>Retry</button></> : "Loading activity…"}
-	</p>;
+	const { t } = useTranslation();
+	return (
+		<p className="px-2 py-1 text-caption text-muted-foreground" role="status">
+			{error ? <>{t("chat.activity.loadFailed")} <button type="button" onClick={retry}>{t("chat.activity.retry")}</button></> : t("chat.activity.loading")}
+		</p>
+	);
 }
