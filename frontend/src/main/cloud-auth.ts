@@ -639,17 +639,23 @@ export async function showCloudSignInFailure(error: unknown): Promise<void> {
 }
 
 // registerCloudProtocol makes this build the ao-app:// handler, or gives the
-// scheme up when it shouldn't hold it. Must run before app.whenReady().
+// scheme up when it shouldn't hold it. Call it once this process is the app's
+// single instance, before app.whenReady().
 //
 // A development build signing in through the loopback redirect never needs
 // ao-app://, and claiming it takes the scheme from the installed app: macOS
 // ignores the path/args below and binds it to the stock node_modules
 // Electron.app, Windows points it at a worktree script, and the installed app's
 // sign-in callbacks and billing return links then land in the wrong process. So
-// such a build only releases the scheme, which also repairs a machine where an
-// earlier dev run took it. A development build pointed at a deep-link redirect
-// (AO_CLOUD_AUTH_REDIRECT set to a bounce page or ao-app://callback) does need
-// the scheme, and claims it like the packaged app.
+// such a build only releases a claim an earlier dev run left behind. On macOS
+// that hands the scheme back to the installed app at once; on Windows it
+// deletes the stale entry, and the installed app takes the scheme again the
+// next time it starts. Linux has no release (Electron's is a no-op there), and
+// a Linux dev build registers the installed app's own .desktop entry anyway.
+//
+// A development build pointed at a deep-link redirect (AO_CLOUD_AUTH_REDIRECT
+// set to a bounce page or ao-app://callback) does need the scheme. It claims it
+// for as long as it runs and gives it back when it quits.
 export function registerCloudProtocol(): void {
   // A dev build is launched as `electron <app dir>`; Windows ties the scheme to
   // that exact command, so every call below names it.
@@ -657,13 +663,19 @@ export function registerCloudProtocol(): void {
     process.defaultApp && process.argv.length >= 2
       ? [process.execPath, [path.resolve(process.argv[1])]]
       : [];
+  const canRelease = process.platform !== "linux";
   if (!app.isPackaged && useLoopbackRedirect) {
-    if (app.isDefaultProtocolClient("ao-app", ...devApp)) {
+    if (canRelease && app.isDefaultProtocolClient("ao-app", ...devApp)) {
       app.removeAsDefaultProtocolClient("ao-app", ...devApp);
     }
     return;
   }
   app.setAsDefaultProtocolClient("ao-app", ...devApp);
+  if (!app.isPackaged && canRelease) {
+    app.once("will-quit", () => {
+      app.removeAsDefaultProtocolClient("ao-app", ...devApp);
+    });
+  }
 }
 
 export function installCloudIPC(
