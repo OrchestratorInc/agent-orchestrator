@@ -1727,6 +1727,40 @@ func TestModelUpdateSkipsAgentReadinessFoundNotInstalled(t *testing.T) {
 	}
 }
 
+func TestModelDiscoverySuccessWithoutBinaryDoesNotScheduleRetry(t *testing.T) {
+	for _, expiredReadiness := range []bool{false, true} {
+		t.Run(fmt.Sprintf("expiredReadiness=%t", expiredReadiness), func(t *testing.T) {
+			now := time.Now().UTC()
+			cache := &fakeModelCache{}
+			discoverer := successfulModelDiscoverer()
+			svc := newService([]agentregistry.HarnessAgent{
+				harnessAgent("qwen", "Qwen", ports.ErrAgentBinaryNotFound),
+			}, cache, discoverer)
+			svc.readiness.now = func() time.Time { return now }
+			if expiredReadiness {
+				if _, err := svc.readiness.EnsureInstallation(context.Background(), []string{"qwen"}, domain.AgentReadinessPurposeDisplay); err != nil {
+					t.Fatal(err)
+				}
+				now = now.Add(svc.readiness.displayTTL + time.Second)
+			}
+			got, err := svc.Models(context.Background(), "qwen", "", true)
+			if err != nil || len(got.Models) != 1 || got.Models[0].ID != "model-one" {
+				t.Fatalf("successful discovery without CLI = %#v, %v", got, err)
+			}
+			if got.RefreshState != "idle" || got.RefreshError != "" || got.RetryAt != nil || got.Warning != "" || got.WarningCode != "" || got.Stale || got.LastSuccessAt == nil {
+				t.Fatalf("successful catalog carries failure state: %#v", got)
+			}
+			record, ok, err := cache.GetAgentModelCatalog(context.Background(), "qwen", "")
+			if err != nil || !ok {
+				t.Fatalf("cached catalog = %#v, %t, %v", record, ok, err)
+			}
+			if record.RefreshState != "idle" || record.RefreshError != "" || record.RetryCount != 0 || !record.RetryAt.IsZero() {
+				t.Fatalf("successful discovery scheduled a retry: %#v", record)
+			}
+		})
+	}
+}
+
 func TestModelsClassifiesMissingAiderAfterReadinessExpires(t *testing.T) {
 	now := time.Now().UTC()
 	svc := newService([]agentregistry.HarnessAgent{
