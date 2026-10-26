@@ -3,7 +3,8 @@ import type { VoiceMode, VoiceState } from "./voice/types";
 export type SpawnComposerOption = {
 	id: string;
 	label: string;
-	icon?: "folder" | "message-square-plus" | "image" | "file-text";
+	/** A project row's glyph: a folder, or the standalone agent's new-conversation mark. */
+	icon?: "folder" | "message-square-plus";
 	sectionBreakBefore?: boolean;
 };
 

@@ -1,20 +1,42 @@
-import { Feather } from "./icons";
-import { useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { AgentLogo } from "./AgentLogo";
-import { useTheme } from "./ThemeProvider";
-import type { Theme } from "./theme";
+import {
+	Box,
+	Button,
+	CircularProgressIndicator,
+	DropdownMenu,
+	DropdownMenuItem,
+	Host,
+	HorizontalDivider,
+	Icon,
+	IconButton,
+	Row,
+	Text,
+	TextButton,
+} from "@expo/ui/jetpack-compose";
+import { background, clip, fillMaxWidth, padding, Shapes, size, testID, weight } from "@expo/ui/jetpack-compose/modifiers";
+import { Fragment, useState, type ReactNode } from "react";
+import { StyleSheet, View } from "react-native";
+import { rowDividerWidth } from "./divider";
+import { chipColorFor } from "./harnessLogo";
+import { logoFor } from "./harnessLogoAssets";
+import { haptics } from "./haptics";
+import { spawnDrawables } from "./spawn-composer-drawables.android";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
-import { type, space } from "./tokens";
+import type { Theme } from "./theme";
+import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
+import { font, iconSize, radius, space, touchTarget } from "./tokens";
 import { MicKey } from "./voice/MicKey";
 
-type OpenMenu = "host" | "project" | "harness" | "model" | "attach" | null;
+type OpenMenu = "host" | "project" | "attach" | "harness" | "model";
 
-const ATTACH_OPTIONS: readonly SpawnComposerOption[] = [
-	{ id: "photo", label: "Choose photo", icon: "image" },
-	{ id: "file", label: "Choose file", icon: "file-text" },
-];
+type MenuOption = { id: string; label: string; leading?: ReactNode; sectionBreakBefore?: boolean };
 
+/**
+ * Spawn's selectors as Material 3 dropdown menus, each anchored to the text
+ * button that names the current choice, and Start as a filled Compose button.
+ * Compose owns the 48dp targets, the ripples and the menu semantics; TalkBack
+ * hears the chosen row as selected from its check, not from its colour.
+ */
 export function SpawnComposerControls({
 	hosts,
 	hostId,
@@ -37,72 +59,88 @@ export function SpawnComposerControls({
 	disabled,
 }: SpawnComposerControlsProps) {
 	const t = useTheme();
-	const styles = makeStyles(t);
-	const [openMenu, setOpenMenu] = useState<OpenMenu>(null);
-	const selectedHost = hosts.find((host) => host.id === hostId);
+	const { scheme } = useThemeState();
+	const styles = useThemedStyles(makeStyles);
+	const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
+	const close = () => setOpenMenu(null);
 	const selectedProject = projects.find((project) => project.id === projectId);
-	const hostLabel = selectedHost?.label ?? "Choose machine";
+	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
-	const modelOptions = [{ id: "__auto__", label: "Automatic" }, ...models];
-	const options = openMenu === "host" ? hosts : openMenu === "project" ? projects : openMenu === "harness" ? agents : openMenu === "attach" ? ATTACH_OPTIONS : modelOptions;
-	const selectedValue = openMenu === "host" ? (hostId ?? "") : openMenu === "project" ? (projectId ?? "") : openMenu === "harness" ? harness : openMenu === "attach" ? "" : modelSelection;
-	const menuTitle = openMenu === "host" ? "Run on" : openMenu === "project" ? "Project" : openMenu === "harness" ? "Agent" : openMenu === "attach" ? "Attach" : "Model";
-
-	const selectOption = (value: string) => {
-		if (openMenu === "host") onSelectHost(value);
-		if (openMenu === "project") onSelectProject(value);
-		if (openMenu === "harness") onSelectHarness(value);
-		if (openMenu === "model") onSelectModel(value);
-		if (openMenu === "attach" && value === "photo") onChoosePhoto();
-		if (openMenu === "attach" && value === "file") onChooseFile();
-		setOpenMenu(null);
+	// Only a real change is worth a tick; the owner ignores a repeat anyway.
+	const choose = (current: string | null, apply: (id: string) => void) => (id: string) => {
+		close();
+		if (id === current) return;
+		haptics.select();
+		apply(id);
 	};
-
-	// Choices replace the controls inside Spawn's own sheet. They used to open a
-	// second sheet on top of it, so picking a project, agent and model stacked
-	// three sheets deep.
-	if (openMenu) {
-		return (
-			<OptionList
-				title={menuTitle}
-				options={options}
-				selectedValue={selectedValue}
-				showAgentLogos={openMenu === "harness"}
-				onSelect={selectOption}
-				onBack={() => setOpenMenu(null)}
-			/>
-		);
-	}
+	const menu = (name: OpenMenu) => ({ expanded: openMenu === name, onExpand: () => setOpenMenu(name), onDismiss: close });
 
 	return (
 		<View style={styles.stack}>
-			<View style={styles.destinationRow}>
-				<SelectorButton label={`Run on ${hostLabel}`} icon="monitor" onPress={() => setOpenMenu("host")} style={styles.destinationButton} />
-				<SelectorButton label={projectLabel} icon={selectedProject?.icon ?? "folder"} onPress={() => setOpenMenu("project")} style={styles.destinationButton} />
-			</View>
+			<Host matchContents={{ vertical: true }} colorScheme={scheme}>
+				<Row horizontalArrangement={{ spacedBy: space.xs }} verticalAlignment="center" modifiers={[fillMaxWidth()]}>
+					<SelectorMenu
+						{...menu("host")}
+						label={`Run on ${hostLabel}`}
+						leading={<Icon source={spawnDrawables.machine} size={iconSize.lg} tint={t.textSecondary} />}
+						options={hosts}
+						selectedId={hostId}
+						onSelect={choose(hostId, onSelectHost)}
+						testTag="spawn-host"
+					/>
+					<SelectorMenu
+						{...menu("project")}
+						label={projectLabel}
+						leading={<ProjectGlyph project={selectedProject} />}
+						options={projects.map((project) => ({ ...project, leading: <ProjectGlyph project={project} /> }))}
+						selectedId={projectId}
+						onSelect={choose(projectId, onSelectProject)}
+						testTag="spawn-project"
+					/>
+				</Row>
+			</Host>
 
 			<View style={styles.rail}>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Attach"
-					android_ripple={{ color: t.accentTint, borderless: true, radius: 20 }}
-					onPress={() => setOpenMenu("attach")}
-					style={styles.attach}
-				>
-					<Feather name="paperclip" size={20} color={t.textSecondary} />
-				</Pressable>
-				<View style={styles.divider} />
-				<SelectorButton label={harnessLabel} icon="terminal" harness={harness} onPress={() => setOpenMenu("harness")} style={styles.railButton} />
-				<View style={styles.divider} />
-				<SelectorButton label={modelLabel} onPress={() => setOpenMenu("model")} style={styles.railButton} />
-				<View style={styles.divider} />
-				{/* Plain, like the paperclip: the rail is the surface, and a second
-				    disc inside it would compete with Start task. */}
+				<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.railHost}>
+					<Row verticalAlignment="center" modifiers={[fillMaxWidth()]}>
+						<DropdownMenu expanded={openMenu === "attach"} onDismissRequest={close} color={t.bgElevated}>
+							<DropdownMenu.Trigger>
+								<IconButton onClick={() => setOpenMenu("attach")} modifiers={[testID("spawn-attachment")]}>
+									<Icon source={spawnDrawables.attach} size={iconSize.xl} tint={t.textSecondary} contentDescription="Attach" />
+								</IconButton>
+							</DropdownMenu.Trigger>
+							<DropdownMenu.Items>
+								<MenuRow label="Choose photo" leading={<Icon source={spawnDrawables.photo} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChoosePhoto(); }} />
+								<MenuRow label="Choose file" leading={<Icon source={spawnDrawables.file} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChooseFile(); }} />
+							</DropdownMenu.Items>
+						</DropdownMenu>
+						<SelectorMenu
+							{...menu("harness")}
+							label={harnessLabel}
+							leading={<HarnessMark harness={harness} />}
+							options={agents.map((agent) => ({ ...agent, leading: <HarnessMark harness={agent.id} /> }))}
+							selectedId={harness}
+							onSelect={choose(harness, onSelectHarness)}
+							testTag="spawn-harness"
+						/>
+						<SelectorMenu
+							{...menu("model")}
+							label={modelLabel}
+							options={[{ id: "__auto__", label: "Automatic" }, ...models]}
+							selectedId={modelSelection}
+							onSelect={choose(modelSelection, onSelectModel)}
+							testTag="spawn-model"
+						/>
+					</Row>
+				</Host>
+				{/* Hold-to-talk needs press-in and press-out, which a Compose button
+				    doesn't expose, so the mic stays the React Native key. Plain: the
+				    rail is the surface, and a second disc would compete with Start. */}
 				<MicKey
 					variant="plain"
-					size={42}
-					glyphSize={20}
+					size={touchTarget}
+					glyphSize={iconSize.xl}
 					state={voice.state}
 					mode={voice.mode}
 					onPressIn={voice.onPressIn}
@@ -110,123 +148,126 @@ export function SpawnComposerControls({
 				/>
 			</View>
 
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={busy ? "Starting task" : "Start task"}
-				accessibilityState={{ disabled }}
-				testID="spawn-submit"
-				disabled={disabled}
-				android_ripple={{ color: "rgba(255,255,255,0.18)" }}
-				onPress={onSpawn}
-				style={[styles.spawn, { opacity: disabled ? 0.68 : 1 }]}
-			>
-				{busy ? <ActivityIndicator size="small" color={t.onAccent} /> : null}
-				<Text style={styles.spawnLabel}>{busy ? "Starting…" : "Start task"}</Text>
-			</Pressable>
-
+			<Host matchContents={{ vertical: true }} colorScheme={scheme}>
+				<Button
+					onClick={onSpawn}
+					enabled={!disabled}
+					// The accent is not one of the Material scheme's own roles, so the
+					// button is given its fill and its ink, enabled and disabled.
+					colors={{ containerColor: t.accent, contentColor: t.onAccent, disabledContainerColor: t.bgElevatedHover, disabledContentColor: t.textFaint }}
+					modifiers={[fillMaxWidth(), testID("spawn-submit")]}
+				>
+					{busy ? <CircularProgressIndicator color={t.textFaint} strokeWidth={2} modifiers={[size(iconSize.md, iconSize.md)]} /> : null}
+					<Text style={{ typography: "labelLarge", fontFamily: font.semibold }} modifiers={busy ? [padding(space.sm, 0, 0, 0)] : undefined}>
+						{busy ? "Starting…" : "Start task"}
+					</Text>
+				</Button>
+			</Host>
 		</View>
 	);
 }
 
-function SelectorButton({ label, icon, harness, onPress, style }: {
+/**
+ * A text button that names the current choice and opens its options as a
+ * dropdown menu below it. Rows sharing a menu take equal widths, and a long
+ * label ellipsizes before it can push the arrow out.
+ */
+function SelectorMenu({ label, leading, options, selectedId, expanded, onExpand, onDismiss, onSelect, testTag }: {
 	label: string;
-	icon?: keyof typeof Feather.glyphMap;
-	harness?: string;
-	onPress: () => void;
-	style?: object;
+	leading?: ReactNode;
+	options: readonly MenuOption[];
+	selectedId: string | null;
+	expanded: boolean;
+	onExpand: () => void;
+	onDismiss: () => void;
+	onSelect: (id: string) => void;
+	testTag: string;
 }) {
 	const t = useTheme();
-	const styles = makeStyles(t);
 	return (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityLabel={label}
-			android_ripple={{ color: t.accentTint }}
-			onPress={onPress}
-			style={[styles.selector, style]}
-		>
-			{harness ? <AgentLogo harness={harness} size={20} /> : icon ? <Feather name={icon} size={15} color={t.textSecondary} /> : null}
-			<Text numberOfLines={1} style={styles.selectorLabel}>{label}</Text>
-			<Feather name="chevron-down" size={15} color={t.textTertiary} />
-		</Pressable>
+		<DropdownMenu expanded={expanded} onDismissRequest={onDismiss} color={t.bgElevated} modifiers={[weight(1)]}>
+			<DropdownMenu.Trigger>
+				<TextButton onClick={onExpand} colors={{ contentColor: t.textPrimary }} modifiers={[fillMaxWidth(), testID(testTag)]}>
+					{leading ?? null}
+					<Text
+						maxLines={1}
+						overflow="ellipsis"
+						style={{ typography: "labelLarge", fontFamily: font.medium }}
+						modifiers={[weight(1), padding(leading ? space.xs : 0, 0, space.xxs, 0)]}
+					>
+						{label}
+					</Text>
+					<Icon source={spawnDrawables.dropDown} size={iconSize.xl} tint={t.textTertiary} />
+				</TextButton>
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Items>
+				{options.map((option) => (
+					<Fragment key={option.id}>
+						{option.sectionBreakBefore ? <HorizontalDivider color={t.borderDefault} /> : null}
+						<MenuRow label={option.label} leading={option.leading} selected={option.id === selectedId} onClick={() => onSelect(option.id)} />
+					</Fragment>
+				))}
+			</DropdownMenu.Items>
+		</DropdownMenu>
 	);
 }
 
-function OptionList({ title, options, selectedValue, showAgentLogos, onSelect, onBack }: {
-	title: string;
-	options: readonly SpawnComposerOption[];
-	selectedValue: string;
-	showAgentLogos?: boolean;
-	onSelect: (value: string) => void;
-	onBack: () => void;
-}) {
+function MenuRow({ label, leading, selected = false, onClick }: { label: string; leading?: ReactNode; selected?: boolean; onClick: () => void }) {
 	const t = useTheme();
-	const styles = makeStyles(t);
 	return (
-		<View style={styles.stack}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel="Back"
-				android_ripple={{ color: t.accentTint }}
-				onPress={onBack}
-				style={styles.optionHeader}
-			>
-				<Feather name="chevron-left" size={20} color={t.textSecondary} />
-				<Text style={styles.optionTitle}>{title}</Text>
-			</Pressable>
-			<ScrollView style={styles.optionList} showsVerticalScrollIndicator={false}>
-				{options.map((option, index) => {
-					const selected = option.id === selectedValue;
-					return (
-						<Pressable
-							key={option.id}
-							accessibilityRole="button"
-							accessibilityState={{ selected }}
-							android_ripple={{ color: t.accentTint }}
-							onPress={() => onSelect(option.id)}
-							style={[styles.optionRow, index > 0 && !option.sectionBreakBefore && styles.optionBorder, option.sectionBreakBefore && styles.optionSectionBreak, selected && styles.optionSelected]}
-						>
-							{showAgentLogos ? <AgentLogo harness={option.id} size={24} /> : option.icon ? <Feather name={option.icon} size={20} color={t.textSecondary} /> : null}
-							<Text numberOfLines={2} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
-							{selected ? <Feather name="check" size={20} color={t.accent} /> : null}
-						</Pressable>
-					);
-				})}
-			</ScrollView>
-		</View>
+		<DropdownMenuItem onClick={onClick} elementColors={{ textColor: t.textPrimary }}>
+			<DropdownMenuItem.Text>
+				<Text maxLines={2} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: font.regular }}>{label}</Text>
+			</DropdownMenuItem.Text>
+			{leading ? <DropdownMenuItem.LeadingIcon>{leading}</DropdownMenuItem.LeadingIcon> : null}
+			{selected ? (
+				<DropdownMenuItem.TrailingIcon>
+					<Icon source={materialDrawable("check")} size={iconSize.xl} tint={t.accent} contentDescription="Selected" />
+				</DropdownMenuItem.TrailingIcon>
+			) : null}
+		</DropdownMenuItem>
+	);
+}
+
+function ProjectGlyph({ project }: { project?: SpawnComposerOption }) {
+	const t = useTheme();
+	const source = project?.icon === "message-square-plus" ? spawnDrawables.standalone : materialDrawable("folder");
+	return <Icon source={source} size={iconSize.lg} tint={t.textSecondary} />;
+}
+
+// The mark's box, and the chip it sits on when it needs one to stay visible.
+// Same arithmetic as `AgentLogo`: a 16% inset and a 28% corner radius.
+const MARK_SIZE = iconSize.lg;
+const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
+const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
+
+/** A harness's brand mark in its own colours, or the terminal symbol when it has none. */
+function HarnessMark({ harness }: { harness: string }) {
+	const t = useTheme();
+	const source = logoFor(harness);
+	if (!source) return <Icon source={spawnDrawables.agent} size={MARK_SIZE} tint={t.textSecondary} />;
+	// White marks (opencode, cursor) vanish on a light menu; `chipColorFor`
+	// says which need a backdrop, as it does for every other surface.
+	const chip = chipColorFor(harness);
+	if (!chip) return <Icon source={source} size={MARK_SIZE} tint={null} />;
+	return (
+		<Box contentAlignment="center" modifiers={[size(MARK_SIZE, MARK_SIZE), clip(Shapes.RoundedCorner(CHIP_RADIUS)), background(chip)]}>
+			<Icon source={source} size={MARK_SIZE - CHIP_INSET * 2} tint={null} />
+		</Box>
 	);
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	stack: { gap: space.sm },
-	destinationRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs },
-	destinationButton: { flex: 1, minWidth: 0, height: 36, paddingHorizontal: space.sm, backgroundColor: "transparent" },
 	rail: {
-		height: 52,
 		flexDirection: "row",
 		alignItems: "center",
 		paddingHorizontal: space.xxs,
-		borderRadius: 16,
+		borderRadius: radius.lg,
 		borderCurve: "continuous",
 		backgroundColor: t.bgElevated,
-		borderWidth: StyleSheet.hairlineWidth,
+		borderWidth: rowDividerWidth,
 		borderColor: t.borderDefault,
-		overflow: "hidden",
 	},
-	attach: { width: 42, height: 42, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-	divider: { width: StyleSheet.hairlineWidth, height: 24, backgroundColor: t.borderDefault },
-	selector: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 12, overflow: "hidden" },
-	railButton: { flex: 1, minWidth: 0, height: 42, paddingHorizontal: space.sm },
-	selectorLabel: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
-	spawn: { height: 44, flexDirection: "row", gap: space.sm, borderRadius: 16, borderCurve: "continuous", alignItems: "center", justifyContent: "center", overflow: "hidden", backgroundColor: t.accent },
-	spawnLabel: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
-	optionHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 12, overflow: "hidden" },
-	optionTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, lineHeight: type.body.lineHeight, fontWeight: "600" },
-	optionList: { maxHeight: 340, borderRadius: 16, backgroundColor: t.bgElevated, overflow: "hidden" },
-	optionRow: { minHeight: 54, paddingHorizontal: space.lg, paddingVertical: space.md, flexDirection: "row", alignItems: "center", gap: space.md },
-	optionBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
-	optionSectionBreak: { marginTop: space.xs, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderDefault },
-	optionSelected: { backgroundColor: t.accentTint },
-	optionLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
-	optionLabelSelected: { fontFamily: "Geist_600SemiBold", color: t.accent, fontWeight: "600" },
+	railHost: { flex: 1, minWidth: 0 },
 });

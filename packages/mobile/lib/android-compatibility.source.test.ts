@@ -50,19 +50,21 @@ describe("Android native compatibility boundaries", () => {
 
 	// Spawn is itself a bottom sheet on Android, so its choices open inside it.
 	// They used to be a second sheet over the first: two grabbers, and only the
-	// top one answered a swipe down.
+	// top one answered a swipe down. Each is now a Material dropdown anchored to
+	// its own button, rather than an inline list that replaced the controls.
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
 		const icons = source("./icons.tsx");
-		expect(android).toContain("OptionList");
+		expect(android).toContain('from "@expo/ui/jetpack-compose"');
+		expect(android).toContain("<DropdownMenu expanded={expanded} onDismissRequest={onDismiss}");
+		expect(android).not.toContain("OptionList");
 		expect(android).not.toMatch(/\bModal\b/);
 		expect(android).not.toContain("@expo/ui/community/bottom-sheet");
-		expect(android).not.toContain("Picker");
-		expect(android).not.toContain("@expo/ui");
-		expect(android).toContain("AgentLogo");
-		expect(android).toContain("option.sectionBreakBefore && styles.optionSectionBreak");
-		expect(android).toContain('icon={selectedProject?.icon ?? "folder"}');
-		expect(android).toContain('option.icon ? <Feather name={option.icon}');
+		expect(android).not.toContain("Pressable");
+		expect(android).not.toContain("Feather");
+		expect(android).toContain("option.sectionBreakBefore ? <HorizontalDivider");
+		expect(android).toContain('project?.icon === "message-square-plus" ? spawnDrawables.standalone : materialDrawable("folder")');
+		expect(android).toContain("chipColorFor(harness)");
 		expect(icons).toContain('import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";');
 		expect(icons).toContain('"message-square-plus": MessageSquarePlus');
 	});
