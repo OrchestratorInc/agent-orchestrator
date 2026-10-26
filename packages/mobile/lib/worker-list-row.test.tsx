@@ -142,6 +142,25 @@ describe("WorkerListRow", () => {
 		act(() => renderer.unmount());
 	});
 
+	// The board tab's large-title bar is translucent and the board is laid out
+	// under it, so the pill starts below the bar instead of under the status bar.
+	it("floats the update pill below a translucent header", () => {
+		const a = { ...session, id: "a", hostId: "mac", lastEventAt: "2026-10-08T02:00:00Z" };
+		const b = { ...session, id: "b", hostId: "mac", lastEventAt: "2026-10-08T01:00:00Z" };
+		const pillTop = (overlayTopInset?: number) => {
+			const render = (sessions: DashboardSession[]) => <WorkerBoardList sessions={sessions} overlayTopInset={overlayTopInset} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />;
+			let renderer!: ReactTestRenderer;
+			act(() => { renderer = create(render([a, b])); });
+			act(() => { renderer.update(render([a, { ...b, lastEventAt: "2026-10-08T03:00:00Z" }])); });
+			const pill = renderer.root.findAllByType("Pressable" as never).find(node => node.props.accessibilityLabel?.includes("updated"))!;
+			const style = Object.assign({}, ...pill.props.style({ pressed: false }).filter(Boolean));
+			act(() => renderer.unmount());
+			return style.top;
+		};
+		expect(pillTop(155)).toBe(155 + 8);
+		expect(pillTop()).toBe(8);
+	});
+
 	it("does not show an update pill when another host hydrates 75 existing workers", () => {
 		const local = { ...session, hostId: "mac", lastEventAt: "2026-10-08T02:00:00Z" };
 		const remote = Array.from({ length: 75 }, (_, index) => ({ ...session, id: `dev-${index}`, hostId: "dev", lastEventAt: index < 35 ? "2026-10-08T03:00:00Z" : "2026-10-08T01:00:00Z" }));

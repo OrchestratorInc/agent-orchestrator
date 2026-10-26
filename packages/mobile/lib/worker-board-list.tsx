@@ -99,6 +99,7 @@ export function WorkerBoardList({
 	listRef,
 	contentBottomInset,
 	contentInsetAdjustmentBehavior,
+	overlayTopInset = 0,
 	refreshing,
 	onRefresh,
 	ListHeaderComponent,
@@ -115,6 +116,11 @@ export function WorkerBoardList({
 	contentBottomInset: number;
 	/** "automatic" under a translucent header, which the board tab's large title is. */
 	contentInsetAdjustmentBehavior?: ScrollViewProps["contentInsetAdjustmentBehavior"];
+	/**
+	 * How much of the list's top a translucent header covers. The list insets
+	 * its rows itself; what floats over it starts this far down.
+	 */
+	overlayTopInset?: number;
 	refreshing: boolean;
 	onRefresh(): void | Promise<void>;
 	ListHeaderComponent?: ReactElement | null;
@@ -485,7 +491,7 @@ export function WorkerBoardList({
 					onEndReachedThreshold={1.5}
 				/>
 			</LayoutAnimationConfig>
-		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} onPress={showLatest} /> : null}
+		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} top={overlayTopInset + space.sm} onPress={showLatest} /> : null}
 		</View>
 	);
 }
@@ -520,7 +526,7 @@ const BoundWorkerRow = memo(function BoundWorkerRow({ actions, ...props }: Bound
 
 // News that arrived while the board was held still. Tapping re-sorts and goes
 // to the top, where the news now is.
-function UpdatesPill({ count, onPress }: { count: number; onPress: () => void }) {
+function UpdatesPill({ count, top, onPress }: { count: number; top: number; onPress: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const label = `${count} updated`;
@@ -529,7 +535,7 @@ function UpdatesPill({ count, onPress }: { count: number; onPress: () => void })
 			accessibilityRole="button"
 			accessibilityLabel={`${label}. Show latest.`}
 			onPress={onPress}
-			style={({ pressed }) => [styles.updatesPill, pressed && { opacity: 0.85 }]}
+			style={({ pressed }) => [styles.updatesPill, { top }, pressed && { opacity: 0.85 }]}
 		>
 			<Feather name="arrow-up" size={14} color={t.onAccent} />
 			<Text style={styles.updatesLabel}>{label}</Text>
@@ -601,7 +607,6 @@ const makeStyles = (t: Theme) =>
 		listWrap: { flex: 1 },
 		updatesPill: {
 			position: "absolute",
-			top: space.sm,
 			alignSelf: "center",
 			flexDirection: "row",
 			alignItems: "center",

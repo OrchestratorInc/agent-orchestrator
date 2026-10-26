@@ -6,6 +6,7 @@ import type { HostSnapshot } from "./otherHosts";
 const fixtures = vi.hoisted(() => ({
 	platform: "ios",
 	keyboard: { height: 0, isVisible: false, progress: 0 },
+	headerHeight: 155,
 	hostStates: [] as HostSnapshot[],
 	refreshAll: vi.fn(async () => {}),
 	refreshHost: vi.fn(async (_hostId: string) => {}),
@@ -25,6 +26,7 @@ vi.mock("expo-router", async () => {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), Badge: host("StackToolbarBadge") }) },
 	};
 });
+vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => fixtures.headerHeight }));
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", ScrollView: "ScrollView", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
 	Keyboard: { dismiss: vi.fn() }, StyleSheet: { create: (styles: object) => styles },
@@ -173,6 +175,20 @@ describe("Workers header", () => {
 		const first = screen.children[0] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string } };
 		expect(first.type).toBe(WorkerBoardList);
 		expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
+	});
+
+	// The list insets its rows under the bar itself; what floats over it does not,
+	// so it is told how much of its top the bar covers.
+	it("floats the board's overlays below the iOS bar the page runs under", () => {
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findByType(WorkerBoardList).props.overlayTopInset).toBe(155);
+	});
+
+	// Android's top app bar sits above the page and covers none of it.
+	it("leaves the board's overlays at the top of the Android page", () => {
+		fixtures.platform = "android";
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findByType(WorkerBoardList).props.overlayTopInset).toBe(0);
 	});
 });
 

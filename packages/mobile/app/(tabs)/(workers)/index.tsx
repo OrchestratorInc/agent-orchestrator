@@ -14,6 +14,7 @@ import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { useTabPageBottomGap } from "../../../lib/useTabPageBottomGap";
+import { useHeaderOverlap } from "../../../lib/useHeaderOverlap";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
@@ -46,6 +47,7 @@ export default function FleetScreen() {
 	const router = useRouter();
 	const tabBarInset = useTabBarInset();
 	const page = useTabPageBottomGap();
+	const headerOverlap = useHeaderOverlap();
 	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
@@ -231,6 +233,7 @@ export default function FleetScreen() {
 					// iOS insets the list by the tab bar already; it pads only for the dock.
 					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom) - tabBarInset}
 					contentInsetAdjustmentBehavior="automatic"
+					overlayTopInset={headerOverlap}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={listHeader}
