@@ -60,6 +60,9 @@ describe("active turn controls", () => {
 	it("renames the session, not the conversation", () => {
 		expect(screenSource).toContain("onRename: (next) => renameWorker(session.id, next)");
 		expect(screenSource).not.toContain("conversation.rename(next)");
+		// The system's text prompt (iOS) or Material dialog (Android), not a sheet.
+		expect(screenSource).toContain("<ConversationRenamePrompt request={renameRequest} onClose={closeRename} />");
+		expect(screenSource).not.toContain('kind: "conversation-rename"');
 	});
 
 	it("does not offer rename on the project orchestrator", () => {

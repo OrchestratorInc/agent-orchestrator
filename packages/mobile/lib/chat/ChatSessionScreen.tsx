@@ -25,6 +25,7 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { useChatKeyboard } from "./useChatKeyboard";
+import { ConversationRenamePrompt, type ConversationRenameRequest } from "./ConversationRenamePrompt";
 import { ConversationTitle } from "./ConversationTitle";
 import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
 import { conversationActionsMenu } from "./conversationActionsMenu";
@@ -116,6 +117,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
+	const [renameRequest, setRenameRequest] = useState<ConversationRenameRequest>();
+	const closeRename = useCallback(() => setRenameRequest(undefined), []);
 	const [resuming, setResuming] = useState(false);
 	const [resumeError, setResumeError] = useState<string | undefined>();
 	// Banners closed this visit, by what they report. See conversationBanners.
@@ -509,11 +512,11 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		refresh: () => void conversation.refresh(),
 		settings: () => void openTurnSettings(),
 		usage: openUsage,
-		rename: () => void presentSheet({
-			kind: "conversation-rename",
+		rename: () => setRenameRequest((current) => ({
+			id: (current?.id ?? 0) + 1,
 			initialTitle: sessionName,
 			onRename: (next) => renameWorker(session.id, next),
-		}),
+		})),
 		pin: () => {
 			if ("projectName" in session) return;
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
@@ -633,6 +636,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
 			{headerItems}
+			<ConversationRenamePrompt request={renameRequest} onClose={closeRename} />
 			{interfaceTransitionActive ? (
 				<InlineBanner
 					tone="warning"

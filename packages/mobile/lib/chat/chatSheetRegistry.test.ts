@@ -17,7 +17,6 @@ describe("chat sheet registry", () => {
 		["conversation-map", "/sheets/conversation-map"],
 		["composer-picker", "/sheets/composer-picker"],
 		["conversation-usage", "/sheets/conversation-usage"],
-		["conversation-rename", "/sheets/conversation-rename"],
 	] as const)("routes %s through a native sheet route", (kind, pathname) => {
 		const route = chatSheetRoute({ kind } as never);
 		expect(route.pathname).toBe(pathname);

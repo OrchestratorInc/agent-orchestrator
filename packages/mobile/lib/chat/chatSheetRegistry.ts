@@ -11,18 +11,11 @@ export type ConversationUsageEntry = {
 	subscribeSnapshot(listener: (snapshot: ConversationSnapshot) => void): () => void;
 };
 
-export type ConversationRenameEntry = {
-	kind: "conversation-rename";
-	initialTitle: string;
-	onRename(title: string): Promise<void> | void;
-};
-
 export type ChatSheetEntry =
 	| { kind: "turn-settings"; snapshot: ConversationSnapshot; models: ChatModel[]; options: ChatConfigOption[]; disabled?: boolean; error?: string; onSettings(settings: TurnSettings): Promise<void>; onOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>; onRefresh(): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }> }
 	| { kind: "conversation-map"; markers: ConversationMarker[]; onSelect(sequence: number): void }
 	| { kind: "composer-picker"; catalog: ComposerPickerCatalog; initialQuery?: string; truncated?: boolean; onSelect(value: string): void }
-	| ConversationUsageEntry
-	| ConversationRenameEntry;
+	| ConversationUsageEntry;
 
 const entries = new Map<string, ChatSheetEntry>();
 let sequence = 0;
@@ -42,7 +35,6 @@ export function chatSheetRoute(entry: ChatSheetEntry) {
 	const pathname = {
 		"turn-settings": "/sheets/chat-settings",
 		"conversation-map": "/sheets/conversation-map",
-		"conversation-rename": "/sheets/conversation-rename",
 		"conversation-usage": "/sheets/conversation-usage",
 		"composer-picker": "/sheets/composer-picker",
 	}[entry.kind];
