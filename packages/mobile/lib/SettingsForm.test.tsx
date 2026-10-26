@@ -25,7 +25,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const modifier = (type: string) => (...args: unknown[]) => ({ $type: type, args });
 	return Object.fromEntries(
-		["background", "buttonStyle", "disabled", "font", "foregroundStyle", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
+		["accessibilityHidden", "background", "buttonStyle", "disabled", "font", "foregroundStyle", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
 	);
 });
 
@@ -96,16 +96,21 @@ describe("the iOS settings form", () => {
 		expect(item.props.leading.props.icon).toBe("theme");
 		const trailing = render(item.props.trailing);
 		expect(trailing.findAllByType("Text" as never).map((text) => text.props.children)).toEqual(["Nord"]);
-		expect(trailing.findAllByType("Image" as never).map((image) => image.props.systemName)).toEqual(["chevron.forward"]);
+		const chevron = trailing.findByType("Image" as never);
+		expect(chevron.props.systemName).toBe("chevron.forward");
+		// VoiceOver reads "Theme, Nord, button", not the symbols' names.
+		expect(has(chevron, "accessibilityHidden", true)).toBe(true);
+		expect(has(render(item.props.leading).findByType("Image" as never), "accessibilityHidden", true)).toBe(true);
 	});
 
-	it("leads every row with its SF Symbol in the secondary ink", () => {
+	it("leads every row with its SF Symbol in the secondary ink, scaled with the text", () => {
 		const root = render(<SettingsValueRow icon="status" label="Status" value="Connected" tone="good" />);
 		const content = root.findByType("LabeledContent" as never);
 		const label = render(content.props.label).findByType("Label" as never);
 		expect(label.props.title).toBe("Status");
 		const icon = render(label.props.icon).findByType("Image" as never);
 		expect(icon.props).toMatchObject({ systemName: "dot.radiowaves.left.and.right", color: "#secondary" });
+		expect(has(icon, "font", { textStyle: "body" })).toBe(true);
 	});
 
 	it.each([

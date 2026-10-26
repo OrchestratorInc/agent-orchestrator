@@ -51,8 +51,8 @@ import { font as typeface, gutter, iconSize, radius, space, stateOpacity } from 
 export { settingsIcons, type SettingsIconName, type SettingsOption, type SettingsTone } from "./SettingsForm.types";
 
 // Android settings are a Material 3 list: Compose ListItems grouped into
-// sections, each row a rounded segment of its group, with the ripple, the 48dp
-// rows and TalkBack's roles coming from Compose. The universal FieldGroup draws
+// sections, each row a rounded segment of its group, with the ripple, the row
+// heights and TalkBack's roles coming from Compose. The universal FieldGroup draws
 // the same grouping, but wraps each row in a ListItem of its own that cannot be
 // tapped, so a tappable row inside it nests a second ListItem; these rows are
 // the ListItem itself.

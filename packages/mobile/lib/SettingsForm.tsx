@@ -1,6 +1,7 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
 import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
 import {
+	accessibilityHidden,
 	background,
 	buttonStyle,
 	disabled as disabledModifier,
@@ -78,10 +79,13 @@ function SectionFooterText({ children }: { children: string }) {
 	return <Text modifiers={[font({ family: typeface.regular, textStyle: "footnote" }), foregroundStyle(t.textSecondary)]}>{children}</Text>;
 }
 
-/** The row's glyph, in the secondary ink and scaled with the row's text. */
+/**
+ * The row's glyph, in the secondary ink and scaled with the row's text. It is
+ * decoration: VoiceOver reads the row's label, not the symbol's name.
+ */
 function RowIcon({ icon, color }: { icon: SettingsIconName; color?: string }) {
 	const t = useTheme();
-	return <Image systemName={settingsIcons[icon].ios} color={color ?? t.textSecondary} modifiers={[font({ textStyle: "body" })]} />;
+	return <Image systemName={settingsIcons[icon].ios} color={color ?? t.textSecondary} modifiers={[font({ textStyle: "body" }), accessibilityHidden(true)]} />;
 }
 
 /** Icon and title as one Label, so the Form lines separators up with the title. */
@@ -114,7 +118,7 @@ export function SettingsLinkRow({ icon, label, value, onPress, testID }: Setting
 			trailing={
 				<HStack spacing={space.xs}>
 					{value ? <ValueText value={value} color={t.textSecondary} /> : null}
-					<Image systemName="chevron.forward" color={t.textTertiary} modifiers={[font({ textStyle: "footnote", weight: "semibold" })]} />
+					<Image systemName="chevron.forward" color={t.textTertiary} modifiers={[font({ textStyle: "footnote", weight: "semibold" }), accessibilityHidden(true)]} />
 				</HStack>
 			}
 		>
