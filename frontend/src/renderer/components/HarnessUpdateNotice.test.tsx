@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
+import { friendlyVersion, HarnessUpdateNotice, noticeCoversLiveBrowser } from "./HarnessUpdateNotice";
 import { useHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { apiClient } from "../lib/api-client";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -76,7 +76,7 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
-		expect(notice).toHaveClass("fixed", "right-4");
+		expect(notice).toHaveClass("absolute", "right-3", "bottom-3");
 	});
 
 	it("publishes the corner it covers while shown, so session content can keep clear of it", async () => {
@@ -96,16 +96,17 @@ describe("startup harness update notice", () => {
 		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
 	});
 
-	it("keeps the app corner, hides for browser overlap, and returns after the inspector closes", async () => {
+	it("stays in the bottom-right corner on every page, hides for browser overlap, and returns after the inspector closes", async () => {
 		vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
+		vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
 		let browserRect = new DOMRect();
 		const originalRect = HTMLElement.prototype.getBoundingClientRect;
 		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-			if (this.classList.contains("harness-update-notice")) return new DOMRect(964, 72, 300, 200);
-			if (this.classList.contains("workspace-topbar-container")) return new DOMRect(0, 0, 1280, 60);
+			if (this.classList.contains("harness-update-notice")) return new DOMRect(948, 688, 320, 100);
 			if (this.classList.contains("browser-panel__viewport")) return browserRect;
 			return originalRect.call(this);
 		});
+		// A taller top bar on another page no longer moves the notice.
 		const topbar = document.createElement("div");
 		topbar.className = "workspace-topbar-container";
 		document.body.append(topbar);
@@ -118,8 +119,13 @@ describe("startup harness update notice", () => {
 		viewport.className = "browser-panel__viewport";
 		browser.append(viewport);
 		try {
-			for (const [left, top, visible] of [[820, 400, true], [820, 100, false], [600, 400, true], [0, 40, false]] as const) {
-				browserRect = new DOMRect(left, top, 1280 - left, 800 - top);
+			for (const [rect, visible] of [
+				[new DOMRect(820, 40, 460, 400), true],
+				[new DOMRect(820, 40, 460, 760), false],
+				[new DOMRect(0, 40, 600, 760), true],
+				[new DOMRect(0, 40, 1280, 760), false],
+			] as const) {
+				browserRect = rect;
 				await act(async () => {
 					document.body.append(browser);
 					window.dispatchEvent(new Event("resize"));
@@ -128,16 +134,37 @@ describe("startup harness update notice", () => {
 				await waitFor(() => {
 					const notice = screen.queryByRole("region", { name: "Agent updates available" });
 					if (!visible) { expect(notice).toBeNull(); return; }
-					expect(notice, `browser left=${left}, top=${top}`).toHaveClass("fixed", "right-4");
+					expect(notice, `browser ${rect.left},${rect.top},${rect.right},${rect.bottom}`).toHaveClass("absolute", "right-3", "bottom-3");
 					expect(notice).not.toHaveAttribute("data-browser-native-overlay");
 				});
 			}
 			await act(async () => { browser.remove(); });
-			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("fixed", "right-4"));
+			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("absolute", "right-3", "bottom-3"));
 		} finally {
 			browser.remove();
 			topbar.remove();
 		}
+	});
+
+	it("dismisses the release when swiped right with two fingers", async () => {
+		mountNotice();
+		const card = await screen.findByRole("article", { name: "Claude Code" });
+		for (const deltaX of [-20, -40, -60]) card.dispatchEvent(new WheelEvent("wheel", { deltaX, deltaMode: WheelEvent.DOM_DELTA_PIXEL }));
+		await waitFor(() => expect(screen.queryByRole("region", { name: "Agent updates available" })).toBeNull());
+		expect(JSON.parse(localStorage.getItem("ao.harness-update-dismissals.v1") ?? "[]")).toHaveLength(1);
+	});
+
+	it("keeps the release when a swipe is mostly vertical", async () => {
+		mountNotice();
+		const card = await screen.findByRole("article", { name: "Claude Code" });
+		for (const deltaY of [20, 40, 60]) card.dispatchEvent(new WheelEvent("wheel", { deltaX: -5, deltaY, deltaMode: WheelEvent.DOM_DELTA_PIXEL }));
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		expect(screen.getByRole("region", { name: "Agent updates available" })).toBeInTheDocument();
+	});
+
+	it("shows build dates for timestamped versions, which read as neighbouring releases when cut short", () => {
+		expect(friendlyVersion("0.0.1778087986-g7acd91", "en")).toMatch(/^May 6/);
+		expect(friendlyVersion("2.1.292", "en")).toBe("v2.1.292");
 	});
 
 	it("finds updates without mounting Harness settings and starts no installation automatically", async () => {
@@ -179,8 +206,8 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		await screen.findByRole("button", { name: "Update all" });
 		// Collapsed, several updates read as one summary card.
-		expect(screen.getAllByRole("article")).toHaveLength(1);
-		expect(screen.getByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
+		expect(screen.queryAllByRole("article")).toHaveLength(0);
+		expect(screen.getByRole("group", { name: "Agent updates available" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		await userEvent.dblClick(screen.getByRole("button", { name: "Update all" }));
 		await waitFor(() => expect(started).toEqual(["cursor"]));
@@ -255,7 +282,7 @@ describe("startup harness update notice", () => {
 		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toMatchObject({ status: "current" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Post-install verification failed");
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
-		expect(screen.queryByRole("region")).toBeNull();
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
 	});
 
 	it("keeps a failed update on the newer release the click-time check chose", async () => {
@@ -367,34 +394,36 @@ describe("startup harness update notice", () => {
 	it("ranks by usage then recency, and dismissing one release keeps the others", async () => {
 		mockStack();
 		mountNotice();
-		expect(await screen.findByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
-		expect(screen.getAllByRole("article")).toHaveLength(1);
+		expect(await screen.findByRole("group", { name: "Agent updates available" })).toBeInTheDocument();
+		expect(screen.queryAllByRole("article")).toHaveLength(0);
 		await userEvent.click(screen.getByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Cursor update" }));
-		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
+		await waitFor(() => expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]));
 		expect(JSON.parse(localStorage.getItem("ao.harness-update-dismissals.v1")!)).toEqual([JSON.stringify(["local", "cursor", "2.0.0"])]);
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
+		await waitFor(() => expect(screen.queryByRole("article", { name: "Codex" })).toBeNull());
 		expect(screen.getByRole("article", { name: "Claude Code" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
-		expect(screen.queryByRole("region")).toBeNull();
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
 	});
 
 	it("expands and collapses the stack, with independent dismissal of expanded cards", async () => {
 		mockStack();
 		mountNotice();
-		const summary = await screen.findByRole("article", { name: "Agent updates available" });
+		const summary = await screen.findByRole("group", { name: "Agent updates available" });
 		expect(screen.queryByRole("article", { name: "Cursor" })).toBeNull();
 		await userEvent.click(within(summary).getByRole("button", { name: "Show all (3)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Cursor", "Codex", "Claude Code"]);
 		expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
-		expect(screen.getAllByRole("article")).toHaveLength(2);
+		await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
 		await userEvent.click(screen.getByRole("button", { name: "Show less" }));
-		expect(screen.getAllByRole("article")).toHaveLength(1);
+		// The list closes, then its rows unmount.
+		await waitFor(() => expect(screen.queryAllByRole("article")).toHaveLength(0));
 		expect(screen.getByRole("button", { name: "Show all (2)" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss all updates" }));
-		expect(screen.queryByRole("region")).toBeNull();
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
 	});
 
 	it("waits for slower advisories before choosing the top harness", async () => {
@@ -432,9 +461,10 @@ describe("startup harness update notice", () => {
 		const view = mountNotice();
 		await userEvent.click(await screen.findByRole("button", { name: "Show all (3)" }));
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Cursor update" }));
+		await waitFor(() => expect(screen.queryByRole("article", { name: "Cursor" })).toBeNull());
 		view.unmount();
 		mountNotice();
-		expect(await screen.findByRole("article", { name: "Agent updates available" })).toBeInTheDocument();
+		expect(await screen.findByRole("group", { name: "Agent updates available" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show all (2)" }));
 		expect(screen.getAllByRole("article").map((card) => card.getAttribute("aria-label"))).toEqual(["Codex", "Claude Code"]);
 	});
@@ -510,16 +540,24 @@ describe("startup harness update notice", () => {
 		expect(screen.getByRole("button", { name: "View details" })).toBeEnabled();
 	});
 
-	it("dismisses the shown release across remounts but shows a newer target", async () => {
+	it("keeps a dismissed harness quiet for a week, even through newer releases", async () => {
 		const view = mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Claude Code update" }));
-		expect(screen.queryByRole("region")).toBeNull();
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
 		view.unmount();
-		const { client } = mountNotice();
-		await waitFor(() => expect(client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
+		const first = mountNotice();
+		await waitFor(() => expect(first.client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
+		const newer = { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" };
+		act(() => first.client.setQueryData(updateAdvisoryQueryKey("claude-code"), newer));
+		await new Promise((resolve) => setTimeout(resolve, 50));
 		expect(screen.queryByRole("region")).toBeNull();
-		act(() => client.setQueryData(updateAdvisoryQueryKey("claude-code"), { agentId: "claude-code", status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.293", maintenanceMethod: "official-installer" }));
+		first.unmount();
+		const now = Date.now();
+		vi.spyOn(Date, "now").mockReturnValue(now + 8 * 24 * 60 * 60 * 1000);
+		const later = mountNotice();
+		await waitFor(() => expect(later.client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
+		act(() => later.client.setQueryData(updateAdvisoryQueryKey("claude-code"), newer));
 		expect(await screen.findByText("v2.1.293")).toBeInTheDocument();
 	});
 
@@ -577,6 +615,18 @@ describe("harness updates while sessions run", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
 		await waitFor(() => expect(installs).toHaveLength(1));
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("says the update finished instead of just disappearing", async () => {
+		installResponse = (agent) => {
+			advisories[agent] = { ...claudeAdvisory, status: "current", currentVersion: "2.1.292" };
+			return { data: { target: agent, status: "succeeded" } };
+		};
+		mountNotice();
+		await userEvent.click(await screen.findByRole("button", { name: "Update" }));
+		const done = await screen.findByRole("status", { name: "Claude Code" });
+		expect(done).toHaveTextContent("Now on v2.1.292");
+		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
 	});
 
 	it("updates a harness open sessions use without asking when it keeps their release", async () => {
@@ -706,26 +756,28 @@ describe("harness updates while sessions run", () => {
 });
 
 describe("noticeCoversLiveBrowser", () => {
-	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], top = 72, height = 200, width = 1280) => noticeCoversLiveBrowser(browser, top, height, width);
+	const window = { left: 0, top: 0, right: 1280, bottom: 800 };
+	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], height = 100, area = window) => noticeCoversLiveBrowser(browser, area, height);
 
-	it("returns false when no live page overlaps the app corner", () => {
+	it("returns false when no live page overlaps the panel corner", () => {
 		expect(covers(null)).toBe(false);
 		expect(covers({ left: 200, top: 60, right: 700, bottom: 800 })).toBe(false);
-		expect(covers({ left: 820, top: 400, right: 1280, bottom: 800 })).toBe(false);
+		expect(covers({ left: 820, top: 40, right: 1280, bottom: 400 })).toBe(false);
 	});
 
 	it.each([820, 600, 300, 0])("hides instead of moving sideways when the page starts at %ipx", (left) => {
-		expect(covers({ left, top: 100, right: 1280, bottom: 800 })).toBe(true);
+		expect(covers({ left, top: 40, right: 1280, bottom: 800 })).toBe(true);
 	});
 
 	it("hides when expanding the stack reaches the browser page", () => {
-		const browser = { left: 820, top: 400, right: 1280, bottom: 800 };
+		const browser = { left: 820, top: 40, right: 1280, bottom: 500 };
 		expect(covers(browser)).toBe(false);
-		expect(covers(browser, 72, 500)).toBe(true);
+		expect(covers(browser, 400)).toBe(true);
 	});
 
-	it("keeps the corner above the page but hides overlap in a narrow window", () => {
-		expect(covers(null, 72, 200, 280)).toBe(false);
-		expect(covers({ left: 0, top: 100, right: 280, bottom: 800 }, 72, 200, 280)).toBe(true);
+	it("measures from the center panel's corner, not the window's", () => {
+		const panel = { left: 260, top: 6, right: 900, bottom: 794 };
+		expect(covers({ left: 920, top: 0, right: 1280, bottom: 800 }, 100, panel)).toBe(false);
+		expect(covers({ left: 700, top: 0, right: 1280, bottom: 800 }, 100, panel)).toBe(true);
 	});
 });
