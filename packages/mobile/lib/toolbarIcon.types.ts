@@ -14,16 +14,21 @@ import type { AppSymbolName, IOSSymbol, symbols } from "./symbols";
 export const materialDrawableNames = [
 	"add",
 	"arrow_back",
+	"arrow_forward",
 	"check",
 	"close",
 	"delete",
+	"desktop_windows",
 	"devices",
 	"filter_list",
 	"folder",
 	"more_vert",
 	"notifications",
 	"open_in_new",
+	"refresh",
 	"settings",
+	"smartphone",
+	"tab",
 	"wrap_text",
 ] as const satisfies readonly AndroidSymbol[];
 

@@ -10,16 +10,21 @@ export type { MaterialDrawableName, ToolbarIcon, ToolbarSymbol, ToolbarSymbolNam
 const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	add: require("../assets/icons/add.xml"),
 	arrow_back: require("../assets/icons/arrow_back.xml"),
+	arrow_forward: require("../assets/icons/arrow_forward.xml"),
 	check: require("../assets/icons/check.xml"),
 	close: require("../assets/icons/close.xml"),
 	delete: require("../assets/icons/delete.xml"),
+	desktop_windows: require("../assets/icons/desktop_windows.xml"),
 	devices: require("../assets/icons/devices.xml"),
 	filter_list: require("../assets/icons/filter_list.xml"),
 	folder: require("../assets/icons/folder.xml"),
 	more_vert: require("../assets/icons/more_vert.xml"),
 	notifications: require("../assets/icons/notifications.xml"),
 	open_in_new: require("../assets/icons/open_in_new.xml"),
+	refresh: require("../assets/icons/refresh.xml"),
 	settings: require("../assets/icons/settings.xml"),
+	smartphone: require("../assets/icons/smartphone.xml"),
+	tab: require("../assets/icons/tab.xml"),
 	wrap_text: require("../assets/icons/wrap_text.xml"),
 };
 
