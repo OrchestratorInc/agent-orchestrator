@@ -263,6 +263,10 @@ func TestOpenCodeV2HomebrewUnlinksItselfAndRestoresLinkedV1(t *testing.T) {
 			if plan.Unsupported {
 				t.Fatalf("homebrew plan = %+v, want available", plan)
 			}
+			if plan.homebrewV1Prefix != prefix {
+				t.Fatalf("Homebrew prefix = %q, want %q", plan.homebrewV1Prefix, prefix)
+			}
+			plan = plan.withLinkedOpenCodeV1()
 			if len(plan.Prepare) == 0 || strings.Join(plan.Prepare[len(plan.Prepare)-1], " ") != "brew unlink opencode" {
 				t.Fatalf("Prepare = %v, want OpenCode 1 unlinked last", plan.Prepare)
 			}

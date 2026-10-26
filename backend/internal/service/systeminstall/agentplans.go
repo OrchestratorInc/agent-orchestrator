@@ -733,26 +733,30 @@ func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
 		if len(plan.Command) == 0 {
 			return plan
 		}
-		var restore [][]string
-		if s.homebrewKegLinked(openCodeV1HomebrewKeg) {
-			plan.Prepare = append(slices.Clone(plan.Prepare), []string{"brew", "unlink", openCodeV1HomebrewKeg})
-			restore = [][]string{{"brew", "link", openCodeV1HomebrewKeg}}
-			// OpenCode 1 launches wait until its link is back.
-			plan.alsoChanges = []Target{TargetOpencode}
+		// Even an absent marker can mean v1 is reinstalling. Reserve its
+		// harness before inspecting linked state in runAgentOperation.
+		plan.alsoChanges = []Target{TargetOpencode}
+		if s.capabilities != nil {
+			plan.homebrewV1Prefix = s.capabilities.Homebrew.Prefix
 		}
-		plan.Cleanup = append([][]string{{"brew", "unlink", openCodeV2HomebrewKeg}}, restore...)
+		plan.Cleanup = [][]string{{"brew", "unlink", openCodeV2HomebrewKeg}}
 	}
 	return plan
 }
 
-// homebrewKegLinked reports whether Homebrew has keg linked into its prefix.
-// Homebrew records each linked keg as <prefix>/var/homebrew/linked/<keg>.
-func (s requestPlanner) homebrewKegLinked(keg string) bool {
-	if s.capabilities == nil || s.capabilities.Homebrew.Prefix == "" {
-		return false
+// withLinkedOpenCodeV1 inspects linked state only after the run reserves v1.
+// A plan may have been built while a v1 reinstall temporarily removed its
+// marker, or long before a deferred update actually starts.
+func (plan Plan) withLinkedOpenCodeV1() Plan {
+	if plan.homebrewV1Prefix == "" {
+		return plan
 	}
-	_, err := os.Lstat(filepath.Join(s.capabilities.Homebrew.Prefix, "var", "homebrew", "linked", keg))
-	return err == nil
+	_, err := os.Lstat(filepath.Join(plan.homebrewV1Prefix, "var", "homebrew", "linked", openCodeV1HomebrewKeg))
+	if err == nil {
+		plan.Prepare = append(slices.Clone(plan.Prepare), []string{"brew", "unlink", openCodeV1HomebrewKeg})
+		plan.Cleanup = append(slices.Clone(plan.Cleanup), []string{"brew", "link", openCodeV1HomebrewKeg})
+	}
+	return plan
 }
 
 // withInstallerEnv returns a copy of script whose environment sets entries,

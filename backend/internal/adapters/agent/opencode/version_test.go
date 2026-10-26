@@ -21,6 +21,7 @@ func versionBinary(t *testing.T, script string) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
+	isolateVersionResolver(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
@@ -30,6 +31,15 @@ func versionBinary(t *testing.T, script string) string {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	return path
+}
+
+// Keep system Homebrew binaries out of tests that require only their fixture.
+func isolateVersionResolver(t *testing.T) {
+	t.Helper()
+	oldPaths, oldPrefixes := opencodeUnixPaths, homebrewDefaultPrefixes
+	opencodeUnixPaths, homebrewDefaultPrefixes = nil, nil
+	t.Cleanup(func() { opencodeUnixPaths, homebrewDefaultPrefixes = oldPaths, oldPrefixes })
+	t.Setenv("HOMEBREW_PREFIX", "")
 }
 
 func TestResolveBinaryForMajor(t *testing.T) {
@@ -131,9 +141,7 @@ func TestResolveBinaryForMajorMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("VOLTA_HOME", t.TempDir())
 	t.Setenv("FNM_DIR", t.TempDir())
-	old := opencodeUnixPaths
-	opencodeUnixPaths = nil
-	t.Cleanup(func() { opencodeUnixPaths = old })
+	isolateVersionResolver(t)
 	_, err := ResolveBinaryForMajor(context.Background(), 2)
 	if !errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		t.Fatalf("error = %v, want missing binary", err)
@@ -361,5 +369,25 @@ func TestV2HomebrewCandidatesIncludeCustomPrefix(t *testing.T) {
 	err := IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.FromSlash(want)}
 	if got := err.ReplacedOpenCode1Message(); got != "" {
 		t.Fatalf("OpenCode 2 at a custom prefix's opt link = %q, want no replacement message", got)
+	}
+}
+
+func TestReplacedOpenCode1MessageExcludesManagedV2Launchers(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "harnesses", "bin")
+	binaryutil.SetManagedBinDir(bin)
+	t.Cleanup(func() { binaryutil.SetManagedBinDir("") })
+	for _, name := range []string{"opencode-v2", "opencode-v2.cmd", "opencode-v2.exe", "opencode-v2.bat"} {
+		t.Run(name, func(t *testing.T) {
+			mismatch := &IncompatibleVersionError{ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "2.1.2", Path: filepath.Join(bin, name)}
+			if got := mismatch.ReplacedOpenCode1Message(); got != "" {
+				t.Fatalf("managed v2 launcher reported a replacement: %s", got)
+			}
+			// A v2 binary using v1's name in the same directory is not v2's
+			// separate launcher and must retain the repair message.
+			mismatch.Path = filepath.Join(bin, "opencode")
+			if got := mismatch.ReplacedOpenCode1Message(); got == "" {
+				t.Fatal("v1 launcher containing v2 should still report replacement")
+			}
+		})
 	}
 }
