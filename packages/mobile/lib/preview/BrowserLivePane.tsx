@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Stack } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { Image, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
-import { BrowserLiveClient } from "../browserLive";
+import { BrowserLiveClient, type BrowserLiveCommand, type BrowserLiveState } from "../browserLive";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { useApp } from "../store";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
@@ -13,9 +15,13 @@ import { duration, radius, space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
 import { useToast } from "../useToast";
+import { bottomToolbarHeight, browserMenu, browserToolbar, hasBottomToolbar, type BrowserControls, type BrowserTab } from "./browserControls";
 import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, type FrameSize, type FrameZoom } from "./frameZoom";
+import { LoadingBar } from "./LoadingBar";
+import { OpenURLPrompt } from "./OpenURLPrompt";
 
 type BrowserStatus = "connecting" | "open" | "error";
+type NavigateAction = "back" | "forward" | "reload" | "stop";
 
 /** How far a finger may wander before a tap becomes a scroll. */
 const DRAG_SLOP = 7;
@@ -24,9 +30,24 @@ const TAP_MAX_MS = 10_000;
 /** The mark a tap leaves on the frame: about a fingertip. */
 const TOUCH_MARK = 36;
 
-export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; onDisabled?(): void }) {
+export type BrowserLivePaneProps = {
+	sessionID: string;
+	onDisabled?(): void;
+	/** The desktop page's title as it changes, or undefined while there is none to show. */
+	onTitle?(title: string | undefined): void;
+	/**
+	 * The page's own trailing header item, memoised. A screen has one right
+	 * toolbar and the pane draws it while it shows, because on iOS the
+	 * browser's controls go there too, so the page hands its item over.
+	 */
+	headerItem?: ReactElement | null;
+};
+
+export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null }: BrowserLivePaneProps) {
 	const { config } = useApp();
+	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const insets = useSafeAreaInsets();
 	const reduceMotion = useReducedMotion();
 	const toast = useToast();
 	const showNotice = toast.show;
@@ -34,6 +55,7 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	const [error, setError] = useState<string>();
+	const [page, setPage] = useState<BrowserLiveState | null>(null);
 	const [frameURI, setFrameURI] = useState<string>();
 	const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
 	const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
@@ -46,9 +68,10 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 	const pageWidth = useRef(0);
 	const frameWidth = useRef(1);
 	frameWidth.current = frameSize.width;
-	const [blank, setBlank] = useState(false);
+	const blank = page !== null && !page.url;
 
 	useEffect(() => {
+		setPage(null);
 		if (!config) {
 			setStatus("error");
 			setError("Pair this phone with the desktop app first.");
@@ -78,7 +101,7 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 			onState: (state) => {
 				if (disposed) return;
 				pageWidth.current = state.width;
-				setBlank(!state.url);
+				setPage(state);
 			},
 			onFrame: (frame) => {
 				if (disposed) return;
@@ -101,19 +124,70 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 		};
 	}, [attempt, config, onDisabled, sessionID, showNotice]);
 
+	// The bar is titled with the desktop's page while one is showing.
+	const pageTitle = status === "open" && page?.url ? page.title.trim() || undefined : undefined;
+	useEffect(() => {
+		onTitle?.(pageTitle);
+	}, [onTitle, pageTitle]);
+	useEffect(() => () => onTitle?.(undefined), [onTitle]);
+
+	const send = useCallback((command: BrowserLiveCommand) => client.current?.send(command), []);
+	const navigate = useCallback((action: NavigateAction) => send({ type: "navigate", payload: { action } }), [send]);
+	const [prompting, setPrompting] = useState(false);
+	const openURL = useCallback((url: string) => send({ type: "navigate", payload: { action: "open", url } }), [send]);
+	const closePrompt = useCallback(() => setPrompting(false), []);
+
+	// Each state message carries a new tab list, so it is compared by content
+	// to keep the toolbars from rebuilding while nothing in them changed.
+	const tabsJSON = JSON.stringify(page?.tabs ?? []);
+	const tabs = useMemo(() => JSON.parse(tabsJSON) as BrowserTab[], [tabsJSON]);
+	const canGoBack = Boolean(page?.canGoBack);
+	const canGoForward = Boolean(page?.canGoForward);
+	const loading = Boolean(page?.loading);
+	const controls = useMemo<BrowserControls>(() => ({
+		enabled: status === "open",
+		canGoBack,
+		canGoForward,
+		loading,
+		tabs,
+		tint: t.accent,
+		disabledTint: t.textFaint,
+		surface: t.bgElevated,
+		onBack: () => navigate("back"),
+		onForward: () => navigate("forward"),
+		onReload: () => navigate("reload"),
+		onStop: () => navigate("stop"),
+		onOpenURL: () => setPrompting(true),
+		onNewTab: () => send({ type: "tab", payload: { action: "new" } }),
+		onSelectTab: (tabId) => send({ type: "tab", payload: { action: "select", tabId } }),
+		onCloseTab: (tabId) => send({ type: "tab", payload: { action: "close", tabId } }),
+	}), [canGoBack, canGoForward, loading, navigate, send, status, t.accent, t.bgElevated, t.textFaint, tabs]);
+	// Android: a bottom toolbar. iOS: one menu in the header.
+	const toolbarShown = hasBottomToolbar();
+	const bottomBar = useMemo(() => toolbarShown ? browserToolbar(controls) : null, [controls, toolbarShown]);
+	// Memoized apart from the controls, so with a bottom toolbar the header's
+	// items register again only when the page's own item changes.
+	const headerMenu = useMemo(() => toolbarShown ? null : browserMenu(controls), [controls, toolbarShown]);
+	const headerItems = useMemo(() => headerMenu || headerItem ? (
+		<Stack.Toolbar placement="right">
+			{headerMenu}
+			{headerItem}
+		</Stack.Toolbar>
+	) : null, [headerItem, headerMenu]);
+
 	// Gestures arrive in viewport points with any zoom already undone.
 	const tapAt = useCallback((x: number, y: number) => {
 		const point = normalizedFramePoint(frameRectRef.current, { x, y });
 		if (!point) return;
-		client.current?.send({ type: "input", payload: { kind: "pointer", phase: "down", ...point, button: "left" } });
-		client.current?.send({ type: "input", payload: { kind: "pointer", phase: "up", ...point, button: "left" } });
-	}, []);
+		send({ type: "input", payload: { kind: "pointer", phase: "down", ...point, button: "left" } });
+		send({ type: "input", payload: { kind: "pointer", phase: "up", ...point, button: "left" } });
+	}, [send]);
 	const scrollBy = useCallback((deltaX: number, deltaY: number, zoom: number) => {
 		// A magnified frame shows fewer desktop pixels per point, so the drag is
 		// scaled by the zoom too and the page keeps pace with the finger.
 		const fitted = frameRectRef.current.width / (pageWidth.current > 1 ? pageWidth.current : frameWidth.current);
-		client.current?.send({ type: "input", payload: { kind: "wheel", ...browserWheelDeltaFromDrag(deltaX, deltaY, fitted * zoom) } });
-	}, []);
+		send({ type: "input", payload: { kind: "wheel", ...browserWheelDeltaFromDrag(deltaX, deltaY, fitted * zoom) } });
+	}, [send]);
 
 	const viewport = useSharedValue<FrameSize>({ width: 1, height: 1 });
 	const zoomScale = useSharedValue(1);
@@ -198,20 +272,30 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 	}, [viewport]);
 
 	const retry = () => setAttempt((value) => value + 1);
+	// The frame stays clear of the bottom toolbar, and notices sit above it.
+	const toolbarClearance = toolbarShown ? insets.bottom + bottomToolbarHeight() : 0;
 
 	return <View style={styles.root}>
-		<GestureDetector gesture={gesture}>
-			<View collapsable={false} style={styles.viewport} onLayout={onViewportLayout}>
-				<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
-					{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
-				</Animated.View>
-				<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
-			</View>
-		</GestureDetector>
-		{status === "open" && blank ? <View pointerEvents="none" style={styles.overlay}><EmptyState icon="desktop" title="Nothing is open in the desktop browser yet" /></View> : null}
-		{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
-		{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
-		<ToastHost toast={toast} />
+		{headerItems}
+		<View style={[styles.stage, { marginBottom: toolbarClearance }]}>
+			<GestureDetector gesture={gesture}>
+				<View collapsable={false} style={styles.viewport} onLayout={onViewportLayout}>
+					<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
+						{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
+					</Animated.View>
+					<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
+				</View>
+			</GestureDetector>
+			{status === "open" && blank ? <View style={styles.overlay}>
+				<EmptyState icon="desktop" title="Nothing is open in the desktop browser yet" action={<Button title="Open URL…" icon="globe" onPress={controls.onOpenURL} />} />
+			</View> : null}
+			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
+			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
+			<LoadingBar loading={status === "open" && loading} accessibilityLabel="Loading page" />
+		</View>
+		{bottomBar}
+		<OpenURLPrompt visible={prompting} onSubmit={openURL} onDismiss={closePrompt} />
+		<ToastHost toast={toast} bottomOffset={toolbarShown ? toolbarClearance + space.md : undefined} />
 	</View>;
 }
 
@@ -234,6 +318,7 @@ function BrowserState({ status, error, retry }: { status: BrowserStatus; error?:
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	root: { flex: 1, backgroundColor: t.bgBase },
+	stage: { flex: 1 },
 	// The letterbox around the fitted frame is the page itself, so it follows the
 	// theme instead of drawing black bars in light mode.
 	viewport: { flex: 1, overflow: "hidden", backgroundColor: t.bgBase },

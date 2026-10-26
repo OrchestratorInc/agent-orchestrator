@@ -87,6 +87,7 @@ import SessionPreviewScreen from "../app/preview/[id]";
 
 const appPreview = { entry: "index.html", url: "http://desktop.local:3011/preview/artifacts/index.html", authenticated: true };
 let screen: ReactTestRenderer;
+let header: ReactTestRenderer | undefined;
 const nodes = (name: string) => screen.root.findAll((node) => (node.type as unknown) === name);
 const lastTitle = () => fixtures.navigation.setOptions.mock.lastCall?.[0].title;
 const webView = () => nodes("WebView")[0];
@@ -96,9 +97,23 @@ function headerButton(label: string) {
 	return nodes("StackToolbarButton").find((node) => node.props.accessibilityLabel === label);
 }
 
+/**
+ * Where the header's items are drawn: the page's own toolbar, or, while the
+ * live browser shows, the item the page hands to it for its toolbar.
+ */
+function headerRoot() {
+	const [pane] = nodes("BrowserLivePane");
+	if (!pane) return screen.root;
+	act(() => {
+		header ??= create(<></>);
+		header.update(pane.props.headerItem ?? <></>);
+	});
+	return header!.root;
+}
+
 /** The header's view menu: Desktop browser or Mobile view, with the system's check on the one showing. */
 function modeMenu() {
-	const [menu] = nodes("StackToolbarMenu").filter((node) => String(node.props.accessibilityLabel).startsWith("View, "));
+	const [menu] = headerRoot().findAll((node) => (node.type as unknown) === "StackToolbarMenu" && String(node.props.accessibilityLabel).startsWith("View, "));
 	expect(menu, "the header has the view menu").toBeDefined();
 	return menu;
 }
@@ -118,7 +133,8 @@ async function openPreview() {
 }
 
 async function setMobile(enabled: boolean) {
-	await act(async () => modeAction(enabled ? "Mobile view" : "Desktop browser").props.onPress());
+	const action = modeAction(enabled ? "Mobile view" : "Desktop browser");
+	await act(async () => action.props.onPress());
 }
 
 beforeEach(() => {
@@ -139,7 +155,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	act(() => { screen?.unmount(); });
+	act(() => { screen?.unmount(); header?.unmount(); });
+	header = undefined;
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
@@ -153,7 +170,9 @@ describe("session preview mode", () => {
 		expect(nodes("WebView")).toHaveLength(0);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "switch")).toHaveLength(0);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "tablist")).toHaveLength(0);
-		expect(nodes("StackToolbar")[0].props.placement).toBe("right");
+		// The live browser draws the bar's right side, so the page hands it the menu.
+		expect(nodes("StackToolbar")).toHaveLength(0);
+		expect(nodes("BrowserLivePane")[0].props.headerItem).toBeTruthy();
 		expect(modeMenu().props).toMatchObject({ accessibilityLabel: "View, Desktop browser", icon: "desktopcomputer" });
 		expect(modeAction("Desktop browser").props.isOn).toBe(true);
 		expect(mobileView()).toEqual({ checked: false, disabled: false });
@@ -240,6 +259,7 @@ describe("session preview mode", () => {
 		expect(nodes("WebView")[0].props.source).toEqual({ uri: appPreview.url, headers: { Authorization: "Bearer test" } });
 		expect(mobileView().checked).toBe(true);
 		expect(modeMenu().props).toMatchObject({ accessibilityLabel: "View, Mobile view", icon: "iphone" });
+		expect(nodes("StackToolbar")[0].props.placement).toBe("right");
 		await setMobile(false);
 		expect(nodes("WebView")).toHaveLength(0);
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
@@ -337,6 +357,10 @@ describe("app preview controls", () => {
 
 	it("titles the bar with the page on show", async () => {
 		await openPreview();
+		expect(lastTitle()).toBe("Preview");
+		await act(async () => nodes("BrowserLivePane")[0].props.onTitle("Desktop dashboard"));
+		expect(lastTitle()).toBe("Desktop dashboard");
+		await act(async () => nodes("BrowserLivePane")[0].props.onTitle(undefined));
 		expect(lastTitle()).toBe("Preview");
 		await setMobile(true);
 		expect(lastTitle()).toBe("index.html");

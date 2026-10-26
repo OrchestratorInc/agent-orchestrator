@@ -174,6 +174,55 @@ describe("browser live transport", () => {
 		expect(frames).toEqual([7n]);
 	});
 
+	it.each([
+		["BROWSER_REMOTE_READ_ONLY", "Desktop browser control is active", "Desktop browser control is active"],
+		["INVALID_URL", "ao browser open requires an explicit http(s) URL or hostname", "Enter a web address, like localhost:3000 or example.com."],
+		["URL_REQUIRED", "url is required", "Enter an address to open."],
+		["BROWSER_URL_FORBIDDEN", "Agent browser commands support only http(s) URLs", "The desktop browser opens only http and https addresses."],
+		["TAB_NOT_FOUND", "Browser tab t2 does not exist", "That tab has already closed."],
+	])("keeps the stream open when the desktop refuses a command with %s", async (code, message, notice) => {
+		class FakeWebSocket {
+			static readonly OPEN = 1;
+			static instance: FakeWebSocket;
+			readonly readyState = FakeWebSocket.OPEN;
+			binaryType = "";
+			onopen: (() => void) | null = null;
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+			sent: string[] = [];
+			constructor() { FakeWebSocket.instance = this; }
+			send(data: string) { this.sent.push(data); }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const onStatus = vi.fn();
+		const client = new BrowserLiveClient({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1", { onStatus, onState: vi.fn(), onFrame: vi.fn() });
+		client.connect();
+		FakeWebSocket.instance.onopen?.();
+		client.send({ type: "navigate", payload: { action: "open", url: "not a url" } });
+		expect(JSON.parse(FakeWebSocket.instance.sent[0])).toEqual({ type: "navigate", payload: { action: "open", url: "not a url" } });
+		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "error", code, message }) });
+		await Promise.resolve();
+		expect(onStatus).toHaveBeenLastCalledWith("open", notice);
+	});
+
+	it("passes the desktop's state through, tabs and history included", async () => {
+		class FakeWebSocket {
+			static instance: FakeWebSocket;
+			binaryType = "";
+			onmessage: ((event: { data: unknown }) => void) | null = null;
+			constructor() { FakeWebSocket.instance = this; }
+			close() {}
+		}
+		vi.stubGlobal("WebSocket", FakeWebSocket);
+		const onState = vi.fn();
+		const client = new BrowserLiveClient({ host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "secret" }, "s1", { onStatus: vi.fn(), onState, onFrame: vi.fn() });
+		client.connect();
+		const state = { url: "http://localhost:3000/", title: "App", loading: true, canGoBack: true, canGoForward: false, activeTabId: "t1", tabs: [{ id: "t1", title: "App", url: "http://localhost:3000/", active: true }], width: 1280, height: 800 };
+		FakeWebSocket.instance.onmessage?.({ data: JSON.stringify({ type: "state", payload: state }) });
+		await Promise.resolve();
+		expect(onState).toHaveBeenCalledWith(state);
+	});
+
 	it("fits the desktop frame without stretching it", () => {
 		expect(containBrowserFrame({ width: 390, height: 600 }, { width: 1280, height: 720 })).toEqual({
 			left: 0,

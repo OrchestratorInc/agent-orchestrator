@@ -75,7 +75,10 @@ function SessionPreviewContent() {
 		setWebTitle(event.title && event.title !== event.url ? event.title : undefined);
 	}, []);
 
-	const headerTitle = (showingApp && (webTitle || preview.entry)) || title || "Preview";
+	// The live browser names its page as it changes.
+	const showingBrowser = !refreshingResponsive && !showingApp;
+	const [browserTitle, setBrowserTitle] = useState<string>();
+	const headerTitle = (showingApp && (webTitle || preview.entry)) || (showingBrowser && browserTitle) || title || "Preview";
 	useLayoutEffect(() => {
 		navigation.setOptions({ title: headerTitle });
 	}, [headerTitle, navigation]);
@@ -87,15 +90,17 @@ function SessionPreviewContent() {
 
 	// Reload and the choice between the two views, as native items in the bar.
 	// Memoized: each new element re-registers the header's items, and the page
-	// re-renders on every preview poll.
+	// re-renders on every preview poll. The live browser draws the bar's right
+	// side itself, ending with the view menu handed to it.
 	const mode: PreviewMode = responsive ? "app" : "browser";
 	const showMenu = hostMatches && Boolean(config);
-	const headerItems = useMemo(() => showMenu ? (
+	const modeMenu = useMemo(() => showMenu ? previewModeMenu({ mode, appAvailable: canShowResponsive, onSelect: setActive }) : null, [canShowResponsive, mode, showMenu]);
+	const headerItems = useMemo(() => modeMenu && !showingBrowser ? (
 		<Stack.Toolbar placement="right">
 			{showingApp ? <Stack.Toolbar.Button icon={toolbarIcon("refresh")} accessibilityLabel="Reload app preview" onPress={reloadApp} /> : null}
-			{previewModeMenu({ mode, appAvailable: canShowResponsive, onSelect: setActive })}
+			{modeMenu}
 		</Stack.Toolbar>
-	) : null, [canShowResponsive, mode, reloadApp, showMenu, showingApp]);
+	) : null, [modeMenu, reloadApp, showingApp, showingBrowser]);
 
 	// Android's back walks the page's own history first, as a browser's does,
 	// and leaves Preview once the page is back where it started.
@@ -146,7 +151,7 @@ function SessionPreviewContent() {
 
 	return <View style={styles.screen}>
 		{headerItems}
-		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} /> : <View style={styles.appPane}>
+		{refreshingResponsive ? <View style={styles.center}><EmptyState busy title="Loading mobile preview…" /></View> : !showingApp ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} onTitle={setBrowserTitle} headerItem={modeMenu} /> : <View style={styles.appPane}>
 			<WebView
 				ref={web}
 				source={{ uri: preview.url, headers: preview.authenticated && config ? authHeaders(config) : undefined }}
