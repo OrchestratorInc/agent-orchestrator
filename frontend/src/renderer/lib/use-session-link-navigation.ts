@@ -40,7 +40,7 @@ export function useArtifactPathLink(value: string, workspaces: WorkspaceSummary[
 	const local = (!sourceHostId || sourceHostId === LOCAL_HOST) && sourceKind !== "cloud"
 		&& workspaces.some((workspace) => (workspace.archivedCount ?? 0) > 0);
 	const ids = [...new Set(candidates.map((candidate) => candidate.sessionId))];
-	const reads = useQueries({ queries: ids.map((id) => ({
+	const reads = useQueries({ queries: ids.map((id) => queryOptions({
 		queryKey: ["artifact-path-session", id],
 		queryFn: async () => {
 			try {
