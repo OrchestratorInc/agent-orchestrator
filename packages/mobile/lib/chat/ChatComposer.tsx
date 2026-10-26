@@ -618,11 +618,24 @@ export function ChatComposer({
 				})}
 			</View> : null}
 			{/* The way back to a request pushed aside to type instead: what it is,
-			    and a button that brings it back. */}
-			{request && !requestCard ? <View style={styles.restore}>
+			    and a button that brings it back. Screen readers get one stop that
+			    names the request, since the button alone would say only "Answer":
+			    VoiceOver's double-tap arrives as an accessibility tap, TalkBack's as
+			    `activate`. */}
+			{request && !requestCard ? <View
+				accessible
+				accessibilityRole="button"
+				accessibilityLabel={`${request.title}. Answer it`}
+				accessibilityActions={[{ name: "activate", label: "Answer" }]}
+				onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "activate") onRestoreRequest(); }}
+				onAccessibilityTap={onRestoreRequest}
+				style={styles.restore}
+			>
 				<AppSymbol name={request.kind === "approval" ? approvalGlyph : "chat"} size={iconSize.xs} color={t.amber} />
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreText}>{request.title}</Text>
-				<Button title="Answer" variant="secondary" onPress={onRestoreRequest} />
+				<View importantForAccessibility="no-hide-descendants">
+					<Button title="Answer" variant="secondary" onPress={onRestoreRequest} />
+				</View>
 			</View> : null}
 			{requestCard ?? <Animated.View
 				style={[styles.composer, activeReviewPR && styles.reviewComposer, activeReviewPR && reviewComposerSurfaceStyle, stopped && styles.inactive]}

@@ -129,6 +129,15 @@ describe("chat composer pill", () => {
 		expect(composer).not.toContain("textDecorationLine");
 	});
 
+	// The button alone would announce a bare "Answer", with no word of which
+	// request it brings back.
+	it("names the request a screen reader would bring back", () => {
+		expect(composer).toContain("accessibilityLabel={`${request.title}. Answer it`}");
+		expect(composer).toContain('accessibilityActions={[{ name: "activate", label: "Answer" }]}');
+		expect(composer).toContain("onAccessibilityTap={onRestoreRequest}");
+		expect(composer).toContain('<View importantForAccessibility="no-hide-descendants">\n\t\t\t\t\t<Button title="Answer"');
+	});
+
 	it("draws the queue dock with the shared divider and radius", () => {
 		expect(styleRule("queueDock")).toContain("borderWidth: rowDividerWidth");
 		expect(styleRule("queueDock")).toContain("borderRadius: radius.lg");
