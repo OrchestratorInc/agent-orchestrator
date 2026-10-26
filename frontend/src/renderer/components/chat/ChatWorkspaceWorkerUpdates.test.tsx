@@ -5,10 +5,12 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { useChatLinkWorkspaces } from "./ChatMarkdown";
+import { PlainReferencesProvider, usePlainReferences } from "./WorkerUpdates";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { chatFixtureEmpty } from "../../lib/chat-fixture";
 import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
@@ -176,6 +178,23 @@ describe("orchestrator messages in a worker chat", () => {
 		expect(within(message).getByText("/tmp/proj/.ao/shot.png").tagName).toBe("CODE");
 		expect(within(message).getByRole("link", { name: "proj-7" })).toHaveAttribute("href", "ao://sessions/proj/proj-7");
 		expect(message).toHaveTextContent("Compare /tmp/proj/.ao/shot.png with proj-7, then report.");
+	});
+
+	it("keeps one plugin list until the set of sessions changes, so session events do not re-parse messages", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, workspaces);
+		const { result } = renderHook(() => ({ plugins: usePlainReferences(), workspaces: useChatLinkWorkspaces() }), {
+			wrapper: ({ children }) => (
+				<QueryClientProvider client={queryClient}><PlainReferencesProvider>{children}</PlainReferencesProvider></QueryClientProvider>
+			),
+		});
+		const first = result.current.plugins;
+		const [project] = workspaces;
+		act(() => queryClient.setQueryData(workspaceQueryKey, [{ ...project, sessions: project!.sessions.map((entry) => ({ ...entry, status: "idle" })) }]));
+		await waitFor(() => expect(result.current.workspaces).not.toBe(workspaces));
+		expect(result.current.plugins).toBe(first);
+		act(() => queryClient.setQueryData(workspaceQueryKey, [{ ...project, sessions: [...project!.sessions, { ...project!.sessions[1]!, id: "proj-8" }] }]));
+		await waitFor(() => expect(result.current.plugins).not.toBe(first));
 	});
 
 	it("leaves a message from any other session as it was", () => {

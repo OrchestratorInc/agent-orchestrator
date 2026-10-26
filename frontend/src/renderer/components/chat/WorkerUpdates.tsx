@@ -259,14 +259,25 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 	return undefined;
 }
 
-/** Agents message each other in plain prose; their paths read as code and the sessions they name link to them. */
-function usePlainReferences() {
+const PlainReferences = createContext<Options["remarkPlugins"]>(undefined);
+
+/**
+ * Agents message each other in plain prose; their paths read as code and the
+ * sessions they name link to them. One plugin list per chat, keyed on which
+ * sessions exist rather than on the workspace list, which changes with every
+ * session event and would re-parse every message.
+ */
+export function PlainReferencesProvider({ children }: { children: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
-	return useMemo<Options["remarkPlugins"]>(() => {
-		const sessionProjects = new Map(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id] as const)));
-		return [[remarkPlainReferences, sessionProjects]];
-	}, [workspaces]);
+	const sessions = JSON.stringify(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id])));
+	const plugins = useMemo<Options["remarkPlugins"]>(
+		() => [[remarkPlainReferences, new Map(JSON.parse(sessions) as [string, string][])]],
+		[sessions],
+	);
+	return <PlainReferences.Provider value={plugins}>{children}</PlainReferences.Provider>;
 }
+
+export const usePlainReferences = () => useContext(PlainReferences);
 
 function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const [open, setOpen] = useState(false);

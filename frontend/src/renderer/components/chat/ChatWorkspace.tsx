@@ -140,6 +140,7 @@ import {
 	useWorkerUpdateIndex,
 	WorkerUpdateIndexContext,
 	WorkerUpdateRows,
+	PlainReferencesProvider,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
 import { HumanMessageEditor } from "./HumanMessageEditor";
@@ -1857,7 +1858,7 @@ function ChatWorkspaceContent({
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
-
+							<PlainReferencesProvider>
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
 									workerUpdates={sessionRole === "orchestrator"}
@@ -1893,6 +1894,7 @@ function ChatWorkspaceContent({
 									openingStartedAt={openingStartedAt}
 									arriving={arrivingInChat}
 								/>
+							</PlainReferencesProvider>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>
 						</ChatLinkProvider>
