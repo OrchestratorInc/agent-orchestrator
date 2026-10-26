@@ -19,13 +19,16 @@ const pendingOpenCodeCatalogs = new Map<string, PendingOpenCodeCatalog>();
 const openCodeRequestPrefix = (agentId: string, hostId?: string) => JSON.stringify([hostId || LOCAL_HOST, agentId]) + ":";
 
 /**
- * Stop sharing pending OpenCode reads for queries an invalidation covers.
- * TanStack emits no invalidate event while a query is still invalidated, so
- * catalog events call this directly instead of relying on the cache listener.
+ * Stop sharing pending OpenCode reads for queries an invalidation covers, and
+ * make any queryFn still awaiting one read again. TanStack emits no invalidate
+ * event while a query is still invalidated, and an observerless prefetch gets
+ * no cancellation or catch-up, so catalog events call this directly.
  */
 export function discardPendingAgentModelReads(queryKey: QueryKey): void {
 	for (const [requestKey, pending] of pendingOpenCodeCatalogs) {
-		if (partialMatchKey(pending.queryKey, queryKey)) pendingOpenCodeCatalogs.delete(requestKey);
+		if (!partialMatchKey(pending.queryKey, queryKey)) continue;
+		pending.invalidated = true;
+		pendingOpenCodeCatalogs.delete(requestKey);
 	}
 }
 

@@ -541,6 +541,43 @@ describe("OpenCode single-read catalogs", () => {
 		}
 	});
 
+	it.each(["opencode", "opencode-v2"])("re-reads a running %s prefetch overtaken by a catalog event", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions(agentId, "");
+		const seed: AgentModelCatalog = { agentId, models: [{ id: "provider/seed", label: "Seed" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const old = { ...seed, models: [{ id: "provider/old", label: "Old" }] };
+		const fresh = { ...seed, models: [{ id: "provider/new", label: "New" }] };
+		let finishOld!: (value: { data: AgentModelCatalog }) => void;
+		let finishNew!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET)
+			.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }) as never)
+			.mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }) as never);
+		client.setQueryData(options.queryKey, seed);
+		// An earlier event leaves the query invalidated, so TanStack emits no
+		// invalidate event for the next one.
+		await client.invalidateQueries({ queryKey: ["agent-models", agentId] }, { cancelRefetch: false });
+		const prefetch = client.prefetchQuery(options);
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			// Without an observer nothing cancels this read, and the transport
+			// schedules no catch-up for it.
+			expect(client.isFetching({ queryKey: ["agent-models", agentId], type: "active" })).toBe(0);
+			await catalogEvent(client, agentId);
+			finishOld({ data: old });
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			expect(client.getQueryData(options.queryKey)).toEqual(seed);
+			finishNew({ data: fresh });
+			await prefetch;
+			expect(client.getQueryData(options.queryKey)).toEqual(fresh);
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(fresh.models);
+		} finally {
+			finishOld({ data: old });
+			finishNew({ data: fresh });
+			await prefetch;
+			client.clear();
+		}
+	});
+
 	it("does not reuse a pending OpenCode read after login invalidation", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const options = agentModelsQueryOptions("opencode", "");
