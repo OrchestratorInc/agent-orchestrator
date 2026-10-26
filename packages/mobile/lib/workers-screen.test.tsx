@@ -458,6 +458,16 @@ describe("Workers selected-machine reachability", () => {
 		act(() => renderer.update(<FleetScreen />));
 		expect(emptyState().props.title).toBe("No workers on Windows");
 	});
+	// The refresh control gives each platform's own feedback, and the Retry
+	// actions that share the handler buzz once rather than twice.
+	it("refreshes from a pull without a haptic of its own", async () => {
+		const { haptics } = await import("./haptics");
+		vi.mocked(haptics.tap).mockClear();
+		act(() => { renderer = create(<FleetScreen />); });
+		await act(async () => renderer.root.findByType(WorkerBoardList).props.onRefresh());
+		expect(fixtures.refreshAll).toHaveBeenCalled();
+		expect(haptics.tap).not.toHaveBeenCalled();
+	});
 	it("offers a retry for the selected machine only", async () => {
 		selectWindows();
 		await act(async () => renderer.root.findByProps({ title: "Retry" }).props.onPress());

@@ -2,7 +2,6 @@ import { Stack, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import { AddFab, addFabClearance } from "../../../lib/AddFab";
-import { haptics } from "../../../lib/haptics";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
@@ -145,8 +144,9 @@ export default function FleetScreen() {
 	// The poll's failure as the same human copy the pairing screens use.
 	const failure = useBoardFailure();
 
+	// No haptic of its own: each platform's refresh control gives the feedback
+	// it gives everywhere, and the Retry actions that also call this buzz once.
 	const onRefresh = useCallback(async () => {
-		haptics.tap();
 		setRefreshing(true);
 		try {
 			if (selectedHost) await refreshHost(selectedHost.hostId);

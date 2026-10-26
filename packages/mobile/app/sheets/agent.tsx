@@ -47,9 +47,9 @@ export default function AgentSheetRoute() {
 		if (!config || refreshing) return;
 		setRefreshing(true);
 		try {
+			// No success haptic: the refresh control already answered the pull.
 			setCatalog(await refreshAgents(config));
 			setError(null);
-			haptics.success();
 		} catch (e) {
 			haptics.error();
 			setError(agentErrorCopy(e));

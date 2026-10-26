@@ -416,5 +416,10 @@ describe("NotificationsScreen", () => {
 		expect(renderer!.root.findAllByType("ListSectionHeader" as never).map((header) => header.props)).toEqual([{ label: "Needs attention", count: 2 }]);
 		const refresh = renderer!.root.findByType("SectionList" as never).props.refreshControl;
 		expect(refresh.props).toEqual(expect.objectContaining({ tintColor: "#000", colors: ["#000"], progressBackgroundColor: "#000" }));
+		// The control gives each platform's own feedback; the page adds none.
+		const { haptics } = await import("./haptics");
+		vi.mocked(haptics.tap).mockClear();
+		await act(async () => { await refresh.props.onRefresh(); });
+		expect(haptics.tap).not.toHaveBeenCalled();
 	});
 });

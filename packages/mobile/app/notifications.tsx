@@ -465,10 +465,8 @@ function NotificationsContent() {
 					refreshControl={
 						<RefreshControl
 							refreshing={refreshing}
-							onRefresh={() => {
-								haptics.tap();
-								void load("refresh");
-							}}
+							// The refresh control gives each platform's own feedback.
+							onRefresh={() => void load("refresh")}
 							{...refreshControlColors(t)}
 						/>
 					}
