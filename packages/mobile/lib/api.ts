@@ -459,6 +459,36 @@ function rememberRevalidated(url: string, etag: string | null, body: string): vo
 	if (revalidated.size > REVALIDATED_LIMIT) revalidated.delete(revalidated.keys().next().value!);
 }
 
+// The body is read as a stream to time it, so it is decoded in JS rather than
+// by the native text(). Expo's JS TextDecoder walks every byte in a JS loop;
+// these two steps run in native string code instead. Measured on a 2.2 MB
+// conversation body: 20 ms against 31-33 ms in Hermes, and about the same
+// (6-7 ms) in V8. A native text() cannot report progress, so it is not used.
+
+/** One char per byte. Hermes caps a call at 4096 arguments. */
+function latin1(bytes: Uint8Array): string {
+	let out = "";
+	for (let i = 0; i < bytes.length; i += 4096) {
+		out += String.fromCharCode.apply(null, bytes.subarray(i, i + 4096) as unknown as number[]);
+	}
+	return out;
+}
+
+/**
+ * UTF-8 from one-char-per-byte text. A multi-byte character is a run of bytes
+ * >= 0x80 and never spans ASCII, so each run decodes on its own.
+ */
+function utf8FromLatin1(text: string): string {
+	return text.replace(/[\x80-\xff]+/g, (run) => {
+		try {
+			return decodeURIComponent(escape(run));
+		} catch {
+			// Invalid UTF-8: replacement characters, as text() would give.
+			return new TextDecoder().decode(Uint8Array.from(run, (char) => char.charCodeAt(0)));
+		}
+	});
+}
+
 /**
  * `onAccepted` runs as soon as the daemon's headers accept the request (2xx or
  * 304), before the body arrives.
@@ -526,14 +556,14 @@ async function req(
 			}
 			lastByteAt = Date.now();
 			const reader = received.body.getReader();
-			const decoder = new TextDecoder();
+			const chunks: string[] = [];
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (done) break;
 				lastByteAt = Date.now();
-				bodyText += decoder.decode(value, { stream: true });
+				chunks.push(latin1(value));
 			}
-			bodyText += decoder.decode();
+			bodyText = utf8FromLatin1(chunks.join(""));
 		})()]);
 	} catch (e) {
 		// Leaving a screen/host is not a connectivity failure. The poll owner
