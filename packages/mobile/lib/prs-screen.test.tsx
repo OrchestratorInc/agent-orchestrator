@@ -52,7 +52,7 @@ vi.mock("@expo/ui/community/menu", async () => {
 });
 vi.mock("./Toast", () => ({ ToastHost: () => null }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
-vi.mock("./pr-filter-dock", () => ({ PRFilterDock: "PRFilterDock" }));
+vi.mock("./pr-filter-control", () => ({ PRFilterControl: "PRFilterControl" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
@@ -159,7 +159,27 @@ it("makes the PR list the page's first view, inset under the header", () => {
 	const screen = renderer!.root.findAllByType("View" as never)[0];
 	const first = screen.children[0] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string; ListHeaderComponent?: { props: { children: { type: unknown }[] } } } };
 	expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
-	expect(first.props.ListHeaderComponent?.props.children.map((child) => child.type)).toEqual(["ProjectSwitcher", "StaleBanner"]);
+	expect(first.props.ListHeaderComponent?.props.children.map((child) => child.type)).toEqual(["ProjectSwitcher", "PRFilterControl", "StaleBanner"]);
+});
+
+// A segmented control heads the list under the title, as each platform places
+// one, rather than floating over the list just above the tab bar.
+it("heads the list with the Open / Merged / All filter and its counts", () => {
+	fixture.allSessions = [
+		session("mac"),
+		{ ...session("windows"), pr: { number: 8, url: "https://github.com/ao/test/pull/8", state: "merged" } },
+	];
+	act(() => { renderer = create(<PRsScreen />); });
+	type Header = { props: { children: ({ type: unknown; props: { filter: string; counts: object; onChange(filter: string): void } } | null)[] } };
+	const list = () => renderer!.root.findByType("SectionList" as never);
+	const control = () => (list().props.ListHeaderComponent as Header).props.children.find((child) => child?.type === "PRFilterControl")!;
+	expect(control().props.filter).toBe("open");
+	expect(control().props.counts).toEqual({ open: 1, merged: 1, all: 2 });
+	act(() => control().props.onChange("merged"));
+	expect(control().props.filter).toBe("merged");
+	expect(fixture.cardRenders.at(-1)).toContain("windows");
+	expect(list().props.contentContainerStyle).toEqual({ flexGrow: 1, paddingBottom: 24 });
+	expect(renderer!.root.findAllByType("PRFilterDock" as never)).toHaveLength(0);
 });
 
 it("badges the Notifications header item with every machine's unread count", () => {
