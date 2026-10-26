@@ -128,6 +128,7 @@ import X from "lucide-react-native/icons/x";
 import CircleX from "lucide-react-native/icons/circle-x";
 import OctagonX from "lucide-react-native/icons/octagon-x";
 import Zap from "lucide-react-native/icons/zap";
+import { useTheme } from "./ThemeProvider";
 
 /**
  * The app's icons, drawn from the desktop's set.
@@ -285,9 +286,13 @@ function Icon({
 	color?: string;
 	style?: ComponentProps<(typeof glyphs)[FeatherIconName]>["style"];
 } & Omit<ComponentProps<(typeof glyphs)[FeatherIconName]>, "size" | "color" | "style">) {
+	const t = useTheme();
 	const Glyph = glyphs[name as FeatherIconName];
 	if (!Glyph) return null;
-	return <Glyph size={size} color={color} style={style} strokeWidth={2} {...rest} />;
+	// Lucide's own default is `currentColor`, which react-native-svg resolves to
+	// black: a call site that forgot a colour drew an invisible glyph on the dark
+	// theme. The theme's secondary ink is what chrome glyphs use (see AppSymbol).
+	return <Glyph size={size} color={color ?? t.textSecondary} style={style} strokeWidth={2} {...rest} />;
 }
 
 /**

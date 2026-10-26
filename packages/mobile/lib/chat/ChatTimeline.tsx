@@ -16,9 +16,11 @@ import {
 	View,
 } from "react-native";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
+import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
+import { usePressFeedback } from "../pressFeedback";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
@@ -79,7 +81,7 @@ import {
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { iconSize, press, type, space } from "../tokens";
+import { iconSize, press, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
@@ -134,6 +136,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const olderFeedback = usePressFeedback("button");
 	const listRef = useRef<FlatList<ConversationGroup>>(null);
 	const followsTail = useRef(true);
 	const [showJump, setShowJump] = useState(false);
@@ -233,11 +236,13 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const olderControl = snapshot.hasMoreBefore ? (
 		<Pressable
 			accessibilityRole="button"
+			accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
 			disabled={loadingOlder}
-			onPress={() => { haptics.tap(); void onLoadOlder(); }}
-			style={styles.older}
+			onPress={() => void onLoadOlder()}
+			android_ripple={olderFeedback.android_ripple}
+			style={({ pressed }) => [styles.older, pressed && olderFeedback.pressed]}
 		>
-			{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
+			{loadingOlder ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name="history" size={iconSize.sm} color={t.textTertiary} />}
 			<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
 		</Pressable>
 	) : null;
@@ -1152,8 +1157,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	emptySurface: { flex: 1, justifyContent: "center" },
 	list: { flex: 1, backgroundColor: t.bgBase },
 	content: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xxxl },
-	older: { alignSelf: "center", flexDirection: "row", gap: space.xs, alignItems: "center", paddingHorizontal: space.md, paddingVertical: space.sm, marginBottom: space.md },
-	olderText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize },
+	older: { alignSelf: "center", minHeight: touchTarget, flexDirection: "row", gap: space.xs, alignItems: "center", paddingHorizontal: space.md, marginBottom: space.xs },
+	olderText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize },
 	userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
 	userMenu: { maxWidth: "88%" },
 	menuBubble: { maxWidth: "100%" },
