@@ -1774,6 +1774,7 @@ function ChatWorkspaceContent({
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen || inlineHeader}
 				slideIn={headerSlideIn}
+				fullscreen={isFullscreen}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -2272,6 +2273,7 @@ function ChatHeader({
 	onReorderAuxiliaryTabs,
 	inline,
 	slideIn = false,
+	fullscreen,
 	session,
 	onSessionRenamed,
 }: {
@@ -2303,6 +2305,7 @@ function ChatHeader({
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
 	slideIn?: boolean;
+	fullscreen?: boolean;
 }) {
 	const { t } = useTranslation();
 	const sessionIsOrchestrator = session
@@ -2337,7 +2340,7 @@ function ChatHeader({
 	const header = (
 		<SessionTabsTopbar
 			className={slideIn ? "chat-header-slide-in" : undefined}
-			globalActions={inline ? undefined : null}
+			fullscreen={fullscreen}
 			actions={
 				<>
 					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}

@@ -40,7 +40,7 @@ import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
-import { PageTopbar, PageTopbarGlobalActions } from "./PageTopbar";
+import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -2247,7 +2247,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					</SessionInspectorRail>
 				) : null}
 			</div>
-			<div className="session-pinned-actions" data-testid="session-pinned-actions" style={noDragStyle}>
+			<PageTopbarTrailingAction>
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<TopbarButton
@@ -2283,9 +2283,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
 					</TooltipContent>
 				</Tooltip> : null}
-				{/* Keep the global notification action trailing at the window edge. */}
-				<PageTopbarGlobalActions />
-			</div>
+			</PageTopbarTrailingAction>
 			{interfaceUi.cloudLoader
 				? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
 				: showLifecycleLoader || showCompletedLoader

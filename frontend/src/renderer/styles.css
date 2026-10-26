@@ -564,12 +564,11 @@ html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-sl
 	border-top-width: 1px;
 }
 
-/* Keep empty header space draggable while tabs and actions remain interactive.
- * Linux retains its separate strip; macOS uses the actual shared header. */
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {
+/* Both native platforms drag from the shared header without an extra strip. */
+html:is([data-ao-platform="darwin"], [data-ao-platform="linux"]) [data-testid="session-topbar-host"] {
 	-webkit-app-region: drag;
 }
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
+html:is([data-ao-platform="darwin"], [data-ao-platform="linux"]) [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
 	-webkit-app-region: no-drag;
 }
 
@@ -581,18 +580,6 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 
 .center-panel-shell.center-panel-shell--mac.center-panel-shell--fullscreen {
 	padding: 0;
-}
-
-/* Keep the session card intact: this strip belongs to its slate outer frame,
- * above the complete card (tabs and inspector alike), so it is a native macOS
- * or Linux drag target without introducing a seam inside session content. */
-.center-panel-shell--draggable-session-frame {
-	flex-direction: column;
-}
-
-.center-panel-session-drag-strip {
-	flex: 0 0 var(--space-2);
-	-webkit-app-region: drag;
 }
 
 /* Sidebar closed on mac: the panel keeps its frame, which recedes to half
@@ -722,7 +709,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .center-panel-titlebar {
-	padding-left: 1.125rem; /* matches former px-4.5 */
+	padding-left: var(--space-4_5);
 }
 
 .center-panel-shell--mac .center-panel-titlebar {
@@ -3391,6 +3378,25 @@ html.sidebar-reordering * {
 	padding-inline: var(--space-2) var(--gap-topbar-control);
 }
 
+/* One panel-owned trailing group stays fixed as the inspector slides. All
+ * headers clear its measured width, including any session-specific controls. */
+.panel-topbar-controls {
+	position: absolute;
+	top: 0;
+	right: var(--gap-topbar-control);
+	z-index: var(--z-index-chrome);
+}
+
+.has-topbar-controls .center-panel-titlebar,
+.has-topbar-controls .session-inspector__trailing,
+.has-topbar-controls .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control));
+}
+
+.has-topbar-controls .session-split:has([data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: var(--gap-topbar-control);
+}
+
 .topbar-control > [data-nav-row-highlight],
 .topbar-control-group > [data-nav-row-highlight] {
 	z-index: -1;
@@ -3465,59 +3471,11 @@ html.sidebar-reordering * {
 		transform var(--duration-normal) ease;
 }
 
-.session-pinned-actions-reserve {
-	display: flex;
-	width: 0;
-	min-width: 0;
-	flex: 0 0 auto;
-	align-items: center;
-	justify-content: flex-end;
-	margin-left: calc(-1 * var(--gap-topbar-control));
-	transition:
-		width var(--session-inspector-motion-duration, 400ms)
-			var(--session-inspector-motion-easing, linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1)),
-		margin-left var(--session-inspector-motion-duration, 400ms)
-			var(--session-inspector-motion-easing, linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1));
-}
-
-.session-pinned-actions-reserve[data-state="expanded"] {
-	width: calc(var(--size-topbar-control) + var(--size-topbar-control) + var(--gap-topbar-control));
-	margin-left: 0;
-}
-
 /* Session switches restore the destination's topbar in its first frame; these
  * transitions are only for changes inside a session (useSessionSwitchSnap). */
-:root[data-session-switching] .session-pinned-actions-reserve,
 :root[data-session-switching] .workspace-topbar-actions .topbar-control,
 :root[data-session-switching] .workspace-topbar-actions [data-compact-label] {
 	transition: none !important;
-}
-
-.session-pinned-actions {
-	-webkit-app-region: no-drag;
-	position: absolute;
-	top: 0;
-	right: var(--gap-topbar-control);
-	z-index: var(--z-index-chrome);
-	display: flex;
-	height: var(--size-topbar-content);
-	align-items: center;
-	gap: var(--gap-topbar-control);
-}
-
-.session-inspector-actions-spacer {
-	width: calc(
-		var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2) + var(--space-3)
-	);
-	flex: 0 0 auto;
-}
-
-/* A button the Files view adds here (maximize) joins the pinned pair, so it
-   sits the same 4px from them as they sit from each other. */
-.session-inspector__files-actions:not(:empty) + .session-inspector-actions-spacer {
-	width: calc(
-		var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2) + var(--space-1)
-	);
 }
 
 @container workspace-topbar (max-width: 759px) {
@@ -3598,7 +3556,6 @@ html.sidebar-reordering * {
 @media (prefers-reduced-motion: reduce) {
 	.workspace-topbar-actions .topbar-control,
 	.workspace-topbar-actions [data-compact-label],
-	.session-pinned-actions-reserve,
 	.session-split[data-terminal-live-resize="true"]
 		.workspace-topbar-actions
 		[data-priority="secondary"].topbar-control,

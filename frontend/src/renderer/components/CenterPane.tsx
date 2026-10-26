@@ -506,7 +506,7 @@ export function CenterPane({
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
 	const terminalTopbar = (
 		<SessionTabsTopbar
-			globalActions={isFullscreen ? undefined : null}
+			fullscreen={isFullscreen}
 			actions={
 				<>
 					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}

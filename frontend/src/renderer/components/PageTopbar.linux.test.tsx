@@ -25,13 +25,12 @@ describe("PageTopbar on Linux", () => {
 		render(<PageTopbar lead={<PageTopbarTitle data-testid="title">Board</PageTopbarTitle>} />);
 
 		const header = screen.getByTestId("title").closest("header");
-		// Cluster left (26) + cluster width (92) + content gap (12) - panel inline inset (16).
-		expect(header).toHaveStyle({ paddingLeft: "114px" });
+		expect(header).toHaveStyle({ paddingLeft: "calc(var(--size-titlebar-content-offset-linux) - var(--size-center-panel-inline-inset))" });
 	});
 
 	it("keeps the default title padding while the sidebar is open", () => {
 		render(<PageTopbar lead={<PageTopbarTitle data-testid="title">Board</PageTopbarTitle>} />);
 
-		expect(screen.getByTestId("title").closest("header")).toHaveStyle({ paddingLeft: "18px" });
+		expect(screen.getByTestId("title").closest("header")).toHaveStyle({ paddingLeft: "var(--space-4_5)" });
 	});
 });

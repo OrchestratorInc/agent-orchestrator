@@ -515,55 +515,13 @@ describe("SessionTopbarActions orchestrator actions", () => {
 	});
 });
 
-describe("SessionTopbarActions inspector state", () => {
-	it("reserves space for orchestrator controls without duplicating notifications", () => {
-		const view = renderTopbarSessions([orchestrator], orchestrator.id);
-		const reserve = screen.getByTestId("session-pinned-actions-reserve");
-		expect(reserve).toHaveAttribute("data-state", "expanded");
-		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
-		useUiStore.setState({ inspectorSessions: { [orchestrator.id]: { isOpen: true, view: "browser" } } });
-		view.rerenderTopbar();
-		expect(reserve).toHaveAttribute("data-state", "collapsed");
-		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
-	});
-
-	it("keeps the expanded worker controls out of the center topbar", () => {
+describe("SessionTopbarActions panel controls", () => {
+	it("leaves inspector and notification controls to the panel", () => {
 		useUiStore.setState({ inspectorSessions: { "sess-1": { isOpen: true, view: "summary" } } });
 		renderTopbarSessions([worker], "sess-1");
 
-		expect(screen.getByTestId("session-pinned-actions-reserve")).toHaveAttribute("data-state", "collapsed");
 		expect(screen.queryByRole("button", { name: "Close inspector panel" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
-	});
-
-	it("sizes the pinned-action reserve for the current worker inspector state", () => {
-		useUiStore.setState({
-			inspectorSessions: {
-				"sess-1": { isOpen: true, view: "summary" },
-				"sess-2": { isOpen: false, view: "summary" },
-			},
-		});
-		const view = renderTopbarSessions([worker, secondWorker], "sess-1");
-
-		expect(screen.getByTestId("session-pinned-actions-reserve")).toHaveAttribute("data-state", "collapsed");
-
-		paramsMock.sessionId = "sess-2";
-		view.rerenderTopbar();
-
-		expect(screen.getByTestId("session-pinned-actions-reserve")).toHaveAttribute("data-state", "expanded");
-	});
-
-	it("keeps one reserve mounted while the inspector changes state", () => {
-		useUiStore.setState({ inspectorSessions: { "sess-1": { isOpen: false, view: "summary" } } });
-		const view = renderTopbarSessions([worker], "sess-1");
-		const reserve = screen.getByTestId("session-pinned-actions-reserve");
-
-		useUiStore.setState({ inspectorSessions: { "sess-1": { isOpen: true, view: "summary" } } });
-		view.rerenderTopbar();
-
-		expect(screen.getByTestId("session-pinned-actions-reserve")).toBe(reserve);
-		expect(reserve).toHaveAttribute("data-state", "collapsed");
-		expect(within(reserve).queryByRole("button")).not.toBeInTheDocument();
 	});
 });
 
