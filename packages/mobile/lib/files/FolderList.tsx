@@ -106,7 +106,7 @@ export function FolderList({ config, sessionId, dir, header, bottomInset, onOpen
 			) : (
 				<PathRow path={item.path} name={item.name} status={item.status} onPress={onOpenFile} onAction={onAction} />
 			)}
-			ListFooterComponent={tree?.truncated ? <Text style={styles.footNote}>This folder has more entries than the daemon lists. Search All files to reach the rest.</Text> : null}
+			ListFooterComponent={tree?.truncated ? <Text style={styles.footNote}>This folder has more entries than the daemon lists. Search for a file to reach the rest.</Text> : null}
 			ListEmptyComponent={loading ? (
 				<View style={styles.loading}><Spinner size="large" accessibilityLabel="Reading this folder" /></View>
 			) : error ? (

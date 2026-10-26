@@ -12,7 +12,8 @@ import { space } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
 import type { FileRowAction } from "../../../lib/files/FileRowMenu.types";
-import { FolderList } from "../../../lib/files/FolderList";
+import { FileSearchBar, useFileSearch } from "../../../lib/files/FileSearch";
+import { FolderList, SearchResults } from "../../../lib/files/FolderList";
 import { splitPath } from "../../../lib/files/model";
 import { REVIEW_BUTTON_CLEARANCE, REVIEW_BUTTON_RISE } from "../../../lib/files/ReviewButton.types";
 import { ReviewButton } from "../../../lib/files/ReviewButton";
@@ -25,7 +26,7 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoun
 /**
  * One folder of the session's worktree, titled with its name. Each folder is
  * its own page, so going back climbs a level and the back button's history
- * lists the way down.
+ * lists the way down. The header's search still reaches the whole worktree.
  */
 export default function SessionFolderScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
@@ -45,6 +46,7 @@ function SessionFolderContent() {
 	const review = useReviewSender(config, reviewKey(currentHostId, id), id);
 	const toast = useToast();
 	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
+	const search = useFileSearch(hostMatches ? config : null, id);
 	const insets = useSafeAreaInsets();
 	const name = splitPath(dir).name || "Worktree";
 
@@ -61,17 +63,23 @@ function SessionFolderContent() {
 	if (!config && appLoading) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Connecting" /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="Files load once the app reconnects." /></View>;
 
+	const bottomInset = review.comments.length ? REVIEW_BUTTON_CLEARANCE : space.xxl;
 	return (
 		<View style={styles.screen}>
-			<FolderList
-				config={config}
-				sessionId={id}
-				dir={dir}
-				bottomInset={review.comments.length ? REVIEW_BUTTON_CLEARANCE : space.xxl}
-				onOpenFile={openPath}
-				onOpenFolder={openFolder}
-				onAction={pathAction}
-			/>
+			<FileSearchBar search={search} />
+			{search.active ? (
+				<SearchResults query={search.query} results={search.results} searching={search.searching} bottomInset={bottomInset} onOpenFile={openPath} onAction={pathAction} />
+			) : (
+				<FolderList
+					config={config}
+					sessionId={id}
+					dir={dir}
+					bottomInset={bottomInset}
+					onOpenFile={openPath}
+					onOpenFolder={openFolder}
+					onAction={pathAction}
+				/>
+			)}
 			<ReviewButton count={review.comments.length} onPress={openReview} />
 			<ToastHost toast={toast} bottomOffset={review.comments.length ? insets.bottom + REVIEW_BUTTON_RISE : undefined} />
 		</View>

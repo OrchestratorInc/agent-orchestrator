@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { RefreshControl, SectionList, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -15,7 +15,8 @@ import { font, fontScaleCap, iconSize, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
 import { LineCounts } from "../../../lib/files/components";
-import { FolderList, SearchResults, useWorkspaceSearch } from "../../../lib/files/FolderList";
+import { FileSearchBar, useFileSearch } from "../../../lib/files/FileSearch";
+import { FolderList, SearchResults } from "../../../lib/files/FolderList";
 import { changeGroups, plural, type ChangeEntry } from "../../../lib/files/model";
 import { REVIEW_BUTTON_CLEARANCE, REVIEW_BUTTON_RISE } from "../../../lib/files/ReviewButton.types";
 import { ReviewButton } from "../../../lib/files/ReviewButton";
@@ -47,14 +48,14 @@ function SessionFilesContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [tab, setTab] = useState<Tab>(initialTab === "all" ? "all" : "changes");
-	const [query, setQuery] = useState("");
 	const { manifest, loading, error, refreshing, refresh } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
 	const key = reviewKey(currentHostId, id);
 	const review = useReviewSender(config, key, id);
 	const toast = useToast();
 	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
 	const insets = useSafeAreaInsets();
-	const search = useWorkspaceSearch(hostMatches && tab === "all" ? config : null, id, query);
+	const search = useFileSearch(hostMatches && tab === "all" ? config : null, id);
+	const dismissSearch = search.dismiss;
 	const groups = useMemo(() => manifest ? changeGroups(manifest) : [], [manifest]);
 	const commentsByPath = useMemo(() => {
 		const counts = new Map<string, number>();
@@ -67,12 +68,10 @@ function SessionFilesContent() {
 	}, [navigation, title]);
 
 	const chooseTab = useCallback((next: Tab) => {
-		setTab(next);
 		// The search belongs to All files and leaves with it.
-		if (next !== "all") setQuery("");
-	}, []);
-	const searchChanged = useCallback((event: { nativeEvent: { text: string } }) => setQuery(event.nativeEvent.text), []);
-	const searchClosed = useCallback(() => setQuery(""), []);
+		if (next !== "all") dismissSearch();
+		setTab(next);
+	}, [dismissSearch]);
 	const openChange = useCallback((file: ChangeEntry) => openFile(file.path, "diff", file.previousPath), [openFile]);
 	const changeAction = useCallback((action: FileRowAction, file: ChangeEntry) => act(action, file), [act]);
 	const openPath = useCallback((path: string, changed: boolean) => openFile(path, changed ? "diff" : "file"), [openFile]);
@@ -136,25 +135,8 @@ function SessionFilesContent() {
 
 	return (
 		<View style={styles.screen}>
-			{/* Finding a file belongs to All files: the header's own search there,
-			    a search field under the title on iOS and the top app bar's search
-			    action on Android, gone again on Changes. It filters in place. */}
-			{tab === "all" ? (
-				<Stack.SearchBar
-					placeholder="Find a file"
-					placement="stacked"
-					hideWhenScrolling={false}
-					obscureBackground={false}
-					autoCapitalize="none"
-					tintColor={t.highlight}
-					textColor={t.textPrimary}
-					hintTextColor={t.textTertiary}
-					headerIconColor={t.accent}
-					onChangeText={searchChanged}
-					onCancelButtonPress={searchClosed}
-					onClose={searchClosed}
-				/>
-			) : null}
+			{/* Finding a file belongs to All files, and is gone again on Changes. */}
+			{tab === "all" ? <FileSearchBar search={search} /> : null}
 			{body}
 			<ReviewButton count={review.comments.length} onPress={openReview} />
 			<ToastHost toast={toast} bottomOffset={review.comments.length ? insets.bottom + REVIEW_BUTTON_RISE : undefined} />

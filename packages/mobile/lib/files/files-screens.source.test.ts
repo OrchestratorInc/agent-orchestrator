@@ -22,9 +22,22 @@ describe("the Files list", () => {
 	});
 
 	it("searches from the header, and only while All files is showing", () => {
-		expect(index).toMatch(/\{tab === "all" \? \(\s*<Stack\.SearchBar/);
+		expect(index).toContain('{tab === "all" ? <FileSearchBar search={search} /> : null}');
 		expect(index).not.toContain("<TextInput");
-		expect(index).toMatch(/<Stack\.SearchBar[^>]*onCancelButtonPress=\{searchClosed\}[^>]*onClose=\{searchClosed\}/);
+		expect(source("./FileSearch.tsx")).toMatch(/<Stack\.SearchBar\s+ref=\{search\.bar\}[^>]*onCancelButtonPress=\{search\.clear\}[^>]*onClose=\{search\.clear\}/);
+	});
+
+	// An active UIKit search controller, or an expanded Android search view,
+	// taken out of the header leaves it as the open search had it.
+	it("closes an open search before switching to Changes", () => {
+		expect(index).toContain('if (next !== "all") dismissSearch();');
+		expect(source("./FileSearch.tsx")).toContain("bar.current?.cancelSearch();");
+	});
+
+	it("searches the whole worktree from every folder page", () => {
+		const folder = source("../../app/files/[sessionId]/folder.tsx");
+		expect(folder).toContain("<FileSearchBar search={search} />");
+		expect(folder).toMatch(/search\.active \? \(\s*<SearchResults/);
 	});
 
 	it("tints the pull-to-refresh spinner on both platforms", () => {
