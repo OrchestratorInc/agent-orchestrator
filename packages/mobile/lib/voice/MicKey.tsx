@@ -56,10 +56,9 @@ export function MicKey({
 	onPressOut(): void;
 	/**
 	 * Starts or finishes hands-free dictation in one step (`useVoiceInput`'s
-	 * `toggleLatched`), for a screen reader's activation. Without it, the key
-	 * makes the two taps a sighted user would.
+	 * `toggleLatched`), for a screen reader's activation.
 	 */
-	onToggleLatched?(): void;
+	onToggleLatched(): void;
 	circular?: boolean;
 	size?: number;
 	/**
@@ -112,19 +111,8 @@ export function MicKey({
 	const ink = live ? t.onDestructive : denied ? t.red : unavailable ? t.textFaint : t.textPrimary;
 	const shapeRadius = circular ? size / 2 : MIC_RADIUS;
 
-	const toggleLatched = () => {
-		if (onToggleLatched) {
-			onToggleLatched();
-			return;
-		}
-		onPressIn();
-		onPressOut();
-		if (latched) return;
-		onPressIn();
-		onPressOut();
-	};
 	const onAccessibilityAction = (event: AccessibilityActionEvent) => {
-		if (event.nativeEvent.actionName === "activate") toggleLatched();
+		if (event.nativeEvent.actionName === "activate") onToggleLatched();
 	};
 
 	return (
@@ -145,7 +133,7 @@ export function MicKey({
 				// accessibility tap. Either one latches instead of tapping the key.
 				accessibilityActions={disabled ? undefined : [{ name: "activate", label: latched ? "Stop dictating" : "Dictate hands-free" }]}
 				onAccessibilityAction={disabled ? undefined : onAccessibilityAction}
-				onAccessibilityTap={disabled ? undefined : toggleLatched}
+				onAccessibilityTap={disabled ? undefined : onToggleLatched}
 				disabled={disabled}
 				android_ripple={feedback.android_ripple}
 				style={({ pressed }) => [

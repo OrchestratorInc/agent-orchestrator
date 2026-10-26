@@ -13,6 +13,8 @@ export type SpawnComposerVoice = {
 	mode: VoiceMode;
 	onPressIn: () => void;
 	onPressOut: () => void;
+	/** Starts or finishes hands-free dictation in one step, for screen readers. */
+	onToggleLatched: () => void;
 };
 
 export type SpawnComposerControlsProps = {

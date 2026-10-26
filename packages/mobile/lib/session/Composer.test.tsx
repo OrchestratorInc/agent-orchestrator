@@ -55,7 +55,7 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-const voice = { state: "idle" as const, mode: "push" as const, pressIn: vi.fn(), pressOut: vi.fn() };
+const voice = { state: "idle" as const, mode: "push" as const, pressIn: vi.fn(), pressOut: vi.fn(), toggleLatched: vi.fn() };
 
 async function render(props: Partial<Parameters<typeof Composer>[0]> = {}) {
 	const all = {
@@ -134,5 +134,11 @@ describe("the terminal composer", () => {
 	it("sizes the mic like the other controls", async () => {
 		await render();
 		expect(renderer!.root.findByType("MicKey" as never).props).toMatchObject({ variant: "plain", size: 44 });
+	});
+
+	// A screen reader latches dictation in one step instead of a synthesized double tap.
+	it("hands the mic the one-step latch", async () => {
+		await render();
+		expect(renderer!.root.findByType("MicKey" as never).props.onToggleLatched).toBe(voice.toggleLatched);
 	});
 });

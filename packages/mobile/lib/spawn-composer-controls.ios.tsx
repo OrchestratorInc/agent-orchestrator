@@ -177,6 +177,7 @@ export function SpawnComposerControls({
 									mode={voice.mode}
 									onPressIn={voice.onPressIn}
 									onPressOut={voice.onPressOut}
+									onToggleLatched={voice.onToggleLatched}
 								/>
 							</View>
 						</RNHostView>

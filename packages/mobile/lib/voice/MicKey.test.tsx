@@ -36,7 +36,7 @@ beforeEach(() => { fixtures.platform.OS = "ios"; fixtures.reduceMotion = false; 
 afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; });
 
 function render(props: Partial<Props> = {}) {
-	const all: Props = { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), ...props };
+	const all: Props = { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn(), ...props };
 	act(() => { renderer = create(createElement(MicKey, all)); });
 	return { props: all, key: renderer!.root.findByType("Pressable" as never) };
 }
@@ -67,13 +67,6 @@ it("latches dictation from a screen reader's activation", () => {
 	act(() => key.props.onAccessibilityTap());
 	expect(onToggleLatched).toHaveBeenCalledTimes(2);
 	expect(props.onPressIn).not.toHaveBeenCalled();
-});
-
-it("falls back to the double tap a sighted user makes", () => {
-	const { props, key } = render();
-	act(() => key.props.onAccessibilityAction({ nativeEvent: { actionName: "activate" } }));
-	expect(props.onPressIn).toHaveBeenCalledTimes(2);
-	expect(props.onPressOut).toHaveBeenCalledTimes(2);
 });
 
 it("offers no activation while it cannot dictate", () => {

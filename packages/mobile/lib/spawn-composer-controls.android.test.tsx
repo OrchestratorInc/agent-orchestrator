@@ -102,7 +102,7 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	onSelectModel: vi.fn(),
 	onChoosePhoto: vi.fn(),
 	onChooseFile: vi.fn(),
-	voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() },
+	voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn() },
 	onSpawn: vi.fn(),
 	busy: false,
 	disabled: false,
@@ -213,6 +213,13 @@ describe("Android spawn selectors", () => {
 	it("keeps the hold-to-talk mic at the touch target", async () => {
 		const root = await render(baseProps());
 		expect(root.findByType("MicKey" as never).props).toMatchObject({ variant: "plain", size: touchTarget });
+	});
+
+	// A screen reader latches dictation in one step instead of a synthesized double tap.
+	it("hands the mic the one-step latch", async () => {
+		const props = baseProps();
+		const root = await render(props);
+		expect(root.findByType("MicKey" as never).props.onToggleLatched).toBe(props.voice.onToggleLatched);
 	});
 });
 

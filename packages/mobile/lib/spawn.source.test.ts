@@ -74,6 +74,10 @@ describe("spawn composer", () => {
 		expect(spawn.indexOf('Platform.OS === "ios" ? voiceFeedback : null')).toBeLessThan(spawn.indexOf('<SpawnComposerControls'));
 	});
 
+	it("passes the hook's one-step latch to the mic", () => {
+		expect(spawn).toContain("onToggleLatched: voice.toggleLatched }}");
+	});
+
 	it("keeps Start task disabled while a stopped dictation waits for its final result", () => {
 		// stop() is asynchronous: the hook stays in recording until onFinal runs.
 		const finish = voiceInput.slice(voiceInput.indexOf("const finish = useCallback"), voiceInput.indexOf("const pressIn = useCallback"));

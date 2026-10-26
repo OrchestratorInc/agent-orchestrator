@@ -492,7 +492,7 @@ function SpawnModalContent() {
 					onSelectModel={selectModel}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
-					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
+					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut, onToggleLatched: voice.toggleLatched }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
 					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}

@@ -85,7 +85,7 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	onSelectModel: vi.fn(),
 	onChoosePhoto: vi.fn(),
 	onChooseFile: vi.fn(),
-	voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn() },
+	voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn() },
 	onSpawn: vi.fn(),
 	busy: false,
 	disabled: false,
@@ -172,6 +172,13 @@ describe("iOS spawn selectors", () => {
 		expect(props.onChooseFile).toHaveBeenCalledOnce();
 		// Opening a system picker is not a moment worth a haptic.
 		expect(fixtures.tap).not.toHaveBeenCalled();
+	});
+
+	// A screen reader latches dictation in one step instead of a synthesized double tap.
+	it("hands the mic the one-step latch", async () => {
+		const props = baseProps();
+		const root = await render(props);
+		expect(root.findByType("MicKey" as never).props.onToggleLatched).toBe(props.voice.onToggleLatched);
 	});
 
 	it("sizes every selector to its content and scales its text with Dynamic Type", async () => {

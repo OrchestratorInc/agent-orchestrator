@@ -39,7 +39,7 @@ export function Composer({
 	sending: boolean;
 	target: SendTarget;
 	onTargetChange: (target: SendTarget) => void;
-	voice: { state: VoiceState; mode: VoiceMode; pressIn(): void; pressOut(): void };
+	voice: { state: VoiceState; mode: VoiceMode; pressIn(): void; pressOut(): void; toggleLatched(): void };
 	keyboardVisible: boolean;
 	onDismissKeyboard: () => void;
 	/** Plain worktree shells have no agent route; hide the misleading toggle. */
@@ -93,7 +93,7 @@ export function Composer({
 							<AppSymbol name="keyboardDismiss" size={iconSize.lg} color={t.textSecondary} />
 						</Pressable>
 					) : null}
-					<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+					<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
 					{/* No haptic of its own: the screen confirms the send, or its failure,
 					    once it knows which happened. */}
 					<Pressable
