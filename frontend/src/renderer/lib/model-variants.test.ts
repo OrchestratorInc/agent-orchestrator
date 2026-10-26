@@ -104,6 +104,20 @@ describe("providerQualifiedChoice", () => {
 		const grouped = { value: "anthropic/claude-opus", name: "anthropic/claude-opus", group: "Anthropic" };
 		expect(providerQualifiedChoice(grouped, "pi")).toBe(grouped);
 		const plain = { value: "anthropic/claude-opus", name: "Claude Opus" };
-		expect(providerQualifiedChoice(plain, "opencode")).toBe(plain);
+		expect(providerQualifiedChoice(plain, "pi")).toBe(plain);
+	});
+
+	it.each(["opencode", "opencode-v2"])("keeps %s provider identities even when model names match", (harness) => {
+		for (const provider of ["opencode", "opencode-go"]) {
+			const choice = { value: `${provider}/deepseek-v4-flash`, name: "DeepSeek V4 Flash" };
+			expect(providerQualifiedChoice(choice, harness)).toEqual({ ...choice, group: provider });
+			expect(providerQualifiedChoice({ ...choice, name: `${provider}/${choice.name}` }, harness))
+				.toEqual({ ...choice, group: provider });
+		}
+	});
+
+	it.each(["opencode", "opencode-v2"])("preserves %s's own provider grouping", (harness) => {
+		const choice = { value: "opencode-go/deepseek-v4-flash", name: "DeepSeek V4 Flash", group: "go", groupName: "OpenCode Go" };
+		expect(providerQualifiedChoice(choice, harness)).toBe(choice);
 	});
 });
