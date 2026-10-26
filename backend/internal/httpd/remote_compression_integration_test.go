@@ -48,7 +48,7 @@ func TestLANManagerCompressionPreservesBoundaries(t *testing.T) {
 				req.Header.Set("Authorization", tc.auth)
 			}
 			recorder := httptest.NewRecorder()
-			var handler http.Handler = remote.handler
+			handler := remote.handler
 			if tc.loopback {
 				handler = router
 			}
