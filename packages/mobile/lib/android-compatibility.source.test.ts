@@ -80,14 +80,21 @@ describe("Android native compatibility boundaries", () => {
 		expect(menu).not.toContain("bottom-sheet");
 	});
 
-	it("uses React Native Android inputs for elicitation", () => {
-		const file = "./chat/elicitation-native-controls.android.tsx";
-		const path = fileURLToPath(new URL(file, import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source(file) : "";
-		expect(android).toContain("TextInput");
-		expect(android).not.toContain("@expo/ui");
-		expect(android).not.toContain('width: "100%"');
+	// Android draws the shared file's Material 3 controls: real radios and
+	// checkboxes with their row semantics, an outlined field and Compose buttons,
+	// instead of glyph-drawn imitations.
+	it("answers elicitation with Compose controls", () => {
+		expect(existsSync(fileURLToPath(new URL("./chat/elicitation-native-controls.android.tsx", import.meta.url)))).toBe(false);
+		const controls = source("./chat/elicitation-native-controls.tsx");
+		expect(controls).toContain('from "@expo/ui/jetpack-compose"');
+		expect(controls).toContain('selectable(checked, choose, "radioButton")');
+		expect(controls).toContain('toggleable(checked, choose, { role: "checkbox" })');
+		expect(controls).toContain("<RadioButton selected={checked} />");
+		expect(controls).toContain("<Checkbox value={checked} />");
+		expect(controls).toContain("<OutlinedTextField");
+		for (const imitation of ["Feather", "Pressable", "rgba(", 'width: "100%"']) {
+			expect(controls).not.toContain(imitation);
+		}
 	});
 
 	// The top app bar's own search action and a Compose dropdown take the place
