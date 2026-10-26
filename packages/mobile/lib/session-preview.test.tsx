@@ -288,6 +288,17 @@ describe("session preview mode", () => {
 		expect(mobileView()).toEqual({ checked: false, disabled: false });
 	});
 
+	it("says why Mobile view is greyed out in the item's own text on Android, whose menu draws no subtitle", async () => {
+		fixtures.platform.OS = "android";
+		fixtures.getPreview.mockResolvedValue(null);
+		await openPreview();
+		const unavailable = modeMenu().find((node) => (node.type as unknown) === "StackToolbarMenuAction" && node.props.children === "Mobile view (no app preview yet)");
+		expect(unavailable.props).toMatchObject({ disabled: true, isOn: false });
+		fixtures.getPreview.mockResolvedValue(appPreview);
+		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+		expect(mobileView()).toEqual({ checked: false, disabled: false });
+	});
+
 	it("returns to the live browser if the selected app preview is cleared", async () => {
 		await openPreview();
 		await setMobile(true);

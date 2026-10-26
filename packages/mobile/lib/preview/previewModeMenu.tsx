@@ -53,10 +53,12 @@ export function previewModeMenu({ mode, appAvailable, onSelect }: PreviewModeMen
 				icon={ios ? "iphone" : undefined}
 				isOn={mode === "app"}
 				disabled={appUnavailable}
-				subtitle={appUnavailable ? "No app preview for this session yet" : undefined}
+				// Android's menu draws neither subtitles nor hints, so why the item
+				// is greyed out goes in its own text there.
+				subtitle={appUnavailable && ios ? "No app preview for this session yet" : undefined}
 				onPress={() => choose("app")}
 			>
-				Mobile view
+				{appUnavailable && !ios ? "Mobile view (no app preview yet)" : "Mobile view"}
 			</Stack.Toolbar.MenuAction>
 		</Stack.Toolbar.Menu>
 	);
