@@ -36,7 +36,13 @@ Module._load = function(name, parent, main) {
    useWindowDimensions: () => ({ width: 390, height: 844 }),
   };
   if (name === "react-native-safe-area-context") return { useSafeAreaInsets: () => ({ top: 0 }) };
-  if (name === "../ThemeProvider") return { useTheme: () => ({}), useThemedStyles: () => ({}) };
+  if (name === "../ThemeProvider" || name === "./ThemeProvider") return { useTheme: () => ({}), useThemedStyles: () => ({}) };
+  if (name === "react-native-gesture-handler") {
+   const chain = new Proxy({}, { get: () => () => chain });
+   return { GestureHandlerRootView: "View", GestureDetector: ({ children }) => children, Gesture: chain };
+  }
+  if (name === "react-native-reanimated") return { __esModule: true, default: { View: "View" }, useSharedValue: value => ({ value }), useAnimatedStyle: () => ({}), withSpring: value => value, withTiming: value => value };
+  if (name === "./useReducedMotion") return { useReducedMotion: () => false };
   if (name === "../haptics" || name === "./haptics") return { haptics: { tap: () => {} } };
   if (name === "../pressFeedback") return { usePressFeedback: () => ({}) };
   if (name === "../icons" || name === "./icons") return { Feather: "Feather" };

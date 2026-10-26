@@ -1,7 +1,7 @@
 import * as Clipboard from "expo-clipboard";
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Image, Platform, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Image, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { FlatList, GestureDetector } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SvgXml } from "react-native-svg";
@@ -11,6 +11,8 @@ import { userFacingError } from "../../../lib/connectionError";
 import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
 import { hostRouteMatches } from "../../../lib/hostRoute";
+import { ImageViewer } from "../../../lib/ImageViewer";
+import { usePressFeedback } from "../../../lib/pressFeedback";
 import { Spinner } from "../../../lib/Spinner";
 import { HostScope, useApp } from "../../../lib/store";
 import type { Theme } from "../../../lib/theme";
@@ -396,7 +398,7 @@ function SessionFileContent() {
 	} else if (loadError && !detail) {
 		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" onPress={() => void load(false)} />} /></View>;
 	} else if (detail && image) {
-		body = <ImageCompare detail={detail} sources={{
+		body = <ImageCompare detail={detail} name={name} sources={{
 			before: detail.status !== "added" && changed ? workspaceImageSource(config!, id, path, "before", detail.workspaceVersion) : undefined,
 			after: !detail.deleted ? workspaceImageSource(config!, id, path, "after", detail.workspaceVersion) : undefined,
 		}} />;
@@ -480,8 +482,17 @@ function SessionFileContent() {
 	);
 }
 
-function ImageCompare({ detail, sources }: { detail: WorkspaceFileDetail; sources: { before?: { uri: string; headers: Record<string, string> }; after?: { uri: string; headers: Record<string, string> } } }) {
+type ImageSide = { uri: string; headers: Record<string, string> };
+
+/**
+ * A changed image, before and after. Each pane opens the full-screen viewer,
+ * where it zooms. The daemon's images need the connection's Bearer header,
+ * which React Native's Android image loader forwards only for an array source.
+ */
+function ImageCompare({ detail, name, sources }: { detail: WorkspaceFileDetail; name: string; sources: { before?: ImageSide; after?: ImageSide } }) {
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("button", { foreground: true });
+	const [viewing, setViewing] = useState<{ label: string; source: ImageSide }>();
 	const panes = [
 		sources.before ? { label: detail.deleted ? "Deleted" : "Before", source: sources.before } : null,
 		sources.after ? { label: detail.status === "added" ? "Added" : sources.before ? "After" : statusLabel[detail.status], source: sources.after } : null,
@@ -491,9 +502,19 @@ function ImageCompare({ detail, sources }: { detail: WorkspaceFileDetail; source
 			{panes.map((pane) => (
 				<View key={pane.label} style={styles.imagePane}>
 					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.imageLabel}>{pane.label}</Text>
-					<Image accessibilityLabel={`${pane.label} image`} source={pane.source} resizeMode="contain" style={styles.image} />
+					<Pressable
+						accessibilityRole="imagebutton"
+						accessibilityLabel={`${pane.label} image`}
+						accessibilityHint="Opens it full screen to zoom"
+						onPress={() => setViewing(pane)}
+						android_ripple={feedback.android_ripple}
+						style={({ pressed }) => [styles.imageFrame, pressed && feedback.pressed]}
+					>
+						<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [pane.source] : pane.source} resizeMode="contain" style={styles.image} />
+					</Pressable>
 				</View>
 			))}
+			{viewing ? <ImageViewer visible name={`${name}, ${viewing.label.toLowerCase()}`} source={viewing.source} onClose={() => setViewing(undefined)} /> : null}
 		</ScrollView>
 	);
 }
@@ -512,6 +533,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	markdown: { padding: space.lg, paddingBottom: 120 },
 	images: { padding: space.lg, gap: space.lg, paddingBottom: 120 },
 	imagePane: { gap: space.xs },
-	imageLabel: { fontFamily: font.semibold, fontSize: type.caption2.fontSize, letterSpacing: 0.9, textTransform: "uppercase", color: t.textTertiary },
-	image: { width: "100%", aspectRatio: 1, borderRadius: radius.md, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
+	imageLabel: { ...type.footnote, fontFamily: font.semibold, color: t.textSecondary },
+	imageFrame: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },
+	image: { width: "100%", aspectRatio: 1 },
 });

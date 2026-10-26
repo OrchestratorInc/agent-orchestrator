@@ -67,6 +67,14 @@ describe("the file viewer", () => {
 		expect(file).toContain("<SegmentedChoice<ViewChoice>");
 	});
 
+	// The daemon's images need the Bearer header, which React Native's Android
+	// loader forwards only for an array source.
+	it("loads authenticated image diffs on Android and opens them to zoom", () => {
+		expect(file).toContain('source={Platform.OS === "android" ? [pane.source] : pane.source}');
+		expect(file).toContain("<ImageViewer visible");
+		expect(file).not.toMatch(/textTransform: "uppercase"/);
+	});
+
 	it("confirms with the shared toast", () => {
 		expect(file).toContain("<ToastHost toast={toast}");
 		expect(file).not.toContain("setNotice");
