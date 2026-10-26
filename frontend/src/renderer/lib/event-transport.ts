@@ -1,9 +1,9 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { aoBridge } from "./bridge";
-import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { apiClient, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
-import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
+import { patchWorkspaceSession, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
 import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
 import {
@@ -23,11 +23,8 @@ export type EventTransport = {
 };
 
 const INVALIDATE_WINDOW_MS = 150;
-// A session_updated that carries only the session id comes from usage
-// bookkeeping (rarely an agent switch, cleanup fact or reported PR) and cannot
-// say whether the board changed. During long agent runs these arrive faster than
-// the window above and refetched the whole workspace every window for hours
-// (#6763), so they refresh it at most once per this interval.
+// Large id-only bursts and failed/unpatchable row reads use the existing
+// throttled list fallback. Small batches refresh just their rows.
 const ID_ONLY_WORKSPACE_REFRESH_MS = 5_000;
 // EventSource.CLOSED, referenced numerically so test stubs without the static
 // constants still work.
@@ -66,6 +63,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			let healthAttempt = 0;
 			let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 			const pendingConversationSessions = new Set<string>();
+			const pendingSessionRows = new Set<string>();
+			let sessionRowsTimer: ReturnType<typeof setTimeout> | undefined;
 			const pendingReviewerConversations = new Set<string>();
 			const pendingReviewSessions = new Set<string>();
 			const pendingInterfaceTransitionSessions = new Set<string>();
@@ -148,6 +147,34 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					if (state.dirty && !disposed) invalidate(queryKey);
 				};
 				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
+			};
+			const sessionRowRefreshes = new Map<string, { dirty: boolean }>();
+			const refreshSessionRow = (sessionId: string) => {
+				const baseUrl = getApiBaseUrl();
+				const key = `${baseUrl}\0${sessionId}`;
+				const running = sessionRowRefreshes.get(key);
+				if (running) { running.dirty = true; return; }
+				const state = { dirty: false };
+				sessionRowRefreshes.set(key, state);
+				void (async () => {
+					do {
+						state.dirty = false;
+						try {
+							const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}", { params: { path: { sessionId } } });
+							if (disposed || getApiBaseUrl() !== baseUrl) break;
+							if (error || !data?.session || !patchWorkspaceSession(queryClient, data.session)) {
+								queueIdOnlyWorkspaceRefresh();
+								scheduleFlush();
+							}
+						} catch {
+							if (!disposed && getApiBaseUrl() === baseUrl) {
+								queueIdOnlyWorkspaceRefresh();
+								scheduleFlush();
+							}
+						}
+					} while (state.dirty && !disposed && getApiBaseUrl() === baseUrl);
+					sessionRowRefreshes.delete(key);
+				})();
 			};
 			const refreshRemote = (hostId: string, reconnect = false) => {
 				invalidate(["remote-workspaces", hostId]);
@@ -415,6 +442,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						) {
 							idOnlySessionUpdate =
 								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
+							if (idOnlySessionUpdate) pendingSessionRows.add(decoded.sessionId);
 							// Async chat startup changes the session's provisionState, but
 							// does not emit a conversationId, and the controller turning
 							// ready writes nothing of its own: whichever session update
@@ -432,7 +460,21 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// cannot target a conversation cache precisely.
 					}
 				}
-				if (idOnlySessionUpdate) queueIdOnlyWorkspaceRefresh();
+				if (idOnlySessionUpdate) {
+					// Always collect a complete window: a leading-edge row read would
+					// escape the >3 fallback before the rest of a sweep arrives.
+					if (sessionRowsTimer === undefined) sessionRowsTimer = setTimeout(() => {
+						sessionRowsTimer = undefined;
+						const ids = [...pendingSessionRows];
+						pendingSessionRows.clear();
+						if (ids.length > 3) {
+							queueIdOnlyWorkspaceRefresh();
+							scheduleFlush();
+						} else {
+							for (const id of ids) refreshSessionRow(id);
+						}
+					}, INVALIDATE_WINDOW_MS);
+				}
 				else if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
 				scheduleFlush();
 			};
@@ -570,6 +612,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				healthAttempt += 1;
 				disposed = true;
 				if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+				if (sessionRowsTimer !== undefined) clearTimeout(sessionRowsTimer);
+				pendingSessionRows.clear();
 				if (idOnlyWorkspaceTimer !== undefined) clearTimeout(idOnlyWorkspaceTimer);
 				pendingConversationSessions.clear();
 				pendingReviewSessions.clear();

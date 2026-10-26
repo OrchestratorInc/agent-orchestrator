@@ -25,3 +25,15 @@ export function subscribeEventsConnection(listener: () => void): () => void {
 		listeners.delete(listener);
 	};
 }
+
+/** Let cold-start REST take its snapshot after SSE is listening. Offline startup
+ * still proceeds; a later onopen performs the normal gap refresh.
+ */
+export function waitForEventsConnection(timeoutMs = 1_000): Promise<void> {
+	if (state === "connected" || typeof EventSource === "undefined") return Promise.resolve();
+	return new Promise((resolve) => {
+		const finish = () => { clearTimeout(timer); unsubscribe(); resolve(); };
+		const unsubscribe = subscribeEventsConnection(() => { if (state === "connected") finish(); });
+		const timer = setTimeout(finish, timeoutMs);
+	});
+}
