@@ -354,6 +354,9 @@ describe("live browser gestures", () => {
 		expect(gesture("pinch").enabled).toBe(true);
 		const frame = nodes("GestureDetector")[0].findByType("View" as never);
 		expect(frame.props).toMatchObject({ accessible: true, accessibilityRole: "image", accessibilityLabel: "Desktop browser, Todo app" });
+		// VoiceOver's double-tap is taken, so it isn't sent on as a click in the page's middle.
+		await act(async () => frame.props.onAccessibilityTap());
+		expect(sent()).toEqual([]);
 	});
 
 	it("clicks the page where a tap lands, and ignores the letterbox", async () => {

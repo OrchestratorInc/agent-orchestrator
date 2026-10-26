@@ -29,6 +29,7 @@ const DRAG_SLOP = 7;
 const TAP_MAX_MS = 10_000;
 /** The mark a tap leaves on the frame: about a fingertip. */
 const TOUCH_MARK = 36;
+const ignoreActivation = () => {};
 
 export type BrowserLivePaneProps = {
 	sessionID: string;
@@ -286,6 +287,10 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 					accessible={interactive}
 					accessibilityRole="image"
 					accessibilityLabel={pageTitle ? `Desktop browser, ${pageTitle}` : "Desktop browser"}
+					// Unhandled, VoiceOver's double-tap lands as a touch on the
+					// frame's middle and clicks whatever the page has there. Its
+					// pass-through gesture still reaches the page by touch.
+					onAccessibilityTap={ignoreActivation}
 					style={styles.viewport}
 					onLayout={onViewportLayout}
 				>
