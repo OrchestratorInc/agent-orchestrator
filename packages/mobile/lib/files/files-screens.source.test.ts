@@ -100,6 +100,16 @@ describe("the file viewer", () => {
 		expect(file).not.toMatch(/textTransform: "uppercase"/);
 	});
 
+	// 44 points on iOS, Material's 48dp on Android.
+	it("sizes every line-comment composer control to the touch target", () => {
+		const components = source("./components.tsx");
+		for (const control of ["composerIcon", "composerPlain", "composerSend"]) {
+			expect(components).toContain(`${control}: { width: touchTarget, height: touchTarget,`);
+		}
+		expect(components).toContain("composerMeta: { minHeight: touchTarget,");
+		expect(components).not.toMatch(/width: 44, height: 44/);
+	});
+
 	it("confirms with the shared toast", () => {
 		expect(file).toMatch(/<ToastHost\s+toast=\{toast\}/);
 		expect(file).not.toContain("setNotice");

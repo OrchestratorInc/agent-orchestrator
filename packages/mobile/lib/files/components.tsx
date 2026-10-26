@@ -282,7 +282,7 @@ export function SelectionComposer({
 					</Pressable>
 				</View>
 				{error ? <Text accessibilityRole="alert" style={styles.composerError}>{error}</Text> : null}
-				{/* The session composer's capsule: same radius, same glass, same 44-point controls. */}
+				{/* The session composer's capsule: same radius, same glass, controls at the touch target. */}
 				<View style={styles.composerPill}>
 					<ComposerGlass radius={COMPOSER_RADIUS} />
 					<View style={styles.composerRow}>
@@ -404,15 +404,15 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// so commenting on a line feels like messaging the session.
 	composerShell: { backgroundColor: t.bgBase, paddingHorizontal: space.md, paddingTop: space.xxs, gap: space.xxs },
 	// The session composer's meta row: its left edge, and the close button over send.
-	composerMeta: { height: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm, paddingRight: space.xs },
+	composerMeta: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm, paddingRight: space.xs },
 	composerLabel: { flex: 1, fontFamily: font.semibold, fontSize: type.footnote.fontSize, fontWeight: "600", color: t.textSecondary },
 	composerIcon: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginLeft: -space.sm },
 	composerError: { ...type.footnote, color: t.red, paddingHorizontal: space.sm },
 	composerPill: { minHeight: 56, padding: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
 	composerRow: { flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
 	composerInput: { flex: 1, minHeight: 44, maxHeight: 138, fontFamily: font.regular, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, color: t.textPrimary, paddingHorizontal: space.md, paddingVertical: space.md, textAlignVertical: "top" },
-	composerPlain: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
-	composerSend: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
+	composerPlain: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, alignItems: "center", justifyContent: "center" },
+	composerSend: { width: touchTarget, height: touchTarget, borderRadius: touchTarget / 2, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	disabled: { opacity: stateOpacity.disabled },
 
 	inlineWrap: { paddingRight: space.md, paddingTop: space.xs, paddingBottom: space.sm, backgroundColor: t.bgBase },
