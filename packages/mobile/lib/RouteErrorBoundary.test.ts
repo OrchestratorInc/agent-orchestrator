@@ -46,7 +46,6 @@ const sheetRoutes = [
 	"sheets/model.tsx",
 	"sheets/project.tsx",
 	"sheets/review-actions.tsx",
-	"sheets/store-update.tsx",
 ];
 
 // The navigators alone: they render no screen of their own, and a fallback there

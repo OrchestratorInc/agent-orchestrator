@@ -25,7 +25,7 @@ import { toggleLayoutGrid, useLayoutGrid } from "../../lib/layoutGrid";
 import { checkStore, openOrStartUpdate } from "../../lib/inAppUpdates";
 import { MachineSelector } from "../../lib/MachineSelector";
 import { canRepairWithQr } from "../../lib/machineRecovery";
-import { describePrompt } from "../../lib/storeUpdate";
+import { promptStoreUpdate } from "../../lib/storeUpdatePrompt";
 import { openGitHub } from "../../lib/openGitHub";
 import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../../lib/push";
@@ -542,7 +542,6 @@ function SoftwareUpdateRow() {
 	const [storeChecking, setStoreChecking] = useState(false);
 	const [storeLast, setStoreLast] = useState<StoreRowResult | null>(null);
 	const [storeCheck, setStoreCheck] = useState<StoreCheck | null>(null);
-	const [storePrompt, setStorePrompt] = useState<{ version?: string; storeConfirmed: boolean; check: StoreCheck | null } | null>(null);
 
 	const ota = describeUpdateRow({
 		enabled: Updates.isEnabled,
@@ -553,21 +552,20 @@ function SoftwareUpdateRow() {
 	const store = describeStoreRow({ enabled: !__DEV__, checking: storeChecking, last: storeLast });
 	const row = describeSoftwareUpdateRow({ ota, store });
 
-	// Shown inside Settings rather than as a second sheet over it. Away
-	// from Settings the nudge still gets its own sheet route — there it is the
-	// only thing on screen.
-	function presentStoreSheet(check: StoreCheck | null) {
+	// The same alert the launch check raises. Not now only closes it here: the
+	// launch nudge's snooze counts prompts nobody asked for, and this one was.
+	function presentStorePrompt(check: StoreCheck | null) {
 		const confirmed = check?.updateAvailable === true;
-		setStorePrompt({
+		promptStoreUpdate({
 			version: confirmed && Platform.OS === "ios" ? check?.storeVersion : floorTarget(VERSION_FLOOR),
 			storeConfirmed: confirmed,
-			check,
+			onUpdate: () => { void openOrStartUpdate(check); },
 		});
 	}
 
 	async function onPress() {
 		if (row.action === "store") {
-			presentStoreSheet(storeCheck);
+			presentStorePrompt(storeCheck);
 			return;
 		}
 		if (row.action === "restart") {
@@ -591,7 +589,7 @@ function SoftwareUpdateRow() {
 				const floor = floorSignal(Application.nativeApplicationVersion, VERSION_FLOOR);
 				const nativeOutcome = storeRowResult(nativeResult, tierOf(nativeResult, Platform.OS, floor));
 				setStoreLast(nativeOutcome);
-				if (nativeOutcome.kind === "available") presentStoreSheet(nativeResult);
+				if (nativeOutcome.kind === "available") presentStorePrompt(nativeResult);
 				else if (nativeOutcome.kind === "error" || otaResult.kind === "error") haptics.error();
 				else haptics.success();
 			} else if (otaResult.kind === "error") haptics.error();
@@ -603,46 +601,15 @@ function SoftwareUpdateRow() {
 	}
 
 	return (
-		<>
-			<CardRow
-				icon="download-cloud"
-				label="Software update"
-				showChevron={false}
-				value={row.value}
-				valueColor={row.tone === "good" ? t.green : row.tone === "bad" ? t.red : undefined}
-				loading={row.busy}
-				onPress={row.action === null ? undefined : onPress}
-			/>
-			{storePrompt ? (
-				<InlinePanel
-					title="A newer version of Orchestrator is ready"
-					copy={describePrompt({ version: storePrompt.version, storeConfirmed: storePrompt.storeConfirmed, storeName: Platform.OS === "ios" ? "App Store" : "Play Store" })}
-					primary={`Open ${Platform.OS === "ios" ? "App Store" : "Play Store"}`}
-					secondary="Not now"
-					onPrimary={() => { const check = storePrompt.check; setStorePrompt(null); void openOrStartUpdate(check); }}
-					onSecondary={() => setStorePrompt(null)}
-				/>
-			) : null}
-		</>
-	);
-}
-
-/** A confirm step that opens inside Settings instead of over it. */
-function InlinePanel({ title, copy, primary, secondary, onPrimary, onSecondary }: { title: string; copy: string; primary: string; secondary: string; onPrimary(): void; onSecondary(): void }) {
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<View style={styles.inlinePanel}>
-			<Text style={styles.inlinePanelTitle}>{title}</Text>
-			<Text style={styles.inlinePanelCopy}>{copy}</Text>
-			<View style={styles.inlinePanelActions}>
-				<Pressable accessibilityRole="button" onPress={() => { haptics.tap(); onSecondary(); }} style={({ pressed }) => [styles.inlinePanelAction, pressed && { opacity: 0.7 }]}>
-					<Text style={styles.inlinePanelActionLabel}>{secondary}</Text>
-				</Pressable>
-				<Pressable accessibilityRole="button" onPress={() => { haptics.tap(); onPrimary(); }} style={({ pressed }) => [styles.inlinePanelAction, styles.inlinePanelPrimary, pressed && { opacity: 0.85 }]}>
-					<Text style={styles.inlinePanelPrimaryLabel}>{primary}</Text>
-				</Pressable>
-			</View>
-		</View>
+		<CardRow
+			icon="download-cloud"
+			label="Software update"
+			showChevron={false}
+			value={row.value}
+			valueColor={row.tone === "good" ? t.green : row.tone === "bad" ? t.red : undefined}
+			loading={row.busy}
+			onPress={row.action === null ? undefined : onPress}
+		/>
 	);
 }
 
@@ -711,14 +678,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	inlineChoices: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle, backgroundColor: t.bgSubtle, paddingVertical: space.hair },
 	inlineChoice: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: 50, paddingRight: space.md },
 	inlineChoiceLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
-	inlinePanel: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle, backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md, gap: space.sm },
-	inlinePanelTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
-	inlinePanelCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	inlinePanelActions: { flexDirection: "row", gap: space.sm },
-	inlinePanelAction: { minHeight: 38, justifyContent: "center", paddingHorizontal: space.md, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	inlinePanelPrimary: { backgroundColor: t.textPrimary, borderColor: t.textPrimary },
-	inlinePanelActionLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-	inlinePanelPrimaryLabel: { fontFamily: "Geist_600SemiBold", color: t.bgBase, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	row: { minHeight: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: space.md, gap: space.sm },
 	rowPressed: { backgroundColor: t.bgElevatedHover },
 	rowIcon: { fontFamily: "Geist_400Regular", width: 26, textAlign: "center" },

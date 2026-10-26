@@ -1,24 +1,23 @@
-import { usePathname, useRootNavigationState, useRouter } from "expo-router";
+import { usePathname, useRootNavigationState } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import * as Application from "expo-application";
 import { AppState, Platform } from "react-native";
 import { checkStore, openOrStartUpdate, openStore, startPlayUpdate } from "./inAppUpdates";
-import { storeUpdateSheetRoute } from "./sheetResult";
 import { floorSignal, floorTarget, nextSnooze, shouldPrompt, tierOf, type Snooze, type StoreCheck } from "./storeUpdate";
 import { VERSION_FLOOR } from "./versionFloor";
+import { promptStoreUpdate } from "./storeUpdatePrompt";
 import { loadSnooze, saveSnooze } from "./storeUpdateStore";
 import { useApp } from "./store";
 
 // Headless. Mounted beside UpdatesManager in `app/_layout.tsx`; asks the store
 // once per launch whether a newer **native binary** exists, and either nudges
-// (dismissible sheet) or hands over to Play's own fullscreen updater. Decision
+// (the system's dismissible alert) or hands over to Play's own fullscreen updater. Decision
 // logic lives in `storeUpdate.ts` so it is unit-testable.
 //
 // The OTA manager next door covers JS updates. A new native build mints a new
 // fingerprint runtime, which is the case OTA does not reach on its own — short of
 // deliberately publishing from that older release's tag.
 export function StoreUpdateManager(): null {
-	const router = useRouter();
 	const pathname = usePathname();
 	const navState = useRootNavigationState();
 	const { config } = useApp();
@@ -57,7 +56,7 @@ export function StoreUpdateManager(): null {
 		if (pathname !== "/") return;
 		ran.current = true;
 		void prompt();
-	}, [snooze, navState?.key, config, pathname, router]);
+	}, [snooze, navState?.key, config, pathname]);
 
 	async function prompt() {
 		// Deliberately no pre-gate on the snooze before this call, tempting as the
@@ -74,11 +73,11 @@ export function StoreUpdateManager(): null {
 			if (started.current) return;
 			// Play would not take over, so in practice this is a nudge. Say that
 			// honestly and let the snooze apply, rather than reprompting every
-			// launch with a sheet the user can dismiss anyway.
+			// launch with a prompt the user can dismiss anyway.
 			tier = "recommended";
 		}
 		const confirmed = check?.updateAvailable === true;
-		// What the sheet names: the store's version when it answered, else the floor's.
+		// What the prompt names: the store's version when it answered, else the floor's.
 		const display = confirmed ? check?.storeVersion : floorTarget(VERSION_FLOOR);
 		// What the snooze is keyed on: the floor's version while the floor has an
 		// opinion about this install. That stays constant whether or not the store
@@ -91,12 +90,12 @@ export function StoreUpdateManager(): null {
 		const key = floor === "none" ? check?.storeVersion : floorTarget(VERSION_FLOOR);
 		const args = { tier, version: key, snooze: snooze ?? null, now: Date.now() };
 		if (!shouldPrompt({ ...args, stalenessDays: check?.playStalenessDays })) return;
-		openSheet(check, display, key, confirmed);
+		openPrompt(check, display, key, confirmed);
 	}
 
-	function openSheet(check: StoreCheck | null, display: string | undefined, key: string | undefined, confirmed: boolean) {
+	function openPrompt(check: StoreCheck | null, display: string | undefined, key: string | undefined, confirmed: boolean) {
 		// The check above is allowed 12s; if the user opened something in the
-		// meantime, don't land a sheet on top of it. Leaving `ran` false gives the
+		// meantime, don't land a prompt on top of it. Leaving `ran` false gives the
 		// prompt another chance when they come back to the board.
 		if (pathnameRef.current !== "/") {
 			ran.current = false;
@@ -107,29 +106,24 @@ export function StoreUpdateManager(): null {
 			setSnooze(next);
 			void saveSnooze(next);
 		};
-		router.push(
-			storeUpdateSheetRoute({
-				// A store-confirmed version is only nameable on iOS — Android's is a
-				// versionCode. A floor version is a real version string either way.
-				version: confirmed && Platform.OS !== "ios" ? undefined : display,
-				storeConfirmed: confirmed,
-				onAction: (action) => {
-					if (action === "update") {
-						// Only Play's flow leaves a download to recover; a listing does not.
-						void openOrStartUpdate(check).then((via) => {
-							started.current = via === "play";
-							// Nothing opened — a floor-driven nudge on a device with no
-							// TestFlight, say. The sheet is already gone, so without a
-							// snooze the same dead end would replay every launch, never
-							// counting toward MAX_DISMISSALS.
-							if (via === "none") snoozeNow();
-						});
-						return;
-					}
-					snoozeNow();
-				},
-			}),
-		);
+		promptStoreUpdate({
+			// A store-confirmed version is only nameable on iOS — Android's is a
+			// versionCode. A floor version is a real version string either way.
+			version: confirmed && Platform.OS !== "ios" ? undefined : display,
+			storeConfirmed: confirmed,
+			onUpdate: () => {
+				// Only Play's flow leaves a download to recover; a listing does not.
+				void openOrStartUpdate(check).then((via) => {
+					started.current = via === "play";
+					// Nothing opened — a floor-driven nudge on a device with no
+					// TestFlight, say. The alert is already gone, so without a
+					// snooze the same dead end would replay every launch, never
+					// counting toward MAX_DISMISSALS.
+					if (via === "none") snoozeNow();
+				});
+			},
+			onDismiss: snoozeNow,
+		});
 	}
 
 	useEffect(() => {
