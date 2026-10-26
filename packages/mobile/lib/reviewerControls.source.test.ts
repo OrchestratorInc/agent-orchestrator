@@ -155,6 +155,17 @@ describe("reviewer control integration", () => {
 		expect(detail).toContain("This will squash-merge PR #${pr.number} in the remote repository.");
 	});
 
+	// A raw message can be an engine string or a bare HTTP status; the shared
+	// mapping turns those into copy that says what to do, as other screens do.
+	it("shows failures through userFacingError, never a raw error message", () => {
+		for (const screen of [detail, actions]) {
+			expect(screen).toContain('import { userFacingError } from "../../lib/connectionError";');
+			expect(screen).not.toMatch(/\.message\s*:/);
+		}
+		expect(detail).toContain('setError(userFacingError(value, "Could not load this review."))');
+		expect(actions).toContain('setError(userFacingError(cause, "Could not load review actions."))');
+	});
+
 	it("keys automatic-review dismissal to the stable run id", () => {
 		expect(detail).toContain("const autoReviewFailureId = autoReviewFailure?.id");
 		expect(detail).toContain("[autoReviewFailureId, dismissedAutoFailureId]");

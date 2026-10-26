@@ -24,6 +24,7 @@ import {
 	type SessionReviews,
 } from "../../lib/api";
 import { AgentLogo } from "../../lib/AgentLogo";
+import { userFacingError } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { openGitHub } from "../../lib/openGitHub";
@@ -91,7 +92,7 @@ function ReviewActionsContent() {
 				autoInjectCI: session.autoInjectCI ?? true,
 			});
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not load review actions.");
+			setError(userFacingError(cause, "Could not load review actions."));
 		}
 	}, [config, hostMatches, prUrl, sessionId]);
 
@@ -129,7 +130,7 @@ function ReviewActionsContent() {
 			setReviewerConfig(selection.agentConfig ?? {});
 			haptics.success();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not change reviewer.");
+			setError(userFacingError(cause, "Could not change reviewer."));
 		} finally {
 			setBusy(undefined);
 		}
@@ -150,7 +151,7 @@ function ReviewActionsContent() {
 				{ text: "Change reviewer", style: "destructive", onPress: () => void saveReviewer(id, agentConfig) },
 			], { cancelable: true, onDismiss: () => setBusy(undefined) });
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not check the active review before changing reviewer settings.");
+			setError(userFacingError(cause, "Could not check the active review before changing reviewer settings."));
 			setBusy(undefined);
 		}
 	}
@@ -179,7 +180,7 @@ function ReviewActionsContent() {
 			haptics.success();
 		} catch (cause) {
 			setPolicies(previous);
-			setError(cause instanceof Error ? cause.message : "Could not update the review automation setting.");
+			setError(userFacingError(cause, "Could not update the review automation setting."));
 		} finally {
 			setBusy(undefined);
 		}
@@ -193,7 +194,7 @@ function ReviewActionsContent() {
 			await requestSessionRereview(config, sessionId, pr.url, item.reviewerId);
 			haptics.success();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not request another review.");
+			setError(userFacingError(cause, "Could not request another review."));
 		} finally {
 			setBusy(undefined);
 		}
@@ -218,7 +219,7 @@ function ReviewActionsContent() {
 			haptics.success();
 			await load();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not resolve this comment.");
+			setError(userFacingError(cause, "Could not resolve this comment."));
 		} finally {
 			setBusy(undefined);
 		}
@@ -233,7 +234,7 @@ function ReviewActionsContent() {
 			setSent((current) => new Set(current).add(id));
 			haptics.success();
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : "Could not send this feedback to the worker.");
+			setError(userFacingError(cause, "Could not send this feedback to the worker."));
 		} finally {
 			setBusy(undefined);
 		}

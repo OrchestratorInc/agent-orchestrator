@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, triggerSessionReview, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
+import { userFacingError } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { ItemActionsMenu } from "../../lib/item-actions-menu";
@@ -67,7 +68,7 @@ function ReviewDetailContent() {
 				setError("");
 			}
 		} catch (value) {
-			if (!quiet && request === latestLoad.current) setError(value instanceof Error ? value.message : "Could not load this review.");
+			if (!quiet && request === latestLoad.current) setError(userFacingError(value, "Could not load this review."));
 		}
 	}, [config, hostMatches, sessionId]);
 
@@ -137,7 +138,7 @@ function ReviewDetailContent() {
 			await restoreSessionReviewer(config, sessionId);
 			await load();
 		} catch (value) {
-			setError(value instanceof Error ? value.message : "Could not restore the reviewer.");
+			setError(userFacingError(value, "Could not restore the reviewer."));
 		} finally {
 			setMutation(undefined);
 		}
@@ -149,7 +150,7 @@ function ReviewDetailContent() {
 			{ text: "Stop reviewer", style: "destructive", onPress: () => void (async () => {
 				setMutation("kill"); setError("");
 				try { setData(await killSessionReviewer(config, sessionId)); haptics.success(); }
-				catch (value) { setError(value instanceof Error ? value.message : "Could not stop the reviewer session."); }
+				catch (value) { setError(userFacingError(value, "Could not stop the reviewer session.")); }
 				finally { setMutation(undefined); }
 			})() },
 		]);
@@ -168,7 +169,7 @@ function ReviewDetailContent() {
 			}
 			await load();
 		} catch (value) {
-			setError(value instanceof Error ? value.message : "The review action failed.");
+			setError(userFacingError(value, "The review action failed."));
 		} finally {
 			setMutation(undefined);
 		}
@@ -182,7 +183,7 @@ function ReviewDetailContent() {
 			setSentRuns((current) => new Set(current).add(run.id));
 			haptics.success();
 		} catch (value) {
-			setError(value instanceof Error ? value.message : "Could not send this review to the worker.");
+			setError(userFacingError(value, "Could not send this review to the worker."));
 		} finally {
 			setMutation(undefined);
 		}
@@ -198,7 +199,7 @@ function ReviewDetailContent() {
 		if (!config || !pr || !merge?.canMerge || (mutation && !merging)) return false;
 		setMutation("merge"); setError("");
 		try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
-		catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); return false; }
+		catch (value) { setError(userFacingError(value, `Could not merge PR #${pr.number}.`)); return false; }
 		finally { setMutation(undefined); }
 	};
 	const confirmMerge = () => {
