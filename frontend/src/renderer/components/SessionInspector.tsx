@@ -2899,7 +2899,7 @@ function ReviewPRGroup({
 				iconClassName={state.className}
 				label={
 					<>
-						<span className="font-medium">PR {pr.label}</span>
+						<span className="font-medium">{`PR ${pr.label}`}</span>
 						{pr.title ? <span> {pr.title}</span> : null}
 					</>
 				}
@@ -3716,6 +3716,7 @@ function ReviewPanel({
 							number={review.prNumber}
 							onCancel={onCancel}
 							startedAt={review.latestRun?.createdAt}
+							stopsAll={inFlight.length > 1}
 						/>
 					</ReviewReveal>
 				))}
@@ -3749,6 +3750,7 @@ function ReviewNowRow({
 	number,
 	onCancel,
 	startedAt,
+	stopsAll,
 }: {
 	disabled: boolean;
 	harness: string;
@@ -3756,6 +3758,8 @@ function ReviewNowRow({
 	number: number;
 	onCancel: () => void;
 	startedAt?: string;
+	/** Cancel is session-wide, so with several reviews running Stop ends all of them. */
+	stopsAll: boolean;
 }) {
 	const { t } = useTranslation();
 	const agent = agentLabel(harness);
@@ -3767,7 +3771,7 @@ function ReviewNowRow({
 				{startedAt ? <span className="text-caption tabular-nums text-muted-foreground"> · {formatTimeCompact(startedAt)}</span> : null}
 			</span>
 			<Button
-				aria-label={t("inspector.review.stopFor", { agent, number })}
+				aria-label={t(stopsAll ? "inspector.review.stopAllFor" : "inspector.review.stopFor", { agent, number })}
 				className="shrink-0 px-2 text-xs"
 				disabled={disabled}
 				onClick={onCancel}
@@ -3775,7 +3779,7 @@ function ReviewNowRow({
 				type="button"
 				variant="ghost"
 			>
-				{isCancelling ? t("inspector.review.cancelling") : t("inspector.review.stop")}
+				{isCancelling ? t("inspector.review.cancelling") : t(stopsAll ? "inspector.review.stopAll" : "inspector.review.stop")}
 			</Button>
 		</div>
 	);

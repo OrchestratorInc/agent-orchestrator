@@ -877,6 +877,8 @@
 	"inspector.review.runLockedCloudReviewer": "Connect or install this reviewer first",
 	"inspector.review.nowReviewing": "{{agent}} is reviewing #{{number}}",
 	"inspector.review.stop": "Stop",
+	"inspector.review.stopAll": "Stop all",
+	"inspector.review.stopAllFor": "Stop all running reviews, including {{agent}} on #{{number}}",
 	"inspector.review.stopFor": "Stop {{agent}} review on #{{number}}",
 	"inspector.review.announceStarted": "{{reviewer}} started reviewing #{{number}}",
 	"inspector.review.announceVerdict": "{{reviewer}}: {{verdict}} on #{{number}}",

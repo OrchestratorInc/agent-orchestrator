@@ -4042,6 +4042,34 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getAllByTestId("review-pr-row")[0]).toHaveTextContent("Reviewable change 4");
   });
 
+  it("labels Stop as stopping all reviews when several are running", async () => {
+    const live = (number: number, harness: string) => ({
+      ...reviewState(number, "running", `sha-${number}`),
+      latestRun: {
+        ...approvedReview,
+        id: `run-live-${number}`,
+        harness,
+        status: "running",
+        verdict: "",
+        createdAt: "2026-01-02T00:00:00Z",
+      },
+    });
+    mockCommonGets([], "reviewer-pane", [live(3, "claude-code"), live(4, "codex")], "active");
+
+    renderWithQuery(
+      <SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />,
+    );
+    await openReviewsSection();
+
+    expect(await screen.findAllByTestId("review-now-row")).toHaveLength(2);
+    // Cancel is session-wide, so neither row may imply it stops only its own pass.
+    expect(
+      screen.getByRole("button", { name: "Stop all running reviews, including Codex on #4" }),
+    ).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Stop Codex review on #4" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("Stop all")).toHaveLength(2);
+  });
+
   it("keeps each harness summary on its own reviewer row when selecting the next agent", async () => {
     const state = {
       ...reviewState(3, "changes_requested", "sha-1"),

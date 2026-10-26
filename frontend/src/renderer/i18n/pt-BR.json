@@ -890,6 +890,8 @@
 	"inspector.review.runLockedCloudReviewer": "Conecte ou instale este revisor primeiro",
 	"inspector.review.nowReviewing": "{{agent}} está revisando #{{number}}",
 	"inspector.review.stop": "Parar",
+	"inspector.review.stopAll": "Parar todas",
+	"inspector.review.stopAllFor": "Parar todas as revisões em andamento, incluindo a de {{agent}} em #{{number}}",
 	"inspector.review.stopFor": "Parar a revisão de {{agent}} em #{{number}}",
 	"inspector.review.announceStarted": "{{reviewer}} começou a revisar #{{number}}",
 	"inspector.review.announceVerdict": "{{reviewer}}: {{verdict}} em #{{number}}",

@@ -890,6 +890,8 @@
 	"inspector.review.runLockedCloudReviewer": "Connectez ou installez d’abord ce relecteur",
 	"inspector.review.nowReviewing": "{{agent}} relit #{{number}}",
 	"inspector.review.stop": "Arrêter",
+	"inspector.review.stopAll": "Tout arrêter",
+	"inspector.review.stopAllFor": "Arrêter toutes les revues en cours, y compris {{agent}} sur #{{number}}",
 	"inspector.review.stopFor": "Arrêter la revue {{agent}} sur #{{number}}",
 	"inspector.review.announceStarted": "{{reviewer}} a commencé à relire #{{number}}",
 	"inspector.review.announceVerdict": "{{reviewer}} : {{verdict}} sur #{{number}}",

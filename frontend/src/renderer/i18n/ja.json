@@ -881,6 +881,8 @@
 	"inspector.review.runLockedCloudReviewer": "先にこのレビュアーを接続またはインストールしてください",
 	"inspector.review.nowReviewing": "{{agent}} が #{{number}} をレビュー中",
 	"inspector.review.stop": "停止",
+	"inspector.review.stopAll": "すべて停止",
+	"inspector.review.stopAllFor": "進行中のレビューをすべて停止（#{{number}} の {{agent}} レビューを含む）",
 	"inspector.review.stopFor": "#{{number}} の {{agent}} レビューを停止",
 	"inspector.review.announceStarted": "{{reviewer}} が #{{number}} のレビューを開始しました",
 	"inspector.review.announceVerdict": "{{reviewer}}: #{{number}} は {{verdict}}",

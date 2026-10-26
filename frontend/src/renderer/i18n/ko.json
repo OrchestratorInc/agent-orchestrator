@@ -881,6 +881,8 @@
 	"inspector.review.runLockedCloudReviewer": "먼저 이 리뷰어를 연결하거나 설치하세요",
 	"inspector.review.nowReviewing": "{{agent}}이(가) #{{number}} 리뷰 중",
 	"inspector.review.stop": "중지",
+	"inspector.review.stopAll": "모두 중지",
+	"inspector.review.stopAllFor": "진행 중인 모든 리뷰 중지(#{{number}}의 {{agent}} 리뷰 포함)",
 	"inspector.review.stopFor": "#{{number}}의 {{agent}} 리뷰 중지",
 	"inspector.review.announceStarted": "{{reviewer}}이(가) #{{number}} 리뷰를 시작했습니다",
 	"inspector.review.announceVerdict": "{{reviewer}}: #{{number}} {{verdict}}",

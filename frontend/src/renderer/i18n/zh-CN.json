@@ -880,6 +880,8 @@
 	"inspector.review.runLockedCloudReviewer": "请先连接或安装此评审者",
 	"inspector.review.nowReviewing": "{{agent}} 正在评审 #{{number}}",
 	"inspector.review.stop": "停止",
+	"inspector.review.stopAll": "全部停止",
+	"inspector.review.stopAllFor": "停止所有进行中的评审，包括 #{{number}} 上的 {{agent}} 评审",
 	"inspector.review.stopFor": "停止 #{{number}} 上的 {{agent}} 评审",
 	"inspector.review.announceStarted": "{{reviewer}} 开始评审 #{{number}}",
 	"inspector.review.announceVerdict": "{{reviewer}}：#{{number}} {{verdict}}",

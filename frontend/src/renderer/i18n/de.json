@@ -881,6 +881,8 @@
 	"inspector.review.runLockedCloudReviewer": "Diesen Reviewer zuerst verbinden oder installieren",
 	"inspector.review.nowReviewing": "{{agent}} prüft #{{number}}",
 	"inspector.review.stop": "Stoppen",
+	"inspector.review.stopAll": "Alle stoppen",
+	"inspector.review.stopAllFor": "Alle laufenden Reviews stoppen, auch {{agent}} für #{{number}}",
 	"inspector.review.stopFor": "{{agent}}-Review für #{{number}} stoppen",
 	"inspector.review.announceStarted": "{{reviewer}} prüft jetzt #{{number}}",
 	"inspector.review.announceVerdict": "{{reviewer}}: {{verdict}} für #{{number}}",
