@@ -754,9 +754,10 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 		{Kind: ports.ChatEventMessageCompleted, ProviderEventID: "replay-answer", ProviderTurnID: "replayed-turn", ProviderItemID: "replay-answer-item", Text: "On it."},
 		{Kind: ports.ChatEventTurnCompleted, ProviderEventID: "replay-complete", ProviderTurnID: "replayed-turn", TurnState: domain.TurnStateCompleted},
 	}}
+	var resumedCfg ports.ChatResumeConfig
 	restarted := chatsvc.New(chatsvc.Options{
 		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
-		Drivers: fakeRegistry{driver: fakeDriver{conv: replay}},
+		Drivers: fakeRegistry{driver: fakeDriver{conv: replay, resumeCfg: &resumedCfg}},
 		Log:     slog.New(slog.DiscardHandler),
 		NewID:   sequentialIDs("restart"),
 	})
@@ -768,6 +769,9 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 		t.Fatalf("resume after restart: %v", err)
 	}
 	t.Cleanup(func() { _ = restarted.Stop(context.Background(), id) })
+	if resumedCfg.FreshIfMissing {
+		t.Fatal("a boundary that answered a turn may start fresh, which would drop its thread")
+	}
 	if replay.historyReads() == 0 {
 		t.Fatal("resume did not replay native history")
 	}
@@ -783,6 +787,104 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 	}
 	if prompts != 1 || len(resumed.Turns) != 1 || resumed.Turns[0].State != domain.TurnStateCompleted {
 		t.Fatalf("after restart: %d opening prompts, turns %+v; want one prompt on one completed turn", prompts, resumed.Turns)
+	}
+}
+
+// A replacement orchestrator nobody wrote to never had a turn on its own
+// boundary, so its provider may never have saved the thread (Codex keeps no
+// rollout before the first message). After a restart it starts fresh in place
+// instead of failing every resume, and the branch moves to the fresh thread.
+func TestUnansweredReplacementOrchestratorStartsFreshAfterRestart(t *testing.T) {
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	provisioningOrchestrator(t, st, id)
+	previous, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("seed earlier orchestrator: %v", err)
+	}
+	project, err := st.CreateConversation(ctx, "project-narrative",
+		domain.ConversationScopeProject, testProject, previous.ID, now)
+	if err != nil {
+		t.Fatalf("seed project conversation: %v", err)
+	}
+	if err := st.UpsertActivity(ctx, project.ID, "", domain.ConversationActivity{
+		ID: "earlier-work", Kind: domain.ActivityKindSystem,
+		Status: domain.ActivityStatusCompleted, Summary: "earlier orchestrator work",
+	}, now); err != nil {
+		t.Fatalf("seed project history: %v", err)
+	}
+	previous.Metadata.ProviderConversationID = "predecessor-thread"
+	previous.IsTerminated = true
+	if err := st.UpdateSession(ctx, previous); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: newFakeConversation()}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("first-start"),
+	})
+	var boundary *domain.ConversationBranch
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ControllerReady: func(result chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
+			boundary = result.ProviderBoundary
+			if boundary == nil {
+				return chatsvc.ControllerCommit{}, errors.New("no provider boundary for the replacement")
+			}
+			rec, _, err := st.GetSession(ctx, id)
+			if err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			rec.ProvisionState = domain.SessionProvisionReady
+			rec.Metadata.ProviderConversationID = result.ProviderConversationID
+			rec.Metadata.ControllerGeneration = result.ControllerGeneration
+			rec.UpdatedAt = now
+			if err := st.CommitChatSpawn(ctx, rec, *boundary); err != nil {
+				return chatsvc.ControllerCommit{}, err
+			}
+			committed := result.Conversation
+			committed.ActiveBranchID = boundary.ID
+			return chatsvc.ControllerCommit{Conversation: committed}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Stop(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// The provider cannot find thread-1 and starts fresh-thread in its place.
+	fresh := newFakeConversation()
+	fresh.providerConversationID = "fresh-thread"
+	var resumedCfg ports.ChatResumeConfig
+	restarted := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st),
+		Drivers: fakeRegistry{driver: fakeDriver{conv: fresh, resumeCfg: &resumedCfg}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   sequentialIDs("restart"),
+	})
+	if _, err := restarted.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryImport,
+	}); err != nil {
+		t.Fatalf("resume after restart: %v", err)
+	}
+	t.Cleanup(func() { _ = restarted.Stop(context.Background(), id) })
+	if !resumedCfg.FreshIfMissing {
+		t.Fatal("resume of an unanswered replacement boundary may not start fresh, so it fails forever")
+	}
+	branch, err := st.ConversationBranch(ctx, project.ID, boundary.ID)
+	if err != nil || branch.ProviderConversationID != "fresh-thread" {
+		t.Fatalf("boundary after fresh start = %+v, err=%v; want fresh-thread", branch, err)
 	}
 }
 
