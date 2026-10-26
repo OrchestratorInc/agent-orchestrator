@@ -158,3 +158,4 @@ d5596e5ce24883aa3e04b8111abc283d3cfad3f3 taken fix(frontend): teach cn() the app
 af42f6bd487241f7b84065295f37b452ff0b3f4f skipped fix(mobile): keep attachments picked on Android and type images by their bytes (#7237) — конфликт packages/mobile, отложен
 35807b1952b9ca7d9df438393805ec2868aae830 skipped perf(chat): stream code tokens incrementally with shiki (#7231)
 787834575d7058ecfe4304022e78d8b753234139 taken fix(scm): dedupe PRs reported under a renamed repository's old name (#7206)
+4d0f14c3016c5dcf008650d35ab17839e5079ad3 taken fix(sessions): accept the suffixed branch when replacing an orchestrator (#7245)
