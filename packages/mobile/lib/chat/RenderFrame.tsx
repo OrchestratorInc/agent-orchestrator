@@ -1,16 +1,17 @@
 import * as Linking from "expo-linking";
+import { useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
+import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
 import { haptics } from "../haptics";
-import { Feather } from "../icons";
+import { usePressFeedback } from "../pressFeedback";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
-import { space, type } from "../tokens";
+import { iconSize, radius, space, touchTarget, type } from "../tokens";
 import {
 	RENDER_BRIDGE_SCRIPT,
 	RENDER_ZOOM_SCRIPT,
@@ -43,7 +44,7 @@ const LINK_TAP_WINDOW_MS = 1000;
 const MAX_PROCESS_RESTARTS = 2;
 // A page this device has already loaded usually comes back within this; only
 // a slower load shows the skeleton, so a cached page does not flash one.
-const SKELETON_DELAY_MS = 250;
+export const SKELETON_DELAY_MS = 250;
 // A frame that measures out of range lets its page go only after this. Content
 // added above (earlier history) lays the list out once before the scroll anchor
 // restores the position, and a measure in between would unload and reload pages
@@ -63,7 +64,7 @@ function useRenderTheme(): RenderTheme {
  * opaque origin. Theme rides in the fragment for first paint and is posted
  * after, so the page never reloads.
  */
-function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed }: {
+export function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed }: {
 	path: string;
 	displayMode: RenderDisplayMode;
 	onHeight?: (height: number) => void;
@@ -134,7 +135,7 @@ function RenderDocument({ path, displayMode, onHeight, onReady, onGone, onFailed
  * One mounted page's lifecycle: loading until its document finishes, then
  * ready. A page whose process dies is mounted afresh, up to a limit.
  */
-function useRenderPage() {
+export function useRenderPage() {
 	const [mount, setMount] = useState(0);
 	const [loading, setLoading] = useState(true);
 	const restarts = useRef(0);
@@ -154,40 +155,6 @@ function useRenderPage() {
 	return useMemo(() => ({ mount, loading, ready, unload, reset, gone }), [mount, loading, ready, unload, reset, gone]);
 }
 
-/** The page over the whole screen, scrollable and pinch-zoomable. */
-function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible: boolean; onClose: () => void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const insets = useSafeAreaInsets();
-	const [failed, setFailed] = useState(false);
-	const page = useRenderPage();
-	const close = () => { haptics.tap(); onClose(); };
-	// Reset on close, not on show: iOS fires onShow after the fade-in, and a reset
-	// then remounts a page that is already showing, so it flashes blank and reloads.
-	const { reset } = page;
-	useEffect(() => {
-		if (visible) return;
-		setFailed(false);
-		reset();
-	}, [visible, reset]);
-	return <Modal visible={visible} animationType="fade" statusBarTranslucent onRequestClose={onClose}>
-		<View style={[styles.viewer, { paddingTop: insets.top }]}>
-			<View style={styles.viewerHeader}>
-				<Text numberOfLines={1} accessibilityRole="header" style={styles.viewerTitle}>{render.title}</Text>
-				<Pressable accessibilityRole="button" accessibilityLabel="Close" hitSlop={10} onPress={close} style={styles.viewerClose}>
-					<Feather name="x" size={18} color={t.textPrimary} />
-				</Pressable>
-			</View>
-			{failed
-				? <View style={styles.viewerError}><Text style={styles.fallbackTitle}>Couldn't load this page.</Text></View>
-				: visible ? <View style={styles.viewerBody}>
-					<RenderDocument key={page.mount} path={render.path} displayMode="fullscreen" onReady={page.ready} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} />
-					{page.loading ? <RenderSkeleton height={Number.POSITIVE_INFINITY} label={render.title} style={styles.viewerSkeleton} delayMs={SKELETON_DELAY_MS} /> : null}
-				</View> : null}
-		</View>
-	</Modal>;
-}
-
 /**
  * An agent's HTML page inline in its turn, as desktop shows it; a tap expands
  * it. Only a frame in or near view holds a WebView: a page can run to megabytes
@@ -197,7 +164,9 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
 export const RenderFrame = memo(function RenderFrame({ render }: { render: RenderRef }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
+	const router = useRouter();
+	const retryFeedback = usePressFeedback("button");
+	const { config, currentHostId } = useApp();
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
@@ -205,7 +174,6 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const [live, setLive] = useState(false);
 	const [failed, setFailed] = useState(false);
 	const page = useRenderPage();
-	const [expanded, setExpanded] = useState(false);
 	// Sized on this device already: by a report this mount, or one saved earlier.
 	const measured = contentHeight !== undefined || rememberedRenderHeight(render.path, width) !== undefined;
 	const liveRef = useRef(live);
@@ -265,10 +233,11 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 			disabled={!config}
 			accessibilityRole={config ? "button" : undefined}
 			accessibilityLabel={config ? `Retry loading ${render.title}` : undefined}
+			android_ripple={config ? retryFeedback.android_ripple : undefined}
 			onPress={() => { haptics.tap(); setFailed(false); page.reset(); }}
-			style={styles.fallback}
+			style={({ pressed }) => [styles.fallback, pressed && retryFeedback.pressed]}
 		>
-			<Feather name={config ? "refresh-cw" : "file-text"} size={12} color={t.textTertiary} />
+			<AppSymbol name={config ? "refresh" : "fileText"} size={iconSize.sm} color={t.textTertiary} />
 			<Text numberOfLines={1} style={styles.fallbackTitle}>{render.title}</Text>
 			{config ? <Text style={styles.fallbackAction}>Couldn't load · Tap to retry</Text> : null}
 		</Pressable>;
@@ -279,16 +248,19 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
 		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
 		{!live || page.loading ? <RenderSkeleton height={height} label={render.title} style={StyleSheet.absoluteFill} delayMs={measured ? SKELETON_DELAY_MS : 0} /> : null}
-		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}
+		{/* Inline, a tap means "show me this larger"; links and zoom live in the viewer. */}
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={`Expand ${render.title}`}
-			onPress={() => { haptics.tap(); setExpanded(true); }}
+			onPress={() => router.push({ pathname: "/render", params: { path: render.path, title: render.title, hostId: currentHostId ?? undefined } })}
 			style={StyleSheet.absoluteFill}
 		>
-			<View style={styles.expandChip}><Feather name="maximize" size={13} color={t.textSecondary} /></View>
+			{({ pressed }) => (
+				<View style={[styles.expandChip, pressed && styles.expandChipPressed]}>
+					<AppSymbol name={{ ios: "arrow.up.left.and.arrow.down.right", android: "open_in_full" }} size={iconSize.sm} color={t.textSecondary} />
+				</View>
+			)}
 		</Pressable>
-		<RenderViewer render={render} visible={expanded} onClose={() => setExpanded(false)} />
 	</View>;
 }, (previous, next) => sameRender(previous.render, next.render));
 
@@ -301,16 +273,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	frame: { marginVertical: space.xs, overflow: "hidden", backgroundColor: t.bgBase },
 	document: { flex: 1 },
 	web: { flex: 1, backgroundColor: t.bgBase },
-	expandChip: { position: "absolute", top: space.xs, right: space.xs, width: 28, height: 28, borderRadius: 14, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderSubtle },
-	viewer: { flex: 1, backgroundColor: t.bgBase },
-	viewerHeader: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.lg, paddingRight: space.sm, paddingVertical: space.xs },
-	viewerTitle: { flex: 1, fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
-	viewerClose: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated },
-	// Edge to edge: the page carries the thread's inset itself (VIEWER_STYLE_SCRIPT).
-	viewerBody: { flex: 1 },
-	viewerSkeleton: { position: "absolute", top: 0, left: space.xl, right: space.xl, height: 360 },
-	viewerError: { flex: 1, alignItems: "center", justifyContent: "center" },
-	fallback: { alignSelf: "flex-start", marginVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
-	fallbackTitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
-	fallbackAction: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption2.fontSize, fontWeight: "600" },
+	// A sign that the frame opens larger; the whole frame is the button.
+	expandChip: { position: "absolute", top: space.xs, right: space.xs, width: iconSize.xxl, height: iconSize.xxl, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderSubtle },
+	expandChipPressed: { backgroundColor: t.bgElevatedHover },
+	fallback: { alignSelf: "flex-start", minHeight: touchTarget, marginVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.md, overflow: "hidden" },
+	fallbackTitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	fallbackAction: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 });
