@@ -1,11 +1,11 @@
 import { useEffect } from "react";
-import { AccessibilityInfo, Pressable, StyleSheet, Text, View } from "react-native";
+import { AccessibilityInfo, StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
-import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { font, fontScaleCap, iconSize, space, touchTarget, type } from "../tokens";
+import { NoticeDismissButton } from "./NoticeDismissButton";
 import type { TerminalNoticeHostProps, TerminalNoticeProps } from "./TerminalNotice.types";
 
 export type { TerminalNoticeHostProps, TerminalNoticeMessage, TerminalNoticeProps, TerminalNoticeTone } from "./TerminalNotice.types";
@@ -21,7 +21,6 @@ export type { TerminalNoticeHostProps, TerminalNoticeMessage, TerminalNoticeProp
 export function TerminalNotice({ notice, onDismiss }: TerminalNoticeProps) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
-	const feedback = usePressFeedback("icon");
 
 	// A row appearing under the bar is silent to VoiceOver otherwise.
 	useEffect(() => {
@@ -36,15 +35,7 @@ export function TerminalNotice({ notice, onDismiss }: TerminalNoticeProps) {
 			<Text maxFontSizeMultiplier={fontScaleCap.body} style={[s.text, error && s.errorText]}>
 				{notice.text}
 			</Text>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel="Dismiss"
-				onPress={onDismiss}
-				android_ripple={feedback.android_ripple}
-				style={({ pressed }) => [s.dismiss, pressed && feedback.pressed]}
-			>
-				<AppSymbol name="close" size={iconSize.sm} color={t.textSecondary} />
-			</Pressable>
+			<NoticeDismissButton accessibilityLabel="Dismiss" onPress={onDismiss} />
 		</View>
 	);
 }
@@ -76,5 +67,4 @@ const makeStyles = (t: Theme) =>
 			color: t.textPrimary,
 		},
 		errorText: { color: t.red },
-		dismiss: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	});

@@ -47,6 +47,7 @@ import { Button, EmptyState } from "../ui";
 import type { PlatformSymbol } from "../symbols";
 import { TerminalNotice, TerminalNoticeHost, type TerminalNoticeMessage, type TerminalNoticeTone } from "./TerminalNotice";
 import { InterfaceSwitchConfirm, type InterfaceSwitchPolicy } from "./InterfaceSwitchConfirm";
+import { NoticeDismissButton } from "./NoticeDismissButton";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -1412,15 +1413,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 								? ` Couldn't dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
 								: ""}
 						</Text>
-					</View>
-					<View style={styles.transitionNoticeActions}>
-						{interfaceFailureRecovery ? (
-							<Button variant="danger" title={interfaceFailureRecovery.actionLabel} onPress={requestInterfaceFailureRecovery} />
-						) : null}
-						<Button
-							variant="ghost"
-							title="Dismiss"
-							loading={interfaceSwitch.acknowledgingNotice}
+						<NoticeDismissButton
+							accessibilityLabel="Dismiss interface switch error"
+							busy={interfaceSwitch.acknowledgingNotice}
 							onPress={() => {
 								void interfaceSwitch
 									.acknowledgeNotice(interfaceTransitionNotice.id)
@@ -1428,6 +1423,11 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 							}}
 						/>
 					</View>
+					{interfaceFailureRecovery ? (
+						<View style={styles.transitionNoticeActions}>
+							<Button variant="danger" title={interfaceFailureRecovery.actionLabel} onPress={requestInterfaceFailureRecovery} />
+						</View>
+					) : null}
 				</View>
 			) : null}
 
@@ -1584,19 +1584,18 @@ const makeStyles = (t: Theme) =>
 		borderColor: t.borderDefault,
 	},
 	statusText: { flexShrink: 1, fontFamily: font.medium, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	// Laid out like TerminalNotice's row, closed by the same button, with the
+	// recovery action on a line of its own when there is one.
 	transitionNotice: {
-		paddingTop: space.sm,
-		paddingLeft: space.lg,
-		paddingRight: space.sm,
 		backgroundColor: t.bgElevated,
 		borderBottomWidth: rowDividerWidth,
 		borderBottomColor: t.borderSubtle,
 	},
 	transitionNoticeFailed: { backgroundColor: t.tintRed },
-	transitionNoticeRow: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, paddingRight: space.sm },
-	transitionNoticeText: { flex: 1, fontFamily: font.regular, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	transitionNoticeRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: touchTarget, paddingLeft: space.lg },
+	transitionNoticeText: { flex: 1, paddingVertical: space.sm, fontFamily: font.regular, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	transitionNoticeTextFailed: { color: t.red },
-	transitionNoticeActions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xs },
+	transitionNoticeActions: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: space.lg, paddingBottom: space.sm },
 	termWrap: { flex: 1, backgroundColor: t.bgBase },
 	// The page's own surface, as under the chat composer: the composer's
 	// elevated fill and the keys' tonal fill both need it to stand apart from.

@@ -82,8 +82,10 @@ describe("the iOS terminal notice", () => {
 	it("closes from a touch-target button with a name", async () => {
 		const onDismiss = vi.fn();
 		await act(async () => { renderer = create(<TerminalNotice notice={{ id: 1, text: "x", tone: "error" }} onDismiss={onDismiss} />); });
-		const close = renderer!.root.findByProps({ accessibilityLabel: "Dismiss" });
+		const close = renderer!.root.findByType("Pressable" as never);
+		expect(close.props.accessibilityLabel).toBe("Dismiss");
 		expect(close.props.accessibilityRole).toBe("button");
+		expect(close.props.style({ pressed: false })).toContainEqual({ width: 44, height: 44, alignItems: "center", justifyContent: "center" });
 		act(() => close.props.onPress());
 		expect(onDismiss).toHaveBeenCalledOnce();
 	});

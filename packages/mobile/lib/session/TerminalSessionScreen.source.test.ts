@@ -49,6 +49,11 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).not.toContain("t.amber");
 	});
 
+	it("names the interface-switch notice's close button for what it closes", () => {
+		expect(screen).toMatch(/<NoticeDismissButton\s+accessibilityLabel="Dismiss interface switch error"\s+busy=\{interfaceSwitch\.acknowledgingNotice\}/);
+		expect(screen).not.toContain('title="Dismiss"');
+	});
+
 	it("asks how a busy session switches through the platform's own choice", () => {
 		expect(screen).toContain("<InterfaceSwitchConfirm message={switchQuestion} onChoose={answerSwitchQuestion} onCancel={closeSwitchQuestion} />");
 		expect(screen).not.toContain('Alert.alert(\n\t\t\t"Switch to Chat?"');
