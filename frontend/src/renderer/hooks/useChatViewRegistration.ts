@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clientForSessionHost } from "../lib/host-clients";
-import { patchWorkspaceSession } from "./useWorkspaceQuery";
+import { beginWorkspaceRead, patchWorkspaceSession } from "./useWorkspaceQuery";
 import { conversationQueryKey } from "./useConversation";
 
 /** Own the primary Chat tab's wake/keep-alive lease across navigation. */
@@ -14,13 +14,14 @@ export function useChatViewRegistration(sessionId: string, chatViewActive: boole
 		let refreshed = false;
 		let pending = Promise.resolve();
 		const refreshSession = async () => {
+			const readVersion = beginWorkspaceRead(queryClient);
 			const { data, error } = await clientForSessionHost().GET("/api/v1/sessions/{sessionId}", {
 				params: { path: { sessionId } },
 			});
 			if (!error && !left && data?.session?.id === sessionId) {
 				// An absent workspace/project is left to authoritative workspace events;
 				// opening one tab must not fall back to fetching the entire list.
-				patchWorkspaceSession(queryClient, data.session);
+				patchWorkspaceSession(queryClient, data.session, readVersion);
 			}
 		};
 		const setViewActive = async (active: boolean) => {

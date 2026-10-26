@@ -9,7 +9,7 @@ vi.mock("../lib/host-clients", () => ({ clientForSessionHost: () => ({ GET: get,
 vi.mock("../lib/session-management-telemetry", () => ({ recordDirectWorkerInteraction: vi.fn() }));
 import { conversationQueryKey, conversationQueryOptions, toSnapshot, useConversation, useConversationCommands } from "./useConversation";
 import { useChatViewRegistration } from "./useChatViewRegistration";
-import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { patchWorkspaceSession, workspaceQueryKey } from "./useWorkspaceQuery";
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -140,6 +140,22 @@ it("does not patch a row whose detail response arrives after navigation", async 
 	view.unmount();
 	await act(async () => { detail.resolve({ data: { session: { id: "old", projectId: "project", mode: "chat" } } }); });
 	expect(client.getQueryData(workspaceQueryKey)).toEqual([expect.objectContaining({ sessions: [] })]);
+});
+
+it("does not overwrite a newer row with a delayed registration detail response", async () => {
+	const { client, wrapper } = setup();
+	const detail = deferred<unknown>();
+	get.mockImplementationOnce(() => detail.promise);
+	const view = renderHook(() => useChatViewRegistration("chat", true), { wrapper });
+	await waitFor(() => expect(requests(sessionPath)).toHaveLength(1));
+	const row = { id: "chat", projectId: "project", mode: "chat", harness: "codex", status: "idle", activity: { state: "idle" } } as const;
+	patchWorkspaceSession(client, { ...row, title: "Newer event" });
+	await act(async () => { detail.resolve({ data: { session: { ...row, title: "Stale registration" } } }); });
+	expect(client.getQueryData(workspaceQueryKey)).toEqual([
+		expect.objectContaining({ sessions: [expect.objectContaining({ id: "chat", title: "Newer event" })] }),
+	]);
+	expect(requests("/api/v1/sessions")).toHaveLength(0);
+	view.unmount();
 });
 
 it("renews the same lease without repeatedly reading the session row", async () => {
