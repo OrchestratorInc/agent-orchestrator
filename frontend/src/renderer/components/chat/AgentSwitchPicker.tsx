@@ -755,7 +755,8 @@ export function ComposerErrorNotice(
 	return (
 		<div
 			role="alert"
-			className="-mb-2 flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
+			data-composer-notice
+			className="flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
 		>
 			<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
 			<div className="min-w-0 flex-1">

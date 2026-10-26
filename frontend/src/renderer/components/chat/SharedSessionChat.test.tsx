@@ -123,7 +123,7 @@ describe("shared session chat", () => {
 	it("locks the chat box while someone else is writing to the agent", async () => {
 		mocks.live = liveState({ holder: { userId: "user-alice", name: "Alice" }, epoch: 3 });
 		renderSurface();
-		await waitFor(() => expect(lastProps()?.composerLockedPlaceholder).toBe("Alice is writing to the agent"));
+		await waitFor(() => expect(lastProps()?.composerLockedPlaceholder).toBe(""));
 	});
 
 	it("trusts the server's word on who this person is over the account the app remembers", async () => {

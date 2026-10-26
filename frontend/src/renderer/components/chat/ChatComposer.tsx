@@ -226,7 +226,7 @@ export const ChatComposer = memo(function ChatComposer({
 	savingQueuedEditPending,
 	queuedEditRecovery,
 	commandError,
-	attachedTop = false,
+	notice,
 	queuedDock,
 	onCompact,
 	compacting,
@@ -337,8 +337,8 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedEditRecovery?: boolean;
 	/** A failed send, approval, interrupt, or settings mutation. */
 	commandError?: string;
-	/** A queued-message dock owns the shared rounded top edge. */
-	attachedTop?: boolean;
+	/** A notice attached to the form, below queued messages and input requests. */
+	notice?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
@@ -1775,6 +1775,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{elicitation}
 					</div>
 				) : null}
+				{notice}
 				{form}
 			</div>
 		);
@@ -1783,7 +1784,6 @@ export const ChatComposer = memo(function ChatComposer({
 		return withQueueStack(
 			<form
 				onSubmit={(event) => event.preventDefault()}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
 			>
 				{approval}
@@ -1813,7 +1813,6 @@ export const ChatComposer = memo(function ChatComposer({
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
 					// Portal menus still bubble clicks here; focusing the editor would close them.

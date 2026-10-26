@@ -2680,6 +2680,16 @@ describe("attachments", () => {
 /* ---- disabled and busy states ------------------------------------------- */
 
 describe("unavailable states", () => {
+	it("keeps approval actions available below an attached notice and queue", async () => {
+		const approve = vi.fn();
+		render(<ChatComposer onSend={vi.fn()} disabled notice={<div data-composer-notice>Another writer</div>} queuedDock={<div>Queued message</div>} approval={<button onClick={approve}>Approve command</button>} />);
+		const notice = screen.getByText("Another writer");
+		expect(notice.previousElementSibling).toHaveAttribute("data-testid", "queued-composer-dock");
+		expect(notice.nextElementSibling?.tagName).toBe("FORM");
+		await userEvent.click(screen.getByRole("button", { name: "Approve command" }));
+		expect(approve).toHaveBeenCalledOnce();
+	});
+
 	it("explains a stopped controller and refuses to send", async () => {
 		const { onSend, field } = renderComposer({ disabled: true, skills: SKILLS });
 		expect(field).toHaveAttribute("aria-placeholder", expect.stringContaining("not connected"));

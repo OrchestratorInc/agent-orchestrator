@@ -1091,11 +1091,9 @@ export function CloudSessionChatSurface({
 			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
-				: lease.locked
-					? (lease.holder
-						? appI18n.t("chat.shared.lockedBy", { name: lease.holder.name || appI18n.t("chat.shared.someone") })
-						: appI18n.t("chat.shared.waitingForTurn"))
-					: undefined}
+				// The attached notice already names the writer and the place in line.
+				// An empty placeholder keeps the input locked without repeating it.
+				: lease.locked ? "" : undefined}
 			onComposerInput={lease.noteDraft}
 			settingsLocked={settingsLocked}
 			onOpenFiles={onOpenFiles}

@@ -46,7 +46,8 @@ export function SharedComposerNotice({ live, lease, userId }: {
 	return (
 		<div
 			data-shared-composer-notice
-			className="-mb-2 flex min-w-0 flex-col rounded-t-(--radius-chat-composer) border-b border-border bg-muted/60 text-xs"
+			data-composer-notice
+			className="flex min-w-0 flex-col rounded-t-(--radius-chat-composer) border-b border-border bg-surface text-xs"
 		>
 			<div role="status" className="flex min-w-0 items-center gap-2 px-3 py-1.5">
 				<Users aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
@@ -88,10 +89,10 @@ export function RemoteDraft({ text, cursor, name }: { text: string; cursor: numb
 		>
 			{text.slice(0, at)}
 			<span className="relative inline-block h-[1.15em] w-0 align-text-bottom" data-remote-caret>
-				<span aria-hidden="true" className="absolute inset-y-0 left-0 w-[2px] rounded-full bg-accent motion-safe:animate-pulse" />
+				<span aria-hidden="true" className="absolute inset-y-0 left-0 w-[2px] rounded-full bg-foreground motion-safe:animate-pulse" />
 				<span
 					aria-hidden="true"
-					className="absolute bottom-full left-0 mb-0.5 rounded-xs bg-accent px-1 text-[10px] leading-4 font-medium whitespace-nowrap text-accent-foreground"
+					className="absolute bottom-full left-0 mb-0.5 rounded-xs bg-foreground px-1 text-[10px] leading-4 font-medium whitespace-nowrap text-background"
 				>
 					{name}
 				</span>

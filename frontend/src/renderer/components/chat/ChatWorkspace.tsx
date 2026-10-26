@@ -1963,9 +1963,8 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									{composerNotice}
 									<ChatComposer
-										attachedTop={Boolean(composerNotice)}
+										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
