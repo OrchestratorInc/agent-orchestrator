@@ -11,11 +11,15 @@ import {
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { iconSize, type } from "./tokens";
+import { iconSize, touchTarget } from "./tokens";
 import { workerActionSymbol } from "./worker-action-model";
+import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 
-const ACTION_WIDTH = 64;
-const CONTROL_SIZE = 44;
+const ACTION_WIDTH = WORKER_ACTION_REVEAL_WIDTH / 2;
+const CONTROL_SIZE = touchTarget;
+// Taller than the buttons so their glass is not clipped at the host's edge. The
+// swipe rail centres this block on the row, however tall the row grows.
+const HOST_HEIGHT = 76;
 // The glass button hugs its label, so each glyph gets the same box. Without
 // it the taller `pin` symbol drew a larger circle than the archive box.
 const GLYPH_BOX = 24;
@@ -35,13 +39,13 @@ export function WorkerRowActions({
 	const t = useTheme();
 
 	return (
-		<Host style={{ width: ACTION_WIDTH * 2, height: 76 }} colorScheme={scheme}>
+		<Host style={{ width: ACTION_WIDTH * 2, height: HOST_HEIGHT }} colorScheme={scheme}>
 			{/* Deliberately not a `GlassEffectContainer`. That is the right wrapper
 			    when two glass controls should read as one surface, but inside one the
 			    system blends their material as they approach, so pin and archive
 			    morphed into a single blob mid-swipe. Each button keeps its own glass
 			    here, and the 16pt gap is what separates them. */}
-			<HStack spacing={16} modifiers={[frame({ width: ACTION_WIDTH * 2, height: 76 })]}>
+			<HStack spacing={16} modifiers={[frame({ width: ACTION_WIDTH * 2, height: HOST_HEIGHT })]}>
 				<Button
 					onPress={() => onSetPinned(!pinned)}
 					modifiers={[
@@ -66,14 +70,17 @@ export function WorkerRowActions({
 						modifiers={[frame({ width: GLYPH_BOX, height: GLYPH_BOX })]}
 					/>
 				</Button>
+				{/* The destructive action of the pair: it stops the agent and deletes
+				    a clean worktree, so it takes the system's destructive role and red. */}
 				<Button
+					role="destructive"
 					onPress={onDelete}
 					modifiers={[
 						buttonStyle("glass"),
 						buttonBorderShape("circle"),
 						controlSize("large"),
 						labelStyle("iconOnly"),
-						tint(t.textPrimary),
+						tint(t.red),
 						frame({ width: CONTROL_SIZE, height: CONTROL_SIZE }),
 						accessibilityLabel(`Archive ${title}`),
 						accessibilityIdentifier("worker-archive"),
@@ -82,7 +89,7 @@ export function WorkerRowActions({
 					<Image
 						systemName={workerActionSymbol("delete").ios}
 						size={iconSize.lg}
-						color={t.textPrimary}
+						color={t.red}
 						modifiers={[frame({ width: GLYPH_BOX, height: GLYPH_BOX })]}
 					/>
 				</Button>

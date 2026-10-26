@@ -1,10 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
+import Animated, { useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 import { rowDividerWidth } from "./divider";
+import { haptics } from "./haptics";
 import type { Theme } from "./theme";
-import { useThemedStyles } from "./ThemeProvider";
-import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
+import type { WorkerActionId } from "./worker-action-model";
+import { isFullSwipe, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { WorkerRowContextMenu } from "./worker-rename-context-menu";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
 
@@ -16,12 +21,19 @@ const DRAG_DISTANCE = 16;
  * Gesture Handler takes a finite offset, so "never" is one no finger reaches.
  */
 const NEVER = 10_000;
+/** The action a full swipe runs, as Mail's runs its last one. */
+const FULL_SWIPE_ACTION: WorkerActionId = "delete";
 
 /**
  * A worker row's touch surface, the same on both platforms: Gesture Handler's
  * Reanimated swipeable, so the drag and its settle run on the UI thread, around
  * the row's Pressable and its native long-press menu (SwiftUI on iOS, Compose on
  * Android).
+ *
+ * The swipeable has no full swipe of its own. A second pan, recognised with
+ * its own, watches the same drag: past the full-swipe point it arms (a haptic,
+ * and the uncovered rail takes the destructive tint), and letting go armed
+ * archives the row through the same confirmation as the Archive button.
  */
 export function WorkerRowInteraction({
 	sessionId,
@@ -41,14 +53,18 @@ export function WorkerRowInteraction({
 	onSwipeClose,
 	onReady,
 }: WorkerRowInteractionProps) {
-	const styles = useThemedStyles(makeStyles);
 	const swipeable = useRef<SwipeableMethods>(null);
 	const [open, setOpen] = useState(false);
 	// The rail's controls exist only while the row is off its resting position: a
 	// resting row hides them behind its foreground, and building native buttons
 	// under every mounted row was most of a row's cost.
 	const [railMounted, setRailMounted] = useState(false);
+	const rowWidth = useSharedValue(0);
+	const railOpen = useSharedValue(false);
+	const dragOrigin = useSharedValue(0);
+	const armed = useSharedValue(false);
 	const close = useCallback(() => swipeable.current?.close(), []);
+	const canFullSwipe = enabled && actions.some((action) => action.id === FULL_SWIPE_ACTION);
 
 	useEffect(() => {
 		onReady?.(close);
@@ -57,68 +73,141 @@ export function WorkerRowInteraction({
 		if (activeSwipeId && activeSwipeId !== sessionId) close();
 	}, [activeSwipeId, close, sessionId]);
 
+	const runAction = useCallback((id: WorkerActionId) => {
+		// Close the swipe rail first: leaving it open behind a sheet or an alert
+		// strands it there once the action's own UI takes over.
+		close();
+		onAction(id);
+	}, [close, onAction]);
+	const fullSwipe = useCallback(() => runAction(FULL_SWIPE_ACTION), [runAction]);
+	const arm = useCallback(() => haptics.armed(), []);
+	const fullSwipeWatch = useMemo(
+		() =>
+			Gesture.Pan()
+				.enabled(canFullSwipe)
+				// A full swipe only ever runs leftward.
+				.activeOffsetX([-DRAG_DISTANCE, NEVER])
+				.onStart(() => {
+					dragOrigin.value = railOpen.value ? -WORKER_ACTION_REVEAL_WIDTH : 0;
+				})
+				.onUpdate((event) => {
+					const next = isFullSwipe(dragOrigin.value + event.translationX, rowWidth.value);
+					if (next === armed.value) return;
+					armed.value = next;
+					if (next) scheduleOnRN(arm);
+				})
+				.onEnd(() => {
+					if (armed.value) scheduleOnRN(fullSwipe);
+				})
+				.onFinalize(() => {
+					armed.value = false;
+				}),
+		[canFullSwipe, dragOrigin, railOpen, rowWidth, armed, arm, fullSwipe],
+	);
+	const measure = useCallback((event: LayoutChangeEvent) => {
+		rowWidth.value = event.nativeEvent.layout.width;
+	}, [rowWidth]);
+
 	return (
-		<ReanimatedSwipeable
-			ref={swipeable}
-			enabled={enabled}
-			containerStyle={shellStyle}
-			childrenContainerStyle={foregroundStyle}
-			dragOffsetFromRightEdge={DRAG_DISTANCE}
-			dragOffsetFromLeftEdge={open ? DRAG_DISTANCE : NEVER}
-			rightThreshold={WORKER_ACTION_REVEAL_WIDTH / 2}
-			overshootRight={false}
-			onSwipeableOpenStartDrag={() => setRailMounted(true)}
-			onSwipeableWillOpen={() => {
-				setRailMounted(true);
-				setOpen(true);
-				onSwipeOpen(sessionId, close);
-			}}
-			onSwipeableWillClose={() => setOpen(false)}
-			onSwipeableClose={() => {
-				// Also fires when a short or cancelled drag settles back at rest.
-				setRailMounted(false);
-				setOpen(false);
-				onSwipeClose(sessionId);
-			}}
-			renderRightActions={() => (
-				// The rail keeps its width before its controls mount: the swipeable
-				// measures it to resolve the very first drag.
-				<View style={styles.rail}>{railMounted ? rightActions : null}</View>
-			)}
-		>
-			{enabled ? (
-				<WorkerRowContextMenu
-					onPress={onPress}
-					actions={actions}
-					onAction={(id) => {
-						// Close the swipe rail first: leaving it open behind a sheet or an
-						// alert strands it there once the action's own UI takes over.
-						close();
-						onAction(id);
+		<GestureDetector gesture={fullSwipeWatch}>
+			{/* Its own native view: two detectors cannot share the swipeable's. */}
+			<View collapsable={false} onLayout={measure}>
+				<ReanimatedSwipeable
+					ref={swipeable}
+					enabled={enabled}
+					containerStyle={shellStyle}
+					childrenContainerStyle={foregroundStyle}
+					dragOffsetFromRightEdge={DRAG_DISTANCE}
+					dragOffsetFromLeftEdge={open ? DRAG_DISTANCE : NEVER}
+					rightThreshold={WORKER_ACTION_REVEAL_WIDTH / 2}
+					// The row travels past the rail only toward a full swipe.
+					overshootRight={canFullSwipe}
+					simultaneousWithExternalGesture={fullSwipeWatch}
+					onSwipeableOpenStartDrag={() => setRailMounted(true)}
+					onSwipeableWillOpen={() => {
+						railOpen.value = true;
+						setRailMounted(true);
+						setOpen(true);
+						onSwipeOpen(sessionId, close);
 					}}
-					accessibilityLabel={accessibilityLabel}
-					accessibilityHint={accessibilityHint}
-					style={rowStyle}
+					onSwipeableWillClose={() => {
+						railOpen.value = false;
+						setOpen(false);
+					}}
+					onSwipeableClose={() => {
+						// Also fires when a short or cancelled drag settles back at rest.
+						railOpen.value = false;
+						setRailMounted(false);
+						setOpen(false);
+						onSwipeClose(sessionId);
+					}}
+					renderRightActions={(_progress, translation) => (
+						<SwipeRail translation={translation} armed={armed}>
+							{railMounted ? rightActions : null}
+						</SwipeRail>
+					)}
 				>
-					{children}
-				</WorkerRowContextMenu>
-			) : (
-				<View style={rowStyle}>{children}</View>
-			)}
-		</ReanimatedSwipeable>
+					{enabled ? (
+						<WorkerRowContextMenu
+							onPress={onPress}
+							actions={actions}
+							onAction={runAction}
+							accessibilityLabel={accessibilityLabel}
+							accessibilityHint={accessibilityHint}
+							style={rowStyle}
+						>
+							{children}
+						</WorkerRowContextMenu>
+					) : (
+						<View style={rowStyle}>{children}</View>
+					)}
+				</ReanimatedSwipeable>
+			</View>
+		</GestureDetector>
+	);
+}
+
+/**
+ * What the swipe uncovers: the controls in a fixed rail at the trailing edge,
+ * over a fill that follows the row past the rail and takes the destructive
+ * tint once letting go would archive.
+ */
+function SwipeRail({ translation, armed, children }: {
+	translation: SharedValue<number>;
+	armed: SharedValue<boolean>;
+	children: ReactNode;
+}) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const fill = useAnimatedStyle(() => ({
+		width: Math.max(WORKER_ACTION_REVEAL_WIDTH, -translation.value),
+		backgroundColor: armed.value ? t.tintRed : t.bgElevated,
+	}));
+	return (
+		<>
+			<Animated.View pointerEvents="none" style={[styles.fill, fill]} />
+			{/* The rail keeps its width before its controls mount: the swipeable
+			    measures it to resolve the very first drag. */}
+			<View style={styles.rail}>{children}</View>
+		</>
 	);
 }
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		fill: {
+			position: "absolute",
+			top: 0,
+			right: 0,
+			bottom: 0,
+			borderLeftWidth: rowDividerWidth,
+			borderLeftColor: t.borderSubtle,
+		},
 		rail: {
 			width: WORKER_ACTION_REVEAL_WIDTH,
 			// The rail is the row's full height and its controls one fixed block.
 			// Centred, they stay level with the row's middle when it grows past the
 			// minimum: a rename in progress, a larger text size, a wrapped line.
 			justifyContent: "center",
-			backgroundColor: t.bgElevated,
-			borderLeftWidth: rowDividerWidth,
-			borderLeftColor: t.borderSubtle,
 		},
 	});
