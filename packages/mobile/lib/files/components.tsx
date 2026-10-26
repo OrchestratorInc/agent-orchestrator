@@ -233,7 +233,7 @@ export const FoldRow = memo(function FoldRow({ hidden, section, expandable, onEx
 export type ComposerAction = "comment" | "send";
 
 /** The session composer's capsule corner (ChatComposer), so the glass behind both matches. */
-const COMPOSER_RADIUS = 28;
+const COMPOSER_RADIUS = radius.xxl;
 
 export function SelectionComposer({
 	label,
