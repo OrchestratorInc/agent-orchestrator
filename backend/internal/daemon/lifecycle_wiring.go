@@ -232,6 +232,7 @@ type sessionLifecycle interface {
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
+	SendWithClientMessageID(ctx context.Context, id domain.SessionID, message, clientMessageID string) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
 	// is built after Session Manager during boot (see startShellTerminals), so
@@ -267,6 +268,9 @@ type sessionLifecycleMessenger struct {
 }
 
 func (m sessionLifecycleMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
+	if clientMessageID := ports.ClientMessageIDFromContext(ctx); clientMessageID != "" {
+		return m.SendWithClientMessageID(ctx, id, message, clientMessageID)
+	}
 	return m.sessionLifecycle.Send(ctx, id, message, nil)
 }
 

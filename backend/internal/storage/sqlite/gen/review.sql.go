@@ -1104,6 +1104,37 @@ func (q *Queries) RestoreReviewLaunchState(ctx context.Context, arg RestoreRevie
 	return result.RowsAffected()
 }
 
+const selectReviewNoticeChatDelivery = `-- name: SelectReviewNoticeChatDelivery :one
+SELECT conversation_turns.state, conversation_turns.error_message
+FROM conversations
+JOIN conversation_messages ON conversation_messages.conversation_id = conversations.id
+    AND conversation_messages.client_message_id = ?1
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversations.current_session_id = ?2
+LIMIT 1
+`
+
+type SelectReviewNoticeChatDeliveryParams struct {
+	ClientMessageID string
+	SessionID       *domain.SessionID
+}
+
+type SelectReviewNoticeChatDeliveryRow struct {
+	State        domain.TurnState
+	ErrorMessage string
+}
+
+// The Chat turn carrying one "review done" delivery attempt, found by the
+// attempt's client message id in the worker's conversation. Its state tells
+// whether the message reached the agent, is still queued (a sleeping session
+// not yet woken), or failed (the wake or drain failed).
+func (q *Queries) SelectReviewNoticeChatDelivery(ctx context.Context, arg SelectReviewNoticeChatDeliveryParams) (SelectReviewNoticeChatDeliveryRow, error) {
+	row := q.db.QueryRowContext(ctx, selectReviewNoticeChatDelivery, arg.ClientMessageID, arg.SessionID)
+	var i SelectReviewNoticeChatDeliveryRow
+	err := row.Scan(&i.State, &i.ErrorMessage)
+	return i, err
+}
+
 const setReviewInterfaceMode = `-- name: SetReviewInterfaceMode :execrows
 UPDATE review SET interface_mode = ?, reviewer_handle_id = CASE WHEN ? = 'chat' THEN '' ELSE reviewer_handle_id END,
     provider_conversation_id = CASE WHEN ? = 'tui' THEN '' ELSE provider_conversation_id END,

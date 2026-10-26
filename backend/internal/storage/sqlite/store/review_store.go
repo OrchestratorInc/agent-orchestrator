@@ -432,6 +432,23 @@ func (s *Store) MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, e
 	return n > 0, nil
 }
 
+// ReviewNoticeChatDelivery returns the state and error of the Chat turn that
+// carries the worker's message with clientMessageID, found=false when no such
+// message exists in the worker's conversation.
+func (s *Store) ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, error) {
+	row, err := s.qr.SelectReviewNoticeChatDelivery(ctx, gen.SelectReviewNoticeChatDeliveryParams{
+		ClientMessageID: clientMessageID,
+		SessionID:       &sessionID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("review notice chat delivery for %s: %w", sessionID, err)
+	}
+	return row.State, row.ErrorMessage, true, nil
+}
+
 // reviewWorkerNotice derives the failed state: a pending notice whose sends
 // failed ReviewWorkerNoticeMaxAttempts times has given up.
 func reviewWorkerNotice(stored string, attempts int64) domain.ReviewWorkerNotice {

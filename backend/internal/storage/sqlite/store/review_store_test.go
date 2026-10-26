@@ -1015,3 +1015,44 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 		t.Fatalf("sessions with pending notices after terminate = %v err=%v", sessions, err)
 	}
 }
+
+// A review done notice relayed to a Chat session is found by its client
+// message id in the worker's conversation, with its turn's state and error.
+func TestReviewNoticeChatDeliveryReadsTheTurn(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	conversation, err := s.CreateConversation(ctx, "conv-notice", domain.ConversationScopeSession, rec.ProjectID, rec.ID, now)
+	if err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	if _, _, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0"); err != nil || found {
+		t.Fatalf("before the relay: found=%v err=%v", found, err)
+	}
+	// A relayed message starts as a queued turn until a controller runs it.
+	created, err := s.AppendUserMessage(ctx, conversation.ID, rec.ID, "generation-root", domain.ConversationMessage{
+		ID: "msg-1", Origin: domain.MessageOriginAutomation, Text: "AO review done: approved", ClientMessageID: "review-done:run-1:0",
+	}, "turn-1", now)
+	if err != nil || !created {
+		t.Fatalf("append: created=%v err=%v", created, err)
+	}
+	state, failure, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
+	if err != nil || !found || state != domain.TurnStateQueued || failure != "" {
+		t.Fatalf("queued relay: state=%q failure=%q found=%v err=%v", state, failure, found, err)
+	}
+	if err := s.SettleTurnByID(ctx, "turn-1", domain.TurnStateFailed, "could not wake the agent", now.Add(time.Minute)); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	state, failure, found, err = s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
+	if err != nil || !found || state != domain.TurnStateFailed || failure != "could not wake the agent" {
+		t.Fatalf("failed relay: state=%q failure=%q found=%v err=%v", state, failure, found, err)
+	}
+	if _, _, found, err := s.ReviewNoticeChatDelivery(ctx, "other-session", "review-done:run-1:0"); err != nil || found {
+		t.Fatalf("another session's lookup: found=%v err=%v", found, err)
+	}
+}

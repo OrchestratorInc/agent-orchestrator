@@ -221,3 +221,16 @@ WHERE status = 'running' AND verdict = '' AND batch_id != ''
 -- name: ArchiveReviewsBySession :exec
 UPDATE review SET is_archived = TRUE, reviewer_handle_id = '', reviewer_launch_id = '',
     controller_generation = '', reviewer_activity_state = 'exited', updated_at = ? WHERE session_id = ?;
+
+-- name: SelectReviewNoticeChatDelivery :one
+-- The Chat turn carrying one "review done" delivery attempt, found by the
+-- attempt's client message id in the worker's conversation. Its state tells
+-- whether the message reached the agent, is still queued (a sleeping session
+-- not yet woken), or failed (the wake or drain failed).
+SELECT conversation_turns.state, conversation_turns.error_message
+FROM conversations
+JOIN conversation_messages ON conversation_messages.conversation_id = conversations.id
+    AND conversation_messages.client_message_id = sqlc.arg(client_message_id)
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversations.current_session_id = sqlc.arg(session_id)
+LIMIT 1;

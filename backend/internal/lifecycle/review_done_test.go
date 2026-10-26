@@ -597,3 +597,115 @@ func TestReviewDoneNotice_UnconfirmedDeliveryIsNotResent(t *testing.T) {
 		t.Fatalf("warning not kept on the run: %+v", got)
 	}
 }
+
+// chatNoticeStore adds the Chat turn lookup: the client message id of each
+// relayed message and its turn state.
+type chatNoticeStore struct {
+	*noticeStore
+	turns map[string]domain.TurnState
+	errs  map[string]string
+}
+
+func (s *chatNoticeStore) ReviewNoticeChatDelivery(_ context.Context, _ domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, error) {
+	state, ok := s.turns[clientMessageID]
+	return state, s.errs[clientMessageID], ok, nil
+}
+
+// chatRelay records each relay under its client message id with the turn
+// state a Chat session would give it: queued while the session sleeps.
+type chatRelay struct {
+	store *chatNoticeStore
+	state domain.TurnState
+	ids   []string
+}
+
+func (r *chatRelay) Send(ctx context.Context, _ domain.SessionID, _ string) error {
+	id := ports.ClientMessageIDFromContext(ctx)
+	r.ids = append(r.ids, id)
+	r.store.turns[id] = r.state
+	return nil
+}
+
+func newChatNoticeManager(t *testing.T, relayState domain.TurnState) (*Manager, *chatNoticeStore, *chatRelay, *time.Time) {
+	t.Helper()
+	st := &chatNoticeStore{noticeStore: &noticeStore{fakeStore: newFakeStore()}, turns: map[string]domain.TurnState{}, errs: map[string]string{}}
+	rec := working("w-1")
+	rec.Mode = domain.SessionModeChat
+	rec.Activity.State = domain.ActivityIdle
+	st.sessions["w-1"] = rec
+	relay := &chatRelay{store: st, state: relayState}
+	m := New(st, relay)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCancelled, domain.VerdictNone, "", "reviewer exited before submitting a result")}
+	return m, st, relay, &now
+}
+
+// A relay into a sleeping Chat session is queued until a background wake
+// drains it. The notice counts as delivered only then, and is sent once.
+func TestReviewDoneNotice_SleepingChatCountsOnceDrained(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateQueued)
+
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 1 || relay.ids[0] != "review-done:run-1:0" {
+		t.Fatalf("relays = %v, want one under the run's first attempt id", relay.ids)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticePending {
+		t.Fatalf("notice = %q while the relay is queued, want pending", got)
+	}
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 1 {
+		t.Fatalf("resent while the first relay was still queued: %v", relay.ids)
+	}
+
+	st.turns["review-done:run-1:0"] = domain.TurnStateCompleted
+	m.SweepReviewDoneNotices(ctx)
+	if got := st.run("run-1"); got.WorkerNotice != domain.ReviewWorkerNoticeSent || got.WorkerNoticeAttempts != 0 {
+		t.Fatalf("after the drain: %+v, want sent with no failed attempts", got)
+	}
+	if len(relay.ids) != 1 {
+		t.Fatalf("relays = %v, want exactly one", relay.ids)
+	}
+}
+
+// When the background wake fails, the queued relay is failed. The notice
+// records that failure and is retried under a new attempt id after the
+// backoff, so the failed message is not duplicated.
+func TestReviewDoneNotice_SleepingChatWakeFailureRetries(t *testing.T) {
+	m, st, relay, now := newChatNoticeManager(t, domain.TurnStateQueued)
+
+	m.SweepReviewDoneNotices(ctx)
+	st.turns["review-done:run-1:0"] = domain.TurnStateFailed
+	st.errs["review-done:run-1:0"] = "could not wake the agent: provider exited"
+	m.SweepReviewDoneNotices(ctx)
+	got := st.run("run-1")
+	if got.WorkerNotice != domain.ReviewWorkerNoticePending || got.WorkerNoticeAttempts != 1 || !strings.Contains(got.WorkerNoticeError, "could not wake the agent") {
+		t.Fatalf("after the failed wake: %+v", got)
+	}
+	if len(relay.ids) != 1 {
+		t.Fatalf("resent inside the backoff: %v", relay.ids)
+	}
+
+	*now = now.Add(reviewNoticeRetryBase)
+	relay.state = domain.TurnStateRunning
+	m.SweepReviewDoneNotices(ctx)
+	if strings.Join(relay.ids, ",") != "review-done:run-1:0,review-done:run-1:1" {
+		t.Fatalf("relays = %v, want the retry under a new attempt id", relay.ids)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q after the retry reached the agent, want sent", got)
+	}
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 2 {
+		t.Fatalf("relays = %v after delivery, want no more", relay.ids)
+	}
+}
+
+// An awake Chat session takes the relay at once; the notice is sent as before.
+func TestReviewDoneNotice_AwakeChatIsSentAtOnce(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateRunning)
+	m.SweepReviewDoneNotices(ctx)
+	if len(relay.ids) != 1 || st.notice("run-1") != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("relays=%v notice=%q, want one relay and the notice sent", relay.ids, st.notice("run-1"))
+	}
+}

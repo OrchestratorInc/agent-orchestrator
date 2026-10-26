@@ -43,6 +43,58 @@ type reviewNoticeStore interface {
 	ListReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error)
 }
 
+// reviewNoticeChatStore reads the Chat turn behind one notice delivery
+// attempt. A relay into a sleeping Chat session is queued and delivered by a
+// background wake, so a successful send there does not yet mean the worker
+// got the message.
+type reviewNoticeChatStore interface {
+	ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, error)
+}
+
+// chatNoticeDelivery is where a notice's Chat delivery attempts stand.
+type chatNoticeDelivery int
+
+const (
+	chatNoticeNotSent   chatNoticeDelivery = iota // no attempt is waiting or delivered
+	chatNoticeQueued                              // an attempt waits for the session to wake
+	chatNoticeDelivered                           // an attempt reached the agent
+	chatNoticeFailed                              // the current attempt's turn failed
+)
+
+// reviewNoticeClientID is the Chat client message id of a notice's delivery
+// attempt. Each retry after a failure uses a new id, because the old one
+// already names the failed message.
+func reviewNoticeClientID(run domain.ReviewRun, attempt int) string {
+	return fmt.Sprintf("review-done:%s:%d", run.ID, attempt)
+}
+
+// chatNoticeDeliveryState checks every delivery attempt of run so far. A
+// delivered or still-queued earlier attempt wins over sending again, so a
+// relay that drains late never doubles the notice.
+func chatNoticeDeliveryState(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, run domain.ReviewRun) (chatNoticeDelivery, string, error) {
+	state, failure := chatNoticeNotSent, ""
+	for attempt := 0; attempt <= run.WorkerNoticeAttempts; attempt++ {
+		turn, turnErr, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewNoticeClientID(run, attempt))
+		if err != nil {
+			return chatNoticeNotSent, "", err
+		}
+		if !found {
+			continue
+		}
+		switch turn {
+		case domain.TurnStateQueued:
+			state = chatNoticeQueued
+		case domain.TurnStateFailed, domain.TurnStateCancelled:
+			if attempt == run.WorkerNoticeAttempts && state == chatNoticeNotSent {
+				state, failure = chatNoticeFailed, fmt.Sprintf("chat turn %s: %s", turn, turnErr)
+			}
+		default:
+			return chatNoticeDelivered, "", nil
+		}
+	}
+	return state, failure, nil
+}
+
 // DeliverReviewDoneNotices sends the worker one message for each of its AO
 // review passes that reached a final state (approved, changes requested,
 // failed, cancelled) and still owes a notice. The store marks a notice pending
@@ -72,13 +124,25 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 	if err != nil {
 		return err
 	}
+	chat, chatOK := m.store.(reviewNoticeChatStore)
+	isChat := chatOK && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat
 	var sessionRuns []domain.ReviewRun
 	for _, run := range runs {
 		// Keep notices in the order the passes were requested: a later pass
 		// is not announced ahead of an earlier one that is still waiting for
-		// its review to be observed or for its retry backoff.
+		// its review to be observed, its retry backoff, or a sleeping Chat
+		// session to take it.
 		if !m.reviewNoticeRetryDue(run) {
 			return nil
+		}
+		if isChat {
+			delivered, waiting, err := m.settleChatNotice(ctx, store, chat, id, run)
+			if err != nil || waiting {
+				return err
+			}
+			if delivered {
+				continue
+			}
 		}
 		if sessionRuns == nil {
 			if sessionRuns, err = store.ListReviewRunsBySession(ctx, id); err != nil {
@@ -92,7 +156,11 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 		if !ready {
 			return nil
 		}
-		outcome, err := m.guard.Nudge(ctx, id, msg)
+		sendCtx := ctx
+		if isChat {
+			sendCtx = ports.WithClientMessageID(ctx, reviewNoticeClientID(run, run.WorkerNoticeAttempts))
+		}
+		outcome, err := m.guard.Nudge(sendCtx, id, msg)
 		if errors.Is(err, ports.ErrDeliveryUnconfirmed) {
 			// The message reached the worker's pane; only its acceptance was
 			// not confirmed, and the messenger already re-sent Enter. Count it
@@ -128,12 +196,52 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 			// Busy, awaiting the user, or gone: keep it pending for the next try.
 			return nil
 		}
+		if isChat {
+			// A sleeping Chat session queues the relay and wakes in the
+			// background; it counts once the message reached the agent.
+			delivered, waiting, err := m.settleChatNotice(ctx, store, chat, id, run)
+			if err != nil || waiting {
+				return err
+			}
+			if delivered {
+				continue
+			}
+		}
 		if _, err := store.MarkReviewRunNoticeSent(ctx, run.ID); err != nil {
 			return err
 		}
 		delete(m.reviewNoticeSeen, run.ID)
 	}
 	return nil
+}
+
+// settleChatNotice applies where run's Chat delivery attempts stand: a
+// delivered attempt marks the notice sent; a queued one waits for the wake;
+// a failed one records the failure, so the next try uses a new attempt after
+// the backoff and counts toward the attempt cap. With no attempt on record it
+// reports neither, and the caller sends or keeps its own result.
+func (m *Manager) settleChatNotice(ctx context.Context, store reviewNoticeStore, chat reviewNoticeChatStore, id domain.SessionID, run domain.ReviewRun) (delivered, waiting bool, err error) {
+	state, failure, err := chatNoticeDeliveryState(ctx, chat, id, run)
+	if err != nil {
+		return false, false, err
+	}
+	switch state {
+	case chatNoticeDelivered:
+		if _, err := store.MarkReviewRunNoticeSent(ctx, run.ID); err != nil {
+			return false, false, err
+		}
+		delete(m.reviewNoticeSeen, run.ID)
+		return true, false, nil
+	case chatNoticeQueued:
+		return false, true, nil
+	case chatNoticeFailed:
+		slog.Default().WarnContext(ctx, "lifecycle: review done notice chat delivery failed", "session", id, "run", run.ID, "attempt", run.WorkerNoticeAttempts+1, "err", failure)
+		if _, err := store.RecordReviewRunNoticeFailure(ctx, run.ID, failure, m.clock()); err != nil {
+			return false, false, err
+		}
+		return false, true, nil
+	}
+	return false, false, nil
 }
 
 // reviewNoticeRetryDue reports whether a notice whose last delivery failed

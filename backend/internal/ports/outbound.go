@@ -75,6 +75,22 @@ type AgentMessenger interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
 }
 
+type clientMessageIDKey struct{}
+
+// WithClientMessageID asks the AgentMessenger that receives ctx to deliver its
+// message under clientMessageID, a stable id a Chat session records with the
+// message. A caller uses it to find out later whether that exact message
+// reached the agent. Messengers that cannot carry an id ignore it.
+func WithClientMessageID(ctx context.Context, clientMessageID string) context.Context {
+	return context.WithValue(ctx, clientMessageIDKey{}, clientMessageID)
+}
+
+// ClientMessageIDFromContext returns the id set by WithClientMessageID, or "".
+func ClientMessageIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(clientMessageIDKey{}).(string)
+	return id
+}
+
 // ErrDeliveryUnconfirmed is returned by an AgentMessenger that wrote the
 // message to the agent but could not confirm the agent accepted it. The
 // message is not lost; callers must not resend it as if it never arrived.
