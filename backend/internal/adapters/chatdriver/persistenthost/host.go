@@ -626,7 +626,8 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	// The job owns descendants even if the direct provider exits first. Close
-	// it before releasing the host lock so Shutdown follows the kill request.
+	// it before waiting for inherited pipes and before releasing the host lock.
+	closeProviderTree = sync.OnceFunc(closeProviderTree)
 	defer closeProviderTree()
 
 	d := Descriptor{
@@ -733,6 +734,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
+	// A surviving descendant can keep child.Wait blocked on the stderr-copy
+	// goroutine after the provider exits. Reap the job before that final wait.
+	closeProviderTree()
 	_ = wait()
 	return runErr
 }
