@@ -1,3 +1,5 @@
+import type { AppSymbolName } from "./symbols";
+
 export const machineAppearancePalette = {
 	symbols: ["server", "cloud", "linux", "desktop", "laptop", "mac-mini", "mac-studio"] as const,
 };
@@ -19,6 +21,17 @@ export const machineSymbolLabels: Record<MachineSymbol, string> = {
 	"mac-mini": "Mini PC",
 	"mac-studio": "Workstation",
 };
+
+/** The system glyph each machine shape draws as: an SF Symbol on iOS, a Material Symbol on Android. */
+export const machineSymbolNames = {
+	server: "server",
+	cloud: "cloud",
+	linux: "terminal",
+	desktop: "desktop",
+	laptop: "laptop",
+	"mac-mini": "miniPc",
+	"mac-studio": "workstation",
+} as const satisfies Record<MachineSymbol, AppSymbolName>;
 
 const legacySymbols: Record<string, MachineSymbol> = {
 	monitor: "desktop",

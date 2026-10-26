@@ -94,6 +94,11 @@ export const symbols = {
 	desktop: { ios: "desktopcomputer", android: "desktop_windows" },
 	devices: { ios: "laptopcomputer.and.iphone", android: "devices" },
 	server: { ios: "server.rack", android: "dns" },
+	cloud: { ios: "cloud", android: "cloud" },
+	laptop: { ios: "laptopcomputer", android: "laptop" },
+	// A small-form-factor machine. Material has no mini PC, so a board stands in.
+	miniPc: { ios: "macmini", android: "developer_board" },
+	workstation: { ios: "macstudio", android: "host" },
 	// A machine the phone cannot reach: the plug, pulled.
 	disconnected: { ios: "powerplug", android: "power_off" },
 	idle: { ios: "moon.zzz", android: "bedtime" },

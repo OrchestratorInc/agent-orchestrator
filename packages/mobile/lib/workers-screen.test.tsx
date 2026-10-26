@@ -476,7 +476,7 @@ describe("Workers selected-machine reachability", () => {
 		const options = sheet.findAllByType("Pressable" as never).filter(node => node.props.accessibilityRole === "radio");
 		expect(options.map(node => node.props.accessibilityLabel)).toEqual(["All environments", "Mac", "Windows"]);
 		expect(options[2].props.accessibilityState.checked).toBe(true);
-		expect(options[2].findAllByType("Feather" as never)[0].props.name).toBe("laptop");
+		expect(options[2].findAllByType("SymbolView" as never)[0].props.name).toEqual({ ios: "laptopcomputer", android: "laptop" });
 		act(() => options[1].props.onPress());
 		expect(selectedEnvironment()).toBe("Mac");
 		expect(renderer.root.findAllByType("BottomSheet" as never)).toHaveLength(0);
@@ -496,7 +496,7 @@ describe("Workers selected-machine reachability", () => {
 		expect(status.findByType("ActivityIndicator" as never).props.size).toBe("small");
 		expect(status.findByType("Text" as never).props.children).toBe("Connecting…");
 		expect(renderer.root.findByType("MenuView" as never).findAllByType("ActivityIndicator" as never)).toHaveLength(0);
-		expect(renderer.root.findAllByType("Feather" as never).some((node) => node.props.name === "laptop")).toBe(true);
+		expect(renderer.root.findAllByType("SymbolView" as never).some((node) => node.props.name?.android === "laptop")).toBe(true);
 		expect(renderer.root.findByType("MenuView" as never).props.actions[2].image).toBe("laptopcomputer");
 	});
 	it("uses the no-workers state only once the selected machine is connected", () => {

@@ -1,5 +1,10 @@
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
+import { machineAppearancePalette, machineSymbolNames } from "./machineAppearance";
+import { machineMenuImage } from "./machine-menu-image";
+import { symbols } from "./symbols";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
@@ -8,21 +13,15 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
-vi.mock("./icons", () => ({ Feather: "Feather" }));
-vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
 vi.mock("./ThemeProvider", () => {
-	const theme = {
-		blue: "blue", green: "green", purple: "purple", orange: "orange", amber: "amber",
-		tintBlue: "blue-tint", tintGreen: "green-tint", tintPurple: "purple-tint", tintOrange: "orange-tint", tintAmber: "amber-tint",
-		textSecondary: "gray",
-	};
+	const theme = { textSecondary: "gray" };
 	return {
 		useTheme: () => theme,
 		useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme),
 	};
 });
 
-import { MachineIdentity } from "./MachineIdentity";
+import { MachineAvatar, MachineIdentity } from "./MachineIdentity";
 
 describe("MachineIdentity", () => {
 	it("keeps the symbol after a truncating machine name on one line", () => {
@@ -40,21 +39,50 @@ describe("MachineIdentity", () => {
 		expect(identity.children[0]).toBe(name);
 		expect(identity.children[1]).toBe(symbol);
 		expect(symbol.props.appearance).toEqual({ symbol: "server" });
-		const glyph = renderer.root.find((node) => (node.type as unknown) === "Feather");
+		const glyph = renderer.root.findByType("SymbolView" as never);
 		const glyphSurface = renderer.root.find((node) => (node.type as unknown) === "View" && Array.isArray(node.props.style) && node.props.style.some((value: { width?: number }) => value?.width === 22));
 		const surfaceStyle = Object.assign({}, ...glyphSurface.props.style);
-		expect(glyph.props.color).toBe("gray");
+		expect(glyph.props.name).toEqual(symbols.server);
+		expect(glyph.props.tintColor).toBe("gray");
 		expect(glyph.props.size).toBe(16);
 		expect(surfaceStyle.backgroundColor).toBeUndefined();
 	});
 
-	it("draws the Mini PC with its dedicated machine silhouette", () => {
+	// The machine shapes are system symbols on both platforms, not drawings.
+	it.each(machineAppearancePalette.symbols)("draws %s as its system symbol", (shape) => {
 		let renderer!: ReactTestRenderer;
 		act(() => {
-			renderer = create(<MachineIdentity name="Mini" appearance={{ symbol: "mac-mini" as never }} />);
+			renderer = create(<MachineAvatar appearance={{ symbol: shape }} size={32} color="accent" />);
 		});
+		const glyph = renderer.root.findByType("SymbolView" as never);
+		expect(glyph.props.name).toEqual(symbols[machineSymbolNames[shape]]);
+		expect(glyph.props.tintColor).toBe("accent");
+		expect(glyph.props.size).toBe(18);
+	});
 
-		const slab = renderer.root.find((node) => (node.type as unknown) === "Rect");
-		expect(slab.props).toMatchObject({ width: 20, height: 8, x: 2, y: 8, rx: 2 });
+	it("draws the Mini PC as its own machine, not a generic monitor", () => {
+		expect(symbols[machineSymbolNames["mac-mini"]]).toEqual({ ios: "macmini", android: "developer_board" });
+		expect(symbols[machineSymbolNames["mac-studio"]]).toEqual({ ios: "macstudio", android: "host" });
+	});
+});
+
+describe("machine menu images", () => {
+	it("names each machine's SF Symbol for iOS menus", () => {
+		for (const shape of machineAppearancePalette.symbols) {
+			expect(machineMenuImage(shape)).toBe(symbols[machineSymbolNames[shape]].ios);
+		}
+	});
+
+	// Android menus and Compose icons take bundled drawables, one per shape,
+	// named for the same Material Symbol the glyph draws.
+	it("bundles each machine's Material Symbol for Android", () => {
+		const android = readFileSync(fileURLToPath(new URL("./machine-menu-image.android.ts", import.meta.url)), "utf8");
+		for (const shape of machineAppearancePalette.symbols) {
+			const name = symbols[machineSymbolNames[shape]].android;
+			expect(android).toContain(`${JSON.stringify(shape).replace(/^"([a-z]+)"$/, "$1")}: require("../assets/icons/${name}.xml")`);
+			const file = fileURLToPath(new URL(`../assets/icons/${name}.xml`, import.meta.url));
+			expect(existsSync(file)).toBe(true);
+			expect(readFileSync(file, "utf8")).toContain('android:viewportWidth="960"');
+		}
 	});
 });
