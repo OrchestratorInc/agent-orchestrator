@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -195,5 +196,34 @@ func TestWriteError_TypedKindsUnchanged(t *testing.T) {
 		if status != tc.status {
 			t.Fatalf("%v: status = %d, want %d", tc.err, status, tc.status)
 		}
+	}
+}
+
+func TestWriteRevalidatedJSON(t *testing.T) {
+	get := func(ifNoneMatch string, v any) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+		if ifNoneMatch != "" {
+			req.Header.Set("If-None-Match", ifNoneMatch)
+		}
+		rec := httptest.NewRecorder()
+		WriteRevalidatedJSON(rec, req, v)
+		return rec
+	}
+	first := get("", map[string]int{"n": 1})
+	etag := first.Header().Get("ETag")
+	if first.Code != http.StatusOK || etag == "" || first.Header().Get("Cache-Control") != "private, no-cache" {
+		t.Fatalf("first = %d etag=%q cache=%q", first.Code, etag, first.Header().Get("Cache-Control"))
+	}
+	if first.Body.String() != "{\"n\":1}\n" {
+		t.Fatalf("body = %q", first.Body.String())
+	}
+	for _, header := range []string{etag, `"other", ` + etag, strings.TrimPrefix(etag, "W/"), "*"} {
+		if rec := get(header, map[string]int{"n": 1}); rec.Code != http.StatusNotModified || rec.Body.Len() != 0 || rec.Header().Get("ETag") != etag {
+			t.Fatalf("If-None-Match %q = %d body=%q", header, rec.Code, rec.Body.String())
+		}
+	}
+	changed := get(etag, map[string]int{"n": 2})
+	if changed.Code != http.StatusOK || changed.Header().Get("ETag") == etag || changed.Body.String() != "{\"n\":2}\n" {
+		t.Fatalf("changed body = %d etag=%q body=%q", changed.Code, changed.Header().Get("ETag"), changed.Body.String())
 	}
 }
