@@ -363,3 +363,101 @@ describe("invalidateAgentModelCatalogs", () => {
 		expect([keys.local, keys.composerRevalidation, keys.otherRevalidation].some(invalidated)).toBe(false);
 	});
 });
+
+
+describe("OpenCode single-read catalogs", () => {
+	it("shows an already-loaded Settings catalog during its single OpenCode read", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const catalog: AgentModelCatalog = { agentId: "opencode", models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		client.setQueryData(agentModelsQueryOptions("opencode", "", undefined, true).queryKey, catalog);
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never);
+		const observer = new QueryObserver(client, agentModelsQueryOptions("opencode", ""));
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(catalog));
+			expect(apiClient.GET).toHaveBeenCalledTimes(1);
+			finish({ data: catalog });
+			await vi.waitFor(() => expect(observer.getCurrentResult().isFetching).toBe(false));
+		} finally { finish({ data: catalog }); unsubscribe(); client.clear(); }
+	});
+
+	it("reuses the pending device read after an observer remount", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions("opencode", "");
+		const catalog: AgentModelCatalog = { agentId: "opencode", models: [{ id: "provider/model", label: "Model" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never);
+		const first = new QueryObserver(client, options);
+		const unsubscribe = first.subscribe(() => {});
+		await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+		unsubscribe();
+		const second = new QueryObserver(client, options);
+		const unsubscribeSecond = second.subscribe(() => {});
+		try {
+			finish({ data: catalog });
+			await vi.waitFor(() => expect(second.getCurrentResult().data).toEqual(catalog));
+			expect(apiClient.GET).toHaveBeenCalledTimes(1);
+		} finally { finish({ data: catalog }); unsubscribeSecond(); client.clear(); }
+	});
+
+	it("does not reuse a pending OpenCode read after login invalidation", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions("opencode", "");
+		const before: AgentModelCatalog = { agentId: "opencode", models: [], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, warning: "Not signed in", fetchedAt: "2026-10-18T00:00:00Z" };
+		const after = { ...before, warning: undefined, models: [{ id: "provider/new", label: "New" }] };
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never).mockResolvedValue({ data: after } as never);
+		const observer = new QueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => {});
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			await invalidateAgentModelCatalogs(client, "opencode");
+			expect(observer.getCurrentResult().data).toEqual(after);
+			finish({ data: before });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(observer.getCurrentResult().data).toEqual(after);
+			expect(readCachedAgentModels("opencode", "")).toEqual(after);
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+		} finally { finish({ data: before }); unsubscribe(); client.clear(); }
+	});
+
+	it("keeps a manual refresh that arrives during an OpenCode read", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const options = agentModelsQueryOptions("opencode", "");
+		const old: AgentModelCatalog = { agentId: "opencode", models: [{ id: "provider/old", label: "Old" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		const fresh = { ...old, models: [{ id: "provider/new", label: "New" }] };
+		let finish!: (value: { data: AgentModelCatalog }) => void;
+		vi.mocked(apiClient.GET).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }) as never);
+		const pending = client.fetchQuery(options);
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(1));
+			client.setQueryData(options.queryKey, fresh);
+			finish({ data: old });
+			expect(await pending).toEqual(fresh);
+			expect(readCachedAgentModels("opencode", "")).toEqual(fresh);
+		} finally { finish({ data: old }); client.clear(); }
+	});
+
+	it.each(["opencode", "opencode-v2"])("deduplicates concurrent %s opens across projects and caches remounts", async (agentId) => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const catalog: AgentModelCatalog = { agentId, models: [{ id: "provider/model", label: "Model", efforts: ["low", "high"], lastUsedAt: "2026-10-18T01:00:00Z" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
+		vi.mocked(apiClient.GET).mockResolvedValue({ data: catalog } as never);
+		try {
+			const [first, second] = await Promise.all([
+				client.fetchQuery(agentModelsQueryOptions(agentId, "project-a")),
+				client.fetchQuery(agentModelsQueryOptions(agentId, "project-b")),
+			]);
+			expect(first).toEqual(catalog);
+			expect(second).toEqual(catalog);
+			await client.fetchQuery(agentModelsQueryOptions(agentId, "project-c"));
+			expect(apiClient.GET).toHaveBeenCalledTimes(1);
+			expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", { params: { path: { agent: agentId }, query: { projectId: undefined } } });
+			expect(readCachedAgentModels(agentId, "")).toEqual(catalog);
+			// Settings still explicitly requests every provider's browsing metadata.
+			await client.fetchQuery(agentModelsQueryOptions(agentId, "", undefined, true));
+			expect(apiClient.GET).toHaveBeenCalledTimes(2);
+			expect(apiClient.GET).toHaveBeenLastCalledWith("/api/v1/agents/{agent}/models", { params: { path: { agent: agentId }, query: { projectId: undefined, catalogOnly: true } } });
+		} finally { client.clear(); }
+	});
+});

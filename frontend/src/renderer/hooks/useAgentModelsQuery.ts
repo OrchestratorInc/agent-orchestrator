@@ -12,6 +12,12 @@ export type AgentModelCatalog = components["schemas"]["AgentModelsResponse"];
 const MODEL_CATALOG_VALIDATION_INTERVAL_MS = 10 * 60 * 1_000;
 const MODEL_CATALOG_REFRESH_POLL_MS = 3_000;
 
+// Survive observer teardown during a session open, while keeping hosts and
+// credential scopes separate. Login invalidation drops pending reads too.
+const pendingOpenCodeCatalogs = new Map<string, Promise<AgentModelCatalog>>();
+const openCodeRequestPrefix = (agentId: string, hostId?: string) => JSON.stringify([hostId || LOCAL_HOST, agentId]) + ":";
+
+
 /** Whether the daemon is still refreshing this catalog in the background. */
 export function isRefreshingCatalog(catalog: Pick<AgentModelCatalog, "refreshState"> | undefined): boolean {
 	return catalog?.refreshState === "refreshing" || catalog?.refreshState === "queued";
@@ -70,6 +76,29 @@ export function agentModelsQueryOptions(agentId: string, scope: string, hostId?:
 		initialData: () => readCachedAgentModels(agentId, catalogScope, hostId),
 		initialDataUpdatedAt: 0,
 		queryFn: async ({ client, signal }): Promise<AgentModelCatalog> => {
+			if (!catalogOnly && (agentId === "opencode" || agentId === "opencode-v2")) {
+				// One response contains all picker options and recency. Fetching the
+				// Settings browsing catalog first duplicates the largest catalog.
+				const browsing = client.getQueryData<AgentModelCatalog>([...key, "catalog"]);
+				if (!client.getQueryData(key) && browsing) client.setQueryData(key, browsing);
+				const before = client.getQueryData<AgentModelCatalog>(key);
+				const requestKey = openCodeRequestPrefix(agentId, hostId) + catalogScope;
+				let pending = pendingOpenCodeCatalogs.get(requestKey);
+				if (!pending) {
+					pending = requestAgentModels(agentId, catalogScope, "cached", hostId);
+					pendingOpenCodeCatalogs.set(requestKey, pending);
+					const active = pending;
+					void active.finally(() => {
+						if (pendingOpenCodeCatalogs.get(requestKey) === active) pendingOpenCodeCatalogs.delete(requestKey);
+					}).catch(() => {});
+				}
+				const result = await pending;
+				signal.throwIfAborted();
+				const current = client.getQueryData<AgentModelCatalog>(key);
+				const latest = current && current !== before ? current : result;
+				cacheAgentModels(latest, agentId, catalogScope, hostId);
+				return latest;
+			}
 			if (catalogOnly) return requestAgentModels(agentId, catalogScope, "cached", hostId, true, signal);
 			const catalogKey = [...key, "catalog"] as const;
 			if (!client.getQueryData<AgentModelCatalog>(key)) {
@@ -135,6 +164,11 @@ export function modelCatalogAuthIssue(catalog: Pick<AgentModelCatalog, "warning"
  * Call after anything that can change what the agent's login allows.
  */
 export async function invalidateAgentModelCatalogs(queryClient: QueryClient, agentId: string, hostId?: string): Promise<unknown> {
+	const prefix = openCodeRequestPrefix(agentId, hostId);
+	for (const key of pendingOpenCodeCatalogs.keys()) {
+		if (key.startsWith(prefix)) pendingOpenCodeCatalogs.delete(key);
+	}
+
 	const queryKey = hostId ? ["agent-models", hostId, agentId] : agentModelsQueryPrefix(agentId);
 	// Cancel inactive catalog reads too, so the next task read cannot dedupe
 	// onto a request made before the login changed.
