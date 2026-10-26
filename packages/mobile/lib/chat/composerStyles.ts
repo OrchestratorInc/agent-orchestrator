@@ -44,7 +44,7 @@ export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	composerRow: { maxHeight: COMPOSER_MAX_HEIGHT, flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
 	// The native content-size event grows this from its one-line resting height;
 	// at the cap, the multiline field scrolls while the controls remain in place.
-	input: { fontFamily: "Geist_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, textAlignVertical: "top" },
+	input: { fontFamily: "DMSans_400Regular", flex: 1, minHeight: COMPOSER_FIELD_HEIGHT, maxHeight: COMPOSER_FIELD_MAX_HEIGHT, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: COMPOSER_LINE_HEIGHT, paddingVertical: space.md, textAlignVertical: "top" },
 	// Clipped so the Android ripple keeps to the circle.
 	send: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
 	stop: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, overflow: "hidden", alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
@@ -53,9 +53,9 @@ export const composerStyleRules = (t: Theme) => StyleSheet.create({
 	// is a touch target rather than a glyph with some slop around it.
 	attachment: { maxWidth: 200, minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.bgElevated, borderRadius: radius.sm, borderCurve: "continuous", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, paddingLeft: space.sm },
 	attachmentImage: { width: 28, height: 28, borderRadius: radius.xs, backgroundColor: t.bgSubtle },
-	attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize },
+	attachmentName: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize },
 	attachmentRemove: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
-	error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginBottom: space.xs, paddingHorizontal: space.hair },
+	error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginBottom: space.xs, paddingHorizontal: space.hair },
 	voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: radius.sm, borderCurve: "continuous", paddingHorizontal: space.sm, paddingVertical: space.xs, marginBottom: space.xs },
-	voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	voiceText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });

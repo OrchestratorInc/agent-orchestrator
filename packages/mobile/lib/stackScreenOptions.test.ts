@@ -14,11 +14,11 @@ beforeEach(() => {
 });
 
 describe("large-title header", () => {
-	it("draws the tab roots' titles large, in Geist, without a hairline", () => {
+	it("draws the tab roots' titles large, heavy in the system face, without a hairline", () => {
 		expect(largeTitleScreenOptions()).toMatchObject({
 			headerLargeTitleEnabled: true,
 			headerLargeTitleShadowVisible: false,
-			headerLargeTitleStyle: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+			headerLargeTitleStyle: { fontWeight: "800" },
 		});
 	});
 

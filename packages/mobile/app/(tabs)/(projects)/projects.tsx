@@ -130,6 +130,11 @@ export default function ProjectsScreen() {
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		screen: { flex: 1, backgroundColor: t.bgBase },
+		// No background of its own: the stack's contentStyle paints the page. A
+		// coloured view that is not a stacking context is mounted empty with its
+		// children hoisted after it, which put it ahead of the list as the page's
+		// first native view, so the large title and the tab bar found no scroll
+		// view to follow and stayed expanded over the rows.
+		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
 	});

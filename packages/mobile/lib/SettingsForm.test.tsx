@@ -72,7 +72,7 @@ describe("the iOS settings form", () => {
 		expect(form.props.testID).toBe("form");
 		expect(has(form, "scrollContentBackground", "hidden")).toBe(true);
 		expect(has(form, "background", "#base")).toBe(true);
-		expect(has(form, "font", { family: "Geist-Regular", size: 17, textStyle: "body" })).toBe(true);
+		expect(has(form, "font", { family: "DMSans-Regular", size: 16, textStyle: "body" })).toBe(true);
 	});
 
 	// A custom face draws at its given size, which the text style only scales, so
@@ -80,7 +80,7 @@ describe("the iOS settings form", () => {
 	// otherwise reach them.
 	it("titles sections with a footnote header and explains them in a footnote footer", () => {
 		const root = render(<SettingsSection title="Account" footer="Paired machines sync.">{null}</SettingsSection>);
-		const footnote = { family: "Geist-Regular", size: 13, textStyle: "footnote" };
+		const footnote = { family: "DMSans-Regular", size: 13, textStyle: "footnote" };
 		const header = root.findByType("FieldGroupSectionHeader" as never).findByType("Text" as never);
 		expect(header.props.children).toBe("Account");
 		expect(has(header, "font", footnote)).toBe(true);

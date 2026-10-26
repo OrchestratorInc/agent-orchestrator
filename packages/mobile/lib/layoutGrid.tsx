@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 8,
 		paddingVertical: 3,
 	},
-	caption: { fontFamily: "Geist_600SemiBold",
+	caption: { fontFamily: "DMSans_600SemiBold",
 		color: "#ffffff",
 		fontSize: 11,
 		fontWeight: "600",

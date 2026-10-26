@@ -1,48 +1,41 @@
-import { Host, RNHostView } from "@expo/ui";
+import { Host } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Divider, Group, HStack, Image, Label, Menu, ProgressView, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
+import { Button, Divider, HStack, Image, Label, Menu, ProgressView, Section, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	accessibilityLabel,
-	aspectRatio,
 	backgroundOverlay,
 	buttonStyle,
 	clipShape,
 	contentShape,
-	controlSize,
 	disabled as disabledModifier,
 	font,
 	foregroundStyle,
 	frame,
-	labelStyle,
 	layoutPriority,
 	lineLimit,
 	menuOrder,
-	opacity,
 	padding,
-	resizable,
 	shapes,
 	tint,
 	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Platform, StyleSheet, View } from "react-native";
-import { chipColorFor } from "./harnessLogo";
+import { StyleSheet } from "react-native";
+import { hasLogo, logoKey } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
-import { glassPanel } from "./glass";
 import { haptics } from "./haptics";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
+import { defaultModelChoice } from "./spawnModel";
 import type { IOSSymbol } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { iconSize, space, stateOpacity, touchTarget } from "./tokens";
-import { MicKey } from "./voice/MicKey";
+import { space, touchTarget } from "./tokens";
 
 // SwiftUI's `.infinity` can't cross the bridge, and any width past the sheet's
 // does the same job: take all the room the row offers.
 const FILL_WIDTH = 10_000;
-// Liquid Glass's prominent style only exists from iOS 26; before it SwiftUI
-// would fall back to a plain text button, so Start keeps the filled style there.
-const startStyle = parseInt(String(Platform.Version), 10) >= 26 ? "glassProminent" : "borderedProminent";
+// A large bordered button's height, so the attach circle beside Start matches it.
+const ACTION_HEIGHT = 50;
 
 /**
  * Spawn's selectors as SwiftUI menus whose options are the system's checkable
@@ -60,24 +53,44 @@ export function SpawnComposerControls({
 	agents,
 	harness,
 	onSelectHarness,
-	models,
+	agentModels,
 	modelSelection,
 	modelLabel,
-	onSelectModel,
+	usesDefaultModel,
+	onSelectAgentModel,
+	onBrowseModels,
+	approvalModes,
+	approvalMode,
+	onSelectApprovalMode,
 	onChoosePhoto,
 	onChooseFile,
 	voice,
+	promptEmpty,
 	onSpawn,
 	busy,
 	disabled,
 }: SpawnComposerControlsProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const logoUris = useHarnessLogoUris(agents);
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
+	const approvalOption = approvalModes.find((mode) => mode.id === approvalMode);
+	// The model the task runs: the one picked or pinned, else the catalog's own
+	// default by name, and the agent's name only when the catalog names none.
+	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
+	const listening = voice.state === "recording" || voice.state === "starting";
+	const transcribing = voice.state === "transcribing";
+	// Dictating while the mic is busy or the prompt is empty; a device that
+	// cannot dictate keeps Start, which says what is missing when pressed.
+	const dictates = !busy && (listening || transcribing || (promptEmpty && voice.state !== "unavailable" && voice.state !== "denied"));
+	const primaryLabel = busy ? "Starting task" : listening ? "Stop dictating" : transcribing ? "Transcribing" : dictates ? "Dictate the task" : "Start task";
+	const primaryDisabled = dictates ? transcribing : disabled;
+	// Solid in every state: the accent to press, red while the mic is open, and
+	// the attach circle's grey while it cannot be pressed.
+	const primaryFill = listening ? t.red : primaryDisabled ? t.bgElevated : t.accent;
+	const primaryInk = listening ? t.onDestructive : primaryDisabled ? t.textFaint : t.onAccent;
 	// A choice only fires when it changes, so each one is worth the tick.
 	const choose = (apply: (id: string) => void, id: string) => {
 		haptics.select();
@@ -87,18 +100,24 @@ export function SpawnComposerControls({
 	return (
 		<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.host}>
 			<VStack alignment="leading" spacing={space.sm}>
-				{/* Every trigger's touch target carries its own air above and below
-				    the text, so the rail needs no gap of its own under the selectors. */}
+				{/* The task's settings as plain selectors, one line each: where it
+				    runs, then what it works on and how freely, then who runs it.
+				    Every trigger's touch target carries its own air above and below
+				    the text, so the lines need no gap of their own. Compact and
+				    left-anchored: a max-width frame would make a Menu fill the row,
+				    which centers its popup over the whole sheet. */}
 				<VStack alignment="leading" spacing={space.none}>
-					{/* Compact and left-anchored: a max-width frame would make a Menu
-					    fill the row, which centers its popup over the whole sheet. */}
 					<HStack spacing={space.sm}>
 						<Menu
-							label={<SelectorLabel icon={<SelectorGlyph name="desktopcomputer" />} title={`Run on ${hostLabel}`} indicator="chevron.up.chevron.down" />}
-							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-host")]}
+							label={<SelectorLabel icon={<SelectorGlyph name="desktopcomputer" />} title={hostLabel} indicator="chevron.up.chevron.down" />}
+							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Run on ${hostLabel}`), accessibilityIdentifier("spawn-host")]}
 						>
 							{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => choose(onSelectHost, host.id)} />)}
 						</Menu>
+						<Spacer minLength={0} />
+					</HStack>
+
+					<HStack spacing={space.lg}>
 						<Menu
 							label={<SelectorLabel icon={<SelectorGlyph name={projectSystemImage(selectedProject)} />} title={projectLabel} indicator="chevron.up.chevron.down" />}
 							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-project")]}
@@ -108,105 +127,128 @@ export function SpawnComposerControls({
 								<Choice key={project.id} label={project.label} systemImage={projectSystemImage(project)} selected={project.id === projectId} onChoose={() => choose(onSelectProject, project.id)} />,
 							])}
 						</Menu>
-						<Spacer minLength={0} />
-					</HStack>
-
-					<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.sm, vertical: space.xxs }), glassPanel()]}>
-						{/* A plain-style Menu answers taps only inside its label, so the
-						    paperclip's target is sized there: a frame around the Menu
-						    enlarges its layout, not its hit area. */}
+						{/* What the worker may do before it asks: its own control, so it
+						    is never read as part of the model. Short enough that the
+						    project's name gives way first. */}
 						<Menu
-							label={
-								<Label
-									title="Attach"
-									systemImage="paperclip"
-									modifiers={[labelStyle("iconOnly"), font({ textStyle: "body" }), frame({ minWidth: touchTarget, minHeight: touchTarget }), contentShape(shapes.rectangle())]}
-								/>
-							}
-							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textPrimary), accessibilityIdentifier("spawn-attachment")]}
-						>
-							<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />
-							<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
-						</Menu>
-
-						{/* The agent's name is laid out first, at its natural width, and
-						    the model fills what the rail has left. Given to the filling
-						    model instead, the priority squeezed the name to an ellipsis. */}
-						<Menu
-							label={<SelectorLabel icon={<HarnessImage uri={logoUris[harness]} harness={harness} />} title={harnessLabel} indicator="chevron.down" />}
-							modifiers={[buttonStyle("plain"), menuOrder("fixed"), layoutPriority(1), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
-						>
-							{agents.map((agent) => (
-								<Choice key={agent.id} label={agent.label} icon={<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />} selected={agent.id === harness} onChoose={() => choose(onSelectHarness, agent.id)} />
-							))}
-						</Menu>
-
-						<Menu
-							label={
-								<HStack spacing={space.xxs} modifiers={[frame({ maxWidth: FILL_WIDTH, minHeight: touchTarget, alignment: "leading" }), contentShape(shapes.rectangle())]}>
-									<SelectorText>{modelLabel}</SelectorText>
-									<Spacer />
-									<SelectorGlyph name="chevron.down" indicator />
-								</HStack>
-							}
+							label={<SelectorLabel icon={<SelectorGlyph name={approvalSymbol(approvalMode)} />} title={approvalOption?.shortLabel ?? approvalOption?.label ?? "Auto"} indicator="chevron.up.chevron.down" priority={1} />}
 							modifiers={[
 								buttonStyle("plain"),
 								menuOrder("fixed"),
-								frame({ maxWidth: FILL_WIDTH, alignment: "leading" }),
+								layoutPriority(1),
 								tint(t.textSecondary),
-								opacity(models.length || modelSelection === "__auto__" ? 1 : stateOpacity.disabled),
-								accessibilityIdentifier("spawn-model"),
+								accessibilityLabel(`Approval, ${approvalOption?.label ?? "Auto"}`),
+								accessibilityIdentifier("spawn-approval"),
 							]}
 						>
-							{[{ id: "__auto__", label: "Automatic" }, ...models].map((model) => (
-								<Choice key={model.id} label={model.label} selected={model.id === modelSelection} onChoose={() => choose(onSelectModel, model.id)} />
-							))}
+							<Section title="Approval">
+								{approvalModes.map((mode) => (
+									<Choice key={mode.id} label={mode.label} systemImage={approvalSymbol(mode.id)} selected={mode.id === approvalMode} onChoose={() => choose(onSelectApprovalMode, mode.id)} />
+								))}
+							</Section>
 						</Menu>
-
-						{/* Hold-to-talk needs press-in and press-out, which a SwiftUI
-						    Button doesn't expose, so the mic is the React Native key
-						    hosted inside the rail. Plain, like the paperclip: the rail's
-						    glass is the material, and a second disc would compete with it. */}
-						<RNHostView matchContents>
-							<View style={styles.micSlot}>
-								<MicKey
-									variant="plain"
-									size={touchTarget}
-									glyphSize={iconSize.md}
-									state={voice.state}
-									mode={voice.mode}
-									onPressIn={voice.onPressIn}
-									onPressOut={voice.onPressOut}
-									onToggleLatched={voice.onToggleLatched}
-								/>
-							</View>
-						</RNHostView>
+						<Spacer minLength={0} />
 					</HStack>
+
 				</VStack>
 
-				{/* The success and failure haptics come from the request itself, so
-				    the press adds none of its own. */}
-				<Button
-					onPress={onSpawn}
-					testID="spawn-submit"
-					modifiers={[
-						buttonStyle(startStyle),
-						controlSize("large"),
-						tint(t.accent),
-						disabledModifier(disabled),
-						accessibilityLabel(busy ? "Starting task" : "Start task"),
-						accessibilityIdentifier("spawn-submit"),
-					]}
-				>
-					<HStack spacing={space.sm} modifiers={[frame({ maxWidth: FILL_WIDTH })]}>
-						{busy ? <ProgressView /> : null}
-						{/* The accent's own ink while it can be pressed; disabled, the
-						    system's dimmed label reads on its grey fill. */}
-						<Text modifiers={[font({ textStyle: "headline" }), ...(disabled ? [] : [foregroundStyle(t.onAccent)])]}>
-							{busy ? "Starting…" : "Start task"}
-						</Text>
-					</HStack>
-				</Button>
+				{/* The composer's own line: who runs the task at the start, then
+				    attach and the one round button that sends it, side by side. The
+				    harness's mark and the model it runs (the harness's name only when
+				    the catalog names no default); each agent in its menu opens one
+				    level down onto its models. */}
+				<HStack spacing={space.sm}>
+					<Menu
+						label={
+							// Enclosed, as the circles beside it are: one capsule of
+							// their height holding the harness's mark and the model.
+							<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.md }), frame({ minHeight: ACTION_HEIGHT, maxHeight: ACTION_HEIGHT }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule"), contentShape(shapes.rectangle())]}>
+								<HarnessImage harness={harness} />
+								<SelectorText>{agentTitle}</SelectorText>
+								<SelectorGlyph name="chevron.up.chevron.down" indicator />
+							</HStack>
+						}
+						modifiers={[
+							buttonStyle("plain"),
+							menuOrder("fixed"),
+							tint(t.textSecondary),
+							accessibilityLabel(`${harnessLabel}, ${modelLabel}`),
+							accessibilityIdentifier("spawn-harness"),
+						]}
+					>
+						{agents.map((agent) => (
+							<Menu
+								key={agent.id}
+								label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}
+								modifiers={[accessibilityIdentifier(`spawn-model-${agent.id}`)]}
+							>
+								{/* The default first, named when the catalog says which it
+								    is; then the first few models; then the whole catalog. */}
+								{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map((model) => (
+									<Choice
+										key={model.id}
+										label={model.label}
+										selected={agent.id === harness && model.id === modelSelection}
+										onChoose={() => choose((id) => onSelectAgentModel(agent.id, id), model.id)}
+									/>
+								))}
+								{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
+									<Section>
+										<Button label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`} systemImage="magnifyingglass" onPress={() => onBrowseModels(agent.id)} />
+									</Section>
+								) : null}
+							</Menu>
+						))}
+					</Menu>
+
+					<Spacer minLength={0} />
+
+					<Menu
+						label={
+							<Image
+								systemName="paperclip"
+								modifiers={[
+									font({ textStyle: "body", weight: "medium" }),
+									foregroundStyle(t.textPrimary),
+									frame({ width: ACTION_HEIGHT, height: ACTION_HEIGHT }),
+									backgroundOverlay({ color: t.bgElevated }),
+									clipShape("circle"),
+									contentShape(shapes.rectangle()),
+								]}
+							/>
+						}
+						modifiers={[buttonStyle("plain"), menuOrder("fixed"), disabledModifier(busy), accessibilityLabel("Attach"), accessibilityIdentifier("spawn-attachment")]}
+					>
+						<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />
+						<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
+					</Menu>
+
+
+					{/* One round button that follows the prompt: with text it starts the
+					    task, with none it dictates, and while the mic is open it stops,
+					    in the recording red. A button only taps, so dictation here is
+					    hands-free: tap, speak, tap again. The success and failure
+					    haptics come from the request itself, so the press adds none. */}
+					<Button
+						onPress={dictates ? voice.onToggleLatched : onSpawn}
+						testID={dictates ? "spawn-dictate" : "spawn-submit"}
+						modifiers={[
+							buttonStyle("plain"),
+							disabledModifier(primaryDisabled),
+							accessibilityLabel(primaryLabel),
+							accessibilityIdentifier(dictates ? "spawn-dictate" : "spawn-submit"),
+						]}
+					>
+						{/* Drawn as a fixed disc, the attach circle's size: a system
+						    round button sizes itself to its glyph, so the arrow, the mic,
+						    the stop square and the spinner each made it a different size. */}
+						<HStack modifiers={[frame({ width: ACTION_HEIGHT, height: ACTION_HEIGHT }), backgroundOverlay({ color: primaryFill }), clipShape("circle"), contentShape(shapes.rectangle())]}>
+							{busy || transcribing
+								? <ProgressView modifiers={[tint(t.textSecondary)]} />
+								: <Image systemName={listening ? "stop.fill" : dictates ? "mic.fill" : "arrow.up"} modifiers={[font({ textStyle: "headline", weight: "bold" }), foregroundStyle(primaryInk)]} />}
+						</HStack>
+					</Button>
+				</HStack>
 			</VStack>
 		</Host>
 	);
@@ -232,11 +274,13 @@ function Choice({ label, systemImage, icon, selected, onChoose }: {
 
 /**
  * A trigger's face. A plain-style Menu answers taps only inside its label, so
- * the label itself is a full touch target, gaps included.
+ * the label itself is a full touch target, gaps included. `priority` decides
+ * which face in a row keeps its text when the row runs short: the machine's
+ * name gives way before the project and the approval mode.
  */
-function SelectorLabel({ icon, title, indicator }: { icon: ReactNode; title: string; indicator: IOSSymbol }) {
+function SelectorLabel({ icon, title, indicator, priority }: { icon: ReactNode; title: string; indicator: IOSSymbol; priority?: number }) {
 	return (
-		<HStack spacing={space.xs} modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
+		<HStack spacing={space.xs} modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle()), ...(priority ? [layoutPriority(priority)] : [])]}>
 			{icon}
 			<SelectorText>{title}</SelectorText>
 			<SelectorGlyph name={indicator} indicator />
@@ -253,37 +297,45 @@ function SelectorGlyph({ name, indicator = false }: { name: IOSSymbol; indicator
 	return <Image systemName={name} modifiers={[font(indicator ? { textStyle: "caption2", weight: "semibold" } : { textStyle: "subheadline" })]} />;
 }
 
+/** Each approval mode's symbol, from asking first to asking for nothing. */
+function approvalSymbol(mode: string): IOSSymbol {
+	switch (mode) {
+		case "default":
+			return "hand.raised";
+		case "accept-edits":
+			return "pencil";
+		case "bypass-permissions":
+			return "exclamationmark.shield";
+		default:
+			return "checkmark.shield";
+	}
+}
+
 function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {
 	return project?.icon === "message-square-plus" ? "plus.bubble" : "folder";
 }
 
 const styles = StyleSheet.create({
 	host: { width: "100%" },
-	micSlot: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 });
 
-// The mark's box, and the chip it sits on when it needs one to stay visible.
-// Same arithmetic as `AgentLogo`: a 16% inset and a 28% corner radius, so a
-// chipped mark here and a chipped mark in a row are the same size and shape.
-const MARK_SIZE = 20;
-const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
-const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
-
-export function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
-	if (!uri) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" })]} />;
-	const mark = [resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE - CHIP_INSET * 2, height: MARK_SIZE - CHIP_INSET * 2 })];
-	const chip = chipColorFor(harness);
-	// opencode's mark is pure white and cursor's likewise, so on the light theme
-	// they disappeared entirely — this menu drew the raw asset, where the rest of
-	// the app asks `chipColorFor` first. Most marks are colourful and render bare.
-	return chip
-		? (
-			<Group modifiers={[frame({ width: MARK_SIZE, height: MARK_SIZE }), backgroundOverlay({ color: chip }), clipShape("roundedRectangle", CHIP_RADIUS)]}>
-				<Image uiImage={uri} modifiers={mark} />
-			</Group>
-		)
-		: <Image uiImage={uri} modifiers={[resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE, height: MARK_SIZE })]} />;
+/**
+ * A harness's mark in its own colours, from the app's asset catalog: a 20pt
+ * image set with its chip baked in where it needs one (see
+ * scripts/generate-harness-menu-icons.mjs). Drawn by name, it keeps its size
+ * wherever SwiftUI puts it, an open submenu's header included, which ignores
+ * any frame. `uri` is the bundled PNG a caller may still pass; the asset wins.
+ */
+export function HarnessImage({ harness }: { uri?: string; harness: string }) {
+	// One slot for every harness, so switching to one without a mark (drawn as
+	// the terminal symbol) never resizes the row it sits in.
+	const slot = frame({ width: HARNESS_MARK, height: HARNESS_MARK });
+	if (!hasLogo(harness)) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" }), slot]} />;
+	return <Image assetName={`HarnessLogo-${logoKey(harness)}`} modifiers={[slot]} />;
 }
+
+/** The marks' image sets are drawn at this many points. */
+const HARNESS_MARK = 20;
 
 export function useHarnessLogoUris(agents: readonly SpawnComposerOption[]) {
 	const ids = useMemo(() => agents.map((agent) => agent.id), [agents]);

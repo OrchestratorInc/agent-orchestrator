@@ -221,7 +221,7 @@ export function renderTheme(t: Theme, appearance: "light" | "dark"): RenderTheme
 		"--link": t.highlight,
 		"--chart-1": t.blue,
 		// The theme replaces the page's defaults wholesale, so these must be
-		// present too. The app's Geist is not loaded inside the page.
+		// present too. The app's own family is not loaded inside the page.
 		"--font-sans": "-apple-system, system-ui, sans-serif",
 		"--font-mono": "ui-monospace, Menlo, monospace",
 		"--radius": "0.5rem",

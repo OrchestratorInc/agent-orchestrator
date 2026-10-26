@@ -118,7 +118,7 @@ export type OrchestratorProjectRow = {
 
 export type OrchestratorProjectSection = {
 	key: OrchestratorProjectSectionKey;
-	title: "Needs Attention" | "Coordinating" | "Not Running";
+	title: "Needs attention" | "Coordinating" | "Not running";
 	data: OrchestratorProjectRow[];
 };
 
@@ -361,9 +361,9 @@ export function orchestratorProjectSections(
 	});
 
 	const definitions: Array<Pick<OrchestratorProjectSection, "key" | "title">> = [
-		{ key: "attention", title: "Needs Attention" },
+		{ key: "attention", title: "Needs attention" },
 		{ key: "coordinating", title: "Coordinating" },
-		{ key: "not-running", title: "Not Running" },
+		{ key: "not-running", title: "Not running" },
 	];
 
 	return definitions.flatMap((definition) => {

@@ -1,8 +1,10 @@
+import { useRouter } from "expo-router";
 import { NativeTabs } from "expo-router/unstable-native-tabs";
 import { useMemo } from "react";
 import { Platform } from "react-native";
 import { boardTitle, workersNeedingYou } from "../../lib/board-tabs";
 import { rippleColor } from "../../lib/pressFeedback";
+import { startNewTask } from "../../lib/newTaskAction";
 import { useApp } from "../../lib/store";
 import { symbols, type IOSSymbol } from "../../lib/symbols";
 import { useTheme } from "../../lib/ThemeProvider";
@@ -25,6 +27,7 @@ const PULL_REQUEST_SYMBOL: IOSSymbol = "arrow.triangle.pull";
  */
 export default function BoardTabsLayout() {
 	const t = useTheme();
+	const router = useRouter();
 	const { allSessions } = useApp();
 	const waiting = workersNeedingYou(allSessions);
 	// The store changes on every poll; the tabs only need to change with the
@@ -36,8 +39,8 @@ export default function BoardTabsLayout() {
 			tintColor={t.accent}
 			iconColor={{ default: t.textSecondary, selected: t.accent }}
 			labelStyle={{
-				default: { fontFamily: "Geist_500Medium", color: t.textSecondary },
-				selected: { fontFamily: "Geist_500Medium", color: t.accent },
+				default: { fontFamily: "DMSans_500Medium", color: t.textSecondary },
+				selected: { fontFamily: "DMSans_500Medium", color: t.accent },
 			}}
 			// iOS keeps the system material behind the bar (glass on iOS 26), which
 			// already follows the theme's light or dark. Android's bar is a flat
@@ -59,6 +62,23 @@ export default function BoardTabsLayout() {
 				<NativeTabs.Trigger.Icon sf={PULL_REQUEST_SYMBOL} src={PULL_REQUEST_GLYPH} />
 				<NativeTabs.Trigger.Label>{boardTitle("(prs)")}</NativeTabs.Trigger.Label>
 			</NativeTabs.Trigger>
+			{/* New task in the tab bar's own row: iOS 26 sets the search role's
+			    item apart from the tabs as a round button, and its "+" replaces
+			    the magnifying glass. Disabled, so a press never selects it; the
+			    press opens the spawn sheet the way the page under it would.
+			    Android keeps its floating New button and never shows this tab:
+			    the role is iOS's, and `hidden` stays fixed so the tabs never
+			    remount. */}
+			<NativeTabs.Trigger
+				name="compose"
+				role="search"
+				hidden={Platform.OS !== "ios"}
+				disabled
+				accessibilityLabel="New task"
+				listeners={{ tabPress: () => startNewTask(() => router.push("/spawn")) }}
+			>
+				<NativeTabs.Trigger.Icon sf="plus" md="add" />
+			</NativeTabs.Trigger>
 		</NativeTabs>
-	), [t, waiting]);
+	), [router, t, waiting]);
 }

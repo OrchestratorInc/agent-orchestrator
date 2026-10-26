@@ -1,3 +1,5 @@
+import type { AgentModelInfo } from "./api";
+
 export type SpawnModelDefaults = {
 	selectedAgent: string;
 	projectWorkerAgent?: string;
@@ -55,4 +57,28 @@ export function modelOverride(value: string, touched: boolean): string | undefin
 	if (!touched) return undefined;
 	const clean = value.trim();
 	return clean && clean !== "__auto__" ? clean : undefined;
+}
+
+/** How many of a catalog's models an agent's menu lists before "All models". */
+export const MENU_MODEL_LIMIT = 12;
+
+/**
+ * One agent's models as its menu offers them. A menu builds every row up front,
+ * and some catalogs hold thousands (opencode's lists every provider's), so it
+ * lists the first few and the whole catalog opens in a sheet. The picked model
+ * is always among them, so the menu can show it checked.
+ */
+export function menuModels(models: readonly AgentModelInfo[], selected: string, limit = MENU_MODEL_LIMIT): { models: { id: string; label: string }[]; total: number; defaultLabel?: string } {
+	const shown = models.slice(0, limit);
+	const picked = selected && !shown.some((model) => model.id === selected) ? models.find((model) => model.id === selected) : undefined;
+	return {
+		models: [...shown, ...(picked ? [picked] : [])].map((model) => ({ id: model.id, label: model.label })),
+		total: models.length,
+		defaultLabel: models.find((model) => model.isDefault)?.label,
+	};
+}
+
+/** An agent's default-model row, by the model's name when the catalog marks one. */
+export function defaultModelChoice(defaultLabel?: string): string {
+	return defaultLabel ? `Default · ${defaultLabel}` : "Default model";
 }

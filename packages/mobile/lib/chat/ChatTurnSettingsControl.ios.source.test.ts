@@ -43,9 +43,12 @@ describe("iOS turn settings choices", () => {
 		expect(source).toContain('model: "square.stack.3d.up"');
 	});
 
-	it("shows the complete dashed-check artwork as one image on the approvals row", () => {
-		expect(source).toContain('if (topic === "permissions")');
-		expect(source).toContain('<Image assetName="CircleDashedCheck" />');
+	// The approval mode is its own control beside the model, so it is never
+	// read as part of the model, and it keeps the dashed-check artwork.
+	it("puts the approval mode on its own control with the dashed-check artwork", () => {
+		expect(source).toContain('const approvalRow = rows.find((row) => turnSettingTopic(row) === "permissions");');
+		expect(source).toContain('<Image assetName="CircleDashedCheck" modifiers={[imageScale("small")]} />');
+		expect(source).toContain("{modelRows.map((row) => <SettingPicker");
 	});
 });
 

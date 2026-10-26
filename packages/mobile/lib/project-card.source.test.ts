@@ -7,8 +7,8 @@ const projects = readFileSync(new URL("../app/(tabs)/(projects)/projects.tsx", i
 
 describe("project row", () => {
 	// Matches a worker row: a divider, not a bordered card.
-	it("is a flat row with a divider", () => {
-		expect(card).toMatch(/row:\s*\{\s*borderBottomWidth:\s*rowDividerWidth/);
+	it("is a flat row with a divider inset to its text", () => {
+		expect(card).toMatch(/divider:\s*\{\s*marginLeft:\s*space\.lg,\s*height:\s*rowDividerWidth/);
 		expect(card).toMatch(/body:\s*\{\s*paddingLeft:\s*space\.lg/);
 	});
 

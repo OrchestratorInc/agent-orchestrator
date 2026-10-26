@@ -102,7 +102,7 @@ describe("Android native compatibility boundaries", () => {
 		expect(board).toContain("onClose={searchClosed}");
 		expect(board).toContain('<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />');
 		expect(source("./BoardHeaderItems.tsx")).toContain("{!ios ? filter : null}");
-		expect(source("./AddFab.android.tsx")).toContain('import { FloatingActionButton, Host, Icon } from "@expo/ui/jetpack-compose";');
+		expect(source("./AddFab.android.tsx")).toContain('import { ExtendedFloatingActionButton, Host, Icon, Text } from "@expo/ui/jetpack-compose";');
 		for (const gone of ["./worker-dock.android.tsx", "./worker-controls-sheet.android.tsx", "./worker-controls-sheet.tsx"]) {
 			expect(existsSync(fileURLToPath(new URL(gone, import.meta.url)))).toBe(false);
 		}
@@ -117,7 +117,9 @@ describe("Android native compatibility boundaries", () => {
 		expect(ios).not.toContain('@expo/ui');
 		expect(ios).toContain("height = 112");
 		expect(ios).toMatch(/paddingHorizontal:\s*space\.lg/);
-		expect(ios).toMatch(/paddingTop:\s*space\.huge/);
+		// The page starts below the sheet's header, so the field needs only a
+		// small top inset of its own.
+		expect(ios).toMatch(/paddingTop:\s*space\.sm/);
 		expect(ios).toMatch(/paddingBottom:\s*space\.md/);
 		expect(ios).toContain('textAlignVertical="top"');
 		expect(ios).toContain("scrollEnabled");

@@ -31,7 +31,7 @@ export function SegmentedChoice<K extends string>({ value, options, onChange, st
 						}}
 					>
 						<SegmentedButton.Label>
-							<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "Geist_500Medium" }}>
+							<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>
 								{option.label}
 							</Text>
 						</SegmentedButton.Label>

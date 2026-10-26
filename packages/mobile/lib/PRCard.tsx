@@ -22,6 +22,7 @@ import {
 	type PRLifecycle,
 } from "./prView";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
+import { useMenuRowWidth } from "./useMenuRowWidth";
 import { iconSize, space, type } from "./tokens";
 
 type PRCardAction = "openInGitHub" | "copyLink";
@@ -62,6 +63,7 @@ export const PRCard = memo(function PRCard({
 	const feedback = usePressFeedback("row");
 	const openPage = useOpenPage();
 	const menu = useRef<MenuComponentRef>(null);
+	const menuWidth = useMenuRowWidth();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
 	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
@@ -105,7 +107,7 @@ export const PRCard = memo(function PRCard({
 			// The row claims the touch, so on Android its long press opens the
 			// menu itself; iOS's context menu takes the gesture natively.
 			onLongPress={Platform.OS === "android" && actions.length ? () => menu.current?.show() : undefined}
-			style={({ pressed }) => [styles.row, pressed && feedback.pressed]}
+			style={({ pressed }) => [styles.row, menuWidth.style, pressed && feedback.pressed]}
 		>
 			<View style={styles.eyebrow}>
 				<Feather name="git-pull-request" size={iconSize.sm} color={state.color} />
@@ -124,16 +126,18 @@ export const PRCard = memo(function PRCard({
 
 	if (!actions.length) return row;
 	return (
-		<MenuView
-			ref={menu}
-			colorScheme={scheme}
-			actions={menuActions}
-			shouldOpenOnLongPress
-			onPressAction={(event: NativeActionEvent) => run(event.nativeEvent.event)}
-			testID="pr-card-menu"
-		>
-			{row}
-		</MenuView>
+		<View onLayout={menuWidth.onLayout}>
+			<MenuView
+				ref={menu}
+				colorScheme={scheme}
+				actions={menuActions}
+				shouldOpenOnLongPress
+				onPressAction={(event: NativeActionEvent) => run(event.nativeEvent.event)}
+				testID="pr-card-menu"
+			>
+				{row}
+			</MenuView>
+		</View>
 	);
 });
 
@@ -144,17 +148,17 @@ const makeStyles = (t: Theme) =>
 			minHeight: 76,
 			justifyContent: "center",
 			paddingHorizontal: space.lg,
-			paddingVertical: space.sm,
+			paddingVertical: space.sm + space.hair,
 			gap: space.hair,
 			backgroundColor: t.bgBase,
-			borderBottomWidth: rowDividerWidth,
-			borderBottomColor: t.borderSubtle,
 		},
+		// Inset to the text, as a worker row's is.
+		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderDefault },
 		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: type.footnote.lineHeight },
-		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-		status: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		status: { fontFamily: "DMSans_600SemiBold", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		copy: { gap: space.hair },
-		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+		title: { fontFamily: type.headline.fontFamily, color: t.textPrimary, fontSize: type.headline.fontSize, lineHeight: type.headline.lineHeight, fontWeight: type.headline.fontWeight },
 		details: { color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
-		blockers: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair, marginLeft: space.xl },
+		blockers: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair, marginLeft: space.xl },
 	});

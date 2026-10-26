@@ -88,6 +88,6 @@ const makeStyles = (t: Theme) =>
 		screen: { flex: 1, backgroundColor: t.bgSurface },
 		fields: { marginTop: space.lg },
 		hint: { gap: space.sm, marginTop: space.md },
-		hintText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		hintText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		submit: { marginTop: space.lg },
 	});

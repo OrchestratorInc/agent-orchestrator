@@ -57,10 +57,10 @@ export function ElicitationInputField({ name, property, required, value, onChang
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		field: { gap: space.xs },
-		inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		inputQuestion: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
-		inputLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		inputHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		inputEyebrow: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		inputQuestion: { fontFamily: "DMSans_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
+		inputLabel: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		inputHint: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md },
 		switchLabel: { flex: 1 },
 		// The system switch's own footprint, as Settings hosts it.

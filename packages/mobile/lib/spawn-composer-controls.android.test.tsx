@@ -14,10 +14,6 @@ vi.mock("./ThemeProvider", () => ({
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness?: string) => (harness === "codex" || harness === "opencode" ? `logo:${harness}` : null) }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
-vi.mock("./voice/MicKey", async () => {
-	const React = await import("react");
-	return { MicKey: (props: object) => React.createElement("MicKey", props) };
-});
 vi.mock("react-native", async () => {
 	const React = await import("react");
 	return {
@@ -33,6 +29,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		Box: host("Box"),
 		Button: host("Button"),
 		CircularProgressIndicator: host("CircularProgressIndicator"),
+		Column: host("Column"),
 		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: host("DropdownMenuTrigger"), Items: host("DropdownMenuItems") }),
 		DropdownMenuItem: Object.assign(host("DropdownMenuItem"), {
 			Text: host("DropdownMenuItemText"),
@@ -41,9 +38,10 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		}),
 		Host: host("ComposeHost"),
 		HorizontalDivider: host("HorizontalDivider"),
+		FilledIconButton: host("FilledIconButton"),
 		Icon: host("Icon"),
-		IconButton: host("IconButton"),
 		Row: host("Row"),
+		Spacer: host("Spacer"),
 		Text: host("ComposeText"),
 		TextButton: host("TextButton"),
 	};
@@ -54,7 +52,9 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 		background: record("background"),
 		clip: record("clip"),
 		fillMaxWidth: record("fillMaxWidth"),
+		height: record("height"),
 		padding: record("padding"),
+		semantics: record("semantics"),
 		size: record("size"),
 		testID: record("testID"),
 		weight: record("weight"),
@@ -63,7 +63,6 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 });
 
 import { SpawnComposerControls } from "./spawn-composer-controls.android";
-import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -97,8 +96,16 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	harness: "codex",
 	onSelectHarness: vi.fn(),
 	models: [{ id: "gpt-5", label: "GPT-5" }],
+	agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1 }, aider: { models: [], total: 0 } },
+	onSelectAgentModel: vi.fn(),
+	usesDefaultModel: true,
+	promptEmpty: false,
+	onBrowseModels: vi.fn(),
+	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
+	approvalMode: "auto",
+	onSelectApprovalMode: vi.fn(),
 	modelSelection: "__auto__",
-	modelLabel: "Automatic",
+	modelLabel: "Default model",
 	onSelectModel: vi.fn(),
 	onChoosePhoto: vi.fn(),
 	onChooseFile: vi.fn(),
@@ -130,17 +137,22 @@ const item = (menu: ReactTestInstance, label: string) => items(menu).find((node)
 const isSelected = (node: ReactTestInstance) =>
 	node.findAll((child) => hostType(child) === "DropdownMenuItemTrailingIcon").some((slot) => slot.findByType("Icon" as never).props.contentDescription === "Selected");
 
+const modifier = (node: ReactTestInstance, name: string) => (node.props.modifiers as { modifier: string; args: unknown[] }[] | undefined)?.find((entry) => entry.modifier === name);
+
 describe("Android spawn selectors", () => {
-	it("opens each choice as a dropdown under a text button that names it", async () => {
+	// Laid out as on iOS: the machine on its own line, then the project and the
+	// approval mode, each a compact text button naming its choice.
+	it("opens each selector as a dropdown under a text button that names it", async () => {
 		const root = await render(baseProps());
-		for (const tag of ["spawn-host", "spawn-project", "spawn-harness", "spawn-model"]) {
+		for (const tag of ["spawn-host", "spawn-project", "spawn-approval"]) {
 			expect(String(trigger(root, tag).type)).toBe("TextButton");
-			expect(menuOf(trigger(root, tag)).props.modifiers).toContainEqual({ modifier: "weight", args: [1] });
+			// Its label's width, not an equal share of the row.
+			expect(menuOf(trigger(root, tag)).props.modifiers).toBeUndefined();
 		}
-		expect(text(trigger(root, "spawn-host"))).toBe("Run on Alpha");
+		expect(text(trigger(root, "spawn-host"))).toBe("Alpha");
+		expect(modifier(trigger(root, "spawn-host"), "semantics")?.args).toEqual([{ contentDescription: "Run on Alpha" }]);
 		expect(text(trigger(root, "spawn-project"))).toBe("Project");
-		expect(text(trigger(root, "spawn-harness"))).toBe("Codex");
-		expect(text(trigger(root, "spawn-model"))).toBe("Automatic");
+		expect(text(trigger(root, "spawn-approval"))).toBe("Auto");
 		// No inline option list: the choices live in the menus, closed until asked for.
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.expanded === false)).toBe(true);
 	});
@@ -162,13 +174,13 @@ describe("Android spawn selectors", () => {
 	it("closes without a change when the current choice is picked again", async () => {
 		const props = baseProps();
 		const root = await render(props);
-		await act(async () => trigger(root, "spawn-model").props.onClick());
-		const menu = menuOf(trigger(root, "spawn-model"));
-		expect(items(menu).map(text)).toEqual(["Automatic", "GPT-5"]);
-		await act(async () => item(menu, "Automatic").props.onClick());
-		expect(props.onSelectModel).not.toHaveBeenCalled();
+		await act(async () => trigger(root, "spawn-approval").props.onClick());
+		const menu = menuOf(trigger(root, "spawn-approval"));
+		expect(items(menu).map(text)).toEqual(["Auto", "Bypass permissions"]);
+		await act(async () => item(menu, "Auto").props.onClick());
+		expect(props.onSelectApprovalMode).not.toHaveBeenCalled();
 		expect(fixtures.select).not.toHaveBeenCalled();
-		expect(menuOf(trigger(root, "spawn-model")).props.expanded).toBe(false);
+		expect(menuOf(trigger(root, "spawn-approval")).props.expanded).toBe(false);
 	});
 
 	it("separates Standalone agent from the projects and marks each with its symbol", async () => {
@@ -180,22 +192,74 @@ describe("Android spawn selectors", () => {
 		expect(glyph(item(menu, "Project"))).toBe("drawable:folder");
 		expect(glyph(item(menu, "Standalone agent"))).toBe("drawable:add_comment");
 	});
+});
+
+describe("Android spawn model", () => {
+	// Who runs the task is one filled capsule, the circles' height: the
+	// harness's mark and the model it runs.
+	it("names the harness's mark and model in a filled capsule", async () => {
+		const root = await render(baseProps());
+		const capsule = trigger(root, "spawn-harness");
+		expect(String(capsule.type)).toBe("Button");
+		expect(capsule.props.colors).toEqual({ containerColor: "#bgElevated", contentColor: "#textPrimary" });
+		expect(modifier(capsule, "height")?.args).toEqual([48]);
+		expect(text(capsule)).toBe("Codex");
+		expect(capsule.findAllByType("Icon" as never)[0].props).toMatchObject({ source: "logo:codex", tint: null });
+	});
+
+	it("names the catalog's default, or a model picked or pinned, on the capsule", async () => {
+		const named = { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } };
+		expect(text(trigger(await render(baseProps({ agentModels: named })), "spawn-harness"))).toBe("GPT-6.1-Sol");
+		await act(async () => renderer?.unmount());
+		expect(text(trigger(await render(baseProps({ usesDefaultModel: false, modelSelection: "gpt-5", modelLabel: "GPT-5" })), "spawn-harness"))).toBe("GPT-5");
+	});
+
+	// Each agent opens one level down onto its models, so an agent and its model
+	// are picked in one step.
+	it("nests each agent's models under it and picks both at once", async () => {
+		const props = baseProps({ modelSelection: "gpt-5", modelLabel: "GPT-5", usesDefaultModel: false });
+		const root = await render(props);
+		await act(async () => trigger(root, "spawn-harness").props.onClick());
+		const codexRow = trigger(root, "spawn-model-codex");
+		expect(text(codexRow)).toBe("Codex");
+		await act(async () => codexRow.props.onClick());
+		const codex = menuOf(trigger(root, "spawn-model-codex"));
+		expect(codex.props.expanded).toBe(true);
+		const models = codex.findByType("DropdownMenuItems" as never);
+		expect(items(models).map((node) => [text(node), isSelected(node)])).toEqual([["Default model", false], ["GPT-5", true]]);
+
+		await act(async () => item(models, "Default model").props.onClick());
+		expect(props.onSelectAgentModel).toHaveBeenCalledWith("codex", "__auto__");
+		expect(fixtures.select).toHaveBeenCalledOnce();
+		expect(menuOf(trigger(root, "spawn-harness")).props.expanded).toBe(false);
+	});
 
 	it("draws harness marks in their own colours, on a chip only where one is needed", async () => {
 		const root = await render(baseProps());
-		const menu = menuOf(trigger(root, "spawn-harness"));
-		const mark = (label: string) => item(menu, label).findByType("DropdownMenuItemLeadingIcon" as never);
-		expect(mark("Codex").findByType("Icon" as never).props).toMatchObject({ source: "logo:codex", tint: null });
-		expect(mark("OpenCode").findAllByType("Box" as never)).toHaveLength(1);
-		expect(mark("OpenCode").findByType("Icon" as never).props).toMatchObject({ source: "logo:opencode", tint: null });
-		expect(mark("Aider").findByType("Icon" as never).props.source).toBe("drawable:terminal");
+		const mark = (agent: string) => trigger(root, `spawn-model-${agent}`).findByType("DropdownMenuItemLeadingIcon" as never);
+		expect(mark("codex").findByType("Icon" as never).props).toMatchObject({ source: "logo:codex", tint: null });
+		expect(mark("opencode").findAllByType("Box" as never)).toHaveLength(1);
+		expect(mark("opencode").findByType("Icon" as never).props).toMatchObject({ source: "logo:opencode", tint: null });
+		expect(mark("aider").findByType("Icon" as never).props.source).toBe("drawable:terminal");
 	});
 
-	it("offers both a photo and a file from the attach button", async () => {
+	it("opens a catalog too long for its menu whole", async () => {
+		const props = baseProps({ agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 8929, defaultLabel: "GPT-6.1-Sol" }, aider: { models: [], total: 0 } } });
+		const root = await render(props);
+		const models = menuOf(trigger(root, "spawn-model-codex")).findByType("DropdownMenuItems" as never);
+		expect(items(models).map(text)).toEqual(["Default · GPT-6.1-Sol", "GPT-5", `All models (${(8929).toLocaleString()})`]);
+		await act(async () => item(models, `All models (${(8929).toLocaleString()})`).props.onClick());
+		expect(props.onBrowseModels).toHaveBeenCalledWith("codex");
+	});
+});
+
+describe("Android spawn actions", () => {
+	it("offers both a photo and a file from a filled attach circle", async () => {
 		const props = baseProps();
 		const root = await render(props);
 		const attach = trigger(root, "spawn-attachment");
-		expect(String(attach.type)).toBe("IconButton");
+		expect(String(attach.type)).toBe("FilledIconButton");
+		expect(modifier(attach, "size")?.args).toEqual([48, 48]);
 		expect(attach.findByType("Icon" as never).props.contentDescription).toBe("Attach");
 
 		await act(async () => attach.props.onClick());
@@ -210,28 +274,15 @@ describe("Android spawn selectors", () => {
 		expect(fixtures.select).not.toHaveBeenCalled();
 	});
 
-	it("keeps the hold-to-talk mic at the touch target", async () => {
-		const root = await render(baseProps());
-		expect(root.findByType("MicKey" as never).props).toMatchObject({ variant: "plain", size: touchTarget });
-	});
-
-	// A screen reader latches dictation in one step instead of a synthesized double tap.
-	it("hands the mic the one-step latch", async () => {
-		const props = baseProps();
-		const root = await render(props);
-		expect(root.findByType("MicKey" as never).props.onToggleLatched).toBe(props.voice.onToggleLatched);
-	});
-});
-
-describe("Android spawn Start", () => {
-	it("starts from a filled Material button with the accent's own fill and ink", async () => {
+	it("starts from a filled round arrow with the accent's own fill and ink", async () => {
 		const props = baseProps();
 		const root = await render(props);
 		const start = trigger(root, "spawn-submit");
-		expect(String(start.type)).toBe("Button");
+		expect(String(start.type)).toBe("FilledIconButton");
 		expect(start.props.enabled).toBe(true);
-		expect(start.props.colors).toEqual({ containerColor: "#accent", contentColor: "#onAccent", disabledContainerColor: "#bgElevatedHover", disabledContentColor: "#textFaint" });
-		expect(text(start)).toBe("Start task");
+		expect(start.props.colors).toEqual({ containerColor: "#accent", contentColor: "#onAccent", disabledContainerColor: "#bgElevated", disabledContentColor: "#textFaint" });
+		expect(modifier(start, "size")?.args).toEqual([48, 48]);
+		expect(start.findByType("Icon" as never).props).toMatchObject({ source: "drawable:arrow_upward", contentDescription: "Start task" });
 		await act(async () => start.props.onClick());
 		expect(props.onSpawn).toHaveBeenCalledOnce();
 	});
@@ -241,7 +292,24 @@ describe("Android spawn Start", () => {
 		const start = trigger(root, "spawn-submit");
 		expect(start.props.enabled).toBe(false);
 		expect(start.findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
-		// TalkBack reads the button's text, so it is the name iOS announces.
-		expect(text(start)).toBe("Starting task");
+	});
+
+	// The round button follows the prompt: it dictates while there is nothing
+	// written and stops while the mic is open, in the recording red.
+	it("dictates with an empty prompt and stops while listening", async () => {
+		let props = baseProps({ promptEmpty: true });
+		let root = await render(props);
+		let button = trigger(root, "spawn-dictate");
+		expect(button.findByType("Icon" as never).props).toMatchObject({ source: "drawable:mic", contentDescription: "Dictate the task" });
+		await act(async () => button.props.onClick());
+		expect(props.voice.onToggleLatched).toHaveBeenCalledOnce();
+		expect(props.onSpawn).not.toHaveBeenCalled();
+		await act(async () => renderer?.unmount());
+
+		props = baseProps({ voice: { ...baseProps().voice, state: "recording", mode: "latched" } });
+		root = await render(props);
+		button = trigger(root, "spawn-dictate");
+		expect(button.findByType("Icon" as never).props.source).toBe("drawable:stop");
+		expect(button.props.colors.containerColor).toBe("#red");
 	});
 });

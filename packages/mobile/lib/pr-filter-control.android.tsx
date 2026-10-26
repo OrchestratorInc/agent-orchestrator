@@ -45,7 +45,7 @@ export function PRFilterControl({ filter, counts, onChange }: PRFilterControlPro
 						modifiers={[testID(`pr-filter-${item}`)]}
 					>
 						<SegmentedButton.Label>
-							<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "Geist_500Medium" }}>
+							<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>
 								{prFilterLabel(item, counts[item])}
 							</Text>
 						</SegmentedButton.Label>

@@ -261,11 +261,11 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		root: { gap: 10 },
-		body: { fontFamily: "Geist_400Regular", color: t.textPrimary, fontSize: prose.fontSize, lineHeight: prose.lineHeight },
+		body: { fontFamily: "DMSans_400Regular", color: t.textPrimary, fontSize: prose.fontSize, lineHeight: prose.lineHeight },
 		proseGap: { fontSize: 10, lineHeight: 10 },
-		heading: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", marginTop: space.xs },
-		smallHeading: { fontFamily: "Geist_400Regular", fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
-		strong: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+		heading: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", marginTop: space.xs },
+		smallHeading: { fontFamily: "DMSans_400Regular", fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
+		strong: { fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
 		em: { fontStyle: "italic" },
 		strike: { textDecorationLine: "line-through" },
 		link: { color: t.highlight, textDecorationLine: "underline" },
@@ -277,13 +277,13 @@ const makeStyles = (t: Theme) =>
 		// items with inline code or links can render past the right edge.
 		listBody: { flex: 1, minWidth: 0 },
 		// The marker sits on the same line as prose, so it borrows prose leading.
-		marker: { fontFamily: "Geist_400Regular", width: 20, flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, textAlign: "right" },
+		marker: { fontFamily: "DMSans_400Regular", width: 20, flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, textAlign: "right" },
 		// A drawn marker's column takes the numbered marker's width.
 		markerBox: { width: 20 },
 		bullet: { width: 5, height: 5, borderRadius: radius.pill, backgroundColor: t.textTertiary },
 		taskDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 		quote: { borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.md },
-		quoteText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, fontStyle: "italic" },
+		quoteText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, fontStyle: "italic" },
 		rule: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginVertical: space.xxs },
 		codeCard: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, backgroundColor: t.bgColumn },
 		codeHeader: { paddingLeft: space.md, flexDirection: "row", alignItems: "center", borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
@@ -297,11 +297,11 @@ const makeStyles = (t: Theme) =>
 		codeTextWrap: { flexShrink: 1 },
 		imageCard: { overflow: "hidden", borderRadius: radius.md, borderCurve: "continuous", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, backgroundColor: t.bgColumn },
 		image: { width: "100%", minHeight: 190, maxHeight: 420 },
-		imageCaption: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.sm, paddingVertical: space.xs, borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
-		imageFallback: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, fontStyle: "italic" },
+		imageCaption: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.sm, paddingVertical: space.xs, borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
+		imageFallback: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, fontStyle: "italic" },
 		table: { borderWidth: rowDividerWidth, borderColor: t.borderSubtle, borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden" },
 		tableRow: { flexDirection: "row", borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
 		tableHeader: { borderTopWidth: 0, backgroundColor: t.bgSubtle },
-		tableCell: { fontFamily: "Geist_400Regular", minWidth: 110, maxWidth: 260, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: rowDividerWidth, borderLeftColor: t.borderSubtle },
-		tableHeaderText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600" },
+		tableCell: { fontFamily: "DMSans_400Regular", minWidth: 110, maxWidth: 260, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: rowDividerWidth, borderLeftColor: t.borderSubtle },
+		tableHeaderText: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontWeight: "600" },
 	});

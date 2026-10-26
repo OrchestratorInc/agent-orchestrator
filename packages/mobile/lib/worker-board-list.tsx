@@ -634,7 +634,7 @@ const makeStyles = (t: Theme) =>
 			// the shadow that clipping would cut off.
 			overflow: Platform.OS === "android" ? "hidden" : "visible",
 		},
-		updatesLabel: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		updatesLabel: { fontFamily: "DMSans_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		archiveHeader: {
 			flexDirection: "row",
 			alignItems: "center",
@@ -643,10 +643,10 @@ const makeStyles = (t: Theme) =>
 			marginTop: space.sm,
 			paddingHorizontal: space.lg,
 		},
-		archiveLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", flex: 1 },
+		archiveLabel: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", flex: 1 },
 		archiveCount: { color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600", fontFamily: t.fontMono },
 		archiveStatus: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, minHeight: 56, paddingHorizontal: space.lg },
-		archiveStatusText: { flexShrink: 1, fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		archiveStatusText: { flexShrink: 1, fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		archiveRetry: { minHeight: touchTarget, justifyContent: "center", paddingHorizontal: space.sm, borderRadius: radius.sm, borderCurve: "continuous" },
-		archiveStatusAction: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		archiveStatusAction: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	});

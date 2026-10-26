@@ -21,10 +21,13 @@ describe("spawn sheet header", () => {
 	it("cancels from the leading bar item on iOS only", () => {
 		expect(spawn).toContain('const headerItems = useMemo(() => Platform.OS === "ios" ? (\n\t\t<Stack.Toolbar placement="left">\n\t\t\t<Stack.Toolbar.Button disabled={busy} onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>');
 		expect(spawn).toContain(") : null, [busy, router]);");
+		// Dictation is beside the model, as the hold-to-talk key; the header has only Cancel.
+		expect(spawn).not.toContain('<Stack.Toolbar placement="right">');
 		expect(spawn).toContain("return <View style={styles.screen}>{headerItems}{content}</View>;");
 		// Start keeps its place with the selectors, riding the keyboard.
 		expect(spawn).toContain("onSpawn={() => { void onSpawn(); }}");
 	});
+
 
 	// A started spawn can't be called back. Leaving mid-request used to let the
 	// success path close the sheet a second time, popping the page under it.
@@ -87,7 +90,18 @@ describe("spawn composer", () => {
 		expect(spawn).toContain('disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}');
 	});
 
+	// The machine's catalog loads before a project is chosen, so a project is
+	// not part of the guard.
 	it("clears model loading when changing to a machine without a ready model request", () => {
-		expect(spawn).toContain('if (!config || !requestedHostId || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }');
+		expect(spawn).toContain('if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }');
+	});
+});
+
+describe("spawn approval mode", () => {
+	// An untouched picker shows the project's mode, which the daemon applies on
+	// its own; only a mode picked on the sheet is sent as an override.
+	it("sends only an approval mode the user picked", () => {
+		expect(spawn).toContain("approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,");
+		expect(spawn).toContain("const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });");
 	});
 });

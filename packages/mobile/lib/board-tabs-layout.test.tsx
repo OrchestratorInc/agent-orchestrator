@@ -9,7 +9,11 @@ const fixtures = vi.hoisted(() => ({
 	sessions: [] as DashboardSession[],
 	tabRenders: 0,
 	theme: new Proxy({}, { get: (_target, property) => `#${String(property)}` }),
+	push: vi.fn(),
+	router: undefined as unknown as { push: (href: string) => void },
 }));
+// One router for the whole run, as expo-router's own is stable.
+fixtures.router = { push: (href: string) => fixtures.push(href) };
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 vi.mock("react-native", () => ({ Platform: fixtures.platform }));
@@ -23,6 +27,7 @@ vi.mock("expo-router/unstable-native-tabs", () => {
 	});
 	return { NativeTabs };
 });
+vi.mock("expo-router", () => ({ useRouter: () => fixtures.router }));
 vi.mock("./store", () => ({ useApp: () => ({ allSessions: fixtures.sessions }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme }));
 
@@ -41,8 +46,9 @@ function render() {
 	act(() => { renderer = create(<BoardTabsLayout />); });
 	return renderer!;
 }
+/** The three board tabs, without the New task button set apart beside them. */
 function triggers() {
-	return renderer!.root.findAllByType("Trigger" as never);
+	return renderer!.root.findAllByType("Trigger" as never).filter((trigger) => trigger.props.name !== "compose");
 }
 
 beforeEach(() => {
@@ -91,8 +97,8 @@ describe("board tabs", () => {
 			tintColor: "#accent",
 			iconColor: { default: "#textSecondary", selected: "#accent" },
 			labelStyle: {
-				default: { fontFamily: "Geist_500Medium", color: "#textSecondary" },
-				selected: { fontFamily: "Geist_500Medium", color: "#accent" },
+				default: { fontFamily: "DMSans_500Medium", color: "#textSecondary" },
+				selected: { fontFamily: "DMSans_500Medium", color: "#accent" },
 			},
 			indicatorColor: "#accentTint",
 			backgroundColor: os === "android" ? "#bgSurface" : undefined,
@@ -105,6 +111,20 @@ describe("board tabs", () => {
 		render();
 		const badges = triggers().map((trigger) => trigger.findAllByType("TriggerBadge" as never).map((badge) => badge.props.children));
 		expect(badges).toEqual([["2"], [], []]);
+	});
+
+	// New task in the tab bar's own row on iOS: the search role's item, which
+	// iOS 26 sets apart as a round button. Disabled, so a press opens the
+	// spawn sheet rather than selecting it; Android never shows it.
+	it.each(["ios", "android"])("sets New task apart in the tab bar on %s", (os) => {
+		fixtures.platform.OS = os;
+		render();
+		const compose = renderer!.root.findAllByType("Trigger" as never).find((trigger) => trigger.props.name === "compose")!;
+		expect(compose.props).toMatchObject({ role: "search", disabled: true, hidden: os !== "ios", accessibilityLabel: "New task" });
+		expect(compose.findByType("TriggerIcon" as never).props).toMatchObject({ sf: "plus" });
+		act(() => compose.props.listeners.tabPress());
+		expect(fixtures.push).toHaveBeenCalledWith("/spawn");
+		fixtures.push.mockClear();
 	});
 
 	it("shows no badge while nothing is waiting", () => {

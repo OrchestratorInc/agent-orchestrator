@@ -30,11 +30,12 @@ describe("Settings environment navigation", () => {
 	});
 
 	// The pages' titles, back buttons and actions are the native header's, with
-	// the same tint, type and bar as every other stack in the app.
+	// the same tint and type as every other stack in the app. On iOS 26 the bar
+	// is the system's glass rather than a painted one.
 	it("gives every Settings page the native header", () => {
 		const settingsLayout = read("../app/settings/_layout.tsx");
 
-		expect(settingsLayout).toContain("<Stack screenOptions={stackScreenOptions(t)}>");
+		expect(settingsLayout).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>");
 		expect(settingsLayout).toContain('<Stack.Screen name="index" options={{ title: "Settings" }} />');
 		expect(settingsLayout).toContain('<Stack.Screen name="theme" options={{ title: "Theme", fullScreenGestureEnabled: true }} />');
 		expect(settingsLayout).not.toContain("headerShown");

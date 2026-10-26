@@ -98,10 +98,10 @@ function SuggestionRow({ kind, choice, onSelect }: { kind: "skills" | "files"; c
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgSurface },
 	notice: { fontFamily: type.footnote.fontFamily, color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.sm },
-	results: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600", marginTop: space.xl, marginBottom: space.xxs },
+	results: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600", marginTop: space.xl, marginBottom: space.xxs },
 	row: { minHeight: 56, flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.sm, paddingHorizontal: space.hair },
 	rowCopy: { flex: 1, minWidth: 0 },
-	label: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "500" },
+	label: { fontFamily: "DMSans_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "500" },
 	detail: { fontFamily: type.footnote.fontFamily, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
 	badge: { fontFamily: type.footnote.fontFamily, color: t.textTertiary, fontSize: type.footnote.fontSize },
 	separator: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginLeft: space.xxxl },

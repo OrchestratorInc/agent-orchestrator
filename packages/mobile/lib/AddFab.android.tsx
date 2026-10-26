@@ -1,14 +1,14 @@
-import { FloatingActionButton, Host, Icon } from "@expo/ui/jetpack-compose";
+import { ExtendedFloatingActionButton, Host, Icon, Text } from "@expo/ui/jetpack-compose";
 import { paddingAll, testID as testTag } from "@expo/ui/jetpack-compose/modifiers";
 import { StyleSheet } from "react-native";
 import type { AddFabProps } from "./AddFab.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
-import { iconSize, space } from "./tokens";
+import { font, iconSize, space } from "./tokens";
 
 export type { AddFabProps } from "./AddFab.types";
 
-/** Material 3's standard FAB, set 16dp in from the bottom-end corner. */
+/** Material 3's extended FAB, set 16dp in from the bottom-end corner. */
 const FAB_SIZE = 56;
 const FAB_MARGIN = space.lg;
 // Room inside the host for the FAB's elevation shadow, which a host sized to
@@ -19,8 +19,9 @@ const SHADOW_ROOM = space.sm;
 export const addFabClearance = FAB_SIZE + FAB_MARGIN;
 
 /**
- * A screen's create action as Material 3's floating action button: the add
- * symbol on the accent fill, with Compose's ripple, elevation and semantics.
+ * A screen's create action as Material 3's extended floating action button: the
+ * add symbol and "New" on the accent fill, with Compose's ripple, elevation and
+ * semantics.
  */
 export function AddFab({ label, onPress, bottomInset, testID }: AddFabProps) {
 	const t = useTheme();
@@ -31,17 +32,21 @@ export function AddFab({ label, onPress, bottomInset, testID }: AddFabProps) {
 			colorScheme={scheme}
 			style={[styles.anchor, { bottom: bottomInset + FAB_MARGIN - SHADOW_ROOM }]}
 		>
-			<FloatingActionButton
+			<ExtendedFloatingActionButton
 				containerColor={t.accent}
 				onClick={onPress}
+				expanded
 				modifiers={[paddingAll(SHADOW_ROOM), ...(testID ? [testTag(testID)] : [])]}
 			>
-				<FloatingActionButton.Icon>
+				<ExtendedFloatingActionButton.Icon>
 					{/* An accent container is not one of the Material scheme's own, so
 					    Compose has no content colour to pair with it. */}
 					<Icon source={materialDrawable("add")} size={iconSize.xl} tint={t.onAccent} contentDescription={label} />
-				</FloatingActionButton.Icon>
-			</FloatingActionButton>
+				</ExtendedFloatingActionButton.Icon>
+				<ExtendedFloatingActionButton.Text>
+					<Text color={t.onAccent} style={{ typography: "labelLarge", fontFamily: font.semibold }}>New</Text>
+				</ExtendedFloatingActionButton.Text>
+			</ExtendedFloatingActionButton>
 		</Host>
 	);
 }

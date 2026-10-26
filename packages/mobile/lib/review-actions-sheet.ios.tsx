@@ -6,7 +6,7 @@ import { ItemActionsPullDown } from "./item-actions-menu.ios";
 import type { ReviewActionsSheetProps, ReviewFeedbackItem, ReviewPolicyRow } from "./review-actions-sheet.types";
 import { ReviewerPicker } from "./reviewer-picker.ios";
 import { symbols } from "./symbols";
-import { geistFont } from "./swiftUIFont";
+import { appFont } from "./swiftUIFont";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
 import { sheetInset, space } from "./tokens";
@@ -34,7 +34,7 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 				<Form modifiers={[scrollContentBackground("hidden")]}>
 					{alerts.length ? (
 						<Section>
-							{alerts.map((alert) => <Label key={alert} title={alert} systemImage={symbols.warning.ios} modifiers={[geistFont("subheadline"), foregroundStyle(t.red), row]} />)}
+							{alerts.map((alert) => <Label key={alert} title={alert} systemImage={symbols.warning.ios} modifiers={[appFont("subheadline"), foregroundStyle(t.red), row]} />)}
 						</Section>
 					) : null}
 					<Section title="Automation" footer={<Text>The same settings as this session's inspector on desktop.</Text>}>
@@ -43,7 +43,7 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 					<Section title="Orchestrator reviewer" footer={<Text>Choose who runs the next Orchestrator review and which model it uses.</Text>}>
 						{reviewer
 							? <ReviewerPicker {...reviewer} />
-							: <Text modifiers={[geistFont("subheadline"), secondary, row]}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
+							: <Text modifiers={[appFont("subheadline"), secondary, row]}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
 					</Section>
 					{externalReviewers.length ? (
 						<Section title="External reviewers" footer={<Text>Ask a GitHub reviewer to look at the latest changes again.</Text>}>
@@ -52,8 +52,8 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 									<HStack spacing={space.md}>
 										<Image systemName={symbols.refresh.ios} />
 										<VStack alignment="leading" spacing={space.hair}>
-											<Text modifiers={[geistFont("body")]}>{item.id}</Text>
-											<Text modifiers={[geistFont("footnote"), secondary]}>{item.detail}</Text>
+											<Text modifiers={[appFont("body")]}>{item.id}</Text>
+											<Text modifiers={[appFont("footnote"), secondary]}>{item.detail}</Text>
 										</VStack>
 										<Spacer />
 										{/* The request runs in place and opens nothing, so the row ends in progress rather than a disclosure. */}
@@ -68,7 +68,7 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 							{section.items.map((item) => <FeedbackRow key={item.key} item={item} locked={locked} />)}
 						</Section>
 					))}
-					{emptyFeedback ? <Section><Text modifiers={[geistFont("subheadline"), secondary, row]}>{emptyFeedback}</Text></Section> : null}
+					{emptyFeedback ? <Section><Text modifiers={[appFont("subheadline"), secondary, row]}>{emptyFeedback}</Text></Section> : null}
 				</Form>
 			</Host>
 		</View>
@@ -78,8 +78,8 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 function PolicyToggle({ policy, locked, onChange }: { policy: ReviewPolicyRow; locked: boolean; onChange: (key: ReviewPolicyRow["key"], value: boolean) => void }) {
 	const t = useTheme();
 	const row = listRowBackground(t.bgElevated);
-	const title = <Text modifiers={[geistFont("body")]}>{policy.title}</Text>;
-	const description = <Text modifiers={[geistFont("subheadline"), secondary]}>{policy.description}</Text>;
+	const title = <Text modifiers={[appFont("body")]}>{policy.title}</Text>;
+	const description = <Text modifiers={[appFont("subheadline"), secondary]}>{policy.description}</Text>;
 	// While the session loads or the change saves, a spinner holds the switch's place.
 	if (policy.busy) {
 		return (
@@ -104,15 +104,15 @@ function FeedbackRow({ item, locked }: { item: ReviewFeedbackItem; locked: boole
 	return (
 		<VStack alignment="leading" spacing={space.xs} modifiers={[listRowBackground(t.bgElevated)]}>
 			<HStack spacing={space.sm}>
-				<Text modifiers={[geistFont("subheadline", { weight: "600" }), lineLimit(1)]}>{item.author}</Text>
+				<Text modifiers={[appFont("subheadline", { weight: "600" }), lineLimit(1)]}>{item.author}</Text>
 				<Spacer />
-				<Text modifiers={[geistFont("footnote"), secondary, lineLimit(1)]}>{item.meta}</Text>
+				<Text modifiers={[appFont("footnote"), secondary, lineLimit(1)]}>{item.meta}</Text>
 				{item.working ? <ProgressView /> : <ItemActionsPullDown actions={item.actions} accessibilityLabel={item.menuLabel} disabled={locked} tintColor={t.textSecondary} />}
 			</HStack>
-			{item.notInjected ? <Text modifiers={[geistFont("footnote"), foregroundStyle(t.amber)]}>Not automatically sent to the worker</Text> : null}
-			{item.location ? <Text modifiers={[geistFont("footnote", { mono: true }), secondary]}>{item.location}</Text> : null}
-			<Text modifiers={item.bodyMissing ? [geistFont("subheadline"), secondary, italic()] : [geistFont("subheadline"), textSelection(true)]}>{item.body}</Text>
-			{item.sent ? <Label title="Sent to worker" systemImage={symbols.checkmark.ios} modifiers={[geistFont("footnote", { weight: "600" }), foregroundStyle(t.green)]} /> : null}
+			{item.notInjected ? <Text modifiers={[appFont("footnote"), foregroundStyle(t.amber)]}>Not automatically sent to the worker</Text> : null}
+			{item.location ? <Text modifiers={[appFont("footnote", { mono: true }), secondary]}>{item.location}</Text> : null}
+			<Text modifiers={item.bodyMissing ? [appFont("subheadline"), secondary, italic()] : [appFont("subheadline"), textSelection(true)]}>{item.body}</Text>
+			{item.sent ? <Label title="Sent to worker" systemImage={symbols.checkmark.ios} modifiers={[appFont("footnote", { weight: "600" }), foregroundStyle(t.green)]} /> : null}
 		</VStack>
 	);
 }

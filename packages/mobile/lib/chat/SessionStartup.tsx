@@ -131,13 +131,13 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// the checklist reads as its own block under the brief. A touch target tall,
 	// as is the turn's status row that takes its place, so the handoff holds still.
 	header: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault, marginBottom: space.xxs },
-	headerLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+	headerLabel: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 	row: { minHeight: 28, flexDirection: "row", alignItems: "center", gap: space.xs },
-	rowLabel: { flexShrink: 0, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
+	rowLabel: { flexShrink: 0, fontFamily: "DMSans_400Regular", fontSize: type.footnote.fontSize },
 	detail: { flex: 1, minWidth: 0, fontFamily: "GeistMono_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 	spacer: { flex: 1 },
 	elapsed: { flexShrink: 0, paddingLeft: space.sm, fontFamily: "GeistMono_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize, fontVariant: ["tabular-nums"] },
 	// Under the header's label, past its glyph and gap.
 	failure: { paddingLeft: iconSize.xs + space.xs, paddingTop: space.xs, gap: space.sm, alignItems: "flex-start" },
-	failureCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	failureCopy: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });

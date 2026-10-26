@@ -19,6 +19,9 @@ export function SpawnComposerControls({
 	modelSelection,
 	modelLabel,
 	onSelectModel,
+	approvalModes,
+	approvalMode,
+	onSelectApprovalMode,
 	onChoosePhoto,
 	onChooseFile,
 	onSpawn,
@@ -38,6 +41,11 @@ export function SpawnComposerControls({
 					<Picker selectedValue={projectId ?? ""} onValueChange={onSelectProject} appearance="menu">
 						<Picker.Item label="Choose project" value="" />
 						{projects.map((project) => <Picker.Item key={project.id} label={project.label} value={project.id} />)}
+					</Picker>
+				</Host>
+				<Host style={styles.destinationHost} colorScheme={scheme}>
+					<Picker selectedValue={approvalMode} onValueChange={onSelectApprovalMode} appearance="menu">
+						{approvalModes.map((mode) => <Picker.Item key={mode.id} label={mode.label} value={mode.id} />)}
 					</Picker>
 				</Host>
 			</View>

@@ -1,8 +1,5 @@
 // Per weight, not from the package root: the barrels pull every face the family
 // ships, and this app draws four of the thirty-six.
-import { Geist_400Regular } from "@expo-google-fonts/geist/400Regular";
-import { Geist_500Medium } from "@expo-google-fonts/geist/500Medium";
-import { Geist_600SemiBold } from "@expo-google-fonts/geist/600SemiBold";
 import { GeistMono_400Regular } from "@expo-google-fonts/geist-mono/400Regular";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavigationThemeProvider } from "expo-router";
 import { getFocusedRouteNameFromRoute } from "expo-router/react-navigation";
@@ -23,6 +20,7 @@ import { boardTitle } from "../lib/board-tabs";
 import { LayoutGrid } from "../lib/layoutGrid";
 import { largeTitleScreenOptions, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
+import { appFonts } from "../lib/appFonts";
 import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
 import { loadThemeSettings, type ThemeSettings } from "../lib/themeStore";
@@ -102,14 +100,15 @@ export const unstable_settings = { initialRouteName: "(tabs)" };
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
-	// The desktop's family, loaded before anything else draws: rendering the tree
-	// first would paint one frame of SF Pro and then swap every label under it.
+	// The app's family (DM Sans, after T3 Code), loaded before anything else
+	// draws: rendering the tree first would paint one frame of SF Pro and then
+	// swap every label under it.
 	//
 	// `error` matters as much as `loaded`. A face that fails to load never flips
 	// `loaded`, so waiting on that flag alone left the app on a blank root forever,
 	// with no way out and nothing on screen to say why. A missing family is worth
 	// losing to a system fallback; it is not worth losing the app to.
-	const [fontsReady, fontError] = useFonts({ Geist_400Regular, Geist_500Medium, Geist_600SemiBold, GeistMono_400Regular, ...symbolFonts });
+	const [fontsReady, fontError] = useFonts({ ...appFonts, GeistMono_400Regular, ...symbolFonts });
 	const fontsSettled = fontsReady || fontError != null;
 	// The stored theme is read under the splash too, for the same reason as the
 	// fonts: the first frame should already be the user's palette, not the default
@@ -247,7 +246,10 @@ function Shell() {
 						// iOS titles the sheet in a native bar that holds its Cancel.
 						// Shown from the start rather than by the page: a modal whose
 						// header appears after it mounts is rebuilt, losing the draft.
+						// Transparent, so the system draws its own glass over the
+						// sheet; the page insets itself by the header's height.
 						headerShown: Platform.OS === "ios",
+						...(Platform.OS === "ios" ? { headerTransparent: true, headerStyle: undefined } : null),
 						title: "New task",
 						sheetAllowedDetents: Platform.OS === "ios" ? [0.5, 0.9] : undefined,
 						// Opens tall on iOS. At the half detent the keyboard is taller

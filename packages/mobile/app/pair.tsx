@@ -495,8 +495,8 @@ const makeStyles = (t: Theme) =>
 
 	steps: { paddingHorizontal: space.xl, paddingBottom: space.lg },
 	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg, gap: space.xs },
-	repairTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
-	repairText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	repairTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
+	repairText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
 	// A card in the theme until the camera runs: the permission prompt inside it
 	// is themed text, which the dark preview backdrop would swallow in light mode.
@@ -522,8 +522,8 @@ const makeStyles = (t: Theme) =>
 	},
 
 	gate: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xxl },
-	gateTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600", marginTop: space.md },
-	gateHint: { fontFamily: "Geist_400Regular",
+	gateTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600", marginTop: space.md },
+	gateHint: { fontFamily: "DMSans_400Regular",
 		color: t.textSecondary,
 		fontSize: type.footnote.fontSize,
 		lineHeight: type.footnote.lineHeight,
@@ -543,8 +543,8 @@ const makeStyles = (t: Theme) =>
 	},
 	noticeLead: { width: iconSize.sm, height: type.subheadline.lineHeight, alignItems: "center", justifyContent: "center" },
 	noticeBody: { flex: 1, gap: space.xxs },
-	noticeTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
-	noticeText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	noticeTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	noticeText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	// Text buttons pad their label for the press state; pulled back by that
 	// padding so the first label lines up with the message above it.
 	noticeActions: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs, marginLeft: -space.md },

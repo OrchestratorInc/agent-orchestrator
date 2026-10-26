@@ -1,4 +1,4 @@
-import { Stack, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import { AddFab, addFabClearance } from "../../../lib/AddFab";
@@ -9,9 +9,9 @@ import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
-import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { useTabBarInset } from "../../../lib/useTabBarInset";
 import { useHeaderOverlap } from "../../../lib/useHeaderOverlap";
+import { setNewTaskHandler } from "../../../lib/newTaskAction";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
@@ -41,7 +41,7 @@ export default function FleetScreen() {
 	const router = useRouter();
 	const tabBarInset = useTabBarInset();
 	const headerOverlap = useHeaderOverlap();
-	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
+	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
@@ -82,6 +82,9 @@ export default function FleetScreen() {
 		const selectedHostId = workerEnvironmentId === ALL_WORKER_ENVIRONMENTS ? undefined : workerEnvironmentId;
 		router.push({ pathname: "/spawn", params: { hostId: project?.hostId ?? selectedHostId ?? connectedHostId ?? config?.hostId, ...project } });
 	}, [allProjects, config?.hostId, connection, openHostId, router, workerEnvironmentId, workerProjectId]);
+	// The tab bar's New task button starts a task on the board's own machine
+	// and project filters while the board is the page in front.
+	useFocusEffect(useCallback(() => setNewTaskHandler(spawnWorker), [spawnWorker]));
 	const listRef = useRef<FlatList<BoardRow>>(null);
 
 	const projectSessions = useMemo(
@@ -155,22 +158,16 @@ export default function FleetScreen() {
 		finally { setRefreshing(false); }
 	}, [refreshAll, refreshHost, selectedHost?.hostId]);
 
-	if (!configured && hostStates.length === 0) {
-		return (
-			<View style={styles.screen}>
-				<TabPageScroll>
-					<UnpairedState />
-				</TabPageScroll>
-				<BoardHeaderItems unread={0} notifications={false} />
-			</View>
-		);
-	}
+	// Unpaired only once the stored config has been read: until then an empty
+	// store means "still finding the machine", and the board shows its spinner.
+	const unpaired = configResolved && !configured && hostStates.length === 0;
+	const resolving = !configResolved && !configured && hostStates.length === 0;
 
 	// Inside the list rather than above it: the header is translucent and the page
 	// is laid out under it, so the list has to be the page's first view. Above the
 	// rows rather than inside ListEmptyComponent, because the case the banner
 	// exists for is a populated board whose poll has died.
-	const listHeader = (
+	const listHeader = unpaired ? null : (
 		<>
 			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
 			{showsEnvironmentFilter(environments) ? (
@@ -185,105 +182,122 @@ export default function FleetScreen() {
 
 	return (
 		<View style={styles.screen}>
-			{!selectedHost && fleetLoading && allSessions.length === 0 ? (
-				<TabPageScroll>
-					{listHeader}
-					<View style={styles.center}>
-						<ActivityIndicator color={t.accent} />
-					</View>
-				</TabPageScroll>
-			) : (
-				<WorkerBoardList
-					key={boardIdentityKey}
-					sessions={projectSessions}
-					archiveSources={archiveSources}
-					query={query}
-					identityKey={boardIdentityKey}
-					listRef={listRef}
-					// iOS insets the list by the tab bar already; Android pads it clear
-					// of the floating spawn button too.
-					contentBottomInset={addFabClearance + space.xxl}
-					contentInsetAdjustmentBehavior="automatic"
-					overlayTopInset={headerOverlap}
-					refreshing={refreshing}
-					onRefresh={onRefresh}
-					ListHeaderComponent={listHeader}
-					ListEmptyComponent={
-						selectedHost && selectedHost.connection !== "open" ? (
-							<WorkerMachineState
-								host={selectedHost}
-								environments={environments}
-								onSelectEnvironment={selectEnvironment}
-								onRetry={onRefresh}
-							/>
-						) : query.trim() ? (
-							<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
-						) : fleetError ? (
-							<EmptyState
-								icon={hostStates.length > 1 ? "unplug" : failure.icon}
-								title={hostStates.length > 1 ? "No machines connected" : failure.title}
-								message={hostStates.length > 1 ? undefined : failure.hint}
-								action={
-									<View style={styles.errorActions}>
-										<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />
-										{/* Re-scanning is the only fix for a rotated password, and the
-										    fastest one for a moved/renamed host — so it belongs beside
-										    Retry rather than three taps away in Settings. */}
-										<Button title="Scan" icon="qrScanner" variant="primary" onPress={() => router.push("/pair")} />
-									</View>
-								}
-							/>
-						) : workerProjectId !== ALL_WORKER_PROJECTS ? (
-							<EmptyState
-								icon="folder"
-								title={`No workers in ${selectedProjectLabel}`}
-								message="Choose another project from the filter menu."
-							/>
-						) : workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? (
-							<EmptyState
-								icon="monitor"
-								title={`No workers on ${selectedEnvironmentLabel ?? "this environment"}`}
-								message="Choose another environment from the filter menu."
-							/>
-						) : (
-							<EmptyState
-								icon="moon"
-								title="No active workers"
-								message="Spawn a worker to get started."
-								action={<Button title="New agent" icon="plus" onPress={spawnWorker} />}
-							/>
-						)
-					}
-				/>
-			)}
-
-			<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />
-			{/* The header's own search: UISearchController under the large title on
-			    iOS, the top app bar's search action on Android. Filtering stays in
-			    place on the board, so the content is not dimmed behind it. */}
-			<Stack.SearchBar
-				placeholder="Search workers"
-				// Under the large title on every iOS version, rather than iOS 26's
-				// toolbar slot, which this tab bar would have to share.
-				placement="stacked"
-				obscureBackground={false}
-				autoCapitalize="none"
-				tintColor={t.highlight}
-				textColor={t.textPrimary}
-				hintTextColor={t.textTertiary}
-				headerIconColor={t.accent}
-				onChangeText={searchChanged}
-				onCancelButtonPress={searchClosed}
-				onClose={searchClosed}
+			{/* The board is the page's one scroll view in every state, unpaired and
+			    loading included: the large title binds to the first scroll view the
+			    page shows, and a placeholder swapped out for the list left the title
+			    tracking a view that was gone, so it stayed expanded over the rows. */}
+			<WorkerBoardList
+				key={boardIdentityKey}
+				sessions={projectSessions}
+				archiveSources={archiveSources}
+				query={query}
+				identityKey={boardIdentityKey}
+				listRef={listRef}
+				// iOS insets the list by the tab bar already; Android pads it clear
+				// of the floating New button too.
+				contentBottomInset={addFabClearance + space.xxl}
+				contentInsetAdjustmentBehavior="automatic"
+				overlayTopInset={headerOverlap}
+				refreshing={refreshing}
+				onRefresh={onRefresh}
+				ListHeaderComponent={listHeader}
+				ListEmptyComponent={
+					unpaired ? (
+						<UnpairedState />
+					) : resolving || (!selectedHost && fleetLoading && allSessions.length === 0) ? (
+						<View style={styles.center}>
+							<ActivityIndicator color={t.accent} />
+						</View>
+					) : selectedHost && selectedHost.connection !== "open" ? (
+						<WorkerMachineState
+							host={selectedHost}
+							environments={environments}
+							onSelectEnvironment={selectEnvironment}
+							onRetry={onRefresh}
+						/>
+					) : query.trim() ? (
+						<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
+					) : fleetError ? (
+						<EmptyState
+							icon={hostStates.length > 1 ? "unplug" : failure.icon}
+							title={hostStates.length > 1 ? "No machines connected" : failure.title}
+							message={hostStates.length > 1 ? undefined : failure.hint}
+							action={
+								<View style={styles.errorActions}>
+									<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />
+									{/* Re-scanning is the only fix for a rotated password, and the
+									    fastest one for a moved/renamed host — so it belongs beside
+									    Retry rather than three taps away in Settings. */}
+									<Button title="Scan" icon="qrScanner" variant="primary" onPress={() => router.push("/pair")} />
+								</View>
+							}
+						/>
+					) : workerProjectId !== ALL_WORKER_PROJECTS ? (
+						<EmptyState
+							icon="folder"
+							title={`No workers in ${selectedProjectLabel}`}
+							message="Choose another project from the filter menu."
+						/>
+					) : workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? (
+						<EmptyState
+							icon="monitor"
+							title={`No workers on ${selectedEnvironmentLabel ?? "this environment"}`}
+							message="Choose another environment from the filter menu."
+						/>
+					) : (
+						<EmptyState
+							icon="moon"
+							title="No active workers"
+							message="Spawn a worker to get started."
+							action={<Button title="New agent" icon="plus" onPress={spawnWorker} />}
+						/>
+					)
+				}
 			/>
-			<BoardHeaderItems unread={unreadCount} filter={filterMenu} onAdd={spawnWorker} addLabel="Spawn worker" />
+
+			{unpaired ? (
+				// Settings is where pairing starts; there is nothing yet to search,
+				// filter or spawn.
+				<BoardHeaderItems unread={0} notifications={false} />
+			) : (
+				<>
+					<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />
+					{/* The header's own search: UISearchController under the large title on
+					    iOS, the top app bar's search action on Android. Filtering stays in
+					    place on the board, so the content is not dimmed behind it. */}
+					<Stack.SearchBar
+						placeholder="Search workers"
+						// Under the large title on every iOS version, rather than iOS 26's
+						// toolbar slot, which this tab bar would have to share.
+						placement="stacked"
+						obscureBackground={false}
+						autoCapitalize="none"
+						tintColor={t.highlight}
+						textColor={t.textPrimary}
+						hintTextColor={t.textTertiary}
+						headerIconColor={t.accent}
+						onChangeText={searchChanged}
+						onCancelButtonPress={searchClosed}
+						onClose={searchClosed}
+					/>
+					{/* New task is the tab bar's own round button on iOS and the
+					    floating New button on Android; the header keeps settings and
+					    alerts. */}
+					<BoardHeaderItems unread={unreadCount} filter={filterMenu} />
+				</>
+			)}
 		</View>
 	);
 }
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		screen: { flex: 1, backgroundColor: t.bgBase },
+		// No background of its own: the stack's contentStyle paints the page. A
+		// coloured view that is not a stacking context is mounted empty with its
+		// children hoisted after it, which put it ahead of the list as the page's
+		// first native view, so the large title and the tab bar found no scroll
+		// view to follow and stayed expanded over the rows.
+		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
 		errorActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: space.sm, alignItems: "center" },
 	});

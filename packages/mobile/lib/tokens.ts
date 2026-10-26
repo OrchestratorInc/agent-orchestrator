@@ -2,20 +2,17 @@
  * The app's measurement system. Every size, gap, radius, icon and duration in
  * the product comes from here, so a screen never invents a number.
  *
- * The sizes are Apple's Dynamic Type ramp (iOS 17 HIG) — a phone needs those
- * steps, and they are what `fontScaleCap` is calibrated against. Everything
- * else about the type follows the desktop app, which is the same product:
+ * The type follows T3 Code's mobile app, whose look this app shares:
  *
- *   - **Geist**, the family the renderer uses (`--font-family-base`), and Geist
- *     Mono for code. iOS would otherwise draw SF Pro, and the two products
- *     would not look like each other.
- *   - **Weights of 400, 500 and 600 only.** The renderer's scale stops at
- *     `--font-weight-semibold`; bold was never part of the design, and a bold
- *     screen title on a phone read heavier than the same title on the desktop.
- *   - **Negative tracking**, from the renderer's scale: `-0.025em` for the
- *     largest steps, `-0.015em` for subheads, `-0.01em` for everything at
- *     reading size. SF Pro's optical tracking ran the other way at large sizes,
- *     which is why these used to be positive.
+ *   - **DM Sans** for text and Geist Mono for code. Native chrome the system
+ *     draws itself (navigation titles, tab labels) stays in SF Pro / Roboto.
+ *   - **A compact ramp**: 16/23 reading text, 14/19 secondary copy and a 13pt
+ *     floor for metadata. Each step keeps the name of the Apple text style it
+ *     scales with, which is what `fontScaleCap` is calibrated against.
+ *   - **Weights of 400, 500 and 600 only.** Row titles and labels are medium;
+ *     semibold is for titles and the rare emphasised word.
+ *   - **No tracking at reading sizes.** DM Sans is spaced for text already; only
+ *     the largest titles tighten a little.
  *
  * Spacing is a 4pt grid with a 2pt half-step for dense rows. Radii, icon sizes
  * and motion follow the same idea: a short ladder of named steps chosen for a
@@ -31,7 +28,7 @@ export type TypeToken = {
 };
 
 /**
- * The desktop's family, one file per weight.
+ * The app's family, one file per weight.
  *
  * A weight is a font file here, not a number: with a bundled family iOS draws
  * whichever face the name points at and ignores `fontWeight`, so a style that
@@ -39,9 +36,9 @@ export type TypeToken = {
  * mapping in one place, and the type ramp below uses it.
  */
 export const font = {
-	regular: "Geist_400Regular",
-	medium: "Geist_500Medium",
-	semibold: "Geist_600SemiBold",
+	regular: "DMSans_400Regular",
+	medium: "DMSans_500Medium",
+	semibold: "DMSans_600SemiBold",
 	mono: "GeistMono_400Regular",
 } as const;
 
@@ -49,11 +46,11 @@ export function fontForWeight(weight: TypeToken["fontWeight"]): string {
 	return weight === "600" ? font.semibold : weight === "500" ? font.medium : font.regular;
 }
 
-/** The renderer's tracking scale, in em. */
-export const tracking = { tightXl: -0.025, tightLg: -0.015, tight: -0.01 } as const;
+/** The tracking scale, in em. */
+export const tracking = { tightXl: -0.02, tightLg: -0.01, tight: 0 } as const;
 
 /**
- * Apple's ramp. Use the semantic name, not the number: a screen title is
+ * The ramp. Use the semantic name, not the number: a screen title is
  * `title2`, a row label is `body`, a metadata line is `footnote`.
  *
  *   largeTitle / title1 / title2  — screen and sheet titles
@@ -64,20 +61,20 @@ export const tracking = { tightXl: -0.025, tightLg: -0.015, tight: -0.01 } as co
  *   subheadline                   — secondary copy under a row title
  *   footnote                      — metadata, timestamps, counts
  *   caption1                      — dense labels, tab bar
- *   caption2                      — the floor: badges and uppercase micro-labels
+ *   caption2                      — the floor: badges and micro-labels
  */
 export const type = {
-	largeTitle: { fontFamily: font.semibold, fontSize: 34, lineHeight: 41, fontWeight: "600", letterSpacing: 34 * tracking.tightXl },
-	title1: { fontFamily: font.semibold, fontSize: 28, lineHeight: 34, fontWeight: "600", letterSpacing: 28 * tracking.tightXl },
-	title2: { fontFamily: font.semibold, fontSize: 22, lineHeight: 28, fontWeight: "600", letterSpacing: 22 * tracking.tightLg },
-	title3: { fontFamily: font.semibold, fontSize: 20, lineHeight: 25, fontWeight: "600", letterSpacing: 20 * tracking.tightLg },
-	headline: { fontFamily: font.semibold, fontSize: 17, lineHeight: 22, fontWeight: "600", letterSpacing: 17 * tracking.tight },
-	body: { fontFamily: font.regular, fontSize: 17, lineHeight: 22, fontWeight: "400", letterSpacing: 17 * tracking.tight },
-	callout: { fontFamily: font.regular, fontSize: 16, lineHeight: 21, fontWeight: "400", letterSpacing: 16 * tracking.tight },
-	subheadline: { fontFamily: font.regular, fontSize: 15, lineHeight: 20, fontWeight: "400", letterSpacing: 15 * tracking.tight },
-	footnote: { fontFamily: font.regular, fontSize: 13, lineHeight: 18, fontWeight: "400", letterSpacing: 13 * tracking.tight },
+	largeTitle: { fontFamily: font.semibold, fontSize: 30, lineHeight: 36, fontWeight: "600", letterSpacing: 30 * tracking.tightXl },
+	title1: { fontFamily: font.semibold, fontSize: 26, lineHeight: 32, fontWeight: "600", letterSpacing: 26 * tracking.tightXl },
+	title2: { fontFamily: font.semibold, fontSize: 21, lineHeight: 28, fontWeight: "600", letterSpacing: 21 * tracking.tightLg },
+	title3: { fontFamily: font.semibold, fontSize: 18, lineHeight: 23, fontWeight: "600", letterSpacing: 18 * tracking.tightLg },
+	headline: { fontFamily: font.medium, fontSize: 16, lineHeight: 23, fontWeight: "500", letterSpacing: 16 * tracking.tight },
+	body: { fontFamily: font.regular, fontSize: 16, lineHeight: 23, fontWeight: "400", letterSpacing: 16 * tracking.tight },
+	callout: { fontFamily: font.regular, fontSize: 15, lineHeight: 21, fontWeight: "400", letterSpacing: 15 * tracking.tight },
+	subheadline: { fontFamily: font.regular, fontSize: 14, lineHeight: 19, fontWeight: "400", letterSpacing: 14 * tracking.tight },
+	footnote: { fontFamily: font.regular, fontSize: 13, lineHeight: 17, fontWeight: "400", letterSpacing: 13 * tracking.tight },
 	caption1: { fontFamily: font.medium, fontSize: 12, lineHeight: 16, fontWeight: "500", letterSpacing: 12 * tracking.tight },
-	caption2: { fontFamily: font.medium, fontSize: 11, lineHeight: 13, fontWeight: "500", letterSpacing: 0 },
+	caption2: { fontFamily: font.medium, fontSize: 11, lineHeight: 14, fontWeight: "500", letterSpacing: 0 },
 } as const satisfies Record<string, TypeToken>;
 
 /**

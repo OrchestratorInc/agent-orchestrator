@@ -98,5 +98,5 @@ const makeStyles = (t: Theme) =>
 		},
 		label: { ...type.subheadline, color: t.textSecondary, flexShrink: 0 },
 		value: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xs },
-		valueText: { ...type.subheadline, fontFamily: "Geist_600SemiBold", fontWeight: "600", color: t.textTertiary, flexShrink: 1 },
+		valueText: { ...type.subheadline, fontFamily: "DMSans_600SemiBold", fontWeight: "600", color: t.textTertiary, flexShrink: 1 },
 	});

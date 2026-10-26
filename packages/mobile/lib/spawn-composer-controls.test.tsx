@@ -44,7 +44,8 @@ describe("SpawnComposerControls fallback", () => {
 		const props = {
 			hosts: [{ id: "host-a", label: "Alpha" }], hostId: "host-a", onSelectHost: vi.fn(),
 			projects: [], projectId: null, onSelectProject: vi.fn(),
-			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], modelSelection: "__auto__", modelLabel: "Automatic", onSelectModel: vi.fn(),
+			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], agentModels: {}, modelSelection: "__auto__", modelLabel: "Default model", onSelectModel: vi.fn(), onSelectAgentModel: vi.fn(), usesDefaultModel: true, onBrowseModels: vi.fn(), promptEmpty: false,
+			approvalModes: [{ id: "auto", label: "Auto" }], approvalMode: "auto", onSelectApprovalMode: vi.fn(),
 			onChoosePhoto, onChooseFile, voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: false,
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];
 		await act(async () => { renderer = create(<SpawnComposerControls {...props} />); });

@@ -41,7 +41,7 @@ export function EnvironmentPicker({ environments, selectedEnvironmentId, onSelec
 				<DropdownMenu.Trigger>
 					<OutlinedButton onClick={() => setOpen(true)} colors={{ contentColor: t.accent }} modifiers={[testID("environment-picker")]}>
 						<Icon source={materialDrawable("devices")} size={BUTTON_ICON_SIZE} tint={t.accent} modifiers={[padding(0, 0, space.sm, 0)]} />
-						<Text style={{ typography: "labelLarge", fontFamily: "Geist_500Medium" }}>Switch environment</Text>
+						<Text style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>Switch environment</Text>
 					</OutlinedButton>
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Items>
@@ -58,7 +58,7 @@ export function EnvironmentPicker({ environments, selectedEnvironmentId, onSelec
 									<Icon source={machineMenuImage(option.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: option.id, name: option.label, appearance: option.appearance }).symbol)} size={MENU_ICON_SIZE} />
 								</DropdownMenuItem.LeadingIcon>
 								<DropdownMenuItem.Text>
-									<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: "Geist_400Regular" }}>
+									<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: "DMSans_400Regular" }}>
 										{option.label}
 									</Text>
 								</DropdownMenuItem.Text>

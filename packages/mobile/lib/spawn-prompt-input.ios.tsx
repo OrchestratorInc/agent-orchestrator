@@ -32,11 +32,11 @@ const styles = StyleSheet.create({
 	// therefore a real editor hit target, and long prompts scroll within it.
 	input: {
 		width: "100%",
-		fontFamily: "Geist_400Regular",
+		fontFamily: "DMSans_400Regular",
 		fontSize: type.callout.fontSize,
 		lineHeight: type.callout.lineHeight,
 		paddingHorizontal: space.lg,
-		paddingTop: space.huge,
+		paddingTop: space.sm,
 		paddingBottom: space.md,
 	},
 });

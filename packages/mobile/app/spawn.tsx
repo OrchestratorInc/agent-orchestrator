@@ -15,13 +15,13 @@ import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-cont
 import { agentErrorCopy } from "../lib/agentError";
 import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
-import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
+import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type AgentModelInfo, type ProjectDetail, type SessionMode } from "../lib/api";
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
@@ -34,6 +34,9 @@ import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
+import { useHeaderOverlap } from "../lib/useHeaderOverlap";
+import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
+import { modelSheetRoute } from "../lib/sheetResult";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
@@ -46,6 +49,7 @@ function SpawnModalContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const navigation = useNavigation();
+	const headerOverlap = useHeaderOverlap();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
 	const { hostStates, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
 	const connectedHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -85,6 +89,10 @@ function SpawnModalContent() {
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
+	// Every agent's own models, so the agent menu can offer each one's list
+	// before it is picked. The picked agent's list is the project-aware catalog.
+	const [agentModelLists, setAgentModelLists] = useState<Record<string, AgentModelInfo[]>>({});
+	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
@@ -158,10 +166,23 @@ function SpawnModalContent() {
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
 	const displayedModel = modelTouched ? model : resolvedModel;
-	// "Automatic" when the project pins nothing, because that is the truth: the
-	// provider picks, and naming a model here promised one the session never ran.
-	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
+	// The project-aware catalog once it lists something. An empty one (still
+	// discovering, or a project that names none) must not hide the machine's
+	// list, which is what left the menu offering only the default.
+	const currentModels = modelCatalog?.models.length ? modelCatalog.models : agentModelLists[harness] ?? [];
+	// "Default model" when the project pins nothing, because that is the truth:
+	// the provider picks, and naming a model here promised one the session never
+	// ran. Not "Automatic", which reads as an approval mode.
+	const displayedModelLabel = displayedModel ? currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Default model";
+	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
+	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";
+	// Each agent's menu list, built once per change rather than per keystroke:
+	// some catalogs run to thousands of models.
+	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
+		agent.id,
+		menuModels(agent.id === harness ? currentModels : agentModelLists[agent.id] ?? [], agent.id === harness ? modelSelection : "__auto__"),
+	])), [agentModelLists, agents, currentModels, harness, modelSelection]);
 	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
 		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]
 		: [];
@@ -209,14 +230,37 @@ function SpawnModalContent() {
 		setHarness((current) => current === nextHarness ? current : nextHarness);
 	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
+	// Each agent's machine-wide models, for the agent menu's lists. Failures
+	// leave that agent's list empty; the picked agent's own load reports errors.
+	const agentIds = agents.filter((agent) => agent.selectable).map((agent) => agent.id).join("|");
 	useEffect(() => {
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!config || !requestedHostId || !agentIds) { setAgentModelLists({}); return; }
+		let cancelled = false;
+		const generation = catalogGeneration.current;
+		const polling = new AbortController();
+		void Promise.all(agentIds.split("|").map(async (id) => {
+			try {
+				return [id, (await getAgentModels(config, id, undefined, polling.signal)).models ?? []] as const;
+			} catch {
+				return [id, []] as const;
+			}
+		})).then((entries) => {
+			if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setAgentModelLists(Object.fromEntries(entries));
+		});
+		return () => { cancelled = true; polling.abort(); };
+	}, [agentIds, config, reloadKey, selectedHostId]);
+
+	useEffect(() => {
+		const requestedHostId = selectedHostId;
+		// The machine's own catalog loads before a project is chosen, so the
+		// model menu is never just the default; choosing a project swaps in its.
+		if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
 		const polling = new AbortController();
-		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
+		getAgentModels(config, harness, !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
 			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
@@ -249,6 +293,8 @@ function SpawnModalContent() {
 		setProjectDetailLoadedFor(null);
 		setModelLoading(false);
 		resetModelSource();
+		setAgentModelLists({});
+		setApprovalChoice(undefined);
 		setError(null);
 		setOfferTUI(false);
 		requestRef.current = undefined;
@@ -288,6 +334,21 @@ function SpawnModalContent() {
 		}
 		setModel(nextModel);
 		setModelTouched(true);
+	};
+	// The agent menu picks an agent and one of its models together.
+	const selectAgentModel = (nextHarness: string, nextModel: string) => {
+		selectAgent(nextHarness);
+		selectModel(nextModel);
+	};
+	// An agent's whole catalog, searchable, for one too long for its menu.
+	const browseModels = (agentId: string) => {
+		router.push(modelSheetRoute({
+			agentId,
+			projectId: projectId && projectId !== STANDALONE_PROJECT ? projectId : "",
+			selected: agentId === harness && modelTouched ? model : "",
+			// The sheet's default row answers "".
+			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
+		}));
 	};
 	const voiceFeedback = listening ? (
 		<View style={styles.voice}>
@@ -372,6 +433,9 @@ function SpawnModalContent() {
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
 				model: modelOverride(displayedModel, modelTouched),
+				// Only a mode picked here overrides the project's; an untouched
+				// picker names the project's mode, which the daemon applies anyway.
+				approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,
 				mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
@@ -433,6 +497,9 @@ function SpawnModalContent() {
 	const content = (
 		<View style={[
 			styles.content,
+			// The sheet's header is the system's transparent bar, laid over the top
+			// of the page, so the prompt starts below it rather than under it.
+			Platform.OS === "ios" && { paddingTop: headerOverlap },
 			Platform.OS === "android" && styles.androidContent,
 		]}>
 				<View
@@ -486,13 +553,21 @@ function SpawnModalContent() {
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={selectAgent}
-					models={modelCatalog?.models.map((item) => ({ id: item.id, label: item.label })) ?? []}
+					models={currentModels.map((item) => ({ id: item.id, label: item.label }))}
+					agentModels={agentMenuModels}
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
+					onSelectAgentModel={selectAgentModel}
+					usesDefaultModel={!displayedModel}
+					onBrowseModels={browseModels}
+					approvalModes={approvalOptions(harness)}
+					approvalMode={approvalMode}
+					onSelectApprovalMode={(next) => setApprovalChoice(next as ApprovalMode)}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut, onToggleLatched: voice.toggleLatched }}
+					promptEmpty={!prompt.trim()}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
 					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
@@ -539,7 +614,8 @@ const PROMPT_MIN_HEIGHT = 112;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		screen: { flex: 1, backgroundColor: t.bgBase },
+		// The sheet's raised surface, a step above the board it covers.
+		screen: { flex: 1, backgroundColor: t.bgSurface },
 		content: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm, gap: space.sm },
 		androidModalRoot: { flex: 1, backgroundColor: "transparent" },
 		androidSheet: {
@@ -550,9 +626,9 @@ const makeStyles = (t: Theme) =>
 		androidContent: { flex: 0, paddingTop: space.md, paddingBottom: space.none },
 		messages: { gap: space.xs },
 		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
-		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		voiceText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
 		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
-		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

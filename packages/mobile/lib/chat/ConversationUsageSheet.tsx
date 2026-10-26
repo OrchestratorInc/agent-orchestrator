@@ -83,9 +83,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rows: { marginTop: space.lg },
 	row: { gap: space.xs, paddingVertical: space.md, borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
 	heading: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: space.md },
-	label: { flexShrink: 1, fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "500" },
-	value: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontVariant: ["tabular-nums"] },
-	detail: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	label: { flexShrink: 1, fontFamily: "DMSans_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "500" },
+	value: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontVariant: ["tabular-nums"] },
+	detail: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	track: { height: space.xxs, borderRadius: radius.xs, backgroundColor: t.bgSubtle, overflow: "hidden" },
 	fill: { height: space.xxs, borderRadius: radius.xs },
 });

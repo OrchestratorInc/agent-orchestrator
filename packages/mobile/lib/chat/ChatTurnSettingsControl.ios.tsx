@@ -4,11 +4,12 @@ import { accessibilityLabel, buttonStyle, contentShape, disabled as disabledModi
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
+import { HarnessImage } from "../spawn-composer-controls.ios";
 import type { IOSSymbol } from "../symbols";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { space, touchTarget } from "../tokens";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
-import { turnSettingsRows, turnSettingsSummary, turnSettingTopic, turnSettingWrite, type TurnSettingRow, type TurnSettingTopic } from "./turnSettingsModel";
+import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow, type TurnSettingTopic } from "./turnSettingsModel";
 
 // SwiftUI's flexible frame cannot be handed infinity across the bridge; any
 // width past the widest screen does the same job and lets the label fill its row.
@@ -25,7 +26,12 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
-	const summary = turnSettingsSummary(snapshot, models, options);
+	// The approval mode is its own control, as on the spawn sheet, so it is
+	// never read as part of the model.
+	const approvalRow = rows.find((row) => turnSettingTopic(row) === "permissions");
+	const modelRows = rows.filter((row) => row !== approvalRow);
+	const parts = turnSettingsParts(snapshot, models, options);
+	const summary = [parts.model, parts.effort].filter(Boolean).join(" · ");
 	// A SwiftUI picker keeps showing the choice it was given when the save fails
 	// and the setting stays put. Rebuilding the menu then shows the setting as
 	// saved; the menu has long closed, so nothing visibly moves.
@@ -38,9 +44,12 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 		void saved.then(() => {}, () => setGeneration((value) => value + 1));
 	};
 
-	// The whole row is the menu's own label, so every point of it opens the menu.
+	// The model's whole stretch of the row is its menu's own label, so every
+	// point of it opens the menu.
 	const label = (
 		<HStack spacing={space.xs} modifiers={[frame({ maxWidth: FILL, minHeight: touchTarget, alignment: "leading" }), contentShape(shapes.rectangle())]}>
+			{/* The harness's mark beside its model, as the spawn sheet names it. */}
+			{snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null}
 			<Text modifiers={[font({ textStyle: "footnote", weight: "semibold" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")]}>{summary || "Turn settings"}</Text>
 			<Image systemName="chevron.up.chevron.down" color={t.textSecondary} modifiers={[font({ textStyle: "footnote", weight: "semibold" }), imageScale("small")]} />
 		</HStack>
@@ -51,18 +60,52 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 		accessibilityLabel(summary ? `Turn settings, ${summary}` : "Turn settings"),
 		disabledModifier(Boolean(disabled)),
 	];
+	const approvalSelection = approvalRow?.kind === "boolean" ? undefined : approvalRow?.choices.find((choice) => choice.selected);
 
 	return (
 		<Host style={styles.host} ignoreSafeArea="all" colorScheme={scheme}>
-			<Menu key={generation} label={label} modifiers={modifiers}>
-				<Section title="Turn settings">
-					{rows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => choose(row, choice)} />)}
-				</Section>
-				{/* The sheet adds what a menu cannot: each choice's description and a refresh. */}
-				<Section>
-					<Button label="All turn settings" systemImage={topicSymbols.setting} onPress={onOpenFallback} />
-				</Section>
-			</Menu>
+			<HStack spacing={space.none}>
+				<Menu key={generation} label={label} modifiers={modifiers}>
+					<Section title="Turn settings">
+						{modelRows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => choose(row, choice)} />)}
+					</Section>
+					{/* The sheet adds what a menu cannot: each choice's description and a refresh. */}
+					<Section>
+						<Button label="All turn settings" systemImage={topicSymbols.setting} onPress={onOpenFallback} />
+					</Section>
+				</Menu>
+				{approvalRow && approvalRow.kind !== "boolean" ? (
+					<Menu
+						key={`approval-${generation}`}
+						label={
+							<HStack spacing={space.xxs} modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
+								{/* One native asset stays crisp at every display scale, where a
+								    ring and a check drawn as two symbols would not line up. */}
+								<Image assetName="CircleDashedCheck" modifiers={[imageScale("small")]} />
+								<Text modifiers={[font({ textStyle: "footnote", weight: "semibold" }), foregroundStyle(t.textSecondary), lineLimit(1)]}>{parts.approval || approvalRow.value}</Text>
+								<Image systemName="chevron.up.chevron.down" color={t.textSecondary} modifiers={[font({ textStyle: "footnote", weight: "semibold" }), imageScale("small")]} />
+							</HStack>
+						}
+						modifiers={[
+							buttonStyle("plain"),
+							padding({ horizontal: space.sm }),
+							accessibilityLabel(`${approvalRow.label}, ${approvalRow.value}`),
+							disabledModifier(Boolean(disabled)),
+						]}
+					>
+						<Section title={approvalRow.label}>
+							{approvalRow.choices.map((choice) => (
+								<Toggle
+									key={choice.value}
+									label={choice.label}
+									isOn={choice.value === approvalSelection?.value}
+									onIsOnChange={(on) => { if (on) choose(approvalRow, choice.value); }}
+								/>
+							))}
+						</Section>
+					</Menu>
+				) : null}
+			</HStack>
 		</Host>
 	);
 }
@@ -82,24 +125,11 @@ function SettingPicker({ row, onChoose }: { row: TurnSettingRow; onChoose(choice
 	const onSelectionChange = (value: string | null) => {
 		if (value !== null) onChoose(value);
 	};
-	if (topic === "permissions") {
-		return (
-			<Picker label={<ApprovalLabel title={row.label} />} selection={selection} onSelectionChange={onSelectionChange} modifiers={[pickerStyle("menu")]}>
-				{choices}
-			</Picker>
-		);
-	}
 	return (
-		<Picker label={row.label} systemImage={topic ? topicSymbols[topic] : undefined} selection={selection} onSelectionChange={onSelectionChange} modifiers={[pickerStyle("menu")]}>
+		<Picker label={row.label} systemImage={topic && topic !== "permissions" ? topicSymbols[topic] : undefined} selection={selection} onSelectionChange={onSelectionChange} modifiers={[pickerStyle("menu")]}>
 			{choices}
 		</Picker>
 	);
-}
-
-function ApprovalLabel({ title }: { title: string }) {
-	// A single native asset stays crisp at every display scale; SwiftUI menu rows
-	// discard the second image when the ring and check are separate symbols.
-	return <HStack spacing={space.md}><Image assetName="CircleDashedCheck" /><Text>{title}</Text></HStack>;
 }
 
 const styles = StyleSheet.create({

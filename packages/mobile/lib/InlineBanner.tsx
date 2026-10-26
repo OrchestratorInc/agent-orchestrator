@@ -105,9 +105,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// One title line tall, so the glyph sits beside the headline however many lines follow it.
 	glyph: { alignSelf: "flex-start", height: type.footnote.lineHeight, marginTop: space.sm, justifyContent: "center" },
 	copy: { flex: 1, minWidth: 0, paddingVertical: space.sm },
-	title: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
-	body: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	title: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+	body: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	action: { minWidth: touchTarget, minHeight: touchTarget, alignItems: "center", justifyContent: "center", paddingHorizontal: space.sm },
-	actionText: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+	actionText: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 	close: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 });

@@ -113,5 +113,5 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 		borderColor: t.borderDefault,
 	},
 	chip: { maxWidth: CHIP_MAX_WIDTH, minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },
-	chipName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	chipName: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });

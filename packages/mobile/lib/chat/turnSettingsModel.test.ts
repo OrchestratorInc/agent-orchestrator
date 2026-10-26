@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, isExecutionModeOption, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary, turnSettingTopic, turnSettingWrite } from "./turnSettingsModel";
+import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, isExecutionModeOption, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary, turnSettingTopic, turnSettingWrite, readableModelId } from "./turnSettingsModel";
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -432,5 +432,20 @@ describe("effort slider", () => {
 		expect(effortSliderWrite(levels, "default", 0)).toBe("low");
 		expect(effortSliderWrite(levels, "low", 2)).toBe("high");
 		expect(effortSliderWrite(levels, "high", effortSliderIndex(levels, "high"))).toBeUndefined();
+	});
+});
+
+describe("readableModelId", () => {
+	// A stopped session reports no catalog, so the control named the model by
+	// its raw id ("claude-opus-5-5"); a Claude id reads as the model's name.
+	it("names a Claude model id the way its catalog would", () => {
+		expect(readableModelId("claude-opus-5-5")).toBe("Opus 5.5");
+		expect(readableModelId("claude-sonnet-4-5-20250929")).toBe("Sonnet 4.5");
+		expect(readableModelId("claude-haiku-5")).toBe("Haiku 5");
+	});
+
+	it("leaves any other id as sent", () => {
+		expect(readableModelId("gpt-5.6-sol")).toBe("gpt-5.6-sol");
+		expect(readableModelId("claude-3-5-sonnet")).toBe("claude-3-5-sonnet");
 	});
 });

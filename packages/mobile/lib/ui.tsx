@@ -12,6 +12,7 @@ import {
 	type ViewStyle,
 } from "react-native";
 import { AppSymbol } from "./AppSymbol";
+import { rowDividerWidth } from "./divider";
 import { resolveChromeIcon, type ChromeIcon } from "./chromeIcon";
 import { haptics } from "./haptics";
 import { BREATHE_MS, shouldBreathe } from "./motion";
@@ -179,12 +180,9 @@ export function MascotLamp({ status, size = 40 }: { status?: ConnStatus; size?: 
 }
 
 /**
- * A board group's heading. With `onToggle` it folds its section away — same
- * typography and rule as before, plus the chevron that says so.
- *
- * The chevron sits beside the label rather than at the far edge so the row still
- * reads as one heading with a rule running out of it, which is what the board
- * looked like before sections could be folded.
+ * A board group's heading: a small medium label with a hairline running out of
+ * it to the edge, T3 Code's list divider. With `onToggle` it folds its section
+ * away, and a small chevron at the end of the rule says so.
  */
 export function ListSectionHeader({
 	label,
@@ -205,13 +203,14 @@ export function ListSectionHeader({
 			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={s.listSectionLabel}>
 				{label}
 			</Text>
-			{onToggle ? (
-				<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.sm} color={t.textTertiary} />
-			) : null}
 			{count !== undefined ? (
 				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={s.listSectionCount}>
 					{count}
 				</Text>
+			) : null}
+			<View style={s.listSectionRule} />
+			{onToggle ? (
+				<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.xs} color={t.textTertiary} />
 			) : null}
 		</>
 	);
@@ -554,12 +553,13 @@ const makeStyles = (t: Theme) =>
 			alignItems: "center",
 			gap: space.sm,
 			paddingHorizontal: space.lg,
-			paddingTop: space.lg,
-			paddingBottom: space.xxs,
+			paddingTop: space.xl,
+			paddingBottom: space.xs,
 		},
-		listSectionLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		listSectionRule: { flex: 1, height: rowDividerWidth, backgroundColor: t.borderDefault },
+		listSectionLabel: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		// Mono and tabular so a count changing from 9 to 10 does not shift the rule.
-		listSectionCount: { color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600", fontFamily: t.fontMono },
+		listSectionCount: { color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
 
 		// Enlarged from 30x26: the wand-tip lamp replaced the "live" pill, so the tip
 		// has to be big enough for the dot to actually read as a status light.
@@ -597,7 +597,7 @@ const makeStyles = (t: Theme) =>
 		btnGhost: { paddingHorizontal: space.md },
 		btnInactive: { opacity: stateOpacity.disabled },
 		btnInner: { flexDirection: "row", alignItems: "center", gap: space.xs },
-		btnText: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", textAlign: "center" },
+		btnText: { fontFamily: "DMSans_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600", textAlign: "center" },
 
 		step: {
 			flexDirection: "row",
@@ -619,9 +619,9 @@ const makeStyles = (t: Theme) =>
 			alignItems: "center",
 			justifyContent: "center",
 		},
-		stepNum: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600", fontVariant: ["tabular-nums"] },
-		stepTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
-		stepHint: { fontFamily: "Geist_400Regular",
+		stepNum: { fontFamily: "DMSans_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600", fontVariant: ["tabular-nums"] },
+		stepTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
+		stepHint: { fontFamily: "DMSans_400Regular",
 			color: t.textTertiary,
 			fontSize: type.footnote.fontSize,
 			lineHeight: type.footnote.lineHeight,
@@ -642,13 +642,13 @@ const makeStyles = (t: Theme) =>
 		// sheet's list can run edge to edge while its rows keep the same inset.
 		sheetHeader: { paddingBottom: space.hair },
 		sheetTitleRow: { flexDirection: "row", alignItems: "center", gap: space.md },
-		sheetTitle: { fontFamily: "Geist_600SemiBold",
+		sheetTitle: { fontFamily: "DMSans_600SemiBold",
 			color: t.textPrimary,
 			fontSize: type.title3.fontSize,
 			fontWeight: "600",
 			letterSpacing: -0.3,
 		},
-		sheetSubtitle: { fontFamily: "Geist_400Regular",
+		sheetSubtitle: { fontFamily: "DMSans_400Regular",
 			color: t.textSecondary,
 			fontSize: type.footnote.fontSize,
 			lineHeight: type.footnote.lineHeight,

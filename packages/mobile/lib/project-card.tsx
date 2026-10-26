@@ -33,7 +33,7 @@ const PILL_HIT_SLOP = { top: (touchTarget - PILL_HEIGHT) / 2, bottom: (touchTarg
  * A flat row with a divider, like a worker row, rather than a card: the two
  * lists read as one app. The body opens the project page; a trailing slot
  * carries a compact pill that opens, starts or resumes the orchestrator. The
- * pill is the only solid control on the row, so it outranks the counts without
+ * pill is the only filled control on the row, so it outranks the counts without
  * dominating the name.
  */
 export function ProjectCard({
@@ -62,16 +62,9 @@ export function ProjectCard({
 			onPress={() => onOpenProject(row)}
 			trailing={<OrchestratorPill row={row} busy={busy} onPress={onOrchestrator} />}
 		>
-			<View style={styles.titleRow}>
-				<Text style={styles.project} numberOfLines={1}>
-					{row.project.name}
-				</Text>
-				<MachineIdentity
-					name={row.project.hostName}
-					appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
-					style={styles.machineIdentity}
-				/>
-			</View>
+			<Text style={styles.project} numberOfLines={1}>
+				{row.project.name}
+			</Text>
 
 			<View style={styles.summaryRow}>
 				<Dot color={status.color} size={6} breathing={status.breathing} />
@@ -93,9 +86,17 @@ export function ProjectCard({
 				</View>
 			) : null}
 
-			<Text style={styles.footerLabel} numberOfLines={1}>
-				{summary.workers}
-			</Text>
+			{/* The worker row's metadata line: the count, and the machine at its end. */}
+			<View style={styles.footerRow}>
+				<Text style={styles.footerLabel} numberOfLines={1}>
+					{summary.workers}
+				</Text>
+				<MachineIdentity
+					name={row.project.hostName}
+					appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
+					style={styles.machineIdentity}
+				/>
+			</View>
 		</TrailingActionRow>
 	);
 }
@@ -132,23 +133,26 @@ function TrailingActionRow({
 	const feedback = usePressFeedback("row");
 	const [pressed, setPressed] = useState(false);
 	return (
-		<View style={[styles.trailingRow, style, pressed && feedback.pressed]}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={accessibilityLabel}
-				accessibilityHint={accessibilityHint}
-				accessibilityState={disabled ? { disabled } : undefined}
-				disabled={disabled}
-				android_ripple={feedback.android_ripple}
-				onPress={onPress}
-				// Only iOS draws a pressed style; Android's ripple needs no re-render.
-				onPressIn={feedback.pressed ? () => setPressed(true) : undefined}
-				onPressOut={feedback.pressed ? () => setPressed(false) : undefined}
-				style={[styles.trailingBody, bodyStyle]}
-			>
-				{children}
-			</Pressable>
-			<View style={styles.trailingSlot}>{trailing}</View>
+		<View style={[style, pressed && feedback.pressed]}>
+			<View style={styles.trailingRow}>
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel={accessibilityLabel}
+					accessibilityHint={accessibilityHint}
+					accessibilityState={disabled ? { disabled } : undefined}
+					disabled={disabled}
+					android_ripple={feedback.android_ripple}
+					onPress={onPress}
+					// Only iOS draws a pressed style; Android's ripple needs no re-render.
+					onPressIn={feedback.pressed ? () => setPressed(true) : undefined}
+					onPressOut={feedback.pressed ? () => setPressed(false) : undefined}
+					style={[styles.trailingBody, bodyStyle]}
+				>
+					{children}
+				</Pressable>
+				<View style={styles.trailingSlot}>{trailing}</View>
+			</View>
+			<View style={styles.divider} />
 		</View>
 	);
 }
@@ -169,11 +173,12 @@ function OrchestratorPill({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const copy = orchestratorButtonCopy(row, busy);
-	// Solid when it opens something live; outlined when it would start one, so a
-	// stopped orchestrator does not look ready.
+	// Filled when it opens something live; outlined when it would start one, so a
+	// stopped orchestrator does not look ready. Tonal rather than solid, as T3
+	// Code draws a row's secondary action: the row's name stays the loudest thing.
 	const solid = copy.running;
-	const ink = solid ? t.bgBase : t.textPrimary;
-	const feedback = usePressFeedback("button", { tone: solid ? "onAccent" : "neutral" });
+	const ink = solid ? t.textPrimary : t.textSecondary;
+	const feedback = usePressFeedback("button", { tone: "neutral" });
 	return (
 		<Pressable
 			accessibilityRole="button"
@@ -283,43 +288,45 @@ export function ProjectPageHeader({
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		// A flat row like a worker row: no card, just the divider.
-		row: { borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
-		body: { paddingLeft: space.lg, paddingVertical: space.md, gap: space.xxs },
+		// A flat row like a worker row: no card, just the inset divider.
+		row: { backgroundColor: t.bgBase },
+		body: { paddingLeft: space.lg, paddingVertical: space.sm + space.hair, gap: space.hair },
 		trailingRow: { flexDirection: "row", alignItems: "stretch" },
 		trailingBody: { flex: 1, minWidth: 0, justifyContent: "center" },
 		// Centred on the row whatever its height, and never narrower than its pill.
 		trailingSlot: { flexShrink: 0, justifyContent: "center", paddingLeft: space.md, paddingRight: space.lg },
+		// Inset to the text, as a worker row's is.
+		divider: { marginLeft: space.lg, height: rowDividerWidth, backgroundColor: t.borderDefault },
 
-		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
-		project: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
-		machineIdentity: { maxWidth: 120 },
+		project: { fontFamily: type.headline.fontFamily, color: t.textPrimary, fontSize: type.headline.fontSize, lineHeight: type.headline.lineHeight, fontWeight: type.headline.fontWeight },
+		machineIdentity: { maxWidth: "55%", marginLeft: "auto" },
 		projectMachineIdentity: { maxWidth: 132, flexShrink: 1 },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },
-		summaryStrong: { fontFamily: "Geist_600SemiBold", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		summaryStrong: { fontFamily: "DMSans_600SemiBold", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		statusLabel: { marginLeft: space.xs },
-		summary: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		summary: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
 		blockerRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },
-		blocker: { fontFamily: "Geist_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		blockerWorker: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		blocker: { fontFamily: "DMSans_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		blockerWorker: { fontFamily: "DMSans_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 
-		footerLabel: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		footerRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minWidth: 0 },
+		footerLabel: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		// A capsule, as both platforms draw a button; `overflow` keeps the Android
 		// ripple inside it.
 		pill: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: PILL_HEIGHT, paddingHorizontal: space.md, paddingVertical: space.xxs, borderRadius: radius.pill, overflow: "hidden" },
-		pillSolid: { backgroundColor: t.textPrimary },
-		pillOutline: { borderWidth: 1, borderColor: t.borderStrong },
-		pillLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		pillSolid: { backgroundColor: t.bgElevated },
+		pillOutline: { borderWidth: 1, borderColor: t.borderDefault },
+		pillLabel: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 
 		stats: { flexDirection: "row", marginHorizontal: space.lg, marginTop: space.xxs, borderTopWidth: rowDividerWidth, borderBottomWidth: rowDividerWidth, borderColor: t.borderSubtle },
 		stat: { flex: 1, alignItems: "center", paddingVertical: space.sm, gap: space.none },
 		statValue: { color: t.textPrimary, fontSize: type.body.fontSize, lineHeight: type.body.lineHeight, fontWeight: "600", fontFamily: t.fontMono, fontVariant: ["tabular-nums"] },
-		statLabel: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		orchestratorRow: { minHeight: 76, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
+		statLabel: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		orchestratorRow: { minHeight: 76 },
 		orchestratorBody: { paddingLeft: space.lg, paddingVertical: space.sm, gap: space.hair },
 		orchestratorEyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: type.footnote.lineHeight },
-		orchestratorEyebrowText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-		orchestratorTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+		orchestratorEyebrowText: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		orchestratorTitle: { fontFamily: type.headline.fontFamily, color: t.textPrimary, fontSize: type.headline.fontSize, lineHeight: type.headline.lineHeight, fontWeight: type.headline.fontWeight },
 	});

@@ -49,7 +49,7 @@ describe("the iOS settings form", () => {
 		expect(ios).toContain('import { FieldGroup, Host, ListItem } from "@expo/ui";');
 		expect(ios).toContain("<FieldGroup.Section");
 		// Geist by its PostScript name at a ramp step, scaled by that step's text style.
-		expect(ios).toContain('geistFont("body")');
+		expect(ios).toContain('appFont("body")');
 		const fonts = ios.match(/font\(\{[^}]*\}\)/g) ?? [];
 		for (const call of fonts) {
 			// Text scales with its text style, never at a bare point size.

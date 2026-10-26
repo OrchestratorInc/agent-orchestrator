@@ -2,7 +2,7 @@ import { Host } from "@expo/ui";
 import { Button, HStack, Image, Text } from "@expo/ui/swift-ui";
 import { accessibilityLabel, buttonBorderShape, buttonStyle, controlSize, font, foregroundStyle, tint } from "@expo/ui/swift-ui/modifiers";
 import { Platform, StyleSheet } from "react-native";
-import { geistFont } from "../swiftUIFont";
+import { appFont } from "../swiftUIFont";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { space } from "../tokens";
 import { jumpToLatestColors } from "./chatChrome";
@@ -39,7 +39,7 @@ export function JumpToLatest({ onPress }: JumpToLatestProps) {
 			>
 				<HStack spacing={space.xs}>
 					<Image systemName="arrow.down" color={colors.foregroundColor} modifiers={[font({ textStyle: "subheadline", weight: "semibold" })]} />
-					<Text modifiers={[geistFont("subheadline", { weight: "600" }), foregroundStyle(colors.foregroundColor)]}>Latest</Text>
+					<Text modifiers={[appFont("subheadline", { weight: "600" }), foregroundStyle(colors.foregroundColor)]}>Latest</Text>
 				</HStack>
 			</Button>
 		</Host>

@@ -188,7 +188,20 @@ export function providerChoiceLabel(option: ChatConfigOption): string {
  * the setting itself is sent unchanged.
  */
 export function nativeModelLabel(model: ChatModel | undefined, setting: string | undefined): string {
-	return model?.displayName ?? sentValue(setting) ?? NOT_REPORTED;
+	const sent = sentValue(setting);
+	return model?.displayName ?? (sent ? readableModelId(sent) : undefined) ?? NOT_REPORTED;
+}
+
+/**
+ * A Claude model id as its name, for when the catalog that names it is not
+ * there (a stopped session reports none): "claude-opus-5-5" reads "Opus 5.5",
+ * and a dated snapshot drops its date. Any other id is shown as sent.
+ */
+export function readableModelId(id: string): string {
+	const claude = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(id);
+	if (!claude) return id;
+	const [, family, major, minor] = claude;
+	return `${capitalize(family)} ${minor ? `${major}.${minor}` : major}`;
 }
 
 /** A value as sent, or undefined when there is none or it is "default", which names nothing. */
@@ -325,17 +338,25 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 }
 
 export function turnSettingsSummary(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): string {
+	const parts = turnSettingsParts(snapshot, models, options);
+	return [parts.model, parts.effort, parts.approval].filter(Boolean).join(" · ");
+}
+
+/**
+ * The summary's parts, for a control that shows the approval mode apart from
+ * the model. Effort is the setting people change most after the model, and it
+ * was the one this line never mentioned. A value that names nothing is "":
+ * saying it spends the row's width on nothing (#5834).
+ */
+export function turnSettingsParts(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): { model: string; effort: string; approval: string } {
 	const rows = turnSettingsRows(snapshot, models, options);
 	const effort = rows.find(isEffortRow);
 	const permissions = rows.find(isPermissionRow);
-	// Effort is the setting people change most after the model, and it was the
-	// one this line never mentioned. A value that names nothing is dropped:
-	// saying it spends the row's width on nothing (#5834).
-	return [
-		modelLabel(rows, snapshot),
-		named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
-		named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
-	].filter(Boolean).join(" · ");
+	return {
+		model: modelLabel(rows, snapshot),
+		effort: named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
+		approval: named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
+	};
 }
 
 /**
@@ -348,7 +369,7 @@ export function turnSettingsModelLabel(snapshot: ConversationSnapshot, models: C
 
 function modelLabel(rows: TurnSettingRow[], snapshot: ConversationSnapshot): string {
 	const model = rows.find(isModelRow);
-	return named(model ? model.value : snapshot.settings.model ?? "");
+	return named(model ? model.value : readableModelId(snapshot.settings.model ?? ""));
 }
 
 /** The value, or "" when it names nothing: unreported, a bare "default", or "Use agent …". */

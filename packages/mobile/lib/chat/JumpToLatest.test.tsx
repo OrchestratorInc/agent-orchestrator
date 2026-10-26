@@ -91,10 +91,10 @@ describe("JumpToLatest on iOS", () => {
 
 	// SwiftUI finds a custom font by the name inside the font file; expo-font's
 	// alias would leave the label in the system face.
-	it("names Geist by its PostScript name", async () => {
+	it("names DM Sans by its PostScript name", async () => {
 		const button = await renderIOS();
 		const font = button.findByType("SwiftText" as never).props.modifiers.find((modifier: { font?: object }) => modifier.font).font;
-		expect(font.family).toBe("Geist-SemiBold");
+		expect(font.family).toBe("DMSans-SemiBold");
 	});
 
 	// Before iOS 26 the glass styles draw no material at all.

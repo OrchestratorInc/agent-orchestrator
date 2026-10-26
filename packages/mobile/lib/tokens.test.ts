@@ -77,8 +77,9 @@ describe("font scale caps", () => {
 });
 
 describe("type scale", () => {
-	// The ramp is Apple's Dynamic Type scale rather than a vocabulary of
-	// per-screen sizes, so the fence is its shape: sizes never decrease as the
+	// The ramp is T3 Code's compact scale, each step named for the Dynamic Type
+	// style it grows with, rather than a vocabulary of per-screen sizes, so the
+	// fence is its shape: sizes never decrease as the
 	// roles get larger, and the anchors below are the steps the app reads at.
 	const steps = [
 		type.caption2,
@@ -99,17 +100,19 @@ describe("type scale", () => {
 		expect(sizes).toEqual([...sizes].sort((a, b) => a - b));
 	});
 
-	it("spans the scale the system uses at its ends", () => {
+	it("spans T3 Code's scale at its ends", () => {
 		expect(type.caption2.fontSize).toBe(11);
-		expect(type.largeTitle.fontSize).toBe(34);
+		expect(type.largeTitle.fontSize).toBe(30);
 	});
 
 	it("keeps the reading sizes where the app reads at them", () => {
-		expect(type.body.fontSize).toBe(17);
+		expect(type.body.fontSize).toBe(16);
 		expect(type.footnote.fontSize).toBe(13);
 	});
 
-	it("tightens the tracking of body text", () => {
-		expect(type.body.letterSpacing).toBeLessThan(0);
+	// DM Sans is spaced for reading already; only titles tighten.
+	it("leaves reading text at the family's own spacing and tightens titles", () => {
+		expect(type.body.letterSpacing).toBe(0);
+		expect(type.largeTitle.letterSpacing).toBeLessThan(0);
 	});
 });

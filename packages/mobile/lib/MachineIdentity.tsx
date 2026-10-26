@@ -37,5 +37,5 @@ const styles = StyleSheet.create({
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	identity: { minWidth: 0, maxWidth: "48%", flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xs },
-	name: { flexShrink: 1, color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+	name: { flexShrink: 1, color: t.textSecondary, fontFamily: "DMSans_500Medium", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 });

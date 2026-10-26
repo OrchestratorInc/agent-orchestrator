@@ -2,7 +2,7 @@ import { Label, Picker, Text } from "@expo/ui/swift-ui";
 import { accessibilityIdentifier, disabled, listRowBackground, pickerStyle, tag, tint } from "@expo/ui/swift-ui/modifiers";
 import { projectDefaultLabel, withCurrentOption, type ReviewerPickerProps } from "./reviewer-picker.types";
 import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios";
-import { geistFont } from "./swiftUIFont";
+import { appFont } from "./swiftUIFont";
 import { useTheme } from "./ThemeProvider";
 import { useDeclinedChoice } from "./useDeclinedChoice";
 
@@ -16,7 +16,7 @@ export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer,
 	const logoUris = useHarnessLogoUris(reviewers);
 	const reviewerChoice = useDeclinedChoice(selectedReviewer, busy);
 	const modelChoice = useDeclinedChoice(selectedModel, busy);
-	const rowModifiers = [pickerStyle("menu"), tint(t.textSecondary), geistFont("body"), disabled(busy), listRowBackground(t.bgElevated)];
+	const rowModifiers = [pickerStyle("menu"), tint(t.textSecondary), appFont("body"), disabled(busy), listRowBackground(t.bgElevated)];
 	return (
 		<>
 			<Picker

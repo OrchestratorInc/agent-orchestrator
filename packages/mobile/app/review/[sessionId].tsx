@@ -95,7 +95,7 @@ function ReviewDetailContent() {
 	}, [autoReviewFailureId, dismissedAutoFailureId]);
 	useLayoutEffect(() => navigation.setOptions({
 		title: review?.title || "Review",
-		headerTitleStyle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+		headerTitleStyle: { color: t.textPrimary, fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
 	}), [navigation, review?.title, t.textPrimary]);
 	// Memoized: each new element re-registers the header's items, and the page
 	// re-renders on every poll while a review runs.
@@ -389,20 +389,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	main: { flex: 1, minWidth: 0, gap: space.hair },
 	trailing: { flexDirection: "row", alignItems: "center", gap: space.xxs },
 	eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-	eyebrowText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-	title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+	eyebrowText: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+	title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
 	statusLine: { flexDirection: "row", alignItems: "center", gap: space.xs, minWidth: 0 },
-	statusStrong: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
-	statusDetail: { fontFamily: "Geist_400Regular", flexShrink: 1, marginLeft: -space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	detail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	statusStrong: { fontFamily: "DMSans_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+	statusDetail: { fontFamily: "DMSans_400Regular", flexShrink: 1, marginLeft: -space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	detail: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	mono: { fontFamily: t.fontMono },
-	note: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.lg, paddingVertical: space.sm },
+	note: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.lg, paddingVertical: space.sm },
 	noteError: { color: t.red },
 	inlineNote: { flexDirection: "row", alignItems: "flex-start", gap: space.xs, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
-	inlineNoteText: { flex: 1, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	inlineNoteText: { flex: 1, fontFamily: "DMSans_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	// The close glyph keeps its place at the row's end; its touch target spills past it.
 	dismiss: { width: touchTarget, height: touchTarget, marginVertical: -space.md, marginRight: -space.md, alignItems: "center", justifyContent: "center" },
-	inlineNoteStrong: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+	inlineNoteStrong: { fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
 	runRow: { paddingHorizontal: space.lg, paddingVertical: space.md, gap: space.xxs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
 	runHead: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: touchTarget },
 	runVerdict: { flex: 1, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },

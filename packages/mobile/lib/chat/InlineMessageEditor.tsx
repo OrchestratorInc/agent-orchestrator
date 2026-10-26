@@ -158,6 +158,6 @@ const makeStyles = (t: Theme) => {
 		// Clipped so an Android ripple keeps to the round control.
 		stop: { ...composer.stop, overflow: "hidden" },
 		send: { ...composer.send, overflow: "hidden" },
-		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.md, paddingTop: space.sm },
+		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.md, paddingTop: space.sm },
 	});
 };

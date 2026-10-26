@@ -26,9 +26,13 @@ describe("themeFor with a named theme", () => {
 		expect(themeFor("dark")).toBe(darkTheme);
 	});
 
-	it("keeps Orchestrate's highlight hue-less, so the default look is unchanged", () => {
-		expect(darkTheme.highlight).toBe(darkTheme.accent);
-		expect(lightTheme.highlight).toBe(lightTheme.accent);
+	// Orchestrate follows T3 Code: filled controls stay hue-less, and only
+	// links, selection and the cursor take its blue.
+	it("gives Orchestrate a blue highlight beside its hue-less accent", () => {
+		expect(darkTheme.highlight).toBe("#4b7cf3");
+		expect(lightTheme.highlight).toBe("#1b4ed8");
+		expect(darkTheme.accent).not.toBe(darkTheme.highlight);
+		expect(lightTheme.accent).not.toBe(lightTheme.highlight);
 	});
 
 	it("returns one object per theme and scheme, so themed styles stay memoised", () => {
@@ -88,9 +92,9 @@ describe("themeFor with a named theme", () => {
 		}
 	});
 
-	it("keeps Orchestrate's Android selection on the hue-less accent border", () => {
-		expect(darkTheme.selection).toBe(darkTheme.accentBorder);
-		expect(lightTheme.selection).toBe(lightTheme.accentBorder);
+	it("draws Orchestrate's Android selection as a translucent highlight", () => {
+		expect(darkTheme.selection).toBe("rgba(52,107,241,0.32)");
+		expect(lightTheme.selection).toBe("rgba(27,78,216,0.24)");
 	});
 
 	// The recording mic's glyph sits on the red fill. It is white wherever the

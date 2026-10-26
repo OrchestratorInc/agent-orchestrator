@@ -99,6 +99,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	anchor: { position: "absolute", top: 0, left: 0, bottom: 0 },
 	anchorBox: { width: 1, height: touchTarget },
 	trigger: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm },
-	label: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+	label: { fontFamily: "DMSans_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 	disabled: { opacity: stateOpacity.disabled },
 });

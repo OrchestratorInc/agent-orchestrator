@@ -54,6 +54,7 @@ import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummar
 import { createHostedRowsCache, type HostedOrchestrator, type HostedProject, type HostedSession } from "./hostedRows";
 import { reconcileRows } from "./rowSharing";
 import { machineAppearance } from "./machineAppearance";
+import type { ApprovalMode } from "./spawnApproval";
 
 const ACTIVE_PROJECT_KEY = "ao.activeProject";
 
@@ -71,6 +72,8 @@ export type SpawnOptions = {
 	prompt?: string;
 	harness?: string;
 	model?: string;
+	/** The worker's starting approval mode; omitted keeps the project's. */
+	approvalMode?: ApprovalMode;
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
@@ -901,12 +904,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -918,6 +921,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					brief: prompt ?? "",
 					agent: harness,
 					model,
+					approvalMode,
 					mode: resolvedMode,
 					attachments,
 					clientRequestId,

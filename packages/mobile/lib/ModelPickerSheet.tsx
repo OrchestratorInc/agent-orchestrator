@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Platform, StyleSheet, Text } from "react-native";
 import type { AgentModelCatalog } from "./api";
 import { haptics } from "./haptics";
+import { ComposerSearchField } from "./chat/ComposerSearchField";
 import { NativePickerList, type PickerOption } from "./NativePickerList";
 import { Spinner } from "./Spinner";
 import type { Theme } from "./theme";
@@ -26,11 +27,19 @@ export function ModelPickerSheet({ catalog, selected, loading, refreshing, error
 	onRefresh(): Promise<void>;
 }) {
 	const styles = useThemedStyles(makeStyles);
+	const [query, setQuery] = useState("");
 	const choose = (value: string) => { haptics.select(); onClose(); onSelect(value); };
+	const models = catalog?.models ?? [];
+	const needle = query.trim().toLowerCase();
+	const matches = needle ? models.filter((model) => model.label.toLowerCase().includes(needle) || model.id.toLowerCase().includes(needle)) : models;
 	const options: PickerOption[] = [
-		{ id: "", title: "Auto", detail: "Let the agent choose" },
-		...(catalog?.models ?? []).map((model) => ({ id: model.id, title: model.label })),
+		// Not "Auto", which reads as the approval mode.
+		...(needle ? [] : [{ id: "", title: "Default model", detail: models.find((model) => model.isDefault)?.label ?? "The agent's own default" }]),
+		// The list is built row by row, and some catalogs hold thousands, so it
+		// shows the first matches and the search narrows the rest.
+		...matches.slice(0, MAX_ROWS).map((model) => ({ id: model.id, title: model.label })),
 	];
+	const hidden = matches.length - Math.min(matches.length, MAX_ROWS);
 	const notice = error || catalog?.warning;
 	const custom = catalog && (catalog.selectionMode === "text" || catalog.allowCustom)
 		? <CustomModel initial={selected && !catalog.models.some((item) => item.id === selected) ? selected : ""} onUse={choose} />
@@ -42,7 +51,10 @@ export function ModelPickerSheet({ catalog, selected, loading, refreshing, error
 				<SheetHeader title={Platform.OS === "ios" ? undefined : "Model"} subtitle="Choose how this agent runs the task." />
 				{notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
 				{loading ? <Spinner size="large" accessibilityLabel="Loading models" style={styles.loading} /> : null}
+				{models.length > SEARCH_FROM ? <ComposerSearchField initialQuery="" placeholder={`Search ${models.length.toLocaleString()} models`} onQuery={setQuery} /> : null}
+				{hidden > 0 ? <Text style={styles.more}>{`${hidden.toLocaleString()} more. Search to narrow them.`}</Text> : null}
 			</>}
+			empty={needle ? `No models match “${query.trim()}”.` : undefined}
 			options={options}
 			selected={selected}
 			onSelect={choose}
@@ -102,7 +114,13 @@ function CustomModel({ initial, onUse }: { initial: string; onUse(value: string)
 	);
 }
 
+/** Rows the list builds at most; the search reaches the rest. */
+const MAX_ROWS = 200;
+/** A catalog longer than this gets a search field. */
+const SEARCH_FROM = 20;
+
 const makeStyles = (t: Theme) => StyleSheet.create({
+	more: { fontFamily: type.footnote.fontFamily, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	notice: { fontFamily: type.footnote.fontFamily, color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	loading: { marginVertical: space.lg },
 });

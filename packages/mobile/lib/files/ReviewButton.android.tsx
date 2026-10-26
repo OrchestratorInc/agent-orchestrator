@@ -35,7 +35,7 @@ export function ReviewButton({ count, onPress, bottomOffset = 0 }: ReviewButtonP
 					<Icon source={fileDrawable("review")} size={iconSize.xl} tint={t.onAccent} contentDescription={label.accessibilityLabel} />
 				</ExtendedFloatingActionButton.Icon>
 				<ExtendedFloatingActionButton.Text>
-					<Text color={t.onAccent} style={{ typography: "labelLarge", fontFamily: "Geist_600SemiBold" }}>{label.title}</Text>
+					<Text color={t.onAccent} style={{ typography: "labelLarge", fontFamily: "DMSans_600SemiBold" }}>{label.title}</Text>
 				</ExtendedFloatingActionButton.Text>
 			</ExtendedFloatingActionButton>
 		</Host>

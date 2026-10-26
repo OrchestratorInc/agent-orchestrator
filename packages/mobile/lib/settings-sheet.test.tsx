@@ -9,9 +9,7 @@ vi.mock("expo-router", async () => {
 	return { Stack, ThemeProvider: "NavigationThemeProvider", DarkTheme: { colors: {} }, DefaultTheme: { colors: {} } };
 });
 vi.mock("expo-router/react-navigation", () => ({ getFocusedRouteNameFromRoute: () => undefined }));
-vi.mock("@expo-google-fonts/geist/400Regular", () => ({ Geist_400Regular: 1 }));
-vi.mock("@expo-google-fonts/geist/500Medium", () => ({ Geist_500Medium: 2 }));
-vi.mock("@expo-google-fonts/geist/600SemiBold", () => ({ Geist_600SemiBold: 3 }));
+vi.mock("./appFonts", () => ({ appFonts: {} }));
 vi.mock("@expo-google-fonts/geist-mono/400Regular", () => ({ GeistMono_400Regular: 4 }));
 vi.mock("expo-font", () => ({ useFonts: () => [true, null] }));
 vi.mock("expo-splash-screen", () => ({ preventAutoHideAsync: vi.fn(async () => {}), hideAsync: vi.fn(async () => {}) }));

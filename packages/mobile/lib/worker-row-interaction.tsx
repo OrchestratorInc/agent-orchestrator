@@ -12,6 +12,7 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, space } from "./tokens";
 import { workerActionSymbol, type WorkerActionId } from "./worker-action-model";
 import { isFullSwipe, WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
+import { useMenuRowWidth } from "./useMenuRowWidth";
 import { WorkerRowContextMenu } from "./worker-rename-context-menu";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
 
@@ -61,6 +62,7 @@ export function WorkerRowInteraction({
 	// resting row hides them behind its foreground, and building native buttons
 	// under every mounted row was most of a row's cost.
 	const [railMounted, setRailMounted] = useState(false);
+	const menuWidth = useMenuRowWidth();
 	const rowWidth = useSharedValue(0);
 	const railOpen = useSharedValue(false);
 	const dragOrigin = useSharedValue(0);
@@ -108,9 +110,11 @@ export function WorkerRowInteraction({
 				}),
 		[canFullSwipe, dragOrigin, railOpen, rowWidth, armed, arm, fullSwipe],
 	);
+	const { onLayout: measureMenuWidth } = menuWidth;
 	const measure = useCallback((event: LayoutChangeEvent) => {
 		rowWidth.value = event.nativeEvent.layout.width;
-	}, [rowWidth]);
+		measureMenuWidth(event);
+	}, [rowWidth, measureMenuWidth]);
 
 	return (
 		<GestureDetector gesture={fullSwipeWatch}>
@@ -158,7 +162,7 @@ export function WorkerRowInteraction({
 							onAction={runAction}
 							accessibilityLabel={accessibilityLabel}
 							accessibilityHint={accessibilityHint}
-							style={rowStyle}
+							style={[rowStyle, menuWidth.style]}
 						>
 							{children}
 						</WorkerRowContextMenu>

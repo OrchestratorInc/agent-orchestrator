@@ -109,3 +109,16 @@ describe("board sections that cannot be folded", () => {
 		expect(board).not.toContain('const collapsible = section.zone !== "search";');
 	});
 });
+
+describe("board tab roots", () => {
+	// A coloured view that is not a stacking context is mounted empty, with its
+	// children hoisted after it. As a tab's root it became the page's first
+	// native view, ahead of the list, so the large title and the tab bar had no
+	// scroll view to follow and stayed expanded over the rows.
+	it.each(["../app/(tabs)/(workers)/index.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/(tabs)/(prs)/prs.tsx"])(
+		"leaves the page background to the stack in %s",
+		(path) => {
+			expect(source(path)).toMatch(/\bscreen: \{ flex: 1 \},/);
+		},
+	);
+});

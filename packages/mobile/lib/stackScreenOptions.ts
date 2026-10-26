@@ -25,7 +25,9 @@ export function stackScreenOptions(t: Theme): NativeStackNavigationOptions {
 		// The app's tint: the system back button and every native header item
 		// draw in it, as bar buttons do in any app on either platform.
 		headerTintColor: t.accent,
-		headerTitleStyle: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+		// The system face at T3 Code's heavy weight: a navigation title is the
+		// platform's chrome, and the app's own family is for what sits under it.
+		headerTitleStyle: { fontSize: 17, fontWeight: "800" },
 		headerShadowVisible: false,
 		headerBackButtonDisplayMode: "minimal",
 		contentStyle: { backgroundColor: t.bgBase },
@@ -50,6 +52,6 @@ export function largeTitleScreenOptions(): NativeStackNavigationOptions {
 		headerLargeTitleEnabled: true,
 		...(parseInt(String(Platform.Version), 10) >= 26 ? { headerStyle: undefined } : null),
 		headerLargeTitleShadowVisible: false,
-		headerLargeTitleStyle: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+		headerLargeTitleStyle: { fontWeight: "800" },
 	};
 }

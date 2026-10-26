@@ -106,6 +106,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	scroll: { flex: 1 },
 	content: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xxxl },
 	group: { marginTop: space.xl, gap: space.sm },
-	heading: { fontFamily: "Geist_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-	note: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	heading: { fontFamily: "DMSans_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+	note: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });

@@ -21,7 +21,7 @@ describe("model setting icon", () => {
 
 describe("approvals setting icon", () => {
 	it("uses the dashed check circle artwork on iOS and the shield symbol on Android", () => {
-		expect(ios).toContain('<Image assetName="CircleDashedCheck" />');
+		expect(ios).toContain('<Image assetName="CircleDashedCheck" modifiers={[imageScale("small")]} />');
 		expect(menuIcons).toContain('permissions: { ios: "checkmark.shield", android: "verified_user" }');
 	});
 });

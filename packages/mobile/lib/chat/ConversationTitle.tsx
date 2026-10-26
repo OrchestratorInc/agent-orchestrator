@@ -60,11 +60,11 @@ export function ConversationTitle({
 const makeStyles = (t: Theme) => StyleSheet.create({
 	header: { maxWidth: 240, flexDirection: "row", alignItems: "center", gap: space.sm },
 	copy: { minWidth: 0, flexShrink: 1, alignItems: "flex-start", justifyContent: "center" },
-	title: { fontFamily: "Geist_600SemiBold", maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	title: { fontFamily: "DMSans_600SemiBold", maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 	subtitleRow: { maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xs },
-	subtitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	subtitle: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	// The word stays whole; the project and harness give way to it.
 	state: { flexShrink: 0, flexDirection: "row", alignItems: "center", gap: space.xxs },
 	dot: { width: 7, height: 7, borderRadius: radius.pill },
-	stateLabel: { fontFamily: "Geist_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+	stateLabel: { fontFamily: "DMSans_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 });

@@ -45,8 +45,8 @@ export function MachineNameForm({ name, onChangeName, symbol, onSelectSymbol, ic
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	field: { marginTop: space.lg },
-	label: { fontFamily: "Geist_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", marginBottom: space.sm },
-	labelValue: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontWeight: "400" },
-	hint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.sm },
+	label: { fontFamily: "DMSans_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", marginBottom: space.sm },
+	labelValue: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontWeight: "400" },
+	hint: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.sm },
 	button: { marginTop: space.lg },
 });

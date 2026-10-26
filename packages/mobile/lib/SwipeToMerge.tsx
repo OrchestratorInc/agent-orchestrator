@@ -222,7 +222,7 @@ const makeStyles = (t: Theme) =>
 		labelRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingVertical: space.sm },
 		labelResting: { paddingLeft: KNOB_CLEARANCE, paddingRight: space.lg },
 		labelSettled: { paddingLeft: space.lg, paddingRight: KNOB_CLEARANCE },
-		label: { flexShrink: 1, textAlign: "center", fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+		label: { flexShrink: 1, textAlign: "center", fontFamily: "DMSans_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 		// Centred on the track's height by its `justifyContent`, however tall a
 		// wrapped label makes it.
 		knob: { position: "absolute", left: INSET, width: KNOB, height: KNOB, borderRadius: KNOB / 2, alignItems: "center", justifyContent: "center" },

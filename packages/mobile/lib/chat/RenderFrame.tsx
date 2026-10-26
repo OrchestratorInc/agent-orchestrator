@@ -280,6 +280,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// A sign that the frame opens larger; the whole frame is the button.
 	expandChip: { position: "absolute", top: space.xs, right: space.xs, width: iconSize.xxl, height: iconSize.xxl, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderSubtle },
 	fallback: { alignSelf: "flex-start", minHeight: touchTarget, marginVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.md, overflow: "hidden" },
-	fallbackTitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	fallbackAction: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+	fallbackTitle: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	fallbackAction: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 });

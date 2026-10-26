@@ -30,6 +30,8 @@ vi.mock("expo-router", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
 		useRouter: () => fixtures.router,
+		// Focused for the whole of a test: the effect runs once, as on mount.
+		useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
 		Stack: {
 			SearchBar: host("StackSearchBar"),
 			Toolbar: Object.assign(host("StackToolbar"), {
@@ -65,7 +67,7 @@ vi.mock("./machine-menu-image", async (importOriginal) => {
 // The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
 vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
 vi.mock("./store", () => ({ useApp: () => ({
-	configured: fixtures.configured, connection: "open", loading: false, error: null,
+	configured: fixtures.configured, configResolved: true, connection: "open", loading: false, error: null,
 	config: { hostId: "mac" },
 	refreshAll: fixtures.refreshAll, refreshHost: fixtures.refreshHost,
 	allSessions: fixtures.hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId }))), allProjects: fixtures.projects,
@@ -95,6 +97,7 @@ vi.mock("./worker-board-list", async () => {
 vi.mock("./AddFab", () => ({ AddFab: "AddFab", addFabClearance: 72 }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
+import { startNewTask } from "./newTaskAction";
 import FleetScreen from "../app/(tabs)/(workers)/index";
 import { WorkerBoardList } from "./worker-board-list";
 import { WorkerEnvironmentFilter } from "./worker-environment-filter";
@@ -375,11 +378,12 @@ describe("Workers filter menu", () => {
 
 describe("Workers spawn action", () => {
 	// iOS has no floating action button: the create action ends the header.
-	it("ends the iOS header with a + that opens the spawn sheet", () => {
+	// New task is the tab bar's own round button on iOS; the board keeps
+	// settings and alerts in its header, and hands the button its own filters.
+	it("starts a task from the tab bar's button on the board's own filters", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		const add = toolbar("right")!.findAllByType("StackToolbarButton" as never).at(-1)!;
-		expect(add.props).toMatchObject({ icon: "plus", accessibilityLabel: "Spawn worker" });
-		act(() => add.props.onPress());
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Notifications"]);
+		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
 

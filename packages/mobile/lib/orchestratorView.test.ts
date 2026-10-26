@@ -303,7 +303,7 @@ describe("orchestratorProjectSections", () => {
 
 		const sections = orchestratorProjectSections(projects, [], orchestrators);
 
-		expect(sections.map((section) => section.title)).toEqual(["Needs Attention", "Coordinating", "Not Running"]);
+		expect(sections.map((section) => section.title)).toEqual(["Needs attention", "Coordinating", "Not running"]);
 		expect(sections.flatMap((section) => section.data).map((row) => row.project.id).sort()).toEqual([
 			"attention",
 			"coordinating",

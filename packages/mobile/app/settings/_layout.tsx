@@ -1,4 +1,5 @@
 import { Stack } from "expo-router";
+import { Platform } from "react-native";
 import { stackScreenOptions } from "../../lib/stackScreenOptions";
 import { useTheme } from "../../lib/ThemeProvider";
 
@@ -7,11 +8,19 @@ import { useTheme } from "../../lib/ThemeProvider";
 // one in the stack and back would close Settings.
 export const unstable_settings = { initialRouteName: "index" };
 
+/**
+ * iOS 26 draws a navigation bar as Liquid Glass with a scroll-edge blur under
+ * it, so there Settings paints no bar of its own: the bar is transparent, each
+ * page (a SwiftUI Form or an automatically inset scroll view) lays out under
+ * it, and the system blurs whatever scrolls beneath the title.
+ */
+const SYSTEM_GLASS_HEADER = Platform.OS === "ios" && parseInt(String(Platform.Version), 10) >= 26;
+
 export default function SettingsLayout() {
 	const t = useTheme();
 
 	return (
-		<Stack screenOptions={stackScreenOptions(t)}>
+		<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>
 			<Stack.Screen name="index" options={{ title: "Settings" }} />
 			<Stack.Screen name="environments" options={{ title: "Environments", fullScreenGestureEnabled: true }} />
 			<Stack.Screen name="theme" options={{ title: "Theme", fullScreenGestureEnabled: true }} />

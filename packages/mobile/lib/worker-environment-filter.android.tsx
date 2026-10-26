@@ -59,7 +59,7 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 								</FilterChip.LeadingIcon>
 							) : null}
 							<FilterChip.Label>
-								<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "Geist_500Medium" }}>
+								<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: "DMSans_500Medium" }}>
 									{environment.label}
 								</Text>
 							</FilterChip.Label>

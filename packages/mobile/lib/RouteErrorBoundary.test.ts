@@ -16,6 +16,7 @@ const screenRoutes = [
 	"(tabs)/(workers)/index.tsx",
 	"(tabs)/(projects)/projects.tsx",
 	"(tabs)/(prs)/prs.tsx",
+	"(tabs)/compose.tsx",
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
 	"files/[sessionId]/folder.tsx",
