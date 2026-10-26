@@ -7,6 +7,9 @@ vi.mock("../hooks/useHostConnection", () => ({
 	useHostConnection: (hostId?: string) => ({ baseUrl: hostId === "remote" ? "http://127.0.0.1:4000/token" : undefined }),
 }));
 
+vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
+vi.mock("pdfjs-dist", () => ({ GlobalWorkerOptions: {}, getDocument: vi.fn(), TextLayer: class {} }));
+
 describe("FileMediaPreview", () => {
 	it.each(["image", "video", "audio"] as const)("uses renderer-origin CORS for protected %s", (kind) => {
 		render(<FileMediaPreview kind={kind} path="media" sessionId="s1" source={{kind: "workspace"}} version={1} />);
@@ -76,5 +79,12 @@ describe("FileMediaPreview", () => {
 	it("streams local artifacts through the explicit loopback artifact route", () => {
 		render(<FileMediaPreview kind="video" path="clips/a #1.mp4" sessionId="session 1" source={{ kind: "artifact", rawUrl: "http://ao-preview-artifact.abc.localhost/clip.mp4?raw=true" }} version={7} />);
 		expect(screen.getByLabelText("clips/a #1.mp4")).toHaveAttribute("src", "http://127.0.0.1:3001/api/v1/sessions/session%201/preview/files/clips/a%20%231.mp4?source=artifact&raw=true&v=7");
+	});
+
+	it("shows Retry when a PDF fails to load", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => new Response("missing", { status: 404 })));
+		render(<FileMediaPreview kind="pdf" path="report.pdf" sessionId="session-1" source={{ kind: "artifact", rawUrl: "http://ao-preview-artifact.abc.localhost/report.pdf?raw=true" }} version={1} />);
+		expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
+		vi.unstubAllGlobals();
 	});
 });

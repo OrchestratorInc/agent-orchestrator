@@ -120,6 +120,7 @@
 		"mermaid": "11.17.2",
 		"motion": "^12.43.0",
 		"openapi-fetch": "^0.17.0",
+		"pdfjs-dist": "^6.4.299",
 		"posthog-js": "^1.390.2",
 		"qrcode-generator": "^1.5.2",
 		"radix-ui": "^1.5.0",
