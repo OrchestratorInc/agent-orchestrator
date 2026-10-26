@@ -2983,7 +2983,8 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 // native resume, a saved-prompt fallback, or a fresh launch. The fallible I/O
 // runs before any durable session write, so a failure never resurrects the row
 // or destroys the worktree (it may hold the agent's prior work).
-func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+	defer func() { m.logRelaunchFailure("restore", id, err) }()
 	if err := m.beginAgentOperation(ctx, id, agentOperationRestore); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrOperationInProgress
@@ -3420,12 +3421,7 @@ func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, 
 	}
 	result, err = m.resumeAgentRecordWithPolicy(ctx, "resume agent", rec,
 		requireNativeHistory || (rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil))
-	if err != nil {
-		var relaunchErr *RelaunchError
-		if errors.As(err, &relaunchErr) {
-			m.logger.Warn("resume agent: relaunch failed", "sessionID", id, "step", relaunchErr.Step, "error", err)
-		}
-	}
+	m.logRelaunchFailure("resume agent", id, err)
 	if err == nil && m.chat != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
 		rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
 		// A failed move to a new release kept the user's queued messages for
@@ -7301,3 +7297,12 @@ func (e *RelaunchError) Error() string { return e.Err.Error() }
 func (e *RelaunchError) Unwrap() error { return e.Err }
 
 func relaunchFailed(step string, err error) error { return &RelaunchError{Step: step, Err: err} }
+
+// logRelaunchFailure keeps the raw error of a failed relaunch in the daemon log.
+// The API answers 409 for it, and the access log records errors only for 5xx.
+func (m *Manager) logRelaunchFailure(operation string, id domain.SessionID, err error) {
+	var relaunchErr *RelaunchError
+	if errors.As(err, &relaunchErr) {
+		m.logger.Warn(operation+": relaunch failed", "sessionID", id, "step", relaunchErr.Step, "error", err)
+	}
+}
