@@ -127,12 +127,14 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// Do not repeatedly cancel a slow fetch under continuous CDC traffic. A
 			// key receives at most one in-flight refresh and one queued catch-up.
 			const refreshes = new Map<string, { dirty: boolean }>();
-			const invalidate = (queryKey: QueryKey) => {
+			const invalidate = (queryKey: QueryKey, { catalogChanged = false }: { catalogChanged?: boolean } = {}) => {
 				if (disposed) return;
 				// TanStack skips a repeat invalidation while a query is still marked
 				// invalidated, and an unmounted catalog read gets no catch-up. Stop
-				// sharing those reads on every event, including coalesced ones.
-				discardPendingAgentModelReads(queryKey);
+				// sharing those reads on every event, including coalesced ones. Only
+				// an actual catalog change restarts reads already awaiting them:
+				// remote polling repeats faster than a slow read can finish.
+				discardPendingAgentModelReads(queryKey, { reread: catalogChanged });
 				const key = JSON.stringify(queryKey);
 				const running = refreshes.get(key);
 				if (running) {
@@ -287,7 +289,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					// Catalogs are device-wide: pickers key them by agent, not by the
 					// project the event names, so refresh every view of this agent
 					// (pickers and Settings) together.
-					invalidate(["agent-models", scope.agentId]);
+					invalidate(["agent-models", scope.agentId], { catalogChanged: true });
 				}
 				pendingModelCatalogScopes.clear();
 			};

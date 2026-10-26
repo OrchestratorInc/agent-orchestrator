@@ -27,7 +27,7 @@ const {
 	subscribeConnectedHostsMock: vi.fn(),
 	unsubscribeConnectedHostsMock: vi.fn(),
 	remoteGetMock: vi.fn(),
-	discardPendingAgentModelReadsMock: vi.fn((_queryKey: readonly unknown[]) => {}),
+	discardPendingAgentModelReadsMock: vi.fn((_queryKey: readonly unknown[], _options?: { reread?: boolean }) => {}),
 }));
 
 vi.mock("./bridge", () => ({
@@ -573,7 +573,7 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	it("evicts pending catalog reads for a catalog event that only queues a catch-up", async () => {
+	it("restarts pending catalog reads for a catalog event that only queues a catch-up", async () => {
 		vi.useFakeTimers();
 		let disconnect: (() => void) | undefined;
 		try {
@@ -584,7 +584,8 @@ describe("createEventTransport", () => {
 				JSON.stringify(filters?.queryKey) === catalogKey
 					? new Promise<void>((resolve) => { settleRefresh.push(resolve); })
 					: Promise.resolve()) as never);
-			const evictions = () => discardPendingAgentModelReadsMock.mock.calls.filter(([queryKey]) => JSON.stringify(queryKey) === catalogKey).length;
+			const evictions = (reread: boolean) => discardPendingAgentModelReadsMock.mock.calls.filter(([queryKey, options]) =>
+				JSON.stringify(queryKey) === catalogKey && (options?.reread ?? false) === reread).length;
 			disconnect = createEventTransport(queryClient).connect();
 			const emit = (seq: number) => cdcSources()[0].emit("session_updated", JSON.stringify({
 				seq, projectId: "", type: "session_updated",
@@ -593,19 +594,36 @@ describe("createEventTransport", () => {
 			}));
 			emit(50);
 			vi.advanceTimersByTime(200);
-			expect([evictions(), settleRefresh.length]).toEqual([1, 1]);
+			expect([evictions(true), settleRefresh.length]).toEqual([1, 1]);
 			// The first refresh is still running, so this event only marks it
-			// dirty. Its pending reads must still stop being shared.
+			// dirty. Its pending reads must still restart.
 			emit(51);
 			vi.advanceTimersByTime(200);
-			expect([evictions(), settleRefresh.length]).toEqual([2, 1]);
+			expect([evictions(true), settleRefresh.length]).toEqual([2, 1]);
 			settleRefresh[0]();
 			await vi.waitFor(() => expect(settleRefresh).toHaveLength(2));
-			expect(evictions()).toBe(3);
+			// The transport's own catch-up is not another catalog change.
+			expect([evictions(true), evictions(false)]).toEqual([2, 1]);
 		} finally {
 			disconnect?.();
 			vi.useRealTimers();
 		}
+	});
+
+	it("evicts remote catalog reads on fallback polls without restarting them", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+			const disconnect = createEventTransport(fakeQueryClient()).connect();
+			discardPendingAgentModelReadsMock.mockClear();
+			await vi.advanceTimersByTimeAsync(6_000);
+			const polls = discardPendingAgentModelReadsMock.mock.calls.filter(([queryKey]) => JSON.stringify(queryKey) === JSON.stringify(["agent-models", "box-a"]));
+			// A read slower than the 2 s interval must still be able to finish.
+			expect(polls).toHaveLength(3);
+			expect(polls.every(([, options]) => options?.reread !== true)).toBe(true);
+			disconnect();
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
