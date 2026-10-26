@@ -152,6 +152,9 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		SessionMeta:    claudeSessionMeta,
 		SessionMode:    claudeSessionMode,
 		SessionOptions: claudeSessionOptions,
+		ValidateModel: func(ctx context.Context, _ acpdriver.LaunchConfig, model string) error {
+			return claudeValidateModel(ctx, plugin, model)
+		},
 	}, log)}
 }
 
@@ -263,6 +266,23 @@ func claudeVersionTooOldFailure(title, details, model string) error {
 			parsed.Installed, subject, parsed.Required),
 		"Run `claude update` (or update the Claude desktop app), then try again.",
 		ports.ErrAgentVersionTooOld)
+}
+
+// claudeValidateModel refuses a model the installed Claude Code is known to be
+// too old for, so a running chat cannot switch to what its next turn would
+// fail on. An alias always passes: each CLI resolves it to a model it supports.
+func claudeValidateModel(ctx context.Context, plugin claudePlugin, model string) error {
+	if isClaudeNativeModelAlias(model) {
+		return nil
+	}
+	binary, err := plugin.ResolveBinary(ctx)
+	if err != nil {
+		return nil
+	}
+	if reason := claudecode.UnsupportedModelReason(ctx, binary, model); reason != "" {
+		return fmt.Errorf("%w: model %q: %s", ports.ErrAgentVersionTooOld, model, reason)
+	}
+	return nil
 }
 
 // claudeServedModel reports what a Claude alias actually resolved to. The ACP

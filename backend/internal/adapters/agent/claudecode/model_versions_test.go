@@ -126,6 +126,37 @@ func TestInstalledVersionCachesByExecutableFingerprint(t *testing.T) {
 	}
 }
 
+func TestUnsupportedModelReasonGatesConcreteModelsOnly(t *testing.T) {
+	name := "claude"
+	if runtime.GOOS == "windows" {
+		name = "claude.exe"
+	}
+	binary := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := claudeVersionCommand
+	claudeVersionCommand = func(context.Context, string) ([]byte, error) {
+		return []byte("2.1.239 (Claude Code)\n"), nil
+	}
+	t.Cleanup(func() { claudeVersionCommand = original })
+	ctx := context.Background()
+
+	for _, model := range []string{"claude-opus-5-5", "claude-opus-5-5[1m]"} {
+		if reason := UnsupportedModelReason(ctx, binary, model); reason == "" {
+			t.Fatalf("%s on 2.1.239 was not refused", model)
+		}
+	}
+	for _, model := range []string{"opus", "claude-sonnet-5-5"} {
+		if reason := UnsupportedModelReason(ctx, binary, model); reason != "" {
+			t.Fatalf("%s refused: %s", model, reason)
+		}
+	}
+	if reason := UnsupportedModelReason(ctx, filepath.Join(t.TempDir(), "missing"), "claude-opus-5-5"); reason != "" {
+		t.Fatalf("unknown installed version refused a model: %s", reason)
+	}
+}
+
 func TestLastAssistantModelSkipsSyntheticAndTruncatedLines(t *testing.T) {
 	data := []byte(`ated":true}
 {"type":"user","message":{"role":"user"}}

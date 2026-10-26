@@ -131,13 +131,35 @@ export function claudeChoiceModel<T extends { id: string; label: string }>(catal
 	};
 }
 
-/** A configured family alias ("sonnet") duplicates that family's newest model, so mark that model as the default instead. */
-export function foldClaudeAliasDefault<T extends { id: string; label: string; isDefault?: boolean }>(models: T[]): T[] {
+type ModelAvailability = { requiresVersion?: string; unavailableReason?: string };
+
+/** Whether a model can be chosen now. The daemon marks models the installed agent CLI is too old to run. */
+export function isModelSelectable(model: ModelAvailability): boolean {
+	return !model.unavailableReason;
+}
+
+/**
+ * Drops the daemon's availability marks, which describe this computer's agent CLI,
+ * for models that run elsewhere (a cloud worker brings its own CLI).
+ */
+export function withoutLocalAvailability<T extends ModelAvailability>(models: T[]): T[] {
+	if (!models.some((model) => model.requiresVersion || model.unavailableReason)) return models;
+	return models.map((model) => (model.requiresVersion || model.unavailableReason
+		? { ...model, requiresVersion: undefined, unavailableReason: undefined }
+		: model));
+}
+
+/**
+ * A configured family alias ("sonnet") duplicates that family's newest model, so mark that model as the default instead.
+ * A model the installed CLI cannot run is never made the default; the newest one it can run stands in for the alias.
+ */
+export function foldClaudeAliasDefault<T extends { id: string; label: string; isDefault?: boolean } & ModelAvailability>(models: T[]): T[] {
 	const alias = models.find((model) => model.isDefault && CLAUDE_FAMILIES.includes(model.id));
 	if (!alias) return models;
 	const rest = models.filter((model) => model !== alias);
 	const family = CLAUDE_FAMILIES.indexOf(alias.id);
-	const newest = splitClaudeModels(rest).current.find((model) => claudeFamilyVersion(model)?.family === family && claudeVariant(model) === "");
+	const newest = splitClaudeModels(rest.filter(isModelSelectable))
+		.current.find((model) => claudeFamilyVersion(model)?.family === family && claudeVariant(model) === "");
 	return newest ? rest.map((model) => (model === newest ? { ...model, isDefault: true } : model)) : models;
 }
 

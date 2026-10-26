@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, offeredCatalogModels, splitClaudeModels } from "./agent-model-choices";
+import {
+	claudeChoiceModel,
+	filterDisabledModels,
+	foldClaudeAliasDefault,
+	offeredCatalogModels,
+	splitClaudeModels,
+	withoutLocalAvailability,
+} from "./agent-model-choices";
 
 type TestModel = { id: string; label: string; isDefault?: boolean };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
@@ -57,6 +64,27 @@ describe("foldClaudeAliasDefault", () => {
 	it("never folds a configured alias into a context variant", () => {
 		const models = [model("Opus 5.5", "opus", { isDefault: true }), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
 		expect(foldClaudeAliasDefault(models)).toBe(models);
+	});
+
+	it("never makes a model the installed CLI cannot run the default", () => {
+		const alias = model("Opus", "opus", { isDefault: true });
+		const gated = { ...model("Opus 5.5"), unavailableReason: "Requires Claude Code 2.1.280 or newer." };
+		const folded = foldClaudeAliasDefault([model("Opus 4.6"), gated, alias]);
+		expect(folded.find((item) => item.isDefault)?.label).toBe("Opus 4.6");
+		const onlyGated = [gated, alias];
+		expect(foldClaudeAliasDefault(onlyGated)).toBe(onlyGated);
+	});
+});
+
+describe("withoutLocalAvailability", () => {
+	it("clears the local CLI's availability marks and keeps an unmarked list as is", () => {
+		const plain = [model("Sonnet 5.5")];
+		expect(withoutLocalAvailability(plain)).toBe(plain);
+		const gated = { ...model("Opus 5.5"), requiresVersion: "2.1.280", unavailableReason: "Requires Claude Code 2.1.280 or newer." };
+		const [cleared] = withoutLocalAvailability([gated]);
+		expect(cleared?.unavailableReason).toBeUndefined();
+		expect(cleared?.requiresVersion).toBeUndefined();
+		expect(cleared?.id).toBe("opus-5-5");
 	});
 });
 

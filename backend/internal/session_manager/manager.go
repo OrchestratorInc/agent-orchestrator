@@ -1625,9 +1625,11 @@ func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig,
 	if validateClaudeModel && selected == nil {
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q is not in the active provider catalog", ErrUnsupportedModel, modelID)
 	}
-	if validateClaudeModel && selected.RequiresVersion != "" {
+	if selected != nil && selected.RequiresVersion != "" {
 		// Launching would only fail on the first turn with the provider's
-		// claude_code_version_too_old rejection; say so before spawning.
+		// claude_code_version_too_old rejection; say so before spawning. This runs
+		// for any listed model, not only when the model is validated: a model the
+		// catalog does not list (a gateway alias) has no known requirement.
 		return ports.AgentConfig{}, fmt.Errorf("%w: model %q: %s", ErrUnsupportedModel, modelID, selected.UnavailableReason)
 	}
 	if selected != nil && len(selected.Efforts) == 0 && cfg.Harness == domain.HarnessClaudeCode {

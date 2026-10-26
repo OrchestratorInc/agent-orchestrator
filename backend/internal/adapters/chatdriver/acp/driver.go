@@ -127,6 +127,10 @@ type Config struct {
 	// showing (for example an alias resolving to a concrete model). It returns
 	// "" when there is nothing to report. Optional.
 	ServedModel func(ctx context.Context, cfg LaunchConfig, sessionID, selectedModel string) (served, reason string)
+	// ValidateModel optionally rejects a model the binding knows the running
+	// agent cannot use (for example one its CLI version predates) before AO asks
+	// the agent to switch to it. It returns nil when the model may be tried.
+	ValidateModel func(ctx context.Context, cfg LaunchConfig, model string) error
 	// SessionPromptResponseFailure is PromptResponseFailure given the provider
 	// session, for a binding that reads the failure from the agent's own record,
 	// and whether the turn brought any reply text or tool call.
@@ -734,6 +738,12 @@ func (d *Driver) initialize(
 		servedModel := d.cfg.ServedModel
 		conv.servedModel = func(ctx context.Context, sessionID, selectedModel string) (string, string) {
 			return servedModel(ctx, cfg, sessionID, selectedModel)
+		}
+	}
+	if d.cfg.ValidateModel != nil {
+		validateModel := d.cfg.ValidateModel
+		conv.validateModel = func(ctx context.Context, model string) error {
+			return validateModel(ctx, cfg, model)
 		}
 	}
 	if proc.reconnected {

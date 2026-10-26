@@ -818,7 +818,8 @@ export function CloudSessionChatSurface({
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
-	const { models, configOptions } = useChatModelChoices(session.provider, workerModels, providerOptions.length ? providerOptions : undefined, settings.model);
+	// The worker runs its own Claude Code, so this computer's CLI version gates nothing here.
+	const { models, configOptions } = useChatModelChoices(session.provider, workerModels, providerOptions.length ? providerOptions : undefined, settings.model, undefined, true, false);
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}

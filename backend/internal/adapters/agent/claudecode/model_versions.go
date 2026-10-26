@@ -187,12 +187,8 @@ func (r *ModelVersionRequirements) GateCatalog(catalog ports.AgentModelCatalog, 
 	for i := range models {
 		models[i].RequiresVersion = ""
 		models[i].UnavailableReason = ""
-		required, known := r.Required(models[i].ID)
-		if !known {
-			continue
-		}
-		minimum, valid := parseCLIVersion(required)
-		if !valid || !current.less(minimum) {
+		required, gated := r.tooNew(models[i].ID, current)
+		if !gated {
 			continue
 		}
 		models[i].RequiresVersion = required
@@ -202,6 +198,40 @@ func (r *ModelVersionRequirements) GateCatalog(catalog ports.AgentModelCatalog, 
 	}
 	catalog.Models = models
 	return catalog
+}
+
+// tooNew reports the known minimum version for model when current predates it.
+// A context-window suffix ("claude-opus-5-5[1m]") names the same model.
+func (r *ModelVersionRequirements) tooNew(model string, current cliVersion) (string, bool) {
+	model, _, _ = strings.Cut(model, "[")
+	required, known := r.Required(model)
+	if !known {
+		return "", false
+	}
+	minimum, valid := parseCLIVersion(required)
+	if !valid || !current.less(minimum) {
+		return "", false
+	}
+	return required, true
+}
+
+// UnsupportedModelReason explains why the Claude Code at binary cannot use
+// model, or returns "" when it can or AO cannot tell. Family aliases are never
+// gated: each CLI version resolves them to a model it supports.
+func UnsupportedModelReason(ctx context.Context, binary, model string) string {
+	installed, ok := InstalledVersion(ctx, binary)
+	if !ok {
+		return ""
+	}
+	current, ok := parseCLIVersion(installed)
+	if !ok {
+		return ""
+	}
+	required, gated := DefaultModelVersionRequirements().tooNew(strings.TrimSpace(model), current)
+	if !gated {
+		return ""
+	}
+	return VersionTooOldMessage(installed, required)
 }
 
 // VersionTooOldMessage is the user-facing explanation and remedy.

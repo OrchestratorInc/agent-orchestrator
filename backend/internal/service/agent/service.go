@@ -616,7 +616,9 @@ func (s *Service) RevalidateModels(ctx context.Context, agentID, scope string) (
 	if err != nil {
 		return catalog, err
 	}
-	return s.withModelUsage(ctx, agentID, catalog), nil
+	// Pickers replace their catalog with this response, so it is gated like a
+	// read; the durable cache stays the raw discovered list.
+	return s.gateModels(ctx, agentID, s.withModelUsage(ctx, agentID, catalog)), nil
 }
 
 // revalidateModels is the unstamped variant for background callers that discard

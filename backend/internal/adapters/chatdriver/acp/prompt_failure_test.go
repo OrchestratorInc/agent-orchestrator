@@ -315,6 +315,90 @@ func TestRetryEpisodesKeepRecoveredDiagnosticsAndReplayIdentity(t *testing.T) {
 	}
 }
 
+func TestTurnHooksSeeTheModelTheTurnStartedWith(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		turnModel string
+		want      string
+	}{
+		{name: "model changed mid-turn", turnModel: "model-A", want: "model-A"},
+		// A turn reattached after a restart has no recorded model; the current
+		// selection is not evidence of what it ran on.
+		{name: "reattached turn", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var failureModel, servedSelected string
+			servedCalled := false
+			conv := &conversation{
+				sessionID: "session-1", activeTurn: "turn-1",
+				events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
+				configOptions: []ports.ChatConfigOption{{
+					ID: "model", Type: ports.ChatConfigOptionSelect,
+					// The user switched to B while the turn was still running on A.
+					Current: ports.ChatConfigOptionValue{Select: "model-B"},
+				}},
+				promptResponseFailure: func(_ acpsdk.PromptResponse, model string) error {
+					failureModel = model
+					return nil
+				},
+				servedModel: func(_ context.Context, _, selected string) (string, string) {
+					servedCalled = true
+					servedSelected = selected
+					return "", ""
+				},
+			}
+			if tc.turnModel != "" {
+				conv.turnModelID, conv.turnModel = "turn-1", tc.turnModel
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil)
+			if failureModel != tc.want {
+				t.Fatalf("promptResponseFailure model = %q, want %q", failureModel, tc.want)
+			}
+			if tc.want == "" && servedCalled {
+				t.Fatalf("servedModel called for a turn with no recorded model (selected %q)", servedSelected)
+			}
+			if tc.want != "" && servedSelected != tc.want {
+				t.Fatalf("servedModel selected = %q, want %q", servedSelected, tc.want)
+			}
+		})
+	}
+}
+
+func TestModelSwitchRefusesWhatTheBindingRejects(t *testing.T) {
+	rejected := errors.New("requires a newer CLI")
+	var checked []string
+	conv := &conversation{
+		sessionID: "session-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
+		configOptions: []ports.ChatConfigOption{{
+			ID: "model", Type: ports.ChatConfigOptionSelect,
+			Current: ports.ChatConfigOptionValue{Select: "model-old"},
+			Choices: []ports.ChatConfigOptionChoice{{Value: "model-old"}, {Value: "model-new"}},
+		}},
+		validateModel: func(_ context.Context, model string) error {
+			checked = append(checked, model)
+			if model == "model-new" {
+				return rejected
+			}
+			return nil
+		},
+	}
+	ctx := context.Background()
+	_, err := conv.SetConfigOption(ctx, "model", ports.ChatConfigOptionValue{Select: "model-new"})
+	if !errors.Is(err, ports.ErrChatConfigOptionInvalid) || !errors.Is(err, rejected) {
+		t.Fatalf("SetConfigOption error = %v, want the binding's rejection as an invalid option", err)
+	}
+	if _, err := conv.SendTurn(ctx, ports.ChatUserMessage{Text: "hi", Settings: ports.ChatTurnSettings{Model: "model-new"}}); !errors.Is(err, rejected) {
+		t.Fatalf("SendTurn error = %v, want the binding's rejection", err)
+	}
+	// A session already on the model is not re-checked, so it still opens.
+	if err := conv.checkModelSwitch(ctx, "model-old"); err != nil {
+		t.Fatalf("current model refused: %v", err)
+	}
+	if len(checked) != 2 {
+		t.Fatalf("validated %v, want only the two switches to model-new", checked)
+	}
+}
+
 func TestACPReplayedPromptFailure(t *testing.T) {
 	meta := testPromptFailureMeta(map[string]any{
 		"id": "failure-1", "severity": "error", "title": "Provider rejected this request", "details": "Original provider details",

@@ -160,6 +160,14 @@ type conversation struct {
 	// binding cannot tell. lastServedModel suppresses repeating the same report.
 	servedModel     func(ctx context.Context, sessionID, selectedModel string) (string, string)
 	lastServedModel string
+	// validateModel rejects a model the binding knows the agent cannot use;
+	// nil when the binding has no such knowledge.
+	validateModel func(ctx context.Context, model string) error
+	// turnModel is the model selected when turn turnModelID started. The
+	// selection can change while a turn runs, so turn-scoped facts (a version
+	// rejection, the model that answered) are attributed to this value instead.
+	turnModel   string
+	turnModelID string
 
 	contextTokens     int64
 	contextWindow     int64
@@ -473,6 +481,9 @@ func (c *conversation) SendTurn(ctx context.Context, msg ports.ChatUserMessage) 
 	if busy {
 		return ports.ChatTurnRef{}, errors.New("ACP conversation already has a turn in flight")
 	}
+	if err := c.checkModelSwitch(ctx, msg.Settings.Model); err != nil {
+		return ports.ChatTurnRef{}, err
+	}
 	if err := c.applyTurnSettings(ctx, msg.Settings); err != nil {
 		return ports.ChatTurnRef{}, err
 	}
@@ -495,6 +506,19 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 		c.prepared = nil
 	}
 	c.mu.Unlock()
+}
+
+// checkModelSwitch refuses a switch to a model the binding knows the agent
+// cannot use. Only a change is checked: a session already on such a model must
+// still open, so the user can pick another one.
+func (c *conversation) checkModelSwitch(ctx context.Context, model string) error {
+	if c.validateModel == nil || model == "" || model == c.configOptionCurrent("model") {
+		return nil
+	}
+	if err := c.validateModel(ctx, model); err != nil {
+		return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+	}
+	return nil
 }
 
 func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.ChatTurnSettings) error {
@@ -717,6 +741,8 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 		c.preambleSpent = true
 	}
 	c.activeTurn = turn.id
+	c.turnModelID = turn.id
+	c.turnModel = c.configOptionCurrentLocked("model")
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
@@ -759,11 +785,11 @@ func (c *conversation) runTurn(ctx context.Context, sessionID string, turn prepa
 // binding can see it and it differs from the selection, such as an alias that
 // the installed CLI resolves to an older concrete model. Each distinct
 // (selection, served) pair is reported once rather than on every turn.
-func (c *conversation) reportServedModel(turnID string) {
+// selected is the model the turn started with, not the current selection.
+func (c *conversation) reportServedModel(turnID, selected string) {
 	if c.servedModel == nil {
 		return
 	}
-	selected := c.configOptionCurrent("model")
 	c.mu.Lock()
 	sessionID := c.sessionID
 	c.mu.Unlock()
@@ -816,6 +842,12 @@ func (c *conversation) finishPrompt(
 	interrupt := c.interrupt
 	isCompaction := c.compactingTurnID != "" && c.compactingTurnID == turnID
 	answered := len(c.messages) > 0 || len(c.tools) > 0
+	// "" when the turn started before this controller (a reattached durable
+	// turn): its model is unknown, and the current selection may not be it.
+	turnModel := ""
+	if c.turnModelID == turnID {
+		turnModel = c.turnModel
+	}
 	c.mu.Unlock()
 	c.settleOpenItems(turnID)
 	interruptedLocally := false
@@ -838,7 +870,7 @@ func (c *conversation) finishPrompt(
 	} else {
 		state = turnState(resp.StopReason)
 		if c.promptResponseFailure != nil && state != domain.TurnStateInterrupted && !interruptedLocally {
-			if failure := c.promptResponseFailure(resp, c.configOptionCurrent("model")); failure != nil {
+			if failure := c.promptResponseFailure(resp, turnModel); failure != nil {
 				state = domain.TurnStateFailed
 				turnErr = failure
 			}
@@ -879,7 +911,7 @@ func (c *conversation) finishPrompt(
 		// of the earlier rejection. The projector ignores this when no durable
 		// reauthentication demand exists.
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventAccountChanged, Account: &ports.ChatAccount{ReauthRecovered: true}})
-		c.reportServedModel(turnID)
+		c.reportServedModel(turnID, turnModel)
 	}
 	if isCompaction {
 		if state == domain.TurnStateCompleted {
@@ -949,6 +981,8 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	before := c.contextTokens
 	id := uuid.NewString()
 	c.activeTurn = id
+	c.turnModelID = id
+	c.turnModel = c.configOptionCurrentLocked("model")
 	c.compactingTurnID = id
 	c.compactionBefore = before
 	c.compactionSummary = ""

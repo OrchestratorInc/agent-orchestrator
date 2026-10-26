@@ -29,7 +29,14 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudAgentInfos, connectedCredentialType, credentialModelScope, isCloudHarnessConnected } from "../lib/cloud-agents";
 import { createCloudSession } from "../lib/cloud-session-create";
-import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../lib/agent-model-choices";
+import {
+	agentModelDisplayLabel,
+	isConcreteModelID,
+	isModelSelectable,
+	modelChoiceLabel,
+	splitClaudeModels,
+	withoutLocalAvailability,
+} from "../lib/agent-model-choices";
 import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
 import { ToggleRow } from "./chat/AgentSwitchPicker";
 import { fallbackEffort } from "../lib/effort";
@@ -458,11 +465,17 @@ export function TaskComposer({
 	const modelAuthIssue = revalidationWarning === undefined ? modelCatalogAuthIssue(modelCatalogQuery.data) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
 	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
-	const { models: offeredModels } = useOfferedModels(selectedAgent, modelCatalogQuery.data?.models, {
+	const { models: localOfferedModels } = useOfferedModels(selectedAgent, modelCatalogQuery.data?.models, {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
 		skip: isCloudProject,
 	});
+	// The daemon marks models this computer's agent CLI is too old for. A cloud task
+	// runs on the worker's own CLI, so those marks say nothing about it.
+	const offeredModels = useMemo(
+		() => (isCloudProject ? withoutLocalAvailability(localOfferedModels) : localOfferedModels),
+		[isCloudProject, localOfferedModels],
+	);
 	const modelCatalog: TaskComposerModelCatalog | undefined = modelCatalogQuery.data
 		? {
 				allowCustom: modelCatalogQuery.data.allowCustom,
@@ -476,27 +489,30 @@ export function TaskComposer({
 		: undefined;
 	// An unmarked first row is not evidence of what the provider will run.
 	const catalogModels = offeredModels.filter((item) => isConcreteModelID(item.id));
+	// Automatic choices never land on a model the picker shows as unavailable.
+	const selectableModels = catalogModels.filter(isModelSelectable);
 	const catalogDefaultOption =
-		catalogModels.find((item) => item.isDefault)?.id ?? "";
+		selectableModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogDefaultHidden = Boolean(modelCatalogQuery.data?.models?.some(
 		(item) => item.isDefault && isConcreteModelID(item.id) && !catalogModels.some((offered) => offered.id === item.id),
 	));
 	const catalogUsesModes = modelCatalogQuery.data?.selectionMode === "mode";
 	// The model this user ran most recently.
 	const lastUsedOption =
-		catalogModels
+		selectableModels
 			.filter((item) => item.lastUsedAt)
 			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
 	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
 	const claudeFallbackOption =
 		selectedAgent === "claude-code" && !catalogUsesModes
-			? (splitClaudeModels(catalogModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
+			? (splitClaudeModels(selectableModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
 			: "";
 	const rememberedConfigForSelectedAgent = agentDrafts[selectedAgent];
 	const rememberedModel = rememberedConfigForSelectedAgent?.model ?? "";
 	const rememberedMode = rememberedConfigForSelectedAgent?.mode ?? "";
 	const rememberedModelIsValid =
 		isConcreteModelID(rememberedModel) &&
+		!catalogModels.some((item) => item.id === rememberedModel && !isModelSelectable(item)) &&
 		Boolean(
 			modelCatalogQuery.data &&
 				(modelCatalogQuery.data.allowCustom || catalogModels.some((item) => item.id === rememberedModel)),
@@ -511,7 +527,7 @@ export function TaskComposer({
 		claudeFallbackOption ||
 		// Only replace a default the catalog identified and Settings hid. An
 		// unreported default must keep the native model/provider selection.
-		(!catalogUsesModes && catalogDefaultHidden ? catalogModels[0]?.id ?? "" : "");
+		(!catalogUsesModes && catalogDefaultHidden ? selectableModels[0]?.id ?? "" : "");
 	const defaultModeForSelectedAgent =
 		(rememberedModeIsValid ? rememberedMode : "") ||
 		(isConcreteModelID(projectModeForSelectedAgent) ? projectModeForSelectedAgent : "") ||
