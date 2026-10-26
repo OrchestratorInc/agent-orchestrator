@@ -354,9 +354,12 @@ describe("CommandPalette workspace file search", () => {
 
 	it("does not show another host's file results for the same session id", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
-		getMock.mockImplementation(async (path: string, init: { params: { query: { query: string } } }) => {
+		// Only the first search (the local host) answers.
+		let fileSearches = 0;
+		getMock.mockImplementation(async (path: string) => {
 			if (path.endsWith("/workspace/search")) {
-				if (init.params.query.query === "zqx1") return { data: { query: "zqx1", results: [{ path: "src/local-only.ts" }], truncated: false } };
+				fileSearches += 1;
+				if (fileSearches === 1) return { data: { query: "zqx1", results: [{ path: "src/local-only.ts" }], truncated: false } };
 				return new Promise(() => {});
 			}
 			if (path.endsWith("/workspace/search/content")) return { data: { results: [] } };
@@ -374,11 +377,7 @@ describe("CommandPalette workspace file search", () => {
 		for (const session of ctx.workspaces[0].sessions) session.hostId = "host-a";
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix", hostId: "host-a" };
 		rerenderPalette();
-		fireEvent.change(input, { target: { value: "zqx2" } });
-		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
-			expect.stringContaining("/workspace/search"),
-			expect.objectContaining({ params: expect.objectContaining({ query: { query: "zqx2", limit: 20 } }) }),
-		));
+		await waitFor(() => expect(fileSearches).toBe(2));
 		expect(screen.queryByText(rowTitle("local-only.ts"))).not.toBeInTheDocument();
 	});
 

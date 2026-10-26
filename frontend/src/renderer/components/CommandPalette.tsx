@@ -125,8 +125,8 @@ export function CommandPalette() {
 	// The action that holds the palette, so a finished older one can't release a
 	// newer one that is still running.
 	const pendingRef = useRef<symbol | null>(null);
-	// cmdk picks the first row by itself whenever the query changes; only a key
-	// press or pointer move counts as the user choosing one.
+	// cmdk selects the first row by itself whenever the query changes; only a
+	// navigation key or pointer move counts as the user choosing one.
 	const userPickRef = useRef(false);
 	const runGenerationRef = useRef(0);
 	const viewRef = useRef(view);
@@ -368,16 +368,6 @@ export function CommandPalette() {
 		|| contentSearchQuery.isPlaceholderData
 		|| chatSearchQuery.isPlaceholderData;
 	const autoSelectable = (item: CommandItemModel) => !item.disabled && !(searchStale && isSearchGroup(item.group));
-	const autoSelectableRef = useRef(autoSelectable);
-	autoSelectableRef.current = autoSelectable;
-	const visibleItemsRef = useRef(visibleItems);
-	visibleItemsRef.current = visibleItems;
-	// A stale search row cmdk picked on its own must not become Enter's target.
-	const handleValueChange = useCallback((next: string) => {
-		const item = visibleItemsRef.current.find((candidate) => candidate.id === next);
-		if (item && !userPickRef.current && !autoSelectableRef.current(item)) return;
-		setSelectedValue(next);
-	}, []);
 	const value =
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
 			? selectedValue
@@ -897,7 +887,7 @@ export function CommandPalette() {
 				commandProps={{
 					shouldFilter: false,
 					value,
-					onValueChange: handleValueChange,
+					onValueChange: setSelectedValue,
 					onKeyDownCapture: (event) => {
 						if (isRowNavigationKey(event)) userPickRef.current = true;
 					},
@@ -939,6 +929,17 @@ export function CommandPalette() {
 								const wantsSecondary = (event.key === "Enter" && (event.metaKey || event.ctrlKey))
 									|| (event.key === "ArrowRight" && !event.shiftKey && !event.metaKey && !event.altKey && !event.ctrlKey
 										&& event.currentTarget.selectionStart === query.length);
+								// A row an earlier search found, which cmdk selected on its own,
+								// is not opened until the user moves onto it. cmdk keeps its own
+								// copy of the selection, so ask the list which row it has.
+								const cmdkSelectedId = event.currentTarget.closest("[cmdk-root]")
+									?.querySelector("[cmdk-item][aria-selected='true']")?.getAttribute("data-value");
+								const cmdkSelected = visibleItems.find((item) => item.id === cmdkSelectedId);
+								if ((event.key === "Enter" || wantsSecondary) && cmdkSelected && !userPickRef.current && !autoSelectable(cmdkSelected)) {
+									event.preventDefault();
+									event.stopPropagation();
+									return;
+								}
 								if (wantsSecondary && selectedItem?.secondaryAction) {
 									event.preventDefault();
 									event.stopPropagation();
