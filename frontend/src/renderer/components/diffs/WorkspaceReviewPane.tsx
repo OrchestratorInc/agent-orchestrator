@@ -242,7 +242,7 @@ export function WorkspaceReviewPane({
 	);
 	// A fresh target/filter starts on its first page in the same render, so it
 	// cannot briefly fetch a previous target's page before an effect resets it.
-	const pageKey = JSON.stringify([viewedSessionKey, reviewSelectionKey, selectionKey, workspaceVersion, normalizedFilter]);
+	const pageKey = JSON.stringify([viewedSessionKey, reviewSelectionKey, selectionKey, normalizedFilter]);
 	const [page, setPage] = useState({ key: pageKey, index: 0 });
 	const pageCount = Math.max(1, Math.ceil(filteredFiles.length / WORKSPACE_REVIEW_PAGE_SIZE));
 	const pageIndex = page.key === pageKey ? Math.min(page.index, pageCount - 1) : 0;

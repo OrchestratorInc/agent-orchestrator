@@ -406,6 +406,31 @@ describe("WorkspaceReviewPane", () => {
 		expect(screen.getByText("Files 1–96 of 5123")).toBeInTheDocument();
 	}, 60_000);
 
+	it("preserves the review page across manifest refreshes and clamps it when files disappear", async () => {
+		const files = Array.from({ length: 193 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 20, binary: true, fileFingerprint: "before" }));
+		const target = reviewTarget(workspace(files));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const pane = (selected = target) => (
+			<QueryClientProvider client={client}><TooltipProvider><WorkspaceReviewPane annotation={annotation()} target={selected} filter="" sessionId="sess-1" split={false} /></TooltipProvider></QueryClientProvider>
+		);
+		const view = render(pane());
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 97–192 of 193")).toBeInTheDocument();
+		const refreshed = { ...target, workspaceVersion: "workspace-2", files: files.map((file) => ({ ...file, fileFingerprint: "after" })) };
+		view.rerender(pane(refreshed));
+		expect(screen.getByText("Files 97–192 of 193")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByText("Files 193–193 of 193")).toBeInTheDocument();
+		view.rerender(pane({ ...refreshed, workspaceVersion: "workspace-3", files: refreshed.files.slice(0, 100) }));
+		expect(screen.getByText("Files 97–100 of 100")).toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(4);
+		view.rerender(pane({ ...refreshed, workspaceVersion: "workspace-4", files: refreshed.files.slice(0, 50) }));
+		expect(await screen.findByRole("checkbox", { name: "Mark file-0.dat as viewed" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Next files" })).not.toBeInTheDocument();
+		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(50);
+	}, 60_000);
+
 	it("bounds binary and deferred fallback rows, including Expand all", async () => {
 		const files = Array.from({ length: 5123 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 600_000, binary: index % 2 === 0 }));
 		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
