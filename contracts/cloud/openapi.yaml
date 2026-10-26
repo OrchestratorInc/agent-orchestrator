@@ -1237,6 +1237,130 @@ paths:
                     $ref: "#/components/schemas/SessionChatSettings"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests/{number}/merge-requests:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: number
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    post:
+      operationId: requestPullRequestMerge
+      tags: [Sessions]
+      description: Ask the owner of a shared project to merge one of the session's pull requests. Only someone the project or session was shared with, who may write in the session, asks; a merge by them is refused with MERGE_NEEDS_APPROVAL. Asking again while a request is pending returns it. The session's creator is notified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [prUrl]
+              properties:
+                prUrl:
+                  type: string
+      responses:
+        "200":
+          description: The pending merge request.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequest]
+                properties:
+                  mergeRequest:
+                    $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/projects/{projectId}/merge-requests:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/ProjectId"
+    get:
+      operationId: listProjectMergeRequests
+      tags: [Sessions]
+      description: A project's merge requests, pending first, then newest first. A member of the organization sees them all; someone the project was shared with sees their own.
+      responses:
+        "200":
+          description: The merge requests.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequests]
+                properties:
+                  mergeRequests:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/approve:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: approveMergeRequest
+      tags: [Sessions]
+      description: Merge the requested pull request as the approving owner (the session's creator, or an organization owner or admin), through the same readiness checks as their own merge, and tell the guest. A pull request that cannot merge leaves the request pending.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedHeadSha]
+              properties:
+                expectedHeadSha:
+                  type: string
+      responses:
+        "202":
+          description: GitHub accepted the merge; the request is recorded as merged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequest]
+                properties:
+                  mergeRequest:
+                    $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/reject:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: rejectMergeRequest
+      tags: [Sessions]
+      description: Decline a pending merge request and tell the guest.
+      responses:
+        "200":
+          description: The declined request.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mergeRequest]
+                properties:
+                  mergeRequest:
+                    $ref: "#/components/schemas/MergeRequest"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/session-participants:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -6488,6 +6612,58 @@ components:
             $ref: "#/components/schemas/SessionViewer"
         composer:
           $ref: "#/components/schemas/ComposerLeaseState"
+    MergeRequest:
+      type: object
+      additionalProperties: false
+      description: A guest's request that a shared project's owner merge a pull request.
+      required: [id, projectId, sessionId, sessionName, pullRequest, requestedBy, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        sessionName:
+          type: string
+        pullRequest:
+          type: object
+          additionalProperties: false
+          required: [id, number, url, title, repository]
+          properties:
+            id:
+              type: string
+            number:
+              type: integer
+            url:
+              type: string
+            title:
+              type: string
+            repository:
+              type: string
+        requestedBy:
+          $ref: "#/components/schemas/MergeRequestPerson"
+        status:
+          type: string
+          enum: [pending, merged, rejected]
+        decidedBy:
+          $ref: "#/components/schemas/MergeRequestPerson"
+        decidedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    MergeRequestPerson:
+      type: object
+      additionalProperties: false
+      required: [userId, name]
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
     SharedSessionParticipants:
       type: object
       additionalProperties: false

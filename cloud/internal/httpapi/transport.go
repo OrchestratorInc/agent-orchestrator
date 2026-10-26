@@ -84,6 +84,9 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, postgres.ErrNotOrchestratorChild):
 		writeError(w, r, http.StatusNotFound, "not_orchestrator_child",
 			"That session is not one this orchestrator started. An orchestrator can only kill or message the sessions it spawned.")
+	case errors.Is(err, postgres.ErrMergeNeedsApproval):
+		writeError(w, r, http.StatusForbidden, "MERGE_NEEDS_APPROVAL",
+			"Only the project's owner can merge this pull request. Ask them to merge it.")
 	case errors.Is(err, postgres.ErrForbidden):
 		writeError(w, r, http.StatusForbidden, "forbidden", "You do not have access to this organization.")
 	case errors.Is(err, postgres.ErrNotFound):
