@@ -85,6 +85,7 @@
 	"chat.usageLimit.manualResumeHint": "Puedes intentar reanudar manualmente.",
 	"chat.usageLimit.ready": "Ya llegó la hora de restablecimiento. Puedes reanudar ahora.",
 	"chat.usageLimit.accountChanged": "Este chat ahora usa otra cuenta. Puedes reanudar ahora.",
+	"chat.usageLimit.continueOn": "Continuar con {{account}}",
 	"chat.usageLimit.availableIn": "Disponible en <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "La reanudación automática está programada.",
 	"chat.usageLimit.waiting": "La reanudación automática está esperando para volver a intentarlo.",

@@ -85,6 +85,7 @@
 	"chat.usageLimit.manualResumeHint": "Você pode tentar retomar manualmente.",
 	"chat.usageLimit.ready": "O horário de redefinição chegou. Você pode retomar agora.",
 	"chat.usageLimit.accountChanged": "Este chat agora usa outra conta. Você pode retomar agora.",
+	"chat.usageLimit.continueOn": "Continuar com {{account}}",
 	"chat.usageLimit.availableIn": "Disponível em <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "A retomada automática está agendada.",
 	"chat.usageLimit.waiting": "A retomada automática está aguardando uma nova tentativa.",

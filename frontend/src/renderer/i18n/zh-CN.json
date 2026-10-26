@@ -85,6 +85,7 @@
 	"chat.usageLimit.manualResumeHint": "你可以尝试手动恢复。",
 	"chat.usageLimit.ready": "已到重置时间。现在可以恢复。",
 	"chat.usageLimit.accountChanged": "此聊天现在使用另一个账号。现在可以恢复。",
+	"chat.usageLimit.continueOn": "改用 {{account}} 继续",
 	"chat.usageLimit.availableIn": "<duration>{{duration}}</duration>后可恢复。",
 	"chat.usageLimit.scheduled": "已安排自动恢复。",
 	"chat.usageLimit.waiting": "自动恢复正在等待重试。",

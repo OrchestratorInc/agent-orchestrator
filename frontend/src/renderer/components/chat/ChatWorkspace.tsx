@@ -161,6 +161,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { UsageLimitNotice } from "./UsageLimitNotice";
+import { useUsageLimitContinue } from "../../hooks/useUsageLimitContinue";
 import {
 	activeTurn,
 	activityPlan,
@@ -820,6 +821,13 @@ function ChatWorkspaceContent({
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
 		latestSettledTurn.hasHumanPrompt
 		? latestSettledTurn : undefined;
+	const continueOn = useUsageLimitContinue({
+		sessionId: snapshot.sessionId,
+		harness: snapshot.harness,
+		limitedTurnId: limitedTurn?.id,
+		enabled: Boolean(limitedTurn && !limitedTurn.usageLimit?.accountChanged && !activeRemoteHostId && !session?.cloud),
+		retry: retryControl?.retry,
+	});
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
 	// "stopped" snapshot is still part of that wake, not a crashed agent.
@@ -1917,6 +1925,9 @@ function ChatWorkspaceContent({
 										disabled={Boolean(turn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
 										error={(retryControl.turnId === limitedTurn.id ? retryControl.error : undefined) ??
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
+										continueOn={continueOn
+											? { account: continueOn.account, onContinue: continueOn.start, pending: continueOn.pending, error: continueOn.error }
+											: undefined}
 									/>
 								) : null}
 								{conversationEmpty ? (

@@ -85,6 +85,7 @@
 	"chat.usageLimit.manualResumeHint": "You can try resuming manually.",
 	"chat.usageLimit.ready": "Reset time reached. You can resume now.",
 	"chat.usageLimit.accountChanged": "This chat now uses another account. You can resume now.",
+	"chat.usageLimit.continueOn": "Continue on {{account}}",
 	"chat.usageLimit.availableIn": "Available in <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "Auto-resume is scheduled.",
 	"chat.usageLimit.waiting": "Auto-resume is waiting to retry.",

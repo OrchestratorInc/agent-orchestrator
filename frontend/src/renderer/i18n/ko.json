@@ -85,6 +85,7 @@
 	"chat.usageLimit.manualResumeHint": "수동으로 재개를 시도할 수 있습니다.",
 	"chat.usageLimit.ready": "초기화 시간이 되었습니다. 지금 재개할 수 있습니다.",
 	"chat.usageLimit.accountChanged": "이 채팅은 이제 다른 계정을 사용합니다. 지금 재개할 수 있습니다.",
+	"chat.usageLimit.continueOn": "{{account}}(으)로 계속",
 	"chat.usageLimit.availableIn": "<duration>{{duration}}</duration> 후에 재개할 수 있습니다.",
 	"chat.usageLimit.scheduled": "자동 재개가 예약되었습니다.",
 	"chat.usageLimit.waiting": "자동 재개가 재시도를 기다리고 있습니다.",
