@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { adjustTerminalViewport } from "./terminalViewport";
+import { adjustTerminalViewport, fitTerminalViewport } from "./terminalViewport";
 
 describe("terminal viewport zoom", () => {
 	it("adjusts the live WebView viewport without replacing the terminal renderer", () => {
@@ -15,7 +15,15 @@ describe("terminal viewport zoom", () => {
 		]);
 	});
 
+	it("fits the grid's width through the same injection", () => {
+		const injectJavaScript = vi.fn();
+
+		expect(fitTerminalViewport({ injectJavaScript })).toBe(true);
+		expect(injectJavaScript).toHaveBeenCalledWith("window.__aoFitTerminalWidth(); true;");
+	});
+
 	it("does nothing until the terminal renderer is ready", () => {
 		expect(adjustTerminalViewport(null, 1)).toBe(false);
+		expect(fitTerminalViewport(null)).toBe(false);
 	});
 });

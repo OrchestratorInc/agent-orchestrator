@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { Alert, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApiError, getPreview, killSession, killSessionReviewer, sendMessage } from "../api";
@@ -36,11 +36,13 @@ import {
 	useInterfaceTransition,
 } from "./useInterfaceTransition";
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
-import { adjustTerminalViewport } from "./terminalViewport";
+import { adjustTerminalViewport, fitTerminalViewport } from "./terminalViewport";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
-import { iconSize, press, space, touchTarget, type } from "../tokens";
+import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../tokens";
 import { toolbarIcon } from "../toolbarIcon";
 import { Spinner } from "../Spinner";
+import { AppSymbol } from "../AppSymbol";
+import { rowDividerWidth } from "../divider";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -104,9 +106,9 @@ const TERMINAL_ENHANCE_JS = `
   // The daemon may hold the grid wider than the phone (a co-viewing desktop
   // drives the size). Start at 1:1 so a desktop-sized grid remains readable on
   // the phone and is locally cropped instead of becoming a tiny overview. Pinch
-  // and the native +/- controls zoom between fit-to-width and 2x; while zoomed,
-  // one finger pans the viewport (vertical overshoot spills into scrollback) and
-  // double-tap toggles overview <-> 1:1.
+  // and the header menu's Smaller / Larger zoom between fit-to-width and 2x;
+  // while zoomed, one finger pans the viewport (vertical overshoot spills into
+  // scrollback) and double-tap toggles overview <-> 1:1.
   // While zoomed we auto-pan to keep the cursor framed, so the prompt/output
   // stays in view without chasing it by hand.
   function term() { return window.terminal; }
@@ -159,13 +161,19 @@ const TERMINAL_ENHANCE_JS = `
     if (!Z.zoomed) { Z.s = Z.min; Z.tx = 0; Z.ty = 0; }
     clampT(b); applyTransform(b);
   }
-  // RN's +/- buttons call this through the WebView's imperative injection hook.
-  // This changes only the phone's CSS viewport: xterm stays mounted and the
-  // daemon-owned PTY grid is never resized, so a co-viewing desktop is unaffected.
+  // The header menu's Smaller / Larger / Fit width call these through the
+  // WebView's injectJavaScript. They change only the phone's CSS viewport: xterm
+  // stays mounted and the daemon-owned PTY grid is never resized, so a
+  // co-viewing desktop is unaffected.
   window.__aoAdjustTerminalZoom = function (direction) {
     var b = box(); if (!b || (direction !== 1 && direction !== -1)) return;
     setZoom(Z.s + direction * 0.2, b.contW / 2, b.contH / 2);
     Z.lastPan = Date.now();
+  };
+  // Back to the overview: the whole grid's width on screen, as a double-tap
+  // out of a zoom does.
+  window.__aoFitTerminalWidth = function () {
+    setZoom(Z.min, 0, 0);
   };
   // Auto-pan so the cursor stays framed while zoomed in. Backs off for a few
   // seconds after a manual pan/pinch (never fight the finger) and only follows
@@ -529,12 +537,6 @@ const TERMINAL_ENHANCE_JS = `
 true;
 `;
 
-const statusColorFor = (t: Theme): Record<MuxStatus, string> => ({
-	connecting: t.amber,
-	open: t.green,
-	closed: t.textTertiary,
-	error: t.red,
-});
 
 function terminalInterfacePhaseLabel(phase?: string): string {
 	switch (phase) {
@@ -766,9 +768,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		};
 	}, []);
 
-	// Header shows just the short id; Kill lives in our own status bar below so we
-	// fully control its shape/alignment (iOS draws its own box behind header
-	// buttons, which fights any custom background).
+	// The title is just the short id; everything else the bar holds is a toolbar item.
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: shellOnly ? (params.title || "Worktree shell") : id.length > 22 ? `${id.slice(0, 20)}...` : id,
@@ -1137,61 +1137,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		router.push(filesRoute(sessionId, params.hostId, params.title));
 	}, [params.hostId, params.title, router, sessionId]);
 
-	// The header items reach their handlers through a ref. The transition hook
-	// returns a new object every render, so `requestInterfaceSwitch` is new every
-	// render too, and a new toolbar element registers the header's options again:
-	// keyed on it, the header would rebuild on every keystroke.
-	const headerActions = useRef({ requestInterfaceSwitch, toggleBrowser, openFiles });
-	headerActions.current = { requestInterfaceSwitch, toggleBrowser, openFiles };
-	const chatSwitchBusy = rechecking || interfaceSwitch.starting;
-	const chatSwitchReady = Boolean(interfaceSwitch.status?.supported);
-	const headerItems = useMemo(() => {
-		// Held back for the frame `resetHeaderRightForSwap` keeps the slot empty,
-		// so the bar never draws these over what the Chat renderer left there.
-		if (shellOnly || !headerRightReady) return null;
-		return (
-			<Stack.Toolbar placement="right">
-				{/* A spinner rather than a dimmed glyph: the recheck only runs while
-				    the glyph is already faint, so fading it further reads as broken.
-				    `starting` shows it too — that POST is disabled-but-silent for up
-				    to REQUEST_TIMEOUT_MS otherwise, the same dead-button shape the
-				    recheck spinner exists to remove. */}
-				{chatSwitchBusy ? (
-					<Stack.Toolbar.View hidesSharedBackground>
-						<View style={styles.headerSpinner}>
-							<Spinner color={t.accent} accessibilityLabel="Checking whether Chat can open" />
-						</View>
-					</Stack.Toolbar.View>
-				) : (
-					<Stack.Toolbar.Button
-						icon={toolbarIcon("chat")}
-						accessibilityLabel="Open Chat interface"
-						disabled={interfaceTransitionActive}
-						// Faint until the daemon says Chat can resume this session. It stays
-						// tappable: the tap asks again and explains what is missing.
-						tintColor={chatSwitchReady ? undefined : t.textFaint}
-						onPress={() => void headerActions.current.requestInterfaceSwitch()}
-					/>
-				)}
-				<Stack.Toolbar.Button
-					icon={toolbarIcon("globe")}
-					accessibilityLabel={hasPreview ? "Open preview, preview ready" : "Open preview"}
-					// iOS draws a bar-button badge only from iOS 26, and an empty one is
-					// a blank capsule there, so on iOS the globe itself turns green.
-					tintColor={hasPreview && Platform.OS === "ios" ? t.green : undefined}
-					onPress={() => headerActions.current.toggleBrowser()}
-				>
-					{hasPreview && Platform.OS !== "ios" ? <Stack.Toolbar.Badge style={{ backgroundColor: t.green }} /> : null}
-				</Stack.Toolbar.Button>
-				<Stack.Toolbar.Button
-					icon={toolbarIcon("fileSearch")}
-					accessibilityLabel="Session files and changes"
-					onPress={() => headerActions.current.openFiles()}
-				/>
-			</Stack.Toolbar>
-		);
-	}, [chatSwitchBusy, chatSwitchReady, hasPreview, headerRightReady, interfaceTransitionActive, shellOnly, styles, t]);
-
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
 			try {
@@ -1277,6 +1222,109 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const zoom = useCallback((delta: number) => {
 		adjustTerminalViewport(xtermRef.current, delta > 0 ? 1 : -1);
 	}, []);
+	const fitWidth = useCallback(() => {
+		fitTerminalViewport(xtermRef.current);
+	}, []);
+
+	// The header items reach their handlers through a ref. The transition hook
+	// returns a new object every render, so `requestInterfaceSwitch` is new every
+	// render too, and a new toolbar element registers the header's options again:
+	// keyed on it, the header would rebuild on every keystroke.
+	const headerActions = useRef({ requestInterfaceSwitch, toggleBrowser, openFiles, confirmKill, zoom, fitWidth });
+	headerActions.current = { requestInterfaceSwitch, toggleBrowser, openFiles, confirmKill, zoom, fitWidth };
+	const chatSwitchBusy = rechecking || interfaceSwitch.starting;
+	const chatSwitchReady = Boolean(interfaceSwitch.status?.supported);
+	const grid = size ? `${size.cols} × ${size.rows}` : undefined;
+	const headerItems = useMemo(() => {
+		// Held back for the frame `resetHeaderRightForSwap` keeps the slot empty,
+		// so the bar never draws these over what the Chat renderer left there.
+		if (!headerRightReady) return null;
+		const ios = Platform.OS === "ios";
+		// A dead session's way back is Restore, in the overlay; a dead shell can
+		// still be closed.
+		const canClose = shellOnly || !dead;
+		const close = reviewerPane
+			? { label: "Stop reviewer", symbol: "stop.circle" as const }
+			: shellOnly
+				? { label: "Close shell", symbol: "xmark" as const }
+				: { label: "Archive session", symbol: "archivebox" as const };
+		// Menu groups, separated the way each platform separates them: the first
+		// sits at the top, each later one in an inline section (a divider on
+		// Android), so no menu opens on a divider.
+		const groups: ReactElement[][] = [];
+		// iOS heads the menu with the shared grid's size; an M3 menu has no title,
+		// so Android lists it as an inert first row.
+		if (grid && !ios && !dead) groups.push([<Stack.Toolbar.MenuAction key="grid" disabled>{`Grid ${grid}`}</Stack.Toolbar.MenuAction>]);
+		// Zoom only the mobile viewport; the shared PTY grid stays unchanged.
+		// Pinch and double-tap zoom too.
+		if (!dead) {
+			groups.push([
+				<Stack.Toolbar.MenuAction key="smaller" icon={ios ? "textformat.size.smaller" : undefined} onPress={() => headerActions.current.zoom(-1)}>Smaller</Stack.Toolbar.MenuAction>,
+				<Stack.Toolbar.MenuAction key="larger" icon={ios ? "textformat.size.larger" : undefined} onPress={() => headerActions.current.zoom(1)}>Larger</Stack.Toolbar.MenuAction>,
+				<Stack.Toolbar.MenuAction key="fit" icon={ios ? "arrow.left.and.right" : undefined} onPress={() => headerActions.current.fitWidth()}>Fit width</Stack.Toolbar.MenuAction>,
+			]);
+		}
+		if (canClose) {
+			groups.push([
+				<Stack.Toolbar.MenuAction key="close" destructive icon={ios ? close.symbol : undefined} onPress={() => headerActions.current.confirmKill()}>
+					{close.label}
+				</Stack.Toolbar.MenuAction>,
+			]);
+		}
+		const menuItems = groups.flatMap((group, index) =>
+			index === 0 ? group : [<Stack.Toolbar.Menu key={`group-${index}`} inline>{group}</Stack.Toolbar.Menu>],
+		);
+		return (
+			<Stack.Toolbar placement="right">
+				{/* A spinner rather than a dimmed glyph: the recheck only runs while
+				    the glyph is already faint, so fading it further reads as broken.
+				    `starting` shows it too — that POST is disabled-but-silent for up
+				    to REQUEST_TIMEOUT_MS otherwise, the same dead-button shape the
+				    recheck spinner exists to remove. */}
+				{shellOnly ? null : chatSwitchBusy ? (
+					<Stack.Toolbar.View hidesSharedBackground>
+						<View style={styles.headerSpinner}>
+							<Spinner color={t.accent} accessibilityLabel="Checking whether Chat can open" />
+						</View>
+					</Stack.Toolbar.View>
+				) : (
+					<Stack.Toolbar.Button
+						icon={toolbarIcon("chat")}
+						accessibilityLabel="Open Chat interface"
+						disabled={interfaceTransitionActive}
+						// Faint until the daemon says Chat can resume this session. It stays
+						// tappable: the tap asks again and explains what is missing.
+						tintColor={chatSwitchReady ? undefined : t.textFaint}
+						onPress={() => void headerActions.current.requestInterfaceSwitch()}
+					/>
+				)}
+				{shellOnly ? null : (
+					<Stack.Toolbar.Button
+						icon={toolbarIcon("globe")}
+						accessibilityLabel={hasPreview ? "Open preview, preview ready" : "Open preview"}
+						// iOS draws a bar-button badge only from iOS 26, and an empty one is
+						// a blank capsule there, so on iOS the globe itself turns green.
+						tintColor={hasPreview && ios ? t.green : undefined}
+						onPress={() => headerActions.current.toggleBrowser()}
+					>
+						{hasPreview && !ios ? <Stack.Toolbar.Badge style={{ backgroundColor: t.green }} /> : null}
+					</Stack.Toolbar.Button>
+				)}
+				{shellOnly ? null : (
+					<Stack.Toolbar.Button
+						icon={toolbarIcon("fileSearch")}
+						accessibilityLabel="Session files and changes"
+						onPress={() => headerActions.current.openFiles()}
+					/>
+				)}
+				{menuItems.length ? (
+					<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions" title={grid && ios && !dead ? `Grid ${grid}` : undefined}>
+						{menuItems}
+					</Stack.Toolbar.Menu>
+				) : null}
+			</Stack.Toolbar>
+		);
+	}, [chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, styles, t]);
 
 	const webViewOptions = useMemo(
 		() => ({
@@ -1316,64 +1364,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	return (
 		<View style={[styles.screen, rootPad > 0 && { paddingBottom: rootPad }]}>
 			{headerItems}
-			<View style={styles.statusBar}>
-				<View style={[styles.statusDot, { backgroundColor: statusColorFor(t)[status] }]} />
-				{/* Status-bar chrome: capped so the toolbar keeps its height and the
-				    terminal grid keeps its rows at accessibility text sizes. */}
-				<Text style={styles.statusText} numberOfLines={1} maxFontSizeMultiplier={1.4}>
-					{TERMINAL_STATUS_LABEL[status]}
-				</Text>
-				{size && !dead && (
-					<Text style={styles.dims} numberOfLines={1} maxFontSizeMultiplier={1.4}>
-						{size.cols}x{size.rows}
-					</Text>
-				)}
-				{/* Zoom only the mobile viewport; the shared PTY grid stays unchanged. */}
-				{!dead && (
-					<View style={styles.zoomGroup}>
-						<Pressable
-							hitSlop={6}
-							accessibilityLabel="Smaller text"
-							onPress={() => { haptics.tap(); zoom(-1); }}
-							style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: press.opacity }]}
-						>
-							<Feather name="minus" size={iconSize.xs} color={t.textSecondary} />
-						</Pressable>
-						<View style={styles.zoomDivider} />
-						<Pressable
-							hitSlop={6}
-							accessibilityLabel="Larger text"
-							onPress={() => { haptics.tap(); zoom(1); }}
-							style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: press.opacity }]}
-						>
-							<Feather name="plus" size={iconSize.xs} color={t.textSecondary} />
-						</Pressable>
-					</View>
-				)}
-				{dead && !shellOnly ? (
-					<Pressable
-						hitSlop={8}
-						onPress={() => { haptics.tap(); void onRestore(); }}
-						disabled={restoring}
-						style={({ pressed }) => [styles.restoreBtn, (pressed || restoring) && { opacity: 0.7 }]}
-					>
-						<Feather name="rotate-ccw" size={iconSize.xs} color={t.accent} />
-						<Text style={styles.restoreText}>{restoring ? "Restoring…" : "Restore"}</Text>
-					</Pressable>
-				) : (
-					// Icon-only: the archive glyph matches the restorable action on the
-					// workers board. The accessible label carries the full operation.
-					<Pressable
-						hitSlop={8}
-						accessibilityLabel={shellOnly ? "Close shell" : "Archive session"}
-						onPress={confirmKill}
-						style={({ pressed }) => [styles.killBtn, pressed && { opacity: press.opacity }]}
-					>
-						<Feather name={shellOnly ? "x" : "archive"} size={iconSize.sm} color={shellOnly ? t.red : t.textSecondary} />
-					</Pressable>
-				)}
-			</View>
-
 			{banner && (
 				<Pressable onPress={() => { haptics.tap(); setBanner(null); }} style={styles.banner}>
 					<Text style={styles.bannerText}>{banner} (tap to dismiss)</Text>
@@ -1432,6 +1422,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					onData={onData}
 					style={{ flex: 1, backgroundColor: t.bgBase }}
 				/>
+				{/* The connection says something only while it is not live. It floats
+				    over the grid rather than taking a row, so the grid keeps its
+				    rows when the link comes and goes. */}
+				{status !== "open" && !dead ? (
+					<View pointerEvents="none" style={styles.statusSlot}>
+						<View style={styles.statusPill} accessibilityLiveRegion="polite">
+							{status === "error" ? <AppSymbol name="offline" size={iconSize.sm} color={t.red} /> : <Spinner size={iconSize.sm} />}
+							<Text style={styles.statusText} numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome}>
+								{TERMINAL_STATUS_LABEL[status]}
+							</Text>
+						</View>
+					</View>
+				) : null}
 				{interfaceTransitionActive ? (
 					<View style={styles.interfaceOverlay}>
 						<View style={styles.interfaceCard}>
@@ -1531,29 +1534,20 @@ const makeStyles = (t: Theme) =>
 		justifyContent: "center",
 		backgroundColor: t.bgBase,
 	},
-	statusBar: {
+	statusSlot: { position: "absolute", top: space.sm, left: space.lg, right: space.lg, alignItems: "center" },
+	statusPill: {
 		flexDirection: "row",
 		alignItems: "center",
+		gap: space.xs,
+		maxWidth: "100%",
 		paddingHorizontal: space.md,
 		paddingVertical: space.xs,
-		borderBottomWidth: 1,
-		borderBottomColor: t.borderSubtle,
-	},
-	statusDot: { width: 8, height: 8, borderRadius: 4, borderCurve: "continuous", marginRight: space.sm },
-	statusText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, flex: 1 },
-	dims: { color: t.textTertiary, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
-	zoomGroup: {
-		flexDirection: "row",
-		alignItems: "center",
-		marginLeft: space.sm,
-		borderWidth: 1,
-		borderColor: t.borderDefault,
-		borderRadius: 8, borderCurve: "continuous",
+		borderRadius: radius.pill,
 		backgroundColor: t.bgElevated,
-		overflow: "hidden",
+		borderWidth: rowDividerWidth,
+		borderColor: t.borderDefault,
 	},
-	zoomBtn: { width: 28, height: 24, alignItems: "center", justifyContent: "center" },
-	zoomDivider: { width: 1, height: 24, backgroundColor: t.borderDefault },
+	statusText: { flexShrink: 1, fontFamily: font.medium, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	banner: {
 		backgroundColor: t.bgElevated,
 		paddingHorizontal: space.md,
@@ -1576,16 +1570,6 @@ const makeStyles = (t: Theme) =>
 		borderTopWidth: 1,
 		borderTopColor: t.borderSubtle,
 		backgroundColor: t.bgSurface,
-	},
-	// Square-ish now that it holds a glyph and no label.
-	killBtn: {
-		alignItems: "center",
-		justifyContent: "center",
-		backgroundColor: t.tintRed,
-		borderRadius: 12, borderCurve: "continuous",
-		paddingHorizontal: space.sm,
-		paddingVertical: space.xxs,
-		marginLeft: space.md,
 	},
 	// The size of the button it stands in for, so the items beside it hold still.
 	headerSpinner: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
@@ -1620,17 +1604,6 @@ const makeStyles = (t: Theme) =>
 	},
 	interfaceCancelText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	interfaceError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, textAlign: "center" },
-	restoreBtn: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: space.xxs,
-		backgroundColor: t.accentTint,
-		borderRadius: 12, borderCurve: "continuous",
-		paddingHorizontal: space.md,
-		paddingVertical: space.xxs,
-		marginLeft: space.md,
-	},
-	restoreText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontWeight: "600", fontSize: type.caption1.fontSize },
 	deadOverlay: {
 		...StyleSheet.absoluteFill,
 		alignItems: "center",
