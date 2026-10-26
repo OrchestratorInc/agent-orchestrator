@@ -70,7 +70,8 @@ export default function ConnectSheetRoute() {
 					if (editingHost) void reloadConfig().catch(() => {});
 					// Closed while it connected (Android's sheet can still be pulled
 					// down or backed out of): closing it again would pop the screen
-					// under it, and the opener's callback was already released.
+					// under it, and the opener's callback was already released. The
+					// form lets go of the sheet itself once this returns.
 					if (!navigation.isFocused()) return;
 					backOr(router);
 					done?.();

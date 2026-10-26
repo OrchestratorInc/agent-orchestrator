@@ -152,6 +152,24 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(onConnected).toHaveBeenCalledOnce();
 	});
 
+	// The route returns from onConnected early when its sheet has lost focus.
+	// The form still lets go once the connect settles, or the sheet would come
+	// back locked against Cancel and the swipe.
+	it("lets go of the sheet once a connect settles, even one whose sheet was left", async () => {
+		let answer!: (value: object) => void;
+		fixtures.ping.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+		const onBusyChange = vi.fn();
+		const { onConnected } = render({ onBusyChange });
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		await type("manual-connect-password", "pw");
+		await act(async () => { void confirm().props.onPress(); });
+		expect(onBusyChange).toHaveBeenLastCalledWith(true);
+		await act(async () => answer({}));
+		expect(onConnected).toHaveBeenCalledOnce();
+		expect(onBusyChange).toHaveBeenLastCalledWith(false);
+	});
+
 	it("says what is wrong under the connection fields, in the error colour", async () => {
 		fixtures.ping.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(401));
 		render({ editingHost: paired });
