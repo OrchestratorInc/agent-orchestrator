@@ -2335,7 +2335,7 @@ func withHandoffNote(systemPrompt, note string) string {
 func (s *Service) branchUnanswered(ctx context.Context, session domain.SessionID, conversationID string, branch domain.ConversationBranch) bool {
 	switchBranch := branch.Strategy == domain.ConversationBranchStrategyApproximateContext && branch.HandoffNote != ""
 	ownBoundary := branch.ParentBranchID != "" && branch.SessionID == session
-	if s.reader == nil || !(switchBranch || ownBoundary) {
+	if s.reader == nil || !switchBranch && !ownBoundary {
 		return false
 	}
 	rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)
