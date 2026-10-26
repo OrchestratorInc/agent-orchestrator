@@ -6054,3 +6054,46 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
 	}
 }
+
+func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
+	cause := sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("tmux: secret-token failed")}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: sink})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Kind != apierr.KindConflict || apiErr.Code != "AGENT_RESUME_FAILED" {
+		t.Fatalf("err = %#v, want conflict AGENT_RESUME_FAILED", err)
+	}
+	if apiErr.Details["step"] != "runtime" || strings.Contains(apiErr.Message, "secret-token") {
+		t.Fatalf("details/message = %v / %q", apiErr.Details, apiErr.Message)
+	}
+	// Restore relaunches the same way and answers the same 409.
+	if _, err := svc.Restore(context.Background(), "mer-1"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
+		t.Fatalf("restore err = %#v, want AGENT_RESUME_FAILED", err)
+	}
+	// The failures left ao.http.5xx, so each must still be counted on its own event.
+	if len(sink.events) != 2 {
+		t.Fatalf("events = %#v, want one relaunch_failed per operation", sink.events)
+	}
+	for i, operation := range []string{"resume_agent", "restore_session"} {
+		ev := sink.events[i]
+		if ev.Name != "ao.session.relaunch_failed" || ev.Payload["operation"] != operation ||
+			ev.Payload["step"] != "runtime" || ev.Payload["cause_type"] != "*errors.errorString" {
+			t.Fatalf("event %d = %#v, want relaunch_failed for %s step runtime", i, ev, operation)
+		}
+		if strings.Contains(fmt.Sprint(ev.Payload), "secret-token") {
+			t.Fatalf("telemetry payload leaked the raw error: %v", ev.Payload)
+		}
+	}
+
+	fc.restoreErr = fmt.Errorf("resume agent mer-1: %w", &sessionmanager.RelaunchError{Step: "runtime", Err: context.DeadlineExceeded})
+	_, err = svc.ResumeAgent(context.Background(), "mer-1")
+	if errors.As(err, &apiErr) {
+		t.Fatalf("deadline must stay unmapped for the 503 path, got %v", err)
+	}
+	if len(sink.events) != 2 {
+		t.Fatalf("a deadline is already counted as ao.http.5xx; events = %#v", sink.events)
+	}
+}

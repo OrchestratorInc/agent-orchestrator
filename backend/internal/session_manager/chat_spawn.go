@@ -494,7 +494,7 @@ func (m *Manager) resumeChatController(
 	// session keeps its standing instructions across the relaunch.
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("system prompt", fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err))
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
 	additionalDirectories, err := m.restoredWorkspaceProjectDirectories(ctx, rec, project, ws.Path)
@@ -610,9 +610,9 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		if completionErr != nil {
 			m.stopChatBestEffort(ctx, rec.ID)
-			return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr)
+			return RestoreResult{}, relaunchFailed("record launch", fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr))
 		}
-		return RestoreResult{}, fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
+		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}
 
 	restored, err := m.getRecord(ctx, rec.ID)

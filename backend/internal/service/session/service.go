@@ -599,6 +599,46 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	})
 }
 
+// emitRelaunchFailed records a failed agent relaunch. These answer 409
+// AGENT_RESUME_FAILED rather than 500, so ao.http.5xx no longer sees them; this
+// event keeps them countable per operation and step. The raw error stays in the
+// daemon log; only its Go type is exported because the text can carry paths and env.
+func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id domain.SessionID, err, mapped error) {
+	var relaunchErr *sessionmanager.RelaunchError
+	var apiErr *apierr.Error
+	if s.telemetry == nil || !errors.As(err, &relaunchErr) ||
+		!errors.As(mapped, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
+		return
+	}
+	cause := relaunchErr.Err
+	for next := errors.Unwrap(cause); next != nil; next = errors.Unwrap(cause) {
+		cause = next
+	}
+	payload := map[string]any{
+		"component":   "session_service",
+		"operation":   operation,
+		"step":        relaunchErr.Step,
+		"cause_type":  fmt.Sprintf("%T", cause),
+		"error_code":  "AGENT_RESUME_FAILED",
+		"fingerprint": telemetrymeta.Fingerprint("session_service", operation, relaunchErr.Step),
+	}
+	var projectID *domain.ProjectID
+	if rec, ok, getErr := s.store.GetSession(ctx, id); getErr == nil && ok {
+		payload["harness"] = string(rec.Harness)
+		payload["kind"] = string(rec.Kind)
+		projectID = &rec.ProjectID
+	}
+	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
+		Name:       "ao.session.relaunch_failed",
+		Source:     "session_service",
+		OccurredAt: s.now(),
+		Level:      ports.TelemetryLevelError,
+		ProjectID:  projectID,
+		RequestID:  reqid.FromContext(ctx),
+		Payload:    payload,
+	})
+}
+
 // SpawnOrchestrator spawns an orchestrator session for a project. When clean is
 // true it first tears down any active orchestrator(s) for that project so the new
 // one is the only live coordinator. When clean is false it is idempotent: if an
@@ -788,6 +828,7 @@ func (s *Service) Restore(ctx context.Context, id domain.SessionID) (RestoreOutc
 	res, err := s.manager.RestoreWithMode(ctx, id)
 	if err != nil {
 		apiErr := toAPIError(err)
+		s.emitRelaunchFailed(ctx, "restore_session", id, err, apiErr)
 		s.recordRestored(ctx, id, domain.SessionRecord{}, actionStatusForError(err), apiErr)
 		return RestoreOutcome{}, apiErr
 	}
@@ -823,7 +864,9 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
-		return ResumeAgentOutcome{}, toAPIError(err)
+		apiErr := toAPIError(err)
+		s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
+		return ResumeAgentOutcome{}, apiErr
 	}
 	session, err := s.toSession(ctx, res.Session)
 	if err != nil {
@@ -1509,6 +1552,7 @@ func toAPIError(err error) error {
 }
 
 func mapSessionError(err error) error {
+	var relaunchErr *sessionmanager.RelaunchError
 	switch {
 	case err == nil:
 		return nil
@@ -1669,6 +1713,12 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_LOCKED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrCleanupScript):
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
+	case errors.Is(err, context.DeadlineExceeded):
+		return err
+	case errors.As(err, &relaunchErr):
+		return apierr.Conflict("AGENT_RESUME_FAILED",
+			"AO could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",
+			map[string]any{"step": relaunchErr.Step})
 	default:
 		return err
 	}
