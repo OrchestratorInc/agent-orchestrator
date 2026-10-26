@@ -47,6 +47,11 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).not.toContain("t.amber");
 	});
 
+	it("asks how a busy session switches through the platform's own choice", () => {
+		expect(screen).toContain("<InterfaceSwitchConfirm message={switchQuestion} onChoose={answerSwitchQuestion} onCancel={closeSwitchQuestion} />");
+		expect(screen).not.toContain('Alert.alert(\n\t\t\t"Switch to Chat?"');
+	});
+
 	it("keeps pinch and double-tap zoom, and adds a fit-to-width step", () => {
 		expect(screen).toContain("window.__aoAdjustTerminalZoom = function (direction)");
 		expect(screen).toContain("window.__aoFitTerminalWidth = function ()");

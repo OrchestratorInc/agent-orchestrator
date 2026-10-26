@@ -45,6 +45,7 @@ import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
 import { Button } from "../ui";
 import { TerminalNotice, TerminalNoticeHost, type TerminalNoticeMessage, type TerminalNoticeTone } from "./TerminalNotice";
+import { InterfaceSwitchConfirm, type InterfaceSwitchPolicy } from "./InterfaceSwitchConfirm";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -1056,6 +1057,8 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		[clearNotice, interfaceSwitch, showNotice],
 	);
 
+	// The detail of the "Switch to Chat?" question while it is being asked.
+	const [switchQuestion, setSwitchQuestion] = useState<string | null>(null);
 	const requestInterfaceSwitch = useCallback(async () => {
 		// A second tap would start a second recheck against a link already slow
 		// enough for the first one to be visible. `starting` and an active
@@ -1108,18 +1111,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			void startInterfaceSwitch("drain");
 			return;
 		}
-		Alert.alert(
-			"Switch to Chat?",
+		// Asked by InterfaceSwitchConfirm: an action sheet on iOS, the system
+		// dialog on Android.
+		setSwitchQuestion(
 			known?.activity === "waiting_input" || known?.activity === "blocked"
 				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
 				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
-			[
-				{ text: "Keep Terminal UI", style: "cancel" },
-				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
-				{ text: "Stop and switch", style: "destructive", onPress: () => void startInterfaceSwitch("interrupt") },
-			],
 		);
 	}, [interfaceBusy, interfaceSwitch, interfaceTransitionActive, known?.activity, startInterfaceSwitch]);
+	const closeSwitchQuestion = useCallback(() => setSwitchQuestion(null), []);
+	const answerSwitchQuestion = useCallback((policy: InterfaceSwitchPolicy) => {
+		setSwitchQuestion(null);
+		void startInterfaceSwitch(policy);
+	}, [startInterfaceSwitch]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. The header
@@ -1527,6 +1531,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			{/* Absolutely placed, so it comes last and draws over the dock's
 			    neighbours; the offset clears the keyboard pad and the dock. */}
 			<TerminalNoticeHost notice={notice} onDismiss={clearNotice} bottomOffset={rootPad + dockHeight + space.sm} />
+			<InterfaceSwitchConfirm message={switchQuestion} onChoose={answerSwitchQuestion} onCancel={closeSwitchQuestion} />
 		</View>
 	);
 }
