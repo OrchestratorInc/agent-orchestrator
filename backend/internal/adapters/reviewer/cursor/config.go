@@ -20,16 +20,29 @@ import (
 )
 
 const (
-	cursorDataDirEnv     = "CURSOR_DATA_DIR"
+	cursorDataDirEnv = "CURSOR_DATA_DIR"
+	// cursorConfigDirEnv is where the Cursor CLI reads cli-config.json, the
+	// permission rules (verified in Cursor CLI 2026.10.22: CURSOR_CONFIG_DIR,
+	// then $XDG_CONFIG_HOME/cursor, then ~/.cursor). CURSOR_DATA_DIR alone
+	// leaves the reviewer on the user's own rules.
+	cursorConfigDirEnv   = "CURSOR_CONFIG_DIR"
 	cursorConfigFileName = "cli-config.json"
 )
 
+// reviewerAllowedPermissions names subcommands, not whole tools: a bare
+// Shell(git) admitted `git push` without a prompt, and Shell(printf) admitted
+// `printf x > file` (both verified live). Anything else prompts, so an
+// unattended Cursor reviewer stops instead of acting.
 var reviewerAllowedPermissions = []string{
 	"Read(**)",
-	"Shell(git)",
-	"Shell(gh)",
-	"Shell(ao)",
-	"Shell(printf)",
+	"Shell(git status)",
+	"Shell(git diff)",
+	"Shell(git log)",
+	"Shell(git show)",
+	"Shell(gh pr view)",
+	"Shell(gh pr diff)",
+	"Shell(gh pr checks)",
+	"Shell(ao review submit)",
 }
 
 var reviewerDeniedPermissions = []string{
@@ -37,6 +50,11 @@ var reviewerDeniedPermissions = []string{
 	"Shell(rm)",
 	"Shell(mv)",
 	"Shell(cp)",
+	"Shell(git push)",
+	"Shell(git commit)",
+	"Shell(ao spawn)",
+	"Shell(ao send)",
+	"Shell(ao stop)",
 }
 
 type reviewerConfig struct {
@@ -55,7 +73,7 @@ func reviewerEnv(inv ports.ReviewInvocation) map[string]string {
 	if profileDir == "" {
 		return nil
 	}
-	return map[string]string{cursorDataDirEnv: profileDir}
+	return map[string]string{cursorDataDirEnv: profileDir, cursorConfigDirEnv: profileDir}
 }
 
 func reviewerProfileDir(inv ports.ReviewInvocation) string {

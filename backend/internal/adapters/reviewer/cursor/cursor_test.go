@@ -100,7 +100,7 @@ func TestReviewCommandBuildsPersistentInteractiveInvocation(t *testing.T) {
 		t.Fatalf("argv exposes system prompt content: %#v", got.Argv)
 	}
 	profileDir := filepath.Join(dataDir, "cursor-reviewers", "c442045692db6092")
-	if !reflect.DeepEqual(got.Env, map[string]string{cursorDataDirEnv: profileDir}) {
+	if !reflect.DeepEqual(got.Env, map[string]string{cursorDataDirEnv: profileDir, cursorConfigDirEnv: profileDir}) {
 		t.Fatalf("env = %#v, want AO-owned profile %q", got.Env, profileDir)
 	}
 }
