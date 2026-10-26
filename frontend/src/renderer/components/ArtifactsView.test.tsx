@@ -280,7 +280,7 @@ describe("ArtifactsView", () => {
 	it("shows a placeholder for text artifacts without a usable URL", () => {
 		renderView();
 		const project = within(screen.getByRole("region", { name: "agent-orchestrator" }));
-		expect(within(project.getByRole("button", { name: /^pricing\.md/ })).getByTitle("No preview available")).toBeInTheDocument();
+		expect(within(project.getByRole("button", { name: /^pricing\.md/ }).closest("li")!).getByTitle("No preview available")).toBeInTheDocument();
 	});
 
 	it("checks HTML availability before framing only its dedicated inline origin", async () => {
@@ -406,10 +406,10 @@ describe("ArtifactsView", () => {
 		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [image] }];
 		renderView();
 		const project = within(screen.getByRole("region", { name: "AO" }));
-		const preview = project.getByRole("button", { name: /^cover\.png/ }).querySelector("img")!;
+		const preview = project.getByRole("button", { name: /^cover\.png/ }).closest("li")!.querySelector("img")!;
 		expect(preview).toHaveAttribute("src", image.artifactFiles![0].rawUrl);
 		fireEvent.error(preview);
-		expect(project.getByRole("button", { name: /^cover\.png/ }).querySelector("img")).toBeNull();
+		expect(project.getByRole("button", { name: /^cover\.png/ }).closest("li")!.querySelector("img")).toBeNull();
 		expect(project.getByTitle("No preview available")).toBeInTheDocument();
 	});
 
