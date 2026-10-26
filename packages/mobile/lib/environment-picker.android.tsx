@@ -3,10 +3,12 @@ import { padding, testID } from "@expo/ui/jetpack-compose/modifiers";
 import { startTransition, useState } from "react";
 import type { EnvironmentPickerProps } from "./environment-picker.types";
 import { haptics } from "./haptics";
+import { machineDrawable } from "./machine-drawable.android";
+import { machineAppearance } from "./machineAppearance";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
 import { space } from "./tokens";
-import { workerEnvironmentOptions } from "./worker-controls";
+import { ALL_WORKER_ENVIRONMENTS, workerEnvironmentOptions } from "./worker-controls";
 
 export type { EnvironmentPickerProps } from "./environment-picker.types";
 
@@ -17,7 +19,8 @@ const MENU_ICON_SIZE = 24;
 
 /**
  * Moves the Workers board to another machine: Material 3's outlined button,
- * opening a dropdown of every environment with a check on the current one.
+ * opening a dropdown of every environment, each with its machine's symbol and a
+ * check on the current one.
  * Compose gives the button its 48dp target and ripple, and the menu its
  * placement, motion and dismissal.
  */
@@ -48,9 +51,12 @@ export function EnvironmentPicker({ environments, selectedEnvironmentId, onSelec
 							<DropdownMenuItem
 								key={option.id}
 								onClick={() => select(option.id)}
-								elementColors={{ textColor: t.textPrimary, trailingIconColor: t.accent }}
+								elementColors={{ textColor: t.textPrimary, leadingIconColor: t.textSecondary, trailingIconColor: t.accent }}
 								modifiers={[testID(`environment-picker-${option.id}`)]}
 							>
+								<DropdownMenuItem.LeadingIcon>
+									<Icon source={machineDrawable(option.id === ALL_WORKER_ENVIRONMENTS ? "server" : machineAppearance({ id: option.id, name: option.label, appearance: option.appearance }).symbol)} size={MENU_ICON_SIZE} />
+								</DropdownMenuItem.LeadingIcon>
 								<DropdownMenuItem.Text>
 									<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: "Geist_400Regular" }}>
 										{option.label}

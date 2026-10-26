@@ -9,6 +9,7 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ scheme: "dark" }),
 }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
+vi.mock("./machine-drawable.android", () => ({ machineDrawable: (symbol: string) => `machine:${symbol}` }));
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -25,7 +26,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 	return {
 		Host: host("ComposeHost"),
 		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: host("TriggerSlot"), Items: host("ItemsSlot") }),
-		DropdownMenuItem: Object.assign(host("DropdownMenuItem"), { Text: host("TextSlot"), TrailingIcon: host("TrailingIconSlot") }),
+		DropdownMenuItem: Object.assign(host("DropdownMenuItem"), { Text: host("TextSlot"), LeadingIcon: host("LeadingIconSlot"), TrailingIcon: host("TrailingIconSlot") }),
 		Icon: host("Icon"),
 		OutlinedButton: host("OutlinedButton"),
 		Text: host("ComposeText"),
@@ -105,7 +106,15 @@ describe("EnvironmentPicker on Android", () => {
 		const items = render(<AndroidEnvironmentPicker environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={vi.fn()} />).findAllByType("DropdownMenuItem" as never);
 		expect(items.map((item) => item.findByType("TextSlot" as never).findByType("ComposeText" as never).props.children)).toEqual(["All environments", "Mac", "Dev box"]);
 		expect(items.map((item) => item.findAllByType("TrailingIconSlot" as never).length)).toEqual([0, 1, 0]);
-		expect(items[1].findByType("Icon" as never).props).toMatchObject({ source: "drawable:check", contentDescription: "Current" });
+		expect(items[1].findByType("TrailingIconSlot" as never).findByType("Icon" as never).props).toMatchObject({ source: "drawable:check", contentDescription: "Current" });
+	});
+
+	// The same identity iOS shows, as Material Symbols; decorative beside the name.
+	it("leads every environment with its machine's symbol", () => {
+		const items = render(<AndroidEnvironmentPicker environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={vi.fn()} />).findAllByType("DropdownMenuItem" as never);
+		const glyphs = items.map((item) => item.findByType("LeadingIconSlot" as never).findByType("Icon" as never).props);
+		expect(glyphs.map((glyph) => glyph.source)).toEqual(["machine:server", "machine:laptop", "machine:server"]);
+		expect(glyphs.every((glyph) => glyph.contentDescription === undefined)).toBe(true);
 	});
 
 	it("closes the menu and switches to a new environment", async () => {
