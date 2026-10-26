@@ -29,7 +29,7 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	const projectId = orchestrator.workspaceId;
 	const participants = useSessionParticipants([orchestrator]).get(orchestrator.id) ?? [];
 	const shared = participants.length > 0;
-	const requests = useProjectMergeRequests(orgId, projectId, shared);
+	const requests = useProjectMergeRequests(orgId, projectId, shared, orchestrator.id);
 	if (!orgId || !shared) return null;
 
 	const guest = orchestrator.cloud?.shared === true;
@@ -71,6 +71,7 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 					{workers.filter((session) => session.prs.length > 0).map((session) => (
 						<SessionPullRequests
 							key={session.id}
+							liveSessionId={orchestrator.id}
 							canDecide={!guest}
 							guest={guest}
 							hostId={hostId}
@@ -86,8 +87,9 @@ export function SharedProjectPanel({ orchestrator, sessions, hostId }: {
 	);
 }
 
-function SessionPullRequests({ canDecide, guest, hostId, openedBy, orgId, requests, session }: {
+function SessionPullRequests({ canDecide, guest, hostId, liveSessionId, openedBy, orgId, requests, session }: {
 	canDecide: boolean;
+	liveSessionId: string;
 	guest: boolean;
 	hostId?: string;
 	openedBy: string;
@@ -117,6 +119,7 @@ function SessionPullRequests({ canDecide, guest, hostId, openedBy, orgId, reques
 							onOpenReviews={() => undefined}
 							pr={pr}
 							projectId={session.workspaceId}
+							liveSessionId={liveSessionId}
 							sessionId={session.id}
 						/>
 						{request ? (

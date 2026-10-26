@@ -6598,6 +6598,9 @@ components:
         canConfigure:
           type: boolean
           description: Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings).
+        mergeRequestsVersion:
+          type: string
+          description: Changes whenever a merge request in the session's project is asked for or decided, so a client re-reads them at once. Absent while the project has none.
         you:
           type: string
           format: uuid

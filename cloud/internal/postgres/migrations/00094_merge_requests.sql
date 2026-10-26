@@ -33,5 +33,35 @@ ALTER TABLE ao_merge_requests FORCE ROW LEVEL SECURITY;
 CREATE POLICY ao_merge_requests_tenant_policy ON ao_merge_requests
     USING (org_id = ao_current_org_id()) WITH CHECK (org_id = ao_current_org_id());
 
+-- A request asked for or decided wakes the live streams of its session and
+-- of its project's orchestrator, where the owner decides it, so both see it
+-- at once.
+-- +goose StatementBegin
+CREATE FUNCTION ao_notify_merge_request_live() RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    orchestrator UUID;
+BEGIN
+    PERFORM pg_notify('ao_session_live', NEW.session_id::text);
+    FOR orchestrator IN
+        SELECT id FROM ao_sessions
+        WHERE org_id = NEW.org_id AND project_id = NEW.project_id
+          AND kind = 'orchestrator' AND is_terminated = false AND id <> NEW.session_id
+    LOOP
+        PERFORM pg_notify('ao_session_live', orchestrator::text);
+    END LOOP;
+    RETURN NULL;
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER ao_merge_requests_live_notify
+    AFTER INSERT OR UPDATE
+    ON ao_merge_requests
+    FOR EACH ROW EXECUTE FUNCTION ao_notify_merge_request_live();
+
 -- +goose Down
+DROP TRIGGER IF EXISTS ao_merge_requests_live_notify ON ao_merge_requests;
+DROP FUNCTION IF EXISTS ao_notify_merge_request_live();
 DROP TABLE IF EXISTS ao_merge_requests;

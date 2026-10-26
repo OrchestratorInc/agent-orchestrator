@@ -920,6 +920,7 @@ export function PRSummaryCard({
 	onOpenReviews,
 	pr,
 	projectId,
+	liveSessionId,
 	sessionId,
 	showRepository = false,
 }: {
@@ -932,6 +933,8 @@ export function PRSummaryCard({
 	pr: SessionPRSummary;
 	/** The cloud project, for a guest's merge requests. */
 	projectId?: string;
+	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
+	liveSessionId?: string;
 	sessionId: string;
 	/** Label the card with its repository: the session has PRs on several. */
 	showRepository?: boolean;
@@ -980,7 +983,7 @@ export function PRSummaryCard({
 		},
 	});
 	const asksToMerge = guest && Boolean(cloudOrgId);
-	const mergeRequests = useProjectMergeRequests(cloudOrgId, projectId, asksToMerge);
+	const mergeRequests = useProjectMergeRequests(cloudOrgId, projectId, asksToMerge, liveSessionId ?? sessionId);
 	const mergeRequestActions = useMergeRequestActions(cloudOrgId, projectId);
 	const pendingRequest = pendingMergeRequestFor(mergeRequests.data, pr.url);
 	const requestMerge = mergeRequestActions.request;

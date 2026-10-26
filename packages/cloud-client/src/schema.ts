@@ -3507,6 +3507,8 @@ export interface components {
             chatSettings: components["schemas"]["SessionChatSettings"];
             /** @description Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings). */
             canConfigure: boolean;
+            /** @description Changes whenever a merge request in the session's project is asked for or decided, so a client re-reads them at once. Absent while the project has none. */
+            mergeRequestsVersion?: string;
             /**
              * Format: uuid
              * @description The user this stream is authenticated as. Clients compare against it rather than an identity they remember.

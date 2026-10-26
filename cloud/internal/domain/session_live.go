@@ -57,6 +57,10 @@ type SessionLiveState struct {
 	// CanConfigure reports whether the person reading the state may change
 	// ChatSettings: the session's owner may, everyone else only sees them.
 	CanConfigure bool
+	// MergeRequestsVersion changes whenever a merge request in the session's
+	// project is asked for or decided, so a client re-reads them at once.
+	// Empty while the project has none.
+	MergeRequestsVersion string
 }
 
 // SessionParticipant is one person in a shared session as the board shows

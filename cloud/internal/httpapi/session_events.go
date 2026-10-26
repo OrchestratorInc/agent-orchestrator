@@ -92,6 +92,9 @@ type sessionLiveResponse struct {
 	// CanConfigure says whether this person is that owner.
 	ChatSettings chatSettingsResponse `json:"chatSettings"`
 	CanConfigure bool                 `json:"canConfigure"`
+	// MergeRequestsVersion changes whenever a merge request in the project is
+	// asked for or decided.
+	MergeRequestsVersion string `json:"mergeRequestsVersion,omitempty"`
 }
 
 type chatSettingsResponse struct {
@@ -107,12 +110,13 @@ func toChatSettingsResponse(settings domain.ChatTurnSettings) chatSettingsRespon
 
 func toSessionLiveResponse(state domain.SessionLiveState) sessionLiveResponse {
 	response := sessionLiveResponse{
-		Type:         "session.live",
-		Viewers:      make([]sessionViewerResponse, 0, len(state.Viewers)),
-		Composer:     toComposerLiveResponse(state.Composer),
-		CanTakeOver:  state.CanTakeOver,
-		ChatSettings: toChatSettingsResponse(state.ChatSettings),
-		CanConfigure: state.CanConfigure,
+		Type:                 "session.live",
+		Viewers:              make([]sessionViewerResponse, 0, len(state.Viewers)),
+		Composer:             toComposerLiveResponse(state.Composer),
+		CanTakeOver:          state.CanTakeOver,
+		ChatSettings:         toChatSettingsResponse(state.ChatSettings),
+		CanConfigure:         state.CanConfigure,
+		MergeRequestsVersion: state.MergeRequestsVersion,
 	}
 	for _, viewer := range state.Viewers {
 		response.Viewers = append(response.Viewers, sessionViewerResponse{UserID: viewer.UserID, Name: viewer.Name, AvatarURL: viewer.AvatarURL, Role: viewer.Role})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -109,5 +110,82 @@ func TestGuestsAskTheOwnerToMerge(t *testing.T) {
 	}
 	if open, _ := notifications(alice, "merge_request_rejected"); open != 1 {
 		t.Fatalf("Alice was not told her request was declined")
+	}
+}
+
+// Asking for a merge, and deciding it, wakes the live streams of the
+// request's session and of the project's orchestrator, whose live state then
+// carries a new merge requests version.
+func TestMergeRequestsReachLiveStreamsAtOnce(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	owner := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	orchestrator, err := store.CreateSession(ctx, owner, fixture.orgID, "orch-"+uuid.NewString(), 10, domain.CreateSession{
+		ProjectID: fixture.projectID, Kind: "orchestrator", Harness: "codex", DisplayName: "Orchestrator",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := redeemProjectLink(t, store, admin, fixture, "editor", "Alice")
+	aliceSession := uuid.NewString()
+	execOneRowAsOrg(t, admin, fixture.orgID, `INSERT INTO ao_sessions (id, org_id, project_id, kind, harness, display_name, branch, created_by_user_id, requested_by_user_id)
+		VALUES ($1, $2, $3, 'worker', 'codex', 'Login flow', $6, $4, $5)`, aliceSession, fixture.orgID, fixture.projectID, fixture.userID, alice.UserID, "login-"+aliceSession)
+	pr, err := store.CreatePullRequestRecord(ctx, fixture.orgID, aliceSession, "github", "owner/repo", "author", 9,
+		"https://github.com/owner/repo/pull/9", "login", "main", "abc123", "Login flow", 1, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := func(sessionID string) string {
+		t.Helper()
+		state, err := store.SessionLiveState(ctx, owner, fixture.orgID, sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.MergeRequestsVersion
+	}
+	if v := version(orchestrator.ID); v != "" {
+		t.Fatalf("a project with no requests has version %q", v)
+	}
+
+	conn, err := admin.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `LISTEN ao_session_live`); err != nil {
+		t.Fatal(err)
+	}
+	woken := func(want ...string) {
+		t.Helper()
+		missing := map[string]bool{}
+		for _, id := range want {
+			missing[id] = true
+		}
+		for len(missing) > 0 {
+			notification, err := conn.Conn().WaitForNotification(ctx)
+			if err != nil {
+				t.Fatalf("never woke %v: %v", missing, err)
+			}
+			delete(missing, notification.Payload)
+		}
+	}
+
+	request, err := store.RequestPullRequestMerge(ctx, alice, fixture.orgID, aliceSession, pr.Number, pr.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	woken(aliceSession, orchestrator.ID)
+	asked := version(orchestrator.ID)
+	if asked == "" || version(aliceSession) != asked {
+		t.Fatalf("after asking, versions are %q and %q", asked, version(aliceSession))
+	}
+
+	if _, err := store.DecideMergeRequest(ctx, owner, fixture.orgID, request.ID, "rejected"); err != nil {
+		t.Fatal(err)
+	}
+	woken(aliceSession, orchestrator.ID)
+	if decided := version(orchestrator.ID); decided == asked {
+		t.Fatalf("the version did not change when the request was decided: %q", decided)
 	}
 }

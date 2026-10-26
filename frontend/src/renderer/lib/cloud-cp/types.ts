@@ -1566,6 +1566,8 @@ export interface CloudCpSessionLive {
 	chatSettings: CloudCpSessionChatSettings;
 	/** Whether the person reading the stream owns the session and may change chatSettings. */
 	canConfigure: boolean;
+	/** Changes whenever a merge request in the project is asked for or decided. */
+	mergeRequestsVersion?: string;
 }
 
 /** A session's owner-set turn settings; an absent field means the default. */

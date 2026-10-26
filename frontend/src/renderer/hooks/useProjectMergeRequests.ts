@@ -1,9 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
 import type { CloudCpMergeRequest } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudSessionLive } from "./useCloudSessionLive";
 
-/** How often a shared project's merge requests are re-read while shown. */
-export const MERGE_REQUESTS_REFRESH_MS = 10_000;
+/**
+ * A fallback re-read for while a live stream is reconnecting; a request
+ * asked for or decided arrives at once through the session's live state.
+ */
+export const MERGE_REQUESTS_REFRESH_MS = 60_000;
 
 export function projectMergeRequestsQueryKey(baseUrl: string, orgId: string, projectId: string) {
 	return ["cloud-merge-requests", baseUrl, orgId, projectId] as const;
@@ -11,12 +16,22 @@ export function projectMergeRequestsQueryKey(baseUrl: string, orgId: string, pro
 
 /**
  * A shared cloud project's merge requests: all of them for its owner, a
- * guest's own for the guest. Pending ones come first.
+ * guest's own for the guest. Pending ones come first. They are re-read the
+ * moment one is asked for or decided, from the live state of liveSessionId,
+ * the session on screen (its stream is already open, so watching it adds no
+ * presence anywhere else).
  */
-export function useProjectMergeRequests(orgId: string | undefined, projectId: string | undefined, enabled = true) {
+export function useProjectMergeRequests(orgId: string | undefined, projectId: string | undefined, enabled = true, liveSessionId?: string) {
 	const { client, baseUrl, ready } = useCloudCp();
+	const queryClient = useQueryClient();
+	const queryKey = useMemo(() => projectMergeRequestsQueryKey(baseUrl, orgId ?? "", projectId ?? ""), [baseUrl, orgId, projectId]);
+	const version = useCloudSessionLive(orgId, liveSessionId, enabled && Boolean(liveSessionId))?.mergeRequestsVersion;
+	useEffect(() => {
+		if (version === undefined) return;
+		void queryClient.invalidateQueries({ queryKey });
+	}, [queryClient, queryKey, version]);
 	return useQuery({
-		queryKey: projectMergeRequestsQueryKey(baseUrl, orgId ?? "", projectId ?? ""),
+		queryKey,
 		enabled: enabled && ready && Boolean(orgId && projectId),
 		refetchInterval: MERGE_REQUESTS_REFRESH_MS,
 		retry: 1,

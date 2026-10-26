@@ -14,6 +14,7 @@ const client = vi.hoisted(() => ({
 	rejectMergeRequest: vi.fn(),
 }));
 vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client, baseUrl: "https://cp.test", ready: true }) }));
+vi.mock("../hooks/useCloudSessionLive", () => ({ useCloudSessionLive: () => undefined }));
 
 const prUrl = "https://github.com/owner/repo/pull/7";
 const session = {

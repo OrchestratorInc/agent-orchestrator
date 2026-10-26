@@ -87,8 +87,20 @@ func (s *Store) SessionLiveState(
 			return err
 		}
 		state.CanConfigure = state.CanTakeOver
-		state.ChatSettings, err = sessionChatSettingsTx(ctx, tx, orgID, sessionID)
-		return err
+		if state.ChatSettings, err = sessionChatSettingsTx(ctx, tx, orgID, sessionID); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx,
+			`SELECT COALESCE((
+				SELECT max(request.updated_at)::text || '/' || count(*)::text
+				FROM ao_merge_requests request
+				WHERE request.org_id = session_row.org_id AND request.project_id = session_row.project_id
+				HAVING count(*) > 0
+			), '')
+			FROM ao_sessions session_row
+			WHERE session_row.org_id = $1 AND session_row.id = $2`,
+			orgID, sessionID,
+		).Scan(&state.MergeRequestsVersion)
 	})
 	return state, err
 }
