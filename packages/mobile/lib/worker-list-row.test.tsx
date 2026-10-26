@@ -28,9 +28,16 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 // expo-router's useRouter returns one stable router object; mirror that.
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("expo-router", () => ({ useRouter: () => router, useFocusEffect: (callback: () => void) => { counters.focus = callback; } }));
+const backHandler = vi.hoisted(() => ({ listeners: [] as (() => boolean)[] }));
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator",
 	Alert: { alert: vi.fn() }, AppState: { addEventListener: (_event: string, callback: (state: string) => void) => { counters.foreground = callback; return { remove: vi.fn() }; } }, RefreshControl: "RefreshControl",
+	BackHandler: {
+		addEventListener: (_event: string, listener: () => boolean) => {
+			backHandler.listeners.push(listener);
+			return { remove: () => { backHandler.listeners = backHandler.listeners.filter((entry) => entry !== listener); } };
+		},
+	},
 	Keyboard: { dismiss: vi.fn() },
 	Platform: { OS: "ios" },
 	Pressable: "Pressable",
@@ -227,6 +234,99 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+});
+
+// An inline rename has no Save or Cancel buttons: Return or leaving the field
+// commits, as a list's own rename does, and Escape or Android's back cancels.
+describe("renaming a worker in place", () => {
+	const flush = async () => { await act(async () => { await Promise.resolve(); }); };
+	function renaming(onRename = vi.fn(async (_title: string) => {})) {
+		const onRenameCancel = vi.fn();
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerListRow
+					session={session} projectName="Agent Orchestrator" isRenaming nowBucket={1}
+					onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={onRenameCancel}
+					onRename={onRename} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+				/>,
+			);
+		});
+		const field = () => renderer.root.findByType("TextInput" as never);
+		return { renderer, field, onRename, onRenameCancel };
+	}
+
+	it("draws only the field, with no save or cancel pills", () => {
+		const { renderer, field } = renaming();
+		expect(field().props.returnKeyType).toBe("done");
+		expect(renderer.root.findAllByType("Pressable" as never)).toHaveLength(0);
+		act(() => renderer.unmount());
+	});
+
+	it("commits once on Return, though the blur that follows asks again", async () => {
+		const { renderer, field, onRename, onRenameCancel } = renaming();
+		act(() => field().props.onChangeText("  Ship the board  "));
+		act(() => field().props.onSubmitEditing());
+		act(() => field().props.onBlur());
+		await flush();
+		expect(onRename.mock.calls).toEqual([["Ship the board"]]);
+		expect(onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
+	});
+
+	it("commits when the field loses focus", async () => {
+		const { renderer, field, onRename } = renaming();
+		act(() => field().props.onChangeText("Ship the board"));
+		act(() => field().props.onBlur());
+		await flush();
+		expect(onRename).toHaveBeenCalledWith("Ship the board");
+		act(() => renderer.unmount());
+	});
+
+	it("keeps the name when the field is left empty or unchanged", () => {
+		for (const title of ["", "Polish workers"]) {
+			const { renderer, field, onRename, onRenameCancel } = renaming();
+			act(() => field().props.onChangeText(title));
+			act(() => field().props.onBlur());
+			expect(onRename).not.toHaveBeenCalled();
+			expect(onRenameCancel).toHaveBeenCalledTimes(1);
+			act(() => renderer.unmount());
+		}
+	});
+
+	it("cancels on Escape and on Android's back, without saving", () => {
+		const viaEscape = renaming();
+		act(() => viaEscape.field().props.onChangeText("Ship the board"));
+		act(() => viaEscape.field().props.onKeyPress({ nativeEvent: { key: "Escape" } }));
+		act(() => viaEscape.field().props.onBlur());
+		expect(viaEscape.onRename).not.toHaveBeenCalled();
+		expect(viaEscape.onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => viaEscape.renderer.unmount());
+
+		const viaBack = renaming();
+		act(() => viaBack.field().props.onChangeText("Ship the board"));
+		let handled = false;
+		act(() => { handled = backHandler.listeners.at(-1)!(); });
+		expect(handled).toBe(true);
+		expect(viaBack.onRename).not.toHaveBeenCalled();
+		expect(viaBack.onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => viaBack.renderer.unmount());
+		expect(backHandler.listeners).toHaveLength(0);
+	});
+
+	// With no Cancel button a field kept open on a failure would have no way
+	// out, so the rename ends and an alert says why.
+	it("ends a failed rename with an alert", async () => {
+		const { Alert } = await import("react-native");
+		vi.mocked(Alert.alert).mockClear();
+		const { renderer, field, onRenameCancel } = renaming(vi.fn(async () => { throw new Error("Lab: rename failed on purpose."); }));
+		act(() => field().props.onChangeText("Ship the board"));
+		act(() => field().props.onSubmitEditing());
+		await flush();
+		expect(Alert.alert).toHaveBeenCalledWith("Couldn't rename this worker", expect.any(String));
+		expect(onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
 	});
 });
 
