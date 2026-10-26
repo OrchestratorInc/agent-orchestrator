@@ -289,58 +289,59 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		<span>{startingAll ? t("settings.harness.startingAllUpdates")
 			: t("settings.harness.updateAll")}</span>
 	</Button>;
+	const help = t("settings.harness.updateNoticeHelp");
 	const updateItem = ({ agentId, advisory, key }: (typeof updates)[number], variant: "card" | "row") => {
-				const plan = installers.data?.find((candidate) => candidate.agentId === agentId);
-				const job = jobFor(agentId);
-				const method = plan?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
-				const authPlan = authPlans.data?.find((candidate) => candidate.agentId === agentId);
-				const needsLogin = needsHarnessLogin(authPlan, readinessById.get(agentId)?.authentication.state);
-				const canUpdate = Boolean(method?.available && method.updateAvailable);
-				const busy = isActiveInstallJob(job) || starting.has(agentId) || settling.has(agentId);
-				// A job this notice started that failed stays explained here.
-				const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
-				const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
-				// The click-time check outranks the cached advisory once it has answered.
-				const sessions = inUse[agentId] ?? advisoryInUse(advisory);
-				// A start error means this attempt made no job; any retained job is an older one.
-				const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
-				const requestAction = () => {
-					if (!needsLogin && method) {
-						// A harness that was only starting is retried, never shown as sessions.
-						if (sessions && !sessions.starting) { setSessionsView({ agentId, inUse: sessions }); return; }
-						void startUpdate(agentId, advisory, method.id);
-						return;
-					}
-					// A login runs in a terminal on the Harness page, which starts it once on open.
-					openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, startLogin: true });
-				};
+		const plan = installers.data?.find((candidate) => candidate.agentId === agentId);
+		const job = jobFor(agentId);
+		const method = plan?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
+		const authPlan = authPlans.data?.find((candidate) => candidate.agentId === agentId);
+		const needsLogin = needsHarnessLogin(authPlan, readinessById.get(agentId)?.authentication.state);
+		const canUpdate = Boolean(method?.available && method.updateAvailable);
+		const busy = isActiveInstallJob(job) || starting.has(agentId) || settling.has(agentId);
+		// A job this notice started that failed stays explained here.
+		const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
+		const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
+		// The click-time check outranks the cached advisory once it has answered.
+		const sessions = inUse[agentId] ?? advisoryInUse(advisory);
+		// A start error means this attempt made no job; any retained job is an older one.
+		const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
+		const requestAction = () => {
+			if (!needsLogin && method) {
+				// A harness that was only starting is retried, never shown as sessions.
+				if (sessions && !sessions.starting) { setSessionsView({ agentId, inUse: sessions }); return; }
+				void startUpdate(agentId, advisory, method.id);
+				return;
+			}
+			// A login runs in a terminal on the Harness page, which starts it once on open.
+			openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, startLogin: true });
+		};
 		return <SwipeCard key={key} variant={variant} label={agentLabel(agentId)} onDismiss={() => dismiss(key)}
 			dismissLabel={t("settings.harness.dismissAgentUpdate", { agent: agentLabel(agentId) })}
 			icon={<AgentAvatar className="size-icon-xl shrink-0" decorative provider={agentId} />}
 			title={variant === "row" ? agentLabel(agentId) : t("settings.harness.updateCardTitle", { agent: agentLabel(agentId) })}
-			help={variant === "card" ? t("settings.harness.updateNoticeHelp") : undefined}>
-					<div className="mt-2 flex items-center gap-2">
-						<VersionChange from={advisory.currentVersion!} to={advisory.latestVersion!} />
-					{/* One width for every label, so Updating… never pushes the versions around. */}
-					{busy ? <Button size="sm" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-icon-2xs animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
-						: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="min-w-20" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
-							: sessions ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))
-							: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
-						: ready && !needsLogin && plan?.documentationUrl ? <Tooltip>
-							<TooltipTrigger asChild><Button size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
-							<TooltipContent side="top" className="max-w-64">{method?.updateReason || t("settings.harness.ownershipUnknown")}</TooltipContent>
-						</Tooltip>
-						: <Button size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
-					</div>
-					{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
-					{error && !busy ? <div className="mt-2 flex flex-col items-start gap-1.5">
-						<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
-						<Button type="button" size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
-					</div> : null}
-					{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}
-					{!error && !busy && inUse[agentId] ? <p role="status" className="mt-2 break-words text-caption text-muted-foreground">
-						{inUse[agentId]!.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) }) : t("settings.harness.inUseBlocked", { count: inUse[agentId]!.count, agent: agentLabel(agentId) })}
-					</p> : null}
+			help={variant === "card" ? help : undefined}>
+			<div className="mt-2 flex items-center gap-2">
+				<VersionChange from={advisory.currentVersion!} to={advisory.latestVersion!} />
+				{/* One width for every label, so Updating… never pushes the versions around. */}
+				{busy ? <Button size="sm" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-icon-2xs animate-spin" aria-hidden="true" />{t(isWaitingForIdleJob(job) ? "settings.harness.waiting" : "settings.harness.updating")}</Button>
+				: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="min-w-20" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
+					: sessions ? (sessions.starting ? t("settings.harness.update") : t("settings.harness.viewSessions", { count: sessions.count }))
+					: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
+				: ready && !needsLogin && plan?.documentationUrl ? <Tooltip>
+					<TooltipTrigger asChild><Button size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
+					<TooltipContent side="top" className="max-w-64">{method?.updateReason || t("settings.harness.ownershipUnknown")}</TooltipContent>
+				</Tooltip>
+				: <Button size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
+			</div>
+			{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
+			{error && !busy ? <div className="mt-2 flex flex-col items-start gap-1.5">
+				<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
+				<Button type="button" size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
+			</div> : null}
+			{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}
+			{!error && !busy && inUse[agentId] ? <p role="status" className="mt-2 break-words text-caption text-muted-foreground">
+				{inUse[agentId]!.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) }) : t("settings.harness.inUseBlocked", { count: inUse[agentId]!.count, agent: agentLabel(agentId) })}
+			</p> : null}
 		</SwipeCard>;
 	};
 	const updatedItems = updatedCards.map(([agentId, version]) => <SwipeCard key={`updated:${agentId}`} variant="card" label={agentLabel(agentId)} role="status"
@@ -358,7 +359,6 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		<p className="mt-2 text-caption text-muted-foreground">{t("settings.harness.updatedTo", { version: friendlyVersion(version, i18n.resolvedLanguage ?? i18n.language) })}</p>
 	</SwipeCard>);
 	const stackTitle = t("settings.harness.updateStackTitle", { count: updates.length });
-	const help = t("settings.harness.updateNoticeHelp");
 	const dismissAll = () => dismiss(...updates.map((update) => update.key));
 	// Portaled to the end of <body>: Electron applies window drag regions in DOM
 	// order, so a later drag strip (the home page's) would otherwise override no-drag.
@@ -415,14 +415,13 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 /** A notice card, or a row in the expanded list: swipe it right (two fingers
  * or a drag) or press × to dismiss it. Every card puts its main action in the
  * same bottom-right place, so Update and Update all line up. */
-function SwipeCard({ variant, role, label, icon, title, help, toggle, dismissLabel, onDismiss, swipeable = true, footer, children }: {
+function SwipeCard({ variant, role, label, icon, title, help, dismissLabel, onDismiss, swipeable = true, footer, children }: {
 	variant: "card" | "row";
 	role?: "status" | "group";
 	label: string;
 	icon: ReactNode;
 	title: string;
 	help?: string;
-	toggle?: ReactNode;
 	dismissLabel: string;
 	onDismiss: () => void;
 	swipeable?: boolean;
@@ -439,7 +438,6 @@ function SwipeCard({ variant, role, label, icon, title, help, toggle, dismissLab
 		<div className="flex items-center gap-2">
 			{icon}
 			<p className="min-w-0 flex-1 truncate text-control font-medium">{title}</p>
-			{toggle}
 			<button type="button" aria-label={dismissLabel} onClick={leave}
 				className="-mr-1 grid size-control-xs shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
 				<X className="size-icon-2xs" aria-hidden="true" />
@@ -487,10 +485,11 @@ function VersionChange({ from, to }: { from: string; to: string }) {
 
 const NOTICE_MAX_WIDTH = 320;
 const NOTICE_EDGE = 12; // right-3, bottom-3, inside the center panel
-// A notice nobody is looking at or working with leaves on its own; its release
-// is then treated as seen, like a swipe or ×, so it is not announced again.
-// Settings › Harness keeps offering the update.
+// A notice nobody is looking at or working with leaves on its own, which
+// quiets its harnesses like a swipe or × (see QUIET_MS).
 const AUTO_HIDE_MS = 10_000;
+// Longer than the list's and a closing row's height transitions (200ms, 180ms).
+const MOTION_SETTLE_MS = 260;
 const UPDATED_MS = 4_000;
 
 /** The notice's frame in the bottom-right corner of the framed center panel,
@@ -513,7 +512,8 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 	const frameRef = useRef<HTMLElement>(null);
 	const [height, setHeight] = useState(0);
 	const [engaged, setEngaged] = useState(false);
-	const [windowFocused, setWindowFocused] = useState(() => document.hasFocus());
+	// Electron reports focus for a hidden window too, so visibility is checked as well.
+	const [windowFocused, setWindowFocused] = useState(() => document.hasFocus() && document.visibilityState === "visible");
 	const [leaving, setLeaving] = useState(false);
 	const autoHide = useRef(onAutoHide);
 	autoHide.current = onAutoHide;
@@ -524,63 +524,64 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 			return;
 		}
 		// Session content in this corner reads this rect to keep itself clear.
-		// While the list opens or closes the size changes every frame; measuring
-		// then would re-render every reader of the rect each frame, so it waits
-		// for the transition to end.
-		let animating = 0;
+		// While a height transition runs (the list opening, a row closing) the
+		// size changes every frame; measuring then would re-render every reader
+		// of the rect each frame, so it measures once the motion has settled.
+		let settle: number | undefined;
 		const measure = () => {
-			if (animating > 0) return;
+			if (settle !== undefined) return;
 			const box = element.getBoundingClientRect();
 			setHeight(box.height);
 			publishHarnessUpdateNoticeRect(box.width > 0 ? { left: box.left, top: box.top, right: box.right, bottom: box.bottom } : null);
 		};
-		const onRun = (event: TransitionEvent) => { if (event.propertyName === "height") animating += 1; };
-		const onEnd = (event: TransitionEvent) => {
-			if (event.propertyName !== "height" || animating === 0) return;
-			animating -= 1;
-			measure();
+		const onTransition = (event: TransitionEvent) => {
+			if (event.propertyName !== "height") return;
+			window.clearTimeout(settle);
+			settle = window.setTimeout(() => {
+				settle = undefined;
+				measure();
+			}, MOTION_SETTLE_MS);
 		};
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);
 		window.addEventListener("resize", measure);
-		element.addEventListener("transitionrun", onRun);
-		element.addEventListener("transitionend", onEnd);
-		element.addEventListener("transitioncancel", onEnd);
+		element.addEventListener("transitionrun", onTransition);
 		measure();
 		return () => {
+			window.clearTimeout(settle);
 			observer.disconnect();
 			window.removeEventListener("resize", measure);
-			element.removeEventListener("transitionrun", onRun);
-			element.removeEventListener("transitionend", onEnd);
-			element.removeEventListener("transitioncancel", onEnd);
+			element.removeEventListener("transitionrun", onTransition);
 		};
 	});
 	useLayoutEffect(() => () => publishHarnessUpdateNoticeRect(null), []);
 	useEffect(() => {
-		const onFocus = () => setWindowFocused(true);
-		const onBlur = () => setWindowFocused(false);
-		window.addEventListener("focus", onFocus);
-		window.addEventListener("blur", onBlur);
+		const sync = () => setWindowFocused(document.hasFocus() && document.visibilityState === "visible");
+		window.addEventListener("focus", sync);
+		window.addEventListener("blur", sync);
+		document.addEventListener("visibilitychange", sync);
 		return () => {
-			window.removeEventListener("focus", onFocus);
-			window.removeEventListener("blur", onBlur);
+			window.removeEventListener("focus", sync);
+			window.removeEventListener("blur", sync);
+			document.removeEventListener("visibilitychange", sync);
 		};
 	}, []);
-	// The clock runs only while the window has focus and nobody is reading or
-	// using the notice, so it never leaves unseen.
+	const area = panel ?? { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
+	const covered = noticeCoversLiveBrowser(browserRect, area, height);
+	// The clock runs only while the notice is on screen in a focused window and
+	// nobody is reading or using it, so it never leaves unseen.
 	useEffect(() => {
 		setLeaving(false);
-		if (holdOpen || engaged || !windowFocused) return;
+		if (holdOpen || engaged || !windowFocused || covered) return;
 		const timer = window.setTimeout(() => setLeaving(true), AUTO_HIDE_MS);
 		return () => window.clearTimeout(timer);
-	}, [holdOpen, engaged, windowFocused]);
+	}, [holdOpen, engaged, windowFocused, covered]);
 	useEffect(() => {
 		if (!leaving) return;
 		const timer = window.setTimeout(() => autoHide.current(), 180);
 		return () => window.clearTimeout(timer);
 	}, [leaving]);
-	const area = panel ?? { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
-	if (noticeCoversLiveBrowser(browserRect, area, height)) return null;
+	if (covered) return null;
 	return <div className="pointer-events-none fixed isolate z-[calc(var(--z-overlay)-1)] overflow-hidden"
 		style={{ left: area.left, top: area.top, width: area.right - area.left, height: area.bottom - area.top, borderRadius: panel?.radius }}>
 		<aside ref={frameRef} role="region" aria-label={label}

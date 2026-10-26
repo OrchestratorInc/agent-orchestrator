@@ -67,7 +67,6 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 		let sumY = 0;
 		let offset = 0;
 		let speed = 0;
-		let dismissed = false;
 		let idleTimer: number | undefined;
 		let outTimer: number | undefined;
 		let nativePhases = false;
@@ -95,7 +94,6 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			if (!tracked) return;
 			const width = element.offsetWidth || 1;
 			if (offset >= width * DISMISS_FRACTION || (offset > AXIS_DECIDE_PX && speed >= FLICK_SPEED_PX)) {
-				dismissed = true;
 				leaving.current = true;
 				outTimer = leave(element, offset, () => dismissRef.current());
 				return;
@@ -114,7 +112,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 
 		const onWheel = (event: WheelEvent) => {
 			// Pinch-zoom arrives as ctrl+wheel; line/page deltas come from mouse wheels.
-			if (dismissed || leaving.current || event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
+			if (leaving.current || event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
 			if (nativePhases && !fingersDown) return;
 			if (!nativePhases) {
 				window.clearTimeout(idleTimer);
@@ -134,7 +132,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 		};
 
 		const onPointerDown = (event: PointerEvent) => {
-			if (dismissed || leaving.current || event.button !== 0 || mode !== "idle") return;
+			if (leaving.current || event.button !== 0 || mode !== "idle") return;
 			if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
 			const startX = event.clientX;
 			const startY = event.clientY;

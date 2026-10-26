@@ -70,7 +70,7 @@ describe("startup harness update notice", () => {
 		});
 		vi.spyOn(apiClient, "POST").mockResolvedValue({ data: readiness } as never);
 	});
-	afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+	afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 	it("never raises the native shell, which would block the live browser page", async () => {
 		mountNotice();
@@ -96,7 +96,7 @@ describe("startup harness update notice", () => {
 		expect(screen.getByLabelText("notice rect")).toHaveTextContent("none");
 	});
 
-	it("stays in the bottom-right corner on every page, hides for browser overlap, and returns after the inspector closes", async () => {
+	it("stays in the bottom-right corner, hides for browser overlap, and returns after the inspector closes", async () => {
 		vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
 		vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
 		let browserRect = new DOMRect();
@@ -106,10 +106,6 @@ describe("startup harness update notice", () => {
 			if (this.classList.contains("browser-panel__viewport")) return browserRect;
 			return originalRect.call(this);
 		});
-		// A taller top bar on another page no longer moves the notice.
-		const topbar = document.createElement("div");
-		topbar.className = "workspace-topbar-container";
-		document.body.append(topbar);
 		mountNotice();
 		await screen.findByRole("region", { name: "Agent updates available" });
 		const browser = document.createElement("div");
@@ -142,7 +138,6 @@ describe("startup harness update notice", () => {
 			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("absolute", "right-3", "bottom-3"));
 		} finally {
 			browser.remove();
-			topbar.remove();
 		}
 	});
 
@@ -419,7 +414,7 @@ describe("startup harness update notice", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss Codex update" }));
 		await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(2));
 		await userEvent.click(screen.getByRole("button", { name: "Show less" }));
-		// The list closes, then its rows unmount.
+		// Closed, the rows stay mounted but leave the accessibility tree.
 		await waitFor(() => expect(screen.queryAllByRole("article")).toHaveLength(0));
 		expect(screen.getByRole("button", { name: "Show all (2)" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Dismiss all updates" }));
@@ -559,6 +554,28 @@ describe("startup harness update notice", () => {
 		await waitFor(() => expect(later.client.getQueryData(updateAdvisoryQueryKey("claude-code"))).toBeDefined());
 		act(() => later.client.setQueryData(updateAdvisoryQueryKey("claude-code"), newer));
 		expect(await screen.findByText("v2.1.293")).toBeInTheDocument();
+	});
+
+	it("leaves on its own after a while in a focused, visible window and quiets that harness", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+		mountNotice();
+		await screen.findByRole("region", { name: "Agent updates available" });
+		await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+		await waitFor(() => expect(screen.queryByRole("region")).toBeNull());
+		expect(Object.keys(JSON.parse(localStorage.getItem("ao.harness-update-quiet.v1")!))).toEqual([JSON.stringify(["local", "claude-code"])]);
+	});
+
+	it("never leaves on its own while the window is hidden", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		mountNotice();
+		await screen.findByRole("region", { name: "Agent updates available" });
+		await act(async () => { await vi.advanceTimersByTimeAsync(10_400); });
+		expect(screen.getByRole("region", { name: "Agent updates available" })).toBeInTheDocument();
+		expect(localStorage.getItem("ao.harness-update-quiet.v1")).toBeNull();
 	});
 
 	it.each(["unknown", "current"])("does not notify for %s results", async (status) => {
@@ -756,8 +773,8 @@ describe("harness updates while sessions run", () => {
 });
 
 describe("noticeCoversLiveBrowser", () => {
-	const window = { left: 0, top: 0, right: 1280, bottom: 800 };
-	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], height = 100, area = window) => noticeCoversLiveBrowser(browser, area, height);
+	const viewport = { left: 0, top: 0, right: 1280, bottom: 800 };
+	const covers = (browser: Parameters<typeof noticeCoversLiveBrowser>[0], height = 100, area = viewport) => noticeCoversLiveBrowser(browser, area, height);
 
 	it("returns false when no live page overlaps the panel corner", () => {
 		expect(covers(null)).toBe(false);
