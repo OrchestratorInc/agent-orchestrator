@@ -1,6 +1,6 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
-import { ListItem as ComposeListItem, RadioButton, RNHostView, Text as ComposeText } from "@expo/ui/jetpack-compose";
-import { alpha, selectable } from "@expo/ui/jetpack-compose/modifiers";
+import { ListItem as ComposeListItem, RadioButton, RNHostView, Surface, Text as ComposeText } from "@expo/ui/jetpack-compose";
+import { alpha, fillMaxWidth, selectable } from "@expo/ui/jetpack-compose/modifiers";
 import { Text as SwiftUIText } from "@expo/ui/swift-ui";
 import { accessibilityAddTraits, disabled as disabledModifier, font, foregroundStyle, refreshable, scrollContentBackground } from "@expo/ui/swift-ui/modifiers";
 import { type ReactElement, type ReactNode } from "react";
@@ -111,7 +111,7 @@ function OptionRow({ option, selected, onSelect }: { option: PickerOption; selec
 			</ListItem>
 		);
 	}
-	return (
+	const row = (
 		// The row is one radio choice: the whole item selects, and TalkBack hears
 		// a radio button and whether it is checked.
 		<ComposeListItem
@@ -124,7 +124,13 @@ function OptionRow({ option, selected, onSelect }: { option: PickerOption; selec
 			{option.mark ? <ComposeListItem.TrailingContent><RNHostView matchContents>{option.mark}</RNHostView></ComposeListItem.TrailingContent> : null}
 		</ComposeListItem>
 	);
+	if (!option.disabled) return row;
+	// A disabled click target, never pressed: Compose merges the row into one
+	// node, so TalkBack reads the title with its status and says it is disabled.
+	return <Surface onClick={ignore} enabled={false} color="transparent" modifiers={[fillMaxWidth()]}>{row}</Surface>;
 }
+
+function ignore() {}
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	// iOS sets the form's rows on the grouped background they are drawn for.

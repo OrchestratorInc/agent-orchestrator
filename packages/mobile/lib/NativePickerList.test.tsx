@@ -21,11 +21,13 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		}),
 		RadioButton: "RadioButton",
 		RNHostView: "RNHostView",
+		Surface: host("Surface"),
 		Text: "ComposeText",
 	};
 });
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
 	alpha: (value: number) => ({ alpha: value }),
+	fillMaxWidth: () => ({ fillMaxWidth: true }),
 	selectable: (selected: boolean, handler: () => void, role: string) => ({ selectable: { selected, handler, role } }),
 }));
 vi.mock("@expo/ui/swift-ui", () => ({ Text: "SwiftUIText" }));
@@ -104,8 +106,16 @@ describe("Android picker list", () => {
 		expect(second.props.modifiers[0].selectable).toMatchObject({ selected: false, role: "radioButton" });
 		act(() => second.props.modifiers[0].selectable.handler());
 		expect(onSelect).toHaveBeenCalledExactlyOnceWith("codex");
-		// Not choosable: dimmed and not selectable.
+		// Not choosable: dimmed, not selectable, and inside a disabled click
+		// target, which TalkBack reads as one node that is disabled.
 		expect(third.props.modifiers).toEqual([{ alpha: 0.4 }]);
+		const surfaces = byType("Surface");
+		expect(surfaces).toHaveLength(1);
+		expect(surfaces[0].props).toMatchObject({ enabled: false, color: "transparent" });
+		expect(surfaces[0].findByType("ComposeListItem" as never)).toBe(third);
+		// Its handler never picks the row: Codex, above, is still the only choice made.
+		surfaces[0].props.onClick();
+		expect(onSelect).toHaveBeenCalledExactlyOnceWith("codex");
 		expect(second.findByType("SupportingContent" as never).findByType("ComposeText" as never).props.color).toBe("amber");
 		expect(first.findByType("TrailingContent" as never).findByType("RNHostView" as never).props.matchContents).toBe(true);
 	});
