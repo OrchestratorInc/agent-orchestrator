@@ -210,6 +210,7 @@ function Shell() {
 					options={{
 						presentation: Platform.OS === "ios" ? "formSheet" : "card",
 						headerShown: false,
+						title: "Settings",
 						...(Platform.OS === "ios" ? {
 							sheetAllowedDetents: [1],
 							sheetGrabberVisible: true,

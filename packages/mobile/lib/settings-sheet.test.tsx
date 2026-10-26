@@ -48,8 +48,10 @@ describe("Settings presentation", () => {
 		try {
 			const settings = renderer.root.findByProps({ name: "settings" }).props.options;
 			const naming = renderer.root.findByProps({ name: "sheets/machine-name" }).props.options;
-			// Settings' own stack draws the headers, never the root's.
+			// Settings' own stack draws the headers, never the root's. The title
+			// names it in the history of a page opened over it.
 			expect(settings.headerShown).toBe(false);
+			expect(settings.title).toBe("Settings");
 			// Nothing stops a swipe for the whole flow; an open editor holds the
 			// sheet still on its own (app/settings/environments.tsx).
 			expect(settings.gestureEnabled).toBeUndefined();
