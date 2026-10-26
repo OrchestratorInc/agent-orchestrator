@@ -91,8 +91,23 @@ describe("SubagentTeam", () => {
 		// A finished child shows the first line of its report, as a sentence.
 		const done = screen.getByRole("button", { name: /Audit: testing gaps/ });
 		expect(within(done).getByText("Ranked 5 tests to write first.")).toBeInTheDocument();
-		expect(within(done).getByText("Done")).toBeInTheDocument();
+		// The report and the header's count already say it finished: no check on the
+		// row, only the word for screen readers.
+		expect(within(done).getByText("Done")).toHaveClass("sr-only");
+		expect(within(done).queryByLabelText("Working")).not.toBeInTheDocument();
 		expect(within(done).getByText("12s")).toBeInTheDocument();
+	});
+
+	it("names a specialized agent type but not Claude's default one", () => {
+		const readme = launch("readme", "README audit");
+		readme.detail = {
+			...readme.detail,
+			input: { description: "README audit", prompt: "Read-only. README audit.", subagent_type: "general-purpose" },
+		} as ConversationActivity["detail"];
+		render(<SubagentTeam launches={[readme, launch("pages", "Audit: info pages")]} steps={new Map()} live harness="claude-code" />);
+
+		expect(within(screen.getByRole("button", { name: /README audit/ })).queryByText("general-purpose")).not.toBeInTheDocument();
+		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("Explore")).toBeInTheDocument();
 	});
 
 	it("never shows the provider's internal launch note", () => {

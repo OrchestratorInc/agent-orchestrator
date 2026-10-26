@@ -14,7 +14,7 @@
 
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Check, ChevronRight, Loader2, Square, X } from "lucide-react";
+import { ChevronRight, Loader2, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
@@ -36,6 +36,11 @@ import type { ConversationActivity } from "../../types/conversation";
 const EASE_OUT = [0.22, 1, 0.36, 1] as const;
 /** At most this many avatars stack in the header; the count says the rest. */
 const STACKED_AVATARS = 3;
+/**
+ * Claude's default agent type. It says nothing a reader can act on, so a row names
+ * only a specialized type, such as `Explore`, `Plan` or a project's own agent.
+ */
+const DEFAULT_AGENT_TYPE = "general-purpose";
 
 export function SubagentTeam({
 	launches,
@@ -237,7 +242,7 @@ function SubagentRow({
 						<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={agent.title}>
 							{agent.title}
 						</span>
-						{agent.agentType ? (
+						{agent.agentType && agent.agentType !== DEFAULT_AGENT_TYPE ? (
 							<span className="shrink-0 text-caption text-muted-foreground/70">{agent.agentType}</span>
 						) : null}
 					</span>
@@ -312,8 +317,10 @@ function SubagentAvatar({ harness, state }: { harness?: string; state: SubagentS
 }
 
 /**
- * The status slot: a spinner while working, then a glyph and a word, so the state
- * never rests on color alone.
+ * The status slot: a spinner while working, then a glyph and a word for anything
+ * that did not simply finish, so the state never rests on color alone. Done shows
+ * nothing: the report under the name and the header's count already say it, so a
+ * check on every row is noise. Screen readers still hear it.
  */
 function StateGlyph({ state }: { state: SubagentState }) {
 	const { t } = useTranslation();
@@ -327,12 +334,7 @@ function StateGlyph({ state }: { state: SubagentState }) {
 			/>
 		);
 	} else if (state === "done") {
-		glyph = (
-			<span className="flex items-center gap-1 text-caption text-muted-foreground">
-				<Check aria-hidden="true" className="size-3" />
-				{t("chat.subagent.state.done")}
-			</span>
-		);
+		glyph = undefined;
 	} else if (state === "failed") {
 		glyph = (
 			<span className="flex items-center gap-1 text-caption text-destructive">
@@ -351,18 +353,24 @@ function StateGlyph({ state }: { state: SubagentState }) {
 		glyph = <span className="text-caption text-muted-foreground/70">{t("chat.subagent.state.unknown")}</span>;
 	}
 	return (
-		<AnimatePresence initial={false} mode="popLayout">
-			<motion.span
-				key={state}
-				initial={reducedMotion ? false : { opacity: 0, scale: 0.8 }}
-				animate={{ opacity: 1, scale: 1 }}
-				exit={reducedMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, scale: 0.8 }}
-				transition={{ duration: reducedMotion ? 0 : 0.16, ease: EASE_OUT }}
-				className="flex items-center"
-			>
-				{glyph}
-			</motion.span>
-		</AnimatePresence>
+		<>
+			{state === "done" ? <span className="sr-only">{t("chat.subagent.state.done")}</span> : null}
+			{/* Stays mounted when the slot empties, so the spinner still fades out. */}
+			<AnimatePresence initial={false} mode="popLayout">
+				{glyph ? (
+					<motion.span
+						key={state}
+						initial={reducedMotion ? false : { opacity: 0, scale: 0.8 }}
+						animate={{ opacity: 1, scale: 1 }}
+						exit={reducedMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, scale: 0.8 }}
+						transition={{ duration: reducedMotion ? 0 : 0.16, ease: EASE_OUT }}
+						className="flex items-center"
+					>
+						{glyph}
+					</motion.span>
+				) : null}
+			</AnimatePresence>
+		</>
 	);
 }
 
