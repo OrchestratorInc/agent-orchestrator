@@ -19,6 +19,7 @@ vi.mock("react-native-gesture-handler", () => {
 	return { Gesture: { Pan: pan }, GestureDetector: ({ children }: { children: unknown }) => children };
 });
 vi.mock("../useReducedMotion", () => ({ useReducedMotion: () => false }));
+vi.mock("../ui", () => ({ Button: "Button" }));
 vi.mock("react-native-keyboard-controller", () => ({ useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }) }));
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("expo-secure-store", () => ({}));

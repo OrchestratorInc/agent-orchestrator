@@ -1,18 +1,20 @@
-import { Feather } from "../icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { AppSymbol } from "../AppSymbol";
 import { haptics } from "../haptics";
+import { usePressFeedback } from "../pressFeedback";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
-import { iconSize } from "../tokens";
+import { iconSize, stateOpacity, touchTarget } from "../tokens";
 import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { ComposerAttachment } from "./ComposerAttachment";
 import { ComposerGlass } from "./composer-glass";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
@@ -43,6 +45,8 @@ export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onS
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const stopFeedback = usePressFeedback("button");
+	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	const [text, setText] = useState("");
 	const [attachments, setAttachments] = useState<Attachment[]>([]);
 	const [submitting, setSubmitting] = useState(false);
@@ -121,10 +125,10 @@ export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onS
 	}));
 	const sendDisabled = stopped || submitting || (!text.trim() && !attachments.length);
 	return <Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
-		{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><Feather name="mic" size={12} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
-		{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((current) => current.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
+		{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><AppSymbol name="mic" size={iconSize.xs} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
+		{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <ComposerAttachment key={item.id} name={item.name} image={item.kind === "image" ? item.image : undefined} onRemove={() => setAttachments((current) => current.filter((candidate) => candidate.id !== item.id))} />)}</ScrollView> : null}
 		{error || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{error || voice.error}</Text> : null}
-		<View style={[styles.composer, stopped && { opacity: 0.55 }]}>
+		<View style={[styles.composer, stopped && inactive]}>
 			<ComposerGlass radius={COMPOSER_RADIUS} />
 			<View style={styles.composerRow}>
 				<ChatAttachmentMenu disabled={stopped || submitting || !attachmentsEnabled} canAttachFile onChoosePhoto={() => void addPhoto()} onChooseFile={() => void addFile()} />
@@ -146,8 +150,8 @@ export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onS
 					editable={!stopped && !submitting}
 					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 				/>
-				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
-				{busy ? <Pressable accessibilityRole="button" accessibilityLabel="Stop reviewer" onPress={() => { haptics.tap(); void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer.")); }} style={({ pressed }) => [styles.stop, pressed && { opacity: 0.8 }]}><Feather name="square" size={12} color={t.textPrimary} /></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send reply" accessibilityState={{ disabled: sendDisabled, busy: submitting }} disabled={sendDisabled} onPress={() => { haptics.tap(); void submit(); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, sendDisabled && { opacity: 0.35 }]}>{submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+				<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
+				{busy ? <Pressable accessibilityRole="button" accessibilityLabel="Stop reviewer" android_ripple={stopFeedback.android_ripple} onPress={() => { haptics.tap(); void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer.")); }} style={({ pressed }) => [styles.stop, pressed && stopFeedback.pressed]}><AppSymbol name="stop" size={iconSize.xs} color={t.textPrimary} /></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send reply" accessibilityState={{ disabled: sendDisabled, busy: submitting }} disabled={sendDisabled} android_ripple={sendFeedback.android_ripple} onPress={() => void submit()} style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed, sendDisabled && inactive]}>{submitting ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.md} color={t.onAccent} />}</Pressable>}
 			</View>
 		</View>
 	</Animated.View>;
@@ -155,3 +159,5 @@ export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onS
 
 // The session composer's dock, pill, field and controls; it draws nothing of its own.
 const makeStyles = composerStyleRules;
+/** The pill, or a control in it, that cannot act right now. */
+const inactive = { opacity: stateOpacity.disabled };

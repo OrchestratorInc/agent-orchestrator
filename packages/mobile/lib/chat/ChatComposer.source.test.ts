@@ -24,7 +24,10 @@ describe("chat composer pill", () => {
 	it("draws a single borderless capsule", () => {
 		const pill = styleRule("composer");
 		expect(pill).toContain("borderRadius: COMPOSER_RADIUS");
-		expect(composerStyles).toContain("const COMPOSER_RADIUS = 28");
+		// Half the resting height: 28 on iOS, around a row of 44pt controls, and
+		// 30 on Android, where the controls are Material's 48dp.
+		expect(composerStyles).toContain("const COMPOSER_HEIGHT = touchTarget + space.xs * 2");
+		expect(composerStyles).toContain("const COMPOSER_RADIUS = COMPOSER_HEIGHT / 2");
 		expect(composer).toContain("...composerStyleRules(t),");
 		expect(pill).not.toContain("borderWidth");
 		expect(pill).not.toContain("borderColor");
@@ -87,9 +90,54 @@ describe("chat composer pill", () => {
 	// Two discs side by side have no hierarchy; the send button is the only shape
 	// that commits, so dictation is a bare glyph here.
 	it("keeps dictation a glyph and the send a filled circle", () => {
-		expect(composer).toContain('<MicKey variant="plain"');
-		expect(styleRule("send")).toContain("borderRadius: 22");
+		expect(composer).toContain('<MicKey variant="plain" size={touchTarget}');
+		expect(styleRule("send")).toContain("width: touchTarget, height: touchTarget, borderRadius: radius.pill");
 		expect(styleRule("send")).toContain("backgroundColor: t.accent");
+	});
+
+	// The glyph on the filled accent is the accent's own ink. `bgBase` happened
+	// to match it on the default themes and nowhere else.
+	it("inks the send glyph for the accent fill", () => {
+		expect(composer).toContain('<AppSymbol name="send" size={iconSize.md} color={t.onAccent} />');
+		expect(composer).toContain('<ActivityIndicator size="small" color={t.onAccent} />');
+		expect(composer).not.toContain("color={t.bgBase}");
+	});
+
+	// The press used to tap and the landing to buzz success: two haptics for one
+	// send. The one that stays is the outcome.
+	it("fires one haptic per send, when it lands", () => {
+		expect(composer).toContain('onPress={() => void submit("send")}');
+		expect(composer).toContain('onPress={() => void submit("steer")}');
+		expect(composer).not.toMatch(/haptics\.tap\(\);\s*void submit/);
+		expect(composer).not.toMatch(/haptics\.tap\(\);\s*set(Promoting|Cancelling)QueuedTurnId/);
+	});
+
+	it("gives every small control in and around the pill a full touch target", () => {
+		for (const rule of ["removeQuote", "queueSteer", "queueDelete", "steerAction"]) {
+			expect(styleRule(rule), rule).toContain("width: touchTarget, height: touchTarget");
+		}
+		expect(styleRule("attachmentRemove")).toContain("width: touchTarget, height: touchTarget");
+		expect(source("./ComposerAttachment.tsx")).toContain('accessibilityRole="button"');
+		expect(composer).toContain("hitSlop={{ top: CHANGES_PILL_SLOP, bottom: CHANGES_PILL_SLOP }}");
+		expect(composer).toContain("const CHANGES_PILL_SLOP = (touchTarget - CHANGES_PILL_HEIGHT) / 2");
+		expect(styleRule("deliveryNote")).toContain("height: touchTarget");
+		expect(composer).not.toContain("hitSlop={7}");
+	});
+
+	it("brings a pushed-aside request back with a real button", () => {
+		expect(composer).toContain('<Button title="Answer" variant="secondary" onPress={onRestoreRequest} />');
+		expect(composer).not.toContain("textDecorationLine");
+	});
+
+	it("draws the queue dock with the shared divider and radius", () => {
+		expect(styleRule("queueDock")).toContain("borderWidth: rowDividerWidth");
+		expect(styleRule("queueDock")).toContain("borderRadius: radius.lg");
+		expect(styleRule("queueRowDivider")).toContain("borderTopWidth: rowDividerWidth");
+		expect(composer).not.toContain("hairlineWidth");
+	});
+
+	it("gives the context meter a value a screen reader can read", () => {
+		expect(composer).toContain("accessibilityValue={{ min: 0, max: 100, now: contextMeter.percent }}");
 	});
 
 	it("opens the row with a plus rather than a paperclip", () => {
@@ -171,8 +219,10 @@ describe("session changes pill", () => {
 		const start = composer.indexOf("{changes && !(deliveryPresentation.showQueueNote && attachments.length)");
 		expect(start).toBeGreaterThan(-1);
 		const pill = composer.slice(start, composer.indexOf(': deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>', start));
-		expect(pill).toContain("changes.onOpen()");
-		expect(pill).toContain('accessibilityLabel="Steer this turn now"');
+		expect(pill).toContain("onPress={changes.onOpen}");
+		expect(pill).toContain("{steerAction}");
+		expect(composer).toContain('const steerAction = deliveryPresentation.showSteerAction ? <Pressable');
+		expect(composer).toContain('accessibilityLabel="Steer this turn now"');
 		expect(composer).toContain('{attachments.length ? "Attachments next" : "Sent after this"}');
 	});
 });

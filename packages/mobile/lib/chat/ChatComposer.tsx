@@ -1,21 +1,23 @@
-import { Feather } from "../icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { machineIdentity, type ServerConfig } from "../config";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { Easing, interpolateColor, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
+import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
-import { fontScaleCap, iconSize, press, radius, space, type } from "../tokens";
+import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
+import { Button } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { MicKey } from "../voice/MicKey";
@@ -29,6 +31,7 @@ import {
 } from "./composerSuggestions";
 import { chatSheetRoute } from "./chatSheetRegistry";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
+import { ComposerAttachment } from "./ComposerAttachment";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
@@ -64,6 +67,19 @@ const REVIEW_COLLAPSE_MS = 150;
 const REVIEW_EXPAND_MS = 240;
 /** The PR card's corner, which eases into the pill's as it folds. */
 const REVIEW_CARD_RADIUS = radius.xxl;
+
+/** The meta row's capsules are this tall; their slop makes up the rest of a touch target. */
+const CHANGES_PILL_HEIGHT = space.xxxl;
+const CHANGES_PILL_SLOP = (touchTarget - CHANGES_PILL_HEIGHT) / 2;
+
+// The composer's one-off glyphs.
+/** Redirect the running turn now. */
+const steer = { ios: "arrow.turn.up.right", android: "turn_right" } as const;
+/** A message waiting its turn in the queue. */
+const queued = { ios: "arrow.turn.down.right", android: "subdirectory_arrow_right" } as const;
+/** Sent once the running turn ends. */
+const sentLater = { ios: "clock", android: "schedule" } as const;
+const approvalGlyph = { ios: "shield", android: "shield" } as const;
 
 export function ChatComposer({
 	quoteRequest,
@@ -175,6 +191,9 @@ export function ChatComposer({
 	const t = useTheme();
 	const router = useRouter();
 	const styles = useThemedStyles(makeStyles);
+	const iconFeedback = usePressFeedback("icon");
+	const buttonFeedback = usePressFeedback("button");
+	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	// The keyboard's own progress, 0 closed to 1 open. This is the same value the
 	// keyboard is animating with, so the dock moves in lockstep with it.
 	const keyboard = useReanimatedKeyboardAnimation();
@@ -482,14 +501,28 @@ export function ChatComposer({
 	}, [cursor, openPicker, pickerGate, text]);
 	const activeReviewPR = reviewPromptAvailable ? reviewPR : undefined;
 	const showReviewPrompt = Boolean(activeReviewPR);
+	const sendBlocked = Boolean(disabled || stopped || pending || submitting || (draftKey && !draftLoaded));
+	// A full touch target around a compact tinted disc, so the meta row keeps its
+	// weight while the button meets the platform minimum.
+	const steerAction = deliveryPresentation.showSteerAction ? <Pressable
+		accessibilityRole="button"
+		accessibilityLabel="Steer this turn now"
+		accessibilityState={{ disabled: disabled || submitting || pending }}
+		disabled={disabled || submitting || pending}
+		android_ripple={iconFeedback.android_ripple}
+		onPress={() => void submit("steer")}
+		style={({ pressed }) => [styles.steerAction, pressed && iconFeedback.pressed]}
+	>
+		<View style={styles.steerDisc}><AppSymbol name={steer} size={iconSize.sm} color={t.accent} /></View>
+	</Pressable> : null;
 	const composerContents = (
 		<>
 				{activeReviewPR ? <Animated.View style={[styles.reviewCardHeader, reviewCardHeaderStyle]} onLayout={(event) => { if (!reviewCardHeaderMeasured.value && event.nativeEvent.layout.height > 0) { reviewCardHeaderHeight.value = event.nativeEvent.layout.height; reviewCardHeaderMeasured.value = true; } }}>
 					<PRReviewPrompt pr={activeReviewPR} summary={reviewPRSummary} onPress={onOpenReview ?? (() => {})} onCollapse={collapseReviewCard} />
 					<View style={styles.reviewDivider} />
 				</Animated.View> : null}
-			{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><Feather name="mic" size={12} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
-			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((old) => old.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
+			{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><AppSymbol name="mic" size={iconSize.xs} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
+			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <ComposerAttachment key={item.id} name={item.name} image={item.kind === "image" ? item.image : undefined} onRemove={() => setAttachments((old) => old.filter((candidate) => candidate.id !== item.id))} />)}</ScrollView> : null}
 			{/* Composer-local only. Conversation and action failures are banners above
 			    the timeline; echoing them here showed one failure twice. */}
 			{localError || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || voice.error}</Text> : null}
@@ -505,22 +538,26 @@ export function ChatComposer({
 						accessibilityRole="button"
 						accessibilityLabel={changesAccessibilityLabel(changes)}
 						accessibilityHint="Opens the changed files"
-						onPress={() => { haptics.tap(); changes.onOpen(); }}
-						style={({ pressed }) => [styles.changesPill, pressed && { opacity: press.opacity }]}
+						// The pill keeps its compact capsule; the slop makes the target
+						// the full height of the row it sits in.
+						hitSlop={{ top: CHANGES_PILL_SLOP, bottom: CHANGES_PILL_SLOP }}
+						android_ripple={buttonFeedback.android_ripple}
+						onPress={changes.onOpen}
+						style={({ pressed }) => [styles.changesPill, pressed && buttonFeedback.pressed]}
 					>
-						<Feather name="file-diff" size={12} color={t.textSecondary} />
+						<AppSymbol name="diff" size={iconSize.xs} color={t.textSecondary} />
 						<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.changesPillText}>{changes.files}</Text>
 						{/* The model picker keeps its room: line counts drop out when the context meter needs the row. */}
 						{!contextMeter && changes.additions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.changesPillCount, { color: t.green }]}>+{compactCount(changes.additions)}</Text> : null}
 						{!contextMeter && changes.deletions ? <Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.changesPillCount, { color: t.red }]}>−{compactCount(changes.deletions)}</Text> : null}
 					</Pressable>
-					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
+					{steerAction}
 				</View> : deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>
-					<Feather name="clock" size={12} color={t.textTertiary} />
-					<Text numberOfLines={1} style={styles.deliveryNoteText}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
-					{deliveryPresentation.showSteerAction ? <Pressable accessibilityRole="button" accessibilityLabel="Steer this turn now" disabled={disabled || submitting || pending} onPress={() => { haptics.tap(); void submit("steer"); }} style={({ pressed }) => [styles.steerAction, pressed && { opacity: 0.7 }]}><Feather name="corner-up-right" size={15} color={t.accent} /></Pressable> : null}
+					<AppSymbol name={sentLater} size={iconSize.xs} color={t.textTertiary} />
+					<Text numberOfLines={1} style={styles.deliveryNoteText} maxFontSizeMultiplier={fontScaleCap.chrome}>{attachments.length ? "Attachments next" : "Sent after this"}</Text>
+					{steerAction}
 				</View> : null}
-				{contextMeter ? <View accessibilityRole="progressbar" accessibilityLabel={`Context window ${contextMeter.percent}% used`} style={styles.contextMeter}>
+				{contextMeter ? <View accessibilityRole="progressbar" accessibilityLabel={`Context window ${contextMeter.percent}% used`} accessibilityValue={{ min: 0, max: 100, now: contextMeter.percent }} style={styles.contextMeter}>
 					<View style={styles.contextTrack}>
 						<View style={[styles.contextFill, { width: `${contextMeter.fillPercent}%`, backgroundColor: contextMeter.severity === "critical" ? t.red : t.amber }]} />
 					</View>
@@ -533,15 +570,15 @@ export function ChatComposer({
 					const cancelling = cancellingQueuedTurnId === entry.turnId;
 					const queueActionPending = Boolean(promotingQueuedTurnId || cancellingQueuedTurnId);
 					return <View key={entry.turnId} style={[styles.queueRow, index > 0 && styles.queueRowDivider]}>
-						<Feather name="corner-down-right" size={15} color={t.textTertiary} />
+						<AppSymbol name={queued} size={iconSize.sm} color={t.textTertiary} />
 						<Text numberOfLines={1} style={styles.queueText}>{entry.message.text}</Text>
 						{canSteer ? <Pressable
 							accessibilityRole="button"
 							accessibilityLabel={`Steer queued message: ${entry.message.text}`}
 							accessibilityState={{ busy: promoting, disabled: queueActionPending }}
 							disabled={queueActionPending}
+							android_ripple={iconFeedback.android_ripple}
 							onPress={() => {
-								haptics.tap();
 								setPromotingQueuedTurnId(entry.turnId);
 								setHiddenQueuedTurnIds((current) => new Set(current).add(entry.turnId));
 								void onPromoteQueuedTurn(entry.turnId)
@@ -556,53 +593,49 @@ export function ChatComposer({
 									})
 									.finally(() => setPromotingQueuedTurnId(undefined));
 							}}
-							style={({ pressed }) => [styles.queueSteer, pressed && { opacity: 0.55 }]}
+							style={({ pressed }) => [styles.queueSteer, pressed && iconFeedback.pressed]}
 						>
-							{promoting ? <ActivityIndicator size="small" color={t.accent} /> : <Feather name="corner-up-right" size={15} color={t.accent} />}
+							{promoting ? <ActivityIndicator size="small" color={t.accent} /> : <AppSymbol name={steer} size={iconSize.sm} color={t.accent} />}
 						</Pressable> : null}
 						<Pressable
 							accessibilityRole="button"
 							accessibilityLabel={`Delete queued message: ${entry.message.text}`}
 							accessibilityState={{ busy: cancelling, disabled: queueActionPending }}
 							disabled={queueActionPending}
+							android_ripple={iconFeedback.android_ripple}
 							onPress={() => {
-								haptics.tap();
 								setCancellingQueuedTurnId(entry.turnId);
 								void onCancelQueuedTurn(entry.turnId)
 									.then(() => haptics.success())
 									.catch(() => haptics.error())
 									.finally(() => setCancellingQueuedTurnId(undefined));
 							}}
-							style={({ pressed }) => [styles.queueDelete, pressed && { opacity: 0.55 }]}
+							style={({ pressed }) => [styles.queueDelete, pressed && iconFeedback.pressed]}
 						>
-							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <Feather name="x" size={15} color={t.textTertiary} />}
+							{cancelling ? <ActivityIndicator size="small" color={t.textTertiary} /> : <AppSymbol name="close" size={iconSize.sm} color={t.textTertiary} />}
 						</Pressable>
 					</View>;
 				})}
 			</View> : null}
-			{request && !requestCard ? <Pressable
-				accessibilityRole="button"
-				accessibilityLabel={`${request.title}. Answer it`}
-				onPress={() => { haptics.tap(); onRestoreRequest(); }}
-				style={({ pressed }) => [styles.restore, pressed && { opacity: 0.6 }]}
-			>
-				<Feather name={request.kind === "approval" ? "shield" : "message-circle"} size={12} color={t.amber} />
+			{/* The way back to a request pushed aside to type instead: what it is,
+			    and a button that brings it back. */}
+			{request && !requestCard ? <View style={styles.restore}>
+				<AppSymbol name={request.kind === "approval" ? approvalGlyph : "chat"} size={iconSize.xs} color={t.amber} />
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreText}>{request.title}</Text>
-				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.restoreAction}>Answer</Text>
-			</Pressable> : null}
+				<Button title="Answer" variant="secondary" onPress={onRestoreRequest} />
+			</View> : null}
 			{requestCard ?? <Animated.View
-				style={[styles.composer, activeReviewPR && styles.reviewComposer, activeReviewPR && reviewComposerSurfaceStyle, stopped && { opacity: 0.55 }]}
+				style={[styles.composer, activeReviewPR && styles.reviewComposer, activeReviewPR && reviewComposerSurfaceStyle, stopped && styles.inactive]}
 			>
 				{activeReviewPR ? <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}><ComposerGlass radius={COMPOSER_RADIUS} /></Animated.View> : <ComposerGlass radius={COMPOSER_RADIUS} />}
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
 					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
 						<Text numberOfLines={2} style={styles.quoteText} accessibilityLabel={`Quoted response: ${quote.text}`}>{quote.text}</Text>
-						<Pressable accessibilityRole="button" accessibilityLabel={`Remove quote: ${quote.text}`} onPress={() => {
-							haptics.tap();
+						<Pressable accessibilityRole="button" accessibilityLabel={`Remove quote: ${quote.text}`} android_ripple={iconFeedback.android_ripple} onPress={() => {
 							const next = latestQuotes.current.filter((item) => item.id !== quote.id);
 							latestQuotes.current = next;
 							setQuotes(next);
-						}} style={styles.removeQuote}><Feather name="x" size={iconSize.lg} color={t.textSecondary} /></Pressable>
+						}} style={({ pressed }) => [styles.removeQuote, pressed && iconFeedback.pressed]}><AppSymbol name="close" size={iconSize.md} color={t.textSecondary} /></Pressable>
 					</View>)}
 				</ScrollView> : null}
 				<View style={styles.composerRow}>
@@ -632,8 +665,8 @@ export function ChatComposer({
 						multiline
 						maxLength={40_000}
 					/>
-					<MicKey variant="plain" size={44} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
-					{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} onPress={() => { haptics.tap(); void onInterrupt(); }} style={[styles.stop, (disabled || interrupting) && { opacity: 0.55 }]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <Feather name="square" size={12} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) }} disabled={disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)} onPress={() => { haptics.tap(); void submit("send"); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, (disabled || stopped || pending || submitting || Boolean(draftKey && !draftLoaded) || (!hasDraft && attachments.length === 0)) && { opacity: 0.35 }]}>{pending || submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
+					<MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
+					{primaryAction === "stop" ? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} android_ripple={buttonFeedback.android_ripple} onPress={() => { haptics.tap(); void onInterrupt(); }} style={({ pressed }) => [styles.stop, pressed && buttonFeedback.pressed, (disabled || interrupting) && styles.inactive]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <AppSymbol name="stop" size={iconSize.xs} color={t.textPrimary} />}</Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: sendBlocked }} disabled={sendBlocked || (!hasDraft && attachments.length === 0)} android_ripple={sendFeedback.android_ripple} onPress={() => void submit("send")} style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed, (sendBlocked || (!hasDraft && attachments.length === 0)) && styles.inactive]}>{pending || submitting ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.md} color={t.onAccent} />}</Pressable>}
 				</View>
 			</Animated.View>}
 		</>
@@ -669,34 +702,37 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// squeeze, and `overflow: "hidden"` so a label that does not truncate cleanly
 	// cannot paint over its neighbours. The `gap` is the floor under that: even
 	// when everything fits, the two never touch.
-	metaRow: { width: "100%", height: 44, flexDirection: "row", alignItems: "center", gap: space.sm },
-	settingsSlot: { flex: 1, minWidth: 0, height: 44, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
+	metaRow: { width: "100%", height: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm },
+	settingsSlot: { flex: 1, minWidth: 0, height: touchTarget, alignItems: "flex-start", justifyContent: "center", overflow: "hidden" },
 	quotes: { maxHeight: 120, flexGrow: 0, marginTop: space.xxs, marginHorizontal: space.sm },
-	quote: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
+	quote: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
 	quoteText: { ...type.subheadline, flex: 1, minWidth: 0, paddingVertical: space.xs, color: t.textSecondary },
-	removeQuote: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+	removeQuote: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 	reviewComposer: { backgroundColor: "transparent" },
+	// The composer, or a control in it, that cannot act right now.
+	inactive: { opacity: stateOpacity.disabled },
 	// The way back to a request the user pushed aside to type instead.
-	restore: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: 12, backgroundColor: t.tintAmber },
-	restoreText: { fontFamily: "Geist_600SemiBold", flex: 1, minWidth: 0, color: t.amber, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	restoreAction: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.caption1.fontSize, fontWeight: "600", textDecorationLine: "underline" },
+	restore: { flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xxs, paddingLeft: space.lg, paddingRight: space.xxs, borderRadius: radius.pill, borderCurve: "continuous", backgroundColor: t.tintAmber },
+	restoreText: { fontFamily: "Geist_600SemiBold", flex: 1, minWidth: 0, color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 	// Sits at the end of the meta row; the bar carries the reading, the label names it.
 	contextMeter: { flexShrink: 0, flexDirection: "row", alignItems: "center", gap: space.xs, height: 32, paddingLeft: space.sm },
-	contextTrack: { width: 34, height: 4, borderRadius: 2, overflow: "hidden", backgroundColor: t.bgSubtle },
-	contextFill: { height: 4, borderRadius: 2 },
-	contextText: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
-	deliveryNote: { flexShrink: 0, maxWidth: "46%", height: 32, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xxs, paddingRight: space.xxs },
-	deliveryNoteText: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	changesPill: { minHeight: 30, flexShrink: 1, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: 15, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	changesPillText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	changesPillCount: { fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
-	steerAction: { width: 30, height: 30, alignItems: "center", justifyContent: "center", borderRadius: 16, backgroundColor: t.accentTint },
-	queueDock: { overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 16, borderCurve: "continuous" },
-	queueRow: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xxs },
-	queueRowDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
+	contextTrack: { width: 34, height: 4, borderRadius: radius.pill, overflow: "hidden", backgroundColor: t.bgSubtle },
+	contextFill: { height: 4, borderRadius: radius.pill },
+	contextText: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, fontWeight: "600" },
+	// As tall as the row, so the pill's slop and the steer button both fit inside it.
+	deliveryNote: { flexShrink: 0, maxWidth: "46%", height: touchTarget, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xxs },
+	deliveryNoteText: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+	changesPill: { minHeight: CHANGES_PILL_HEIGHT, flexShrink: 1, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: radius.pill, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
+	changesPillText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+	changesPillCount: { fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
+	steerAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	steerDisc: { width: CHANGES_PILL_HEIGHT, height: CHANGES_PILL_HEIGHT, alignItems: "center", justifyContent: "center", borderRadius: radius.pill, backgroundColor: t.accentTint },
+	queueDock: { overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderDefault, borderRadius: radius.lg, borderCurve: "continuous" },
+	queueRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xxs },
+	queueRowDivider: { borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
 	queueText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-	queueSteer: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 20 },
-	queueDelete: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center" },
+	queueSteer: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	queueDelete: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 });
 
 function changesAccessibilityLabel(changes: { files: number; additions: number; deletions: number }): string {
