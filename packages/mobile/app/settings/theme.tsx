@@ -1,11 +1,8 @@
-import { useRouter } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { THEMES, type ThemeStyle } from "../../../shared/theme/palettes";
-import { backOr } from "../../lib/backNavigation";
 import { haptics } from "../../lib/haptics";
 import { Feather } from "../../lib/icons";
-import { NativeHeaderButton } from "../../lib/native-header-button";
 import { usePressFeedback } from "../../lib/pressFeedback";
 import { themeFor, type Theme } from "../../lib/theme";
 import { ThemePaletteSwatch } from "../../lib/ThemePaletteSwatch";
@@ -22,7 +19,6 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
 export default function ThemeScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const router = useRouter();
 	const { scheme, style, setStyle } = useThemeState();
 	const insets = useSafeAreaInsets();
 	const feedback = usePressFeedback("row");
@@ -35,12 +31,6 @@ export default function ThemeScreen() {
 
 	return (
 		<View style={styles.screen}>
-			<View style={styles.header}>
-				<View style={[styles.headerButton, styles.backButton]}>
-					<NativeHeaderButton icon="back" label="Back to Settings" onPress={() => backOr(router, "/settings")} />
-				</View>
-				<Text style={styles.headerTitle}>Theme</Text>
-			</View>
 			{/* The rounded card is the scroll viewport, not a child of one: rows scroll
 			    inside it, so its corners stay round however far the list moves. A card
 			    scrolled inside a square viewport was cut flat at the top edge. */}
@@ -76,10 +66,6 @@ export default function ThemeScreen() {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	header: { height: 88, alignItems: "center", justifyContent: "center", paddingHorizontal: space.lg, backgroundColor: t.bgBase, zIndex: 1 },
-	headerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", letterSpacing: -0.3 },
-	headerButton: { position: "absolute", top: 22, width: 44, height: 44, borderRadius: 22, overflow: "hidden" },
-	backButton: { left: 14 },
 	// Shrinks to fit a short list and stops at the safe area on a long one.
 	card: { flexShrink: 1, marginHorizontal: space.lg, marginTop: space.xs, backgroundColor: t.bgElevated, borderRadius: 16, borderCurve: "continuous", overflow: "hidden" },
 	list: { flexGrow: 0 },

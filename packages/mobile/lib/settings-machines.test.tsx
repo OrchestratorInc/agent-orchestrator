@@ -3,22 +3,31 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({
 	navigate: vi.fn(),
+	back: vi.fn(),
+	platform: { OS: "android" },
 	hosts: [{ id: "dev", name: "Dev", endpoints: [], token: "token", platform: "darwin", lastConnected: 1 }],
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	const router = { navigate: fixtures.navigate };
 	return {
-		useRouter: () => ({ navigate: fixtures.navigate }),
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
+		useRouter: () => router,
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
 	};
 });
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", Alert: { alert: vi.fn() }, Linking: {},
-	Platform: { OS: "android" }, Pressable: "Pressable", ScrollView: "ScrollView",
+	Platform: fixtures.platform, Pressable: "Pressable", ScrollView: "ScrollView",
 	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 }, Text: "Text", View: "View",
 }));
-vi.mock("@expo/ui", () => ({ Host: "Host", Picker: "Picker", Row: "Row", Switch: "Switch" }));
+vi.mock("@expo/ui", async () => {
+	const React = await import("react");
+	const Picker = Object.assign(({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Picker", props, children), { Item: "PickerItem" });
+	return { Host: "Host", Picker, Row: "Row", Switch: "Switch" };
+});
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({ tint: (color: string) => ({ $type: "tint", color }) }));
 vi.mock("expo-application", () => ({ nativeApplicationVersion: "1.0", nativeBuildVersion: "1" }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
@@ -35,7 +44,6 @@ vi.mock("./disconnect", () => ({ forgetPairedHost: vi.fn(), forgetServer: vi.fn(
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), warning: vi.fn() } }));
 vi.mock("./layoutGrid", () => ({ toggleLayoutGrid: vi.fn(), useLayoutGrid: () => false }));
 vi.mock("./inAppUpdates", () => ({ checkStore: vi.fn(), openOrStartUpdate: vi.fn() }));
-vi.mock("./native-header-button", () => ({ NativeHeaderButton: "NativeHeaderButton" }));
 vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("./push", () => ({
 	getPushStatus: async () => ({ osPermission: "undetermined", registered: false, localToken: null }),
@@ -48,7 +56,7 @@ vi.mock("./ThemeProvider", () => ({
 	useThemeState: () => ({ preference: "system", scheme: "dark", setPreference: vi.fn() }),
 }));
 vi.mock("./updates", () => ({ checkAndDownload: vi.fn(), describeUpdateRow: () => ({ title: "Software update", value: "Check now" }) }));
-vi.mock("./backNavigation", () => ({ backOr: vi.fn() }));
+vi.mock("./backNavigation", () => ({ backOr: fixtures.back }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import SettingsScreen from "../app/settings/index";
@@ -58,6 +66,8 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("__DEV__", false);
 	fixtures.navigate.mockClear();
+	fixtures.back.mockClear();
+	fixtures.platform.OS = "android";
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -109,4 +119,24 @@ it.each(["Add a machine", "Software update", "Report a problem", "Request a feat
 	if (label === "Request a feature") expect(row.findAllByType("Text" as never).map((node) => node.props.children)).toContain("Discord");
 	const environments = renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === "Environments" && node.parent?.props.onPress)[0].parent!;
 	expect(environments.findAllByType("Feather" as never).map((icon) => icon.props.name)).toContain("chevron-right");
+});
+
+// The native header carries the title. iOS presents Settings as a sheet, so it
+// closes from a bar item; Android's page has the system back button instead.
+it.each(["ios", "android"])("leaves the title to the native header and closes from the bar on %s", async (platform) => {
+	fixtures.platform.OS = platform;
+	await act(async () => { renderer = create(<SettingsScreen />); });
+	const texts = renderer!.root.findAllByType("Text" as never).map((node) => node.props.children);
+	expect(texts).not.toContain("Settings");
+	expect(renderer!.root.findAllByType("NativeHeaderButton" as never)).toHaveLength(0);
+	const close = renderer!.root.findAllByType("StackToolbarButton" as never);
+	if (platform === "android") {
+		expect(renderer!.root.findAllByType("StackToolbar" as never)).toHaveLength(0);
+		return;
+	}
+	expect(renderer!.root.findByType("StackToolbar" as never).props.placement).toBe("right");
+	expect(close).toHaveLength(1);
+	expect(close[0].props).toMatchObject({ icon: "xmark", accessibilityLabel: "Close settings" });
+	act(() => close[0].props.onPress());
+	expect(fixtures.back).toHaveBeenCalledTimes(1);
 });

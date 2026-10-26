@@ -194,25 +194,22 @@ function Shell() {
 					name="(tabs)"
 					options={({ route }) => ({ headerShown: false, title: boardTitle(getFocusedRouteNameFromRoute(route)) })}
 				/>
+				{/* Settings holds a stack of its own, whose pages draw the native
+				    headers. On iOS it is a full-height sheet that swipes away like any
+				    other; Environments holds it still while a machine editor is open.
+				    On Android it is a full-screen page with a top app bar and the
+				    system back: a bottom sheet holding a stack of pages is not a
+				    Material pattern. */}
 				<Stack.Screen
 					name="settings"
 					options={{
-						presentation: "formSheet",
+						presentation: Platform.OS === "ios" ? "formSheet" : "card",
 						headerShown: false,
-						// Settings contains long, dynamically collapsing forms. Letting the
-						// native sheet own vertical gestures means a scroll released near the
-						// bottom can dismiss the whole flow after an editor collapses. Settings
-						// already has an explicit close control, so keep list gestures inside it.
-						gestureEnabled: false,
-						// Android measures this nested stack at the largest detent, so
-						// opening at 90% translates its fixed Save/Cancel footer below
-						// the visible screen. Match iOS with one 92% detent so the
-						// measured and visible heights agree without a swipe. The
-						// editor handles the keyboard itself inside that viewport.
-						sheetAllowedDetents: [0.92],
-						sheetInitialDetentIndex: 0,
-						sheetGrabberVisible: false,
-						sheetCornerRadius,
+						...(Platform.OS === "ios" ? {
+							sheetAllowedDetents: [1],
+							sheetGrabberVisible: true,
+							sheetCornerRadius,
+						} : null),
 						contentStyle: { backgroundColor: t.bgBase },
 					}}
 				/>

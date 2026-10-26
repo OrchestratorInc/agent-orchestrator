@@ -170,13 +170,15 @@ describe("Android native compatibility boundaries", () => {
 		expect(source("./push.ts")).not.toContain('sound: "default"');
 	});
 
+	// A full-screen page over the board on Android, with a top app bar and the
+	// system back; a sheet on iOS.
 	it("presents Settings from the root stack over the board", () => {
 		const rootSettingsPath = fileURLToPath(new URL("../app/settings/index.tsx", import.meta.url));
 		const nestedSettingsPath = fileURLToPath(new URL("../app/(tabs)/settings.tsx", import.meta.url));
 		expect(existsSync(rootSettingsPath)).toBe(true);
 		expect(existsSync(nestedSettingsPath)).toBe(false);
 		const rootLayout = source("../app/_layout.tsx");
-		expect(rootLayout).toMatch(/name="settings"[\s\S]*presentation:\s*"formSheet"/);
+		expect(rootLayout).toMatch(/name="settings"\s*options=\{\{\s*presentation: Platform\.OS === "ios" \? "formSheet" : "card",/);
 	});
 
 	it("renders conversation actions in a single native list with its conversation header", () => {

@@ -8,15 +8,21 @@ const fixtures = vi.hoisted(() => ({
 	reloadConfig: vi.fn(),
 	replace: vi.fn(),
 	push: vi.fn(),
+	setSheetOptions: vi.fn(),
 	platform: { OS: "ios" },
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 
 vi.mock("expo-router", async () => {
 	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	const router = { push: fixtures.push, replace: fixtures.replace };
+	const navigation = { getParent: () => ({ setOptions: fixtures.setSheetOptions }) };
 	return {
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
-		useRouter: () => ({ push: fixtures.push, replace: fixtures.replace }),
+		useNavigation: () => navigation,
+		useRouter: () => router,
 	};
 });
 vi.mock("react-native", async () => {
@@ -65,10 +71,6 @@ vi.mock("../lib/icons", async () => {
 	return { Feather: (props: object) => React.createElement("Feather", props) };
 });
 vi.mock("../lib/manualConnect", () => ({ DifferentMachineError: class DifferentMachineError extends Error {}, persistManualHostEdit: vi.fn() }));
-vi.mock("../lib/native-header-button", async () => {
-	const React = await import("react");
-	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
-});
 vi.mock("../lib/race", () => ({ IncompatibleHostVersionError: class IncompatibleHostVersionError extends Error {} }));
 vi.mock("../lib/store", () => ({
 	useApp: () => ({
@@ -80,7 +82,6 @@ vi.mock("../lib/ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
 	useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme),
 }));
-vi.mock("../lib/backNavigation", () => ({ backOr: vi.fn() }));
 vi.mock("../lib/RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import EnvironmentsScreen from "../app/settings/environments";
@@ -96,6 +97,7 @@ beforeEach(() => {
 	fixtures.reloadConfig.mockReset();
 	fixtures.replace.mockClear();
 	fixtures.push.mockClear();
+	fixtures.setSheetOptions.mockClear();
 	vi.mocked(forgetServer).mockReset().mockResolvedValue(undefined);
 	vi.mocked(forgetPairedHost).mockReset().mockResolvedValue(undefined);
 	vi.mocked(Alert.alert).mockClear();
@@ -151,6 +153,48 @@ describe("Environments editor keyboard handling", () => {
 		expect(renderer!.root.findByType("EnvironmentEditorActions" as never).props.editor.hostId).toBe("b");
 		act(() => second.props.onEditorStateChange(null, "b"));
 		expect(renderer!.root.findAllByType("EnvironmentEditorActions" as never)).toHaveLength(0);
+	});
+});
+
+describe("Environments header", () => {
+	// The title is the native header's; Add machine is its trailing item.
+	it("adds a machine from the native header", async () => {
+		await act(async () => { renderer = create(<EnvironmentsScreen />); });
+		expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === "Environments")).toHaveLength(0);
+		expect(renderer!.root.findByType("StackToolbar" as never).props.placement).toBe("right");
+		const add = renderer!.root.findByType("StackToolbarButton" as never);
+		expect(add.props).toMatchObject({ icon: "plus", accessibilityLabel: "Add machine" });
+		act(() => add.props.onPress());
+		expect(fixtures.push).toHaveBeenCalledWith("/pair");
+	});
+
+	// A swipe on the Settings sheet would discard the edit, so the sheet holds
+	// still only while an editor is open.
+	it("holds the Settings sheet still while a machine editor is open", async () => {
+		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
+		fixtures.loadHosts.mockResolvedValue([a]);
+		fixtures.activeHost.mockResolvedValue(a);
+		await act(async () => { renderer = create(<EnvironmentsScreen />); });
+		expect(fixtures.setSheetOptions).not.toHaveBeenCalled();
+		const row = renderer!.root.findByType("EnvironmentMachineRow" as never);
+		const editor = { hostId: "a", canSave: true, saving: false, onSave: vi.fn(), onCancel: vi.fn() };
+		act(() => row.props.onEditorStateChange(editor, "a"));
+		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: false });
+		act(() => row.props.onEditorStateChange(null, "a"));
+		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
+		expect(fixtures.setSheetOptions).toHaveBeenCalledTimes(2);
+	});
+
+	it("lets the Settings sheet swipe away again when the page closes mid-edit", async () => {
+		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
+		fixtures.loadHosts.mockResolvedValue([a]);
+		fixtures.activeHost.mockResolvedValue(a);
+		await act(async () => { renderer = create(<EnvironmentsScreen />); });
+		const row = renderer!.root.findByType("EnvironmentMachineRow" as never);
+		act(() => row.props.onEditorStateChange({ hostId: "a", canSave: true, saving: false, onSave: vi.fn(), onCancel: vi.fn() }, "a"));
+		await act(async () => renderer?.unmount());
+		renderer = undefined;
+		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
 	});
 });
 

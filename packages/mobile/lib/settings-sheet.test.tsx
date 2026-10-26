@@ -33,8 +33,8 @@ import RootLayout from "../app/_layout";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("Settings sheet visible viewport", () => {
-	it.each(["android", "ios"])("keeps the fixed editor footer inside every allowed %s sheet height", async (platform) => {
+describe("Settings presentation", () => {
+	it.each(["android", "ios"])("presents Settings the %s way", async (platform) => {
 		fixtures.platform.OS = platform;
 		vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 		const error = console.error;
@@ -48,20 +48,30 @@ describe("Settings sheet visible viewport", () => {
 		try {
 			const settings = renderer.root.findByProps({ name: "settings" }).props.options;
 			const naming = renderer.root.findByProps({ name: "sheets/machine-name" }).props.options;
+			// Settings' own stack draws the headers, never the root's.
+			expect(settings.headerShown).toBe(false);
+			// Nothing stops a swipe for the whole flow; an open editor holds the
+			// sheet still on its own (app/settings/environments.tsx).
+			expect(settings.gestureEnabled).toBeUndefined();
 			if (platform === "android") {
+				// A full-screen page with a top app bar and the system back, not a
+				// bottom sheet holding a stack of pages.
+				expect(settings.presentation).toBe("card");
+				expect(settings.sheetAllowedDetents).toBeUndefined();
+				expect(settings.sheetGrabberVisible).toBeUndefined();
 				expect(naming.presentation).toBe("transparentModal");
 				expect(naming.sheetAllowedDetents).toBeUndefined();
 				expect(naming.contentStyle.backgroundColor).toBe("transparent");
 			} else {
+				// A full-height sheet in the system's own shape, with the grabber
+				// that says it swipes away.
+				expect(settings.presentation).toBe("formSheet");
+				expect(settings.sheetAllowedDetents).toEqual([1]);
+				expect(settings.sheetGrabberVisible).toBe(true);
+				expect(settings.sheetCornerRadius).toBeUndefined();
 				expect(naming.presentation).toBe("formSheet");
 				expect(naming.sheetAllowedDetents).toBe("fitToContents");
 			}
-			// A footer placed at the tallest detent must also be visible at opening.
-			// Android translates the full-height content instead of resizing the
-			// nested Settings navigator when moving to a smaller detent.
-			expect(settings.sheetAllowedDetents).toEqual([0.92]);
-			expect(settings.sheetInitialDetentIndex).toBe(0);
-			expect(settings.gestureEnabled).toBe(false);
 		} finally {
 			act(() => renderer.unmount());
 		}

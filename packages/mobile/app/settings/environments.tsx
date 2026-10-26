@@ -1,5 +1,5 @@
-import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import { Stack, useFocusEffect, useNavigation, useRouter } from "expo-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
@@ -22,13 +22,12 @@ import { activeHost, activeHostMetadata, loadHosts, renameHost, saveHost, update
 import { Feather } from "../../lib/icons";
 import { AccountManagedHostError, DifferentMachineError, persistManualHostEdit } from "../../lib/manualConnect";
 import { machineAppearance } from "../../lib/machineAppearance";
-import { NativeHeaderButton } from "../../lib/native-header-button";
 import { IncompatibleHostVersionError } from "../../lib/race";
 import { useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { iconSize, space, touchTarget, type } from "../../lib/tokens";
-import { backOr } from "../../lib/backNavigation";
+import { toolbarIcon } from "../../lib/toolbarIcon";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -36,6 +35,7 @@ export default function EnvironmentsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
 	const { hostStates, configForHost, switchHost, refreshAll, reloadConfig, reloadHostMetadata } = useApp();
 	const [hosts, setHosts] = useState<PairedHost[]>([]);
@@ -54,6 +54,21 @@ export default function EnvironmentsScreen() {
 		// A collapsing previous row must not clear the new machine's footer.
 		setEditor((current) => next ?? (current?.hostId === hostId ? null : current));
 	}, []);
+	// Swiping the Settings sheet away would throw out an open editor's changes,
+	// so the sheet holds still while one is open, the way iOS keeps any sheet
+	// with unsaved edits in place. It swipes away again once the editor closes.
+	const editing = activeEditor !== null;
+	useEffect(() => {
+		if (!editing) return;
+		const settings = navigation.getParent();
+		settings?.setOptions({ gestureEnabled: false });
+		return () => settings?.setOptions({ gestureEnabled: true });
+	}, [editing, navigation]);
+	const headerItems = useMemo(() => (
+		<Stack.Toolbar placement="right">
+			<Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Add machine" onPress={() => router.push("/pair")} />
+		</Stack.Toolbar>
+	), [router]);
 
 	const reloadHosts = useCallback(async () => {
 		try {
@@ -181,15 +196,7 @@ export default function EnvironmentsScreen() {
 
 	return (
 		<View style={styles.screen}>
-			<View style={styles.header}>
-				<View style={[styles.headerButton, styles.backButton]}>
-					<NativeHeaderButton icon="back" label="Back to Settings" onPress={() => backOr(router, "/settings")} />
-				</View>
-				<Text style={styles.headerTitle}>Environments</Text>
-				<View style={[styles.headerButton, styles.addButton]}>
-					<NativeHeaderButton icon="add" label="Add machine" onPress={() => router.push("/pair")} />
-				</View>
-			</View>
+			{headerItems}
 			{notice ? (
 				<View style={styles.notice}>
 					<Text testID="environment-forgotten-notice" accessibilityRole="alert" accessibilityLiveRegion="polite" style={styles.noticeText}>{notice}</Text>
@@ -281,11 +288,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	editorFooter: { paddingHorizontal: space.lg, paddingTop: space.sm, backgroundColor: t.bgBase, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderDefault },
 	scrollViewport: { flex: 1, overflow: "hidden" },
 	list: { flex: 1 },
-	header: { height: 88, alignItems: "center", justifyContent: "center", paddingHorizontal: space.lg, backgroundColor: t.bgBase, zIndex: 1 },
-	headerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", letterSpacing: -0.3 },
-	headerButton: { position: "absolute", top: 22, width: 44, height: 44, borderRadius: 22, overflow: "hidden" },
-	backButton: { left: 14 },
-	addButton: { right: 14 },
 	center: { flex: 1, alignItems: "center", justifyContent: "center" },
 	content: { paddingBottom: space.xxxl },
 	emptyContent: { flexGrow: 1, paddingBottom: space.xxxl },

@@ -5,9 +5,9 @@ import * as Application from "expo-application";
 import * as Clipboard from "expo-clipboard";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
-import { useFocusEffect, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
-import { Children, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Children, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ApiError, pingServer } from "../../lib/api";
 import { loadAccount, signInToAccount, signOutOfAccount, type Account } from "../../lib/account";
@@ -26,7 +26,6 @@ import { checkStore, openOrStartUpdate } from "../../lib/inAppUpdates";
 import { MachineSelector } from "../../lib/MachineSelector";
 import { canRepairWithQr } from "../../lib/machineRecovery";
 import { describePrompt } from "../../lib/storeUpdate";
-import { NativeHeaderButton } from "../../lib/native-header-button";
 import { openGitHub } from "../../lib/openGitHub";
 import { tunnelMayHaveRotated } from "../../lib/staleTunnel";
 import { getPushStatus, openNotificationSettings, registerForPush, unregisterFromPush } from "../../lib/push";
@@ -45,6 +44,7 @@ import {
 import type { Theme } from "../../lib/theme";
 import { getThemeDefinition } from "../../../shared/theme/palettes";
 import { preferenceLabel, type ThemePreference } from "../../lib/themePreference";
+import { toolbarIcon } from "../../lib/toolbarIcon";
 
 // Light / Dark / System, in the desktop app's order and wording.
 const THEME_OPTIONS: { value: ThemePreference; icon: keyof typeof Feather.glyphMap }[] = [
@@ -107,7 +107,15 @@ export default function SettingsScreen() {
 		}
 	}
 
-	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	// iOS presents Settings as a sheet, which closes from its bar. Android's
+	// Settings is a page, and its top app bar has the system back button.
+	const headerItems = useMemo(() => Platform.OS === "ios" ? (
+		<Stack.Toolbar placement="right">
+			<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close settings" onPress={() => backOr(router)} />
+		</Stack.Toolbar>
+	) : null, [router]);
+
+	if (!loaded) return <View style={styles.center}>{headerItems}<ActivityIndicator color={t.accent} /></View>;
 
 	const paired = pairedHosts.length > 0 || configured || selectedHostName !== null;
 	const selectedHost = pairedHosts.find((host) => host.id === selectedHostId);
@@ -123,12 +131,7 @@ export default function SettingsScreen() {
 	const machineStatusColor = machineStatus.tone === "ok" ? t.green : machineStatus.tone === "error" ? t.red : undefined;
 	return (
 		<View style={styles.screen} collapsable={false}>
-			<View style={styles.header}>
-				<Text style={styles.headerTitle}>Settings</Text>
-				<View style={styles.closeButton}>
-					<NativeHeaderButton icon="close" label="Close settings" onPress={() => backOr(router)} />
-				</View>
-			</View>
+			{headerItems}
 			<ScrollView
 				ref={scrollRef}
 				contentInsetAdjustmentBehavior="automatic"
@@ -257,7 +260,7 @@ function SettingsCard({ children }: { children: ReactNode }) {
 	);
 }
 
-/** The theme options, inline inside the Settings sheet on Android. */
+/** The theme options, inline inside Settings on Android. */
 function ThemeChoices({ preference, onSelect }: { preference: ThemePreference; onSelect(next: ThemePreference): void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -404,8 +407,7 @@ function AppearanceRow() {
 	const { preference, scheme, setPreference } = useThemeState();
 	const [open, setOpen] = useState(false);
 	if (Platform.OS === "android") {
-		// Settings is itself a sheet on Android, so the choices expand in place
-		// rather than opening a second sheet on top of it.
+		// The choices expand in place rather than opening a sheet over Settings.
 		return (
 			<>
 				<CardRow
@@ -551,7 +553,7 @@ function SoftwareUpdateRow() {
 	const store = describeStoreRow({ enabled: !__DEV__, checking: storeChecking, last: storeLast });
 	const row = describeSoftwareUpdateRow({ ota, store });
 
-	// Shown in the Settings sheet rather than as a second sheet over it. Away
+	// Shown inside Settings rather than as a second sheet over it. Away
 	// from Settings the nudge still gets its own sheet route — there it is the
 	// only thing on screen.
 	function presentStoreSheet(check: StoreCheck | null) {
@@ -625,7 +627,7 @@ function SoftwareUpdateRow() {
 	);
 }
 
-/** A confirm step that opens inside the Settings sheet instead of over it. */
+/** A confirm step that opens inside Settings instead of over it. */
 function InlinePanel({ title, copy, primary, secondary, onPrimary, onSecondary }: { title: string; copy: string; primary: string; secondary: string; onPrimary(): void; onSecondary(): void }) {
 	const styles = useThemedStyles(makeStyles);
 	return (
@@ -698,9 +700,6 @@ function VersionFooter() {
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	header: { height: 64, alignItems: "center", justifyContent: "center", paddingHorizontal: space.lg },
-	headerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", letterSpacing: -0.3 },
-	closeButton: { position: "absolute", right: 14, top: 10 },
 	content: { paddingHorizontal: space.lg, paddingTop: space.xs, paddingBottom: space.xxxl, gap: space.lg },
 	section: { gap: space.xs },
 	sectionTitle: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600", paddingHorizontal: space.sm },
