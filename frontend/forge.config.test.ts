@@ -293,8 +293,10 @@ describe("macOS Touch ID passkeys", () => {
 		writeFileSync(join(contents, "embedded.provisionprofile"), "");
 		await expect(hook(envConfig, packageResult)).rejects.toThrow("missing webauthn.json");
 		writeFileSync(join(resources, "webauthn.json"), "{}");
-		// Past both checks, packaging moves on to the existing tmux verification.
-		await expect(hook(envConfig, packageResult)).rejects.toThrow("packaged tmux missing");
+		// Past both passkey checks, packaging moves on to the next bundled-resource
+		// verification. Upstream's cloudflared check now runs before tmux, and this
+		// fixture ships neither, so cloudflared is the next failure.
+		await expect(hook(envConfig, packageResult)).rejects.toThrow("packaged cloudflared missing");
 	});
 });
 
