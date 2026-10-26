@@ -45,6 +45,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 
 import { SettingsButtonRow, SettingsChoiceSection, SettingsForm, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsToggleRow, SettingsValueRow } from "./SettingsForm.android";
 import { settingsIcons } from "./SettingsForm.types";
+import { materialDrawableNames } from "./toolbarIcon.types";
 
 type Modifier = { $type: string; args: unknown[] };
 const modifiersOf = (node: ReactTestInstance) => (node.props.modifiers ?? []) as Modifier[];
@@ -222,9 +223,11 @@ describe("the Android settings form", () => {
 describe("settings glyphs on Android", () => {
 	const drawables = readFileSync(fileURLToPath(new URL("./settingsDrawables.android.ts", import.meta.url)), "utf8");
 
-	// Compose draws a bundled vector for each glyph; a missing file would fail the bundle.
+	// Compose draws a bundled vector for each glyph; a missing file would fail the
+	// bundle. One the shared drawables already bundle is taken from them.
 	it.each(Object.entries(settingsIcons))("bundles the Material Symbol for %s", (name, symbol) => {
-		expect(drawables).toContain(`${name}: require("../assets/icons/${symbol.android}.xml"),`);
+		const shared = (materialDrawableNames as readonly string[]).includes(symbol.android);
+		expect(drawables).toContain(shared ? `${name}: materialDrawable("${symbol.android}"),` : `${name}: require("../assets/icons/${symbol.android}.xml"),`);
 		expect(existsSync(fileURLToPath(new URL(`../assets/icons/${symbol.android}.xml`, import.meta.url)))).toBe(true);
 	});
 });
