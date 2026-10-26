@@ -7,7 +7,7 @@ function source(relativePath: string): string {
 }
 
 const list = source("./worker-board-list.tsx");
-const board = source("../app/(tabs)/index.tsx");
+const board = source("../app/(tabs)/(workers)/index.tsx");
 
 describe("worker board list identity", () => {
 	// Swapping the project filter in place left the board showing two lists at

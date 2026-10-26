@@ -13,12 +13,12 @@ const { TabRouter } = createRequire(import.meta.url)("expo-router/build/react-na
 
 describe("sidebar list lifecycle", () => {
 	it("keeps route and navigator keys when moving among the three existing pages", () => {
-		const router = TabRouter({ initialRouteName: "index", backBehavior: "none" });
-		const options = { routeNames: ["index", "projects", "prs"], routeParamList: {}, routeGetIdList: {} };
+		const router = TabRouter({ initialRouteName: "(workers)", backBehavior: "none" });
+		const options = { routeNames: ["(workers)", "(projects)", "(prs)"], routeParamList: {}, routeGetIdList: {} };
 		let state = router.getInitialState(options);
 		const key = state.key;
 		const routes = state.routes.map((route: { key: string }) => route.key);
-		for (const name of ["projects", "index", "prs", "index", "prs"]) {
+		for (const name of ["(projects)", "(workers)", "(prs)", "(workers)", "(prs)"]) {
 			state = router.getStateForAction(state, { type: "NAVIGATE", payload: { name } }, options);
 			expect(state.key).toBe(key);
 			expect(state.routes.map((route: { key: string }) => route.key)).toEqual(routes);

@@ -10,10 +10,20 @@ const fixtures = vi.hoisted(() => ({
 	refreshHost: vi.fn(async (_hostId: string) => {}),
 	showMenu: vi.fn(),
 	push: vi.fn(),
+	navigate: vi.fn(),
+	configured: true,
+	notificationsUnread: 0,
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
 
-vi.mock("expo-router", () => ({ useRouter: () => ({ push: fixtures.push, navigate: vi.fn() }) }));
+vi.mock("expo-router", async () => {
+	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	return {
+		useRouter: () => ({ push: fixtures.push, navigate: fixtures.navigate }),
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), Badge: host("StackToolbarBadge") }) },
+	};
+});
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", ScrollView: "ScrollView", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
 	Keyboard: { dismiss: vi.fn() }, StyleSheet: { create: (styles: object) => styles },
@@ -35,11 +45,11 @@ vi.mock("@expo/ui/community/menu", async () => {
 });
 vi.mock("@expo/ui/community/bottom-sheet", () => ({ default: "BottomSheet", BottomSheetView: "BottomSheetView", BottomSheetScrollView: "BottomSheetScrollView" }));
 vi.mock("./store", () => ({ useApp: () => ({
-	configured: true, connection: "open", loading: false, error: null,
+	configured: fixtures.configured, connection: "open", loading: false, error: null,
 	config: { hostId: "mac" },
 	refreshAll: fixtures.refreshAll, refreshHost: fixtures.refreshHost,
 	allSessions: fixtures.hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId }))), allProjects: [],
-	hostStates: fixtures.hostStates, notificationsUnread: 0,
+	hostStates: fixtures.hostStates, notificationsUnread: fixtures.notificationsUnread,
 }) }));
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }) }));
@@ -53,20 +63,21 @@ vi.mock("./useTabScrollToTop", () => ({ useTabScrollToTop: () => ({ current: nul
 vi.mock("./ui", async () => {
 	const React = await import("react");
 	return {
-		Button: "Button", HeaderIconButton: "HeaderIconButton", ScreenHeader: "ScreenHeader",
+		Button: "Button",
 		EmptyState: (props: { action?: React.ReactNode }) => React.createElement("EmptyState", props, props.action),
 	};
 });
 vi.mock("./worker-board-list", async () => {
 	const React = await import("react");
-	return { WorkerBoardList: ({ ListEmptyComponent, ...props }: { ListEmptyComponent: React.ReactNode; sessions: unknown[] }) =>
-		React.createElement("WorkerBoardList", props, props.sessions.length === 0 ? ListEmptyComponent : null) };
+	return { WorkerBoardList: ({ ListHeaderComponent, ListEmptyComponent, ...props }: { ListHeaderComponent: React.ReactNode; ListEmptyComponent: React.ReactNode; sessions: unknown[] }) =>
+		React.createElement("WorkerBoardList", props, ListHeaderComponent, props.sessions.length === 0 ? ListEmptyComponent : null) };
 });
 vi.mock("./worker-dock", () => ({ WorkerDock: "WorkerDock" }));
 vi.mock("./worker-controls-sheet", () => ({ WorkerControlsSheet: "WorkerControlsSheet" }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
-import FleetScreen from "../app/(tabs)/index";
+import FleetScreen from "../app/(tabs)/(workers)/index";
+import { WorkerBoardList } from "./worker-board-list";
 
 let renderer: ReactTestRenderer;
 function selectWindows() {
@@ -96,17 +107,68 @@ function snapshot(patch: Partial<HostSnapshot>): HostSnapshot {
 
 beforeEach(() => {
 	fixtures.platform = "ios";
+	fixtures.configured = true;
+	fixtures.notificationsUnread = 0;
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.refreshAll.mockClear();
 	fixtures.refreshHost.mockClear();
 	fixtures.showMenu.mockClear();
 	fixtures.push.mockClear();
+	fixtures.navigate.mockClear();
 	fixtures.hostStates = [
 		snapshot({ hostId: "mac", name: "Mac", connection: "open", error: null, sessions: [session("worker-1")] }),
 		snapshot({}),
 	];
 });
 afterEach(() => { act(() => renderer?.unmount()); vi.unstubAllGlobals(); });
+
+describe("Workers header", () => {
+	function headerButtons() {
+		return renderer.root.findByType("StackToolbar" as never).findAllByType("StackToolbarButton" as never);
+	}
+
+	// The header is the native bar's: its title comes from the tab's stack, and
+	// its actions are bar items the page declares, not a row drawn in the page.
+	it("declares Settings and Notifications as trailing header items", () => {
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findByType("StackToolbar" as never).props.placement).toBe("right");
+		const [settings, notifications] = headerButtons();
+		expect(settings.props).toMatchObject({ icon: "gearshape", accessibilityLabel: "Settings" });
+		expect(notifications.props).toMatchObject({ icon: "bell", accessibilityLabel: "Notifications" });
+		expect(notifications.findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
+		act(() => settings.props.onPress());
+		expect(fixtures.push).toHaveBeenCalledWith("/settings");
+		act(() => notifications.props.onPress());
+		expect(fixtures.navigate).toHaveBeenCalledWith("/notifications");
+	});
+
+	it("badges Notifications with the unread count across machines", () => {
+		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, notificationsUnread: 2 }));
+		act(() => { renderer = create(<FleetScreen />); });
+		const notifications = headerButtons()[1];
+		expect(notifications.props.accessibilityLabel).toBe("Notifications, 4 unread");
+		expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("4");
+	});
+
+	// Settings is where pairing starts, so an unpaired board still offers it.
+	it("keeps Settings in the header before a machine is paired", () => {
+		fixtures.configured = false;
+		fixtures.hostStates = [];
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(renderer.root.findByType("UnpairedState" as never)).toBeTruthy();
+		expect(headerButtons().map((button) => button.props.accessibilityLabel)).toEqual(["Settings"]);
+	});
+
+	// A large-title bar is translucent and the page is laid out under it, so the
+	// board list has to be the page's first view and inset itself under the bar.
+	it("makes the board list the page's first view, inset under the header", () => {
+		act(() => { renderer = create(<FleetScreen />); });
+		const screen = renderer.root.findAllByType("View" as never)[0];
+		const first = screen.children[0] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string } };
+		expect(first.type).toBe(WorkerBoardList);
+		expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
+	});
+});
 
 describe("Workers dock stability", () => {
 	it("keeps the dock's environments across polls that change only machine state", () => {

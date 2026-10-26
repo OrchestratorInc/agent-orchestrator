@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const card = readFileSync(new URL("./project-card.tsx", import.meta.url), "utf8");
 const page = readFileSync(new URL("../app/project/[id].tsx", import.meta.url), "utf8");
-const projects = readFileSync(new URL("../app/(tabs)/projects.tsx", import.meta.url), "utf8");
+const projects = readFileSync(new URL("../app/(tabs)/(projects)/projects.tsx", import.meta.url), "utf8");
 
 describe("project row", () => {
 	// Matches a worker row: a divider, not a bordered card.

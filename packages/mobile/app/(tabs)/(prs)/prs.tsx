@@ -1,25 +1,27 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { Theme } from "../../lib/theme";
-import { haptics } from "../../lib/haptics";
-import { PRCard } from "../../lib/PRCard";
-import { PRFilterDock } from "../../lib/pr-filter-dock";
-import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
-import { collectPRs, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
-import { StaleBanner } from "../../lib/StaleBanner";
-import { useApp } from "../../lib/store";
-import { UnpairedState } from "../../lib/UnpairedState";
-import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../lib/usePRSummaries";
-import { useBoardFailure } from "../../lib/useBoardFailure";
-import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
-import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { space } from "../../lib/tokens";
-import type { HostedSession } from "../../lib/hostedRows";
+import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
+import type { Theme } from "../../../lib/theme";
+import { haptics } from "../../../lib/haptics";
+import { PRCard } from "../../../lib/PRCard";
+import { PRFilterDock } from "../../../lib/pr-filter-dock";
+import { ProjectSwitcher } from "../../../lib/ProjectSwitcher";
+import { collectPRs, prLifecycle, prListSections, type PRListFilter } from "../../../lib/prView";
+import { StaleBanner } from "../../../lib/StaleBanner";
+import { useApp } from "../../../lib/store";
+import { UnpairedState } from "../../../lib/UnpairedState";
+import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../../lib/usePRSummaries";
+import { useBoardFailure } from "../../../lib/useBoardFailure";
+import { useTabScrollToTop } from "../../../lib/useTabScrollToTop";
+import { TabPageScroll } from "../../../lib/TabPageScroll";
+import { Button, EmptyState, ListSectionHeader } from "../../../lib/ui";
+import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
+import { space } from "../../../lib/tokens";
+import type { HostedSession } from "../../../lib/hostedRows";
 
-export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
 type Filter = PRListFilter;
 
@@ -36,7 +38,6 @@ export default function PRsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
-	const router = useRouter();
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<{ hostId?: string; projectId?: string }>();
 	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId } = useApp();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
@@ -97,12 +98,10 @@ export default function PRsScreen() {
 	if (!configured) {
 		return (
 			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				{/* Workers and Projects both keep their header in the unpaired state; this
-				    screen dropped it, so the tab lost its title and connection lamp exactly
-				    when a user most needs to know what they are looking at. */}
-				<ScreenHeader title="Pull Requests" />
-				<UnpairedState />
+				<TabPageScroll>
+					<UnpairedState />
+				</TabPageScroll>
+				<BoardHeaderItems unread={0} notifications={false} />
 			</View>
 		);
 	}
@@ -113,34 +112,33 @@ export default function PRsScreen() {
 		all: prs.length,
 	};
 
-	return (
-		<View style={styles.screen}>
-			<View style={{ height: insets.top }} />
-			<ScreenHeader
-				title="Pull Requests"
-				right={
-					<HeaderIconButton
-						icon="bell"
-						label="Notifications"
-						badge={notificationsUnread}
-						onPress={() => router.navigate("/notifications")}
-					/>
-				}
-			/>
+	// In the list, not above it: the list has to be the page's first view under
+	// the translucent header.
+	const listHeader = (
+		<>
 			{hostStates.length === 1 && !routeHostId ? <ProjectSwitcher /> : null}
 			{hostStates.length === 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+		</>
+	);
 
+	return (
+		<View style={styles.screen}>
 			{loading && prs.length === 0 ? (
-				<View style={styles.center}>
-					<ActivityIndicator color={t.accent} />
-				</View>
+				<TabPageScroll>
+					{listHeader}
+					<View style={styles.center}>
+						<ActivityIndicator color={t.accent} />
+					</View>
+				</TabPageScroll>
 			) : (
 				<SectionList
 					ref={scrollRef}
 					sections={sections}
 					keyExtractor={({ pr, session }) => `${session.hostId}:${session.projectId}#${pr.number}`}
+					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={{ flexGrow: 1, paddingBottom: 110 }}
 					stickySectionHeadersEnabled={false}
+					ListHeaderComponent={listHeader}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
 					renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}
 					renderItem={({ item: { pr, session } }) => {
@@ -177,6 +175,7 @@ export default function PRsScreen() {
 			<View style={[styles.dock, { bottom: Math.max(insets.bottom, 12) }]}>
 				<PRFilterDock filter={filter} counts={counts} onChange={setFilter} />
 			</View>
+			<BoardHeaderItems unread={notificationsUnread} />
 		</View>
 	);
 }

@@ -1,27 +1,28 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { haptics } from "../../lib/haptics";
-import { hostedProjectKey, hostedProjectSections, type HostedProjectRow } from "../../lib/hostedRows";
-import type { OrchestratorProjectRow } from "../../lib/orchestratorView";
-import { ProjectCard } from "../../lib/project-card";
-import { StaleBanner } from "../../lib/StaleBanner";
-import { useApp } from "../../lib/store";
-import { UnpairedState } from "../../lib/UnpairedState";
-import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
-import { useBoardFailure } from "../../lib/useBoardFailure";
-import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
-import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader } from "../../lib/ui";
+import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
+import { haptics } from "../../../lib/haptics";
+import { hostedProjectKey, hostedProjectSections, type HostedProjectRow } from "../../../lib/hostedRows";
+import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
+import { ProjectCard } from "../../../lib/project-card";
+import { StaleBanner } from "../../../lib/StaleBanner";
+import { useApp } from "../../../lib/store";
+import { UnpairedState } from "../../../lib/UnpairedState";
+import type { Theme } from "../../../lib/theme";
+import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
+import { useOrchestratorLauncher } from "../../../lib/useOrchestratorLauncher";
+import { useBoardFailure } from "../../../lib/useBoardFailure";
+import { useTabScrollToTop } from "../../../lib/useTabScrollToTop";
+import { TabPageScroll } from "../../../lib/TabPageScroll";
+import { space } from "../../../lib/tokens";
+import { Button, EmptyState, ListSectionHeader } from "../../../lib/ui";
 
-export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
 export default function ProjectsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const insets = useSafeAreaInsets();
 	const router = useRouter();
 	const {
 		configured,
@@ -68,42 +69,37 @@ export default function ProjectsScreen() {
 	if (!configured && hostStates.length === 0) {
 		return (
 			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Projects" />
-				<UnpairedState />
+				<TabPageScroll>
+					<UnpairedState />
+				</TabPageScroll>
+				<BoardHeaderItems unread={0} notifications={false} />
 			</View>
 		);
 	}
 
+	// In the list, not above it: the list has to be the page's first view under
+	// the translucent header.
+	const staleBanner = hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null;
+
 	return (
 		<View style={styles.screen}>
-			<View style={{ height: insets.top }} />
-			<ScreenHeader
-				title="Projects"
-				right={
-					<HeaderIconButton
-						icon="bell"
-						label="Notifications"
-						badge={unreadCount}
-						onPress={() => router.navigate("/notifications")}
-					/>
-				}
-			/>
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
-
 			{fleetLoading && allProjects.length === 0 ? (
-				<View style={styles.center}>
-					<ActivityIndicator color={t.accent} />
-				</View>
+				<TabPageScroll>
+					{staleBanner}
+					<View style={styles.center}>
+						<ActivityIndicator color={t.accent} />
+					</View>
+				</TabPageScroll>
 			) : (
 				<SectionList
 					ref={listRef}
 					sections={sections}
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"
-					contentContainerStyle={{ flexGrow: 1, paddingBottom: insets.bottom + 92 }}
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
 					stickySectionHeadersEnabled={false}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
+					ListHeaderComponent={staleBanner}
 					renderSectionHeader={({ section }) => (
 						<ListSectionHeader label={section.title} count={section.data.length} />
 					)}
@@ -129,6 +125,7 @@ export default function ProjectsScreen() {
 					}
 				/>
 			)}
+			<BoardHeaderItems unread={unreadCount} />
 		</View>
 	);
 }

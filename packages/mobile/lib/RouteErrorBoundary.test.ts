@@ -13,9 +13,9 @@ const source = (route: string) => readFileSync(new URL(route, appDir), "utf8");
 const rootLayout = "_layout.tsx";
 
 const screenRoutes = [
-	"(tabs)/index.tsx",
-	"(tabs)/projects.tsx",
-	"(tabs)/prs.tsx",
+	"(tabs)/(workers)/index.tsx",
+	"(tabs)/(projects)/projects.tsx",
+	"(tabs)/(prs)/prs.tsx",
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
 	"settings/environments.tsx",
@@ -49,9 +49,15 @@ const sheetRoutes = [
 	"sheets/store-update.tsx",
 ];
 
-// The tab navigator alone: it renders no screen of its own, and a fallback there
-// would swallow the failure of whichever tab is mounted inside it.
-const deferredRoutes = ["(tabs)/_layout.tsx", "settings/_layout.tsx"];
+// The navigators alone: they render no screen of their own, and a fallback there
+// would swallow the failure of whichever page is mounted inside them.
+const deferredRoutes = [
+	"(tabs)/_layout.tsx",
+	"(tabs)/(workers)/_layout.tsx",
+	"(tabs)/(projects)/_layout.tsx",
+	"(tabs)/(prs)/_layout.tsx",
+	"settings/_layout.tsx",
+];
 
 describe("route error boundaries", () => {
 	it("places every route file on exactly one list", () => {

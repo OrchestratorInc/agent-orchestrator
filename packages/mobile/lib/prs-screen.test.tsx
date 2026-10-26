@@ -25,7 +25,16 @@ vi.mock("react-native", async () => {
 			React.createElement("SectionList", { ...props, sections }, sections.flatMap(section => section.data.map((item, index) => React.createElement(React.Fragment, { key: `${section.key}:${index}` }, renderItem({ item }))))),
 	};
 });
-vi.mock("expo-router", () => ({ useRouter: () => ({ navigate: vi.fn() }), useLocalSearchParams: () => fixture.params, useFocusEffect: (callback: () => void) => { fixture.focus = callback; } }));
+vi.mock("expo-router", async () => {
+	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	return {
+		useRouter: () => ({ push: vi.fn(), navigate: vi.fn() }),
+		useLocalSearchParams: () => fixture.params,
+		useFocusEffect: (callback: () => void) => { fixture.focus = callback; },
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), Badge: host("StackToolbarBadge") }) },
+	};
+});
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {} }));
 vi.mock("expo-secure-store", () => ({}));
@@ -45,9 +54,9 @@ vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({}) }));
 vi.mock("./useTabScrollToTop", () => ({ useTabScrollToTop: () => undefined }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries: () => ({ summaryFor: (_config: unknown, id: string) => fixture.summaries.get(id), reload: fixture.reload }) }));
-vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", HeaderIconButton: "HeaderIconButton", ListSectionHeader: "ListSectionHeader", ScreenHeader: "ScreenHeader" }));
+vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
 
-import PRsScreen from "../app/(tabs)/prs";
+import PRsScreen from "../app/(tabs)/(prs)/prs";
 let renderer: ReactTestRenderer | undefined;
 function session(hostId: string): HostedSession {
 	return {
@@ -123,4 +132,24 @@ it("retains the default PR scroll buffer", () => {
 	expect(list.props.windowSize).toBeUndefined();
 	expect(list.props.maxToRenderPerBatch).toBeUndefined();
 	expect(list.props.initialNumToRender).toBeUndefined();
+});
+
+// A large-title bar is translucent and the page is laid out under it, so the PR
+// list is the page's first view, and what sat above it now heads the list.
+it("makes the PR list the page's first view, inset under the header", () => {
+	fixture.hostStates = fixture.hostStates.slice(0, 1);
+	act(() => { renderer = create(<PRsScreen />); });
+	const screen = renderer!.root.findAllByType("View" as never)[0];
+	const first = screen.children[0] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string; ListHeaderComponent?: { props: { children: { type: unknown }[] } } } };
+	expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
+	expect(first.props.ListHeaderComponent?.props.children.map((child) => child.type)).toEqual(["ProjectSwitcher", "StaleBanner"]);
+});
+
+it("badges the Notifications header item with every machine's unread count", () => {
+	fixture.hostStates = fixture.hostStates.map((host) => ({ ...host, notificationsUnread: 3 }));
+	act(() => { renderer = create(<PRsScreen />); });
+	const [settings, notifications] = renderer!.root.findByType("StackToolbar" as never).findAllByType("StackToolbarButton" as never);
+	expect(settings.props.accessibilityLabel).toBe("Settings");
+	expect(notifications.props.accessibilityLabel).toBe("Notifications, 6 unread");
+	expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("6");
 });

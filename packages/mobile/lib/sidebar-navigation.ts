@@ -50,16 +50,6 @@ export function activeSidebarDestination(pathname: string): SidebarDestinationId
 	return sidebarDestinations.find(({ href }) => href === withoutGroup)?.id ?? "agents";
 }
 
-/**
- * The board's name while `tab` shows, `tab` being the tab navigator's route
- * name. Undefined means the navigator has not picked one yet, so its first tab,
- * Workers, is the one on screen.
- */
-export function boardTitle(tab: string | undefined): string {
-	const id = activeSidebarDestination(!tab || tab === "index" ? "/" : `/${tab}`);
-	return sidebarDestinations.find((destination) => destination.id === id)?.label ?? "Workers";
-}
-
 export function selectedPrimarySidebarDestination(
 	pathname: string,
 	previous: PrimarySidebarDestinationId,

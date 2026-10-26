@@ -4,23 +4,25 @@ import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-n
 import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { haptics } from "../../lib/haptics";
-import { StaleBanner } from "../../lib/StaleBanner";
-import { useApp } from "../../lib/store";
-import { useBoardFailure } from "../../lib/useBoardFailure";
-import { UnpairedState } from "../../lib/UnpairedState";
-import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
-import { Button, EmptyState, HeaderIconButton, ScreenHeader } from "../../lib/ui";
-import { WorkerBoardList, type BoardRow } from "../../lib/worker-board-list";
-import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
-import { hostedProjectKey } from "../../lib/hostedRows";
-import { WorkerDock } from "../../lib/worker-dock";
-import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
-import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
-import { WorkerMachineState } from "../../lib/worker-machine-state";
-import { WorkerEnvironmentFilter } from "../../lib/worker-environment-filter";
+import { haptics } from "../../../lib/haptics";
+import { StaleBanner } from "../../../lib/StaleBanner";
+import { useApp } from "../../../lib/store";
+import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
+import { useBoardFailure } from "../../../lib/useBoardFailure";
+import { UnpairedState } from "../../../lib/UnpairedState";
+import type { Theme } from "../../../lib/theme";
+import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
+import { useTabScrollToTop } from "../../../lib/useTabScrollToTop";
+import { TabPageScroll } from "../../../lib/TabPageScroll";
+import { Button, EmptyState } from "../../../lib/ui";
+import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
+import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
+import { hostedProjectKey } from "../../../lib/hostedRows";
+import { WorkerDock } from "../../../lib/worker-dock";
+import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../../lib/worker-dock-layout";
+import { WorkerControlsSheet } from "../../../lib/worker-controls-sheet";
+import { WorkerMachineState } from "../../../lib/worker-machine-state";
+import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
 import {
 	ALL_WORKER_ENVIRONMENTS,
 	ALL_WORKER_PROJECTS,
@@ -32,10 +34,10 @@ import {
 	workerProjectLabel,
 	workerProjectOptions,
 	workerSearchPresentation,
-} from "../../lib/worker-controls";
-import { space } from "../../lib/tokens";
+} from "../../../lib/worker-controls";
+import { space } from "../../../lib/tokens";
 
-export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
 export default function FleetScreen() {
 	const t = useTheme();
@@ -180,29 +182,20 @@ export default function FleetScreen() {
 	if (!configured && hostStates.length === 0) {
 		return (
 			<View style={styles.screen}>
-				<View style={{ height: insets.top }} />
-				<ScreenHeader title="Workers" />
-				<UnpairedState />
+				<TabPageScroll>
+					<UnpairedState />
+				</TabPageScroll>
+				<BoardHeaderItems unread={0} notifications={false} />
 			</View>
 		);
 	}
 
-	return (
-		<View style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
-			<View style={{ height: insets.top }} />
-			<ScreenHeader
-				title="Workers"
-				right={
-					<HeaderIconButton
-						icon="bell"
-						label="Notifications"
-						badge={unreadCount}
-						onPress={() => router.navigate("/notifications")}
-					/>
-				}
-			/>
-			{/* Above the list rather than inside ListEmptyComponent: the case this
-			    exists for is a populated board whose poll has died. */}
+	// Inside the list rather than above it: the header is translucent and the page
+	// is laid out under it, so the list has to be the page's first view. Above the
+	// rows rather than inside ListEmptyComponent, because the case the banner
+	// exists for is a populated board whose poll has died.
+	const listHeader = (
+		<>
 			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
@@ -211,11 +204,18 @@ export default function FleetScreen() {
 					onSelectEnvironment={selectEnvironment}
 				/>
 			) : null}
+		</>
+	);
 
+	return (
+		<View style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
 			{!selectedHost && fleetLoading && allSessions.length === 0 ? (
-				<View style={styles.center}>
-					<ActivityIndicator color={t.accent} />
-				</View>
+				<TabPageScroll>
+					{listHeader}
+					<View style={styles.center}>
+						<ActivityIndicator color={t.accent} />
+					</View>
+				</TabPageScroll>
 			) : (
 				<WorkerBoardList
 					key={boardIdentityKey}
@@ -225,8 +225,10 @@ export default function FleetScreen() {
 					identityKey={boardIdentityKey}
 					listRef={listRef}
 					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom)}
+					contentInsetAdjustmentBehavior="automatic"
 					refreshing={refreshing}
 					onRefresh={onRefresh}
+					ListHeaderComponent={listHeader}
 					ListEmptyComponent={
 						selectedHost && selectedHost.connection !== "open" ? (
 							<WorkerMachineState
@@ -308,6 +310,7 @@ export default function FleetScreen() {
 				selectedProjectId={workerProjectId}
 				onSelectProject={setWorkerProjectId}
 			/>
+			<BoardHeaderItems unread={unreadCount} />
 		</View>
 	);
 }

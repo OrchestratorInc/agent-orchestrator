@@ -8,7 +8,7 @@ export default function SidebarLayout() {
 			    their lists during drawer closing; retain visited tabs instead.
 			    The existing sidebar remains the only tab-selection UI. */}
 			<Tabs
-				initialRouteName="index"
+				initialRouteName="(workers)"
 				backBehavior="none"
 				tabBar={() => null}
 				detachInactiveScreens

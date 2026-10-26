@@ -27,6 +27,33 @@ describe("navigation surfaces", () => {
 		expect(source("./stackScreenOptions.ts")).not.toMatch(/animation:/);
 	});
 
+	// Each board tab is a route group with a stack of its own: the stack gives the
+	// tab's page a native header, the group keeps the page's URL.
+	it("gives each board tab a native large-title header", () => {
+		for (const [group, screen] of [["(workers)", "index"], ["(projects)", "projects"], ["(prs)", "prs"]]) {
+			expect(source(`../app/(tabs)/${group}/_layout.tsx`)).toContain(`<TabStack screen="${screen}" title={boardTitle("${group}")} />`);
+		}
+		expect(source("./TabStack.tsx")).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>");
+	});
+
+	// The header row each page used to draw (a safe-area spacer, a title and a bell
+	// with a hand-drawn dot) is the native bar now, with its actions as bar items.
+	it("leaves the tab roots' titles and actions to the native header", () => {
+		for (const page of ["../app/(tabs)/(workers)/index.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/(tabs)/(prs)/prs.tsx"]) {
+			const text = source(page);
+			expect(text).not.toContain("ScreenHeader");
+			expect(text).not.toContain("HeaderIconButton");
+			expect(text).not.toContain("insets.top");
+			expect(text).toContain("<BoardHeaderItems unread={");
+			expect(text).toContain('contentInsetAdjustmentBehavior="automatic"');
+		}
+		const items = source("./BoardHeaderItems.tsx");
+		expect(items).toContain('<Stack.Toolbar placement="right">');
+		expect(items).toContain('icon={toolbarIcon("settings")}');
+		expect(items).toContain('icon={toolbarIcon("notifications")}');
+		expect(items).toContain("<Stack.Toolbar.Badge>");
+	});
+
 	// The session used to render a spinner until the push animation finished, so
 	// the page assembled itself after it had already landed.
 	it("renders a session's content while it is still sliding in", () => {

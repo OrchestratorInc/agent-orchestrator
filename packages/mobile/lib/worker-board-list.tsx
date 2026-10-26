@@ -1,7 +1,7 @@
 import { Feather } from "./icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { ActivityIndicator, Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View, type ScrollViewProps } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import {
 	absorbNewHosts,
@@ -98,6 +98,7 @@ export function WorkerBoardList({
 	query = "",
 	listRef,
 	contentBottomInset,
+	contentInsetAdjustmentBehavior,
 	refreshing,
 	onRefresh,
 	ListHeaderComponent,
@@ -112,6 +113,8 @@ export function WorkerBoardList({
 	query?: string;
 	listRef?: RefObject<FlatList<BoardRow> | null>;
 	contentBottomInset: number;
+	/** "automatic" under a translucent header, which the board tab's large title is. */
+	contentInsetAdjustmentBehavior?: ScrollViewProps["contentInsetAdjustmentBehavior"];
 	refreshing: boolean;
 	onRefresh(): void | Promise<void>;
 	ListHeaderComponent?: ReactElement | null;
@@ -470,6 +473,7 @@ export function WorkerBoardList({
 					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
 					contentContainerStyle={{ flexGrow: 1, paddingBottom: contentBottomInset }}
+					contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} tintColor={t.accent} />}
