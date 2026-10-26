@@ -80,7 +80,8 @@ Archiving a Cloud session marks it terminated and sets the sandbox's desired
 state to deleted. The reconciler tears down the provider environment and keeps
 the session and event history. Restore changes the desired state back to
 running. After teardown completes, it provisions a new environment. The worker
-can rehydrate a captured conversation transcript. It restores preserved
+can rehydrate a captured conversation transcript and, with cloud artifacts on,
+restores the session's artifact files. It restores preserved
 uncommitted work only when the checkpoint includes a preserved Git ref. The provider's own storage and retention rules still apply, so code
 that must survive a teardown should be committed and pushed.
 
@@ -145,6 +146,108 @@ mode and denied commands. A read ticket does not grant permission to send
 terminal input. The desktop connects to these public API endpoints; terminal
 support in the optional private web app must be checked in that app's source
 and deployment.
+
+## Session artifacts
+
+With `AO_CLOUD_ARTIFACTS=1`, a session's deliverable files are kept outside
+its sandbox, so they can be listed and opened while the sandbox is paused,
+replaced, or archived. The flag applies to every organization; with it off the
+artifact routes are not registered, `requestedOutput: "artifact"` is refused,
+and no S3 client is built.
+
+- **Worker.** When the launch context sets `artifacts` (artifacts are on and
+  the worker advertises `session.artifacts`), the worker creates
+  `<AO_DATA_DIR>/artifacts/<sessionId>` outside the checkout, passes it to the
+  agent as `AO_SESSION_ARTIFACTS_DIR`, names it in the agent prompt, and adds it
+  to the directories the harness may write (Claude `--add-dir`, Codex writable
+  roots). It walks the directory through Go's rooted filesystem API, skipping
+  symlinks, `.versions`, `.git` and `node_modules`, paths that do not fit a
+  bucket key, and files over the limits, and uploads a file once two scans see
+  the same size and modification time. The agent's Stop hook, a 30 s rescan, a
+  2 s rescan after a change, and a final flush at shutdown trigger a sync. A
+  failed request backs off from 10 s to 5 min; a request refused with a client
+  error waits until the files change. The worker reports a deletion only for a
+  file the same process synced or restored that is no longer in the directory
+  at all.
+- **Restore.** Before the agent starts, a worker on a new sandbox (after a
+  restore or a replacement) lists the session's committed files with
+  `GET /worker/artifacts` and downloads each one missing from the directory
+  with `GET /worker/artifacts/blob/{path}`, which streams the row's
+  `version_id`. Each file is written straight to its path in the artifact
+  directory, created only if absent, so it never replaces a file the agent
+  wrote, and is checked against the row's size and SHA-256; a download that
+  fails or does not match is removed. A path that already exists keeps its
+  local file, which counts as the committed file until a scan finds it
+  changed. A restored or kept file counts as synced: it is not uploaded again
+  unless it changes, and deleting it deletes the committed file. A restore
+  that fails or runs past 30 s is retried in the background while the agent
+  runs, skipping paths already synced, so a retry never brings back a file
+  the agent deleted.
+- **Storage.** The worker sends a manifest of `(path, size, sha256)`; the
+  control plane answers with the paths whose committed row differs. Each
+  changed file is relayed to the versioned tenant artifact bucket at
+  `orgs/{orgId}/sessions/{sessionId}/{path}` with S3 verifying its SHA-256, so a
+  mismatched body creates no version. Every upload is recorded in
+  `ao_artifact_object_versions`; a session can hold at most 400 uncommitted
+  uploads or 1000 MiB. Sandboxes hold no AWS credentials.
+- **Commit.** The commit checks every uploaded `(path, versionId)` with
+  `HeadObject`, then, in one transaction under the session row lock and only
+  from the worker's current connection: claims each version as an open upload,
+  upserts and deletes `ao_session_artifacts` rows, recomputes the session's
+  `output_type`, queues the versions it replaced or deleted, and appends an
+  `artifact.changed` event. A commit over 200 files or 500 MiB per session
+  (25 MiB per file) changes nothing, and a commit that changes nothing appends
+  no event.
+- **Cleanup.** A sweeper in the control plane deletes, by version, every
+  upload not committed within 24 hours and every replaced or deleted version
+  one hour after its commit. A version the sweeper has claimed can no longer be
+  committed.
+- **User delete.** `DELETE /sessions/{id}/artifacts?path=...` deletes one file
+  for a member of the session's organization. In one transaction it removes
+  the row, queues its object version for collection now, updates the
+  session's `output_type`, appends an `artifact.changed` event, and sends
+  `ao_worker_work` with the payload `artifacts:{sessionId}`. The handler then
+  deletes the stored version at once; the sweeper deletes it if that fails.
+  Each replica remembers the change for ten minutes and wakes the worker's
+  `GET /worker/work/wait`, which answers `artifactsChanged: true`. The worker
+  then lists the committed files and removes each file it synced that is no
+  longer committed, unless the file changed since it was synced; a changed
+  file stays and is synced as a new one. The worker saves its synced files
+  next to the artifact directory, so a worker that starts on a kept disk
+  removes the files deleted while no worker ran before the agent starts, and
+  a new sandbox never restores a deleted file.
+- **Reads.** `GET /sessions/{id}/artifacts` reads PostgreSQL only and never
+  wakes the sandbox; the session list carries only `artifactCount` and
+  `artifactsUpdatedAt`. An orchestrator's `GET /worker/children` (`ao list`)
+  carries each child's `artifactFiles` with the count and newest commit time.
+  `POST /sessions/{id}/artifacts/access` returns a ten-minute path prefix
+  signed for one user, organization, and session (an iframe cannot send a
+  bearer header). `GET /artifact-files/{token}/{path}` checks that the user is
+  still an active member of an active organization, reads the row, and streams
+  the row's `version_id`, never the newest S3 version, with a sandbox
+  Content-Security-Policy without `allow-same-origin` or popups,
+  `connect-src 'none'`, `nosniff`, and an ETag of the SHA-256. A row whose
+  object is gone returns 404 `artifact_unavailable`. A served page cannot
+  fetch or open a window, and the desktop holds its frame to the session's
+  access prefix, so it cannot carry its URL to another site; the token in that
+  URL lasts ten minutes and works only for a current member. A frame that
+  navigates with an expired link gets a short page saying so.
+
+Every key comes from a worker's claims or from a row read under the caller's
+organization; a client never supplies one. Paths are NFC-normalized and must be
+relative, without `.` or `..` segments, backslashes, drive letters, control or
+invisible format characters, Windows device names, or a leading `.versions` in
+any letter case, with the whole key at most 1024 bytes.
+
+Archiving a session keeps its artifacts, so a restored session gets them back;
+a lifecycle policy that removes archived sessions' artifacts is tracked in
+#7072. Deleting a project, which has no restore, deletes its sessions'
+artifacts: in the same transaction every object version they own (committed,
+replaced, or still uploading) is queued for the sweeper to delete now, the
+artifact rows are removed, and the sessions' `output_type` keeps only their
+pull requests. The sweeper deletes the objects on its next pass, within five
+minutes. A commit for a session of a deleted project is refused, and deleting
+the project again finishes the cleanup.
 
 ## Agent browser relay
 

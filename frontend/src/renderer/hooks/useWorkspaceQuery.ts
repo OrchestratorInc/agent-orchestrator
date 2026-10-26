@@ -1,10 +1,11 @@
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import type { TraySessionEntry } from "../../shared/tray";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import { CloudCpError, type CloudCpProject, type CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -475,6 +476,18 @@ export function toCloudWorkspaceSession(
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
 		},
+		outputType: session.outputType,
+		requestedOutput: session.requestedOutput,
+		// The list route sends only a count; useCloudSessionsQuery fills in the
+		// files from each session's own artifact list query. File URLs come from a short-lived access prefix when a file is
+		// opened (useCloudArtifactAccess), not from the list.
+		artifactFiles: session.artifactFiles?.map((file) => ({
+			kind: file.kind,
+			name: file.name,
+			path: file.path,
+			size: file.size,
+			updatedAt: file.updatedAt,
+		})),
 	};
 }
 
@@ -573,11 +586,39 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 	});
 }
 
+/** At most this many cloud artifact lists are read at once. */
+const CLOUD_ARTIFACT_LIST_CONCURRENCY = 4;
+let cloudArtifactListsRunning = 0;
+const cloudArtifactListWaiters: Array<() => void> = [];
+
+async function withCloudArtifactListSlot<T>(read: () => Promise<T>): Promise<T> {
+	if (cloudArtifactListsRunning >= CLOUD_ARTIFACT_LIST_CONCURRENCY) {
+		await new Promise<void>((resolve) => cloudArtifactListWaiters.push(resolve));
+	}
+	cloudArtifactListsRunning++;
+	try {
+		return await read();
+	} finally {
+		cloudArtifactListsRunning--;
+		cloudArtifactListWaiters.shift()?.();
+	}
+}
+
+/** A cloud session's artifact version: its file count and newest commit time. */
+function cloudArtifactVersion(session: CloudCpSession): string {
+	return `${session.artifactCount ?? 0}:${session.artifactsUpdatedAt ?? session.updatedAt}`;
+}
+
+/** Each query's data. useQueries keeps the array while no query changes. */
+function queryResultsData<T>(results: { data?: T }[]): (T | undefined)[] {
+	return results.map((result) => result.data);
+}
+
 export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
 	const orgId = org?.id;
-	return useQuery({
+	const list = useQuery({
 		queryKey: [...cloudSessionsQueryKey, baseUrl, orgId ?? ""],
 		enabled: options.enabled !== false && ready && orgId !== undefined,
 		subscribed: options.subscribed,
@@ -591,6 +632,36 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			return response.items;
 		},
 	});
+	// The list carries only an artifact count. Each live session's files are
+	// read in their own query, once per artifact version, without holding up
+	// the list.
+	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
+	const fileData = useQueries({
+		queries: withFiles.map((session) => ({
+			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
+			enabled: orgId !== undefined && options.enabled !== false,
+			subscribed: options.subscribed,
+			staleTime: Infinity,
+			retry: 1,
+			queryFn: ({ signal }: { signal: AbortSignal }) =>
+				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(orgId ?? "", session.id, { signal })).artifacts),
+		})),
+		combine: queryResultsData,
+	});
+	// A session keeps its last good list while a new version loads or after a
+	// failed read, so its Artifacts tab and open file stay.
+	const lastFiles = useRef(new Map<string, CloudCpSessionArtifact[]>());
+	const data = useMemo(() => {
+		if (list.data === undefined) return undefined;
+		const read = new Map(withFiles.map((session, index) => [session.id, fileData[index]] as const));
+		return list.data.map((session) => {
+			const files = read.get(session.id) ?? lastFiles.current.get(session.id);
+			if (read.get(session.id)) lastFiles.current.set(session.id, read.get(session.id)!);
+			return files && (session.artifactCount ?? 0) > 0 ? { ...session, artifactFiles: files } : session;
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [list.data, fileData]);
+	return { ...list, data };
 }
 
 export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions = {}) {

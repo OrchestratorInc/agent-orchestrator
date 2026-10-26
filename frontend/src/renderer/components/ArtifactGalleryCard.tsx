@@ -1,4 +1,5 @@
-import { File, FileText, Globe, Loader2 } from "lucide-react";
+import { BrowserIcon } from "./icons";
+import { File, FileText, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { ArtifactRow } from "../lib/artifacts";
@@ -12,7 +13,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions }: {
 	actions: ReactNode;
 }) {
 	const { t } = useTranslation();
-	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
+	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
 	return (
 		<li className="group relative min-w-0 rounded-md bg-card">
 			<button

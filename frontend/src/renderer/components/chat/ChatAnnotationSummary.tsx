@@ -81,7 +81,7 @@ export function ChatAnnotationSummary({
 			<PopoverContent
 				align="start"
 				side="top"
-				className="w-[min(22rem,90vw)] border-0 p-2 shadow-md"
+				className="w-[min(22rem,90vw)] p-2"
 				onInteractOutside={() => { interactedOutside.current = true; }}
 				onCloseAutoFocus={(event) => {
 					// Outside interaction already chose a focus target. Stealing it back

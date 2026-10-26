@@ -47,6 +47,7 @@ type Store interface {
 	InsertGitHubWebhook(context.Context, domain.GitHubWebhookDelivery, []byte) (bool, error)
 	ClaimGitHubWebhook(context.Context, string, time.Time) (domain.GitHubWebhookDelivery, error)
 	CompleteGitHubWebhook(context.Context, string, string) error
+	PruneGitHubWebhooks(context.Context, time.Time, int) (int64, error)
 	RetryGitHubWebhook(context.Context, string, string, string, time.Time, bool) error
 	RecentOpenedPullRequestWebhooks(context.Context, int64, time.Time, int) ([]domain.GitHubWebhookDelivery, error)
 	GitHubInstallationRoutes(context.Context, int64) ([]domain.GitHubInstallationRoute, error)
@@ -166,6 +167,14 @@ const (
 	defaultWebhookWorkers = 8
 	// webhookIdlePoll is how long a worker waits after finding the queue empty.
 	webhookIdlePoll = time.Second
+	// webhookRetention is how long finished deliveries are kept. It covers
+	// GitHub's redelivery window and the 7-day look-back of
+	// RecentOpenedPullRequestWebhooks.
+	webhookRetention = 8 * 24 * time.Hour
+	// webhookPruneInterval and webhookPruneBatch pace the deletion of older
+	// finished deliveries so it never competes with claiming.
+	webhookPruneInterval = time.Hour
+	webhookPruneBatch    = 1000
 )
 
 func (s *Service) Check(ctx context.Context) error {
@@ -1197,7 +1206,45 @@ func (s *Service) Run(ctx context.Context) {
 			s.runWebhookWorker(ctx)
 		}()
 	}
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		s.runWebhookPruner(ctx)
+	}()
 	group.Wait()
+}
+
+// runWebhookPruner deletes finished deliveries older than webhookRetention once
+// an hour, in small batches, until ctx is canceled.
+func (s *Service) runWebhookPruner(ctx context.Context) {
+	for {
+		s.pruneWebhooks(ctx, time.Now().Add(-webhookRetention))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(webhookPruneInterval):
+		}
+	}
+}
+
+func (s *Service) pruneWebhooks(ctx context.Context, before time.Time) {
+	var total int64
+	for ctx.Err() == nil {
+		deleted, err := s.store.PruneGitHubWebhooks(ctx, before, webhookPruneBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.logger.Error("prune GitHub webhooks", "error", err)
+			}
+			return
+		}
+		total += deleted
+		if deleted < webhookPruneBatch {
+			break
+		}
+	}
+	if total > 0 {
+		s.logger.Info("pruned GitHub webhooks", "deleted", total)
+	}
 }
 
 func (s *Service) runWebhookWorker(ctx context.Context) {

@@ -1,4 +1,16 @@
-import type { SVGProps } from "react";
+import type { ComponentType, SVGProps } from "react";
+
+export type AppIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
+export function BrowserIcon(props: SVGProps<SVGSVGElement>) {
+	return (
+		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
+			<circle cx="12" cy="12" r="9" />
+			<line x1="3" y1="12" x2="21" y2="12" />
+			<path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
+		</svg>
+	);
+}
 
 // Codex mark: a rounded terminal tile holding a `<` prompt and a caret bar,
 // drawn monochrome in lucide's 24x24 stroke style so it inherits color/size

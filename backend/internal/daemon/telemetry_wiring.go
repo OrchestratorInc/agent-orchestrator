@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
@@ -29,7 +30,6 @@ import (
 var aggregatedEventNames = []string{
 	"ao.http.5xx",
 	"ao.daemon.panic",
-	"ao.cli.usage_errors",
 }
 
 // newTelemetrySink also returns the live telemetry identity (nil when the data
@@ -57,10 +57,18 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// rather than the primary cost control, and still does the real limiting
 	// job for every event name that isn't aggregated.
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
+	// CLI usage is already one event per command path and error kind. The
+	// minute cap would drop most of that daily burst. The day cap stays.
+	rateLimited.SkipMinuteWindow("ao.cli.usage_errors")
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	// Opt-out is enforced ahead of the aggregator: events folded into a rollup
-	// bucket while opted out would otherwise be flushed after an opt back in.
-	gated := telemetryadapter.NewOptOutSink(aggregated, remote.Identity().ExportSuppressed)
+	// Keep the full local error stream. Remote HTTP 5xx is not sampled: the
+	// minute rollup and the rate limit already bound it. CLI usage is one
+	// event per command path and error kind per completed UTC day.
+	daily := telemetryadapter.NewDailySummarySink(aggregated, filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
+	remote.Identity().OnInstallRetired(daily.Discard)
+	// Opt-out is enforced ahead of aggregation: events folded into a rollup
+	// while opted out could flush after an opt back in.
+	gated := telemetryadapter.NewOptOutSink(daily, remote.Identity().ExportSuppressed)
 	// The kill switch sits outermost on the remote chain so a silenced stream
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.

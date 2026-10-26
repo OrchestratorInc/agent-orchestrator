@@ -1,14 +1,17 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, Minimize2, SquareTerminal } from "lucide-react";
+import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal } from "lucide-react";
 import { isAgentActivityWorking } from "@aoagents/product-ui";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
+import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
-import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useFileAnnotation } from "../hooks/useFileAnnotation";
+import { CloudArtifactAccessError, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import type { ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
@@ -17,10 +20,11 @@ import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
+import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { ArtifactHistoryMenu, ArtifactVersionPreview } from "./ArtifactHistory";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { PanelMessage } from "./WorkspaceDiffView";
+import { FileAnnotationComposer, PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 export type ArtifactOpenRequest = { feedback?: boolean; key: number; path: string };
 
@@ -161,6 +165,9 @@ function ArtifactViewerFrame({
  */
 function ArtifactViewerBody({
 	artifact,
+	artifactRoot,
+	cloud = false,
+	onAccessRefused,
 	feedbackRequestKey,
 	initialEditing,
 	htmlSource,
@@ -169,10 +176,17 @@ function ArtifactViewerBody({
 	onPreviewVersion,
 	previewVersion,
 	readOnly,
+	sendMessage,
 	sessionId,
 	toolbarHost,
 }: {
 	artifact: SessionArtifact;
+	/** A cloud file's access prefix, which relative links resolve against. */
+	artifactRoot?: string;
+	/** Reads the file through the cloud bridge. */
+	cloud?: boolean;
+	/** Takes a fresh access link for a cloud file whose link was refused. */
+	onAccessRefused?: () => void;
 	feedbackRequestKey?: number;
 	initialEditing?: boolean;
 	htmlSource: boolean;
@@ -181,6 +195,8 @@ function ArtifactViewerBody({
 	onPreviewVersion: (version: number | null) => void;
 	previewVersion: number | null;
 	readOnly: boolean;
+	/** Sends feedback to a cloud session's worker. */
+	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
 	toolbarHost: HTMLElement | null;
 }) {
@@ -205,12 +221,16 @@ function ArtifactViewerBody({
 					<ArtifactFileView
 						artifactName={artifact.name}
 						initialEditing={initialEditing}
+						artifactRoot={artifactRoot}
+						cloud={cloud}
+						onAccessRefused={onAccessRefused}
 						feedbackRequestKey={feedbackRequestKey}
 						hostId={hostId}
 						onFeedbackRequestConsumed={onFeedbackRequestConsumed}
 						path={artifact.path}
 						rawUrl={artifact.rawUrl}
 						readOnly={readOnly}
+						sendMessage={sendMessage}
 						sessionId={sessionId}
 						toolbarHost={previewing || showingPage ? null : toolbarHost}
 					/>
@@ -237,6 +257,71 @@ function ArtifactViewerBody({
 }
 
 /**
+ * A cloud session's HTML artifact with whole-file feedback for its worker.
+ * The framed page is in another origin, so feedback is on the file, not a
+ * selection in it.
+ */
+function CloudHtmlArtifactView({
+	artifact,
+	feedbackRequestKey,
+	onAccessRefused,
+	onFeedbackRequestConsumed,
+	onNavigate,
+	sendMessage,
+	sessionId,
+	toolbarHost,
+	url,
+}: {
+	artifact: SessionArtifact;
+	feedbackRequestKey?: number;
+	onAccessRefused: () => void;
+	onFeedbackRequestConsumed?: (key: number) => void;
+	/** Called with the path of another file the page opened. */
+	onNavigate: (path: string) => void;
+	sendMessage: (message: string) => Promise<void>;
+	sessionId: string;
+	toolbarHost: HTMLElement | null;
+	url: string;
+}) {
+	const { t } = useTranslation();
+	const annotation = useFileAnnotation(sessionId, { source: artifact.name, sendMessage });
+	const begin = annotation.begin;
+	const path = artifact.path;
+	useEffect(() => {
+		if (feedbackRequestKey === undefined) return;
+		begin({ path, side: "file", surface: "focused" });
+		onFeedbackRequestConsumed?.(feedbackRequestKey);
+	}, [feedbackRequestKey, onFeedbackRequestConsumed, path]);
+	const target = annotation.targets.find((item) => item.surface !== "review" && item.path === path && item.side === "file" && item.line == null && item.quote == null);
+	const feedbackButton = (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={t("files.addFeedback")}
+					className="text-muted-foreground hover:text-foreground"
+					onClick={() => begin({ path, side: "file", surface: "focused" })}
+					size="icon-sm"
+					type="button"
+					variant="ghost"
+				>
+					<MessageSquarePlus aria-hidden="true" className="size-icon-sm" />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
+		</Tooltip>
+	);
+	return (
+		<div className="flex h-full min-h-0 flex-col">
+			{toolbarHost ? createPortal(feedbackButton, toolbarHost) : null}
+			{target ? <FileAnnotationComposer annotation={annotation} target={target} /> : null}
+			<div className="min-h-0 flex-1">
+				<CloudArtifactFrame onAccessRefused={onAccessRefused} onNavigate={onNavigate} title={artifact.name} url={url} />
+			</div>
+		</div>
+	);
+}
+
+/**
  * The inspector's Artifacts view (its own inspector tab): every file in
  * the session's artifact directory. Files open in place of the gallery,
  * with isolated inline HTML previews and an optional full-screen view.
@@ -253,7 +338,17 @@ export function SessionArtifactsView({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
-	const artifacts = useMemo(() => sortedArtifacts(session.artifactFiles ?? []), [session.artifactFiles]);
+	const cloud = Boolean(session.cloud);
+	const cloudAccess = useCloudArtifactAccess(session, cloud && (session.artifactFiles?.length ?? 0) > 0);
+	const cloudRoot = cloudAccess.data;
+	// A cloud file's URL comes from the session's short-lived access prefix.
+	const artifacts = useMemo(
+		() =>
+			sortedArtifacts(session.artifactFiles ?? []).map((artifact) =>
+				cloud && cloudRoot ? { ...artifact, rawUrl: cloudArtifactFileUrl(cloudRoot, artifact.path, artifact.updatedAt) } : artifact,
+			),
+		[cloud, cloudRoot, session.artifactFiles],
+	);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
@@ -261,6 +356,13 @@ export function SessionArtifactsView({
 	const [fullscreen, setFullscreen] = useState(false);
 	const [previewVersion, setPreviewVersion] = useState<number | null>(null);
 	const uiKey = sessionUiKey(session.id, hostId);
+	const { client: cloudClient } = useCloudCp(cloud);
+	const cloudOrgId = session.cloud?.orgId;
+	// A cloud session's worker gets feedback from the control plane, not the daemon.
+	const sendCloudFeedback = useCallback(async (message: string) => {
+		if (!cloudOrgId) throw new Error(t("files.feedbackError"));
+		await cloudClient.sendSessionMessage(cloudOrgId, session.id, { text: message });
+	}, [cloudClient, cloudOrgId, session.id, t]);
 
 	useEffect(() => { setSelectedPath(null); setEditingPath(null); setHtmlSourcePath(null); }, [uiKey]);
 	// History is per file: opening another one starts on its live content.
@@ -274,11 +376,16 @@ export function SessionArtifactsView({
 		}
 	}, [request]);
 
-	const selected = artifacts.find((artifact) => artifact.path === selectedPath);
+	const listed = artifacts.find((artifact) => artifact.path === selectedPath);
+	// An open cloud file keeps the URL it opened with while the access prefix
+	// is refreshed, so the refresh does not reload it.
+	const pinned = usePinnedArtifactUrl(cloud ? cloudRoot : undefined, cloud ? listed?.path : undefined, listed?.updatedAt);
+	const selected = listed && cloud ? { ...listed, rawUrl: pinned.url } : listed;
 	const artifactRow = (artifact: SessionArtifact): ArtifactRow => ({
 		...artifact,
 		sessionId: session.id,
 		sessionTitle: session.title ?? "",
+		cloud: session.cloud,
 		generating: isAgentActivityWorking(session.activity),
 	});
 	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
@@ -287,16 +394,32 @@ export function SessionArtifactsView({
 		setSelectedPath(artifact.path);
 	};
 	// Versions are read back as text, so a binary file such as an image gets no
-	// History. This shares the viewer's cached read of the file.
+	// History. This shares the viewer's cached read of the file, which for a
+	// cloud file also shows when its access link was refused.
 	const selectedFile = useQuery({
-		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact")),
-		enabled: Boolean(selected) && !session.cloud,
+		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact"), cloud),
+		enabled: Boolean(selected) && (!cloud || (Boolean(selected?.rawUrl) && selected?.kind !== "html")),
 	});
+	const refetchAccess = cloudAccess.refetch;
+	const repin = pinned.repin;
+	const accessRefused = useCallback(() => {
+		void refetchAccess();
+		repin();
+	}, [refetchAccess, repin]);
+	// A page that opens another file of its session selects it, so the header
+	// names the file shown.
+	const followFrame = useCallback((path: string) => {
+		if (session.artifactFiles?.some((artifact) => artifact.path === path)) setSelectedPath(path);
+	}, [session.artifactFiles]);
+	const readRefused = selectedFile.error instanceof CloudArtifactAccessError;
+	useEffect(() => {
+		if (readRefused) accessRefused();
+	}, [readRefused, accessRefused]);
 	useEffect(() => {
 		if (!selected) setFullscreen(false);
 	}, [selected]);
 	if (selected) {
-		const fullscreenLabel = t(fullscreen ? "artifacts.exitFullscreen" : "artifacts.fullscreen");
+		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
 		const hasHtmlPreview = selected.kind === "html" && selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl);
 		const showingHtmlSource = htmlSourcePath === selected.path;
@@ -313,7 +436,7 @@ export function SessionArtifactsView({
 					>
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
-					<ArtifactActionsMenu artifact={selected} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session}>
+					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session}>
 						{session.cloud || selectedFile.data?.binary ? null : (
 							<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 						)}
@@ -332,7 +455,7 @@ export function SessionArtifactsView({
 									aria-label={fullscreenLabel}
 									aria-pressed={fullscreen}
 									className="text-muted-foreground hover:text-foreground"
-									onClick={() => setFullscreen((current) => !current)}
+									onClick={() => { if (cloud) pinned.refresh(); setFullscreen((current) => !current); }}
 									size="icon-sm"
 									type="button"
 									variant="ghost"
@@ -345,19 +468,43 @@ export function SessionArtifactsView({
 					</div>
 				</div>
 				<div className="min-h-0 flex-1">
-					<ArtifactViewerBody
-						artifact={selected}
-						htmlSource={showingHtmlSource}
-						initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated && !session.cloud}
-						feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
-						hostId={hostId}
-						onFeedbackRequestConsumed={onRequestConsumed}
-						onPreviewVersion={setPreviewVersion}
-						previewVersion={previewVersion}
-						readOnly={Boolean(session.cloud)}
-						sessionId={session.id}
-						toolbarHost={toolbarHost}
-					/>
+					{cloud && !selected.rawUrl ? (
+						cloudAccess.isError ? (
+							<PanelMessage action={<RetryButton onClick={() => void cloudAccess.refetch()} />}>{t("artifacts.accessError")}</PanelMessage>
+						) : (
+							<PanelMessage>{t("files.loading")}</PanelMessage>
+						)
+					) : cloud && selected.kind === "html" ? (
+						<CloudHtmlArtifactView
+							artifact={selected}
+							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
+							onAccessRefused={accessRefused}
+							onFeedbackRequestConsumed={onRequestConsumed}
+							onNavigate={followFrame}
+							sendMessage={sendCloudFeedback}
+							sessionId={session.id}
+							toolbarHost={toolbarHost}
+							url={selected.rawUrl!}
+						/>
+					) : (
+						<ArtifactViewerBody
+							artifact={selected}
+							htmlSource={showingHtmlSource}
+							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated && !cloud}
+							artifactRoot={cloud ? pinned.root : undefined}
+							cloud={cloud}
+							onAccessRefused={cloud ? accessRefused : undefined}
+							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
+							hostId={hostId}
+							onFeedbackRequestConsumed={onRequestConsumed}
+							onPreviewVersion={setPreviewVersion}
+							previewVersion={previewVersion}
+							readOnly={cloud}
+							sendMessage={cloud ? sendCloudFeedback : undefined}
+							sessionId={session.id}
+							toolbarHost={toolbarHost}
+						/>
+					)}
 				</div>
 			</ArtifactViewerFrame>
 		);

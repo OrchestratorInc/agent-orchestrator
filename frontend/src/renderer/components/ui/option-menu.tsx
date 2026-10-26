@@ -4,13 +4,13 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 
 const SURFACE =
-	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu p-1 gap-0!";
+	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)";
 
 const ROW =
-	"relative isolate flex min-w-0 cursor-default items-center rounded-none px-3 py-2 outline-none whitespace-nowrap transition-none! before:pointer-events-none before:absolute before:inset-x-0 before:inset-y-px before:-z-10 before:rounded-[10px] first:before:top-0 last:before:bottom-0 focus:before:bg-settings-menu-selected focus:text-settings-title focus:text-foreground data-highlighted:before:bg-settings-menu-selected data-highlighted:text-settings-title data-highlighted:text-foreground data-[search-active=true]:before:bg-settings-menu-selected data-[search-active=true]:text-settings-title data-[search-active=true]:text-foreground data-[active=true]:before:bg-settings-menu-selected data-[active=true]:text-foreground";
+	"relative isolate flex min-w-0 cursor-default items-center gap-2.5 rounded-none px-2 py-1.5 text-control text-muted-foreground outline-none whitespace-nowrap transition-none! before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:rounded-md focus:before:bg-interactive-hover focus:text-foreground data-highlighted:before:bg-interactive-hover data-highlighted:text-foreground data-[search-active=true]:before:bg-interactive-hover data-[search-active=true]:text-foreground data-[active=true]:before:bg-interactive-hover data-[active=true]:text-foreground";
 
 const LABEL =
-	"px-3 py-2 text-[length:var(--font-size-base)] font-normal tracking-normal text-settings-muted";
+	"px-2 py-1.5 text-micro tracking-wide text-passive";
 
 /**
  * The quiet filled trigger both this menu and the Settings pickers wear —
@@ -147,7 +147,7 @@ export function OptionMenuSubTrigger({
 }) {
 	return (
 		<DropdownMenuPrimitive.SubTrigger
-			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-settings-menu-selected data-[state=open]:text-foreground", className)}
+			className={cn(ROW, "justify-between gap-3 text-xs text-foreground data-[state=open]:before:bg-interactive-hover data-[state=open]:text-foreground", className)}
 			// Stop the click reaching the composer's click-to-focus handler without
 			// calling preventDefault, which Radix's composeEventHandlers reads as a
 			// signal to skip its own open/close handling.

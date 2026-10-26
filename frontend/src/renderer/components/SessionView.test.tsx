@@ -10,6 +10,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import { conversationQueryKey } from "../hooks/useConversation";
 import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -431,13 +432,13 @@ vi.mock("./chat/SessionChatSurface", async () => {
 
 vi.mock("./chat/CloudSessionChatSurface", async (importOriginal) => ({
 	...await importOriginal<typeof import("./chat/CloudSessionChatSurface")>(),
-	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void }) => (
+	CloudSessionChatSurface: ({ sessionTabAction, controllerTransitioning, newWorkDisabled, onConversationWorkChange, reviewerTerminal, reviewerTarget, onOpenReviewerTerminal, onSelectChat, shellTarget }: { sessionTabAction?: ReactNode; controllerTransitioning?: boolean; newWorkDisabled?: boolean; onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void; reviewerTerminal?: { handleId: string; harness: string }; reviewerTarget?: { handleId: string; harness: string }; onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void; onSelectChat?: () => void; shellTarget?: { handleId: string } }) => (
 		<div data-testid="cloud-chat-surface" data-transitioning={controllerTransitioning ? "true" : "false"} data-new-work-disabled={newWorkDisabled ? "true" : "false"}>
 			{sessionTabAction}
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>report cloud chat work</button>
 			<button type="button" onClick={() => onSelectChat?.()}>cloud chat tab</button>
 			{reviewerTerminal ? <button type="button" onClick={() => onOpenReviewerTerminal?.(reviewerTerminal)}>cloud reviewer tab</button> : null}
-			<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : "chat"}</span>
+			<span data-testid="cloud-chat-target">{reviewerTarget ? `reviewer:${reviewerTarget.handleId}:${reviewerTarget.harness}` : shellTarget ? `shell:${shellTarget.handleId}` : "chat"}</span>
 		</div>
 	),
 }));
@@ -1212,6 +1213,40 @@ describe("SessionView", () => {
 		expect(cloudSessionLookup).toHaveBeenLastCalledWith("cloud-org", "sess-1", false);
 	});
 
+	it("keeps a Cloud Chat session's shell on the Cloud surface", () => {
+		const cloudSession: WorkspaceSession = {
+			...workerSession("sess-1"),
+			workspaceId: "cloud-project",
+			workspaceName: "Cloud project",
+			mode: "chat",
+			cloud: { orgId: "cloud-org" },
+		};
+		workspaceQueryState.data = [
+			...workspaces,
+			{ id: "cloud-project", name: "Cloud project", kind: "cloud", path: "", sessions: [cloudSession] },
+		];
+		shellTerminalsState.data = [{
+			handleId: "cloud-shell-1",
+			sessionId: "sess-1",
+			title: "sandbox shell",
+			workingDir: "",
+			createdAt: "2026-10-25T00:00:00Z",
+		}];
+
+		render(<SessionView cloudOrgId="cloud-org" projectId="cloud-project" sessionId="sess-1" />);
+		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat");
+
+		// The local Chat surface would ask this machine's daemon for the
+		// conversation, which answers "session not found" for a Cloud session.
+		act(() => useUiStore.getState().setActiveShellTerminal("cloud-shell-1"));
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("shell:cloud-shell-1");
+
+		fireEvent.click(screen.getByRole("button", { name: "cloud chat tab" }));
+		expect(screen.getByTestId("cloud-chat-target")).toHaveTextContent("chat");
+	});
+
 	it("keeps an unscoped local session available when Cloud is offline", () => {
 		cloudSessionQueryState.isError = true;
 		render(<SessionView cloudOrgId="cloud-org" sessionId="sess-1" />);
@@ -1442,6 +1477,24 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
 		view.unmount();
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2));
+	});
+
+	it("reloads Chat history on open only while the cached chat is not ready", async () => {
+		workerSession("sess-1").mode = "chat";
+		for (const [state, reloads] of [["ready", 0], ["hibernated", 1]] as const) {
+			let finishView!: (result: { error: undefined }) => void;
+			chatViewPostMock.mockImplementationOnce(() => new Promise((resolve) => { finishView = resolve; }));
+			const view = render(<SessionView sessionId="sess-1" />);
+			view.client.setQueryData(conversationQueryKey("sess-1"), { pages: [{ controller: { state } }], pageParams: [undefined] });
+			const invalidate = vi.spyOn(view.client, "invalidateQueries");
+			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
+			await act(async () => { finishView({ error: undefined }); });
+			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
+			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
+			expect(conversationReloads, state).toHaveLength(reloads);
+			view.unmount();
+			chatViewPostMock.mockClear();
+		}
 	});
 
 	it("releases Chat without waiting for a pending wake and cleans up its late response", async () => {
@@ -2256,6 +2309,44 @@ describe("SessionView", () => {
 		act(() => useUiStore.getState().setActiveShellTerminal("cue-shell"));
 		await waitFor(() => expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument());
 		expect(screen.getByTestId("terminal-target")).toHaveTextContent("cue-shell");
+	});
+
+	it("reveals the primary chat for each palette hit over a file tab", async () => {
+		workerSession("sess-1").mode = "chat";
+		render(<SessionView sessionId="sess-1" />);
+		for (const messageId of ["m1", "m2"]) {
+			fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+			const filePane = await screen.findByTestId("session-file-workspace");
+			expect(filePane.closest("[inert]")).toBeNull();
+			act(() => useUiStore.getState().requestChatMessageFocus("sess-1", messageId, "flaky login"));
+			await waitFor(() => expect(filePane.closest("[inert]")).not.toBeNull());
+			expect(screen.getByTestId("chat-surface")).toBeInTheDocument();
+		}
+		act(() => useUiStore.setState({ chatMessageFocusRequest: null }));
+	});
+
+	it("does not switch a TUI session's pane for a primary chat hit", async () => {
+		workerSession("sess-1").mode = "tui";
+		render(<SessionView sessionId="sess-1" />);
+		fireEvent.click(screen.getByRole("button", { name: "view review file" }));
+		const filePane = await screen.findByTestId("session-file-workspace");
+		act(() => useUiStore.getState().requestChatMessageFocus("sess-1", "m1", "flaky login"));
+		expect(filePane.closest("[inert]")).toBeNull();
+		expect(screen.queryByTestId("chat-surface")).not.toBeInTheDocument();
+		act(() => useUiStore.setState({ chatMessageFocusRequest: null }));
+	});
+
+	it("opens the reviewer chat a palette hit names", async () => {
+		const view = render(<SessionView sessionId="sess-1" />);
+		act(() => view.client.setQueryData(["session-reviews", "sess-1"], {
+			reviewerHandleId: "review-chat:review-1",
+			reviewerSurface: { mode: "chat", reviewId: "review-1", harness: "codex" },
+			reviews: [], runs: [],
+		}));
+		expect(screen.queryByTestId("reviewer-chat-surface")).not.toBeInTheDocument();
+		act(() => useUiStore.getState().requestChatMessageFocus("sess-1", "m1", "flaky login", "review-1"));
+		expect(await screen.findByTestId("reviewer-chat-surface")).toHaveTextContent("review-1");
+		act(() => useUiStore.setState({ chatMessageFocusRequest: null }));
 	});
 
 	it("does not offer a new terminal for orchestrator sessions", () => {

@@ -20,6 +20,7 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 	const [visible, setVisible] = useState(false);
 	const [width, setWidth] = useState(0);
 	const [failed, setFailed] = useState(false);
+	const [pageAvailable, setPageAvailable] = useState<boolean>();
 	const page = row.kind === "html" && row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined;
 	const contentUrl = artifactContentUrl(row.sessionId, row.path, row.rawUrl);
 	const image = isRasterImagePath(row.path) || isSvgPath(row.path)
@@ -51,6 +52,22 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 		return () => observer.disconnect();
 	}, []);
 	useLayoutEffect(() => {
+		setPageAvailable(undefined);
+		if (!visible || !page || !contentUrl) return;
+		const controller = new AbortController();
+		// A cross-origin iframe fires load even for a 404 JSON response. Check
+		// the readable artifact route before framing it, without retaining HTML.
+		void fetch(contentUrl, { signal: controller.signal, cache: "no-store" })
+			.then(async (response) => {
+				await response.body?.cancel();
+				if (!controller.signal.aborted) setPageAvailable(response.ok);
+			})
+			.catch(() => {
+				if (!controller.signal.aborted) setPageAvailable(false);
+			});
+		return () => controller.abort();
+	}, [visible, page, contentUrl, row.updatedAt]);
+	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element || !page) return;
 		const initialWidth = element.getBoundingClientRect().width;
@@ -66,7 +83,7 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 		? content.replace(/^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/, "").trim().slice(0, 4000) : "";
 	const text = plainText && content.trim() ? content.slice(0, 4000) : "";
 	const Icon = image ? Image : row.kind === "html" ? Globe : row.kind === "markdown" || plainText ? FileText : File;
-	const unavailable = failed || file.isError || ((row.kind === "markdown" || plainText) && !contentUrl)
+	const unavailable = failed || file.isError || pageAvailable === false || (page && !contentUrl) || ((row.kind === "markdown" || plainText) && !contentUrl)
 		|| (!page && !image && !markdown && !text && !(row.kind === "markdown" || plainText))
 		|| (file.isSuccess && !page && !image && !markdown && !text);
 	return (
@@ -78,16 +95,18 @@ export function ArtifactThumbnail({ row }: { row: ArtifactRow }) {
 			) : !visible ? null : image ? (
 				<img src={image} alt="" loading="eager" onError={() => setFailed(true)} className="h-full w-full object-cover object-top" />
 			) : page ? (
-				<iframe
-					src={page}
-					title={row.name}
-					sandbox="allow-scripts allow-same-origin"
-					loading="eager"
-					tabIndex={-1}
-					onError={() => setFailed(true)}
-					className="absolute left-0 top-0 origin-top-left border-0 bg-[var(--solid-muted,var(--muted))]"
-					style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / PAGE_WIDTH})` }}
-				/>
+				pageAvailable ? (
+					<iframe
+						src={page}
+						title={row.name}
+						sandbox="allow-scripts allow-same-origin"
+						loading="eager"
+						tabIndex={-1}
+						onError={() => setFailed(true)}
+						className="absolute left-0 top-0 origin-top-left border-0 bg-[var(--solid-muted,var(--muted))]"
+						style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / PAGE_WIDTH})` }}
+					/>
+				) : null
 			) : plainText ? (
 				<pre className="m-0 h-full overflow-hidden whitespace-pre-wrap break-words p-4 font-mono text-caption leading-relaxed text-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]">{text}</pre>
 			) : (

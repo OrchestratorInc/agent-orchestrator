@@ -4,6 +4,8 @@ import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
+import { useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
+import { useCloudCp } from "../hooks/useCloudCp";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
@@ -14,6 +16,8 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ArtifactFileView } from "./ArtifactFileView";
+import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { FileMediaPreview } from "./FileMediaPreview";
 import { SvgFileView } from "./SvgFileView";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
@@ -61,7 +65,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
 							<ArtifactActionsMenu
 								artifact={artifact}
-								session={{ id: artifact.sessionId }}
+								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
 								iconOnly
 								pinInMenu
 								pinned={pinned}
@@ -97,17 +101,32 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 
 function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 	const { t } = useTranslation();
+	const cloud = Boolean(artifact.cloud);
+	const access = useCloudArtifactAccess({ id: artifact.sessionId, cloud: artifact.cloud }, cloud);
+	const pinned = usePinnedArtifactUrl(cloud ? access.data : undefined, cloud ? artifact.path : undefined, artifact.updatedAt);
+	const { client: cloudClient } = useCloudCp(cloud);
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const media = fileMediaKind(artifact.path);
 	const contentUrl = artifactContentUrl(artifact.sessionId, artifact.path, artifact.rawUrl);
-	const options = sessionArtifactFileQueryOptions(artifact.sessionId, artifact.path, artifact.rawUrl, t("files.error.loadArtifact"));
+	const options = sessionArtifactFileQueryOptions(artifact.sessionId, artifact.path, artifact.rawUrl, t("files.error.loadArtifact"), Boolean(artifact.cloud));
 	const query = useQuery({
 		...options,
 		queryKey: [...options.queryKey, artifact.updatedAt],
-		enabled: Boolean(contentUrl) && !page && !media,
+		enabled: !cloud && Boolean(contentUrl) && !page && !media,
 		staleTime: Infinity,
 		retry: false,
 	});
+	if (artifact.cloud) {
+		const orgId = artifact.cloud.orgId;
+		if (access.isError) return <PanelMessage action={<RetryButton onClick={() => { void access.refetch(); }} />}>{t("artifacts.accessError")}</PanelMessage>;
+		if (!pinned.url) return <PanelMessage>{t("files.loading")}</PanelMessage>;
+		const accessRefused = () => {
+			pinned.repin();
+			void access.refetch();
+		};
+		if (artifact.kind === "html") return <CloudArtifactFrame onAccessRefused={accessRefused} title={artifact.name} url={pinned.url} />;
+		return <ArtifactFileView artifactName={artifact.name} artifactRoot={pinned.root} cloud onAccessRefused={accessRefused} path={artifact.path} rawUrl={pinned.url} readOnly sendMessage={async (message) => { await cloudClient.sendSessionMessage(orgId, artifact.sessionId, { text: message }); }} sessionId={artifact.sessionId} />;
+	}
 	if (page) {
 		return <iframe className="h-full w-full border-0 bg-background" sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
 	}
