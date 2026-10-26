@@ -27,6 +27,8 @@ type fakeAgentAuthService struct {
 	uiMethod    string
 	uiSecret    string
 	uiOperation string
+	uiCode      string
+	codeCalls   int
 }
 
 func (f *fakeAgentAuthService) StartLogin(_ context.Context, agentID, method, secret string) (agentauth.LoginSnapshot, error) {
@@ -42,6 +44,36 @@ func (f *fakeAgentAuthService) Login(_ context.Context, agentID, id string) (age
 
 func (f *fakeAgentAuthService) CancelLogin(ctx context.Context, agentID, id string) (agentauth.LoginSnapshot, error) {
 	return f.Login(ctx, agentID, id)
+}
+
+func (f *fakeAgentAuthService) SubmitLoginCode(_ context.Context, agentID, id, code string) (agentauth.LoginSnapshot, error) {
+	f.startedID, f.uiOperation, f.uiCode = agentID, id, code
+	f.codeCalls++
+	return f.uiResult, f.startErr
+}
+
+func TestAgentUILoginCodeRequestIsBoundedAndNeverReturnsCode(t *testing.T) {
+	svc := &fakeAgentAuthService{uiResult: agentauth.LoginSnapshot{ID: "login-1", AgentID: "claude-code", Status: "running"}}
+	server := newAgentAuthTestServer(t, svc)
+	path := "/api/v1/agents/claude-code/auth/operations/login-1/code"
+	for _, request := range []string{``, `{"code":`, `{"code":"one"} {"code":"two"}`, `{"code":"one","command":"arbitrary"}`, `{"code":"` + strings.Repeat("x", 21*1024) + `"}`} {
+		_, status, _ := doRequest(t, server, http.MethodPost, path, request)
+		if status != http.StatusBadRequest || svc.codeCalls != 0 {
+			t.Fatalf("invalid request reached native input: status=%d calls=%d", status, svc.codeCalls)
+		}
+	}
+	body, status, headers := doRequest(t, server, http.MethodPost, path, `{"code":"one-time-code#state"}`)
+	if status != http.StatusAccepted || svc.uiCode != "one-time-code#state" || svc.startedID != "claude-code" || svc.uiOperation != "login-1" || headers.Get("Cache-Control") != "no-store" {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if strings.Contains(string(body), "one-time-code") {
+		t.Fatal("code appeared in response")
+	}
+	svc.startErr = apierr.NotFound("AGENT_AUTH_OPERATION_NOT_FOUND", "Login operation not found.")
+	body, status, _ = doRequest(t, server, http.MethodPost, path, `{"code":"one-time-code#state"}`)
+	if status != http.StatusNotFound || !strings.Contains(string(body), `"requestId"`) || !strings.Contains(string(body), `"code":"AGENT_AUTH_OPERATION_NOT_FOUND"`) {
+		t.Fatalf("missing operation envelope: status=%d body=%s", status, body)
+	}
 }
 
 func TestAgentUILoginValidatesRequestBeforeStarting(t *testing.T) {

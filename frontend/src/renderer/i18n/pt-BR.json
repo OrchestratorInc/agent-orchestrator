@@ -3688,5 +3688,10 @@
 	"settings.harness.loginUi.createDeviceCode": "Obter código de acesso",
 	"settings.harness.loginUi.otherOptions": "Outras opções",
 	"settings.harness.loginUi.connectedDescription": "Sua conta está pronta para usar com este harness.",
-	"settings.harness.loginUi.waitingForCode": "Insira este código na página de acesso. Aguardando aprovação…"
+	"settings.harness.loginUi.waitingForCode": "Insira este código na página de acesso. Aguardando aprovação…",
+	"settings.harness.loginUi.signInCode": "Código de acesso",
+	"settings.harness.loginUi.codeHint": "Se a página de acesso exibir um código, cole-o aqui.",
+	"settings.harness.loginUi.submitCode": "Enviar código",
+	"settings.harness.loginUi.remoteCodex": "Em um host remoto, use um código de dispositivo ou credenciais. O retorno do navegador ocorre nesse host.",
+	"settings.harness.loginUi.remoteClaude": "Abra a página de acesso e cole o código aqui para concluir no host selecionado."
 }

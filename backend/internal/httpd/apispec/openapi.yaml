@@ -210,6 +210,68 @@ paths:
       summary: Read recognized login prompts and background process state
       tags:
       - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}/code:
+    post:
+      operationId: submitAgentUILoginCode
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAgentUILoginCodeRequest'
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Submit a one-time Claude sign-in code to the existing native login
+      tags:
+      - agents
   /api/v1/agents/{agent}/chat/prewarm:
     post:
       operationId: prewarmChatAgent
@@ -13455,6 +13517,8 @@ components:
       type: object
     AgentLoginSnapshot:
       properties:
+        acceptsCode:
+          type: boolean
         agentId:
           type: string
         deviceCode:
@@ -20904,6 +20968,13 @@ components:
       required:
       - outcome
       - duplicate
+      type: object
+    SubmitAgentUILoginCodeRequest:
+      properties:
+        code:
+          type: string
+      required:
+      - code
       type: object
     SubmitReviewInput:
       properties:

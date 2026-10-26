@@ -39,19 +39,22 @@ func loginMethods(agentID string) []LoginMethod {
 // LoginSnapshot contains only recognized prompts and process state. A successful
 // process must still be checked through the harness's authentication probe.
 type LoginSnapshot struct {
-	ID         string    `json:"id"`
-	AgentID    string    `json:"agentId"`
-	Method     string    `json:"method"`
-	Status     string    `json:"status" enum:"running,succeeded,failed,cancelled,timed_out"`
-	LoginURL   string    `json:"loginUrl,omitempty"`
-	DeviceCode string    `json:"deviceCode,omitempty"`
-	ExpiresAt  time.Time `json:"expiresAt"`
+	ID          string    `json:"id"`
+	AgentID     string    `json:"agentId"`
+	Method      string    `json:"method"`
+	Status      string    `json:"status" enum:"running,succeeded,failed,cancelled,timed_out"`
+	LoginURL    string    `json:"loginUrl,omitempty"`
+	DeviceCode  string    `json:"deviceCode,omitempty"`
+	AcceptsCode bool      `json:"acceptsCode,omitempty"`
+	ExpiresAt   time.Time `json:"expiresAt"`
 }
 
 type loginOperation struct {
-	snapshot LoginSnapshot
-	cancel   context.CancelFunc
-	done     chan struct{}
+	snapshot      LoginSnapshot
+	cancel        context.CancelFunc
+	done          chan struct{}
+	stdin         io.WriteCloser
+	codeSubmitted bool
 }
 
 // StartLogin runs a fixed native login in the background. Secrets travel only
@@ -79,6 +82,9 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 	defer s.mu.Unlock()
 	if s.closed {
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "Authentication service is stopping.")
+	}
+	if s.terminalStarts[agentID] {
+		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "A terminal login is starting for this harness.", nil)
 	}
 	for _, op := range s.operations {
 		if op.snapshot.AgentID == agentID {
@@ -114,16 +120,30 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 		cmd.Stdin = strings.NewReader(secret + "\n")
 		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	} else {
+		if agentID == "claude-code" {
+			stdin, pipeErr := cmd.StdinPipe()
+			if pipeErr != nil {
+				cancel()
+				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_START_FAILED", "The native login input could not be prepared.")
+			}
+			op.stdin = stdin
+		}
 		output := &loginOutput{service: s, operation: op}
 		cmd.Stdout, cmd.Stderr = output, output
 	}
 	if err := cmd.Start(); err != nil {
 		cancel()
+		if op.stdin != nil {
+			_ = op.stdin.Close()
+		}
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_START_FAILED", "The native login could not start. Try the terminal login.")
 	}
 	s.operations[op.snapshot.ID] = op
 	go func() {
 		err := cmd.Wait()
+		if op.stdin != nil {
+			_ = op.stdin.Close()
+		}
 		s.mu.Lock()
 		if op.snapshot.Status == "running" {
 			switch {
@@ -136,11 +156,68 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 			}
 		}
 		op.snapshot.LoginURL, op.snapshot.DeviceCode = "", ""
+		op.snapshot.AcceptsCode = false
 		s.mu.Unlock()
 		cancel()
 		close(op.done)
 	}()
 	return op.snapshot, nil
+}
+
+// SubmitLoginCode forwards one Claude fallback code to the existing native
+// process. The pipe write never holds the registry/output lock.
+func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string) (LoginSnapshot, error) {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 4096 || strings.ContainsAny(code, "\r\n\x00") {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_CODE_INVALID", "Supply a sign-in code on a single line.", nil)
+	}
+	if err := ctx.Err(); err != nil {
+		return LoginSnapshot{}, err
+	}
+	s.mu.Lock()
+	op := s.operations[id]
+	if op == nil || op.snapshot.AgentID != agentID {
+		s.mu.Unlock()
+		return LoginSnapshot{}, apierr.NotFound("AGENT_AUTH_OPERATION_NOT_FOUND", "Login operation not found.")
+	}
+	if agentID != "claude-code" || op.stdin == nil || op.snapshot.Status != "running" || !op.snapshot.AcceptsCode {
+		s.mu.Unlock()
+		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_CODE_UNAVAILABLE", "This sign-in no longer accepts a code.", nil)
+	}
+	// Claim the single submission before releasing the lock. Stop parsing output
+	// now as a native CLI could echo the submitted code.
+	op.snapshot.AcceptsCode = false
+	op.codeSubmitted = true
+	op.snapshot.LoginURL = ""
+	s.mu.Unlock()
+	writeCtx, cancelWrite := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelWrite()
+	written := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(op.stdin, code+"\n")
+		written <- err
+	}()
+	var writeErr error
+	select {
+	case writeErr = <-written:
+	case <-writeCtx.Done():
+		writeErr = writeCtx.Err()
+		op.cancel()
+		_ = op.stdin.Close()
+		<-written
+	}
+	if writeErr != nil {
+		s.mu.Lock()
+		if op.snapshot.Status == "running" {
+			op.snapshot.Status = "failed"
+			op.snapshot.LoginURL, op.snapshot.DeviceCode = "", ""
+		}
+		s.mu.Unlock()
+		op.cancel()
+		_ = op.stdin.Close()
+		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_CODE_FAILED", "The code could not be submitted. Start sign-in again.")
+	}
+	return s.Login(ctx, agentID, id)
 }
 
 func loginArgs(agentID, method string) ([]string, bool, error) {
@@ -192,6 +269,7 @@ func (s *Service) CancelLogin(ctx context.Context, agentID, id string) (LoginSna
 	if op.snapshot.Status == "running" {
 		op.snapshot.Status = "cancelled"
 		op.snapshot.LoginURL, op.snapshot.DeviceCode = "", ""
+		op.snapshot.AcceptsCode = false
 		op.cancel()
 	}
 	s.mu.Unlock()
@@ -212,6 +290,7 @@ func (s *Service) Close() {
 		if op.snapshot.Status == "running" {
 			op.snapshot.Status = "cancelled"
 			op.snapshot.LoginURL, op.snapshot.DeviceCode = "", ""
+			op.snapshot.AcceptsCode = false
 		}
 		op.cancel()
 		ops = append(ops, op)
@@ -242,6 +321,9 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 	if w.operation.snapshot.Status != "running" {
 		return len(p), nil
 	}
+	if w.operation.codeSubmitted {
+		return len(p), nil
+	}
 	w.tail += string(p)
 	if len(w.tail) > 16*1024 {
 		w.tail = w.tail[len(w.tail)-16*1024:]
@@ -259,6 +341,15 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 		}
 		match := output[indices[0]:indices[1]]
 		if safeLoginURL(w.operation.snapshot.AgentID, match) {
+			if w.operation.snapshot.AgentID == "claude-code" {
+				parsed, _ := url.Parse(match)
+				// Only publish the manual-code fallback. A localhost callback
+				// belongs to the CLI's host and cannot be reopened remotely.
+				if parsed.Query().Get("code") != "true" {
+					continue
+				}
+				w.operation.snapshot.AcceptsCode = true
+			}
 			w.operation.snapshot.LoginURL = match
 		}
 	}
@@ -278,5 +369,11 @@ func safeLoginURL(agentID, raw string) bool {
 	if agentID == "codex" {
 		return u.Hostname() == "auth.openai.com" && (u.Path == "/oauth/authorize" || u.Path == "/codex/device")
 	}
-	return agentID == "claude-code" && (u.Hostname() == "claude.ai" || u.Hostname() == "console.anthropic.com" || u.Hostname() == "platform.claude.com") && u.Path == "/oauth/authorize"
+	if agentID != "claude-code" {
+		return false
+	}
+	if u.Hostname() == "claude.com" {
+		return u.Path == "/cai/oauth/authorize"
+	}
+	return (u.Hostname() == "claude.ai" || u.Hostname() == "console.anthropic.com" || u.Hostname() == "platform.claude.com") && u.Path == "/oauth/authorize"
 }

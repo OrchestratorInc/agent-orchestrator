@@ -157,6 +157,11 @@ type StartAgentUILoginRequest struct {
 	Secret string `json:"secret,omitempty"`
 }
 
+// SubmitAgentUILoginCodeRequest supplies a one-time native fallback code.
+type SubmitAgentUILoginCodeRequest struct {
+	Code string `json:"code"`
+}
+
 // AgentUILoginIDParam scopes an in-memory login operation to one harness.
 type AgentUILoginIDParam struct {
 	OperationID string `path:"operationId"`

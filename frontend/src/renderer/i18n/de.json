@@ -3619,5 +3619,10 @@
 	"settings.harness.loginUi.createDeviceCode": "Anmeldecode abrufen",
 	"settings.harness.loginUi.otherOptions": "Weitere Optionen",
 	"settings.harness.loginUi.connectedDescription": "Dein Konto ist für diesen Harness bereit.",
-	"settings.harness.loginUi.waitingForCode": "Diesen Code auf der Anmeldeseite eingeben. Warte auf Bestätigung…"
+	"settings.harness.loginUi.waitingForCode": "Diesen Code auf der Anmeldeseite eingeben. Warte auf Bestätigung…",
+	"settings.harness.loginUi.signInCode": "Anmeldecode",
+	"settings.harness.loginUi.codeHint": "Falls die Anmeldeseite einen Code anzeigt, füge ihn hier ein.",
+	"settings.harness.loginUi.submitCode": "Code senden",
+	"settings.harness.loginUi.remoteCodex": "Verwende für einen entfernten Host einen Gerätecode oder Zugangsdaten. Browser-Rückrufe laufen auf diesem Host.",
+	"settings.harness.loginUi.remoteClaude": "Öffne die Anmeldeseite und füge ihren Code hier ein, um die Anmeldung auf dem gewählten Host abzuschließen."
 }

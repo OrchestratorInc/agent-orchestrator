@@ -25,14 +25,22 @@ export async function startAgentUILogin(agentId: string, method: string, secret:
 }
 
 export async function getAgentUILogin(agentId: string, operationId: string, hostId?: string): Promise<AgentLoginSnapshot> {
-	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } });
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not check sign-in."));
+	const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } });
+	if (error || !data) throw Object.assign(new Error(apiErrorMessage(error, "Could not check sign-in.")), { code: apiErrorCode(error), status: response?.status });
 	return data;
 }
 
 export async function cancelAgentUILogin(agentId: string, operationId: string, hostId?: string): Promise<void> {
 	const { error } = await clientForSessionHost(hostId).DELETE("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } });
 	if (error && apiErrorCode(error) !== "AGENT_AUTH_OPERATION_NOT_FOUND") throw new Error(apiErrorMessage(error, "Could not stop sign-in."));
+}
+
+export async function submitAgentUILoginCode(agentId: string, operationId: string, code: string, hostId?: string): Promise<AgentLoginSnapshot> {
+	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/code", {
+		params: { path: { agent: agentId, operationId } }, body: { code },
+	});
+	if (error || !data) throw new Error(apiErrorMessage(error, "Could not submit sign-in code."));
+	return data;
 }
 
 export const agentAuthPlansQueryKey = ["agent-auth-plans"] as const;

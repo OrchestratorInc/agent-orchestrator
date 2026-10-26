@@ -125,6 +125,7 @@ type Service struct {
 	selfExecutable func() (string, error)
 	mu             sync.Mutex
 	operations     map[string]*loginOperation
+	terminalStarts map[string]bool
 	closed         bool
 	commandContext func(context.Context, string, ...string) *exec.Cmd
 	loginTimeout   time.Duration
@@ -138,7 +139,7 @@ func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 // NewWithAgentResolver creates a service that uses AO's adapter-aware binary
 // resolver as the authoritative validation and discovery boundary.
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
-	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
 }
 
 // Plans returns every known harness plan in stable Harness settings order.
@@ -194,7 +195,14 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 
 func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		return StartResult{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "Authentication service is stopping.")
+	}
+	if s.terminalStarts[plan.AgentID] {
+		s.mu.Unlock()
+		return StartResult{}, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "Authentication is starting or stopping.", nil)
+	}
 	for _, op := range s.operations {
 		if op.snapshot.AgentID != plan.AgentID {
 			continue
@@ -202,9 +210,19 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 		select {
 		case <-op.done:
 		default:
+			s.mu.Unlock()
 			return StartResult{}, apierr.Conflict("AGENT_AUTH_IN_PROGRESS", "Stop the background login before opening a terminal login.", map[string]any{"operationId": op.snapshot.ID})
 		}
 	}
+	// Reserve this harness's startup, but never hold the output/polling lock
+	// across binary resolution, workspace preparation, or terminal startup I/O.
+	s.terminalStarts[plan.AgentID] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.terminalStarts, plan.AgentID)
+		s.mu.Unlock()
+	}()
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_UNAVAILABLE", plan.Reason, nil)

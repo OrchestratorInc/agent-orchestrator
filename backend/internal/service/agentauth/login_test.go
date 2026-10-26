@@ -1,6 +1,7 @@
 package agentauth
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
 func TestLoginMethodsInvokeOnlyFixedCommands(t *testing.T) {
@@ -90,6 +92,14 @@ func TestUILoginHelper(t *testing.T) {
 		return
 	}
 	switch mode {
+	case "claude-code":
+		fmt.Println("If the browser didn't open, use https://platform.claude.com/oauth/authorize?code=true&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback")
+		fmt.Print("Paste code here if prompted > ")
+		code, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil || code != "one-time-code#state\n" {
+			os.Exit(5)
+		}
+		fmt.Println("https://platform.claude.com/oauth/authorize?code=one-time-code#state")
 	case "secret":
 		data, _ := io.ReadAll(os.Stdin)
 		if string(data) != "test-secret\n" {
@@ -220,5 +230,196 @@ func TestUILoginTimeoutAndShutdownStopProcesses(t *testing.T) {
 				t.Fatal("started after shutdown")
 			}
 		}
+	}
+}
+
+func TestClaudeFallbackURLsFromNativeCLIOutput(t *testing.T) {
+	// Sanitized URL forms reproduced with Claude Code 2.1.310 in review
+	// https://github.com/OrchestratorInc/agent-orchestrator/pull/7163#discussion_r4373785021.
+	for _, raw := range []string{
+		"https://claude.com/cai/oauth/authorize?code=true&client_id=redacted&state=redacted",
+		"https://claude.com/cai/oauth/authorize?code=true&state=redacted&login_method=sso",
+		"https://platform.claude.com/oauth/authorize?code=true&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback",
+	} {
+		svc := New(nil, nil)
+		op := &loginOperation{snapshot: LoginSnapshot{AgentID: "claude-code", Status: "running"}}
+		output := &loginOutput{service: svc, operation: op}
+		_, _ = output.Write([]byte("If the browser didn't open, visit this URL:\n\n" + raw + "\n\nPaste code here if prompted > "))
+		if op.snapshot.LoginURL != raw || !op.snapshot.AcceptsCode {
+			t.Fatalf("rejected native fallback URL %q", raw)
+		}
+	}
+	// The native browser tab may use a callback on the daemon's host. Only
+	// manual-code URLs can be reopened safely from another host's desktop.
+	svc := New(nil, nil)
+	op := &loginOperation{snapshot: LoginSnapshot{AgentID: "claude-code", Status: "running"}}
+	output := &loginOutput{service: svc, operation: op}
+	_, _ = output.Write([]byte("https://claude.com/cai/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1234%2Fcallback\n"))
+	if op.snapshot.LoginURL != "" || op.snapshot.AcceptsCode {
+		t.Fatal("published a host-local callback as a manual-code fallback")
+	}
+	for _, raw := range []string{"https://claude.com/oauth/authorize", "https://claude.com/cai/oauth/authorize/extra", "https://claude.com.evil.test/cai/oauth/authorize", "https://user@claude.com/cai/oauth/authorize", "https://claude.com:444/cai/oauth/authorize"} {
+		if safeLoginURL("claude-code", raw) {
+			t.Fatalf("accepted unsafe URL %q", raw)
+		}
+	}
+}
+
+func TestUILoginClaudeCodeUsesOpenStdinAndClearsPrompts(t *testing.T) {
+	svc := loginTestService(t, "claude-code")
+	svc.executables = executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil })
+	started, err := svc.StartLogin(t.Context(), "claude-code", "console", "")
+	if err != nil {
+		t.Fatalf("start=%+v err=%v", started, err)
+	}
+	for _, code := range []string{"", "one\ntwo", "one\x00two", strings.Repeat("x", 4097)} {
+		if _, err := svc.SubmitLoginCode(t.Context(), "claude-code", started.ID, code); err == nil {
+			t.Fatal("accepted invalid code")
+		}
+	}
+	if _, err := svc.SubmitLoginCode(t.Context(), "codex", started.ID, "one-time-code#state"); err == nil {
+		t.Fatal("accepted code for another harness")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		snapshot, pollErr := svc.Login(t.Context(), "claude-code", started.ID)
+		if pollErr != nil {
+			t.Fatal(pollErr)
+		}
+		if snapshot.LoginURL != "" {
+			if !snapshot.AcceptsCode {
+				t.Fatal("fallback URL did not offer code submission")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("native process did not wait for a fallback code")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	result, err := svc.SubmitLoginCode(t.Context(), "claude-code", started.ID, "one-time-code#state")
+	if err != nil || result.AcceptsCode || result.LoginURL != "" {
+		t.Fatalf("submit=%+v err=%v", result, err)
+	}
+	if _, err := svc.SubmitLoginCode(t.Context(), "claude-code", started.ID, "one-time-code#state"); err == nil {
+		t.Fatal("accepted duplicate code submission")
+	}
+	for {
+		result, err = svc.Login(t.Context(), "claude-code", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != "running" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("native login did not finish after reading code")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if result.Status != "succeeded" || result.AcceptsCode || result.LoginURL != "" {
+		t.Fatalf("finished=%+v", result)
+	}
+}
+
+func TestUILoginCodeCancellationClosesBlockedInput(t *testing.T) {
+	svc := New(nil, nil)
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	loginCtx, stop := context.WithCancel(t.Context())
+	defer stop()
+	op := &loginOperation{
+		snapshot: LoginSnapshot{ID: "blocked", AgentID: "claude-code", Status: "running", AcceptsCode: true},
+		stdin:    writer, cancel: stop,
+	}
+	svc.operations[op.snapshot.ID] = op
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { _, err := svc.SubmitLoginCode(ctx, "claude-code", "blocked", "private-code"); finished <- err }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, err := svc.Login(t.Context(), "claude-code", "blocked")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !snapshot.AcceptsCode {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("code submission did not start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-finished:
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_CODE_FAILED" || strings.Contains(err.Error(), "private-code") {
+			t.Fatalf("unexpected submission error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled submission left its pipe writer blocked")
+	}
+	if loginCtx.Err() == nil {
+		t.Fatal("cancelled submission did not stop the native login")
+	}
+	snapshot, _ := svc.Login(t.Context(), "claude-code", "blocked")
+	if snapshot.Status != "failed" || snapshot.AcceptsCode {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}
+
+type blockedAuthTerminal struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockedAuthTerminal) OpenCommandTerminal(ctx context.Context, _ shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
+	close(b.entered)
+	select {
+	case <-b.release:
+		return shellterm.ShellTerminal{}, nil
+	case <-ctx.Done():
+		return shellterm.ShellTerminal{}, ctx.Err()
+	}
+}
+
+func TestTerminalStartupDoesNotBlockLoginPolling(t *testing.T) {
+	svc := loginTestService(t, "wait")
+	svc.executables = executableFinderFunc(func(name string) (string, error) { return "/test/bin/" + name, nil })
+	opener := &blockedAuthTerminal{entered: make(chan struct{}), release: make(chan struct{})}
+	svc.terminals = opener
+	started, err := svc.StartLogin(t.Context(), "codex", "device_code", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitLogin(t, svc, started.ID, func(snapshot LoginSnapshot) bool { return snapshot.DeviceCode != "" })
+	terminalDone := make(chan error, 1)
+	go func() { _, startErr := svc.Start(t.Context(), "claude-code"); terminalDone <- startErr }()
+	defer func() {
+		close(opener.release)
+		if startErr := <-terminalDone; startErr != nil {
+			t.Errorf("terminal startup: %v", startErr)
+		}
+	}()
+	select {
+	case <-opener.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal startup did not begin")
+	}
+	polled := make(chan error, 1)
+	go func() { _, pollErr := svc.Login(t.Context(), "codex", started.ID); polled <- pollErr }()
+	select {
+	case pollErr := <-polled:
+		if pollErr != nil {
+			t.Fatal(pollErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal I/O blocked background login polling")
+	}
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "browser", ""); err == nil {
+		t.Fatal("allowed a background login during the same harness's terminal startup")
 	}
 }
