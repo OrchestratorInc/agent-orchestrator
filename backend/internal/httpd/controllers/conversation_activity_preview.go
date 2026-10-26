@@ -39,14 +39,20 @@ var fileBodyKeys = []string{"patch", "oldText", "newText"}
 // still streams. Settled rows of the heavy kinds lose their large bodies and say
 // so with DetailOmitted; the client fetches the full row when someone expands it.
 func previewActivity(a *ConversationActivityResponse) {
+	keys, heavy := activityBodyKeys[a.ActivityKind]
+	settled := a.Status != string(domain.ActivityStatusRunning) && a.Status != string(domain.ActivityStatusPending)
+	fullBytes := 0
+	if heavy && settled && a.Detail != nil {
+		encoded, _ := json.Marshal(a.Detail)
+		fullBytes = len(encoded)
+	}
 	command, hasCommand := a.Detail["command"].(string)
 	if raw, ok := a.Detail["rawCommand"].(string); ok && hasCommand && raw == command {
 		delete(a.Detail, "rawCommand")
 	}
 	summaryIsCommand := hasCommand && a.Summary == command
-	keys, heavy := activityBodyKeys[a.ActivityKind]
-	if heavy && a.Status != string(domain.ActivityStatusRunning) && a.Status != string(domain.ActivityStatusPending) {
-		omitBody(a, keys)
+	if heavy && settled {
+		omitBody(a, keys, fullBytes)
 	}
 	if summaryIsCommand {
 		a.Summary = ""
@@ -54,12 +60,7 @@ func previewActivity(a *ConversationActivityResponse) {
 }
 
 // omitBody cuts a settled row's summary and body fields to the preview limit.
-func omitBody(a *ConversationActivityResponse, keys []string) {
-	fullBytes := 0
-	if a.Detail != nil {
-		encoded, _ := json.Marshal(a.Detail)
-		fullBytes = len(encoded)
-	}
+func omitBody(a *ConversationActivityResponse, keys []string, fullBytes int) {
 	omitted := false
 	if summary, cut := previewString(a.Summary); cut {
 		a.Summary, omitted = summary, true
