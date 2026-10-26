@@ -26,6 +26,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { useEventStreamHealthy } from "./useEventsConnection";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
@@ -352,6 +353,7 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 const CONVERSATION_PAGE_SIZE = 200;
 const remoteConversationRefreshErrorKey = (sessionId: string, hostId: string) => ["remote-conversation-refresh-error", hostId, sessionId] as const;
 const CONFIG_OPTIONS_POLL_INTERVAL_MS = 5_000;
+const CONFIG_OPTIONS_HEALTHY_POLL_INTERVAL_MS = 30_000;
 const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
 
@@ -380,13 +382,7 @@ export interface ConversationQueryResult {
 }
 
 async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
-	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
-		// Settled tool rows arrive as previews; an opened row reads its full body
-		// through conversationActivityQueryOptions. Daemons without previews ignore this.
-		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE, activityDetail: "preview" } },
-	});
-	if (error) throw error;
-	return toSnapshot(data as WireSnapshot);
+	return (await fetchConversationWire(sessionId, hostId, { beforeSequence })).page;
 }
 
 /** One activity's full row, for a row the page sent as a preview. */
@@ -405,29 +401,138 @@ export function conversationActivityQueryOptions(sessionId: string, activity: Pi
 	});
 }
 
-/** Refresh only the live page; refetching an infinite query downloads all older history. */
-export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
-	let latest: ConversationSnapshot;
+type ConversationPageRead = { page: ConversationSnapshot; changesOnly: boolean; pageDigest?: string };
+
+async function fetchConversationWire(
+	sessionId: string,
+	hostId: string | undefined,
+	{ beforeSequence, changedSince, signal }: { beforeSequence?: number; changedSince?: string; signal?: AbortSignal },
+): Promise<ConversationPageRead> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
+		// Settled tool rows arrive as previews; an opened row reads its full body
+		// through conversationActivityQueryOptions. Daemons without previews ignore this.
+		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE, activityDetail: "preview", ...(changedSince ? { changedSince } : {}) } },
+		...(signal ? { signal } : {}),
+	});
+	if (error) throw error;
+	const wire = data as WireSnapshot;
+	return { page: toSnapshot(wire), changesOnly: wire.changesOnly === true, pageDigest: wire.pageDigest };
+}
+
+/** FNV-1a 32-bit over "<kind>:<id>:<revision>\n" per item, the daemon's pageDigest. */
+export function conversationPageDigest(items: readonly ConversationItem[]): string {
+	const bytes = new TextEncoder().encode(items.map((item) => `${item.kind}:${item.id}:${item.revision}\n`).join(""));
+	let hash = 0x811c9dc5;
+	for (const byte of bytes) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+	return hash.toString(16).padStart(8, "0");
+}
+
+/**
+ * Folds a newest-page read into the cached pages. Returns undefined when a
+ * changes-only read does not apply to the cached page, so the caller must read
+ * the full page instead.
+ */
+function mergeLivePage(
+	previous: InfiniteData<ConversationSnapshot> | undefined,
+	read: ConversationPageRead,
+): InfiniteData<ConversationSnapshot> | undefined {
+	let latest = read.page;
+	const priorLive = previous?.pages[0];
+	const sameBranch = priorLive?.conversationId === latest.conversationId && priorLive.activeBranchId === latest.activeBranchId;
+	if (read.changesOnly) {
+		if (!priorLive || !sameBranch) return undefined;
+		const items = new Map<string, ConversationItem>();
+		for (const item of priorLive.items) if (item.sequence >= latest.oldestSequence) items.set(`${item.kind}:${item.id}`, item);
+		for (const item of latest.items) items.set(`${item.kind}:${item.id}`, item);
+		const merged = [...items.values()].sort((a, b) => a.sequence - b.sequence);
+		if (conversationPageDigest(merged) !== read.pageDigest) return undefined;
+		latest = { ...latest, items: merged };
+	}
+	if (!previous || !priorLive) return { pages: [latest], pageParams: [undefined] };
+	if (sameBranch && latest.latestSequence < priorLive.latestSequence) return previous;
+	if (!latest.hasMoreBefore || !sameBranch) return { pages: [latest], pageParams: [undefined] };
+	const slidOut = latest.oldestSequence > priorLive.oldestSequence
+		? priorLive.items.filter((item) => item.sequence < latest.oldestSequence)
+		: [];
+	const slidTurnIds = new Set(slidOut.map((item) => item.turnId));
+	const live = slidOut.length
+		? mergeConversationPages([latest, { ...priorLive, items: slidOut, turns: priorLive.turns.filter((turn) => slidTurnIds.has(turn.id)) }]) ?? latest
+		: latest;
+	return { ...previous, pages: [live, ...previous.pages.slice(1)] };
+}
+
+async function readLiveConversation(queryClient: QueryClient, sessionId: string, hostId: string | undefined, signal: AbortSignal): Promise<void> {
+	const queryKey = conversationQueryKey(sessionId, hostId);
+	// A refetch or older-page read that started earlier would land after this
+	// read and put its older newest page back, so let it finish first.
+	await queryClient.getQueryCache().find({ queryKey, exact: true })?.promise?.catch(() => undefined);
+	const changedSince = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey)?.pages[0]?.changeCursor;
+	let next: InfiniteData<ConversationSnapshot> | undefined;
 	try {
-		latest = await fetchConversationPage(sessionId, hostId);
+		const read = await fetchConversationWire(sessionId, hostId, { changedSince, signal });
+		next = mergeLivePage(queryClient.getQueryData(queryKey), read);
+		if (!next) next = mergeLivePage(queryClient.getQueryData(queryKey), await fetchConversationWire(sessionId, hostId, { signal }));
 	} catch (error) {
-		queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
+		if (signal.aborted) return;
+		if (hostId) queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
 		throw error;
 	}
-	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
-	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), (previous) => {
-		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
-		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
-		const priorLive = previous.pages[0];
-		const slidOut = latest.oldestSequence > priorLive.oldestSequence
-			? priorLive.items.filter((item) => item.sequence < latest.oldestSequence)
-			: [];
-		const slidTurnIds = new Set(slidOut.map((item) => item.turnId));
-		const live = slidOut.length
-			? mergeConversationPages([latest, { ...priorLive, items: slidOut, turns: priorLive.turns.filter((turn) => slidTurnIds.has(turn.id)) }]) ?? latest
-			: latest;
-		return { ...previous, pages: [live, ...previous.pages.slice(1)] };
-	});
+	if (hostId) queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
+	queryClient.setQueryData(queryKey, next);
+}
+
+type LiveConversationRefresh = { controller: AbortController; dirty: boolean; done: Promise<void> };
+const liveConversationRefreshes = new WeakMap<QueryClient, Map<string, LiveConversationRefresh>>();
+
+/**
+ * Refresh only the newest page; refetching an infinite query downloads all
+ * older history. A daemon that sends changeCursor answers with just the rows
+ * that changed. Calls for one conversation share at most one read in flight
+ * and one queued catch-up, so a streaming agent cannot stack reads. A busy
+ * stream never cancels the read in flight: on a slow link it would never finish.
+ */
+export function refreshLiveConversation(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
+	let refreshes = liveConversationRefreshes.get(queryClient);
+	if (!refreshes) {
+		refreshes = new Map();
+		liveConversationRefreshes.set(queryClient, refreshes);
+	}
+	const key = JSON.stringify(conversationQueryKey(sessionId, hostId));
+	const running = refreshes.get(key);
+	if (running) {
+		running.dirty = true;
+		return running.done;
+	}
+	const state = { controller: new AbortController(), dirty: false } as LiveConversationRefresh;
+	const map = refreshes;
+	state.done = (async () => {
+		try {
+			do {
+				state.dirty = false;
+				try {
+					await readLiveConversation(queryClient, sessionId, hostId, state.controller.signal);
+				} catch (error) {
+					if (!state.dirty) throw error;
+				}
+			} while (state.dirty && !state.controller.signal.aborted);
+		} finally {
+			if (map.get(key) === state) map.delete(key);
+		}
+	})();
+	map.set(key, state);
+	return state.done;
+}
+
+/** Abort newest-page reads that something else supersedes, such as teardown. */
+export function cancelLiveConversationRefreshes(queryClient: QueryClient, hostId?: string): void {
+	const refreshes = liveConversationRefreshes.get(queryClient);
+	if (!refreshes) return;
+	const prefix = hostId ? JSON.stringify(["remote-conversation", hostId]).slice(0, -1) : undefined;
+	for (const [key, state] of refreshes) {
+		if (prefix && !key.startsWith(prefix)) continue;
+		state.controller.abort();
+		refreshes.delete(key);
+	}
 }
 
 /**
@@ -480,13 +585,15 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		enabled: Boolean(sessionId),
 		select: selectConversationPages,
 	});
+	// The host's event stream refreshes the live page; poll only while it cannot.
+	const streamHealthy = useEventStreamHealthy(hostId);
 	useEffect(() => {
-		if (!hostId || !sessionId) return;
+		if (!hostId || !sessionId || streamHealthy) return;
 		const timer = window.setInterval(() => {
-			void refreshRemoteConversation(queryClient, sessionId, hostId).catch(() => {});
+			void refreshLiveConversation(queryClient, sessionId, hostId).catch(() => {});
 		}, 2_000);
 		return () => window.clearInterval(timer);
-	}, [hostId, queryClient, sessionId]);
+	}, [hostId, queryClient, sessionId, streamHealthy]);
 
 	if (query.error && (!hostId || !query.data)) {
 		const code = apiErrorCode(query.error);
@@ -588,7 +695,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const trackedDispatch = stateSessionId ? trackedDispatches[stateSessionId] : undefined;
 	const invalidateSession = useCallback(
 		async (targetSessionId: string) => {
-			if (hostId) await refreshRemoteConversation(queryClient, targetSessionId, hostId);
+			if (hostId) await refreshLiveConversation(queryClient, targetSessionId, hostId);
 			else await queryClient.invalidateQueries({ queryKey: conversationQueryKey(targetSessionId) });
 		},
 		[hostId, queryClient],
@@ -1484,14 +1591,16 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 	// start a fresh read mid-write whose pre-change catalog lands after the
 	// mutation's own result and reverts the picker the user just used.
 	const [writing, setWriting] = useState(false);
+	const streamHealthy = useEventStreamHealthy(hostId);
 	const query = useQuery({
 		queryKey,
 		enabled: Boolean(sessionId) && enabled,
 		retry: false,
-		// ACP can push a replacement catalog when one option changes. Until the
-		// renderer consumes daemon change events, a light poll keeps those updates
-		// visible without coupling them to conversation history polling.
-		refetchInterval: writing ? false : CONFIG_OPTIONS_POLL_INTERVAL_MS,
+		// ACP can push a replacement catalog when one option changes, and no daemon
+		// event reports it. A light poll keeps those updates visible; it slows down
+		// while the event stream is healthy, since the visible conversation state
+		// then arrives without it.
+		refetchInterval: writing ? false : streamHealthy ? CONFIG_OPTIONS_HEALTHY_POLL_INTERVAL_MS : CONFIG_OPTIONS_POLL_INTERVAL_MS,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/config-options",
@@ -1715,6 +1824,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 		latestSequence: wire.latestSequence,
 		oldestSequence: wire.oldestSequence ?? wire.latestSequence + 1,
 		hasMoreBefore: wire.hasMoreBefore ?? false,
+		changeCursor: wire.changeCursor || undefined,
 		nativeForkAvailableAfterSequence: wire.nativeForkAvailableAfterSequence ?? 0,
 		settings: {
 			model: wire.settings?.model || undefined,

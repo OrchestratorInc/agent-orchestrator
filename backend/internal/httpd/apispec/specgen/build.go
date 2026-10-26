@@ -972,6 +972,11 @@ type conversationSnapshotQuery struct {
 	ActivityDetail *string `query:"activityDetail,omitempty" enum:"full,preview" description:"preview drops copies of detail.command from every activity (a rawCommand equal to it; a summary equal to it is sent empty), and cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities, marking them detailOmitted. Read the full row from the activity endpoint. Defaults to full."`
 }
 
+type sessionConversationSnapshotQuery struct {
+	conversationSnapshotQuery
+	ChangedSince string `query:"changedSince,omitempty" description:"changeCursor from an earlier newest-page response. The answer is the newest page with only the rows changed since then (changesOnly), or the full page when the cursor no longer applies. Not allowed with beforeSequence."`
+}
+
 func usageOperations() []operation {
 	return []operation{
 		{
@@ -1106,7 +1111,7 @@ func shellTerminalOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation", id: "getSessionConversation", tag: "conversations",
 			summary:    "Read a chat session's durable conversation",
-			pathParams: []any{controllers.SessionIDParam{}, conversationSnapshotQuery{}},
+			pathParams: []any{controllers.SessionIDParam{}, sessionConversationSnapshotQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ConversationSnapshotResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

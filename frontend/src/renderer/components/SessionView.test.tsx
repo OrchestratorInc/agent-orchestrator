@@ -1487,11 +1487,14 @@ describe("SessionView", () => {
 			const view = render(<SessionView sessionId="sess-1" />);
 			view.client.setQueryData(conversationQueryKey("sess-1"), { pages: [{ controller: { state } }], pageParams: [undefined] });
 			const invalidate = vi.spyOn(view.client, "invalidateQueries");
+			reviewGetMock.mockClear();
 			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
 			await act(async () => { finishView({ error: undefined }); });
 			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
-			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
+			// A reload reads only the newest page; older history stays loaded.
+			const conversationReloads = reviewGetMock.mock.calls.filter(([path]) => path === "/api/v1/sessions/{sessionId}/conversation");
 			expect(conversationReloads, state).toHaveLength(reloads);
+			expect(invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]')).toHaveLength(0);
 			view.unmount();
 			chatViewPostMock.mockClear();
 		}

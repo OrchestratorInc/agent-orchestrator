@@ -5499,6 +5499,8 @@ export interface components {
             branchPoints?: components["schemas"]["ConversationBranchPointResponse"][];
             branchedFromEarlierMessage: boolean;
             capabilities?: string[];
+            changeCursor?: string;
+            changesOnly?: boolean;
             compactedAt?: null | string;
             continueTurnId: string;
             /** @enum {string} */
@@ -5517,6 +5519,7 @@ export interface components {
             nativeForkAvailableAfterSequence: number;
             /** Format: int64 */
             oldestSequence?: number;
+            pageDigest?: string;
             rateLimits?: components["schemas"]["ConversationRateLimitsPayload"];
             sessionId: string;
             settings: components["schemas"]["ConversationTurnSettingsPayload"];
@@ -16047,6 +16050,8 @@ export interface operations {
                 limit?: null | number;
                 /** @description preview drops copies of detail.command from every activity (a rawCommand equal to it; a summary equal to it is sent empty), and cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities, marking them detailOmitted. Read the full row from the activity endpoint. Defaults to full. */
                 activityDetail?: "full" | "preview" | null;
+                /** @description changeCursor from an earlier newest-page response. The answer is the newest page with only the rows changed since then (changesOnly), or the full page when the cursor no longer applies. Not allowed with beforeSequence. */
+                changedSince?: string;
             };
             header?: never;
             path: {
