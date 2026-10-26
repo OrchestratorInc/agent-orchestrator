@@ -51,7 +51,6 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 	{ name: "sheets/chat-settings", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-map", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-usage", detents: "fitToContents" },
-	{ name: "sheets/composer-picker", detents: [0.6, 0.95] },
 	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "files/[sessionId]/review", detents: [0.5, 1] },
 ];
@@ -284,6 +283,23 @@ function Shell() {
 						}}
 					/>
 				))}
+				{/* The composer's skill and file picker searches in a native bar on
+				    iOS, under the title the page sets ("Skills", "Worktree files").
+				    Android searches in the sheet's body. */}
+				<Stack.Screen
+					name="sheets/composer-picker"
+					options={{
+						presentation: "formSheet",
+						sheetAllowedDetents: [0.6, 0.95],
+						sheetInitialDetentIndex: 0,
+						sheetGrabberVisible: true,
+						sheetCornerRadius,
+						headerShown: Platform.OS === "ios",
+						title: "Insert",
+						headerStyle: { backgroundColor: t.bgSurface },
+						contentStyle: { backgroundColor: t.bgSurface },
+					}}
+				/>
 				<Stack.Screen
 					name="sheets/connect"
 					options={{

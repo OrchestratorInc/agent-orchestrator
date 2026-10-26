@@ -1,13 +1,18 @@
-import { Feather } from "./icons";
+import { FieldGroup, Host } from "@expo/ui";
+import { Button as ComposeButton, Column as ComposeColumn, OutlinedTextField, Row as ComposeRow, Text as ComposeText, useNativeState } from "@expo/ui/jetpack-compose";
+import { fillMaxWidth, weight } from "@expo/ui/jetpack-compose/modifiers";
+import { Button as SwiftUIButton, HStack, TextField } from "@expo/ui/swift-ui";
+import { autocorrectionDisabled, buttonStyle, disabled as disabledModifier, onSubmit, submitLabel, textInputAutocapitalization, tint } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, StyleSheet, Text } from "react-native";
 import type { AgentModelCatalog } from "./api";
 import { haptics } from "./haptics";
+import { NativePickerList, type PickerOption } from "./NativePickerList";
+import { Spinner } from "./Spinner";
 import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { textSelectionColors } from "./textSelection";
-import { SHEET_SCROLL_CONTENT, SheetHeader } from "./ui";
-import { iconSize, press, space, type } from "./tokens";
+import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
+import { SheetHeader } from "./ui";
+import { space, type } from "./tokens";
 
 export function ModelPickerSheet({ catalog, selected, loading, refreshing, error, onClose, onSelect, onRefresh }: {
 	catalog?: AgentModelCatalog;
@@ -17,40 +22,86 @@ export function ModelPickerSheet({ catalog, selected, loading, refreshing, error
 	error?: string;
 	onClose(): void;
 	onSelect(value: string): void;
-	onRefresh(): void;
+	/** Settles once the catalog has been fetched again. */
+	onRefresh(): Promise<void>;
 }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const [custom, setCustom] = useState(selected && !catalog?.models.some((item) => item.id === selected) ? selected : "");
-	const rows = [{ id: "", label: "Auto", isDefault: false }, ...(catalog?.models ?? [])];
 	const choose = (value: string) => { haptics.select(); onClose(); onSelect(value); };
-	return <FlatList
-		style={styles.list}
-		data={rows}
-		keyExtractor={(item) => item.id || "__auto__"}
-		// Keeps an Android drag with the list; without it the sheet's own pan
-		// takes the gesture and dismisses instead of scrolling back up.
-		nestedScrollEnabled
-		contentContainerStyle={SHEET_SCROLL_CONTENT}
-		// The custom-model field lives in this list's footer, so the keyboard is up
-		// over the rows it is meant to help pick. Without this, Android's default
-		// (`never`) spends the first tap on dismissing the keyboard and only the
-		// second one chooses a model. Every other list in the app that holds an
-		// input already sets it.
-		keyboardShouldPersistTaps="handled"
-		ListHeaderComponent={<><SheetHeader title="Model" subtitle="Choose how this agent runs the task." right={<Pressable accessibilityRole="button" accessibilityLabel="Refresh model list" disabled={refreshing} onPress={() => { haptics.tap(); onRefresh(); }} style={styles.refresh}>{refreshing ? <ActivityIndicator size="small" color={t.accent} /> : <><Feather name="refresh-cw" size={iconSize.xs} color={t.accent} /><Text style={styles.refreshText}>Refresh</Text></>}</Pressable>} />{error || catalog?.warning ? <Text style={styles.error}>{error || catalog?.warning}</Text> : null}{loading ? <ActivityIndicator color={t.accent} style={{ marginVertical: space.xxl }} /> : null}</>}
-		renderItem={({ item }) => <Pressable accessibilityRole="radio" accessibilityState={{ selected: selected === item.id }} onPress={() => choose(item.id)} style={({ pressed }) => [styles.option, pressed && { opacity: press.opacity }]}><View style={{ flex: 1 }}><Text style={[styles.label, selected === item.id && { color: t.accent }]}>{item.label}</Text>{item.id === "" ? <Text style={styles.hint}>Let the agent choose</Text> : null}</View>{selected === item.id ? <Feather name="check" size={iconSize.md} color={t.accent} /> : null}</Pressable>}
-		ListFooterComponent={catalog && (catalog.selectionMode === "text" || catalog.allowCustom) ? <View style={styles.custom}><Text style={styles.customLabel}>CUSTOM MODEL</Text><View style={styles.customRow}><TextInput value={custom} onChangeText={setCustom} placeholder="Model identifier" placeholderTextColor={t.textFaint} {...textSelectionColors(t)} autoCapitalize="none" autoCorrect={false} style={styles.input} /><Pressable disabled={!custom.trim()} onPress={() => choose(custom.trim())} style={[styles.use, !custom.trim() && { opacity: 0.4 }]}><Text style={styles.useText}>Use</Text></Pressable></View></View> : null}
-	/>;
+	const options: PickerOption[] = [
+		{ id: "", title: "Auto", detail: "Let the agent choose" },
+		...(catalog?.models ?? []).map((model) => ({ id: model.id, title: model.label })),
+	];
+	const notice = error || catalog?.warning;
+	const custom = catalog && (catalog.selectionMode === "text" || catalog.allowCustom)
+		? <CustomModel initial={selected && !catalog.models.some((item) => item.id === selected) ? selected : ""} onUse={choose} />
+		: null;
+	return (
+		<NativePickerList
+			header={<>
+				<SheetHeader title="Model" subtitle="Choose how this agent runs the task." />
+				{notice ? <Text style={styles.notice}>{notice}</Text> : null}
+				{loading ? <Spinner size="large" accessibilityLabel="Loading models" style={styles.loading} /> : null}
+			</>}
+			options={options}
+			selected={selected}
+			onSelect={choose}
+			refreshing={Boolean(refreshing)}
+			onRefresh={onRefresh}
+			footer={custom}
+		/>
+	);
+}
+
+/** A model the catalog does not list, typed by its identifier. */
+function CustomModel({ initial, onUse }: { initial: string; onUse(value: string): void }) {
+	const t = useTheme();
+	const { scheme } = useThemeState();
+	// The field keeps its own text natively (one state type serves SwiftUI and
+	// Compose); this copy enables Use.
+	const field = useNativeState(initial);
+	const [value, setValue] = useState(initial);
+	const use = () => { if (value.trim()) onUse(value.trim()); };
+	if (Platform.OS === "ios") {
+		return (
+			<FieldGroup.Section title="Custom model">
+				<HStack spacing={space.md}>
+					<TextField
+						text={field}
+						placeholder="Model identifier"
+						onTextChange={setValue}
+						modifiers={[textInputAutocapitalization("never"), autocorrectionDisabled(), submitLabel("done"), onSubmit(use), tint(t.highlight)]}
+					/>
+					{/* Borderless, or a Form row hands every tap in it to the button. */}
+					<SwiftUIButton label="Use" onPress={use} modifiers={[buttonStyle("borderless"), disabledModifier(!value.trim())]} />
+				</HStack>
+			</FieldGroup.Section>
+		);
+	}
+	return (
+		<Host matchContents={{ vertical: true }} style={{ alignSelf: "stretch" }} colorScheme={scheme}>
+			<ComposeColumn verticalArrangement={{ spacedBy: space.sm }} modifiers={[fillMaxWidth()]}>
+				<ComposeText color={t.textSecondary} style={{ typography: "titleSmall" }}>Custom model</ComposeText>
+				<ComposeRow verticalAlignment="center" horizontalArrangement={{ spacedBy: space.sm }} modifiers={[fillMaxWidth()]}>
+					<OutlinedTextField
+						value={field}
+						onValueChange={setValue}
+						singleLine
+						keyboardOptions={{ capitalization: "none", autoCorrectEnabled: false, imeAction: "done" }}
+						keyboardActions={{ onDone: use }}
+						colors={{ cursorColor: t.highlight }}
+						textSelectionColors={{ handleColor: t.highlight, backgroundColor: t.selection }}
+						modifiers={[weight(1)]}
+					>
+						<OutlinedTextField.Label><ComposeText>Model identifier</ComposeText></OutlinedTextField.Label>
+					</OutlinedTextField>
+					<ComposeButton enabled={Boolean(value.trim())} onClick={use}><ComposeText>Use</ComposeText></ComposeButton>
+				</ComposeRow>
+			</ComposeColumn>
+		</Host>
+	);
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	list: { flex: 1, backgroundColor: t.bgSurface },
-	refresh: { flexDirection: "row", alignItems: "center", gap: space.xxs }, refreshText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
-	error: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, marginBottom: space.sm },
-	option: { minHeight: 54, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.sm, paddingHorizontal: space.hair },
-	label: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "500" }, hint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, marginTop: space.hair },
-	custom: { marginTop: space.md, paddingTop: space.md, borderTopWidth: 1, borderTopColor: t.borderSubtle }, customLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 1, marginBottom: space.sm },
-	customRow: { flexDirection: "row", gap: space.sm }, input: { flex: 1, minHeight: 44, borderWidth: 1, borderColor: t.borderDefault, backgroundColor: t.bgElevated, borderRadius: 8, borderCurve: "continuous", color: t.textPrimary, paddingHorizontal: space.md },
-	use: { minWidth: 58, alignItems: "center", justifyContent: "center", borderRadius: 8, borderCurve: "continuous", backgroundColor: t.accent }, useText: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontWeight: "600" },
+	notice: { fontFamily: type.footnote.fontFamily, color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	loading: { marginVertical: space.lg },
 });
