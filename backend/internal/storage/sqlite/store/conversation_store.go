@@ -3690,6 +3690,9 @@ func (s *Store) ApplyProviderTitle(
 
 // ConversationSnapshot is the durable read model for one conversation.
 type ConversationSnapshot struct {
+	VisibleAfterSequence             int64
+	ChangeCursor                     int64
+	AfterSequence                    *int64
 	Conversation                     domain.ConversationRecord
 	ActiveBranch                     domain.ConversationBranch
 	EditFloorSequence                int64
@@ -3973,6 +3976,11 @@ func (s *Store) LoadConversationSnapshotPage(
 	beforeSequence int64,
 	limit int64,
 ) (ConversationSnapshot, error) {
+	// Capture before reading rows: a concurrent commit can be repeated, never skipped.
+	cursor, err := s.qr.SelectConversationChangeCursor(ctx)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
 	conv, err := s.qr.SelectConversationByID(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ConversationSnapshot{}, ErrConversationNotFound
@@ -4011,6 +4019,8 @@ func (s *Store) LoadConversationSnapshotPage(
 	presentation := s.conversationHistoryPresentation(ctx, conversationID)
 	if beforeSequence <= visibleAfterSequence {
 		snapshot := ConversationSnapshot{
+			VisibleAfterSequence:             visibleAfterSequence,
+			ChangeCursor:                     cursor,
 			Conversation:                     conversationToDomain(conv),
 			ActiveBranch:                     presentation.activeBranch,
 			EditFloorSequence:                presentation.editFloorSequence,
@@ -4045,6 +4055,8 @@ func (s *Store) LoadConversationSnapshotPage(
 	}
 
 	snapshot := ConversationSnapshot{
+		VisibleAfterSequence:             visibleAfterSequence,
+		ChangeCursor:                     cursor,
 		Conversation:                     conversationToDomain(conv),
 		ActiveBranch:                     presentation.activeBranch,
 		EditFloorSequence:                presentation.editFloorSequence,
@@ -5213,4 +5225,158 @@ WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
 		return fmt.Errorf("rebind branch %s provider: %d rows", branchID, rows)
 	}
 	return nil
+}
+
+// LoadConversationSnapshotDelta returns every visible changed row, even when its
+// immutable timeline position predates the newest page. No echo means replace.
+func (s *Store) LoadConversationSnapshotDelta(ctx context.Context, conversationID string, afterSequence, afterChange, limit int64) (ConversationSnapshot, error) {
+	tx, err := s.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	reader := *s
+	reader.qr = gen.New(tx)
+	page, err := reader.loadConversationSnapshotDelta(ctx, conversationID, afterSequence, afterChange, limit)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ConversationSnapshot{}, err
+	}
+	return page, nil
+}
+
+func (s *Store) loadConversationSnapshotDelta(ctx context.Context, conversationID string, afterSequence, afterChange, limit int64) (ConversationSnapshot, error) {
+	page, err := s.LoadConversationSnapshotPage(ctx, conversationID, 0, limit)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	if afterSequence <= 0 || afterChange > page.ChangeCursor || (page.HasMoreBefore && page.OldestSequence > afterSequence) {
+		return page, nil
+	}
+	if afterChange > 0 {
+		reset, err := s.qr.ConversationResetAfterCursor(ctx, gen.ConversationResetAfterCursorParams{ConversationID: conversationID, ChangedAt: afterChange})
+		if err != nil {
+			return ConversationSnapshot{}, err
+		}
+		if reset {
+			return page, nil
+		}
+	}
+	if afterChange == 0 {
+		afterChange = page.ChangeCursor
+	}
+	messages, err := s.qr.SelectConversationMessagesDelta(ctx, gen.SelectConversationMessagesDeltaParams{ConversationID: conversationID, AfterSequence: afterSequence, AfterChange: afterChange, PageLimit: 1001})
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	activities, err := s.qr.SelectConversationActivitiesDelta(ctx, gen.SelectConversationActivitiesDeltaParams{ConversationID: conversationID, AfterSequence: afterSequence, AfterChange: afterChange, PageLimit: 1001})
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	if len(messages) > 1000 || len(activities) > 1000 {
+		return page, nil
+	}
+	conv, err := s.qr.SelectConversationByID(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	visibleAfter, err := s.conversationVisibleAfterSequence(ctx, conv)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	changedTurns, err := s.qr.SelectConversationTurnsDelta(ctx, gen.SelectConversationTurnsDeltaParams{ConversationID: conversationID, AfterChange: afterChange})
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	if len(changedTurns) > 1000 {
+		return page, nil
+	}
+	retried, err := s.conversationRetriedSources(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	human, err := s.conversationHumanPromptTurns(ctx, conversationID)
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	presentation := s.conversationHistoryPresentation(ctx, conversationID)
+	for _, row := range changedTurns {
+		if !conversationTurnVisibleAfterSequence(row, conv, visibleAfter) {
+			continue
+		}
+		turn := turnToDomain(row)
+		turn.HasRetryAttempt = retried[turn.ID]
+		turn.HasHumanPrompt = human[turn.ID]
+		presentation.filterInactiveProviderTurn(&turn)
+		replaced := false
+		for i := range page.Turns {
+			if page.Turns[i].ID == turn.ID {
+				page.Turns[i] = turn
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			page.Turns = append(page.Turns, turn)
+		}
+	}
+	page.Messages = nil
+	page.Activities = nil
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Sequence > visibleAfter {
+			page.Messages = append(page.Messages, messageToDomain(messages[i]))
+		}
+	}
+	for i := len(activities) - 1; i >= 0; i-- {
+		if activities[i].Sequence > visibleAfter {
+			page.Activities = append(page.Activities, activityToDomain(activities[i]))
+		}
+	}
+	// A rewritten older row can belong to an unchanged turn outside the live
+	// page. Include that metadata too, even if the client never loaded its page.
+	knownTurns := make(map[string]bool, len(page.Turns))
+	for _, turn := range page.Turns {
+		knownTurns[turn.ID] = true
+	}
+	var rowTurns []string
+	for _, message := range page.Messages {
+		rowTurns = append(rowTurns, message.TurnID)
+	}
+	for _, activity := range page.Activities {
+		rowTurns = append(rowTurns, activity.TurnID)
+	}
+	for _, id := range rowTurns {
+		if id == "" || knownTurns[id] {
+			continue
+		}
+		row, err := s.qr.SelectConversationTurnByID(ctx, id)
+		if err != nil {
+			return ConversationSnapshot{}, err
+		}
+		knownTurns[id] = true
+		if !conversationTurnVisibleAfterSequence(row, conv, visibleAfter) {
+			continue
+		}
+		turn := turnToDomain(row)
+		turn.HasRetryAttempt = retried[turn.ID]
+		turn.HasHumanPrompt = human[turn.ID]
+		presentation.filterInactiveProviderTurn(&turn)
+		page.Turns = append(page.Turns, turn)
+	}
+	sort.SliceStable(page.Turns, func(i, j int) bool { return page.Turns[i].RequestedAt.Before(page.Turns[j].RequestedAt) })
+	size, err := json.Marshal(struct {
+		Turns      []domain.ConversationTurn
+		Messages   []domain.ConversationMessage
+		Activities []domain.ConversationActivity
+	}{page.Turns, page.Messages, page.Activities})
+	if err != nil {
+		return ConversationSnapshot{}, err
+	}
+	if len(size) > conversationPageMaxBytes {
+		return s.LoadConversationSnapshotPage(ctx, conversationID, 0, limit)
+	}
+	page.AfterSequence = &afterSequence
+	return page, nil
 }

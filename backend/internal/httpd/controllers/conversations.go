@@ -68,6 +68,10 @@ type pagedConversationService interface {
 	SnapshotPage(ctx context.Context, session domain.SessionID, beforeSequence, limit int64) (chatsvc.Snapshot, error)
 }
 
+type deltaConversationService interface {
+	SnapshotDelta(context.Context, domain.SessionID, int64, int64, int64) (chatsvc.Snapshot, error)
+}
+
 type reviewerConversationService interface {
 	ModelsForOwner(context.Context, domain.ConversationOwner) ([]ports.ChatModel, domain.ConversationSettings, error)
 	SetTurnSettingsForOwner(context.Context, domain.ConversationOwner, domain.ConversationSettings) (domain.ConversationSettings, error)
@@ -908,8 +912,25 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
+	var after, changed int64
+	if raw := r.URL.Query().Get("afterSequence"); raw != "" {
+		after, err = optionalPositiveInt64(raw)
+		if err != nil || before != 0 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", "afterSequence must be positive and cannot be combined with beforeSequence", nil)
+			return
+		}
+	}
+	if raw := r.URL.Query().Get("afterChange"); raw != "" {
+		changed, err = optionalPositiveInt64(raw)
+		if err != nil || after == 0 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", "afterChange requires afterSequence and must be positive", nil)
+			return
+		}
+	}
 	var snapshot chatsvc.Snapshot
-	if paged, ok := c.Svc.(pagedConversationService); ok {
+	if delta, ok := c.Svc.(deltaConversationService); ok && after > 0 {
+		snapshot, err = delta.SnapshotDelta(r.Context(), session, after, changed, limit)
+	} else if paged, ok := c.Svc.(pagedConversationService); ok {
 		snapshot, err = paged.SnapshotPage(r.Context(), session, before, limit)
 	} else {
 		snapshot, err = c.Svc.Snapshot(r.Context(), session)
@@ -1344,6 +1365,9 @@ func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 // Items arrive already ordered by sequence, so nothing is re-sorted here.
 func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotResponse {
 	out := ConversationSnapshotResponse{
+		VisibleAfterSequence:             s.VisibleAfterSequence,
+		ChangeCursor:                     s.ChangeCursor,
+		AfterSequence:                    s.AfterSequence,
 		ContinueTurnID:                   chatsvc.ContinuableTurnID(s.Turns),
 		ConversationID:                   s.Conversation.ID,
 		ActiveBranchID:                   s.Conversation.ActiveBranchID,

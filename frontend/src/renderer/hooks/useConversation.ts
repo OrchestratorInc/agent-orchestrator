@@ -381,12 +381,54 @@ export interface ConversationQueryResult {
 	loadOlder: () => void;
 }
 
-async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
+async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number, afterSequence?: number, afterChange?: number): Promise<ConversationSnapshot> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
-		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
+		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE, ...(afterSequence === undefined ? {} : { afterSequence, afterChange }) } },
 	});
 	if (error) throw error;
 	return toSnapshot(data as WireSnapshot);
+}
+
+/** Refresh an observed local chat without refetching its loaded history pages. */
+export async function refreshLocalConversation(queryClient: QueryClient, sessionId: string): Promise<void> {
+	const queryKey = conversationQueryKey(sessionId);
+	const previous = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
+	const live = previous?.pages[0];
+	const fallback = () => queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+	// Inactive caches must remain stale so opening them uses a full snapshot.
+	const active = queryClient.getQueryCache().find({ queryKey, exact: true })?.isActive();
+	if (!active) {
+		// An inactive hover-prefetch cannot acknowledge an event that postdates it.
+		if (queryClient.isFetching({ queryKey, type: "inactive" }) > 0) {
+			await queryClient.cancelQueries({ queryKey, type: "inactive" });
+		}
+		await fallback();
+		return;
+	}
+	if (queryClient.isFetching({ queryKey, type: "active" }) > 0) {
+		// Joining a request that predates the event cannot acknowledge that event.
+		// Read its cursor, then catch up after it settles.
+		await fallback();
+		await refreshLocalConversation(queryClient, sessionId);
+		return;
+	}
+	if (!live?.changeCursor) {
+		await fallback();
+		return;
+	}
+	const afterSequence = live.latestSequence + 1;
+	const delta = await fetchConversationPage(sessionId, undefined, undefined, afterSequence, live.changeCursor);
+	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
+	if (!current || delta.afterSequence !== afterSequence || delta.conversationId !== live.conversationId || delta.activeBranchId !== live.activeBranchId || delta.visibleAfterSequence !== live.visibleAfterSequence || current.pages[0] !== live) {
+		await fallback();
+		return;
+	}
+	const merged = mergeConversationPages([delta, live]);
+	if (!merged) return;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(queryKey, {
+		...current,
+		pages: [merged, ...current.pages.slice(1)],
+	});
 }
 
 /** Refresh only the live page; refetching an infinite query downloads all older history. */
@@ -1756,6 +1798,9 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	].sort((a, b) => a.sequence - b.sequence);
 
 	return {
+		changeCursor: wire.changeCursor,
+		visibleAfterSequence: wire.visibleAfterSequence,
+		afterSequence: wire.afterSequence,
 		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
 		supportsFileReferences: wire.supportsFileReferences,
@@ -1943,10 +1988,14 @@ export function mergeConversationPages(pages: ConversationSnapshot[]): Conversat
 
 	const items = new Map<string, ConversationItem>();
 	const turns = new Map<string, ConversationSnapshot["turns"][number]>();
-	// Walk oldest to newest so the live page wins when a row changed after an older
-	// page was fetched (for example, a streamed message settling).
+	// Prefer the highest row revision; for ties, the live page wins. A delta can
+	// update a settled row that also exists on an older loaded page.
 	for (const page of [...pages].reverse()) {
-		for (const item of page.items) items.set(`${item.kind}:${item.id}`, item);
+		for (const item of page.items) {
+			const key = `${item.kind}:${item.id}`;
+			const prior = items.get(key);
+			if (!prior || item.revision >= prior.revision) items.set(key, item);
+		}
 		for (const turn of page.turns) turns.set(turn.id, turn);
 	}
 

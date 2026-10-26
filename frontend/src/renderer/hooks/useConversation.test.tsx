@@ -1,5 +1,5 @@
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryObserver, type InfiniteData } from "@tanstack/react-query";
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -21,6 +21,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 
 import {
 	clearConversationProviderCatalogs,
+	conversationQueryKey, refreshLocalConversation, mergeConversationPages,
 	conversationConfigOptionsQueryKey,
 	useConversation,
 	ProviderSwitchFailed,
@@ -29,6 +30,7 @@ import {
 	useConversationSkills,
 	toSnapshot,
 } from "./useConversation";
+import type { ConversationSnapshot } from "../types/conversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -1417,4 +1419,72 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 	await act(async () => { refresh.resolve(page(21)); });
 
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
+});
+
+describe("local conversation deltas", () => {
+	function cachedLive() {
+		return { ...toSnapshot(WIRE as Parameters<typeof toSnapshot>[0]), changeCursor: 10, oldestSequence: 2, hasMoreBefore: true };
+	}
+	async function activeCache() {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const live = cachedLive();
+		const older = { ...live, oldestSequence: 1, hasMoreBefore: false };
+		queryClient.setQueryData(conversationQueryKey("ao-1"), { pages: [live, older], pageParams: [undefined, 2] });
+		const observer = new QueryObserver(queryClient, { queryKey: conversationQueryKey("ao-1"), enabled: true, staleTime: Infinity });
+		const unsubscribe = observer.subscribe(() => {});
+		return { queryClient, live, older, unsubscribe };
+	}
+	it("fetches only a delta and preserves all earlier pages", async () => {
+		const { queryClient, live, older, unsubscribe } = await activeCache();
+		getMock.mockResolvedValue({ data: { ...WIRE, changeCursor: 11, afterSequence: 4, oldestSequence: 2, hasMoreBefore: true }, error: undefined });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(getMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/conversation", { params: { path: { sessionId: "ao-1" }, query: { beforeSequence: undefined, afterSequence: 4, afterChange: 10, limit: 200 } } });
+		const data = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"))!;
+		expect(data.pages).toHaveLength(2);
+		expect(data.pages[1]).toBe(older);
+		expect(data.pages[0].changeCursor).toBe(11);
+		expect(data.pages[0].oldestSequence).toBe(live.oldestSequence);
+		expect(invalidate).not.toHaveBeenCalled();
+		unsubscribe(); queryClient.clear();
+	});
+	it.each([
+		{ afterSequence: undefined },
+		{ afterSequence: 4, conversationId: "replacement" },
+		{ afterSequence: 4, activeBranchId: "branch-b" },
+		{ afterSequence: 4, visibleAfterSequence: 3 },
+	])("falls back for an unmergeable response %j", async (patch) => {
+		const { queryClient, unsubscribe } = await activeCache();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		getMock.mockResolvedValue({ data: { ...WIRE, changeCursor: 11, ...patch }, error: undefined });
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(invalidate).toHaveBeenCalledOnce();
+		unsubscribe(); queryClient.clear();
+	});
+	it("invalidates without a cache and without requesting a delta", async () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		getMock.mockClear();
+		await refreshLocalConversation(queryClient, "absent");
+		expect(invalidate).toHaveBeenCalledOnce(); expect(getMock).not.toHaveBeenCalled(); queryClient.clear();
+	});
+
+	it("cancels an inactive prefetch that predates the event", async () => {
+		const queryClient = new QueryClient();
+		const pending = deferred<InfiniteData<ConversationSnapshot>>();
+		const prefetch = queryClient.prefetchQuery({ queryKey: conversationQueryKey("ao-1"), queryFn: () => pending.promise });
+		const cancel = vi.spyOn(queryClient, "cancelQueries");
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(cancel).toHaveBeenCalledWith({ queryKey: conversationQueryKey("ao-1"), type: "inactive" });
+		pending.resolve({ pages: [cachedLive()], pageParams: [undefined] });
+		await prefetch;
+		expect(queryClient.getQueryData(conversationQueryKey("ao-1"))).toBeUndefined();
+		queryClient.clear();
+	});
+	it("keeps the highest revision when a rewritten older row overlaps loaded history", () => {
+		const live = cachedLive();
+		const row = { kind: "message" as const, id: "older-message", sequence: 1, revision: 3, text: "corrected" } as ConversationSnapshot["items"][number];
+		const result = mergeConversationPages([{ ...live, items: [row] }, { ...live, items: [{ ...row, revision: 4, text: "newer" }] }]);
+		expect(result?.items).toEqual([{ ...row, revision: 4, text: "newer" }]);
+	});
 });

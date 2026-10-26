@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InfiniteQueryObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
+import { toSnapshot } from "../hooks/useConversation";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const {
@@ -83,6 +84,7 @@ function fakeQueryClient() {
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
 		getQueryData: vi.fn(),
+		getQueryCache: vi.fn(() => ({ find: vi.fn(() => undefined) })),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
 
@@ -190,6 +192,35 @@ describe("createEventTransport", () => {
 		disconnect();
 		expect(remoteB.closed).toBe(true);
 		expect(unsubscribeConnectedHostsMock).toHaveBeenCalledOnce();
+	});
+
+	it("coalesces local conversation events into one in-flight delta and one catch-up", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wire = { conversationId: "local-conversation", sessionId: "same", mode: "chat" as const, controller: "ready" as const, latestSequence: 3, changeCursor: 10, oldestSequence: 1, hasMoreBefore: false, messages: [], activities: [], turns: [], settings: {}, continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0 };
+		const page = toSnapshot(wire);
+		client.setQueryData(["conversation", "same"], { pages: [page], pageParams: [undefined] });
+		const observer = new QueryObserver(client, { queryKey: ["conversation", "same"], staleTime: Infinity });
+		const unsubscribe = observer.subscribe(() => {});
+		const replies: Array<(value: unknown) => void> = [];
+		remoteGetMock.mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
+		const disconnect = createEventTransport(client).connect();
+		try {
+			const local = cdcSources()[0];
+			const event = JSON.stringify({ sessionId: "same", payload: { conversationId: "local-conversation" } });
+			local.emit("session_updated", event);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(remoteGetMock).toHaveBeenCalledOnce();
+			for (let i = 0; i < 10; i++) local.emit("session_updated", event);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(remoteGetMock).toHaveBeenCalledOnce();
+			replies[0]({ data: { ...wire, afterSequence: 4, changeCursor: 11 } });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(remoteGetMock).toHaveBeenCalledTimes(2);
+			replies[1]({ data: { ...wire, afterSequence: 4, changeCursor: 12 } });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(remoteGetMock).toHaveBeenCalledTimes(2);
+		} finally { disconnect(); unsubscribe(); client.clear(); vi.useRealTimers(); }
 	});
 
 	it("coalesces a burst of remote conversation events into one catch-up fetch", async () => {

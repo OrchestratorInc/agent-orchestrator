@@ -5,7 +5,7 @@ import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshLocalConversation, refreshRemoteConversation } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -121,6 +121,22 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						catch { /* A later event or the polling fallback can retry. */ }
 					} while (state.dirty && !disposed && baseUrlForHost(hostId));
 					remoteConversationRefreshes.delete(key);
+				})();
+			};
+
+			const localConversationRefreshes = new Map<string, { dirty: boolean }>();
+			const refreshLocalConversationOnce = (sessionId: string) => {
+				const running = localConversationRefreshes.get(sessionId);
+				if (running) { running.dirty = true; return; }
+				const state = { dirty: false };
+				localConversationRefreshes.set(sessionId, state);
+				void (async () => {
+					do {
+						state.dirty = false;
+						try { await refreshLocalConversation(queryClient, sessionId); }
+						catch { await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) }, { cancelRefetch: false }).catch(() => undefined); }
+					} while (state.dirty && !disposed);
+					localConversationRefreshes.delete(sessionId);
 				})();
 			};
 			// Do not repeatedly cancel a slow fetch under continuous CDC traffic. A
@@ -263,7 +279,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					pendingEditorHandoffSessions.clear();
 				}
 				for (const sessionId of pendingConversationSessions) {
-					invalidate(conversationQueryKey(sessionId));
+					refreshLocalConversationOnce(sessionId);
 				}
 				pendingConversationSessions.clear();
 				for (const sessionId of pendingReviewSessions) {

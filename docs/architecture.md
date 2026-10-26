@@ -64,6 +64,27 @@ The only persistent session state is:
 
 Display status like `working`, `needs_input`, `ci_failed`, `mergeable` are **computed at read time** by the service layer from the durable facts above.
 
+### Live conversation deltas
+
+Local chat events refresh only the newest cached page. The opt-in newest-page
+request uses inclusive `afterSequence` and, when supported, `afterChange` from the
+previous response's `changeCursor`. Timeline sequence is immutable; a durable
+indexed side table records the last write cursor for each message, activity, and
+turn.
+SQLite triggers advance it for all writers, including rewrites of settled rows.
+The delta includes rows at or above `afterSequence` **or** changed after
+`afterChange`, with current header, live-page turns, and changed older turns. An `afterSequence` echo
+marks a complete mergeable response; older clients and ordinary reads keep the
+full-page contract. Row and byte bounds, insufficient sequence coverage, or a
+reset marker from deletion/rollback/cancellation produce an unmarked full page.
+
+The client serializes refreshes per chat with one queued catch-up, merges by row
+ID and revision, and retains previously loaded pages. Cache absence, an unmarked
+response, changed conversation/branch identity, or a changed project visibility
+boundary uses full invalidation. A delta reads its cursor and rows in one SQLite
+read transaction. Normal page reads capture the cursor before reading rows so
+concurrent writes can be repeated on the next delta but cannot be skipped.
+
 ### Chat hibernation boundary
 
 | Agent and controller state | Hibernate? | Reason |

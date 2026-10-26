@@ -1000,6 +1000,13 @@ type conversationSnapshotQuery struct {
 	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
 }
 
+type sessionConversationSnapshotQuery struct {
+	BeforeSequence *int64 `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
+	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
+	AfterSequence  *int64 `query:"afterSequence,omitempty" minimum:"1" description:"Newest page only: include rows at or after this sequence. Echoed only for complete deltas."`
+	AfterChange    *int64 `query:"afterChange,omitempty" minimum:"1" description:"Include every row rewritten after this durable change cursor, regardless of its timeline sequence. Requires afterSequence."`
+}
+
 func usageOperations() []operation {
 	return []operation{
 		{
@@ -1134,7 +1141,7 @@ func shellTerminalOperations() []operation {
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation", id: "getSessionConversation", tag: "conversations",
 			summary:    "Read a chat session's durable conversation",
-			pathParams: []any{controllers.SessionIDParam{}, conversationSnapshotQuery{}},
+			pathParams: []any{controllers.SessionIDParam{}, sessionConversationSnapshotQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ConversationSnapshotResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},

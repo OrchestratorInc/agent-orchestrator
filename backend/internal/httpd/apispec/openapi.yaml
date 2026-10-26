@@ -6457,6 +6457,28 @@ paths:
           type:
           - "null"
           - integer
+      - description: 'Newest page only: include rows at or after this sequence. Echoed
+          only for complete deltas.'
+        in: query
+        name: afterSequence
+        schema:
+          description: 'Newest page only: include rows at or after this sequence.
+            Echoed only for complete deltas.'
+          minimum: 1
+          type:
+          - "null"
+          - integer
+      - description: Include every row rewritten after this durable change cursor,
+          regardless of its timeline sequence. Requires afterSequence.
+        in: query
+        name: afterChange
+        schema:
+          description: Include every row rewritten after this durable change cursor,
+            regardless of its timeline sequence. Requires afterSequence.
+          minimum: 1
+          type:
+          - "null"
+          - integer
       responses:
         "200":
           content:
@@ -16202,6 +16224,10 @@ components:
           items:
             $ref: '#/components/schemas/ConversationActivityResponse'
           type: array
+        afterSequence:
+          type:
+          - "null"
+          - integer
         branchMaterialization:
           $ref: '#/components/schemas/ConversationBranchMaterializationResponse'
         branchPoints:
@@ -16214,6 +16240,9 @@ components:
           items:
             type: string
           type: array
+        changeCursor:
+          format: int64
+          type: integer
         compactedAt:
           type:
           - "null"
@@ -16279,6 +16308,9 @@ components:
           type: array
         usage:
           $ref: '#/components/schemas/ConversationUsagePayload'
+        visibleAfterSequence:
+          format: int64
+          type: integer
       required:
       - continueTurnId
       - conversationId
