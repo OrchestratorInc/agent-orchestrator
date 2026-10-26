@@ -224,3 +224,15 @@ it("does not refetch stopped history on a failed lease and can register again wh
 	await waitFor(() => expect(requests(sessionPath)).toHaveLength(1));
 	view.unmount();
 });
+
+it.each(["unloaded", "missing-project"])("does not fall back to a list fetch when the workspace is %s", async (state) => {
+	const { client, wrapper } = setup();
+	if (state === "unloaded") client.removeQueries({ queryKey: workspaceQueryKey });
+	else client.setQueryData(workspaceQueryKey, [{ id: "other-project", name: "Other", sessions: [] }]);
+	const before = client.getQueryData(workspaceQueryKey);
+	const view = renderHook(() => useChatViewRegistration("chat", true), { wrapper });
+	await waitFor(() => expect(requests(sessionPath)).toHaveLength(1));
+	expect(requests("/api/v1/sessions")).toHaveLength(0);
+	expect(client.getQueryData(workspaceQueryKey)).toEqual(before);
+	view.unmount();
+});
