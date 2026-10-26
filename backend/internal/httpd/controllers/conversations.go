@@ -1384,6 +1384,7 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 			HasRetryAttempt: turn.HasRetryAttempt,
 			HasHumanPrompt:  turn.HasHumanPrompt,
 			ErrorMessage:    turn.ErrorMessage,
+			FailureCode:     string(turn.FailureCode),
 			UsageLimit:      usageLimitPayload(turn.UsageLimit),
 			RequestedAt:     turn.RequestedAt.UTC().Format(time.RFC3339),
 			StartedAt:       optionalTimestamp(turn.StartedAt),
