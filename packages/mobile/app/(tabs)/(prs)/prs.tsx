@@ -1,7 +1,9 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
-import { useFocusEffect, useLocalSearchParams } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useNavigation } from "expo-router";
+import type { NavigationProp } from "expo-router/react-navigation";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
+import type { BoardTabName } from "../../../lib/board-tabs";
 import type { Theme } from "../../../lib/theme";
 import { PRCard } from "../../../lib/PRCard";
 import { PRFilterControl } from "../../../lib/pr-filter-control";
@@ -28,12 +30,16 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoun
 type Filter = PRListFilter;
 
 const NO_SUMMARY_TARGETS: PRSummarySession[] = [];
+const PR_TAB: BoardTabName = "(prs)";
+
+type PRsParams = { hostId?: string; projectId?: string };
 
 export default function PRsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const tabBarInset = useTabBarInset();
-	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<{ hostId?: string; projectId?: string }>();
+	const navigation = useNavigation<NavigationProp<{ prs: PRsParams }, "prs">>();
+	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();
 	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId } = useApp();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
 	const projectFilter = routeHostId ? (routeProjectId ?? "all") : hostStates.length === 1 ? activeProjectId : "all";
@@ -94,6 +100,24 @@ export default function PRsScreen() {
 		summaries.reload();
 	}, [visited, summaries.reload]));
 	const failure = useBoardFailure();
+
+	// A notification opens this tab scoped to its machine. The tab stays mounted
+	// with the board, so a scope left in its params would outlive the visit and
+	// hide the project switcher with nothing on screen to clear it. It lasts
+	// until another tab is chosen; a page pushed over the board keeps it for the
+	// way back.
+	const routeScoped = Boolean(routeHostId || routeProjectId);
+	useEffect(() => {
+		const tabs = navigation.getParent();
+		if (!routeScoped || !tabs) return;
+		const stop = tabs.addListener("state", ({ data: { state } }) => {
+			if (state.routes[state.index]?.name === PR_TAB) return;
+			// Once: clearing the params is itself a change to the tabs' state.
+			stop();
+			navigation.setParams({ hostId: undefined, projectId: undefined });
+		});
+		return stop;
+	}, [navigation, routeScoped]);
 
 	// No haptic of its own: each platform's refresh control gives the feedback
 	// it gives everywhere, and the Retry buttons that also call this buzz once.

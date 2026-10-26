@@ -11,6 +11,13 @@ const fixture = vi.hoisted(() => ({
 	summaries: new Map<string, SessionPRSummary>(),
 	reload: vi.fn(), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
 	theme: new Proxy({}, { get: () => "#888888" }),
+	// The board's tab navigator, which the page listens to for a change of tab.
+	tabListeners: new Set<(event: { data: { state: { index: number; routes: { name: string }[] } } }) => void>(),
+	navigation: { setParams: vi.fn(), getParent: () => fixture.tabs },
+	tabs: { addListener: (type: string, listener: (event: { data: { state: { index: number; routes: { name: string }[] } } }) => void) => {
+		if (type === "state") fixture.tabListeners.add(listener);
+		return () => fixture.tabListeners.delete(listener);
+	} },
 }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -31,6 +38,7 @@ vi.mock("expo-router", async () => {
 	return {
 		useRouter: () => ({ push: vi.fn(), navigate: vi.fn() }),
 		useLocalSearchParams: () => fixture.params,
+		useNavigation: () => fixture.navigation,
 		useFocusEffect: (callback: () => void) => { fixture.focus = callback; },
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), Badge: host("StackToolbarBadge") }) },
 	};
@@ -84,6 +92,7 @@ beforeEach(() => {
 	}));
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
 	fixture.reload.mockClear(); fixture.focus = undefined; fixture.summaryTargets = [];
+	fixture.navigation.setParams.mockClear(); fixture.tabListeners.clear();
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -143,6 +152,29 @@ it("scopes PRs to the requested host and project", () => {
 	expect(fixture.cardRenders).toHaveLength(1);
 	expect(fixture.cardRenders[0]).toContain("windows");
 });
+// A notification scopes the tab to its machine. The tab is the board's own, so
+// the scope must not outlive the visit and hide the project switcher for good.
+it("keeps a notification's scope over a pushed page and drops it once another tab is chosen", () => {
+	fixture.params = { hostId: "windows" };
+	act(() => { renderer = create(<PRsScreen />); });
+	const tabState = (name: string) => ({ data: { state: { index: 1, routes: [{ name: "(workers)" }, { name }] } } });
+	expect(fixture.tabListeners.size).toBe(1);
+	for (const listener of fixture.tabListeners) listener(tabState("(prs)"));
+	expect(fixture.navigation.setParams).not.toHaveBeenCalled();
+	for (const listener of fixture.tabListeners) listener(tabState("(projects)"));
+	expect(fixture.navigation.setParams).toHaveBeenCalledWith({ hostId: undefined, projectId: undefined });
+	// Clearing changes the tabs' state again; that must not clear a second time.
+	expect(fixture.tabListeners.size).toBe(0);
+	fixture.params = {};
+	act(() => renderer!.update(<PRsScreen />));
+	expect(fixture.tabListeners.size).toBe(0);
+});
+
+it("leaves an unscoped tab's params alone", () => {
+	act(() => { renderer = create(<PRsScreen />); });
+	expect(fixture.tabListeners.size).toBe(0);
+});
+
 it("retains the default PR scroll buffer", () => {
 	act(() => { renderer = create(<PRsScreen />); });
 	const list = renderer!.root.findByType("SectionList" as never);
