@@ -11,7 +11,11 @@ vi.mock("./icons", async () => {
 	const React = await import("react");
 	return { Feather: (props: object) => React.createElement("Feather", props) };
 });
-vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
+// Inside the Workers tab, the inset counts the tab bar; the window's is the home indicator's.
+vi.mock("react-native-safe-area-context", () => ({
+	useSafeAreaInsets: () => ({ top: 59, bottom: 83, left: 0, right: 0 }),
+	initialWindowMetrics: { frame: { x: 0, y: 0, width: 402, height: 874 }, insets: { top: 59, bottom: 34, left: 0, right: 0 } },
+}));
 vi.mock("@expo/ui/community/bottom-sheet", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) =>
@@ -167,4 +171,11 @@ describe.each([
 		await act(async () => { renderer!.update(<Controls {...props} open={true} selectedEnvironmentId="all" />); });
 		expect(mac().props.accessibilityState.selected).toBe(false);
 	});
+});
+
+// iOS presents the sheet over the tab bar, so it only clears the home indicator.
+it("pads the iOS sheet for the window's home indicator, not the tab bar it covers", async () => {
+	await act(async () => { renderer = create(<WorkerControlsSheet {...props} />); });
+	const style = Object.assign({}, ...renderer!.root.findByType("BottomSheetView" as never).props.style);
+	expect(style.paddingBottom).toBe(34);
 });

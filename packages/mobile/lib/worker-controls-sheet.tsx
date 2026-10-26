@@ -1,7 +1,7 @@
 import { Feather } from "./icons";
 import BottomSheet, { BottomSheetScrollView, BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "./haptics";
 import { MachineAvatar } from "./MachineIdentity";
 import { machineAppearance } from "./machineAppearance";
@@ -35,6 +35,10 @@ export function WorkerControlsSheet({
 	const t = useTheme();
 	const styles = makeStyles(t);
 	const insets = useSafeAreaInsets();
+	// The sheet is presented over the whole window, tab bar included, so it clears
+	// the window's home indicator. Inside the Workers tab the inset also counts
+	// the tab bar, which the sheet covers.
+	const bottomInset = initialWindowMetrics?.insets.bottom ?? insets.bottom;
 	const draft = useWorkerControlsDraft({ open, selectedEnvironmentId, selectedProjectId, projects, onSelectEnvironment, onSelectProject, onDismiss, onSearch });
 	const environmentOptions = workerEnvironmentOptions(environments);
 	const projectOptions = workerProjectOptions(projects, draft.environmentId);
@@ -48,7 +52,7 @@ export function WorkerControlsSheet({
 			backgroundStyle={{ backgroundColor: t.bgSurface }}
 			onClose={draft.didClose}
 		>
-			<BottomSheetView style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+			<BottomSheetView style={[styles.sheet, { paddingBottom: Math.max(bottomInset, 16) }]}>
 				<View style={styles.header}>
 					<View>
 						<Text style={styles.title}>Workers</Text>
