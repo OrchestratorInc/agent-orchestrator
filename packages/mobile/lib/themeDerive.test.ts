@@ -93,6 +93,13 @@ describe("themeFor with a named theme", () => {
 		expect(lightTheme.selection).toBe(lightTheme.accentBorder);
 	});
 
+	// The recording mic's glyph sits on the red fill. It is white wherever the
+	// red can carry it, and always clears the non-text floor.
+	it.each([...CASES, [DEFAULT_THEME_STYLE, "dark"], [DEFAULT_THEME_STYLE, "light"]] as const)("%s %s ink on red stays legible", (style, scheme) => {
+		const t = themeFor(scheme, style);
+		expect(contrastRatio(t.onDestructive, t.red)).toBeGreaterThanOrEqual(FAINT_CONTRAST);
+	});
+
 	it.each(NAMED)("%s light lifts cards off the base", (style) => {
 		const t = themeFor("light", style);
 		expect(contrastRatio(t.bgElevated, t.bgBase)).toBeGreaterThanOrEqual(1.05);

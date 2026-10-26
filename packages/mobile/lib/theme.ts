@@ -92,6 +92,8 @@ export type Theme = {
 
 	/** Ink on a filled accent surface (primary button, send, mic). */
 	onAccent: string;
+	/** Ink on a filled `red` surface (the recording mic): white, as the system draws it. */
+	onDestructive: string;
 	/** Scrim behind modals. */
 	scrim: string;
 
@@ -147,6 +149,7 @@ export const darkTheme: Theme = {
 
 	// Near-black ink on the near-white accent.
 	onAccent: "#0b0c0e",
+	onDestructive: "#ffffff",
 	scrim: "rgba(0,0,0,0.6)",
 
 	fontMono: FONT_MONO,
@@ -200,6 +203,7 @@ export const lightTheme: Theme = {
 	tintPurple: "rgba(122,63,208,0.12)",
 
 	onAccent: "#ffffff",
+	onDestructive: "#ffffff",
 	scrim: "rgba(0,0,0,0.45)",
 
 	fontMono: FONT_MONO,

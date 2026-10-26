@@ -1,10 +1,15 @@
-import { Feather } from "../icons";
-import { useEffect, useRef } from "react";
-import { Animated, Pressable, StyleSheet, View } from "react-native";
-import type { Theme } from "../theme";
+import { useEffect } from "react";
+import { Pressable, StyleSheet, View, type AccessibilityActionEvent } from "react-native";
+import Animated, { cancelAnimation, Easing, interpolate, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
+import { AppSymbol } from "../AppSymbol";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
-import type { VoiceMode, VoiceState } from "./types";
+import { usePressFeedback } from "../pressFeedback";
+import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { iconSize, radius, stateOpacity } from "../tokens";
+import { useReducedMotion } from "../useReducedMotion";
+import type { VoiceMode, VoiceState } from "./types";
 import { MicGlass } from "./mic-glass";
 
 // The dictation control, with two gestures:
@@ -13,6 +18,9 @@ import { MicGlass } from "./mic-glass";
 //                 built-in mic. For short phrases where warm-up dominates.
 //   double-tap  - latch on, hands-free, Bluetooth-capable. Tap once more to
 //                 finish. For long prompts where warm-up stops mattering.
+//
+// A screen reader has no hold to time, so its activation latches and finishes
+// hands-free dictation directly.
 //
 // Sized to the send button and sitting beside it: dictation is a primary way to
 // talk to an agent from a phone, and as one more outlined grey pill in the key
@@ -26,23 +34,32 @@ import { MicGlass } from "./mic-glass";
 //
 /** Matches the send button so the two controls are the same size. */
 export const MIC_SIZE = 40;
-const MIC_RADIUS = 12;
+const MIC_RADIUS = radius.md;
+/** One breath of the recording ring, out or back. */
+const PULSE_MS = 900;
 
 export function MicKey({
 	state,
 	mode,
 	onPressIn,
 	onPressOut,
+	onToggleLatched,
 	circular = false,
 	size = MIC_SIZE,
 	variant = "glass",
-	glyphSize = 17,
+	glyphSize = iconSize.md,
 	disabled: disabledByOwner = false,
 }: {
 	state: VoiceState;
 	mode: VoiceMode;
 	onPressIn(): void;
 	onPressOut(): void;
+	/**
+	 * Starts or finishes hands-free dictation in one step (`useVoiceInput`'s
+	 * `toggleLatched`), for a screen reader's activation. Without it, the key
+	 * makes the two taps a sighted user would.
+	 */
+	onToggleLatched?(): void;
 	circular?: boolean;
 	size?: number;
 	/**
@@ -58,6 +75,8 @@ export function MicKey({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const reduceMotion = useReducedMotion();
+	const feedback = usePressFeedback(variant === "plain" ? "icon" : "button");
 	const live = state === "recording" || state === "starting";
 	const latched = live && mode === "latched";
 	const denied = state === "denied";
@@ -68,47 +87,50 @@ export function MicKey({
 	const disabled = unavailable || denied || (disabledByOwner && !live);
 	const controlShape = { width: size, height: size, borderRadius: circular ? size / 2 : MIC_RADIUS };
 
-	// A breathing ring behind the circle while the mic is open — the same
-	// Animated loop `Dot` uses, rather than a new animation dependency.
-	const pulse = useRef(new Animated.Value(0)).current;
+	// A ring breathing out from the key while the mic is open. Under Reduce
+	// Motion it stays away: the solid red fill already says the mic is live.
+	const pulse = useSharedValue(0);
+	const breathing = live && !reduceMotion;
 	useEffect(() => {
-		if (!live) {
-			pulse.setValue(0);
+		if (!breathing) {
+			cancelAnimation(pulse);
+			pulse.value = 0;
 			return;
 		}
-		const loop = Animated.loop(
-			Animated.sequence([
-				Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }),
-				Animated.timing(pulse, { toValue: 0, duration: 900, useNativeDriver: true }),
-			]),
-		);
-		loop.start();
-		return () => loop.stop();
-	}, [live, pulse]);
+		pulse.value = withRepeat(withTiming(1, { duration: PULSE_MS, easing: Easing.inOut(Easing.ease) }), -1, true);
+		return () => cancelAnimation(pulse);
+	}, [breathing, pulse]);
+	const ringStyle = useAnimatedStyle(() => ({
+		opacity: interpolate(pulse.value, [0, 1], [0.45, 0]),
+		transform: [{ scale: interpolate(pulse.value, [0, 1], [1, 1.45]) }],
+	}));
 
 	// Idle is the only glass state: recording, denied and unavailable each keep a
 	// fill that says something the material would soften.
 	const glass = variant === "glass" && !live && !denied && !unavailable;
 	const fill = live ? t.red : denied ? t.tintRed : unavailable ? t.bgElevated : "transparent";
-	const ink = live ? t.textPrimary : denied ? t.red : unavailable ? t.textFaint : t.textPrimary;
-	const radius = circular ? size / 2 : MIC_RADIUS;
+	const ink = live ? t.onDestructive : denied ? t.red : unavailable ? t.textFaint : t.textPrimary;
+	const shapeRadius = circular ? size / 2 : MIC_RADIUS;
+
+	const toggleLatched = () => {
+		if (onToggleLatched) {
+			onToggleLatched();
+			return;
+		}
+		onPressIn();
+		onPressOut();
+		if (latched) return;
+		onPressIn();
+		onPressOut();
+	};
+	const onAccessibilityAction = (event: AccessibilityActionEvent) => {
+		if (event.nativeEvent.actionName === "activate") toggleLatched();
+	};
 
 	return (
 		<View style={[styles.slot, { width: size, height: size }]}>
-			{live ? (
-				<Animated.View
-					pointerEvents="none"
-					style={[
-						styles.ring,
-						controlShape,
-						{
-							opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }),
-							transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.45] }) }],
-						},
-					]}
-				/>
-			) : null}
-			{glass ? <MicGlass size={size} radius={radius} /> : null}
+			{breathing ? <Animated.View pointerEvents="none" style={[styles.ring, controlShape, ringStyle]} /> : null}
+			{glass ? <MicGlass size={size} radius={shapeRadius} /> : null}
 			<Pressable
 				accessibilityRole="button"
 				accessibilityLabel={
@@ -119,7 +141,13 @@ export function MicKey({
 							: "Hold to dictate, or double-tap for hands-free"
 				}
 				accessibilityState={{ busy: live, disabled }}
+				// TalkBack's double-tap arrives as `activate`; VoiceOver's as an
+				// accessibility tap. Either one latches instead of tapping the key.
+				accessibilityActions={disabled ? undefined : [{ name: "activate", label: latched ? "Stop dictating" : "Dictate hands-free" }]}
+				onAccessibilityAction={disabled ? undefined : onAccessibilityAction}
+				onAccessibilityTap={disabled ? undefined : toggleLatched}
 				disabled={disabled}
+				android_ripple={feedback.android_ripple}
 				style={({ pressed }) => [
 					styles.mic,
 					controlShape,
@@ -127,7 +155,8 @@ export function MicKey({
 					variant === "glass" && circular && !glass && styles.circular,
 					latched && styles.latched,
 					unavailable && styles.unavailable,
-					pressed && !disabled && { opacity: 0.85 },
+					// A held key is recording; it keeps its full red rather than dimming.
+					pressed && !disabled && !live && feedback.pressed,
 				]}
 				onPressIn={() => {
 					haptics.tap();
@@ -139,7 +168,7 @@ export function MicKey({
 				// unaffected: it ignores the finger by design.
 				onTouchCancel={onPressOut}
 			>
-				<Feather name={denied || unavailable ? "mic-off" : "mic"} size={glyphSize} color={ink} />
+				<AppSymbol name={denied || unavailable ? "micOff" : "mic"} size={glyphSize} color={ink} />
 			</Pressable>
 		</View>
 	);
@@ -147,18 +176,13 @@ export function MicKey({
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-	slot: { alignItems: "center", justifyContent: "center" },
-	mic: {
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	circular: { borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	ring: {
-		position: "absolute",
-		backgroundColor: t.red,
-	},
-	// Latched holds the mic open with no finger on it, so it gets an outline the
-	// held state doesn't — this is the state that must never be missed.
-	latched: { borderWidth: 2, borderColor: t.textPrimary },
-	unavailable: { borderWidth: 1, borderColor: t.borderSubtle, opacity: 0.5 },
-});
+		slot: { alignItems: "center", justifyContent: "center" },
+		// Clipped so the Android ripple keeps to the key's shape.
+		mic: { alignItems: "center", justifyContent: "center", overflow: "hidden" },
+		circular: { borderWidth: rowDividerWidth, borderColor: t.borderDefault },
+		ring: { position: "absolute", backgroundColor: t.red },
+		// Latched holds the mic open with no finger on it, so it gets an outline the
+		// held state doesn't — this is the state that must never be missed.
+		latched: { borderWidth: 2, borderColor: t.textPrimary },
+		unavailable: { borderWidth: rowDividerWidth, borderColor: t.borderSubtle, opacity: stateOpacity.disabled },
+	});

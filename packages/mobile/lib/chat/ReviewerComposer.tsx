@@ -146,7 +146,7 @@ export function ReviewerComposer({ busy, stopped, attachmentsEnabled = true, onS
 					editable={!stopped && !submitting}
 					style={[styles.input, { height: text ? fieldHeight : COMPOSER_FIELD_HEIGHT }]}
 				/>
-				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} />
+				<MicKey variant="plain" size={44} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} />
 				{busy ? <Pressable accessibilityRole="button" accessibilityLabel="Stop reviewer" onPress={() => { haptics.tap(); void onInterrupt().catch((cause) => setError(cause instanceof Error ? cause.message : "Could not stop the reviewer.")); }} style={({ pressed }) => [styles.stop, pressed && { opacity: 0.8 }]}><Feather name="square" size={12} color={t.textPrimary} /></Pressable> : <Pressable accessibilityRole="button" accessibilityLabel="Send reply" accessibilityState={{ disabled: sendDisabled, busy: submitting }} disabled={sendDisabled} onPress={() => { haptics.tap(); void submit(); }} style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, sendDisabled && { opacity: 0.35 }]}>{submitting ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>}
 			</View>
 		</View>

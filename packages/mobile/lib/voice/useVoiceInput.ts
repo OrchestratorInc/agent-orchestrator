@@ -30,6 +30,12 @@ export type UseVoiceInput = {
 	pressIn(): void;
 	/** Finger up off the mic key. */
 	pressOut(): void;
+	/**
+	 * Starts hands-free dictation, or finishes it when it is already running.
+	 * The screen reader's way in: an activation has no hold to time and no
+	 * second tap to wait for.
+	 */
+	toggleLatched(): void;
 };
 
 export function useVoiceInput({
@@ -263,5 +269,18 @@ export function useVoiceInput({
 		finish();
 	}, [device, finish, setPhase]);
 
-	return { state, mode, partial, error, pressIn, pressOut };
+	const toggleLatched = useCallback(() => {
+		if (modeRef.current === "latched" && stateRef.current !== "idle") {
+			finish();
+			return;
+		}
+		if (tapWindowRef.current) {
+			clearTimeout(tapWindowRef.current);
+			tapWindowRef.current = null;
+		}
+		startedLatchedRef.current = false;
+		beginRecording("latched");
+	}, [beginRecording, finish]);
+
+	return { state, mode, partial, error, pressIn, pressOut, toggleLatched };
 }
