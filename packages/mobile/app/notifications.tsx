@@ -1,4 +1,3 @@
-import { Feather } from "../lib/icons";
 import { Stack, useFocusEffect, useRouter, type Href } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { useOpenPage } from "../lib/pageNavigation";
@@ -22,6 +21,8 @@ import {
 	markNotificationRead,
 	type NotificationRecord,
 } from "../lib/api";
+import { AppSymbol } from "../lib/AppSymbol";
+import { rowDividerWidth } from "../lib/divider";
 import { haptics } from "../lib/haptics";
 import { NotificationTypeIcon } from "../lib/notification-type-icon";
 import {
@@ -38,11 +39,13 @@ import { useApp } from "../lib/store";
 import { MINUTE_MS, useNow } from "../lib/useNow";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { Button, Dot, EmptyState } from "../lib/ui";
+import { Button, Dot, EmptyState, ListSectionHeader } from "../lib/ui";
+import { usePressFeedback } from "../lib/pressFeedback";
+import { refreshControlColors } from "../lib/refreshControlColors";
 import { TabPageScroll } from "../lib/TabPageScroll";
 import { toolbarIcon } from "../lib/toolbarIcon";
 import { UnpairedState } from "../lib/UnpairedState";
-import { space, type } from "../lib/tokens";
+import { iconSize, radius, space, stateOpacity, type } from "../lib/tokens";
 import { userFacingError } from "../lib/connectionError";
 import { ToastHost } from "../lib/Toast";
 import type { ToastDuration } from "../lib/Toast.types";
@@ -285,7 +288,6 @@ function NotificationsContent() {
 			notify(`${notification.hostName} is offline.`);
 			return;
 		}
-		haptics.tap();
 		updateFeeds((previous) => {
 			const feed = previous[notification.hostId];
 			if (!feed) return previous;
@@ -303,7 +305,9 @@ function NotificationsContent() {
 		const action = notificationAction(notification, sessionState(notification.hostId, notification.sessionId));
 		if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: notification.hostId } });
 		else if (action.kind === "review") openPage(notificationTarget(notification, knownHostIds) as Href);
-		else if (action.kind === "prs") router.navigate({ pathname: "/prs", params: { hostId: notification.hostId } });
+		// Back to the board's own PRs tab: navigating from this pushed page would
+		// stack a second board on top of it.
+		else if (action.kind === "prs") router.dismissTo({ pathname: "/prs", params: { hostId: notification.hostId } });
 		else if (action.kind === "restore") {
 			haptics.warning();
 			notify("This session is terminated. Tap restore to bring it back.");
@@ -320,7 +324,6 @@ function NotificationsContent() {
 			notify(`${notification.hostName} is offline.`);
 			return false;
 		}
-		haptics.warning();
 		updateFeeds((previous) => {
 			const feed = previous[notification.hostId];
 			if (!feed || !feed.items.some((item) => item.id === notification.id)) return previous;
@@ -362,18 +365,21 @@ function NotificationsContent() {
 
 	function restoreSession(hostId: string, sessionId: string) {
 		const key = notificationIdentity(hostId, sessionId);
-		haptics.tap();
 		setRestoringId(key);
 		void restore(sessionId, hostId)
 			.then(() => {
 				haptics.success();
 				router.navigate({ pathname: "/session/[id]", params: { id: sessionId, hostId } });
 			})
-			.catch((cause) => Alert.alert("Couldn't restore the session", userFacingError(cause)))
+			.catch((cause) => {
+				haptics.error();
+				Alert.alert("Couldn't restore the session", userFacingError(cause));
+			})
 			.finally(() => setRestoringId(undefined));
 	}
 
 	function confirmClearAll() {
+		haptics.warning();
 		Alert.alert("Clear all notifications?", "This removes the notification history on every connected machine.", [
 			{ text: "Cancel", style: "cancel" },
 			{ text: "Clear all", style: "destructive", onPress: () => void clearAll() },
@@ -394,7 +400,6 @@ function NotificationsContent() {
 			notify("Notifications are on machines that are currently offline.");
 			return;
 		}
-		haptics.warning();
 		// Drop anything in flight so a page that lands now cannot bring rows back.
 		loadGeneration.current += 1;
 		// Each emptied feed is kept by identity, so a failed clear can put the old
@@ -464,7 +469,7 @@ function NotificationsContent() {
 								haptics.tap();
 								void load("refresh");
 							}}
-							tintColor={t.accent}
+							{...refreshControlColors(t)}
 						/>
 					}
 					onEndReached={() => { if (hasMore) void load("more"); }}
@@ -472,7 +477,7 @@ function NotificationsContent() {
 					ListHeaderComponent={
 						unavailableFeeds.length > 0 && items.length > 0 ? (
 							<View style={styles.inlineError}>
-								<Feather name="wifi-off" size={15} color={t.textSecondary} />
+								<AppSymbol name="offline" size={iconSize.sm} color={t.textSecondary} />
 								<Text style={styles.inlineErrorText}>
 									{unavailableFeeds.length === hostStates.length
 										? `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} offline. Showing previously loaded activity.`
@@ -483,7 +488,7 @@ function NotificationsContent() {
 					}
 					renderSectionHeader={({ section }) => (
 						section.title
-							? <NotificationSectionHeader title={section.title} count={section.data.length} />
+							? <ListSectionHeader label={section.title} count={section.data.length} />
 							: null
 					)}
 					renderItem={({ item }) => (
@@ -535,17 +540,6 @@ function NotificationsContent() {
 	);
 }
 
-function NotificationSectionHeader({ title, count }: { title: string; count: number }) {
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<View style={styles.sectionHeader}>
-			<Text style={styles.sectionLabel}>{title}</Text>
-			<View style={styles.sectionRule} />
-			<Text style={styles.sectionCount}>{count}</Text>
-		</View>
-	);
-}
-
 function NotificationRow({ item, highlighted, now, action, restoring, onPress, onRestore, onClear }: {
 	item: FeedItem;
 	highlighted: boolean;
@@ -560,21 +554,26 @@ function NotificationRow({ item, highlighted, now, action, restoring, onPress, o
 	const styles = useThemedStyles(makeStyles);
 	const visual = notificationVisual(t, item.type);
 	const unread = item.status === "unread" || highlighted;
+	const inert = action === "none";
+	const rowFeedback = usePressFeedback("row");
+	const restoreFeedback = usePressFeedback("icon");
 
 	return (
 		<NotificationSwipeRow onClear={onClear}>
-			<View style={[styles.row, action === "none" && styles.rowInert]}>
+			<View style={[styles.row, inert && styles.rowInert]}>
 				<Pressable
 					onPress={onPress}
 					accessibilityRole="button"
-					accessibilityState={{ disabled: action === "none" }}
-					accessibilityLabel={`${item.title || visual.label}, ${visual.label}, ${item.hostName} machine`}
+					accessibilityState={{ disabled: inert }}
+					// The dot and the heavier title say "unread" to the eye; this says it aloud.
+					accessibilityLabel={`${unread ? "Unread, " : ""}${item.title || visual.label}, ${visual.label}, ${item.hostName} machine`}
 					accessibilityHint={action === "restore" ? "This session is terminated. Use the restore button to bring it back." : undefined}
 					accessibilityActions={[{ name: "delete", label: "Clear notification" }]}
 					onAccessibilityAction={(event) => {
 						if (event.nativeEvent.actionName === "delete") onClear();
 					}}
-					style={({ pressed }) => [styles.rowTap, pressed && action !== "none" && styles.rowPressed]}
+					android_ripple={inert ? undefined : rowFeedback.android_ripple}
+					style={({ pressed }) => [styles.rowTap, pressed && !inert && rowFeedback.pressed]}
 				>
 					<View style={styles.rowCopy}>
 						<View style={styles.metaRow}>
@@ -599,9 +598,12 @@ function NotificationRow({ item, highlighted, now, action, restoring, onPress, o
 						accessibilityRole="button"
 						accessibilityLabel={`Restore ${item.title || visual.label}`}
 						accessibilityState={{ busy: restoring, disabled: restoring }}
-						style={({ pressed }) => [styles.restoreButton, pressed && styles.restorePressed]}
+						android_ripple={restoreFeedback.android_ripple}
+						style={({ pressed }) => [styles.restoreButton, pressed && restoreFeedback.pressed]}
 					>
-						{restoring ? <ActivityIndicator size="small" color={t.textSecondary} /> : <Feather name="rotate-ccw" size={20} color={t.textSecondary} />}
+						{restoring
+							? <ActivityIndicator size="small" color={t.textSecondary} />
+							: <AppSymbol name={{ ios: "arrow.counterclockwise", android: "restore" }} size={iconSize.lg} color={t.textSecondary} />}
 					</Pressable>
 				) : null}
 			</View>
@@ -620,50 +622,31 @@ const makeStyles = (t: Theme) =>
 			marginHorizontal: space.lg,
 			paddingHorizontal: space.md,
 			paddingVertical: space.sm,
-			borderRadius: 12,
+			borderRadius: radius.md,
 			borderCurve: "continuous",
 			backgroundColor: t.bgSubtle,
 		},
 		inlineErrorText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, flex: 1 },
-		sectionHeader: {
-			flexDirection: "row",
-			alignItems: "center",
-			gap: space.sm,
-			paddingHorizontal: space.lg,
-			paddingTop: space.lg,
-			paddingBottom: space.xxs,
-		},
-		sectionLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		sectionRule: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: t.borderSubtle },
-		sectionCount: { fontFamily: "Geist_600SemiBold",
-			color: t.textFaint,
-			fontSize: type.caption1.fontSize,
-			lineHeight: type.caption1.lineHeight,
-			fontWeight: "600",
-			fontVariant: ["tabular-nums"],
-		},
 		machineIdentity: { maxWidth: 112 },
 		row: {
 			minHeight: 76,
 			flexDirection: "row",
 			alignItems: "center",
-			borderBottomWidth: StyleSheet.hairlineWidth,
+			borderBottomWidth: rowDividerWidth,
 			borderBottomColor: t.borderSubtle,
 		},
 		rowTap: { flex: 1, minWidth: 0, paddingLeft: space.lg, paddingRight: space.sm, paddingVertical: space.sm },
 		// Its own column, wide enough to hit without aiming: restoring is the only
 		// thing a terminated row can do, and it should not share the row's tap.
 		restoreButton: { width: 56, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
-		restorePressed: { backgroundColor: t.bgElevated },
-		rowInert: { opacity: 0.55 },
-		rowPressed: { backgroundColor: t.bgElevated },
+		rowInert: { opacity: stateOpacity.disabled },
 		rowCopy: { flex: 1, gap: space.hair },
 		metaRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
-		kind: { flexShrink: 1, fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
+		kind: { flexShrink: 1, fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		time: { fontFamily: "Geist_400Regular",
 			color: t.textFaint,
-			fontSize: type.caption1.fontSize,
-			lineHeight: type.caption1.lineHeight,
+			fontSize: type.footnote.fontSize,
+			lineHeight: type.footnote.lineHeight,
 			fontVariant: ["tabular-nums"],
 			marginLeft: "auto",
 		},

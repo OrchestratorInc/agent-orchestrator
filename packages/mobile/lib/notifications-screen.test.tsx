@@ -12,6 +12,7 @@ const fixtures = vi.hoisted(() => {
 		clearNotification: vi.fn(async () => {}),
 		clearAllNotifications: vi.fn(async (_config: unknown) => {}),
 		alert: vi.fn(),
+		router: { navigate: vi.fn(), push: vi.fn(), back: vi.fn(), dismissTo: vi.fn(), canGoBack: () => false },
 		focus: (() => {
 			const listeners = new Set<() => void>();
 			return {
@@ -41,6 +42,7 @@ vi.mock("react-native", async () => {
 	return {
 		ActivityIndicator: host("ActivityIndicator"),
 		Alert: { alert: fixtures.alert },
+		Platform: { OS: "ios" },
 		Pressable: host("Pressable"),
 		RefreshControl: host("RefreshControl"),
 		ScrollView: host("ScrollView"),
@@ -70,10 +72,9 @@ vi.mock("react-native", async () => {
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	const router = { navigate: vi.fn(), push: vi.fn(), back: vi.fn(), canGoBack: () => false };
 	return {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
-		useRouter: () => router,
+		useRouter: () => fixtures.router,
 		// Runs the effect while focused and its cleanup on blur, like react-navigation.
 		useFocusEffect: (effect: () => (() => void) | void) => {
 			const focused = React.useSyncExternalStore(fixtures.focus.subscribe, () => fixtures.focus.value);
@@ -131,7 +132,7 @@ vi.mock("./useNow", () => ({ MINUTE_MS: 60_000, useNow: () => Date.parse("2026-1
 vi.mock("./ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => (props: object) => React.createElement(name, props);
-	return { Button: host("Button"), Dot: host("Dot"), EmptyState: host("EmptyState") };
+	return { Button: host("Button"), Dot: host("Dot"), EmptyState: host("EmptyState"), ListSectionHeader: host("ListSectionHeader") };
 });
 vi.mock("./UnpairedState", async () => {
 	const React = await import("react");
@@ -160,7 +161,8 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	fixtures.getNotifications.mockClear();
+	// Back to the fixture feeds: some tests swap the implementation for the rest of their run.
+	fixtures.getNotifications.mockReset();
 	fixtures.clearNotification.mockClear();
 	fixtures.markAllNotificationsRead.mockReset();
 	fixtures.markAllNotificationsRead.mockImplementation(async () => {});
@@ -349,7 +351,7 @@ describe("NotificationsScreen", () => {
 	it("clears a notification through the hidden delete gesture action", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 
-		const firstRow = renderer!.root.find((node) => node.props.accessibilityLabel === "First update, Needs input, Dev machine");
+		const firstRow = renderer!.root.find((node) => node.props.accessibilityLabel === "Unread, First update, Needs input, Dev machine");
 		expect(firstRow.props.accessibilityActions).toEqual([{ name: "delete", label: "Clear notification" }]);
 
 		await act(async () => {
@@ -357,7 +359,7 @@ describe("NotificationsScreen", () => {
 		});
 
 		expect(fixtures.clearNotification).toHaveBeenCalledWith(fixtures.configs.dev, "dev-1");
-		expect(renderer!.root.findAll((node) => node.props.accessibilityLabel === "First update, Needs input, Dev machine")).toHaveLength(0);
+		expect(renderer!.root.findAll((node) => node.props.accessibilityLabel === "Unread, First update, Needs input, Dev machine")).toHaveLength(0);
 	});
 
 	it("releases pagination when a refresh supersedes a page that is still loading", async () => {
@@ -387,5 +389,32 @@ describe("NotificationsScreen", () => {
 		fixtures.getNotifications.mockImplementation(async () => ({ notifications: [], nextCursor: undefined, unreadCount: 0 }));
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		expect(renderer!.root.findAllByType("StackToolbar" as never)).toHaveLength(0);
+	});
+
+	it("returns to the board's PRs tab for a PR outcome instead of stacking a second board", async () => {
+		const base = fixtures.getNotifications.getMockImplementation()!;
+		fixtures.getNotifications.mockImplementation(async (config: { hostId: "dev" | "mac" }) => config.hostId === "mac"
+			? { notifications: [{ id: "mac-pr", sessionId: "", projectId: "project-2", prUrl: "", type: "pr_merged", title: "Merged it", body: "", status: "read", createdAt: "2026-10-08T08:00:00Z" }], nextCursor: undefined, unreadCount: 0 }
+			: base(config));
+		try {
+			fixtures.router.navigate.mockClear();
+			fixtures.router.dismissTo.mockClear();
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const row = renderer!.root.find((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Merged it, Merged, Mac machine");
+			act(() => { row.props.onPress(); });
+			expect(fixtures.router.dismissTo).toHaveBeenCalledWith({ pathname: "/prs", params: { hostId: "mac" } });
+			expect(fixtures.router.navigate).not.toHaveBeenCalled();
+		} finally {
+			fixtures.getNotifications.mockImplementation(base);
+		}
+	});
+
+	it("heads the unread group with the shared section header and themes the refresh spinner", async () => {
+		// Opened under a session, so nothing is acked and the unread group stays.
+		fixtures.focus.value = false;
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		expect(renderer!.root.findAllByType("ListSectionHeader" as never).map((header) => header.props)).toEqual([{ label: "Needs attention", count: 2 }]);
+		const refresh = renderer!.root.findByType("SectionList" as never).props.refreshControl;
+		expect(refresh.props).toEqual(expect.objectContaining({ tintColor: "#000", colors: ["#000"], progressBackgroundColor: "#000" }));
 	});
 });
