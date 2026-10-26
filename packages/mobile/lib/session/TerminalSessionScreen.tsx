@@ -1,4 +1,3 @@
-import { Feather } from "../icons";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
@@ -1444,7 +1443,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				{canScrollTop && !dead ? <ScrollTopButton onPress={scrollToTop} /> : null}
 				{interfaceTransitionActive ? (
 					<View style={styles.interfaceOverlay}>
-						<View style={styles.interfaceCard} accessibilityViewIsModal>
+						<View style={styles.interfaceCard}>
 							{/* The system's own indicator while the switch runs: a turning
 							    glyph that never turned read as frozen. */}
 							{interfaceRecoveryMessage ? (
@@ -1505,7 +1504,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				    input under the user's caret is hostile. */}
 				{(voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing") && (
 					<View style={[styles.voiceStrip, voice.state === "starting" && styles.voiceStripWarmup]}>
-						<Feather name="mic" size={iconSize.xs} color={voice.state === "starting" ? t.textTertiary : t.accent} />
+						<AppSymbol name="mic" size={iconSize.sm} color={voice.state === "starting" ? t.textTertiary : t.accent} />
 						<Text style={styles.voiceText} numberOfLines={2}>
 							{voice.partial ||
 								(voice.state === "starting"
@@ -1624,11 +1623,11 @@ const makeStyles = (t: Theme) =>
 		paddingHorizontal: space.md,
 		paddingVertical: space.xs,
 		backgroundColor: t.accentTint,
-		borderBottomWidth: 1,
+		borderBottomWidth: rowDividerWidth,
 		borderBottomColor: t.accent,
 	},
 	// Muted while the mic warms up, so "ready to speak" is a visible state change
 	// and not just a wording difference.
 	voiceStripWarmup: { backgroundColor: t.bgElevated, borderBottomColor: t.borderDefault },
-	voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textPrimary, fontSize: type.footnote.fontSize },
+	voiceText: { flex: 1, fontFamily: font.regular, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });
