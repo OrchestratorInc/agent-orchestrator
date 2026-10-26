@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { forgetAcceptedCredential } from "../acceptedCredentials";
 import { isConfigured, machineIdentity, type ServerConfig } from "../config";
 import { streamGlobalConversationEvents } from "./api";
 import { HEAD_CURSOR } from "./eventCursor";
@@ -88,7 +89,9 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 				} catch {
 					if (stopped || controller.signal.aborted) return;
 				}
+				// The stream ended or failed, so the daemon may have restarted.
 				lastHeartbeatAt.delete(hostId);
+				forgetAcceptedCredential(cfg);
 				await wait(delay);
 				delay = Math.min(RECONNECT_MAX_MS, delay * 2);
 			}
@@ -97,6 +100,7 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 		return () => {
 			stopped = true;
 			lastHeartbeatAt.delete(hostId);
+			forgetAcceptedCredential(cfg);
 			controller?.abort();
 		};
 	}, [cfg]);

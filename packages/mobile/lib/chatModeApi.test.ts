@@ -7,6 +7,7 @@ vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 import { fetch as expoFetch } from "expo/fetch";
 import { ApiError, apiRequest, delegateTask, getAgentModels, getArchivedSessions, getPreview, getSessions, getSettings, launchOrchestrator, mobileReachablePreviewURL, pinSession, renameSession, restoreSession, resumeSessionAgent, setSessionAutoInjectCI, setSessionAutoInjectReview, setSessionAutoReview, spawnSession, unpinSession, resetArchivePagingProbes } from "./api";
 import * as chatApi from "./chat/api";
+import { forgetAcceptedCredential, isCredentialAccepted } from "./acceptedCredentials";
 import { UNREACHABLE_ACTION_COPY, UnreachableError, userFacingError } from "./connectionError";
 import type { ServerConfig } from "./config";
 
@@ -196,6 +197,28 @@ describe("mobile Chat API boundaries", () => {
 		vi.mocked(fetch).mockReset().mockImplementation(async () => response({ message: "bad password" }, 401));
 		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
 		vi.mocked(fetch).mockClear();
+		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
+		expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+	});
+
+	it.each([
+		["a failed poll", async () => {
+			vi.mocked(fetch).mockRejectedValueOnce(new TypeError("Network request failed"));
+			await expect(getSessions(cfg)).rejects.toBeInstanceOf(UnreachableError);
+		}],
+		["a broken connection", async () => { forgetAcceptedCredential(cfg); }],
+	])("probes /sessions alone again after %s", async (_reason, breakConnection) => {
+		const board = () => vi.mocked(fetch)
+			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [] }))
+			.mockResolvedValueOnce(response({ sessions: [] }))
+			.mockResolvedValueOnce(response({ projects: [] }));
+		board();
+		await getSessions(cfg);
+		expect(isCredentialAccepted(cfg)).toBe(true);
+		await breakConnection();
+		expect(isCredentialAccepted(cfg)).toBe(false);
+		// A daemon restarted with a new password: the first tick spends one attempt.
+		vi.mocked(fetch).mockReset().mockImplementation(async () => response({ message: "bad password" }, 401));
 		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
 		expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
 	});

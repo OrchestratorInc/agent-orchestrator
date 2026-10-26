@@ -1,3 +1,4 @@
+import { forgetAcceptedCredential, isCredentialAccepted, markCredentialAccepted, resetAcceptedCredentials } from "./acceptedCredentials";
 import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
@@ -210,17 +211,10 @@ export const ARCHIVE_PAGE_SIZE = 50;
 const legacyArchiveHosts = new Map<string, number>();
 const LEGACY_ARCHIVE_RECHECK_MS = 15 * 60_000;
 
-// Credentials a daemon has accepted on /sessions in this process; see getSessions.
-const acceptedCredentials = new Set<string>();
-
-function credentialKey(cfg: ServerConfig): string {
-	return `${cfg.hostId ?? ""}|${httpBase(cfg)}|${cfg.password ?? ""}`;
-}
-
 /** Forget which machines answered like an older daemon, and which credentials were accepted. For tests. */
 export function resetArchivePagingProbes(): void {
 	legacyArchiveHosts.clear();
-	acceptedCredentials.clear();
+	resetAcceptedCredentials();
 }
 
 function archiveHostKey(cfg: ServerConfig): string {
@@ -576,15 +570,17 @@ export async function getSessions(
 	// The daemon exposes sessions and orchestrators as two lists. Fetch both,
 	// keep worker sessions for the board, and map orchestrators for their screen.
 	//
-	// Until this credential has been accepted once, /sessions is probed FIRST,
-	// alone. The daemon locks a device out for a minute after 5 failed auths, so
-	// a stale password used to cost 4 failures per poll tick — enough to arm the
+	// Until this credential has been accepted since the connection last broke
+	// (see acceptedCredentials.ts), /sessions is probed FIRST, alone. The daemon
+	// locks a device out for a minute after 5 failed auths, so a stale password
+	// used to cost 4 failures per poll tick — enough to arm the
 	// lockout in one or two ticks and make the user's next action, typically
 	// scanning a fresh pairing code, fail with 429 before the new password was
 	// ever checked. Probing first caps a bad-credential tick at one failed
-	// attempt. Once accepted, every request goes out in one batch: a password
-	// the daemon has since rotated counts as retired, not as a failed attempt,
-	// so the batch cannot arm the lockout, and it saves two round trips a tick.
+	// attempt. Once accepted, every request goes out in one batch, which saves
+	// two round trips a tick: a password the daemon has since rotated counts as
+	// retired, not as a failed attempt, and a daemon restart (which forgets the
+	// retired ones) breaks the connection, so the next tick probes again.
 	//
 	// The poll asks for live workers only, with the archive's size: the archive is
 	// most of a long-running machine's sessions, and over a tunnel the poll runs
@@ -593,11 +589,10 @@ export async function getSessions(
 	const hostKey = archiveHostKey(cfg);
 	const legacySince = legacyArchiveHosts.get(hostKey);
 	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
-	const credential = credentialKey(cfg);
 	const sessionsRead = req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init)
 		.then((res) => res.json())
 		.then(async (data) => {
-			acceptedCredentials.add(credential);
+			markCredentialAccepted(cfg);
 			const archive = tryPaged ? wireArchiveSummary(data?.archived) : null;
 			if (!tryPaged) return { data, archive };
 			if (archive) {
@@ -611,10 +606,11 @@ export async function getSessions(
 			return { data: ignoredFilter ? data : await (await req(cfg, `${API}/sessions`, init)).json(), archive };
 		})
 		.catch((error: unknown) => {
-			if (error instanceof ApiError && (error.status === 401 || error.status === 429)) acceptedCredentials.delete(credential);
+			// Any failure (a rejection, a lockout, a lost path) means probe again.
+			forgetAcceptedCredential(cfg);
 			throw error;
 		});
-	if (!acceptedCredentials.has(credential)) await sessionsRead;
+	if (!isCredentialAccepted(cfg)) await sessionsRead;
 	// A failed /projects is reported as null rather than [] so a caller can tell
 	// "this daemon has no projects" from "we could not ask". It and the unread
 	// count stay caught: an older daemon, or one blip on that one route, must not

@@ -8,6 +8,7 @@
  * provides. Treat the shapes as correct and the runtime behaviour as claimed
  * until it has been run. See docs for the local end-to-end check.
  */
+import { forgetAcceptedCredential } from "./acceptedCredentials";
 import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
 import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
@@ -187,7 +188,14 @@ export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 	};
 }
 
-/** Connects to a paired machine using the real network and storage. */
-export function connectToHost(hostId: string, options?: ConnectOptions): Promise<ConnectResult> {
-	return connectHost(hostId, runtimeConnectDeps(options));
+/**
+ * Connects to a paired machine using the real network and storage.
+ *
+ * A race runs on a resume, a network change, a rejected request, or a check
+ * for a better path, so the board's first tick on the winner probes alone.
+ */
+export async function connectToHost(hostId: string, options?: ConnectOptions): Promise<ConnectResult> {
+	const result = await connectHost(hostId, runtimeConnectDeps(options));
+	if (result.ok) forgetAcceptedCredential(result.config);
+	return result;
 }
