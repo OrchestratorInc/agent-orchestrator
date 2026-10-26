@@ -258,6 +258,33 @@ func TestReadyCheckTimeoutParksWithoutStopping(t *testing.T) {
 	}
 }
 
+// A project working folder the session cannot use (outside the durable
+// root, or one the bootstrap could not prepare) fails the same way on every
+// retry, so the session parks with the reason instead of retrying forever.
+func TestUnusableWorkingFolderParksWithoutStopping(t *testing.T) {
+	for _, code := range []string{sandbox.StartupErrorWorkingDirectoryNotDurable, sandbox.StartupErrorWorkingDirectoryUnusable} {
+		store := &lifecycleStore{}
+		provider := &byoProvider{
+			lifecycleProvider: lifecycleProvider{environment: sandbox.Environment{ID: "workspace-1", State: sandbox.StateRunning}},
+			bootstrapErr: &sandbox.StartupError{
+				Code:    code,
+				Message: "The working folder must be inside your home folder (/home/coder) so the agent's work survives restarts.",
+			},
+		}
+		record := coderRecord(t, "connection-1", byoBudget, time.Minute)
+		if err := byoReconciler(store, provider).reconcileSandbox(context.Background(), record); err != nil {
+			t.Fatalf("%s: reconcile: %v", code, err)
+		}
+		if len(store.observations) != 1 || store.observations[0] != domain.SandboxObservedTerminated || provider.stops != 0 ||
+			len(store.failures) != 0 {
+			t.Fatalf("%s: observations = %v, stops = %d, failures = %v; want parked", code, store.observations, provider.stops, store.failures)
+		}
+		if len(store.startupErrors) != 1 || store.startupErrors[0].code != code {
+			t.Fatalf("%s: startup errors = %+v", code, store.startupErrors)
+		}
+	}
+}
+
 func TestWorkerBootstrapCarriesArchBuildsAndMountPolicy(t *testing.T) {
 	reconciler := byoReconciler(&lifecycleStore{}, nil)
 	byo := reconciler.workerBootstrap(coderRecord(t, "connection-1", nil, 0), sandbox.Spec{}, false)

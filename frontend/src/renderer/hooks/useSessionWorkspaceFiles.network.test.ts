@@ -8,6 +8,45 @@ import { sessionArtifactFileQueryOptions } from "./useSessionWorkspaceFiles";
 
 vi.mock("../lib/bridge", () => ({ aoBridge: {} }));
 
+it.each(["image.png", "video.webm", "audio.mp3"])("loads %s metadata from a GET-only artifact route and cancels the body", async (path) => {
+	const requests: { method: string | undefined; url: string | undefined }[] = [];
+	let cancelled = false;
+	const modified = "Wed, 14 Oct 2026 12:00:00 GMT";
+	const daemon = createServer((request, response) => {
+		requests.push({ method: request.method, url: request.url });
+		if (request.method !== "GET") {
+			response.writeHead(405).end();
+			return;
+		}
+		response.on("close", () => { cancelled = true; });
+		response.writeHead(200, { "Content-Length": "104857600", "Last-Modified": modified });
+		// Leave the body open: metadata loading must finish without downloading it.
+		response.flushHeaders();
+	});
+	const previousBase = getApiBaseUrl();
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	try {
+		await new Promise<void>((resolve) => daemon.listen(0, "127.0.0.1", resolve));
+		const address = daemon.address();
+		if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
+		setApiBaseUrl(`http://127.0.0.1:${address.port}`);
+		const rawUrl = `http://ao-preview-artifact.session.localhost:${address.port}/${path}?raw=true`;
+
+		const detail = await client.fetchQuery(sessionArtifactFileQueryOptions("session-1", path, rawUrl));
+
+		expect(detail).toMatchObject({ binary: true, content: "", editable: false, size: 104857600, mediaVersion: modified });
+		expect(requests).toEqual([{ method: "GET", url: `/api/v1/sessions/session-1/preview/files/${path}?source=artifact&raw=true` }]);
+		await vi.waitFor(() => expect(cancelled).toBe(true));
+	} finally {
+		client.clear();
+		setApiBaseUrl(previousBase || null);
+		await new Promise<void>((resolve, reject) => {
+			daemon.close((error) => error ? reject(error) : resolve());
+			daemon.closeAllConnections();
+		});
+	}
+});
+
 it.for([
 	{ simulateCollision: false, artifactPath: "sub/report (1).md", escapedPath: "sub/report%20(1).md" },
 	{ simulateCollision: true, artifactPath: "sub/a+b.md", escapedPath: "sub/a%2Bb.md" },

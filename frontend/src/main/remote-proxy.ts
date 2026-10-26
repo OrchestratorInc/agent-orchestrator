@@ -228,11 +228,27 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			if (incoming.authorization) out["x-ao-preview-app-authorization"] = incoming.authorization;
 			if (incoming.origin) out["x-ao-preview-app-origin"] = incoming.origin;
 		}
+		if (previewKind === undefined) {
+			delete out["sec-fetch-site"];
+			delete out["sec-fetch-mode"];
+			delete out["sec-fetch-dest"];
+		}
 		out.host = upstream.host;
 		out.authorization = `Bearer ${entry.password}`;
 		if (entry.hostId) out["x-ao-expected-host-id"] = entry.hostId;
 		return out;
 	};
+
+	// A token authenticates the local native client, not arbitrary pages that
+	// happen to learn its URL. Check before stripping Origin/injecting auth.
+	// Only sandboxed render-document GET/HEAD navigations may omit Origin.
+	const validControlOrigin = (req: { headers: IncomingHttpHeaders; method?: string; url?: string }): boolean =>
+		req.headers.origin === undefined
+			? req.headers["sec-fetch-site"] === undefined || (
+				(req.method === "GET" || req.method === "HEAD") &&
+				/^\/api\/v1\/sessions\/[^/]+\/renders\/(?!check(?:$|[?]))[^/?]+(?:\?.*)?$/.test((stripToken(req.url) ?? "").slice(prefix.length))
+			)
+			: req.headers.origin === rendererOrigin;
 
 	const validPreviewOrigin = (scheme: "http" | "https", host: string | undefined, origin: string | undefined, kind?: PreviewTarget["kind"]): boolean =>
 		(kind !== "app" && kind !== "agent") || !origin || origin === `${scheme}://${host}`;
@@ -510,6 +526,18 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		for (const [name, value] of Object.entries(upstreamHeaders)) {
 			if (!name.startsWith(":") && !HOP_BY_HOP_HEADERS.includes(name)) headers[name] = value;
 		}
+		// The host confines legacy API documents with this final CSP policy.
+		// Only our separately routed preview origins can shed that API-origin
+		// sandbox. Keep every upstream app policy, including its own sandbox.
+		if (kind !== undefined && upstreamHeaders["x-ao-preview-api-sandbox"] === "1") {
+			const policy = headers["content-security-policy"];
+			const sandbox = "sandbox allow-scripts allow-forms";
+			if (typeof policy === "string") {
+				if (policy === sandbox) delete headers["content-security-policy"];
+				else if (policy.endsWith(`, ${sandbox}`)) headers["content-security-policy"] = policy.slice(0, -sandbox.length - 2);
+			}
+		}
+		delete headers["x-ao-preview-api-sandbox"];
 		Object.assign(headers, corsHeaders);
 		if (kind !== undefined && kind !== "app") delete headers["set-cookie"];
 		res.writeHead(status, headers);
@@ -609,10 +637,12 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		upstreamStream.once("response", (responseHeaders) => {
 			responded = true;
 			settle();
-			// At "end" a finished stream is still alive; a cut one is already
-			// destroyed, often with code 0 (a destroyed session or socket).
+			// A cut stream ends with its session destroyed, often with code 0.
+			// The stream's own destroyed flag can't tell: when a small answer's
+			// close lands in the same read as its headers (as through the
+			// tunnel), Node destroys the finished stream before "end".
 			relayResponse(res, Number(responseHeaders[":status"]), responseHeaders as IncomingHttpHeaders, upstreamStream, req.method, path, kind,
-				() => upstreamStream.destroyed || upstreamStream.rstCode !== http2Constants.NGHTTP2_NO_ERROR);
+				() => session.destroyed || upstreamStream.rstCode !== http2Constants.NGHTTP2_NO_ERROR);
 		});
 		upstreamStream.on("error", (error: Error) => {
 			if (!refused()) answerUpstreamFailure(res, error, req.method, path, kind);
@@ -633,7 +663,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			res.end('{"error":"unknown path"}');
 			return;
 		}
-		if (!validPreviewOrigin(scheme, host, req.headers.origin, preview?.kind)) {
+		if ((!preview && !validControlOrigin(req)) || !validPreviewOrigin(scheme, host, req.headers.origin, preview?.kind)) {
 			res.writeHead(403, { "content-type": "application/json" });
 			res.end('{"error":"preview origin mismatch"}');
 			return;
@@ -676,12 +706,18 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 
 	const handleUpgrade = (req: IncomingMessage, socket: Socket, head: Buffer, scheme: "http" | "https"): void => {
 		const preview = previewPath(req.headers.host, req.url, req.method, scheme);
-		const path = preview?.kind === "app" || preview?.kind === "agent" ? preview.path : stripToken(req.url);
+		// Static preview hosts never tunnel sockets. In particular a path
+		// containing the control token must not fall back to the daemon mux.
+		if (preview && preview.kind !== "app" && preview.kind !== "agent") {
+			socket.destroy();
+			return;
+		}
+		const path = preview ? preview.path : stripToken(req.url);
 		if (path === null) {
 			socket.destroy();
 			return;
 		}
-		if (!validPreviewOrigin(scheme, req.headers.host, req.headers.origin, preview?.kind)) {
+		if ((!preview && !validControlOrigin(req)) || !validPreviewOrigin(scheme, req.headers.host, req.headers.origin, preview?.kind)) {
 			socket.destroy();
 			return;
 		}
@@ -697,6 +733,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			if (socket.destroyed) return;
 			const upstreamSocket = dialUpstream(() => {
 				const headers = forwardHeaders(req.headers, preview?.kind);
+				if (!preview) {
+					delete headers["sec-fetch-site"];
+					delete headers["sec-fetch-mode"];
+					delete headers["sec-fetch-dest"];
+				}
 				const lines = [`${req.method} ${path} HTTP/1.1`];
 				// The WebSocket-specific headers were stripped as hop-by-hop; restore
 				// the two the handshake requires, with the credential injected above.

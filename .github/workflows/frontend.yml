@@ -2,7 +2,8 @@ name: Frontend
 
 # Runs the renderer vitest suite and typechecks the codebase.
 #
-# This job ensures both compiler/type checking passes and vitest tests succeed.
+# The vitest suite is sharded and typechecking runs in its own job so the
+# slowest pieces run in parallel; `test` gates on all of them.
 
 on:
   push:
@@ -18,6 +19,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   mac-update-helper:
@@ -46,6 +51,10 @@ jobs:
           mkdir -p "$HOME/.ao/build-cache/wake-helper/tests"
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/PolicyTests.swift -o "$HOME/.ao/build-cache/wake-helper/policy-tests"
           "$HOME/.ao/build-cache/wake-helper/policy-tests"
+          xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/WakeLights.swift native/wake-helper/WakeEffects.swift native/wake-helper/EffectsTests.swift -o "$HOME/.ao/build-cache/wake-helper/effects-tests"
+          "$HOME/.ao/build-cache/wake-helper/effects-tests"
+          xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/wake-helper/tests" native/wake-helper/WakePolicy.swift native/wake-helper/WakeLowPower.swift native/wake-helper/LowPowerTests.swift -o "$HOME/.ao/build-cache/wake-helper/low-power-tests"
+          "$HOME/.ao/build-cache/wake-helper/low-power-tests"
       - name: Test repair installer packaging and guards
         run: node --test scripts/build-mac-repair-installer.node-test.mjs
       - name: Compile helper for both macOS architectures
@@ -60,7 +69,7 @@ jobs:
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/update-helper/tests" native/update-helper/UpdateProgressState.swift native/update-helper/StateTests.swift -o "$HOME/.ao/build-cache/update-helper/state-tests"
           "$HOME/.ao/build-cache/update-helper/state-tests"
 
-  test:
+  checks:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -127,8 +136,73 @@ jobs:
       - name: Install docs dependencies
         run: npm ci --prefix src/docs
 
+      # Re-extracts the docs catalogs, then fails if any locale is missing a
+      # translation for a string in the source.
+      - name: Check docs translations
+        run: npm run check:i18n --prefix src/docs
+
+      - name: Test docs
+        run: npm test --prefix src/docs
+
       - name: Build docs
         run: npm run build --prefix src/docs
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Verify terminal origin boundary in real Electron
+        working-directory: backend
+        run: |
+          # Keep lazy-download output out of the executable-path capture.
+          node ../frontend/node_modules/electron/install.js
+          AO_MUX_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestMuxOriginElectron$' ./internal/httpd
+
+      - name: Verify daemon browser boundary in real Electron
+        working-directory: backend
+        run: |
+          AO_BOUNDARY_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestBrowserBoundaryElectron$' ./internal/httpd
+
+      - name: Run guarded-navigation browser integration
+        run: npm run test:browser-postcondition-integration
+
+  typecheck:
+    runs-on: ubuntu-latest
+    env:
+      # tsc needs Electron's types, not its binary; skip the flaky download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "npm ci failed; retrying Electron dependency download ($attempt/3)"
+          done
+
+      # tsconfig maps @aoagents/product-ui to its source, whose imports resolve
+      # from packages/product-ui/node_modules.
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
 
       - name: Typecheck project
         run: npm run typecheck
@@ -136,13 +210,61 @@ jobs:
       - name: Typecheck E2E suite
         run: npm run typecheck:e2e
 
-      - name: Run vitest suite
+  vitest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "npm ci failed; retrying Electron dependency download ($attempt/3)"
+          done
+
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
+
+      - name: Prepare pinned agent-browser runtime
+        run: npm run browser-runtime:prepare -- --quiet
+
+      - name: Run vitest shard
         env:
           AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
-        run: npx vitest run
+        run: npx vitest run --shard=${{ matrix.shard }}/4
 
-      - name: Run guarded-navigation browser integration
-        run: npm run test:browser-postcondition-integration
+  # Keep the existing check name as the gate for the split frontend jobs.
+  test:
+    if: always()
+    needs: [checks, typecheck, vitest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check frontend results
+        run: |
+          test '${{ needs.checks.result }}' = success
+          test '${{ needs.typecheck.result }}' = success
+          test '${{ needs.vitest.result }}' = success
 
   renderer-smoke:
     # RENDERER smoke (issue #2483, renderer slice) — the Playwright specs that run

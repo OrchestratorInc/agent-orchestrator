@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,8 +37,7 @@ vi.mock("./ReadOnlyFileView", () => ({
 
 const fetchMock = vi.fn();
 
-function renderWithQuery(ui: ReactNode) {
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function renderWithQuery(ui: ReactNode, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
 	return render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>{ui}</TooltipProvider>
@@ -66,6 +65,86 @@ describe("ArtifactFileView", () => {
 	});
 
 	const RAW_URL = "http://ao-preview-artifact.abc123.localhost:3001/notes.txt?raw=true";
+
+	it.each([
+		["screenshot.png", "img"],
+		["animation.GIF", "img"],
+		["recording.mp4", "video"],
+		["recording.webm", "video"],
+		["voice.mp3", "audio"],
+		["voice.wav", "audio"],
+	])("previews %s as media without reading it as text", async (path, tag) => {
+		const rawUrl = `http://ao-preview-artifact.abc123.localhost:3001/${path}?raw=true`;
+		const cancel = vi.fn();
+		const response = new Response(new ReadableStream({ cancel }), { headers: { "Content-Length": "104857600" } });
+		// The daemon's preview/files route only registers GET, including for media.
+		fetchMock.mockImplementation((_url, init?: RequestInit) => Promise.resolve(
+			init?.method && init.method !== "GET" ? new Response(null, { status: 405 }) : response,
+		));
+
+		renderWithQuery(<ArtifactFileView artifactName={path} path={path} rawUrl={rawUrl} sessionId="sess-1" />);
+
+		const media = await screen.findByLabelText(path);
+		expect(media.tagName.toLowerCase()).toBe(tag);
+		const contentUrl = `http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/${path}?source=artifact&raw=true`;
+		expect(media).toHaveAttribute("src", expect.stringContaining(`${contentUrl}&v=`));
+		expect(fetchMock).toHaveBeenCalledExactlyOnceWith(contentUrl);
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		if (tag !== "img") {
+			expect(media).toHaveAttribute("controls");
+			expect(media).toHaveAttribute("preload", "metadata");
+			expect(media).not.toHaveAttribute("autoplay");
+		}
+	});
+
+	it.each(["recording.mp4", "voice.wav"])("preserves %s playback until its ETag changes within the same Last-Modified second", async (path) => {
+		let etag = '"1000-1791979200123456789"';
+		fetchMock.mockImplementation(() => Promise.resolve(new Response(null, {
+			headers: { "Content-Length": "1000", "Last-Modified": "Wed, 14 Oct 2026 12:00:00 GMT", ETag: etag },
+		})));
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderWithQuery(<ArtifactFileView artifactName={path} path={path} rawUrl={RAW_URL} sessionId="sess-1" />, client);
+		const player = await screen.findByLabelText<HTMLMediaElement>(path);
+		const src = player.src;
+		expect(new URL(src).searchParams.get("v")).toBe(etag);
+		player.currentTime = 12;
+
+		await act(() => client.invalidateQueries({ queryKey: ["session-artifact-file"] }));
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(screen.getByLabelText(path)).toBe(player);
+		expect(player.src).toBe(src);
+		expect(player.currentTime).toBe(12);
+
+		etag = '"1000-1791979200123456790"';
+		await act(() => client.invalidateQueries({ queryKey: ["session-artifact-file"] }));
+		await waitFor(() => expect(screen.getByLabelText(path)).not.toBe(player));
+		const replacement = screen.getByLabelText<HTMLMediaElement>(path);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(replacement.src).not.toBe(src);
+		expect(new URL(replacement.src).searchParams.get("v")).toBe(etag);
+		expect(replacement.currentTime).toBe(0);
+	});
+
+	it("previews SVGs as images while keeping their text source editable", async () => {
+		const content = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+		fetchMock.mockResolvedValue(new Response(content));
+		renderWithQuery(<ArtifactFileView artifactName="diagram.svg" path="diagram.svg" rawUrl={RAW_URL} sessionId="sess-1" />);
+		expect(await screen.findByRole("img", { name: "diagram.svg" })).toHaveAttribute("src", expect.stringContaining("data:image/svg+xml"));
+		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
+		expect(screen.queryByRole("img", { name: "diagram.svg" })).not.toBeInTheDocument();
+		expect(document.querySelector("code")).toHaveTextContent(content);
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/diagram.svg?source=artifact&raw=true");
+	});
+
+	it("shows a retry action when media fails to load or decode", async () => {
+		fetchMock.mockResolvedValue(new Response(null));
+		renderWithQuery(<ArtifactFileView artifactName="clip.mp4" path="clip.mp4" rawUrl={RAW_URL} sessionId="sess-1" />);
+		fireEvent.error(await screen.findByLabelText("clip.mp4"));
+		expect(screen.getByText("Unable to load this file.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(screen.getByLabelText("clip.mp4")).toBeInTheDocument();
+	});
 
 	it("fetches a local artifact through the explicit loopback artifact API and renders its content", async () => {
 		fetchMock.mockResolvedValue(new Response("hello world", { status: 200 }));

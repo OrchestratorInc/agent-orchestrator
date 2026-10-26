@@ -109,6 +109,7 @@ logged as `msg = "activity event"` with `activity_kind` and its attributes under
 | `sandbox.paused` / `sandbox.resuming` | compute stopped / restore started | `desired_state`, `reason` |
 | `session.resume_requested` | user resumed a session | `observed_state` |
 | `worker.disconnected` | heartbeat timeout repair | `reason`, `last_seen_ago_ms` |
+| `worker.relaunched` | a launched worker never checked in within its check-in window and was relaunched with a fresh ticket (once per startup) | `reason` `never_checked_in`, `epoch` (the abandoned launch), `launched_ago_ms`, `redeemed`, `checkin_timeout_ms`, `startup_attempts` |
 | `sandbox.terminated` | startup ceiling parked the session | `code`, `ceiling_ms`, `customer_owned` |
 | `worker.git_grant_failed` | worker could not get repo credentials | `code`, `error` |
 | `coder.connection_validated` | BYO Coder connection saved/tested | `result` ok/rejected, `reason`, `error`, `coder_host`, `connection_id` |
@@ -286,7 +287,10 @@ workspace_id: <workspace id>
 the worker with `setsid`; the `cause` shows the last 1 KB of bootstrap
 terminal output; attrs carry `worker_user` and `checkout_reuse`). A failure
 after `worker_install` succeeded (no heartbeat, `worker_never_started`) is on
-the worker side: read its log. With `reuseExistingCheckout`, the worker log
+the worker side: read its log. AO relaunches such a worker once, with a fresh
+bootstrap ticket, when its check-in window (`AO_CLOUD_WORKER_CHECKIN_TIMEOUT`,
+default 12 minutes from the launch) closes; a `worker.relaunched` event marks
+it, and the session parks when the relaunched worker's window closes too. With `reuseExistingCheckout`, the worker log
 says which checkout it adopted (`checkout reuse: ...`), any stash it made for
 uncommitted changes, or why it cloned into `<root>/repository` instead.
 
@@ -318,7 +322,9 @@ stdout/stderr, JSON), `worker.pid`, `launch.sh`; the repository is
 
 | code | what it means | fix |
 |---|---|---|
-| `workspace_not_ready` | the Coder agent never reached `ready` (still `starting`, or the build is stuck) | read the agent startup log tail; a slow template startup script needs a larger `startupTimeoutSeconds` on the connection; a failed build shows `job_error` (template error, cloud quota) |
+| `workspace_not_ready` | the Coder agent never reached `ready` (still `starting`, or the build is stuck) | read the agent startup log tail; a slow template startup script needs a larger `startupTimeoutSeconds` on the connection |
+| `workspace_build_failed` | the Coder workspace build failed or was canceled (template error, cloud quota such as AWS `VcpuLimitExceeded`); reported once per failed build, as soon as Coder ends it. A bring-your-own workspace's message is the build log's redacted `Error:` line; an AO-managed one shows only the cloud error code (for example `VcpuLimitExceeded (cloud capacity limit)`), with the line in the CP log (`sandbox workspace build failed`) and the startup error detail | read `job_error` and the build log tail; fix the template or free/raise the quota, then Retry: it starts one new build (managed workspaces were stopped and are started again; bring-your-own ones are left as they are until the retry). AO never starts a build on its own for a failed build seen while a worker is connected, or for a failed stop/delete |
+| `workspace_create_failed` | AO could not create the workspace (Coder API refused it, connection unusable, or no provider capacity) within the startup budget; the session is parked at the startup ceiling. The message is generic; the provider's response is in the detail (bring-your-own) and the CP log | fix the connection/template, then Retry |
 | `terminal_unavailable` | AO could not open a PTY on the agent (agent disconnected or reconnecting) | `coder ping <workspace>`; check the agent's network path to Coder (DERP/relay), restart the workspace |
 | `unsupported_architecture` | the workspace CPU has no AO worker build | AO ships amd64 and arm64; for arm64 make sure the control-plane image includes `ao-worker-linux-arm64` (the CP logs "arm64 worker build unavailable" at boot if not) |
 | `durable_root_unavailable` | the durable root is not usable: `$HOME` not writable or a symlink, not a mount when `requireMountedDurableRoot` is on, or it holds another session's data | fix ownership/permissions of the home directory or mount, or turn off `requireMountedDurableRoot`; a reused volume from another session needs a fresh workspace |

@@ -11,13 +11,20 @@ import (
 )
 
 var (
-	ErrNotFound             = errors.New("not found")
-	ErrForbidden            = errors.New("forbidden")
-	ErrConflict             = errors.New("conflict")
-	ErrInvalid              = errors.New("invalid")
+	ErrNotFound      = errors.New("not found")
+	ErrForbidden     = errors.New("forbidden")
+	ErrConflict      = errors.New("conflict")
+	ErrInvalid       = errors.New("invalid")
+	ErrInvalidBranch = errors.New("invalid session branch")
+	// ErrBranchInUse refuses a requested session branch a live session of the
+	// project already works on (BranchRefusedError carries which one).
+	ErrBranchInUse          = errors.New("session branch in use")
 	ErrIdempotencyMismatch  = errors.New("idempotency key belongs to a different operation")
 	ErrSandboxQuotaExceeded = errors.New("sandbox quota exceeded")
 	ErrWorkerUnavailable    = errors.New("worker unavailable")
+	// ErrSessionTerminated refuses to wake a deleted session; only a restore
+	// brings it back.
+	ErrSessionTerminated = errors.New("session is terminated")
 	// ErrTerminalSessionExited means an agent terminal finished and there is no
 	// live worker terminal to attach to. It is deliberately distinct from
 	// ErrWorkerUnavailable: the latter is expected while a sandbox is booting
@@ -26,9 +33,29 @@ var (
 	ErrTerminalSessionExited = errors.New("terminal session exited")
 	ErrTransportExpired      = errors.New("worker request expired")
 	ErrWorkspaceReadOnly     = errors.New("workspace is read-only")
+	// ErrTerminalClosed means output arrived for a terminal that is no longer
+	// open at the worker's epoch (closed, failed, or never opened there).
+	ErrTerminalClosed = errors.New("terminal is closed")
+	// ErrTerminalExpired means output arrived for an open terminal whose lease
+	// has passed. Its state is left alone: the lease holder decides whether
+	// the terminal is reopened or retired.
+	ErrTerminalExpired = errors.New("terminal lease expired")
 	// ErrProviderConnectionInUse refuses deleting a provider connection that a
 	// sandbox not yet fully deleted still runs on. It is a conflict.
 	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)
+	// ErrArtifactLimit means a commit would exceed a session's artifact file
+	// count or total size.
+	ErrArtifactLimit = errors.New("session artifact limit exceeded")
+	// ErrNotOrchestratorChild refuses an orchestrator acting on a session it
+	// did not spawn. It is forbidden, but names the reason so `ao kill` and
+	// `ao send` can say so instead of reporting an organization access error.
+	ErrNotOrchestratorChild = fmt.Errorf("not a session this orchestrator started: %w", ErrForbidden)
+	// ErrArtifactShareLimit means the user already holds their maximum number
+	// of active artifact share links.
+	ErrArtifactShareLimit = errors.New("artifact share limit reached")
+	// ErrArtifactShareNameChanged refuses replacing a link's file with one of
+	// another name: the name is part of the document a link belongs to.
+	ErrArtifactShareNameChanged = errors.New("artifact share file name changed")
 )
 
 type Store struct {
@@ -37,6 +64,17 @@ type Store struct {
 	// activityLog is told about activity rows the store writes itself, inside
 	// the transaction they describe (see commitWithActivity).
 	activityLog func(context.Context, domain.ActivityEvent)
+	// coderReadableNames stores a readable Coder workspace name on each new
+	// Coder session (SetCoderReadableWorkspaceNames).
+	coderReadableNames bool
+}
+
+// SetCoderReadableWorkspaceNames turns readable Coder workspace names on for
+// sessions created from now on (config.Config.CoderReadableWorkspaceNames).
+// Off, the default, a new session stores no name and keeps the <prefix>-<id>
+// name; a stored name is read either way. Call it before serving requests.
+func (s *Store) SetCoderReadableWorkspaceNames(enabled bool) {
+	s.coderReadableNames = enabled
 }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {

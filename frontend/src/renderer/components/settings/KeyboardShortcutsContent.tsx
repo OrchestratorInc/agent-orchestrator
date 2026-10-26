@@ -1,11 +1,13 @@
-import { Check, Keyboard, Pencil, Plus, RotateCcw, X } from "lucide-react";
+import { AlertCircle, Check, Keyboard, MoreHorizontal, Pencil, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { shortcutCategoryLabelKeys, shortcutLabelKeys } from "../../i18n/key-maps";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
 	APP_SHORTCUTS,
 	effectiveShortcutBindings,
+	SHORTCUT_CATEGORIES,
+	shortcutBindingKeys,
 	matchesShortcutBinding,
 	shortcutBindingLabel,
 	shortcutBindingValidationError,
@@ -21,9 +23,12 @@ import { useKeybindingsStore } from "../../stores/keybindings-store";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ConfirmDialog } from "../ConfirmDialog";
-import { SettingsRow } from "./SettingsRow";
-import { SettingsSearch } from "./SettingsSearch";
+import { ShortcutKeys, shortcutKeysDescription } from "../ShortcutKeys";
+import { RadioGroup } from "radix-ui";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { SettingsSection } from "./SettingsSection";
+import { HARNESS_CARD_CLASS, HARNESS_CARD_ROW_CLASS } from "./harness/harness-ui";
+import "./keyboard-shortcuts.css";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -44,6 +49,7 @@ type ToastState = {
 	title: string;
 	body?: string;
 	undo?: () => Promise<void>;
+	error?: boolean;
 };
 
 const ignoredRecordingKeys = new Set([
@@ -78,30 +84,57 @@ export function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
 	};
 }
 
-function definition(id: AppShortcutId) {
-	return APP_SHORTCUTS.find((shortcut) => shortcut.id === id);
+function bindingDescription(binding: ShortcutBinding, isMac: boolean) {
+	return shortcutKeysDescription(shortcutBindingKeys(binding, isMac));
+}
+
+function BindingKeys({ binding, isMac }: { binding: ShortcutBinding; isMac: boolean }) {
+	return <ShortcutKeys keys={shortcutBindingKeys(binding, isMac)} />;
+}
+
+function searchText(value: string) {
+	return value.toLowerCase().replace(/command|cmd|⌘/g, " meta ").replace(/control|ctrl|⌃/g, " ctrl ")
+		.replace(/option|opt|alt|⌥/g, " alt ").replace(/shift|⇧/g, " shift ").replace(/\+/g, " ").trim();
 }
 
 export function KeyboardShortcutsContent({
 	active,
 	titleHidden,
+	bounded = true,
 	isMac = isMacPlatform(),
 }: {
 	active: boolean;
 	titleHidden?: boolean;
+	bounded?: boolean;
 	isMac?: boolean;
 }) {
 	const { t } = useTranslation();
+	const reduceMotion = useReducedMotion();
 	const overrides = useKeybindingsStore((state) => state.overrides);
 	const setOverrides = useKeybindingsStore((state) => state.setOverrides);
 	const resetBinding = useKeybindingsStore((state) => state.resetBinding);
 	const resetAll = useKeybindingsStore((state) => state.resetAll);
 	const [query, setQuery] = useState("");
+	const [modifiedOnly, setModifiedOnly] = useState(false);
+	const [expanded, setExpanded] = useState<AppShortcutId | null>(null);
+	const [recordingReady, setRecordingReady] = useState(false);
+	const [recordingError, setRecordingError] = useState<string | null>(null);
+	const [saving, setSaving] = useState(false);
+	const [savingId, setSavingId] = useState<AppShortcutId | null>(null);
+	const [mutationError, setMutationError] = useState<{ id: AppShortcutId; message: string } | null>(null);
+	const savingRef = useRef(false);
+	const captureRef = useRef<HTMLDivElement>(null);
+	const layoutRef = useRef<HTMLDivElement>(null);
+	const triggerRef = useRef<HTMLElement | null>(null);
+	const editIdRef = useRef<string | null>(null);
+	const searchRef = useRef<HTMLInputElement>(null);
+	const contentId = useId();
 	const [recording, setRecordingState] = useState<RecordingState | null>(null);
 	const [conflict, setConflict] = useState<ConflictState | null>(null);
 	const [confirmResetAll, setConfirmResetAll] = useState(false);
 	const [resettingAll, setResettingAll] = useState(false);
 	const [resetAllError, setResetAllError] = useState<string | null>(null);
+	const [conflictError, setConflictError] = useState<string | null>(null);
 	const [toast, setToast] = useState<ToastState | null>(null);
 	const toastTimerRef = useRef<number | undefined>(undefined);
 	const activeRef = useRef(active);
@@ -126,54 +159,95 @@ export function KeyboardShortcutsContent({
 
 	useEffect(() => {
 		if (active) return;
+		recordingRequestRef.current += 1;
 		setRecordingState(null);
+		setRecordingReady(false);
 		void aoBridge.keybindings.setRecording(false);
 	}, [active]);
 
+	const endRecording = (restoreFocus = true) => {
+		recordingRequestRef.current += 1;
+		setRecordingState(null);
+		setRecordingReady(false);
+		setRecordingError(null);
+		void aoBridge.keybindings.setRecording(false);
+		if (restoreFocus) queueMicrotask(() => {
+			const trigger = triggerRef.current;
+			if (trigger?.isConnected) trigger.focus();
+			else if (editIdRef.current) document.getElementById(editIdRef.current)?.focus();
+		});
+	};
+
 	useEffect(() => {
 		if (!recording) return;
-		const handleBlur = () => {
-			setRecordingState(null);
-			void aoBridge.keybindings.setRecording(false);
-		};
+		captureRef.current?.focus();
+		const handleBlur = () => endRecording(false);
 		window.addEventListener("blur", handleBlur);
 		return () => window.removeEventListener("blur", handleBlur);
 	}, [recording]);
 
-	const beginRecording = async (next: RecordingState) => {
-		const request = recordingRequestRef.current + 1;
-		recordingRequestRef.current = request;
+	const beginRecording = async (next: RecordingState, trigger: HTMLElement) => {
+		if (savingRef.current) return;
+		triggerRef.current = trigger;
+		editIdRef.current = `${contentId}-${next.id}-edit`;
+		const request = ++recordingRequestRef.current;
+		setRecordingError(null);
+		setMutationError(null);
+		setRecordingReady(false);
+		setRecordingState(next);
 		try {
 			await aoBridge.keybindings.setRecording(true);
-			if (!activeRef.current || request !== recordingRequestRef.current) {
-				await aoBridge.keybindings.setRecording(false);
-				return;
-			}
-			setRecordingState(next);
+			if (!activeRef.current || request !== recordingRequestRef.current) return;
+			setRecordingReady(true);
 		} catch {
-			showToast({
-				title: t("shortcut.couldNotRecord"),
-				body: t("shortcut.tryReopen"),
-			});
+			if (request !== recordingRequestRef.current) return;
+			endRecording();
+			setMutationError({ id: next.id, message: t("shortcut.couldNotRecord") });
 		}
 	};
 
-	const endRecording = () => {
-		recordingRequestRef.current += 1;
-		setRecordingState(null);
-		void aoBridge.keybindings.setRecording(false);
-	};
+	// Like Harness, the shortcut list owns scrolling. Keep any offset inherited
+	// from another settings page out of the fixed outer viewport.
+	useLayoutEffect(() => {
+		if (!bounded) return;
+		const body = layoutRef.current?.closest<HTMLElement>(".settings-thin-scrollbar");
+		if (!body) return;
+		const toTop = () => { if (body.scrollTop !== 0) body.scrollTop = 0; };
+		toTop();
+		body.addEventListener("scroll", toTop);
+		return () => body.removeEventListener("scroll", toTop);
+	}, [bounded]);
 
 	const filteredShortcuts = useMemo(() => {
-		const needle = query.trim().toLowerCase();
-		if (!needle) return APP_SHORTCUTS;
+		const needles = searchText(query).split(/\s+/).filter(Boolean);
 		return APP_SHORTCUTS.filter((shortcut) => {
+			if (modifiedOnly && !Object.hasOwn(overrides, shortcut.id)) return false;
 			const labels = effectiveShortcutBindings(shortcut.id, isMac, overrides)
-				.map((candidate) => shortcutBindingLabel(candidate, isMac))
+				.map((candidate) => `${shortcutBindingLabel(candidate, isMac)} ${bindingDescription(candidate, isMac)}`)
 				.join(" ");
-			return `${shortcutLabel(shortcut.id, t)} ${shortcutCategoryLabel(shortcut.category, t)} ${labels}`.toLowerCase().includes(needle);
+			const haystack = searchText(`${shortcutLabel(shortcut.id, t)} ${shortcutCategoryLabel(shortcut.category, t)} ${labels}`);
+			return needles.every((needle) => haystack.includes(needle));
 		});
-	}, [isMac, overrides, query, t]);
+	}, [isMac, overrides, query, modifiedOnly, t]);
+
+	const mutate = async (id: AppShortcutId, operation: () => Promise<void>) => {
+		if (savingRef.current) return false;
+		savingRef.current = true;
+		setSaving(true);
+		setSavingId(id);
+		setMutationError(null);
+		try {
+			await operation();
+			return true;
+		} catch {
+			setMutationError({ id, message: t("shortcut.saveFailed") });
+			return false;
+		} finally {
+			savingRef.current = false;
+			setSaving(false);
+			setSavingId(null);
+		}
+	};
 
 	const applyBinding = async (
 		targetId: AppShortcutId,
@@ -181,16 +255,16 @@ export function KeyboardShortcutsContent({
 		mode: RecordingState["mode"],
 		conflictingId?: AppShortcutId,
 	) => {
-		const before = overrides;
-		const next: KeybindingOverrides = { ...overrides };
-		const currentTarget = effectiveShortcutBindings(targetId, isMac, overrides);
+		const before = useKeybindingsStore.getState().overrides;
+		const next: KeybindingOverrides = { ...before };
+		const currentTarget = effectiveShortcutBindings(targetId, isMac, before);
 		next[targetId] = mode === "add" ? [...currentTarget, candidate].slice(-2) : [candidate];
 		if (conflictingId) {
-			next[conflictingId] = effectiveShortcutBindings(conflictingId, isMac, overrides).filter(
+			next[conflictingId] = effectiveShortcutBindings(conflictingId, isMac, before).filter(
 				(existing) => !matchesShortcutBinding(candidate, existing),
 			);
 		}
-		await setOverrides(next);
+		if (!await mutate(targetId, () => setOverrides(next))) return false;
 		const targetLabel = shortcutLabel(targetId, t);
 		const conflictLabel = conflictingId ? shortcutLabel(conflictingId, t) : undefined;
 		showToast({
@@ -203,29 +277,35 @@ export function KeyboardShortcutsContent({
 					})
 				: t("shortcut.updatedBody", { name: targetLabel, binding: shortcutBindingLabel(candidate, isMac) }),
 			undo: async () => {
-				await setOverrides(before);
-				showToast({ title: t("shortcut.undone") });
+				if (await mutate(targetId, () => setOverrides(before))) showToast({ title: t("shortcut.undone") });
 			},
 		});
+		return true;
 	};
 
 	useEffect(() => {
 		if (!active || !recording) return;
 		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Tab") {
+				endRecording(false);
+				return;
+			}
+			// Own Escape before Radix's document listener, so it cancels capture
+			// without dismissing the surrounding settings dialog.
 			event.preventDefault();
-			event.stopPropagation();
+			event.stopImmediatePropagation();
 			if (event.key === "Escape") {
 				endRecording();
 				return;
 			}
-			if (event.repeat) return;
+			if (!recordingReady || event.repeat) return;
 			const candidate = eventBinding(event);
 			if (!candidate) {
 				return;
 			}
 			const validationError = shortcutBindingValidationError(candidate, isMac);
 			if (validationError) {
-				showToast({ title: t("shortcut.reserved"), body: validationError });
+				setRecordingError(validationError);
 				return;
 			}
 			if (
@@ -234,11 +314,7 @@ export function KeyboardShortcutsContent({
 					matchesShortcutBinding(candidate, existing),
 				)
 			) {
-				showToast({
-					title: t("shortcut.alreadyAssigned"),
-					body: t("shortcut.alreadyAvailable", { binding: shortcutBindingLabel(candidate, isMac) }),
-				});
-				endRecording();
+				setRecordingError(t("shortcut.alreadyAvailable", { binding: shortcutBindingLabel(candidate, isMac) }));
 				return;
 			}
 			const conflicting = APP_SHORTCUTS.find(
@@ -250,10 +326,7 @@ export function KeyboardShortcutsContent({
 			);
 			if (conflicting) {
 				if (conflicting.customizable === false) {
-					showToast({
-						title: t("shortcut.reserved"),
-						body: t("shortcut.usedByFixed", { binding: shortcutBindingLabel(candidate, isMac), name: shortcutLabel(conflicting.id, t) }),
-					});
+					setRecordingError(t("shortcut.usedByFixed", { binding: shortcutBindingLabel(candidate, isMac), name: shortcutLabel(conflicting.id, t) }));
 					return;
 				}
 				setConflict({
@@ -265,188 +338,152 @@ export function KeyboardShortcutsContent({
 				endRecording();
 				return;
 			}
-			void applyBinding(recording.id, candidate, recording.mode).catch(() =>
-				showToast({ title: t("shortcut.couldNotUpdate"), body: t("shortcut.previousStillActive") }),
-			);
+			void applyBinding(recording.id, candidate, recording.mode);
 			endRecording();
 		};
 		window.addEventListener("keydown", handleKeyDown, true);
 		return () => window.removeEventListener("keydown", handleKeyDown, true);
-	}, [isMac, active, overrides, recording]);
+	}, [isMac, active, overrides, recording, recordingReady]);
 
 	const handleResetBinding = async (id: AppShortcutId) => {
-		const before = overrides;
-		await resetBinding(id);
+		const before = useKeybindingsStore.getState().overrides;
+		if (!await mutate(id, () => resetBinding(id))) return;
 		showToast({
 			title: t("shortcut.restored"),
-			body: `${definition(id)?.label ?? id} now uses its original binding.`,
+			body: t("shortcut.restoredBody", { name: shortcutLabel(id, t) }),
 			undo: async () => {
-				await setOverrides(before);
-				showToast({ title: t("shortcut.undone") });
+				if (await mutate(id, () => setOverrides(before))) showToast({ title: t("shortcut.undone") });
 			},
 		});
 	};
 
 	const handleRemoveBinding = async (id: AppShortcutId, index: number) => {
-		const before = overrides;
-		const current = effectiveShortcutBindings(id, isMac, overrides);
+		const before = useKeybindingsStore.getState().overrides;
+		const current = effectiveShortcutBindings(id, isMac, before);
 		const removed = current[index];
-		await setOverrides({ ...overrides, [id]: current.filter((_, candidateIndex) => candidateIndex !== index) });
+		if (!await mutate(id, () => setOverrides({ ...before, [id]: current.filter((_, candidateIndex) => candidateIndex !== index) }))) return;
 		showToast({
 			title: t("shortcut.removed"),
-			body: removed ? `${definition(id)?.label ?? id} no longer uses ${shortcutBindingLabel(removed, isMac)}.` : undefined,
+			body: removed ? t("shortcut.removedBody", { name: shortcutLabel(id, t), binding: shortcutBindingLabel(removed, isMac) }) : undefined,
 			undo: async () => {
-				await setOverrides(before);
-				showToast({ title: t("shortcut.undone") });
+				if (await mutate(id, () => setOverrides(before))) showToast({ title: t("shortcut.undone") });
 			},
 		});
 	};
 
 	return (
 		<>
-			<SettingsSection
-				title={t("settings.keyboardShortcuts")}
-				titleHidden={titleHidden}
-				grouped
-				toolbar={
-					<SettingsSearch
-						aria-label={t("shortcut.searchPlaceholder")}
-						placeholder={t("shortcut.searchPlaceholder")}
-						value={query}
-						onChange={setQuery}
-						trailing={
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								className="text-settings-muted hover:text-settings-label"
-								disabled={Object.keys(overrides).length === 0}
-								onClick={() => setConfirmResetAll(true)}
-							>
-								<RotateCcw aria-hidden="true" />
-								{t("shortcut.resetAll")}
-							</Button>
-						}
-					/>
-				}
-			>
-				{filteredShortcuts.map((shortcut) => {
-					const bindings = effectiveShortcutBindings(shortcut.id, isMac, overrides);
-					const modified = Object.hasOwn(overrides, shortcut.id);
-					const isRecording = recording?.id === shortcut.id;
-					return (
-						<SettingsRow
-							className={cn(isRecording && "bg-settings-row-hover")}
-							key={shortcut.id}
-							label={
-								<span className="flex items-center gap-2">
-									{shortcutLabel(shortcut.id, t)}
-									{modified ? (
-										<span className="rounded-full bg-settings-menu-selected px-2 py-0.5 text-micro text-settings-muted">
-											{t("shortcut.modified")}
-										</span>
-									) : null}
-								</span>
-							}
-							description={shortcutCategoryLabel(shortcut.category, t)}
-						>
-							{shortcut.customizable === false ? (
-								<span className="ml-auto text-xs text-settings-muted">{t("shortcut.fixedIndexed")}</span>
-							) : isRecording ? (
-								<div className="ml-auto flex min-w-52 items-center gap-2 rounded-md border border-(--color-settings-accent) px-3 py-2 text-caption text-settings-label">
-									<Keyboard className="size-icon-base animate-pulse" aria-hidden="true" />
-									{t("shortcut.pressRecording")}
-								</div>
-							) : (
-								<div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-									{bindings.length === 0 ? (
-										<span className="text-xs text-settings-muted">{t("shortcut.unassigned")}</span>
-									) : (
-										bindings.map((candidate, index) => (
-											<span
-												className="inline-flex items-center rounded-md bg-(--color-bg-settings-input)"
-												key={`${candidate.key}-${index}`}
-											>
-												<kbd className="px-2 py-1.5 font-mono text-caption text-settings-label">
-													{shortcutBindingLabel(candidate, isMac)}
-												</kbd>
+			<div ref={layoutRef} className="shortcuts-settings" data-shortcuts-layout={bounded ? "" : undefined} aria-busy={saving}>
+				<SettingsSection
+					title={t("settings.keyboardShortcuts")}
+					titleHidden={titleHidden}
+					sectionId="keyboard-shortcuts"
+					toolbar={
+						<div className="shortcut-toolbar sticky top-toolbar z-10 flex flex-wrap items-center gap-2 bg-(--color-bg-primary) pb-2">
+							<div className="flex h-9 min-w-40 flex-1 items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-(--color-settings-accent)">
+								<Search aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
+								<input
+									ref={searchRef}
+									type="search"
+									className="min-w-0 flex-1 bg-transparent text-sm text-settings-label outline-none placeholder:text-settings-muted [&::-webkit-search-cancel-button]:hidden"
+									aria-label={t("shortcut.searchPlaceholder")}
+									placeholder={t("shortcut.searchPlaceholder")}
+									value={query}
+									onChange={(event) => { if (recording) endRecording(false); setQuery(event.target.value); }}
+								/>
+								{query ? <button type="button" className="shortcut-icon-button -mr-2" aria-label={t("shortcut.clearSearch")} onClick={() => { setQuery(""); searchRef.current?.focus(); }}><X className="size-4" aria-hidden="true" /></button> : null}
+							</div>
+							<RadioGroup.Root value={modifiedOnly ? "modified" : "all"} onValueChange={(value) => { if (recording) endRecording(false); setModifiedOnly(value === "modified"); }} aria-label={t("shortcut.filterLabel")} className="settings-segment rounded-md">
+								<RadioGroup.Item value="all" className="settings-segment-item rounded-md">{t("shortcut.allCommands")}</RadioGroup.Item>
+								<RadioGroup.Item value="modified" className="settings-segment-item gap-1.5 rounded-md">{t("shortcut.modified")}<span className="text-settings-muted">{Object.keys(overrides).length}</span></RadioGroup.Item>
+							</RadioGroup.Root>
+						</div>
+					}
+				>
+					<div className="flex min-w-0 flex-col gap-3">
+						<div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+							<p className="min-w-0 flex-1 text-xs leading-5 text-settings-muted">{t("shortcut.settingsIntro")}</p>
+							<Button type="button" variant="ghost" size="sm" className="h-8 text-settings-muted" disabled={Object.keys(overrides).length === 0 || saving || Boolean(recording)} onClick={() => setConfirmResetAll(true)}><RotateCcw className="size-4" aria-hidden="true" />{t("shortcut.resetAll")}</Button>
+						</div>
+						<span className="text-xs text-settings-muted" aria-live="polite">{t("shortcut.resultCount", { count: filteredShortcuts.length })}</span>
+						<div data-shortcuts-list="" className={cn(HARNESS_CARD_CLASS, "shortcut-list harness-list-scrollbar")}>
+						{filteredShortcuts.length > 0 ? <>
+				{SHORTCUT_CATEGORIES.map((category) => {
+					const shortcuts = filteredShortcuts.filter((shortcut) => shortcut.category === category);
+					if (!shortcuts.length) return null;
+					return <section className="flex min-w-0 shrink-0 flex-col" key={category} aria-labelledby={`${contentId}-${category}`}>
+						<h3 className="border-b border-border bg-(--color-bg-secondary) px-3 py-2 text-xs font-medium leading-4 text-settings-muted" id={`${contentId}-${category}`}>{shortcutCategoryLabel(category, t)}</h3>
+						<div className="divide-y divide-border">
+							{shortcuts.map((shortcut) => {
+								const bindings = effectiveShortcutBindings(shortcut.id, isMac, overrides);
+								const modified = Object.hasOwn(overrides, shortcut.id);
+								const isRecording = recording?.id === shortcut.id;
+								const isExpanded = expanded === shortcut.id;
+								const label = shortcutLabel(shortcut.id, t);
+								return <div className={cn("shortcut-item", isRecording && "is-recording")} key={shortcut.id}>
+									<div className={cn(HARNESS_CARD_ROW_CLASS, "flex-wrap gap-x-4 gap-y-2")}>
+										<div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 text-sm leading-5 text-settings-label [overflow-wrap:anywhere]"><span>{label}</span>{modified ? <span className="shortcut-modified">{t("shortcut.modified")}</span> : null}{savingId === shortcut.id ? <span className="text-control text-muted-foreground" role="status">{t("shortcut.saving")}</span> : null}</div>
+										<div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-2">
+										<div className="flex flex-wrap items-center gap-2">
+											{bindings.length ? bindings.map((binding, index) => <span className="shortcut-alternative" key={`${binding.key}-${index}`}>{index > 0 ? <span className="shortcut-or">{t("shortcut.or")}</span> : null}<BindingKeys binding={binding} isMac={isMac} /></span>) : <span className="shortcut-unassigned">{t("shortcut.unassigned")}</span>}
+										</div>
+										<div className="flex shrink-0 items-center justify-end gap-1">
+											{shortcut.customizable === false ? <span className="shortcut-fixed" title={t("shortcut.fixedIndexed")}>{t("shortcut.fixed")}</span> : <>
 												<Tooltip>
 													<TooltipTrigger asChild>
-														<button
-															type="button"
-															className="mr-1 inline-flex size-5 items-center justify-center rounded text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-															aria-label={t("shortcut.removeBindingAria", { binding: shortcutBindingLabel(candidate, isMac), name: shortcutLabel(shortcut.id, t) })}
-															onClick={() => void handleRemoveBinding(shortcut.id, index)}
-														>
-															<X className="size-3" aria-hidden="true" />
-														</button>
+														<button type="button" className="shortcut-icon-button" id={`${contentId}-${shortcut.id}-edit`} disabled={saving || Boolean(recording)} aria-label={t("shortcut.changeAria", { name: label })} onClick={(event) => void beginRecording({ id: shortcut.id, mode: "replace" }, event.currentTarget)}><Pencil className="size-4" aria-hidden="true" /></button>
 													</TooltipTrigger>
-													<TooltipContent>{t("shortcut.remove")}</TooltipContent>
+													<TooltipContent>{t("shortcut.changeAria", { name: label })}</TooltipContent>
 												</Tooltip>
-											</span>
-										))
-									)}
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<button
-												type="button"
-												className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-												aria-label={t("shortcut.changeAria", { name: shortcutLabel(shortcut.id, t) })}
-												onClick={() => void beginRecording({ id: shortcut.id, mode: "replace" })}
-											>
-												<Pencil className="size-icon-base" aria-hidden="true" />
-											</button>
-										</TooltipTrigger>
-										<TooltipContent>{t("shortcut.change")}</TooltipContent>
-									</Tooltip>
-									{bindings.length < 2 ? (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<button
-													type="button"
-													className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-													aria-label={t("shortcut.addAltAria", { name: shortcutLabel(shortcut.id, t) })}
-													onClick={() => void beginRecording({ id: shortcut.id, mode: "add" })}
-												>
-													<Plus className="size-icon-base" aria-hidden="true" />
-												</button>
-											</TooltipTrigger>
-											<TooltipContent>{t("shortcut.add")}</TooltipContent>
-										</Tooltip>
-									) : null}
-									{modified ? (
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<button
-													type="button"
-													className="inline-flex size-8 items-center justify-center rounded-md text-settings-muted hover:bg-settings-menu-selected hover:text-settings-label"
-													aria-label={t("shortcut.resetAria", { name: shortcutLabel(shortcut.id, t) })}
-													onClick={() => void handleResetBinding(shortcut.id)}
-												>
-													<RotateCcw className="size-icon-base" aria-hidden="true" />
-												</button>
-											</TooltipTrigger>
-											<TooltipContent>{t("shortcut.reset")}</TooltipContent>
-										</Tooltip>
-									) : null}
-								</div>
-							)}
-						</SettingsRow>
-					);
+												<button type="button" className="shortcut-icon-button" id={`${contentId}-${shortcut.id}-options`} aria-label={t("shortcut.manageAria", { name: label })} aria-expanded={isExpanded} aria-controls={`${contentId}-${shortcut.id}-manage`} disabled={saving || Boolean(recording)} onClick={() => setExpanded(isExpanded ? null : shortcut.id)}><MoreHorizontal className="size-4" aria-hidden="true" /></button>
+											</>}
+										</div>
+										</div>
+									</div>
+									{isRecording ? <div ref={captureRef} className="shortcut-recorder" tabIndex={0} role="group" aria-label={t("shortcut.recordingAria", { name: label })} aria-describedby={`${contentId}-recording-help`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) endRecording(false); }}>
+										<Keyboard className="size-5 shrink-0" aria-hidden="true" />
+										<div className="min-w-0 flex-1"><p>{recordingReady ? t("shortcut.pressRecording") : t("shortcut.preparing")}</p><p id={`${contentId}-recording-help`} className="shortcut-recording-help">{t("shortcut.recordingHelp")}</p>{recordingError ? <p role="alert" className="shortcut-error">{recordingError}</p> : null}</div>
+										<Button type="button" variant="outline" className="shortcut-button" onClick={() => endRecording()}>{t("confirm.cancel")}</Button>
+									</div> : null}
+									<AnimatePresence initial={false}>
+									{isExpanded && !isRecording ? <motion.div
+										key="shortcut-management"
+										className="overflow-hidden"
+										initial={reduceMotion ? false : { height: 0, opacity: 0 }}
+										animate={{ height: "auto", opacity: 1 }}
+										exit={reduceMotion ? undefined : { height: 0, opacity: 0 }}
+										transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+									>
+									<div className="shortcut-management" id={`${contentId}-${shortcut.id}-manage`}>
+										{bindings.map((binding, index) => <div className="shortcut-manage-binding" key={`${binding.key}-${index}`}><BindingKeys binding={binding} isMac={isMac} /><Tooltip><TooltipTrigger asChild><button type="button" className="shortcut-icon-button" disabled={saving} aria-label={t("shortcut.removeBindingAria", { binding: shortcutBindingLabel(binding, isMac), name: label })} onClick={() => void handleRemoveBinding(shortcut.id, index)}><Trash2 className="size-4" aria-hidden="true" /></button></TooltipTrigger><TooltipContent>{t("shortcut.removeBindingAria", { binding: shortcutBindingLabel(binding, isMac), name: label })}</TooltipContent></Tooltip></div>)}
+										<div className="shortcut-manage-actions">
+											{bindings.length < 2 ? <Button type="button" variant="outline" className="shortcut-button" disabled={saving} aria-label={t("shortcut.addAltAria", { name: label })} onClick={(event) => void beginRecording({ id: shortcut.id, mode: "add" }, event.currentTarget)}><Plus className="size-4" aria-hidden="true" />{t("shortcut.addAlternative")}</Button> : null}
+											{modified ? <Button type="button" variant="ghost" className="shortcut-button" disabled={saving} aria-label={t("shortcut.resetAria", { name: label })} onClick={() => void handleResetBinding(shortcut.id)}><RotateCcw className="size-4" aria-hidden="true" />{t("shortcut.restoreDefault")}</Button> : null}
+											<Button type="button" variant="ghost" className="shortcut-button ml-auto" aria-label={t("shortcut.closeManageAria", { name: label })} onClick={() => { setExpanded(null); document.getElementById(`${contentId}-${shortcut.id}-options`)?.focus(); }}>{t("common.close")}</Button>
+										</div>
+									</div>
+									</motion.div> : null}
+									</AnimatePresence>
+									{mutationError?.id === shortcut.id ? <p role="alert" className="shortcut-error shortcut-row-error">{mutationError.message}</p> : null}
+								</div>;
+							})}
+						</div>
+					</section>;
 				})}
-				{filteredShortcuts.length === 0 ? (
-					<div className="settings-row-bar text-sm text-settings-muted">{t("shortcut.noMatching")}</div>
-				) : null}
-			</SettingsSection>
+						</> : null}
+				{filteredShortcuts.length === 0 ? <div className="shortcut-empty"><Search className="size-6" aria-hidden="true" /><p>{modifiedOnly && !query ? t("shortcut.noModified") : t("shortcut.noMatching")}</p><span>{modifiedOnly && !query ? t("shortcut.noModifiedHelp") : t("shortcut.noMatchingHelp")}</span><Button type="button" variant="outline" className="shortcut-button" onClick={() => { setQuery(""); setModifiedOnly(false); searchRef.current?.focus(); }}>{t("shortcut.showAll")}</Button></div> : null}
+						</div>
+					</div>
+				</SettingsSection>
 
 			{toast ? (
 				<div
-					className="pointer-events-auto sticky bottom-2 z-10 ml-auto flex w-[min(24rem,100%)] items-start gap-3 rounded-xl border border-(--color-border-settings-dialog) bg-settings-dialog px-4 py-3 shadow-[var(--shadow-settings-dialog)]"
+					className="pointer-events-auto absolute bottom-4 right-4 z-10 flex w-[min(24rem,100%)] items-start gap-3 rounded-xl border border-(--color-border-settings-dialog) bg-settings-dialog px-4 py-3 shadow-[var(--shadow-settings-dialog)]"
 					role="status"
 					aria-live="polite"
 					aria-atomic="true"
 				>
-					<Check className="mt-0.5 size-icon-base shrink-0 text-success" aria-hidden="true" />
+					{toast.error ? <AlertCircle className="mt-0.5 size-4 shrink-0 text-error" aria-hidden="true" /> : <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />}
 					<div className="min-w-0 flex-1">
 						<p className="text-sm font-medium text-settings-label">{toast.title}</p>
 						{toast.body ? <p className="mt-0.5 text-caption text-settings-muted">{toast.body}</p> : null}
@@ -454,7 +491,8 @@ export function KeyboardShortcutsContent({
 					{toast.undo ? (
 						<button
 							type="button"
-							className="text-caption font-medium text-settings-label hover:underline"
+							className="shortcut-button text-control font-medium text-settings-label hover:underline"
+							disabled={saving}
 							onClick={() => void toast.undo?.()}
 						>
 							{t("shortcut.undo")}
@@ -462,7 +500,7 @@ export function KeyboardShortcutsContent({
 					) : null}
 					<button
 						type="button"
-						className="text-settings-muted hover:text-settings-label"
+						className="shortcut-icon-button"
 						aria-label={t("shortcut.dismissNotification")}
 						onClick={() => setToast(null)}
 					>
@@ -470,6 +508,7 @@ export function KeyboardShortcutsContent({
 					</button>
 				</div>
 			) : null}
+			</div>
 
 			<ConfirmDialog
 				open={confirmResetAll}
@@ -510,24 +549,19 @@ export function KeyboardShortcutsContent({
 						: ""
 				}
 				confirmLabel={t("shortcut.reassign")}
+				busy={saving}
+				error={conflictError}
 				onOpenChange={(next) => {
-					if (!next) setConflict(null);
+					if (!next) { setConflict(null); setConflictError(null); }
 				}}
 				onConfirm={() => {
 					if (!conflict) return;
 					const pending = conflict;
-					setConflict(null);
-					void applyBinding(
-						pending.targetId,
-						pending.binding,
-						pending.mode,
-						pending.conflictingId,
-					).catch(() =>
-						showToast({
-							title: t("shortcut.couldNotReassign"),
-							body: t("shortcut.previousBindingsActive"),
-						}),
-					);
+					setConflictError(null);
+					void applyBinding(pending.targetId, pending.binding, pending.mode, pending.conflictingId).then((saved) => {
+						if (saved) setConflict(null);
+						else setConflictError(t("shortcut.saveFailed"));
+					});
 				}}
 			/>
 		</>

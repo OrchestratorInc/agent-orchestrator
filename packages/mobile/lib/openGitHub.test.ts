@@ -54,15 +54,29 @@ describe("openGitHub", () => {
 	it("still prefers the GitHub app from a sheet", async () => {
 		canOpenURL.mockResolvedValue(true);
 		await openGitHub(PR, { fromSheet: true });
-		expect(openURL).toHaveBeenCalledWith("github://repo/Untrivial-ai/agent-orchestrator/pull/5648");
+		expect(canOpenURL).toHaveBeenCalledWith("github://");
+		expect(openURL).toHaveBeenCalledWith(PR);
 		expect(openBrowserAsync).not.toHaveBeenCalled();
 	});
 
-	it("prefers the GitHub app for a page it has a screen for", async () => {
+	// `github://repo/o/r/pull/N` brought the app forward on whatever screen it
+	// was showing. The https URL is a universal link the app routes to the PR,
+	// and only `Linking.openURL` honours it; the in-app browser never would.
+	it("hands the GitHub app an https universal link for a page it has a screen for", async () => {
 		canOpenURL.mockResolvedValue(true);
-		await openGitHub(PR);
-		expect(openURL).toHaveBeenCalledWith("github://repo/Untrivial-ai/agent-orchestrator/pull/5648");
+		await openGitHub(`${PR}?diff=split`);
+		expect(canOpenURL).toHaveBeenCalledWith("github://");
+		expect(openURL).toHaveBeenCalledWith(PR);
+		expect(openURL).not.toHaveBeenCalledWith(expect.stringMatching(/^github:/));
 		expect(openBrowserAsync).not.toHaveBeenCalled();
+	});
+
+	it("keeps a page the GitHub app has no screen for in the in-app browser", async () => {
+		canOpenURL.mockResolvedValue(true);
+		const files = `${PR}/files`;
+		await openGitHub(files);
+		expect(openURL).not.toHaveBeenCalled();
+		expect(openBrowserAsync).toHaveBeenCalledWith(files, { createTask: false });
 	});
 
 	// The iOS bug report arrives as `x-safari-https://` (bugReportOpenUrl) so the

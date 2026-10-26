@@ -8,6 +8,7 @@ import {
 	type Http2SecureServer, type Http2Server, type Http2ServerRequest, type Http2ServerResponse, type ServerHttp2Session,
 } from "node:http2";
 import { WebSocketServer, createWebSocketStream, type WebSocket } from "ws";
+import * as agentViewer from "./agent-viewer";
 import { previewCertificate } from "./preview-certificate";
 import { startRemoteProxy, type ActiveProxy } from "./remote-proxy";
 
@@ -95,6 +96,83 @@ async function startUpstream(
 }
 
 describe("startRemoteProxy", () => {
+	it("allows only no-Origin GET/HEAD render documents through the control proxy", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "<p>render</p>" }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		for (const method of ["GET", "HEAD"]) {
+			const response = await fetch(`${proxy.base}/api/v1/sessions/s1/renders/r1?source=1`, { method, headers: { "sec-fetch-site": "cross-site" } });
+			expect(response.status).toBe(200);
+		}
+		for (const [method, route, origin] of [
+			["POST", "renders/r1", ""], ["GET", "renders/check", ""], ["GET", "renders/r1/artifact", ""],
+			["GET", "workspace/file/blob", ""], ["GET", "renders/r1", "null"], ["GET", "renders/r1", "http://evil.localhost"],
+		]) {
+			const response = await fetch(`${proxy.base}/api/v1/sessions/s1/${route}`, { method, headers: { "sec-fetch-site": "cross-site", ...(origin ? { Origin: origin } : {}) } });
+			expect(response.status).toBe(403);
+		}
+		expect(seen).toHaveLength(2);
+	});
+
+	it("rejects hostile browser REST and preflights before injecting upstream credentials", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		for (const origin of ["http://ao-preview-attacker.localhost:3001", "http://localhost", "null", "http://evil.example"]) {
+			for (const method of ["POST", "OPTIONS"]) {
+				const response = await fetch(`${proxy.base}/api/v1/shell-terminals`, { method, headers: { Origin: origin, "content-type": "text/plain" } });
+				expect(response.status).toBe(403);
+			}
+		}
+		const noOrigin = await fetch(`${proxy.base}/api/v1/shell-terminals`, { method: "POST", headers: { "sec-fetch-site": "cross-site" } });
+		expect(noOrigin.status).toBe(403);
+		expect(seen).toHaveLength(0);
+		const trusted = await fetch(`${proxy.base}/api/v1/shell-terminals`, { method: "POST", headers: { Origin: "app://renderer", "sec-fetch-site": "cross-site" } });
+		expect(trusted.status).toBe(200);
+		expect(seen).toHaveLength(1);
+		expect(seen[0].auth).toBe("Bearer pw");
+		expect(seen[0].origin).toBeUndefined();
+	});
+
+	it("refuses hostile mux upgrades without opening an upstream socket", async () => {
+		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
+		const upgrades = vi.fn();
+		upstream!.on("upgrade", (req, socket) => { upgrades(req.url); socket.destroy(); });
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const target = new URL(proxy.base);
+		const staticPreview = new URL(proxy.previewUrl("ao-1", `http://ao-preview.mfxs2mi.localhost:${port}/index.html`));
+		for (const [destination, origin] of [[target, "http://ao-preview-attacker.localhost:3001"], [target, "null"], [staticPreview, staticPreview.origin]] as const) {
+			await new Promise<void>((resolve, reject) => {
+				const onConnect = () => {
+					socket.write(`GET ${target.pathname}/mux HTTP/1.1\r\nHost: ${destination.host}\r\nOrigin: ${origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+				};
+				const socket = destination.protocol === "https:"
+					? tlsConnect({ host: "127.0.0.1", port: Number(destination.port), ...trustPreview(destination) }, onConnect)
+					: netConnect(Number(destination.port), "127.0.0.1", onConnect);
+				socket.setTimeout(2000, () => { socket.destroy(); reject(new Error("upgrade did not close")); });
+				socket.on("error", reject);
+				socket.on("close", () => resolve());
+			});
+		}
+		expect(upgrades).not.toHaveBeenCalled();
+		expect(seen).toHaveLength(0);
+	});
+
+	it("removes only the host's final API sandbox on isolated preview origins", async () => {
+		const sandbox = "sandbox allow-scripts allow-forms";
+		const appPolicy = "default-src 'self'; sandbox allow-scripts";
+		const { port } = await startUpstream(() => ({ status: 200, body: "<main>preview</main>", headers: {
+			"content-type": "text/html", "content-security-policy": `${appPolicy}, ${sandbox}`, "x-ao-preview-api-sandbox": "1",
+		} }));
+		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}`, password: "pw" });
+		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
+		const headers = await new Promise<IncomingMessage["headers"]>((resolve, reject) => {
+			previewRequest(preview, { path: "/", method: "GET" }, (res) => { res.resume(); resolve(res.headers); }).on("error", reject).end();
+		});
+		expect(headers["content-security-policy"]).toBe(appPolicy);
+		expect(headers["x-ao-preview-api-sandbox"]).toBeUndefined();
+		const legacy = await fetch(`${proxy.base}/api/v1/sessions/ao-1/preview/files/index.html`);
+		expect(legacy.headers.get("content-security-policy")).toBe(`${appPolicy}, ${sandbox}`);
+	});
+
 	it("serves authenticated artifact files and sibling assets without replacing an app preview", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "artifact", headers: { "set-cookie": "secret=1" } }));
 		proxy = await startRemoteProxy({ label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" });
@@ -136,7 +214,9 @@ describe("startRemoteProxy", () => {
 		expect(await request(raw)).toBe(200);
 	});
 
-	it("keeps an app preview's origin across dev-server and proxy restarts", async () => {
+	it("keeps an app preview's origin across restarts with the same preview port", async () => {
+		// Port contention permits a different origin; isolate stable-port URL mapping.
+		vi.spyOn(agentViewer, "listenOnStablePort").mockResolvedValue(44000);
 		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		const entry = { label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" };
 		proxy = await startRemoteProxy(entry);
@@ -429,7 +509,8 @@ describe("startRemoteProxy", () => {
 			method: "OPTIONS",
 			headers: { Origin: "http://evil.example" },
 		});
-		expect(foreign.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+		expect(foreign.status).toBe(403);
+		expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
 	});
 
 	it("serves a verified host with the token stripped", async () => {
@@ -891,9 +972,11 @@ describe("startRemoteProxy streams", () => {
 
 	it("tunnels a WebSocket upgrade with the credential injected", async () => {
 		const sawAuth: Array<string | undefined> = [];
+		const sawFetchSite: unknown[] = [];
 		upstream = createServer();
 		upstream.on("upgrade", (req, socket) => {
 			sawAuth.push(req.headers.authorization);
+			sawFetchSite.push(req.headers["sec-fetch-site"]);
 			socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
 			socket.on("data", (d) => socket.write(d)); // echo frames back verbatim
 			// Upgraded sockets are half-open by default and would hold close() open.
@@ -913,7 +996,7 @@ describe("startRemoteProxy streams", () => {
 		await new Promise<void>((resolve) => socket.on("connect", () => resolve()));
 		socket.on("data", (d) => received.push(d));
 		socket.write(
-			`GET ${proxyUrl.pathname}/mux HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+			`GET ${proxyUrl.pathname}/mux HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: app://renderer\r\nSec-Fetch-Site: cross-site\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGVzdA==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
 		);
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		socket.write("payload-bytes");
@@ -924,6 +1007,7 @@ describe("startRemoteProxy streams", () => {
 		expect(all).toContain("101 Switching Protocols");
 		expect(all).toContain("payload-bytes"); // echoed through both pipes
 		expect(sawAuth).toEqual(["Bearer pw"]);
+		expect(sawFetchSite).toEqual([undefined]);
 	});
 
 	it("destroys an upgrade that carries no token", async () => {
@@ -1194,7 +1278,9 @@ describe("startRemoteProxy when the upstream fails", () => {
 	// An HTTPS daemon carrying HTTP/2 inside a WebSocket at /api/v1/tunnel, as
 	// AO's does behind a Cloudflare tunnel. drop() closes every tunnel; direct
 	// requests answer {direct}.
-	async function startTunnelDaemon(handler: DaemonHandler, options: { failUpgrades?: number; answerUpgrades?: boolean } = {}) {
+	// holdMs sends what the daemon wrote within that time as one tunnel
+	// message, as the Cloudflare edge passes a small answer on.
+	async function startTunnelDaemon(handler: DaemonHandler, options: { failUpgrades?: number; answerUpgrades?: boolean; holdMs?: number } = {}) {
 		const tunnels = new Set<WebSocket>();
 		const drop = () => { for (const tunnel of tunnels) tunnel.terminate(); };
 		const inner = createHttp2Server((req, res) => (req.url === "/api/v1/identity" ? void res.end(identity) : handler(req, res, drop)));
@@ -1218,6 +1304,7 @@ describe("startRemoteProxy when the upstream fails", () => {
 			sockets.handleUpgrade(req, socket, head, (ws) => {
 				tunnels.add(ws);
 				ws.once("close", () => tunnels.delete(ws));
+				if (options.holdMs) holdSends(ws, options.holdMs);
 				const stream = createWebSocketStream(ws);
 				stream.on("error", () => undefined);
 				inner.emit("connection", stream);
@@ -1231,6 +1318,20 @@ describe("startRemoteProxy when the upstream fails", () => {
 			return new Promise<void>((resolve) => host.close(() => resolve()));
 		});
 		return state;
+	}
+
+	function holdSends(ws: WebSocket, holdMs: number): void {
+		const send = ws.send.bind(ws);
+		let held: Buffer[] = [];
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		ws.send = ((data: Buffer, callback?: (error?: Error) => void) => {
+			held.push(Buffer.from(data));
+			callback?.();
+			timer ??= setTimeout(() => {
+				timer = undefined;
+				send(Buffer.concat(held.splice(0)));
+			}, holdMs);
+		}) as typeof ws.send;
 	}
 
 	// A TCP relay to a daemon. silence() makes every connection it carries go
@@ -1328,9 +1429,23 @@ describe("startRemoteProxy when the upstream fails", () => {
 		}
 	});
 
+	it("relays a small body whose tunnelled stream closed before its end", async () => {
+		// Through the tunnel, a small answer's stream closes with NO_ERROR before
+		// its body ends. Once the request has gone out, as it has over any real
+		// network, Node destroys that stream before "end": the body is complete.
+		const host = await startTunnelDaemon((_req, res) => void setTimeout(() => res.end('{"ok":true}'), 30), { holdMs: 10 });
+		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`));
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const response = await fetch(`${proxy.base}/api/v1/projects`);
+			expect(response.status).toBe(200);
+			expect(await within(response.json())).toEqual({ ok: true });
+		}
+		expect(host.upgrades).toBe(1);
+	});
+
 	it("fails a body whose host destroyed its session mid-body", async () => {
 		// A destroyed session ends its streams with code 0 and no reset: only the
-		// stream's own state tells this cut from a finished body.
+		// destroyed session tells this cut from a finished body.
 		const port = await startH2Daemon((_req, res) => {
 			res.writeHead(200, { "content-type": "text/javascript" });
 			res.write("x".repeat(5_000));

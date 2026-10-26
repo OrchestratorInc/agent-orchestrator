@@ -77,7 +77,7 @@ beforeEach(() => {
 			return { agent, agentConfig: { ...previous?.agentConfig, ...update.agentConfig } };
 		};
 		const coder = patch.config?.coder ? { ...(project.config.coder as object | undefined), ...patch.config.coder } : project.config.coder;
-		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } };
+		project = { ...project, ...(patch.displayName ? { displayName: patch.displayName } : {}), ...(patch.defaultBranch ? { defaultBranch: patch.defaultBranch } : {}), config: { ...project.config, ...patch.config, coder, worker: mergeRole("worker"), orchestrator: mergeRole("orchestrator") } as CloudCpProject["config"] };
 		if (project.config.coder === undefined) delete project.config.coder;
 		for (const role of ["worker", "orchestrator"] as const) if (project.config[role] === undefined) delete project.config[role];
 		return { project };
@@ -116,7 +116,7 @@ describe("Cloud project settings", () => {
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", expectedPatch({ model: "other-model", effort: "low", permissions: "bypass-permissions" })));
 		view.unmount();
 		mount();
-		expect(await screen.findByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low");
+		await waitFor(() => expect(screen.getByRole("button", { name: `${label} model` })).toHaveTextContent("Other model · Low"));
 		expect(screen.getByRole("button", { name: `${label} approval` })).toHaveTextContent("Bypass permissions");
 		expect(screen.getByRole("button", { name: `${label} agent` })).toBeDisabled();
 	});
@@ -178,6 +178,19 @@ describe("Cloud project settings", () => {
 		await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("org", "project", { displayName: "New name" }));
 		expect(screen.queryByText("Issue Intake")).not.toBeInTheDocument();
 		expect(screen.getByText("legacy")).toBeInTheDocument();
+	});
+
+	it("refreshes the shared project list after a rename so the sidebar and board show the new name", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const listKey = ["cloud-projects", "https://cloud.test", "org"];
+		client.setQueryData(listKey, [project]);
+		render(<QueryClientProvider client={client}><TooltipProvider><ProjectSettingsForm projectId="project" cloudOrgId="org" section="general" onSaveState={vi.fn()} /></TooltipProvider></QueryClientProvider>);
+		await userEvent.click(await screen.findByRole("button", { name: "Edit Project name" }));
+		const name = screen.getByRole("textbox", { name: "Project name" });
+		await userEvent.clear(name);
+		await userEvent.type(name, "Renamed");
+		await waitFor(() => expect(mocks.patch).toHaveBeenCalledWith("org", "project", { displayName: "Renamed" }));
+		await waitFor(() => expect(client.getQueryState(listKey)?.isInvalidated).toBe(true));
 	});
 
 	it("keeps auto review off until the project enables it, like local projects", async () => {
@@ -315,7 +328,7 @@ describe("Cloud project Coder template", () => {
 		project.config.coder = { templateId: "tpl-1" };
 		mount("general");
 		await userEvent.click(await screen.findByRole("button", { name: "Edit Workspace name prefix" }));
-		expect(screen.getByText("Applies to new sessions. Workspaces are named <prefix>-<id>; empty uses the project name.")).toBeInTheDocument();
+		expect(screen.getByText("Applies to new sessions. Workspaces are named <prefix>-o-<id> / <prefix>-w-<word>-<id>; empty uses the project name.")).toBeInTheDocument();
 		const prefix = screen.getByRole("textbox", { name: "Workspace name prefix" });
 		await userEvent.type(prefix, "acme");
 		await waitFor(() => expect(mocks.patch).toHaveBeenLastCalledWith("org", "project", { config: { coder: { workspaceNamePrefix: "acme" } } }));

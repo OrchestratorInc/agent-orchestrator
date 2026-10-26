@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,17 +34,21 @@ type acpSession struct {
 	steering  bool
 }
 
+// lockedBuffer collects an agent's stderr, which os/exec copies in from its
+// own goroutine while a failing turn reads it. The buffer is a field, not
+// embedded: an embedded bytes.Buffer would lend it ReadFrom, which io.Copy
+// prefers over Write, and the copy would then skip the lock.
 type lockedBuffer struct {
-	mu sync.Mutex
-	bytes.Buffer
+	mu     sync.Mutex
+	buffer bytes.Buffer
 }
 
 func (b *lockedBuffer) Write(value []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.Buffer.Write(value)
+	return b.buffer.Write(value)
 }
-func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.Buffer.String() }
+func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buffer.String() }
 
 func (s *acpSession) Steer(ctx context.Context, turnID, text string) error {
 	if s == nil || turnID != s.turnID || !s.steering {
@@ -105,7 +110,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 		return fmt.Errorf("start ACP agent: %w", err)
 	}
 	defer func() { _ = stopProviderProcess(process); _ = process.Wait() }()
-	client := &cloudACPClient{control: control, turn: turn, publish: publish}
+	client := &cloudACPClient{control: control, turn: turn, cursorMode: command.CursorMode, publish: publish}
 	conn := acp.NewClientSideConnection(client, stdin, stdout)
 	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -119,11 +124,18 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 			"type": "preset", "preset": "claude_code", "append": command.SystemPrompt,
 		}}
 	}
+	// Claude opens the sibling checkouts as additional directories, so it
+	// loads their CLAUDE.md as a terminal's --add-dir does. An agent that does
+	// not advertise the capability keeps the settings' directory access only.
+	var additionalDirectories []string
+	if turn.Harness == "claude-code" && initialized.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil {
+		additionalDirectories = command.AdditionalDirectories
+	}
 	var sessionID acp.SessionId
 	var configOptions []acp.SessionConfigOption
 	var modes *acp.SessionModeState
 	if turn.AgentSessionID != "" {
-		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
+		loaded, loadErr := conn.LoadSession(handshakeCtx, acp.LoadSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}, SessionId: acp.SessionId(turn.AgentSessionID)})
 		if loadErr != nil {
 			var requestErr *acp.RequestError
 			// The CLI builder's missing-transcript check only changes CLI args;
@@ -138,7 +150,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 		}
 	}
 	if sessionID == "" {
-		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, McpServers: []acp.McpServer{}})
+		created, createErr := conn.NewSession(handshakeCtx, acp.NewSessionRequest{Meta: meta, Cwd: command.Dir, AdditionalDirectories: additionalDirectories, McpServers: []acp.McpServer{}})
 		if createErr != nil {
 			return fmt.Errorf("create ACP session: %w: %s", createErr, boundedError(stderr.String()))
 		}
@@ -148,7 +160,7 @@ func (s *Supervisor) runACP(ctx context.Context, turn worker.Turn, command Comma
 			return err
 		}
 	}
-	if err := configureACPSession(ctx, conn, sessionID, turn, configOptions, modes); err != nil {
+	if err := configureACPSession(ctx, conn, sessionID, turn, command.CursorMode, configOptions, modes, publish); err != nil {
 		return err
 	}
 	active := &acpSession{conn: conn, sessionID: sessionID, turnID: turn.ID, steering: acpSteeringSupported(initialized.Meta)}
@@ -196,8 +208,15 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 		}
 		return adapter, nil, env, nil
 	case "cursor":
+		if err := validateCursorMode(command.CursorMode); err != nil {
+			return "", nil, nil, err
+		}
+		// The project's Cursor mode is not a flag here: cursor-agent's acp
+		// command ignores --mode, so configureACPSession sets it as the ACP
+		// session mode. A restricted mode launches without --force or
+		// --auto-review (cursorACPApprovalMode).
 		args := []string{"--trust"}
-		switch turn.ApprovalMode {
+		switch cursorACPApprovalMode(turn, command.CursorMode) {
 		case "auto":
 			args = append(args, "--auto-review")
 		case "bypass-permissions":
@@ -209,7 +228,10 @@ func acpLaunch(ctx context.Context, turn worker.Turn, command Command) (string, 
 	}
 }
 
-func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, turn worker.Turn, options []acp.SessionConfigOption, modes *acp.SessionModeState) error {
+// configureACPSession applies the turn's model, approval mode and effort to
+// the session. publish, when set, carries the notice of an approval mode the
+// turn's model does not offer, so the timeline says which mode ran instead.
+func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, turn worker.Turn, cursorMode string, options []acp.SessionConfigOption, modes *acp.SessionModeState, publish func(Output) error) error {
 	setOption := func(id, value string) error {
 		if value == "" {
 			return nil
@@ -231,30 +253,181 @@ func configureACPSession(ctx context.Context, conn *acp.ClientSideConnection, se
 		return err
 	}
 	if turn.Harness == "claude-code" {
-		mode := "default"
-		if turn.Mode == "read-only" {
-			mode = "plan"
-		} else {
-			switch turn.ApprovalMode {
-			case "accept-edits":
-				mode = "acceptEdits"
-			case "auto":
-				mode = "auto"
-			case "bypass-permissions":
-				mode = "bypassPermissions"
-			}
-		}
-		if mode == "auto" && !acpModeOffered(options, modes, mode) && acpModeOffered(options, modes, "default") {
-			mode = "default"
-		}
+		mode := claudeACPOfferedMode(turn, options, modes)
 		if !acpModeOffered(options, modes, mode) {
 			return fmt.Errorf("ACP session does not offer approval mode %q", mode)
 		}
 		if _, err := conn.SetSessionMode(ctx, acp.SetSessionModeRequest{SessionId: sessionID, ModeId: acp.SessionModeId(mode)}); err != nil {
 			return fmt.Errorf("set Claude approval mode: %w", err)
 		}
+		if wanted := claudeACPApprovalMode(turn); mode != wanted && publish != nil {
+			// The timeline is a view of the turn: a notice it rejects never fails it.
+			_ = publish(Output{Activity: approvalModeSubstitutedActivity(wanted, mode, acpSelectedChoiceName(options, "model", turn.Model))})
+		}
+	}
+	if turn.Harness == "cursor" && cursorMode != "" {
+		// The project's plan or ask mode, set on every turn so a restored
+		// conversation runs in it too. A session that does not offer it fails
+		// the turn rather than running it as the full agent.
+		if !acpModeOffered(options, modes, cursorMode) {
+			return fmt.Errorf("%w: ACP session does not offer Cursor mode %q", ErrUnsupportedPolicy, cursorMode)
+		}
+		if _, err := conn.SetSessionMode(ctx, acp.SetSessionModeRequest{SessionId: sessionID, ModeId: acp.SessionModeId(cursorMode)}); err != nil {
+			return fmt.Errorf("set Cursor mode: %w", err)
+		}
 	}
 	return setOption("effort", turn.ReasoningEffort)
+}
+
+// claudeApprovalStepDown is the order a Claude approval mode steps down in
+// when the turn's model does not offer it, most permissive first:
+// bypassPermissions never asks, auto lets a classifier approve routine
+// actions, acceptEdits approves file edits only, and default asks. A mode
+// steps down only to the modes after it, so a substitute stays as close to
+// the user's choice as the model allows without approving more than asked.
+// Claude ACP offers auto only for models that support it, so auto on Haiku
+// runs as acceptEdits.
+var claudeApprovalStepDown = []string{"bypassPermissions", "auto", "acceptEdits", "default"}
+
+// claudeACPOfferedMode is the turn's approval mode adjusted to what the adapter
+// offers for the session's model: the first mode at or after it in
+// claudeApprovalStepDown that the session offers, whether it was chosen for
+// the turn or taken from the session's mode. configureACPSession reports a
+// substitute in the timeline, so a weaker mode is never applied silently. A
+// read-only turn's plan mode never steps down, and a mode with no offered
+// substitute is returned unchanged so the turn fails instead of widening.
+func claudeACPOfferedMode(turn worker.Turn, options []acp.SessionConfigOption, modes *acp.SessionModeState) string {
+	mode := claudeACPApprovalMode(turn)
+	start := slices.Index(claudeApprovalStepDown, mode)
+	if start < 0 {
+		return mode
+	}
+	for _, candidate := range claudeApprovalStepDown[start:] {
+		if acpModeOffered(options, modes, candidate) {
+			return candidate
+		}
+	}
+	return mode
+}
+
+// claudeACPModeApproval maps a Claude ACP session mode to AO's approval mode,
+// or "" for a mode AO does not offer as one (plan, dontAsk).
+func claudeACPModeApproval(mode string) string {
+	switch mode {
+	case "default":
+		return "default"
+	case "acceptEdits":
+		return "accept-edits"
+	case "auto":
+		return "auto"
+	case "bypassPermissions":
+		return "bypass-permissions"
+	}
+	return ""
+}
+
+// approvalModeLabels name Claude's session modes the way the Chat approval
+// menu names AO's approval modes. default only ever reads as a substitute.
+var approvalModeLabels = map[string]string{
+	"bypassPermissions": "Bypass permissions",
+	"auto":              "Auto-approve",
+	"acceptEdits":       "Accept edits",
+	"default":           "agent permissions",
+}
+
+// approvalModeSubstitutedActivity is the timeline notice for a turn that runs
+// a weaker approval mode than it asked for because its model does not offer
+// that one: "Auto-approve isn't available for Haiku; using Accept edits."
+func approvalModeSubstitutedActivity(wanted, used, model string) *worker.ChatActivity {
+	if model == "" {
+		model = "this model"
+	}
+	return &worker.ChatActivity{
+		ID: "approval-mode-substituted", Kind: "system", Status: "completed",
+		Summary: fmt.Sprintf("%s isn't available for %s; using %s.", approvalModeLabels[wanted], model, approvalModeLabels[used]),
+		Detail: map[string]any{
+			"event": "approval_mode.substituted", "model": model,
+			"requestedApprovalMode": claudeACPModeApproval(wanted), "approvalMode": claudeACPModeApproval(used),
+		},
+	}
+}
+
+// acpSelectedChoiceName is the display name of the choice a select option
+// currently holds, or fallback when the session does not name it.
+func acpSelectedChoiceName(options []acp.SessionConfigOption, id, fallback string) string {
+	for _, option := range options {
+		if option.Select == nil || string(option.Select.Id) != id {
+			continue
+		}
+		var choices []acp.SessionConfigSelectOption
+		if option.Select.Options.Ungrouped != nil {
+			choices = append(choices, *option.Select.Options.Ungrouped...)
+		}
+		if option.Select.Options.Grouped != nil {
+			for _, group := range *option.Select.Options.Grouped {
+				choices = append(choices, group.Options...)
+			}
+		}
+		for _, choice := range choices {
+			if choice.Value == option.Select.CurrentValue && strings.TrimSpace(choice.Name) != "" {
+				return strings.TrimSpace(choice.Name)
+			}
+		}
+	}
+	return fallback
+}
+
+// claudeACPApprovalMode is the Claude approval mode a Chat turn runs with. A
+// turn's own approval mode wins; a turn without one (the session's queued
+// first prompt, or a message sent without a pick) follows the session mode as
+// a headless Chat turn does (claudeArgs): trusted skips permission prompts and
+// standard accepts edits. The interactive terminal runs standard with
+// --permission-mode auto instead (agentruntime.PermissionPolicyForMode).
+func claudeACPApprovalMode(turn worker.Turn) string {
+	if turn.Mode == "read-only" {
+		return "plan"
+	}
+	switch turn.ApprovalMode {
+	case "default":
+		return "default"
+	case "accept-edits":
+		return "acceptEdits"
+	case "auto":
+		return "auto"
+	case "bypass-permissions":
+		return "bypassPermissions"
+	}
+	switch turn.Mode {
+	case "trusted":
+		return "bypassPermissions"
+	case "standard":
+		return "acceptEdits"
+	}
+	return "default"
+}
+
+// cursorACPApprovalMode is the approval mode a Cursor Chat turn runs with, as
+// claudeACPApprovalMode is Claude's: a turn's own approval mode wins, and a
+// turn without one follows the session mode (trusted bypasses permission
+// prompts, standard accepts edits). A read-only turn approves nothing: it
+// launches without --force and every permission request is cancelled
+// (cloudACPClient.RequestPermission). A turn in the project's plan or ask
+// mode (cursorMode) asks for every approval: a restricted mode is never
+// combined with --force, --auto-review or an automatic approval.
+func cursorACPApprovalMode(turn worker.Turn, cursorMode string) string {
+	if turn.Mode == "read-only" || cursorMode != "" {
+		return "default"
+	}
+	if turn.ApprovalMode != "" {
+		return turn.ApprovalMode
+	}
+	switch turn.Mode {
+	case "trusted":
+		return "bypass-permissions"
+	case "standard":
+		return "accept-edits"
+	}
+	return "default"
 }
 
 // acpModelValue maps a model alias to the choice the session lists for it.
@@ -348,7 +521,9 @@ func acpModeOffered(options []acp.SessionConfigOption, modes *acp.SessionModeSta
 type cloudACPClient struct {
 	control approvalControl
 	turn    worker.Turn
-	publish func(Output) error
+	// cursorMode is the turn's Command.CursorMode.
+	cursorMode string
+	publish    func(Output) error
 	// live gates recording of session updates. LoadSession replays the entire
 	// prior conversation back through SessionUpdate before it returns; recording
 	// that replay would re-emit every earlier turn's assistant text at the head
@@ -356,16 +531,155 @@ type cloudACPClient struct {
 	// handshake and is flipped true just before Prompt, so only the live turn's
 	// output is published.
 	live atomic.Bool
+	// mu guards the tool calls and reasoning run below, which turn ACP tool
+	// calls and thoughts into Chat activity for the live turn.
+	mu        sync.Mutex
+	tools     map[string]*acpToolState
+	thoughtID string
+	thoughts  int
+	// textID is the assistant message the current run of text chunks adds to.
+	// A tool call or thought ends it, so the agent's sentence before each step
+	// is its own message, placed where it was said.
+	textID string
+	texts  int
+	// published is each activity's last snapshot, so an update that changes
+	// nothing the timeline shows is not stored again.
+	published map[string]string
 }
 
 func (c *cloudACPClient) SessionUpdate(_ context.Context, notification acp.SessionNotification) error {
 	if !c.live.Load() {
 		return nil
 	}
-	if chunk := notification.Update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
-		return c.publish(Output{Stream: "stdout", Text: chunk.Content.Text.Text})
+	update := notification.Update
+	if chunk := update.AgentMessageChunk; chunk != nil && chunk.Content.Text != nil {
+		return c.publish(Output{Stream: "stdout", Text: chunk.Content.Text.Text, ItemID: c.text()})
+	}
+	if chunk := update.AgentThoughtChunk; chunk != nil && chunk.Content.Text != nil && chunk.Content.Text.Text != "" {
+		// Consecutive thought chunks are one reasoning row, as with Codex.
+		var outputs []Output
+		id := c.thought()
+		for _, text := range codexChunks(chunk.Content.Text.Text) {
+			outputs = append(outputs, Output{Activity: &worker.ChatActivity{ID: id, Kind: "reasoning", Status: "running",
+				Summary: "Reasoning", Detail: map[string]any{"textDelta": text}}})
+		}
+		for _, output := range outputs {
+			c.publishActivity(output)
+		}
+		return nil
+	}
+	if activity := c.toolActivity(update); activity != nil {
+		c.publishActivity(Output{Activity: activity})
 	}
 	return nil
+}
+
+// publishActivity records a tool call or reasoning row on a best-effort basis:
+// the timeline is a view of the turn, so a rejected activity must never fail
+// it. A worker that lost its turn finds out from the assistant text it
+// publishes. A tool snapshot identical to the last one sent is skipped.
+func (c *cloudACPClient) publishActivity(output Output) {
+	if activity := output.Activity; activity != nil && activity.Kind != "reasoning" {
+		raw, err := json.Marshal(activity)
+		if err == nil {
+			c.mu.Lock()
+			if c.published == nil {
+				c.published = map[string]string{}
+			}
+			same := c.published[activity.ID] == string(raw)
+			c.published[activity.ID] = string(raw)
+			c.mu.Unlock()
+			if same {
+				return
+			}
+		}
+	}
+	_ = c.publish(output)
+}
+
+// text is the id of the assistant message the current run of text chunks adds
+// to, starting a new one after a tool call or a thought.
+func (c *cloudACPClient) text() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.thoughtID = ""
+	if c.textID == "" {
+		c.texts++
+		c.textID = fmt.Sprintf("acp-text-%d", c.texts)
+	}
+	return c.textID
+}
+
+// toolActivity folds an ACP tool_call or tool_call_update into the call's
+// remembered state and returns its full activity snapshot, or nil for any
+// other update.
+func (c *cloudACPClient) toolActivity(update acp.SessionUpdate) *worker.ChatActivity {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tools == nil {
+		c.tools = map[string]*acpToolState{}
+	}
+	switch {
+	case update.ToolCall != nil:
+		call := update.ToolCall
+		id := string(call.ToolCallId)
+		if id == "" {
+			return nil
+		}
+		c.thoughtID, c.textID = "", ""
+		tool := &acpToolState{title: call.Title, kind: call.Kind, status: call.Status, content: call.Content,
+			rawInput: call.RawInput, rawOutput: call.RawOutput, meta: call.Meta}
+		c.tools[id] = tool
+		return acpToolActivity(id, tool)
+	case update.ToolCallUpdate != nil:
+		call := update.ToolCallUpdate
+		id := string(call.ToolCallId)
+		if id == "" {
+			return nil
+		}
+		c.thoughtID, c.textID = "", ""
+		tool := c.tools[id]
+		if tool == nil {
+			tool = &acpToolState{}
+			c.tools[id] = tool
+		}
+		if call.Title != nil {
+			tool.title = *call.Title
+		}
+		if call.Kind != nil {
+			tool.kind = *call.Kind
+		}
+		if call.Status != nil {
+			tool.status = *call.Status
+		}
+		if call.Content != nil {
+			tool.content = call.Content
+		}
+		if call.RawInput != nil {
+			tool.rawInput = call.RawInput
+		}
+		if call.RawOutput != nil {
+			tool.rawOutput = call.RawOutput
+		}
+		if call.Meta != nil {
+			tool.meta = call.Meta
+		}
+		return acpToolActivity(id, tool)
+	}
+	return nil
+}
+
+// thought is the id of the reasoning row the current run of thought chunks
+// adds to, starting a new one after a message or a tool call.
+func (c *cloudACPClient) thought() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.textID = ""
+	if c.thoughtID == "" {
+		c.thoughts++
+		c.thoughtID = fmt.Sprintf("acp-thought-%d", c.thoughts)
+	}
+	return c.thoughtID
 }
 
 func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
@@ -375,7 +689,7 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 	if ctx.Err() != nil || c.turn.Mode == "read-only" {
 		return cancelled, nil
 	}
-	if selected, ok := automaticACPDecision(c.turn, request); ok {
+	if selected, ok := automaticACPDecision(c.turn, c.cursorMode, request); ok {
 		return acp.RequestPermissionResponse{Outcome: acp.NewRequestPermissionOutcomeSelected(selected)}, nil
 	}
 	options := make([]map[string]string, 0, len(request.Options))
@@ -433,12 +747,16 @@ func (c *cloudACPClient) RequestPermission(ctx context.Context, request acp.Requ
 	}
 }
 
-func automaticACPDecision(turn worker.Turn, request acp.RequestPermissionRequest) (acp.PermissionOptionId, bool) {
+func automaticACPDecision(turn worker.Turn, cursorMode string, request acp.RequestPermissionRequest) (acp.PermissionOptionId, bool) {
+	approval := turn.ApprovalMode
+	if turn.Harness == "cursor" {
+		approval = cursorACPApprovalMode(turn, cursorMode)
+	}
 	allow := false
-	if turn.ApprovalMode == "bypass-permissions" {
+	if approval == "bypass-permissions" {
 		allow = true
 	}
-	if turn.Harness == "cursor" && turn.ApprovalMode == "accept-edits" && request.ToolCall.Kind != nil {
+	if turn.Harness == "cursor" && approval == "accept-edits" && request.ToolCall.Kind != nil {
 		switch *request.ToolCall.Kind {
 		case acp.ToolKindEdit, acp.ToolKindDelete, acp.ToolKindMove:
 			allow = true
@@ -448,7 +766,7 @@ func automaticACPDecision(turn worker.Turn, request acp.RequestPermissionRequest
 		return "", false
 	}
 	kinds := []acp.PermissionOptionKind{acp.PermissionOptionKindAllowOnce}
-	if turn.ApprovalMode == "bypass-permissions" {
+	if approval == "bypass-permissions" {
 		kinds = append([]acp.PermissionOptionKind{acp.PermissionOptionKindAllowAlways}, kinds...)
 	}
 	for _, kind := range kinds {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reconcileRows } from "./rowSharing";
 import { ApiError, getNotifications, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
+import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
 import { shouldKeepPolling, userFacingError } from "./connectionError";
@@ -24,6 +25,12 @@ export type HostSnapshot = {
 	projects: ProjectInfo[];
 	projectsKnown: boolean;
 	sessions: DashboardSession[];
+	/**
+	 * The size of the archive the poll left out of `sessions`, when this machine
+	 * pages it. Null before the first answer and for a daemon that predates
+	 * paging, whose `sessions` still holds every archived worker.
+	 */
+	archive?: ArchiveSummary | null;
 	orchestrators: OrchestratorLink[];
 	orchestratorId: string | null;
 	stats: DashboardStats;
@@ -50,6 +57,7 @@ export function emptyHostSnapshot(host: Host): HostSnapshot {
 		projects: [],
 		projectsKnown: false,
 		sessions: [],
+		archive: null,
 		orchestrators: [],
 		orchestratorId: null,
 		stats: {},
@@ -170,6 +178,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				projects: lastProjects,
 				projectsKnown,
 				sessions: answer.sessions,
+				archive: answer.archive ?? null,
 				orchestrators: answer.orchestrators,
 				orchestratorId: answer.orchestratorId,
 				stats: answer.stats,
@@ -250,6 +259,7 @@ export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appA
 				if (patch.sessions) next.sessions = reconcileRows(previous.sessions, patch.sessions);
 				if (patch.projects) next.projects = reconcileRows(previous.projects, patch.projects);
 				if (patch.orchestrators) next.orchestrators = reconcileRows(previous.orchestrators, patch.orchestrators);
+				if ("archive" in patch && sameArchiveSummary(previous.archive, patch.archive)) next.archive = previous.archive;
 				if (Object.keys(patch).every((key) => next[key as keyof HostSnapshot] === previous[key as keyof HostSnapshot])) return current;
 				return { ...current, [host.id]: next };
 			});

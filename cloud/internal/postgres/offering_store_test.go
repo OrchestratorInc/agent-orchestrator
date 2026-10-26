@@ -48,6 +48,15 @@ func TestOrchestratorPlacementInheritsBYOCoderConnection(t *testing.T) {
 	if cfg, ok := domain.DecodeProjectCoderConfig(placement.ProjectConfig); !ok || cfg.WorkspaceNamePrefix != "acme" {
 		t.Fatalf("project config = %s, want the project's coder config", placement.ProjectConfig)
 	}
+	var repositoryURL string
+	if err := admin.QueryRow(ctx, `SELECT repository_url FROM ao_projects WHERE org_id = $1 AND id = $2`,
+		fixture.orgID, fixture.projectID).Scan(&repositoryURL); err != nil {
+		t.Fatal(err)
+	}
+	// A child resolves {repo} in the project's working folder from it.
+	if repositoryURL == "" || placement.RepositoryURL != repositoryURL {
+		t.Fatalf("repository = %q, want the project's %q", placement.RepositoryURL, repositoryURL)
+	}
 	if len(placement.CoderConnections) != 1 || placement.CoderConnections[0].ID != connection.ID {
 		t.Fatalf("coder connections = %+v, want the org's single connection", placement.CoderConnections)
 	}

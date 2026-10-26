@@ -99,6 +99,39 @@ func TestPrepareV2DataHomeDoesNotCopyOrphanedRollbackJournal(t *testing.T) {
 	}
 }
 
+// opencode keeps downloaded language servers under bin/, whose node_modules/.bin
+// is all symlinks. The migration leaves that cache behind rather than failing
+// on it, or OpenCode 2 never starts for anyone who has used an LSP.
+func TestPrepareV2DataHomeSkipsToolCache(t *testing.T) {
+	parent := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", parent)
+	legacy := filepath.Join(parent, "opencode")
+	linkDir := filepath.Join(legacy, "bin", "node_modules", ".bin")
+	if err := os.MkdirAll(linkDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../astro/bin/ls.js", filepath.Join(linkDir, "astro-ls")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(legacy, "storage"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "storage", "session.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	home, err := PrepareV2DataHome(context.Background())
+	if err != nil {
+		t.Fatalf("PrepareV2DataHome: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "opencode", "storage", "session.json")); err != nil {
+		t.Fatalf("user data was not migrated: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "opencode", "bin")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("tool cache was migrated (err %v), want it left behind", err)
+	}
+}
+
 func TestPrepareV2DataHomeStopsWaitingForMigrationLockOnCancel(t *testing.T) {
 	parent := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", parent)

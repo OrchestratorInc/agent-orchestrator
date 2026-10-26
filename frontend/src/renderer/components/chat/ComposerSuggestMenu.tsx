@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDownUp, CornerDownLeft } from "lucide-react";
+import { CornerDownLeft } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
@@ -94,21 +94,11 @@ export function ComposerSuggestMenu({
 
 	return (
 		<div
-			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col gap-px overflow-hidden rounded-lg border border-border bg-card p-1 text-popover-foreground"
+			className="absolute bottom-full left-0 z-overlay mb-1.5 flex w-full max-w-md flex-col gap-px overflow-hidden rounded-lg border border-(--color-border-overlay) bg-overlay p-1 text-popover-foreground shadow-(--shadow-popover)"
 			// The composer owns the keyboard; a pointerdown here must not pull focus
 			// out of the textarea on its way to the click.
 			onMouseDown={(event) => event.preventDefault()}
 		>
-			<div className="flex items-start justify-between gap-2 px-2 py-1">
-				<span className="text-micro text-muted-foreground">
-					{kind === "skill" ? "Skills" : "Files in this worktree"}
-				</span>
-				<ArrowDownUp
-					aria-label="Use the up and down arrow keys to navigate"
-					className="size-3.5 text-muted-foreground"
-				/>
-			</div>
-
 			<div className="relative min-h-0">
 				<ul
 					ref={list}
@@ -171,9 +161,6 @@ export function ComposerSuggestMenu({
 										aria-label="Press Tab or Enter to insert"
 										className="flex shrink-0 items-center gap-1 text-micro text-muted-foreground"
 									>
-										<kbd className="rounded border border-border-strong bg-background/40 px-1 py-0.5 font-sans text-micro leading-none">
-											Tab
-										</kbd>
 										<CornerDownLeft aria-hidden="true" className="size-3" />
 									</span>
 								) : null}
