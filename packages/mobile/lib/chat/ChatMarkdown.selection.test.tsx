@@ -30,6 +30,7 @@ vi.mock("../ThemeProvider", () => ({
 }));
 
 import { ChatLinkProvider, ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
+import { parseBlocks } from "./markdownBlocks";
 import * as androidSelection from "./useAndroidResponseSelection";
 
 function textOf(node: { children: Array<string | { children: unknown[] }> }): string {
@@ -68,16 +69,17 @@ it.each(["ios", "android"])("offers one continuous selection across all response
 	platform.OS = os;
 	let renderer!: ReactTestRenderer;
 	try {
-		act(() => { renderer = create(<SelectableResponseText text={[
+		const blocks = parseBlocks([
 			"# Title", "", "Body [link](https://example.com).", "", "- List item", "", "> Quoted text", "",
-			"```text", "Code text", "```", "", "| Column |", "| --- |", "| Cell |", "",
+			"```text", "Code text", "```", "",
 			"![Caption](https://example.com/image.png)",
-		].join("\n")} />); });
+		].join("\n"));
+		act(() => { renderer = create(<SelectableResponseText blocks={blocks.filter((block) => block.kind !== "table")} />); });
 		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
 		expect(selectable).toHaveLength(1);
 		expect(selectable[0].props.uiTextView).toBe(true);
 		const selectedText = textOf(selectable[0]);
-		for (const part of ["Title", "Body link.", "List item", "Quoted text", "Code text", "Column", "Cell", "Caption"]) expect(selectedText).toContain(part);
+		for (const part of ["Title", "Body link.", "List item", "Quoted text", "Code text", "Caption"]) expect(selectedText).toContain(part);
 		expect(renderer.root.findAll((node) => node.props.accessibilityRole === "link")).toHaveLength(1);
 		act(() => renderer.unmount());
 	} finally {
@@ -91,16 +93,40 @@ it.each(["ios", "android"])("renders the agent reply as one in-place selection a
 	try {
 		act(() => { renderer = create(<ChatMarkdown continuousSelection text={[
 			"# Release steps", "", "Build the app.", "", "- Check iOS", "- Check Android", "",
-			"```sh", "npm test", "```", "", "| Result |", "| --- |", "| Passed |",
+			"```sh", "npm test", "```",
 		].join("\n")} />); });
 		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
 		expect(selectable).toHaveLength(1);
 		expect(selectable[0].props.uiTextView).toBe(true);
-		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test\n\nResult\nPassed");
+		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test");
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";
 	}
+});
+
+it("draws a table in an agent reply as a grid between the selectable text around it", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={[
+		"Before the table.", "",
+		"Job | Superset | AO",
+		"--- | --- | ---",
+		"Publish | `pages publish` | **Share links**",
+		"Identity | workspace | session",
+		"", "After the table.",
+	].join("\n")} />); });
+	const texts = renderer.root.findAll((node) => node.props.selectable === true).map(textOf);
+	expect(texts).toEqual(["Before the table.", "Job", "Superset", "AO", "Publish", "pages publish", "Share links", "Identity", "workspace", "session", "After the table."]);
+	expect(texts.join("")).not.toContain("|");
+	// Every row gives a column the same width (not flexBasis, which Yoga ignores
+	// in a horizontal ScrollView), so the columns line up.
+	const rows = renderer.root.findAll((node) => (node.type as string) === "View" && [node.props.style].flat().some((style) => style?.flexDirection === "row"));
+	expect(rows).toHaveLength(3);
+	const widths = rows.map((row) => row.children.map((cell) => typeof cell === "string" ? 0 : (cell.props.style as Array<{ width?: number } | false>).find((style) => style && style.width !== undefined)));
+	expect(widths[0].every((style) => typeof style === "object" && style.width! > 0)).toBe(true);
+	expect(widths[1]).toEqual(widths[0]);
+	expect(widths[2]).toEqual(widths[0]);
+	act(() => renderer.unmount());
 });
 
 it("keeps inline links operable in the continuously selectable response", () => {

@@ -5,10 +5,13 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
+import { useChatLinkWorkspaces } from "./ChatMarkdown";
+import { usePlainReferences } from "./WorkerUpdates";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import { chatFixtureEmpty } from "../../lib/chat-fixture";
 import type { ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot } from "../../types/conversation";
@@ -167,6 +170,38 @@ describe("agent messages in a worker chat", () => {
 		expect(message).toHaveTextContent("Keep the draft local until Dhruv approves.");
 		expect(message).not.toHaveTextContent("[from");
 		expect(within(message).getByRole("link", { name: "Orchestrator" })).toHaveAttribute("href", "ao://sessions/proj/proj-1");
+	});
+
+	it("marks the paths in its plain prose as code and links the sessions it names", () => {
+		renderOrchestrator([sent("Compare /tmp/proj/.ao/shot.png with proj-7, then report.", "proj-1"), reply("t1", 2, "On it.")], vi.fn(), workspaces, "worker");
+
+		const message = screen.getByTestId("agent-message");
+		expect(within(message).getByText("/tmp/proj/.ao/shot.png").tagName).toBe("CODE");
+		expect(within(message).getByRole("link", { name: "proj-7" })).toHaveAttribute("href", "ao://sessions/proj/proj-7");
+		expect(message).toHaveTextContent("Compare /tmp/proj/.ao/shot.png with proj-7, then report.");
+	});
+
+	it("keeps an authored reference link to its own target", () => {
+		renderOrchestrator([sent("See [proj-7][target].\n\n[target]: ao://sessions/proj/proj-1", "proj-1"), reply("t1", 2, "Ok.")], vi.fn(), workspaces, "worker");
+
+		const links = within(screen.getByTestId("agent-message")).getAllByRole("link", { name: "proj-7" });
+		expect(links).toHaveLength(1);
+		expect(links[0]).toHaveAttribute("href", "ao://sessions/proj/proj-1");
+	});
+
+	it("shares one plugin list until the set of sessions changes, so session events do not re-parse messages", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		queryClient.setQueryData(workspaceQueryKey, workspaces);
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => ({ plugins: usePlainReferences(), workspaces: useChatLinkWorkspaces() }), { wrapper });
+		const first = result.current.plugins;
+		expect(renderHook(usePlainReferences, { wrapper }).result.current).toBe(first);
+		const [project] = workspaces;
+		act(() => queryClient.setQueryData(workspaceQueryKey, [{ ...project, sessions: project!.sessions.map((entry) => ({ ...entry, status: "idle" })) }]));
+		await waitFor(() => expect(result.current.workspaces).not.toBe(workspaces));
+		expect(result.current.plugins).toBe(first);
+		act(() => queryClient.setQueryData(workspaceQueryKey, [{ ...project, sessions: [...project!.sessions, { ...project!.sessions[1]!, id: "proj-8" }] }]));
+		await waitFor(() => expect(result.current.plugins).not.toBe(first));
 	});
 
 	it("names a sibling worker by its task", () => {

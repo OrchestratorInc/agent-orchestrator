@@ -13,7 +13,8 @@ import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
  *     produced content; markdown-only is the whole sanitization story and there
  *     is no schema to get wrong — except ```mermaid fences, which render as
  *     diagrams through the shared `MermaidBlock` (strict mode plus DOMPurify,
- *     active-content tags forbidden), matching the chat surface.
+ *     active-content tags forbidden), and formulas, which the shared
+ *     `MathFormula` typesets with KaTeX's `trust: false`, matching the chat surface.
  *   - Fenced code reuses the app's Shiki engine (`lib/code-highlight.ts`).
  *     Its JavaScript regex engine needs no WASM or CSP exception, and its
  *     syntax classes use AO's existing palette in both themes.
@@ -37,9 +38,12 @@ import { useTranslation } from "react-i18next";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
 import { isWebLink } from "../../lib/external-link-policy";
+import { isInlineMath, remarkMath } from "../../lib/remark-math";
+import { useUiStore } from "../../stores/ui-store";
 import { CopyButton } from "../chat/CopyButton";
 import { HighlightedCode } from "../chat/HighlightedCode";
 import { MermaidBlock } from "../chat/MermaidBlock";
+import { MathFormula } from "../chat/MathFormula";
 import "../chat/code-theme.css";
 import "github-markdown-css/github-markdown.css";
 import { MarkdownFileContext } from "./markdown-file-context";
@@ -47,6 +51,7 @@ import { MarkdownImage } from "./MarkdownImage";
 import { MarkdownExternalLink } from "./MarkdownExternalLink";
 
 const REMARK_PLUGINS = [remarkGfm];
+const MATH_REMARK_PLUGINS = [remarkGfm, remarkMath];
 
 // rehype-slug must run before rehype-autolink-headings, which reads the `id`
 // the former just attached. The anchor mirrors GitHub's own markup exactly
@@ -89,6 +94,7 @@ export function MarkdownFileView({
 }) {
 	const { t } = useTranslation();
 	const bodyRef = useRef<HTMLDivElement>(null);
+	const renderMath = useUiStore((state) => state.renderMath);
 	const contextValue = useMemo(() => ({ sessionId, hostId, filePath, version, artifactOrigin, snapshotSource }), [sessionId, hostId, filePath, version, artifactOrigin,snapshotSource]);
 
 	// Heading slugs are unique per rendered file, not per document, and the Files
@@ -117,6 +123,7 @@ export function MarkdownFileView({
 				if (fence.language?.toLowerCase() === "mermaid") {
 					return <MermaidBlock code={fence.code} />;
 				}
+				if (fence.language?.toLowerCase() === "math") return <MathFormula tex={fence.code} display />;
 				return (
 					<div className="group/md-code relative">
 						<pre className="markdown-code">
@@ -134,6 +141,15 @@ export function MarkdownFileView({
 					</div>
 				);
 			},
+
+			code: ({ node: _node, className, children, ...rest }) =>
+				isInlineMath(className) ? (
+					<MathFormula tex={String(children ?? "")} />
+				) : (
+					<code className={className} {...rest}>
+						{children}
+					</code>
+				),
 
 			img: ({ src, alt }) => <MarkdownImage src={typeof src === "string" ? src : undefined} alt={alt} />,
 
@@ -179,7 +195,7 @@ export function MarkdownFileView({
 				    into the left gutter (`margin-left: -20px`), so the inline padding
 				    must be wider than that or the scroll container clips the icon. */}
 				<div className="markdown-body px-6 py-4" ref={bodyRef}>
-					<Markdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
+					<Markdown remarkPlugins={renderMath ? MATH_REMARK_PLUGINS : REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS} components={components}>
 						{content}
 					</Markdown>
 				</div>

@@ -169,14 +169,14 @@ When using `+"`ao`"+`, read %s/SKILL.md and only the relevant file under
 // artifacts.
 func artifactsPrompt(dir string) string {
 	return "## Session Artifacts\n\n" +
-		"Any deliverable that is not part of a pull request — a one-pager, analysis, plan, design doc, report, or other generated file — must be written to `" + filepath.ToSlash(dir) + "` (also in `$" + worker.ArtifactsDirEnv + "`), never into the git workspace, even temporarily. " +
-		"This applies even when a workspace-relative path like `docs/`, `docs/plans/`, or `notes/` would otherwise feel like the natural place for it: if it is not shipping in a PR, it does not belong in the workspace at all. " +
-		"Keep the workspace limited to code changes that will ship in a PR. Preserve any relative asset links between files you place in the artifact directory. " +
-		"Create a separate document when the user requests a durable document or when the task needs a reviewable deliverable. Ordinary progress updates, concise final answers, and validation summaries can stay in this conversation; do not create files solely because a response is a summary, plan, analysis, or report. " +
-		"Routine test logs, command output, scratch notes, and intermediate diagnostics are working material, not deliverables. Prefer one consolidated deliverable over many diagnostic files. " +
-		"The directory starts with the files this session already saved there, so after the session is restored, update them in place rather than starting over. " +
-		"Files in this directory are copied to AO Cloud and shown in the session's Artifacts, up to " + strconv.Itoa(domain.MaxArtifactFileBytes>>20) + " MiB per file and " + strconv.Itoa(domain.MaxSessionArtifactFiles) + " files. " +
-		"Saving a file here does not authorize external publishing; follow the user's publishing scope."
+		"Write deliverables that are not part of a pull request to `" + filepath.ToSlash(dir) + "` (also in `$" + worker.ArtifactsDirEnv + "`), never into the git workspace, even temporarily or under `docs/` or `notes/`.\n\n" +
+		"Only two kinds of file belong there: a finished deliverable the user asked for or will open directly, such as a document, page, dashboard, image, video, dataset, or export; and files a deliverable needs to work, such as images a page links to. Keep relative links between them intact. " +
+		"Everything produced along the way is working material and goes in the system temp directory unless the user asked for it: intermediate outputs such as frames or partial renders, drafts, downloaded inputs, caches, build output, logs, and the scripts that generate the deliverable. " +
+		"If a file is neither opened on its own nor needed by a deliverable, it is working material.\n\n" +
+		"Create a deliverable only when the user asks for a durable output or the task needs a reviewable one; summaries, final answers, and validation results stay in this conversation. " +
+		"Prefer one consolidated deliverable, and revise it in place instead of adding copies; after the session is restored, the directory starts with the files already saved there. " +
+		"Files here are copied to AO Cloud and shown in the session's Artifacts, up to " + strconv.Itoa(domain.MaxArtifactFileBytes>>20) + " MiB per file and " + strconv.Itoa(domain.MaxSessionArtifactFiles) + " files; if a deliverable exceeds a limit, say so instead of splitting it into many files. " +
+		"Saving a file here does not authorize external publishing."
 }
 
 // artifactOutputPrompt is added for a session created with the artifact

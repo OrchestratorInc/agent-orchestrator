@@ -2,35 +2,42 @@ import { unified } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import type { Nodes } from "mdast";
+import { remarkMath } from "./remark-math";
 
 // Use the renderer's parser: a second markdown dialect can disagree about
-// where lists, HTML, tables and indented code end.
+// where lists, HTML, tables and indented code end. With math on, a `$$` block
+// may hold lines that would otherwise start a list or end a paragraph.
 const parser = unified().use(remarkParse).use(remarkGfm);
+const mathParser = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
 
 type MarkdownBlock = { source: string; start: number; repairInline: boolean };
 export type MarkdownBlocks = {
 	source: string;
+	/** The dialect the blocks were cut in. */
+	math: boolean;
 	blocks: MarkdownBlock[];
 	stableCount: number;
 };
 
+// Formulas are as literal as code: emphasis repair would rewrite their TeX.
 function containsCode(node: Nodes): boolean {
-	return node.type === "code" || ("children" in node && node.children.some(containsCode));
+	return node.type === "code" || node.type === "math" || node.type === "inlineMath"
+		|| ("children" in node && node.children.some(containsCode));
 }
 
 /** Per-message, immutable state; concurrent replies never evict each other. */
-export function splitStreamingMarkdown(source: string, previous?: MarkdownBlocks): MarkdownBlocks {
-	if (previous?.source === source) return previous;
+export function splitStreamingMarkdown(source: string, previous?: MarkdownBlocks, math = false): MarkdownBlocks {
+	if (previous?.source === source && previous.math === math) return previous;
 	// Definitions and footnotes have document-wide scope. Keep one document so
 	// later definitions resolve earlier links and footnote IDs stay unique.
 	if (/\]\s*:|\[\^/.test(source)) {
-		return { source, blocks: [{ source, start: 0, repairInline: false }], stableCount: 0 };
+		return { source, math, blocks: [{ source, start: 0, repairInline: false }], stableCount: 0 };
 	}
-	const keep = previous && source.startsWith(previous.source) ? previous.stableCount : 0;
+	const keep = previous?.math === math && source.startsWith(previous.source) ? previous.stableCount : 0;
 	const blocks = previous?.blocks.slice(0, keep) ?? [];
 	const offset = previous?.blocks[keep]?.start ?? 0;
 	const tail = source.slice(offset);
-	const tree = parser.parse(tail);
+	const tree = (math ? mathParser : parser).parse(tail);
 	const starts = tree.children.map((node) => {
 		const position = node.position?.start;
 		// Include indentation in the next block, rather than leaving it on the
@@ -58,5 +65,5 @@ export function splitStreamingMarkdown(source: string, previous?: MarkdownBlocks
 			break;
 		}
 	}
-	return { source, blocks, stableCount };
+	return { source, math, blocks, stableCount };
 }

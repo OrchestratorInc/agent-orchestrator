@@ -4669,6 +4669,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             displayName: string;
+            effort?: string;
             enabled: boolean;
             harness?: string;
             id: string;
@@ -4677,6 +4678,8 @@ export interface components {
             /** Format: date-time */
             lastRunAt?: null | string;
             latestRun?: components["schemas"]["AutomationRunSummaryResponse"];
+            mode?: string;
+            model?: string;
             /** Format: date-time */
             nextRunAt: string;
             projectId: string;
@@ -5569,10 +5572,13 @@ export interface components {
         CreateAutomationRequest: {
             cron?: string;
             displayName: string;
+            effort?: string;
             enabled?: null | boolean;
             harness?: string;
             /** @enum {string} */
             kind: "worker" | "orchestrator";
+            mode?: string;
+            model?: string;
             projectId: string;
             prompt: string;
             rrule?: string;
@@ -7461,10 +7467,13 @@ export interface components {
         UpdateAutomationRequest: {
             cron?: null | string;
             displayName?: null | string;
+            effort?: null | string;
             enabled?: null | boolean;
             harness?: null | string;
             /** @enum {null|string} */
             kind?: "worker" | "orchestrator" | null;
+            mode?: null | string;
+            model?: null | string;
             prompt?: null | string;
             rrule?: null | string;
             timezone?: null | string;
