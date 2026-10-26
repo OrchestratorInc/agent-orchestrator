@@ -42,7 +42,6 @@ import { deriveMobileTheme, deriveTerminalTheme } from "./themeDerive";
 
 export type Theme = {
 	bgBase: string;
-	bgSide: string;
 	bgColumn: string;
 	bgSurface: string;
 	bgElevated: string;
@@ -106,7 +105,6 @@ const FONT_MONO = "GeistMono_400Regular";
 export const darkTheme: Theme = {
 	// Surfaces (no box-in-box; the card is the only bordered surface)
 	bgBase: "#0a0b0d",
-	bgSide: "#08090b",
 	bgColumn: "#0e0f12",
 	bgSurface: "#121317", // headers, tab bar, input dock - flush chrome
 	bgElevated: "#15171b", // cards & inputs
@@ -159,7 +157,6 @@ export const lightTheme: Theme = {
 	// iOS grouped-list convention: grey base, white cards. Desktop uses
 	// #fcfcfc/#ffffff, which on a phone leaves cards nearly invisible.
 	bgBase: "#f2f2f7",
-	bgSide: "#eceef2",
 	bgColumn: "#f7f7fa",
 	bgSurface: "#ffffff",
 	bgElevated: "#ffffff",

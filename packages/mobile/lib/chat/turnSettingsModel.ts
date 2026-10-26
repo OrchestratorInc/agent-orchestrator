@@ -435,7 +435,7 @@ export function turnSettingWrite(settings: TurnSettings, row: TurnSettingRow, ch
 	return { kind: "settings", settings: applyTurnSettingChoice(settings, row, String(choice)) };
 }
 
-export function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
+function applyTurnSettingChoice(settings: TurnSettings, row: TurnSettingRow, value: string): TurnSettings {
 	if (row.target.kind !== "settings") return settings;
 	if (row.target.key === "model") return { ...settings, model: value, reasoningEffort: undefined };
 	return { ...settings, [row.target.key]: value } as TurnSettings;

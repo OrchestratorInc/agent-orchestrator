@@ -21,7 +21,7 @@ describe("Interface affordances", () => {
 			// The app's primary controls live here, so a missing role is missing on
 			// every screen at once. Each one is checked inside its own body, so a role
 			// on one primitive cannot stand in for another's.
-			for (const name of ["Pill", "ListSectionHeader", "Button"]) {
+			for (const name of ["ListSectionHeader", "Button"]) {
 				const start = ui.indexOf(`export function ${name}(`);
 				expect(start, `${name} should exist`).toBeGreaterThan(-1);
 				const end = ui.indexOf("\nexport ", start + 1);
@@ -33,10 +33,6 @@ describe("Interface affordances", () => {
 		it("pins the Button's name to its title so a spinner does not erase it", () => {
 			expect(ui).toContain("accessibilityLabel={title}");
 			expect(ui).toContain("accessibilityState={{ disabled: disabled || loading, busy: loading }}");
-		});
-
-		it("reports the selected filter pill", () => {
-			expect(ui).toContain("accessibilityState={{ selected: active }}");
 		});
 	});
 

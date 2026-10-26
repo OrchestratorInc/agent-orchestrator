@@ -36,7 +36,7 @@ describe("merge readiness", () => {
 	});
 
 	it("reports merged and closed PRs without a merge action", () => {
-		expect(mergeReadiness({ ...ready(), state: "merged", targetBranch: "main" })).toEqual({ canMerge: false, tone: "purple", icon: "git-merge", label: "Merged", reason: "This pull request was merged into main." });
+		expect(mergeReadiness({ ...ready(), state: "merged", targetBranch: "main" })).toEqual({ canMerge: false, tone: "purple", label: "Merged", reason: "This pull request was merged into main." });
 		expect(mergeReadiness({ ...ready(), state: "closed" })).toMatchObject({ canMerge: false, tone: "muted", label: "Closed" });
 	});
 });

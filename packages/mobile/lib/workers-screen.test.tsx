@@ -57,7 +57,6 @@ vi.mock("@expo/ui/community/menu", async () => {
 		return React.createElement("MenuView", props, children);
 	}) };
 });
-vi.mock("@expo/ui/community/bottom-sheet", () => ({ default: "BottomSheet", BottomSheetView: "BottomSheetView", BottomSheetScrollView: "BottomSheetScrollView" }));
 // The picker is a SwiftUI menu or a Compose dropdown, tested in environment-picker.test.
 vi.mock("./environment-picker", () => ({ EnvironmentPicker: "EnvironmentPicker" }));
 vi.mock("./store", () => ({ useApp: () => ({

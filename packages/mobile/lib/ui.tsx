@@ -9,7 +9,6 @@ import {
 	Text,
 	View,
 	type StyleProp,
-	type TextStyle,
 	type ViewStyle,
 } from "react-native";
 import { AppSymbol } from "./AppSymbol";
@@ -130,43 +129,6 @@ export const Dot = memo(function Dot({
 		/>
 	);
 });
-
-// A selectable pill - used by the project switcher, PR filters, and spawn picker
-// so the active/inactive color logic lives in exactly one place.
-export function Pill({
-	label,
-	active,
-	onPress,
-	style,
-	textStyle,
-}: {
-	label: string;
-	active: boolean;
-	onPress: () => void;
-	style?: StyleProp<ViewStyle>;
-	textStyle?: StyleProp<TextStyle>;
-}) {
-	const s = useThemedStyles(makeStyles);
-	return (
-		<Pressable
-			accessibilityRole="button"
-			accessibilityState={{ selected: active }}
-			onPress={() => {
-				haptics.select();
-				onPress();
-			}}
-			style={[s.pill, active && s.pillActive, style]}
-		>
-			<Text
-				numberOfLines={1}
-				maxFontSizeMultiplier={fontScaleCap.chrome}
-				style={[s.pillText, active && s.pillTextActive, textStyle]}
-			>
-				{label}
-			</Text>
-		</Pressable>
-	);
-}
 
 // `mascot.png` is the desktop mascot (frontend/assets/ao-mascot.png) cropped to
 // its artwork, with the eye sockets filled so they stay dark on light themes.
@@ -592,18 +554,6 @@ const makeStyles = (t: Theme) =>
 		listSectionLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
 		// Mono and tabular so a count changing from 9 to 10 does not shift the rule.
 		listSectionCount: { color: t.textFaint, fontSize: type.caption1.fontSize, fontWeight: "600", fontFamily: t.fontMono },
-
-		pill: {
-			paddingHorizontal: space.md,
-			paddingVertical: space.xs,
-			borderRadius: 20,
-			borderWidth: 1,
-			borderColor: t.borderDefault,
-			backgroundColor: t.bgElevated,
-		},
-		pillActive: { backgroundColor: t.accentTint, borderColor: t.accent },
-		pillText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-		pillTextActive: { color: t.accent },
 
 		// Enlarged from 30x26: the wand-tip lamp replaced the "live" pill, so the tip
 		// has to be big enough for the dot to actually read as a status light.

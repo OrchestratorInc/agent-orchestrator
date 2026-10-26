@@ -30,15 +30,6 @@ import { duration, press, spring } from "./tokens";
 /** `Dot`'s pulse half-period. */
 export const BREATHE_MS = 1200;
 
-/**
- * One sweep of a loading skeleton's shimmer, then a rest before the next.
- *
- * Slow and linear: the sweep says "still loading", and a quick or eased one
- * reads as busy. The rest keeps a screen with several skeletons from strobing.
- */
-export const SHIMMER_MS = 1300;
-export const SHIMMER_REST_MS = 400;
-
 /** Fallback used when the keyboard event carries no duration. */
 export const KEYBOARD_FALLBACK_MS = 250;
 

@@ -22,7 +22,6 @@ export type ElicitationChoiceListProps = {
 export type ElicitationTextFieldProps = {
 	value: unknown;
 	label: string;
-	autoFocus?: boolean;
 	numeric?: boolean;
 	maxLength?: number;
 	onChange(value: string | number): void;
@@ -78,7 +77,7 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 	);
 }
 
-export function ElicitationTextField({ value, label, autoFocus, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
+export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const controlledText = value === undefined ? "" : String(value);
@@ -88,7 +87,6 @@ export function ElicitationTextField({ value, label, autoFocus, numeric, maxLeng
 		<Host matchContents={{ vertical: true }} colorScheme={scheme}>
 			<OutlinedTextField
 				value={text}
-				autoFocus={autoFocus}
 				singleLine
 				maxLength={maxLength}
 				keyboardOptions={{ keyboardType: numeric ? "decimal" : "text" }}

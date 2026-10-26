@@ -4,7 +4,6 @@ import {
 	connectSheetRoute,
 	machineNameSheetRoute,
 	parkSheetResult,
-	projectSheetRoute,
 	modelSheetRoute,
 	releaseSheetResult,
 	resetSheetResults,
@@ -43,36 +42,6 @@ describe("parkSheetResult", () => {
 });
 
 describe("route builders", () => {
-	it("encodes includeAll as a string param and parks the callback", () => {
-		const fn = vi.fn();
-		const route = projectSheetRoute({ selected: "p1", onSelect: fn, includeAll: false });
-		expect(route.pathname).toBe("/sheets/project");
-		expect(route.params.includeAll).toBe("0");
-		expect(route.params.selected).toBe("p1");
-		takeSheetResult<string>(route.params.resultKey)?.("p2");
-		expect(fn).toHaveBeenCalledWith("p2");
-	});
-
-	it("defaults includeAll to on", () => {
-		expect(projectSheetRoute({ selected: "", onSelect: vi.fn() }).params.includeAll).toBe("1");
-	});
-
-	it("omits optional title and subtitle rather than sending undefined", () => {
-		const params = projectSheetRoute({ selected: "", onSelect: vi.fn() }).params;
-		expect("title" in params).toBe(false);
-		expect("subtitle" in params).toBe(false);
-	});
-
-	it("passes title and subtitle through when given", () => {
-		const params = projectSheetRoute({
-			selected: "",
-			onSelect: vi.fn(),
-			title: "Project",
-			subtitle: "Where this agent gets its workspace.",
-		}).params;
-		expect(params).toMatchObject({ title: "Project", subtitle: "Where this agent gets its workspace." });
-	});
-
 	it("builds the agent route", () => {
 		const fn = vi.fn();
 		const route = agentSheetRoute({ selected: "claude-code", onSelect: fn });

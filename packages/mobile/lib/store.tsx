@@ -229,7 +229,7 @@ function HostConversationTransport({ config }: { config: ServerConfig }) {
 
 // Convenience selectors -------------------------------------------------------
 
-export function useVisibleSessions(): DashboardSession[] {
+function useVisibleSessions(): DashboardSession[] {
 	const { sessions, activeProjectId } = useApp();
 	return useMemo(
 		() => (activeProjectId === "all" ? sessions : sessions.filter((s) => s.projectId === activeProjectId)),

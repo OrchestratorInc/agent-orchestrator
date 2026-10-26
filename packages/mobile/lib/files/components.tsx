@@ -31,7 +31,7 @@ import type { ReviewComment } from "./reviewStore";
 
 // ---- Status + counts ------------------------------------------------------------
 
-export function statusColor(status: WorkspaceFileStatus, t: Theme): string {
+function statusColor(status: WorkspaceFileStatus, t: Theme): string {
 	switch (status) {
 		case "added": return t.green;
 		case "deleted": return t.red;

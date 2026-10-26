@@ -88,7 +88,6 @@ export function deriveMobileTheme(p: ThemePalette, scheme: ColorScheme, fontMono
 
 	return {
 		bgBase,
-		bgSide: dark ? p.sidebar : mixColor(p.sidebar, p.text, 0.07),
 		bgColumn: dark ? mixColor(p.bg, p.panel, 0.4) : mixColor(bgBase, bgElevated, 0.5),
 		bgSurface: dark ? mixColor(p.bg, p.panel, 0.6) : bgElevated,
 		bgElevated,

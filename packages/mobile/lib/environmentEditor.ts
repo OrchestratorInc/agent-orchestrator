@@ -19,7 +19,7 @@ export function editableEndpointIndex(host: Host, activeConfig?: ServerConfig | 
 	return activeIndex < 0 ? 0 : activeIndex;
 }
 
-export function editConfig(host: Host, endpointIndex: number): ServerConfig {
+function editConfig(host: Host, endpointIndex: number): ServerConfig {
 	const endpoint = host.endpoints[endpointIndex];
 	return endpoint ? {
 		host: endpoint.host,
