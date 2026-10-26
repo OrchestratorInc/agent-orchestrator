@@ -628,6 +628,26 @@ describe("mobile Chat API boundaries", () => {
 	// unbroken run starves the JS thread, which is also what services touches — the
 	// board renders but ignores taps until the OS or the renderer gives up. The reader
 	// must therefore hand the event loop back periodically, no matter how much is queued.
+		it("takes the head cursor and heartbeats from a real stream without publishing them as changes", async () => {
+		vi.mocked(expoFetch).mockResolvedValue(new Response([
+			"id: 7\nevent: cursor\ndata: {}\n\n",
+			"event: heartbeat\ndata: {}\n\n",
+			'id: 8\ndata: {"seq":8,"projectId":"p-1","sessionId":"w-1","type":"session_updated","payload":{"conversationId":"c-1"},"createdAt":"2026-10-26"}\n\n',
+			"event: heartbeat\ndata: {}\n\n",
+		].join(""), { headers: { "X-AO-Event-After": "7" } }) as unknown as Awaited<ReturnType<typeof expoFetch>>);
+		const resets: number[] = [];
+		const sessions: string[] = [];
+		const cursor = await chatApi.streamGlobalConversationEvents(
+			cfg, Number.MAX_SAFE_INTEGER, new AbortController().signal,
+			(event) => { if (event.sessionId) sessions.push(event.sessionId); },
+			(reset) => resets.push(reset),
+		);
+		expect(vi.mocked(expoFetch).mock.lastCall?.[0]).toBe(`http://ao.test:3011/api/v1/events?after=${Number.MAX_SAFE_INTEGER}`);
+		expect(resets).toEqual([7]);
+		expect(sessions).toEqual(["w-1"]);
+		expect(cursor).toBe(8);
+	});
+
 	it("yields to the event loop while draining a large replay", async () => {
 		vi.mocked(expoFetch).mockResolvedValue(new Response(
 			replayFrames(300),

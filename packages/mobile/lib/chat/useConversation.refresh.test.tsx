@@ -6,7 +6,6 @@ import type { ConversationEvent } from "./sse";
 const state = vi.hoisted(() => ({
 	request: vi.fn(),
 	listener: undefined as ((event: ConversationEvent) => void) | undefined,
-	healthy: false,
 	pollEvery: null as number | null,
 }));
 vi.mock("../api", () => ({ apiRequest: state.request, ApiError: class extends Error {}, ATTACHMENT_REQUEST_TIMEOUT_MS: 1 }));
@@ -18,7 +17,6 @@ vi.mock("./conversationEvents", () => ({
 		state.listener = listener;
 		return () => { state.listener = undefined; };
 	},
-	conversationStreamHealthy: () => state.healthy,
 }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => state.pollEvery }));
 import { useMobileConversation, type MobileConversation } from "./useConversation";
@@ -41,7 +39,6 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	vi.clearAllMocks();
 	pages = [];
-	state.healthy = false;
 	state.pollEvery = null;
 	state.request.mockImplementation((_cfg, _path, init?: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
 		init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { name: "AbortError" })));
@@ -89,23 +86,26 @@ it("cancels a superseded page download when an explicit refresh starts", async (
 	expect(conversation.error).toBeUndefined();
 });
 
-it("refreshes when the event stream reopens at head", async () => {
+it("polls over the tunnel no later than an interval after the last load", async () => {
+	state.pollEvery = 2_000;
 	await mount();
-	await act(async () => { pages[0].finish(); await vi.advanceTimersByTimeAsync(0); });
-	await act(async () => {
-		state.listener!({ seq: 0, projectId: "", sessionId: "qa-session", type: "stream_resync", createdAt: "" });
-		await vi.advanceTimersByTimeAsync(200);
-	});
+	await act(async () => { pages[0].finish(); await vi.advanceTimersByTimeAsync(1_999); });
+	expect(pages).toHaveLength(1);
+	await act(async () => { await vi.advanceTimersByTimeAsync(1); });
 	expect(pages).toHaveLength(2);
+	await act(async () => { pages[1].finish(); await vi.advanceTimersByTimeAsync(2_000); });
+	expect(pages).toHaveLength(3);
 });
 
-it("polls over the tunnel only while the event stream is not delivering", async () => {
+it("counts a load an event started as the tunnel poll's", async () => {
 	state.pollEvery = 2_000;
-	state.healthy = true;
 	await mount();
-	await act(async () => { pages[0].finish(); await vi.advanceTimersByTimeAsync(10_000); });
-	expect(pages).toHaveLength(1);
-	state.healthy = false;
-	await act(async () => { await vi.advanceTimersByTimeAsync(2_200); });
+	await act(async () => { pages[0].finish(); await vi.advanceTimersByTimeAsync(1_000); });
+	await act(async () => { state.listener!(chatEvent(1)); await vi.advanceTimersByTimeAsync(200); });
 	expect(pages).toHaveLength(2);
+	await act(async () => { pages[1].finish(); await vi.advanceTimersByTimeAsync(1_800); });
+	// The poll would have fired at 2 s; the event's load at 1.12 s moved it to 3.12 s.
+	expect(pages).toHaveLength(2);
+	await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+	expect(pages).toHaveLength(3);
 });

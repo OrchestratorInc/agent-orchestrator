@@ -22,7 +22,7 @@ import type {
 	DecisionOption,
 	TurnSettings,
 } from "./types";
-import { isSseHeartbeat, parseSseFrame, readSseFrameSeq, takeSseFrames, type ConversationEvent } from "./sse";
+import { parseSseFrame, readSseFrameSeq, takeSseFrames, type ConversationEvent } from "./sse";
 import { mergeConversationPages, type ConversationPage } from "./snapshot";
 
 export { parseSseFrame } from "./sse";
@@ -411,10 +411,6 @@ export type ConversationStreamOptions = {
 	wantsPayload?: () => boolean;
 	/** A frame that advanced the cursor without being parsed. */
 	onCursorAdvance?: (seq: number) => void;
-	/** The daemon accepted the stream; frames follow. */
-	onOpen?: () => void;
-	/** An idle heartbeat frame arrived, proving the path delivers small writes. */
-	onHeartbeat?: () => void;
 };
 
 /**
@@ -450,7 +446,6 @@ export async function streamGlobalConversationEvents(
 		? advertisedAfter
 		: after;
 	if (effectiveAfter !== after) onCursorReset?.(effectiveAfter);
-	options?.onOpen?.();
 
 	const decoder = new TextDecoder();
 	const reader = res.body.getReader();
@@ -467,9 +462,7 @@ export async function streamGlobalConversationEvents(
 			const split = takeSseFrames(buffer);
 			buffer = split.remainder;
 			for (const frame of split.frames) {
-				if (isSseHeartbeat(frame)) {
-					options?.onHeartbeat?.();
-				} else if (wantsPayload && !wantsPayload()) {
+				if (wantsPayload && !wantsPayload()) {
 					// Nothing is subscribed, so the payload has no reader. Take the
 					// sequence and skip the parse entirely.
 					const seq = readSseFrameSeq(frame);

@@ -9,7 +9,7 @@ vi.mock("expo-secure-store", () => ({
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { DEFAULT_CONFIG, machineIdentity, type ServerConfig } from "../config";
-import { clearEventCursorsForHost, eventCursorKey } from "./eventCursor";
+import { clearEventCursorsForHost, eventCursorKey, HEAD_CURSOR, initialCursorFor } from "./eventCursor";
 
 const cfg = (over: Partial<ServerConfig> = {}): ServerConfig => ({
 	...DEFAULT_CONFIG, host: "192.168.1.42", httpPort: "3011", secure: false, password: "pw", ...over,
@@ -80,5 +80,31 @@ describe("clearEventCursorsForHost", () => {
 
 		expect(AsyncStorage.removeItem).toHaveBeenCalledWith("ao.chat.events.http.192.168.1.42.3011");
 		expect(AsyncStorage.removeItem).not.toHaveBeenCalledWith("ao.chat.events.host.");
+	});
+});
+
+describe("initialCursorFor", () => {
+	// A first connection has no business replaying history: chat content comes
+	// from REST, and the stream exists for live updates. Asking beyond head makes
+	// the daemon clamp to head and report it back, so a fresh pairing starts
+	// live instead of chewing through 14,338 stale events.
+	it("starts at head when there is no stored cursor", () => {
+		expect(initialCursorFor(null)).toBe(HEAD_CURSOR);
+	});
+
+	it("resumes from a stored cursor", () => {
+		expect(initialCursorFor("4210")).toBe(4210);
+	});
+
+	it("starts at head when the stored value is unusable", () => {
+		for (const bad of ["", "not-a-number", "-5"]) {
+			expect(initialCursorFor(bad)).toBe(HEAD_CURSOR);
+		}
+	});
+
+	// Zero is what the old address-keyed cursor produced on every network change.
+	// Honouring it would replay the whole backlog exactly as before.
+	it("treats a stored zero as head rather than a full replay", () => {
+		expect(initialCursorFor("0")).toBe(HEAD_CURSOR);
 	});
 });

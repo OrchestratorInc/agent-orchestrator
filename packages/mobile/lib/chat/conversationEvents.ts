@@ -1,24 +1,17 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect } from "react";
 import { isConfigured, machineIdentity, type ServerConfig } from "../config";
 import { streamGlobalConversationEvents } from "./api";
-import { HEAD_CURSOR } from "./eventCursor";
-import { createConversationEventRegistry, type ConversationEvent } from "./sse";
+import { eventCursorKey, HEAD_CURSOR, initialCursorFor } from "./eventCursor";
+import {
+	createConversationEventRegistry,
+	createCursorPersister,
+	type ConversationEvent,
+} from "./sse";
 
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const registry = createConversationEventRegistry();
-
-/**
- * How recently a heartbeat must have arrived for the stream to count as
- * delivering. The daemon writes one every 10 s on a fixed ticker, busy or idle,
- * into the same response as the events and in order with them, so a heartbeat
- * that arrives proves the events written before it arrived too. An
- * intermediary that buffers small writes (a Cloudflare quick tunnel) holds the
- * heartbeats back with the events, so they stop arriving on time exactly when
- * events would too.
- */
-export const STREAM_HEALTHY_WITHIN_MS = 15_000;
-const lastHeartbeatAt = new Map<string, number>();
 
 export function subscribeConversationEvents(
 	cfg: ServerConfig,
@@ -28,33 +21,26 @@ export function subscribeConversationEvents(
 	return registry.subscribe(machineIdentity(cfg), sessionId, listener);
 }
 
-/** Whether this machine's event stream is delivering frames promptly right now. */
-export function conversationStreamHealthy(cfg: ServerConfig, now = Date.now()): boolean {
-	const at = lastHeartbeatAt.get(machineIdentity(cfg));
-	return at !== undefined && now - at < STREAM_HEALTHY_WITHIN_MS;
-}
-
-/**
- * Own the daemon's global CDC stream for the lifetime of the configured app.
- *
- * Every start opens at head. A start follows a new config — launch, resume,
- * a different endpoint — and each of those makes the board and any open chat
- * load fresh over REST, which is all the replayed events were ever used for.
- * Replaying from a stored cursor instead downloaded every change on the
- * machine since the phone left: megabytes after an hour of background, most
- * of it for sessions nobody had open. Listeners are told to refresh once the
- * stream is open, which covers changes between their load and the head.
- * Reconnects within one start still resume from the cursor, a short gap.
- */
+/** Own the daemon's global CDC stream for the lifetime of the configured app. */
 export function useConversationEventTransport(cfg: ServerConfig | null): void {
 	useEffect(() => {
 		if (!cfg || !isConfigured(cfg)) return;
 		let stopped = false;
 		let controller: AbortController | undefined;
 		const hostId = machineIdentity(cfg);
+		const cursorKey = eventCursorKey(cfg);
+		const cursorPersister = createCursorPersister((cursor) =>
+			AsyncStorage.setItem(cursorKey, String(cursor)),
+		);
 		const run = async () => {
-			let cursor = HEAD_CURSOR;
-			let opened = false;
+			// Missing or unusable starts at head, not zero: a fresh client has no
+			// reason to replay the whole change log to reach the live tail.
+			const stored = initialCursorFor(await AsyncStorage.getItem(cursorKey));
+			// The replay only matters to an open chat: it brings the changes made
+			// between the chat's own load and the live tail. With no chat open,
+			// start at head. Everything else reloads over REST on this same config
+			// change, and a replay after hours in the background is megabytes.
+			let cursor = registry.hasListeners(hostId) ? stored : HEAD_CURSOR;
 			let delay = RECONNECT_MIN_MS;
 			while (!stopped) {
 				controller = new AbortController();
@@ -65,25 +51,21 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 						controller.signal,
 						(event) => {
 							cursor = Math.max(cursor, event.seq);
+							cursorPersister.update(cursor);
 							registry.publish(hostId, event);
 						},
 						(resetCursor) => {
 							cursor = resetCursor;
+							cursorPersister.replace(resetCursor);
 						},
 						{
 							// Only the chat screen currently on top subscribes, so most frames
-							// have no reader. Those only need to move the cursor.
+							// have no reader — and during a cold-start replay, when no chat is
+							// open at all, none of them do. Those only need to move the cursor.
 							wantsPayload: () => registry.hasListeners(hostId),
 							onCursorAdvance: (seq) => {
 								cursor = Math.max(cursor, seq);
-							},
-							onOpen: () => {
-								if (opened) return;
-								opened = true;
-								registry.resync(hostId);
-							},
-							onHeartbeat: () => {
-								if (!stopped) lastHeartbeatAt.set(hostId, Date.now());
+								cursorPersister.update(cursor);
 							},
 						},
 					);
@@ -91,7 +73,6 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 				} catch {
 					if (stopped || controller.signal.aborted) return;
 				}
-				lastHeartbeatAt.delete(hostId);
 				await wait(delay);
 				delay = Math.min(RECONNECT_MAX_MS, delay * 2);
 			}
@@ -99,8 +80,8 @@ export function useConversationEventTransport(cfg: ServerConfig | null): void {
 		void run();
 		return () => {
 			stopped = true;
-			lastHeartbeatAt.delete(hostId);
 			controller?.abort();
+			cursorPersister.flush();
 		};
 	}, [cfg]);
 }

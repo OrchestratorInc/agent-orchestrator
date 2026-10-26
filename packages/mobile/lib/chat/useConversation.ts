@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { machineIdentity, type ServerConfig } from "../config";
 import {
 	cancelQueuedConversationTurn,
@@ -33,8 +33,7 @@ import {
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
-import { conversationStreamHealthy, subscribeConversationEvents } from "./conversationEvents";
-import { STREAM_RESYNC_EVENT } from "./sse";
+import { subscribeConversationEvents } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
@@ -155,6 +154,8 @@ export function useMobileConversation(
 	// Set when an event arrives while a load is in flight; see scheduleRefresh.
 	const refreshAgain = useRef(false);
 	const refreshRef = useRef<() => Promise<void>>(async () => {});
+	// When the latest page load started; the tunnel poll is timed from it.
+	const lastLoadStartedAt = useRef(0);
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
@@ -163,6 +164,7 @@ export function useMobileConversation(
 		inFlight.current?.abort();
 		const controller = new AbortController();
 		inFlight.current = controller;
+		lastLoadStartedAt.current = Date.now();
 		const request = refreshGate.begin();
 		setRefreshing(true);
 		try {
@@ -196,20 +198,23 @@ export function useMobileConversation(
 			}
 		}
 	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
-	refreshRef.current = refresh;
+	useLayoutEffect(() => { refreshRef.current = refresh; }, [refresh]);
 
 	// Live events coalesce rather than cancel: while an agent streams, events
 	// arrive faster than a page downloads on a slow link, and cancelling on each
 	// one would never let a page finish. One load runs at a time; events during
 	// it queue exactly one more, which starts when it lands.
+	const refreshOrQueue = useCallback(() => {
+		if (inFlight.current) refreshAgain.current = true;
+		else void refresh();
+	}, [refresh]);
 	const scheduleRefresh = useCallback(() => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		refreshTimer.current = setTimeout(() => {
 			refreshTimer.current = null;
-			if (inFlight.current) refreshAgain.current = true;
-			else void refresh();
+			refreshOrQueue();
 		}, REFRESH_DEBOUNCE_MS);
-	}, [refresh]);
+	}, [refreshOrQueue]);
 
 	const loadOlder = useCallback(async () => {
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
@@ -293,24 +298,35 @@ export function useMobileConversation(
 		const eventSessionId = options?.eventSessionId ?? sessionId;
 		if (!cfg || unavailable || !eventSessionId) return;
 		return subscribeConversationEvents(cfg, eventSessionId, (event) => {
-			if (event.payload?.conversationId || event.type === STREAM_RESYNC_EVENT) scheduleRefresh();
+			if (event.payload?.conversationId) scheduleRefresh();
 		});
 	}, [cfg, options?.eventSessionId, sessionId, scheduleRefresh, unavailable]);
 
-	// Poll the conversation on paths where the event stream may not deliver.
-	// Over a Cloudflare quick tunnel the subscription above can stay silent —
-	// the body is forwarded in ~128 KB chunks and a chat event is a few hundred
+	// Poll the conversation on paths where the event stream cannot deliver.
+	// Over a Cloudflare quick tunnel the subscription above never fires — the
+	// body is forwarded in ~128 KB chunks and a chat event is a few hundred
 	// bytes — so without this the screen shows the agent working indefinitely
-	// while the reply has already landed. Ticks are skipped while the stream's
-	// heartbeats arrive on time, since events then arrive on time too.
+	// while the reply has already landed.
+	//
+	// A load starts at most `every` after the previous one, whatever started
+	// it, so a page is never older than on a fixed interval. Loads that events
+	// already started count, so a delivering stream saves those polls.
 	useEffect(() => {
 		const every = conversationPollIntervalFor(cfg);
-		if (!cfg || every === null || unavailable) return;
-		const timer = setInterval(() => {
-			if (!conversationStreamHealthy(cfg)) scheduleRefresh();
-		}, every);
-		return () => clearInterval(timer);
-	}, [cfg, unavailable, scheduleRefresh]);
+		if (every === null || unavailable) return;
+		let timer: ReturnType<typeof setTimeout>;
+		const tick = () => {
+			const wait = lastLoadStartedAt.current + every - Date.now();
+			if (wait > 0) {
+				timer = setTimeout(tick, wait);
+				return;
+			}
+			refreshOrQueue();
+			timer = setTimeout(tick, every);
+		};
+		timer = setTimeout(tick, every);
+		return () => clearTimeout(timer);
+	}, [cfg, unavailable, refreshOrQueue]);
 
 	const runAction = useCallback(
 		// `banner: false` keeps a failure out of the screen banner when the control
