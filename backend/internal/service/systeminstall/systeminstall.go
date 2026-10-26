@@ -208,6 +208,8 @@ type Plan struct {
 	// run holds each one's harness gate throughout, so its launches wait and
 	// its own install, reinstall or update is refused meanwhile.
 	alsoChanges []Target
+	// homebrewV1Prefix defers the v1 linked-state check until its gate is held.
+	homebrewV1Prefix string
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -1181,6 +1183,13 @@ func (s *Service) beginWorker() bool {
 	return true
 }
 
+// ShutdownTimeout reserves time for both Homebrew cleanup steps, a pending
+// harness hold, command termination delays, and terminal state persistence. The daemon
+// must drain for at least this long so normal shutdown cannot skip v1 relinking.
+func (s *Service) ShutdownTimeout() time.Duration {
+	return 2*s.cleanupStepTimeout() + otherHarnessHoldWait + 2*defaultPersistenceTimeout + 30*time.Second
+}
+
 // Close cancels and drains daemon-owned harness installation work.
 func (s *Service) Close(ctx context.Context) error {
 	s.mu.Lock()
@@ -1275,6 +1284,10 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		return
 	}
 	defer release()
+	plan = plan.withLinkedOpenCodeV1()
+	s.mu.Lock()
+	job.Command = displayCommand(plan)
+	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	out := &capturedOutput{max: maxOutputBytes}

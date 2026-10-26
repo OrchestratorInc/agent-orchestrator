@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -53,12 +54,18 @@ func (e *IncompatibleVersionError) ReplacedOpenCode1Message() string {
 
 // isPrivateV2Location reports whether path is where AO installs OpenCode 2
 // apart from OpenCode 1: under the OpenCode 2 data home (npm prefix,
-// installer home) or the opencode-v2 formula's opt link.
+// installer home), AO's managed launcher, or the opencode-v2 formula's opt link.
 func isPrivateV2Location(path string) bool {
 	if path == "" {
 		return false
 	}
 	path = filepath.Clean(path)
+	name := strings.ToLower(filepath.Base(path))
+	if name == "opencode-v2" || name == "opencode-v2.cmd" || name == "opencode-v2.exe" || name == "opencode-v2.bat" {
+		if _, managed := binaryutil.ManagedCurrentDir(path, "opencode-v2"); managed {
+			return true
+		}
+	}
 	if slices.Contains(v2HomebrewCandidates(), filepath.ToSlash(path)) {
 		return true
 	}

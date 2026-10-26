@@ -1241,7 +1241,7 @@ func Run(buildVersion string) error {
 	if usageLimitResumeDone != nil {
 		<-usageLimitResumeDone
 	}
-	installStopCtx, installStopCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	installStopCtx, installStopCancel := context.WithTimeout(context.Background(), max(cfg.ShutdownTimeout, systemInstall.ShutdownTimeout()))
 	if err := systemInstall.Close(installStopCtx); err != nil {
 		log.Error("harness installer shutdown", "err", err)
 	}
