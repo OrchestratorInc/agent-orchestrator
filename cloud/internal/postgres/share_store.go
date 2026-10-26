@@ -674,38 +674,53 @@ func (s *Store) withSessionAccess(
 
 	access := sessionAccess{Role: "member"}
 	if !isMember {
-		var projectID string
+		var projectID, kind, requestedBy string
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project_id FROM ao_sessions WHERE org_id = $1 AND id = $2`,
+			`SELECT project_id, kind, COALESCE(requested_by_user_id::text, '')
+			FROM ao_sessions WHERE org_id = $1 AND id = $2`,
 			orgID, sessionID,
-		).Scan(&projectID)
+		).Scan(&projectID, &kind, &requestedBy)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
 		if err != nil {
 			return err
 		}
+		var wholeProject bool
 		err = tx.QueryRow(
 			ctx,
-			`SELECT role, COALESCE(mode_cap, ''), COALESCE(denied_commands, ARRAY[]::text[])
+			`SELECT role, COALESCE(mode_cap, ''), COALESCE(denied_commands, ARRAY[]::text[]), session_id IS NULL
 			FROM ao_project_share_grants
 			WHERE org_id = $1 AND project_id = $2 AND user_id = $3 AND status = 'active'
 			  AND (session_id = $4 OR session_id IS NULL)
 			ORDER BY (session_id IS NULL)
 			LIMIT 1`,
 			orgID, projectID, principal.UserID, sessionID,
-		).Scan(&access.Role, &access.ModeCap, &access.DeniedCommands)
+		).Scan(&access.Role, &access.ModeCap, &access.DeniedCommands, &wholeProject)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
 		if err != nil {
 			return err
 		}
+		access.Role = projectGrantRole(access.Role, wholeProject, kind, requestedBy, principal.UserID)
 	}
 
 	if err := fn(tx, access); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// projectGrantRole is what a guest's grant lets them do in one session. A
+// link to the session itself applies as it is. A link to the whole project
+// applies as it is to its orchestrator, where guests ask for sessions, and to
+// the sessions started for that guest; every other session in the project,
+// the owner's and other guests', they only watch.
+func projectGrantRole(role string, wholeProject bool, kind, requestedBy, userID string) string {
+	if !wholeProject || kind == "orchestrator" || (requestedBy != "" && requestedBy == userID) {
+		return role
+	}
+	return "viewer"
 }
