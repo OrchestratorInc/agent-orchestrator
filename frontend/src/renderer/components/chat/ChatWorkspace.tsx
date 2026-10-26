@@ -6,6 +6,7 @@ import { useChatFind } from "../../hooks/useChatFind";
 import { occurrenceKey, type FindOccurrence } from "../../lib/chat-find";
 import "./chat-find.css";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
+import { ActivityDetailProvider } from "../../hooks/useActivityDetail";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
@@ -2104,6 +2105,7 @@ function ChatWorkspaceContent({
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
+							<ActivityDetailProvider sessionId={snapshot.sessionId} hostId={activeRemoteHostId}>
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
@@ -2147,6 +2149,7 @@ function ChatWorkspaceContent({
 									openingStartupLabel={cloudStarting && openingStartedAt ? t("chat.startup.sandbox") : undefined}
 									arriving={arrivingInChat}
 								/>
+							</ActivityDetailProvider>
 							</ChatTokenSkills.Provider>
 							</ChatHostId.Provider>
 							</ChatImageSourceProvider>

@@ -1,3 +1,4 @@
+import { useActivityDetail, ActivityDetailStatus } from "../../hooks/useActivityDetail";
 import { AppLink } from "../AppLink";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
@@ -1785,7 +1786,7 @@ function GenericActivityRow({
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const files = fileChangeFiles(activity);
-	const hasBody = genericActivityHasBody(activity);
+	const hasBody = Boolean(activity.detailOmitted) || genericActivityHasBody(activity);
 	const { label, path, pathTitle, icon: stepIconName } = splitSummary(activity);
 	const StepMark = stepIcon[stepIconName ?? "run"];
 	// Commands and file edits share the explore-style summary line: a small mark for
@@ -1962,7 +1963,10 @@ function genericActivityHasBody(activity: ConversationActivity): boolean {
 }
 
 /** What a step's row opens onto: the command and its output, a patch, or a file list. */
-function GenericActivityBody({ activity }: { activity: ConversationActivity }) {
+function GenericActivityBody({ activity: preview }: { activity: ConversationActivity }) {
+	const loaded = useActivityDetail(preview, true);
+	const activity = loaded.activity;
+	if (loaded.pending) return <ActivityDetailStatus error={loaded.error} retry={loaded.retry} />;
 	const detail = activity.detail;
 	const files = fileChangeFiles(activity);
 	const isFileChange = activity.activityKind === "file_change";
@@ -2484,7 +2488,10 @@ function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
  * while the model works and is replaced by the provider's settled summary when the
  * item completes, so one field is read either way.
  */
-function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
+function ReasoningBlock({ activity: preview }: { activity: ConversationActivity }) {
+	const loaded = useActivityDetail(preview, true);
+	const activity = loaded.activity;
+	if (loaded.pending) return <ActivityDetailStatus error={loaded.error} retry={loaded.retry} />;
 	const text = activity.detail?.text ?? activity.detail?.reason ?? "";
 	if (!text) return null;
 	const streaming = activity.status === "running";
@@ -2530,7 +2537,7 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  */
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const aoView = aoToolView(activity);
-	if (aoView) return aoView.hidden ? null : <AOToolRow view={aoView} />;
+	if (aoView) return aoView.hidden ? null : <AOToolRow view={aoView} activity={activity} />;
 	return <GenericMcpToolRow activity={activity} />;
 }
 
@@ -2558,7 +2565,7 @@ function GenericMcpToolRow({ activity }: { activity: ConversationActivity }) {
 				? lastLine(detail.progress)
 				: undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
-	const hasBody = mcpToolHasBody(activity);
+	const hasBody = Boolean(activity.detailOmitted) || mcpToolHasBody(activity);
 
 	return (
 		<div className="min-w-0 max-w-full">
@@ -2651,7 +2658,10 @@ function mcpToolHasBody(activity: ConversationActivity): boolean {
 }
 
 /** What a tool call opens onto: its error, arguments, result, content and progress. */
-function McpToolBody({ activity }: { activity: ConversationActivity }) {
+function McpToolBody({ activity: preview }: { activity: ConversationActivity }) {
+	const loaded = useActivityDetail(preview, true);
+	const activity = loaded.activity;
+	if (loaded.pending) return <ActivityDetailStatus error={loaded.error} retry={loaded.retry} />;
 	const detail = activity.detail;
 	const args = mcpToolArguments(activity);
 	return (
@@ -2685,11 +2695,13 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
  * what went wrong when something did. The tool's answer is written for the agent,
  * so it is never shown as is.
  */
-function AOToolRow({ view }: { view: AOToolView }) {
+function AOToolRow({ view: previewView, activity }: { view: AOToolView; activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
+	const loaded = useActivityDetail(activity, open);
+	const view = aoToolView(loaded.activity) ?? previewView;
 	const reducedMotion = useReducedMotion();
 	const failed = view.state === "failed";
-	const hasBody = Boolean((failed && view.error) || view.lines?.length || view.text);
+	const hasBody = Boolean(activity.detailOmitted || (failed && view.error) || view.lines?.length || view.text);
 
 	return (
 		<div className="min-w-0 max-w-full">
@@ -2730,7 +2742,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden"
 					>
-						<div className="flex flex-col gap-1 pb-2.5">
+						{loaded.pending ? <ActivityDetailStatus error={loaded.error} retry={loaded.retry} /> : <div className="flex flex-col gap-1 pb-2.5">
 							{failed && view.error ? (
 								<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-destructive">
 									{view.error}
@@ -2752,7 +2764,7 @@ function AOToolRow({ view }: { view: AOToolView }) {
 									{view.text}
 								</pre>
 							) : null}
-						</div>
+						</div>}
 					</motion.div>
 				) : null}
 			</AnimatePresence>

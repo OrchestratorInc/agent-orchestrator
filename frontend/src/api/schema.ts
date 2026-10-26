@@ -2718,6 +2718,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/conversation/activities/{activityId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one full activity in the active conversation, with duplicate bodies omitted */
+        get: operations["getSessionConversationActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve": {
         parameters: {
             query?: never;
@@ -5964,6 +5981,7 @@ export interface components {
             detail?: {
                 [key: string]: unknown;
             };
+            detailOmitted?: boolean;
             id: string;
             /** @enum {string} */
             kind: "activity";
@@ -18346,6 +18364,10 @@ export interface operations {
                 afterSequence?: null | number;
                 /** @description Keep at most this many bytes of each command output: its head and tail. A cut output carries outputBytes, the full size. Omit for whole outputs. */
                 outputLimit?: null | number;
+                /** @description Return 128-byte UTF-8 previews for settled tool and reasoning detail strings. */
+                compactDetails?: "1" | null;
+                /** @description Omit duplicate tool bodies with explicit source-field markers. */
+                dedupeBodies?: "1" | null;
             };
             header?: never;
             path: {
@@ -18363,6 +18385,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConversationSnapshotResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionConversationActivity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                activityId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationActivityResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
