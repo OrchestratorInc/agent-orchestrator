@@ -267,9 +267,10 @@ func (s *Store) ListLatestRetiredCodexReplacementClaimsByPath(
 }
 
 // ListUsageDiscoveryBindings returns live-session bindings that may need a
-// main source, a relocated source, or newly-created subagent sources.
-func (s *Store) ListUsageDiscoveryBindings(ctx context.Context, limit int64) ([]domain.UsageBindingRecord, error) {
-	rows, err := s.qr.ListUsageDiscoveryBindings(ctx, limit)
+// main source, a relocated source, or newly-created subagent sources, in id
+// order starting after afterID.
+func (s *Store) ListUsageDiscoveryBindings(ctx context.Context, afterID, limit int64) ([]domain.UsageBindingRecord, error) {
+	rows, err := s.qr.ListUsageDiscoveryBindings(ctx, gen.ListUsageDiscoveryBindingsParams{AfterID: afterID, RowLimit: limit})
 	if err != nil {
 		return nil, fmt.Errorf("list usage discovery bindings: %w", err)
 	}

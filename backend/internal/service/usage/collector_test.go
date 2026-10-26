@@ -1471,6 +1471,26 @@ func TestCollectorDiscoveryLimitRotatesPendingBindings(t *testing.T) {
 	}
 }
 
+func TestCollectorReconcileLeavesUnchangedBindingsAlone(t *testing.T) {
+	store := collectorTestStore(t)
+	collectorTestSession(t, store, domain.HarnessCodex, "native-missing", false)
+	collector := NewCollector(store, SourceRoots{CodexSessions: filepath.Join(t.TempDir(), "sessions")}, nil)
+	ctx := context.Background()
+	mustNoError(t, collector.BackfillActive(ctx), "backfill")
+	mustNoError(t, collector.ReconcileSources(ctx, 0), "first reconcile")
+
+	seq, err := store.LatestSeq(ctx)
+	mustNoError(t, err)
+	for range 3 {
+		mustNoError(t, collector.ReconcileSources(ctx, 0), "repeat reconcile")
+	}
+	after, err := store.LatestSeq(ctx)
+	mustNoError(t, err)
+	if after != seq {
+		t.Fatalf("change_log advanced from %d to %d with nothing discovered", seq, after)
+	}
+}
+
 func TestCollectorResumeReactivatesAllLatestCodexSources(t *testing.T) {
 	store := collectorTestStore(t)
 	session := collectorTestSession(t, store, domain.HarnessCodex, "native-resume", false)

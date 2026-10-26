@@ -1082,6 +1082,72 @@ func TestIngestorStopsRetryingConflictingNativeEvent(t *testing.T) {
 	}
 }
 
+func TestIngestorConflictedSourceLeavesSettledBindingAlone(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1700000000, 0).UTC()
+	store, session := seedUsageTestSession(
+		t, t.TempDir(), "usage", domain.HarnessClaudeCode, domain.ActivityExited, "", now,
+	)
+	binding := seedUsageTestBinding(t, store, session, "claude-root", domain.UsageBindingFinalizing, now)
+	path := filepath.Join(t.TempDir(), "claude-root.jsonl")
+	line := `{"type":"assistant","uuid":"native-message","message":{"id":"msg-1","model":"claude-x","stop_reason":"end_turn","usage":{"input_tokens":8,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2}}}` + "\n"
+	mustNoError(t, os.WriteFile(path, []byte(line), 0o600))
+	identity, err := usagesvc.SourceIdentity(ctx, path)
+	mustNoError(t, err)
+	source, err := store.InsertUsageSource(ctx, domain.UsageSourceRecord{
+		BindingID:       binding.ID,
+		Kind:            domain.UsageSourceClaudeMain,
+		NativeSessionID: "claude-root",
+		ArtifactPath:    path,
+		FileIdentity:    identity,
+		State:           domain.UsageSourcePending,
+		UpdatedAt:       now,
+	})
+	mustNoError(t, err)
+	contextSource, ok, err := store.GetUsageSourceForIngestion(ctx, source.ID)
+	if err != nil || !ok {
+		t.Fatalf("source ok=%v err=%v", ok, err)
+	}
+	parsed := parseRecords(contextSource, []jsonlRecord{{Data: []byte(line), Offset: 0}}, int64(len(line)), now)
+	mustNoError(t, parsed.err)
+	conflict := parsed.Events[0]
+	(*conflict.Tokens.OutputTokens)++
+	mustNoError(t, store.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 0,
+		State:      domain.UsageSourcePending,
+		UpdatedAt:  now,
+	}, []domain.ModelUsageEvent{conflict}))
+
+	ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
+	result, err := ingestor.Ingest(ctx, source.ID)
+	mustNoError(t, err)
+	if result.RetryAt != nil {
+		t.Fatalf("conflict scheduled a retry at %s", result.RetryAt)
+	}
+	bindings, err := store.ListUsageBindingsForSession(ctx, session.ID)
+	if err != nil || len(bindings) != 1 || bindings[0].State != domain.UsageBindingPartial {
+		t.Fatalf("bindings=%+v err=%v", bindings, err)
+	}
+
+	// The conflict left the cursor at 0 with the whole transcript unread. Later
+	// passes must not flip the settled binding back through finalizing.
+	seq, err := store.LatestSeq(ctx)
+	mustNoError(t, err)
+	for range 3 {
+		now = now.Add(defaultFinalizationWait + time.Second)
+		result, err := ingestor.Ingest(ctx, source.ID)
+		mustNoError(t, err)
+		if result.RetryAt != nil {
+			t.Fatalf("settled conflict scheduled a retry at %s", result.RetryAt)
+		}
+	}
+	after, err := store.LatestSeq(ctx)
+	mustNoError(t, err)
+	if after != seq {
+		t.Fatalf("change_log advanced from %d to %d on an unchanged source", seq, after)
+	}
+}
+
 func TestRetryDelayUsesBoundedBackoff(t *testing.T) {
 	tests := []struct {
 		failure int64

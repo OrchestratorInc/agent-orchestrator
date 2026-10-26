@@ -104,7 +104,7 @@ type collectorStore interface {
 	GetUsageBinding(context.Context, domain.SessionID, domain.AgentHarness, string) (domain.UsageBindingRecord, bool, error)
 	ListUsageBindingsForSession(context.Context, domain.SessionID) ([]domain.UsageBindingRecord, error)
 	FinalizeUsageBindingsForSessionLaunch(context.Context, domain.SessionID, string, int64, time.Time) ([]domain.UsageBindingRecord, error)
-	ListUsageDiscoveryBindings(context.Context, int64) ([]domain.UsageBindingRecord, error)
+	ListUsageDiscoveryBindings(context.Context, int64, int64) ([]domain.UsageBindingRecord, error)
 	ListUsageBindingsForCodexParent(context.Context, string) ([]domain.UsageBindingRecord, error)
 	ListLatestRetiredCodexReplacementClaimsByPath(context.Context, string) ([]domain.UsageSourceRecord, error)
 	UpdateUsageBindingState(context.Context, int64, domain.UsageBindingState, string, time.Time) (bool, error)
@@ -128,6 +128,10 @@ type Collector struct {
 	now                     func() time.Time
 	logger                  *slog.Logger
 	mu                      sync.Mutex
+	// discoveryAfterID is where the next bounded reconcile pass resumes,
+	// guarded by mu. Unchanged bindings are not rewritten, so their updated_at
+	// cannot rotate the pass through more bindings than one limit holds.
+	discoveryAfterID int64
 	// Guarded separately from mu, which RecordHook holds across the whole hook.
 	routeMu sync.RWMutex
 }
@@ -675,9 +679,25 @@ func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
 	if limit == 0 {
 		limit = defaultDiscoveryLimit
 	}
-	bindings, err := c.store.ListUsageDiscoveryBindings(ctx, limit)
+	bindings, err := c.store.ListUsageDiscoveryBindings(ctx, c.discoveryAfterID, limit)
 	if err != nil {
 		return err
+	}
+	if remaining := limit - int64(len(bindings)); limit > 0 && remaining > 0 && c.discoveryAfterID > 0 {
+		wrapped, err := c.store.ListUsageDiscoveryBindings(ctx, 0, remaining)
+		if err != nil {
+			return err
+		}
+		for _, binding := range wrapped {
+			if binding.ID > c.discoveryAfterID {
+				break
+			}
+			bindings = append(bindings, binding)
+		}
+	}
+	c.discoveryAfterID = 0
+	if limit > 0 && int64(len(bindings)) == limit {
+		c.discoveryAfterID = bindings[len(bindings)-1].ID
 	}
 	now := c.now().UTC()
 	var errs []error
