@@ -109,7 +109,15 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						if status.LoopbackOnly || tunnelOnly {
 							flag = "--tunnel-only"
 						}
-						message = "Tunnel: downloading cloudflared; run `ao remote-host status` for the HTTPS address. If none appears, install cloudflared and rerun `ao remote-host enable " + flag + "`"
+						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable " + flag + "`"
+						// AO downloads its own cloudflared once per run where it has a
+						// pinned build; the tunnel starts by itself when it lands.
+						var install struct {
+							Status string `json:"status"`
+						}
+						if ctx.doJSON(cmd.Context(), "GET", "system/install/cloudflared", nil, &install) == nil && install.Status == "running" {
+							message = "Tunnel: downloading cloudflared; run `ao remote-host status` for the HTTPS address"
+						}
 					} else if status.Tunnel.LastError != "" && !status.Tunnel.Running {
 						message = "Tunnel unavailable: " + status.Tunnel.LastError
 					}

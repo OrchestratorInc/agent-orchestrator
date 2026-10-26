@@ -29,7 +29,7 @@ type remoteHostAddressStore interface {
 type remoteHostTunnelStore interface {
 	GetRemoteHostTunnel(context.Context, string) (domain.RemoteHostTunnel, bool, error)
 	SaveRemoteHostTunnel(context.Context, domain.RemoteHostTunnel) error
-	TouchRemoteHostTunnel(context.Context, string) error
+	TouchRemoteHostTunnel(context.Context, string, time.Time) error
 	DeleteRemoteHostTunnel(context.Context, string, string) error
 }
 
@@ -103,20 +103,27 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Label = strings.TrimSpace(input.Label)
 	input.URL = strings.TrimSpace(input.URL)
-	// A machine on this AO Cloud registers before its tunnel exists, so it can
-	// leave the address out: its fixed address is known from the host ID, and
-	// the machine fetches the tunnel next. Written the way the machine's
-	// address publish writes it, so that publish does not rewrite the record
-	// and reconnect every device.
-	if input.URL == "" && s.hostTunnels != nil && validRemoteHostID(hostID) {
-		input.URL = "https://" + s.hostTunnels.Hostname(hostID) + ":443"
-	}
+	tunnels := s.tunnelStore()
 	secret, err := hex.DecodeString(input.Token)
-	if !validRemoteHostID(hostID) || input.Label == "" || len(input.Label) > 64 || !validRemoteAddress(input.URL) || err != nil || len(secret) != 32 {
+	if !validRemoteHostID(hostID) || input.Label == "" || len(input.Label) > 64 || err != nil || len(secret) != 32 ||
+		(input.URL != "" && !validRemoteAddress(input.URL)) || (input.URL == "" && tunnels == nil) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The remote host connection is invalid.")
 		return
 	}
 	defer clear(secret)
+	// A machine on this AO Cloud registers before its tunnel exists, so it can
+	// leave the address out. The tunnel and its DNS record are made here,
+	// before any device is told the address, so no device looks the name up
+	// before it exists and caches the miss. Written the way the machine's
+	// address publish writes it, so that publish does not rewrite the record
+	// and reconnect every device.
+	if input.URL == "" {
+		hostname, _, ok := s.hostTunnel(w, r, tunnels, hostID, false)
+		if !ok {
+			return
+		}
+		input.URL = "https://" + hostname + ":443"
+	}
 	principal := principalFrom(r)
 	encrypted, nonce, err := s.secretCipher.Encrypt([]byte(input.Token), "remote-host:"+principal.UserID+":"+hostID)
 	if err != nil {
@@ -147,37 +154,37 @@ func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	s.releaseUnregisteredTunnel(context.WithoutCancel(r.Context()), hostID)
+	s.releaseUnregisteredTunnel(r.Context(), hostID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // releaseUnregisteredTunnel deletes hostID's tunnel once no account lists the
-// host, in the background so removing a host does not wait on Cloudflare. A
-// failure is left to the daily sweep.
+// host. It finishes before the removal answers, so a host added back right
+// after gets a new tunnel rather than the one being deleted. A failure is left
+// to the daily sweep.
 func (s *Server) releaseUnregisteredTunnel(ctx context.Context, hostID string) {
 	registrations, ok := s.store.(remoteHostAddressStore)
-	tunnels, hasTunnels := s.store.(remoteHostTunnelStore)
-	if !ok || !hasTunnels || s.hostTunnels == nil {
+	tunnels := s.tunnelStore()
+	if !ok || tunnels == nil {
 		return
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(ctx, time.Minute)
-		defer cancel()
-		if hosts, err := registrations.FindRemoteHostRegistrations(ctx, hostID); err != nil || len(hosts) > 0 {
-			return
-		}
-		tunnel, found, err := tunnels.GetRemoteHostTunnel(ctx, hostID)
-		if err != nil || !found {
-			return
-		}
-		if err := s.hostTunnels.Delete(ctx, tunnel.TunnelID, tunnel.Hostname); err != nil {
-			s.logger.Warn("release host tunnel", "host_id", hostID, "error", err)
-			return
-		}
-		if err := tunnels.DeleteRemoteHostTunnel(ctx, hostID, tunnel.TunnelID); err != nil {
-			s.logger.Warn("forget host tunnel", "host_id", hostID, "error", err)
-		}
-	}()
+	// A client that hangs up mid-release must not leave half a tunnel.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if hosts, err := registrations.FindRemoteHostRegistrations(ctx, hostID); err != nil || len(hosts) > 0 {
+		return
+	}
+	tunnel, found, err := tunnels.GetRemoteHostTunnel(ctx, hostID)
+	if err != nil || !found {
+		return
+	}
+	if err := s.hostTunnels.Delete(ctx, tunnel.TunnelID, tunnel.Hostname); err != nil {
+		s.logger.Warn("release host tunnel", "host_id", hostID, "error", err)
+		return
+	}
+	if err := tunnels.DeleteRemoteHostTunnel(ctx, hostID, tunnel.TunnelID); err != nil {
+		s.logger.Warn("forget host tunnel", "host_id", hostID, "error", err)
+	}
 }
 
 // The host publishes a rotated quick-tunnel address using the SHA-256 digest
@@ -255,8 +262,8 @@ const minTunnelRepairInterval = time.Minute
 func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	registrations, ok := s.store.(remoteHostAddressStore)
-	tunnels, hasTunnels := s.store.(remoteHostTunnelStore)
-	if !ok || !hasTunnels || s.secretCipher == nil || s.hostTunnels == nil {
+	tunnels := s.tunnelStore()
+	if !ok || tunnels == nil {
 		writeError(w, r, http.StatusServiceUnavailable, "fixed_addresses_unavailable", "Fixed addresses are unavailable.")
 		return
 	}
@@ -271,36 +278,56 @@ func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
 	}
+	hostname, runToken, ok := s.hostTunnel(w, r, tunnels, hostID, input.Repair)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"hostname": hostname, "runToken": runToken})
+}
+
+// tunnelStore is the store's tunnel half, or nil when this AO Cloud hands out
+// no fixed addresses.
+func (s *Server) tunnelStore() remoteHostTunnelStore {
+	tunnels, ok := s.store.(remoteHostTunnelStore)
+	if !ok || s.hostTunnels == nil || s.secretCipher == nil {
+		return nil
+	}
+	return tunnels
+}
+
+// hostTunnel returns hostID's tunnel, making it and its DNS record on first
+// use. repair remakes a stored tunnel, at most once a minute. It writes the
+// error response itself when it fails.
+func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remoteHostTunnelStore, hostID string, repair bool) (hostname, runToken string, ok bool) {
 	stored, found, err := tunnels.GetRemoteHostTunnel(r.Context(), hostID)
 	if err != nil {
 		s.writeStoreError(w, r, err)
-		return
+		return "", "", false
 	}
 	aad := "remote-host-tunnel:" + hostID
-	if found && (!input.Repair || time.Since(stored.UpdatedAt) < minTunnelRepairInterval) {
+	if found && (!repair || time.Since(stored.UpdatedAt) < minTunnelRepairInterval) {
 		token, err := s.secretCipher.Decrypt(stored.EncryptedRunToken, stored.RunTokenNonce, aad)
 		if err == nil {
-			_ = tunnels.TouchRemoteHostTunnel(r.Context(), hostID)
-			writeJSON(w, http.StatusOK, map[string]string{"hostname": stored.Hostname, "runToken": string(token)})
-			return
+			_ = tunnels.TouchRemoteHostTunnel(r.Context(), hostID, time.Now())
+			return stored.Hostname, string(token), true
 		}
 	}
 	tunnel, err := s.hostTunnels.Ensure(r.Context(), hostID)
 	if err != nil {
 		s.logger.Warn("provision host tunnel", "host_id", hostID, "error", err)
 		writeError(w, r, http.StatusBadGateway, "tunnel_unavailable", "The fixed address could not be prepared.")
-		return
+		return "", "", false
 	}
 	encrypted, nonce, err := s.secretCipher.Encrypt([]byte(tunnel.RunToken), aad)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The tunnel credential could not be stored.")
-		return
+		return "", "", false
 	}
 	if err := tunnels.SaveRemoteHostTunnel(r.Context(), domain.RemoteHostTunnel{
 		HostID: hostID, TunnelID: tunnel.ID, Hostname: tunnel.Hostname, EncryptedRunToken: encrypted, RunTokenNonce: nonce,
 	}); err != nil {
 		s.writeStoreError(w, r, err)
-		return
+		return "", "", false
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"hostname": tunnel.Hostname, "runToken": tunnel.RunToken})
+	return tunnel.Hostname, tunnel.RunToken, true
 }

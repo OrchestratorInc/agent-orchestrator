@@ -160,14 +160,14 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 
 	// Hold the endpoint back until its hostname has had time to propagate: DNS
 	// for a brand-new quick tunnel, or a named tunnel's just-published record,
-	// lags the connector's own "registered" signal. A named record published
-	// on an earlier start has nothing left to wait for.
+	// lags the connector's own "registered" signal. A named record this
+	// machine has known for longer than that has nothing left to wait for.
 	settleCtx, stopSettle := context.WithCancel(ctx)
 	defer stopSettle()
 	if fixed {
 		t.Runtime.NamedHostname(named.Hostname)
 	}
-	if fixed && !named.NewRecord {
+	if fixed && time.Since(named.Since) >= t.settleDelay() {
 		t.Runtime.Settled()
 	} else {
 		go t.awaitSettled(settleCtx)

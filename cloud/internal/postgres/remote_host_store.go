@@ -112,9 +112,9 @@ func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTun
 	})
 }
 
-func (s *Store) TouchRemoteHostTunnel(ctx context.Context, hostID string) error {
+func (s *Store) TouchRemoteHostTunnel(ctx context.Context, hostID string, seenAt time.Time) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET last_seen_at = now() WHERE host_id = $1`, hostID)
+		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET last_seen_at = $2 WHERE host_id = $1`, hostID, seenAt)
 		return err
 	})
 }

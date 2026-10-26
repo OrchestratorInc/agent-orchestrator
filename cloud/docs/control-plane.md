@@ -271,18 +271,23 @@ machine only ever receives its own tunnel's run token.
 
 - The address is `h-<hash of the host ID>.<zone>`, one level under the zone
   apex because Universal SSL covers one level only. A host registered without
-  a URL (`PUT /api/cloud/v1/me/hosts/{hostId}`) is listed at it at once.
+  a URL (`PUT /api/cloud/v1/me/hosts/{hostId}`) gets a locally configured
+  tunnel and its proxied CNAME first and is then listed at that address, so no
+  device looks the name up before it exists. If Cloudflare fails, the
+  registration fails with 502; without the settings it is refused with 422.
+  Either way the desktop links the computer at its quick tunnel's address.
 - The machine fetches its run token from
   `POST /api/cloud/v1/remote-hosts/{hostId}/tunnel`, proving the host with the
-  digest of its account token, as the address publish does. The first call
-  creates a locally configured tunnel and its proxied CNAME; later calls return
-  the stored token without calling Cloudflare. `{"repair":true}`, sent after the
+  digest of its account token, as the address publish does. It returns the
+  stored token without calling Cloudflare, and makes the tunnel only for a host
+  that has none yet. `{"repair":true}`, sent after the
   machine's address answered 530 three times, makes the tunnel and record exist
   again, at most once a minute per host.
 - `ao_remote_host_tunnels` keeps one row per host, whichever accounts list it,
   with the run token encrypted like host tokens.
-- Removing the last registration deletes the tunnel and its record in the
-  background. A daily sweep deletes tunnels no account lists, tunnels Cloudflare
+- Removing the last registration deletes the tunnel and its record before the
+  removal answers, so a host added back right after gets a new tunnel. A daily
+  sweep deletes tunnels no account lists, tunnels Cloudflare
   no longer has, and tunnels whose machine has had no connector for 90 days.
   A deleted machine that comes back gets a new tunnel at the same address.
 - Zone records are the limit: a Free zone holds 200, Pro 3,500. A refused record

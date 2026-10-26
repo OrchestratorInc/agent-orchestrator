@@ -65,8 +65,11 @@ func TestRemoteHostTunnelsAreServiceOwnedAndSwept(t *testing.T) {
 	if _, found, _ := store.GetRemoteHostTunnel(ctx, registered); !found {
 		t.Fatal("delete of an older tunnel removed the current one")
 	}
-	if err := store.TouchRemoteHostTunnel(ctx, registered); err != nil {
+	if err := store.TouchRemoteHostTunnel(ctx, registered, time.Now()); err != nil {
 		t.Fatal(err)
+	}
+	if candidates, err := store.ListRemoteHostTunnelSweepCandidates(ctx, time.Now().Add(-time.Hour)); err != nil || len(pick(candidates, registered)) != 0 {
+		t.Fatalf("a touched tunnel stayed a candidate: %+v, %v", candidates, err)
 	}
 	if err := store.DeleteRemoteHostTunnel(ctx, registered, "tun-"+registered); err != nil {
 		t.Fatal(err)

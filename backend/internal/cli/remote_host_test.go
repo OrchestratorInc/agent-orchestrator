@@ -174,27 +174,40 @@ func TestRemoteHostCLITunnelRefusesLoopbackOnlyListener(t *testing.T) {
 }
 
 func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
-	cfg := setConfigEnv(t)
-	var requests []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
-			requests = append(requests, r.Method+" "+r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false}}`)
-	}))
-	t.Cleanup(srv.Close)
-	writeRunFileFor(t, cfg, srv)
+	// The connector line follows the daemon's own cloudflared download: only
+	// a running one is reported as on its way.
+	for install, want := range map[string]string{
+		"running": "Tunnel: downloading cloudflared",
+		"failed":  "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable --tunnel`",
+	} {
+		t.Run(install, func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			var requests []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/v1/system/install/cloudflared" {
+					_, _ = io.WriteString(w, `{"target":"cloudflared","status":"`+install+`"}`)
+					return
+				}
+				if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+					requests = append(requests, r.Method+" "+r.URL.Path)
+				}
+				_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false}}`)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
 
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
-		t.Fatalf("requests = %s, want no listener restart", got)
-	}
-	if !strings.Contains(out, "existing-secret") || !strings.Contains(out, "Tunnel: downloading cloudflared") {
-		t.Fatalf("tunnel output = %q", out)
+			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
+				t.Fatalf("requests = %s, want no listener restart", got)
+			}
+			if !strings.Contains(out, "existing-secret") || !strings.Contains(out, want) {
+				t.Fatalf("tunnel output = %q, want %q", out, want)
+			}
+		})
 	}
 }
 

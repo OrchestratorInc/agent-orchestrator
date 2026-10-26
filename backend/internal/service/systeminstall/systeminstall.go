@@ -1262,9 +1262,17 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	job.Status = StatusSucceeded
 	callback := s.onSucceeded
 	target := job.Target
+	var connectorInstalled func()
+	if target == TargetCloudflared {
+		// A package-manager install remote access waited on, like the download.
+		connectorInstalled = s.onCloudflaredInstalled
+	}
 	s.mu.Unlock()
 	if callback != nil {
 		callback(target)
+	}
+	if connectorInstalled != nil {
+		connectorInstalled()
 	}
 }
 

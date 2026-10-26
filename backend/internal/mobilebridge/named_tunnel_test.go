@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeAOCloud answers the fixed-tunnel route for host-uuid.
@@ -73,6 +74,21 @@ func link(t *testing.T, src *FixedTunnelSource, digest string) {
 	}
 }
 
+// knownTunnel caches the fake's tunnel as first fetched a day ago, as on
+// every start after the first.
+func knownTunnel(t *testing.T, src *FixedTunnelSource) {
+	t.Helper()
+	b, err := json.Marshal(cachedNamedTunnel{Key: src.cacheKey("host-uuid"), Tunnel: NamedTunnel{
+		Hostname: "h-test.example.dev", RunToken: "run-token-tun-1", Since: time.Now().Add(-24 * time.Hour),
+	}})
+	if err == nil {
+		err = os.WriteFile(src.CachePath, b, 0o600)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFixedTunnelNeedsALinkedMachine(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	link(t, src, "")
@@ -89,11 +105,12 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	ctx := context.Background()
 
 	first, err := src.TunnelFor(ctx, "host-uuid", false)
-	if err != nil || first.Hostname != "h-test.example.dev" || first.RunToken != "run-token-tun-1" || !first.NewRecord {
+	if err != nil || first.Hostname != "h-test.example.dev" || first.RunToken != "run-token-tun-1" || time.Since(first.Since) > time.Minute {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
+	// A later answer keeps the first sighting: the record is no newer.
 	again, err := src.TunnelFor(ctx, "host-uuid", true)
-	if err != nil || again.NewRecord || cloud.repairs[1] != true || cloud.digests[1] != "account-digest" {
+	if err != nil || !again.Since.Equal(first.Since) || cloud.repairs[1] != true || cloud.digests[1] != "account-digest" {
 		t.Fatalf("again = %+v, %v, repairs %v, digests %v", again, err, cloud.repairs, cloud.digests)
 	}
 

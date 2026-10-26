@@ -13,12 +13,14 @@ export function fitLabel(name: string): string {
 
 /**
  * Links this computer to the signed-in AO account, so it appears on the
- * account's devices without a password. Done before its tunnel starts: a
- * linked machine gets its fixed address from AO Cloud, which lists it there
- * at once, so it never starts a quick tunnel only to replace it.
+ * account's devices without a password. Without url it is done before the
+ * tunnel starts: AO Cloud makes this computer's fixed address and lists it
+ * there, so it never starts a quick tunnel only to replace it. An AO Cloud
+ * that has no fixed addresses refuses that, and the caller links again with
+ * the quick tunnel's url once it has one.
  * Returns the host id the account now lists.
  */
-export async function linkThisComputer(cloudBaseUrl: string, accountId: string, password: string): Promise<string> {
+export async function linkThisComputer(cloudBaseUrl: string, accountId: string, password: string, url?: string): Promise<string> {
 	const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
 		headers: { Authorization: `Bearer ${password}`, "X-AO-Account-ID": accountId },
 	});
@@ -26,6 +28,7 @@ export async function linkThisComputer(cloudBaseUrl: string, accountId: string, 
 	await saveAccountRemoteHost(cloudBaseUrl, {
 		hostId: issued.data.hostId,
 		label: fitLabel(await aoBridge.remotes.computerName()),
+		url,
 		token: issued.data.token,
 	});
 	return issued.data.hostId;

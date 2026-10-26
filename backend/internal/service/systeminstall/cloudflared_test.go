@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -166,5 +167,26 @@ func TestDownloadCloudflaredInBackgroundNeverRunsAPackageManager(t *testing.T) {
 	s.mu.Unlock()
 	if started {
 		t.Fatal("the automatic trigger started a package-manager install")
+	}
+}
+
+// Where there is nothing to download, remote access waits on the install the
+// user starts instead, and that install must start the connector as well.
+func TestPackageManagerCloudflaredStartsTheWaitingConnector(t *testing.T) {
+	s, _ := newDownloadService("darwin", "386", nil, "brew", "cloudflared")
+	s.commands = testCommandRunner(func(ctx context.Context, _ []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	})
+	installed := make(chan struct{}, 1)
+	s.DownloadCloudflaredInBackground(func() { installed <- struct{}{} })
+
+	if _, err := s.Start(context.Background(), TargetCloudflared); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	waitForStatus(t, s, TargetCloudflared, StatusSucceeded)
+	select {
+	case <-installed:
+	case <-time.After(time.Second):
+		t.Fatal("the connector waiting on cloudflared was not started")
 	}
 }

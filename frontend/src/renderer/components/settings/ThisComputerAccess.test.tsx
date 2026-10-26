@@ -8,7 +8,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 // tunnel but keeps a running bridge's password, and the account token needs
 // the current password. A machine linked to the account serves its fixed
 // address, an unlinked one a quick tunnel. The cloud fake follows
-// remote_host_handlers: a host saved without a url is listed at its fixed address.
+// remote_host_handlers: a host saved without a url is listed at its fixed
+// address, and an AO Cloud without fixed addresses refuses that save.
 const fake = vi.hoisted(() => {
 	const HOST_ID = "h_6f1c2b9e-0d4a-4c1e-9b7a-3f2d1e0c9b8a";
 	const TOKEN = "0f".repeat(32);
@@ -31,6 +32,7 @@ const fake = vi.hoisted(() => {
 		hosts: new Map<string, { label: string; url: string; token: string }>(),
 		failPut: false,
 		failDelete: false,
+		fixedAddresses: true,
 	};
 	const log: string[] = [];
 	const tokenRequests: Array<{ authorization: string; account: string }> = [];
@@ -123,6 +125,7 @@ const fake = vi.hoisted(() => {
 		if (method === "PUT") {
 			const input = JSON.parse(body ?? "{}") as { label: string; url?: string; token: string };
 			if (cloud.failPut) return reply(503);
+			if (input.url === undefined && !cloud.fixedAddresses) return reply(422);
 			input.url ??= `https://${FIXED}:443`;
 			const labelBytes = new TextEncoder().encode(input.label).length;
 			if (labelBytes === 0 || labelBytes > 64 || !/^[0-9a-f]{64}$/.test(input.token)) return reply(422);
@@ -187,6 +190,7 @@ afterEach(() => {
 	fake.cloud.hosts.clear();
 	fake.cloud.failPut = false;
 	fake.cloud.failDelete = false;
+	fake.cloud.fixedAddresses = true;
 	fake.log.length = 0;
 	fake.tokenRequests.length = 0;
 	fake.computerName = "Dhruv’s Mac mini";
@@ -209,6 +213,25 @@ it("links this computer before its tunnel starts, so the tunnel is its fixed add
 		"/api/v1/remote-host/account-token",
 		`cloud PUT ${fake.HOST_ID}`,
 		"/api/v1/mobile/remote-access",
+	]);
+});
+
+it("links at the quick tunnel's address when AO Cloud has no fixed addresses", async () => {
+	fake.cloud.fixedAddresses = false;
+	renderAccess();
+	const toggle = await readySwitch();
+	fireEvent.click(toggle);
+
+	expect(await screen.findByText("Your devices see this computer as Dhruv’s Mac mini.")).toBeVisible();
+	expect(toggle).toHaveAttribute("aria-checked", "true");
+	expect(fake.cloud.hosts.get(fake.HOST_ID)?.url).toBe(`https://${fake.TUNNEL}:443`);
+	expect(fake.log).toEqual([
+		"/api/v1/mobile/enable-lan-only",
+		"/api/v1/remote-host/account-token",
+		`cloud PUT ${fake.HOST_ID}`,
+		"/api/v1/mobile/remote-access",
+		"/api/v1/remote-host/account-token",
+		`cloud PUT ${fake.HOST_ID}`,
 	]);
 });
 
@@ -365,15 +388,16 @@ it("shortens a long computer name to fit the account", async () => {
 	expect(new TextEncoder().encode(label).length).toBeLessThanOrEqual(64);
 });
 
-it("waits for the daemon's own cloudflared download instead of giving up", async () => {
+it("waits for the daemon's own cloudflared download, however long it takes", async () => {
 	vi.useFakeTimers({ shouldAdvanceTime: true });
-	Object.assign(fake.daemon, { connector: false, downloadReads: 3 });
+	// About two minutes of status reads: longer than the tunnel's own wait.
+	Object.assign(fake.daemon, { connector: false, downloadReads: 60 });
 	renderAccess();
 	const toggle = await readySwitch();
 	fireEvent.click(toggle);
 
 	await act(async () => {
-		await vi.advanceTimersByTimeAsync(20_000);
+		await vi.advanceTimersByTimeAsync(150_000);
 	});
 
 	expect(await screen.findByText("Your devices see this computer as Dhruv’s Mac mini.")).toBeVisible();

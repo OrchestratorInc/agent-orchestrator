@@ -71,7 +71,7 @@ beforeEach(() => {
 	vi.mocked(linkThisComputer).mockClear();
 });
 
-const posted = () => vi.mocked(apiClient.POST).mock.calls.map(([path]) => path);
+const posted = () => (vi.mocked(apiClient.POST).mock.calls as unknown[][]).map(([path]) => path);
 
 test("a signed-out computer pairs on this network only and says why", async () => {
 	fake.signedIn = false;

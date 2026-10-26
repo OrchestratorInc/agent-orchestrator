@@ -46,10 +46,10 @@ func NewFixedTunnelSource(controlPlaneURL, dataDir string) *FixedTunnelSource {
 type NamedTunnel struct {
 	Hostname string `json:"hostname"`
 	RunToken string `json:"runToken"`
-	// NewRecord is set on this machine's first fixed tunnel: its DNS record is
-	// new, so resolvers that asked for the name earlier may still hold an
-	// NXDOMAIN.
-	NewRecord bool `json:"-"`
+	// Since is when this machine first got Hostname from AO Cloud. Its DNS
+	// record is no older, so until it settles, resolvers that asked for the
+	// name earlier may still hold an NXDOMAIN. Zero means long ago.
+	Since time.Time `json:"since,omitzero"`
 }
 
 type cachedNamedTunnel struct {
@@ -92,7 +92,7 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 	if state.AccountTokenHash == "" {
 		return NamedTunnel{}, errNotLinked
 	}
-	key := strings.TrimRight(s.ControlPlaneURL, "/") + "/" + hostID
+	key := s.cacheKey(hostID)
 	cached := loadNamedTunnelCache(s.CachePath, key)
 	t, err := s.request(ctx, hostID, state.AccountTokenHash, repair)
 	if errors.Is(err, errHostRefused) {
@@ -102,12 +102,21 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 	if err != nil {
 		return cached, err // the zero value when nothing is cached
 	}
-	t.NewRecord = cached.Hostname != t.Hostname
+	// Kept across answers: the quick-to-fixed check and the rechecks all
+	// write this cache, so "cached" never means "old".
+	t.Since = cached.Since
+	if cached.Hostname != t.Hostname {
+		t.Since = time.Now()
+	}
 	// A lost cache only costs the fallback until the next good answer.
 	if b, err := json.Marshal(cachedNamedTunnel{Key: key, Tunnel: t}); err == nil && s.CachePath != "" {
 		_ = os.WriteFile(s.CachePath, b, 0o600)
 	}
 	return t, nil
+}
+
+func (s *FixedTunnelSource) cacheKey(hostID string) string {
+	return strings.TrimRight(s.ControlPlaneURL, "/") + "/" + hostID
 }
 
 func loadNamedTunnelCache(path, key string) NamedTunnel {

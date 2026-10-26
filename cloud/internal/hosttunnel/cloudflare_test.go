@@ -232,14 +232,19 @@ func TestVerifyRejectsAnotherZone(t *testing.T) {
 type fakeSweepStore struct {
 	candidates []domain.RemoteHostTunnelCandidate
 	touched    []string
+	seen       map[string]time.Time
 	deleted    []string
 }
 
 func (s *fakeSweepStore) ListRemoteHostTunnelSweepCandidates(context.Context, time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
 	return s.candidates, nil
 }
-func (s *fakeSweepStore) TouchRemoteHostTunnel(_ context.Context, hostID string) error {
+func (s *fakeSweepStore) TouchRemoteHostTunnel(_ context.Context, hostID string, seenAt time.Time) error {
 	s.touched = append(s.touched, hostID)
+	if s.seen == nil {
+		s.seen = map[string]time.Time{}
+	}
+	s.seen[hostID] = seenAt
 	return nil
 }
 func (s *fakeSweepStore) DeleteRemoteHostTunnel(_ context.Context, hostID, _ string) error {
@@ -266,8 +271,13 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted != 3 || strings.Join(store.deleted, ",") != "stale,missing,orphan" || strings.Join(store.touched, ",") != "online" {
+	if deleted != 3 || strings.Join(store.deleted, ",") != "stale,missing,orphan" || strings.Join(store.touched, ",") != "online,recent" {
 		t.Fatalf("deleted %d %v, touched %v", deleted, store.deleted, store.touched)
+	}
+	// The kept offline tunnel is due again 90 days after Cloudflare last saw it,
+	// not 90 days after this sweep, and leaves the batch until then.
+	if !store.seen["online"].Equal(now) || !store.seen["recent"].Equal(recent) {
+		t.Fatalf("seen %v", store.seen)
 	}
 	if _, ok := cf.tunnels["recent"]; !ok {
 		t.Fatal("a tunnel offline for 10 days was deleted")

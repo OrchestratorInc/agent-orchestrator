@@ -20,7 +20,7 @@ const (
 // SweepStore is what the sweep reads and writes.
 type SweepStore interface {
 	ListRemoteHostTunnelSweepCandidates(context.Context, time.Time) ([]domain.RemoteHostTunnelCandidate, error)
-	TouchRemoteHostTunnel(context.Context, string) error
+	TouchRemoteHostTunnel(context.Context, string, time.Time) error
 	DeleteRemoteHostTunnel(context.Context, string, string) error
 }
 
@@ -70,13 +70,17 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 				errs = append(errs, err)
 				continue
 			}
-			if status.Online {
-				if err := store.TouchRemoteHostTunnel(ctx, c.HostID); err != nil {
+			// Recorded as seen when Cloudflare last saw it, so a kept tunnel
+			// leaves the candidates until it could be due, and the batch
+			// limit never fills with machines that are not.
+			seen := now
+			if !status.Online {
+				seen = status.OfflineSince
+			}
+			if status.Online || (!status.Missing && seen.After(cutoff)) {
+				if err := store.TouchRemoteHostTunnel(ctx, c.HostID, seen); err != nil {
 					errs = append(errs, err)
 				}
-				continue
-			}
-			if !status.Missing && status.OfflineSince.After(cutoff) {
 				continue
 			}
 		}

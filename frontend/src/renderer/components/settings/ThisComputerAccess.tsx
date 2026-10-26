@@ -33,12 +33,16 @@ async function connectorDownloading(): Promise<boolean> {
 
 /** Polls until the tunnel has a public address; null when no connector is installed or on its way. */
 async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
-	const deadline = Date.now() + TUNNEL_WAIT_MS;
+	let deadline = Date.now() + TUNNEL_WAIT_MS;
 	for (;;) {
 		const status = await fetchMobileStatus();
 		const url = tunnelUrl(status);
 		if (url) return { status, url };
-		if (status.tunnel?.supported === false && !(await connectorDownloading())) return null;
+		if (status.tunnel?.supported === false) {
+			if (!(await connectorDownloading())) return null;
+			// The download, tens of MB on a slow link, does not count against the tunnel's start.
+			deadline = Date.now() + TUNNEL_WAIT_MS;
+		}
 		if (status.tunnel?.lastError) throw new Error(status.tunnel.lastError);
 		if (Date.now() >= deadline) throw new Error(timeoutMessage);
 		await new Promise((resolve) => setTimeout(resolve, TUNNEL_POLL_MS));
@@ -114,7 +118,7 @@ export function ThisComputerAccess() {
 				password = started.data.password ?? "";
 			}
 			// Linked before the tunnel starts, so the tunnel is this computer's fixed address.
-			hostId = await linkThisComputer(cloudBaseUrl, accountId, password);
+			hostId = await linkThisComputer(cloudBaseUrl, accountId, password).catch(() => "");
 			const access = await apiClient.POST("/api/v1/mobile/remote-access");
 			if (access.error) throw new Error(apiErrorMessage(access.error));
 			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
@@ -122,6 +126,8 @@ export function ThisComputerAccess() {
 				setNeedsConnector(true);
 				return;
 			}
+			// No fixed address from this AO Cloud: listed at the quick tunnel's, as before fixed addresses.
+			if (!hostId) hostId = await linkThisComputer(cloudBaseUrl, accountId, password, ready.url);
 			shared = true;
 		} finally {
 			// Not shared, the switch shows off; leaving access on, or the account listing this computer, would contradict it.

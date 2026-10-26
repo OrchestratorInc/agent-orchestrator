@@ -69,10 +69,7 @@ func readArgs(t *testing.T, argsFile string) (argv, token string) {
 
 func TestTunnelRunnerAdvertisesAKnownFixedAddressAtOnce(t *testing.T) {
 	_, src := newFixedSource(t)
-	// The record exists already, as on every start after the first.
-	if _, err := src.TunnelFor(context.Background(), "host-uuid", false); err != nil {
-		t.Fatal(err)
-	}
+	knownTunnel(t, src)
 	bin, argsFile := fakeCloudflared(t, registeredLine)
 
 	if got := advertisedHostname(t, namedRunner(t, bin, src)); got != "h-test.example.dev" {
@@ -87,9 +84,7 @@ func TestTunnelRunnerAdvertisesAKnownFixedAddressAtOnce(t *testing.T) {
 
 func TestTunnelRunnerStartsTheCachedTunnelWhenAOCloudIsDown(t *testing.T) {
 	cloud, src := newFixedSource(t)
-	if _, err := src.TunnelFor(context.Background(), "host-uuid", false); err != nil {
-		t.Fatal(err)
-	}
+	knownTunnel(t, src)
 	cloud.set(http.StatusBadGateway)
 	bin, _ := fakeCloudflared(t, registeredLine)
 
@@ -162,6 +157,19 @@ func TestTunnelRunnerMovesAQuickTunnelToTheFixedAddressOnceLinked(t *testing.T) 
 	link(t, src, "account-digest") // a signed-in device links the machine
 	if err := <-done; !errors.Is(err, errFixedTunnelReady) {
 		t.Fatalf("runOnce = %v, want the switch to the fixed address", err)
+	}
+
+	// The check that found the address cached it, but its record is seconds
+	// old: the fixed connector still waits out the settle delay.
+	go func() { done <- r.runOnce(ctx) }()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(10 * time.Second); r.Runtime.UnsettledHostname() != "h-test.example.dev"; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("fixed connector never registered: %+v", r.Runtime.Snapshot())
+		}
+	}
+	if ep := r.Runtime.Endpoint(); ep != nil {
+		t.Fatalf("advertised %q before its new record settled", ep.Hostname)
 	}
 }
 

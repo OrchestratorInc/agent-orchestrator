@@ -147,40 +147,22 @@ func TestHostCanPublishRotatedAddressWithScopedDigest(t *testing.T) {
 
 type remoteHostTunnelFakeStore struct {
 	*remoteHostFakeStore
-	mu      sync.Mutex
 	tunnels map[string]domain.RemoteHostTunnel
 }
 
-// The tunnel release reads registrations in the background, so the host
-// methods it shares with the request goroutine take the lock too.
-func (s *remoteHostTunnelFakeStore) DeleteRemoteHost(ctx context.Context, principal domain.Principal, hostID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.remoteHostFakeStore.DeleteRemoteHost(ctx, principal, hostID)
-}
-func (s *remoteHostTunnelFakeStore) FindRemoteHostRegistrations(ctx context.Context, hostID string) ([]domain.RemoteHost, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.remoteHostFakeStore.FindRemoteHostRegistrations(ctx, hostID)
-}
-
 func (s *remoteHostTunnelFakeStore) GetRemoteHostTunnel(_ context.Context, hostID string) (domain.RemoteHostTunnel, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	t, ok := s.tunnels[hostID]
 	return t, ok, nil
 }
 func (s *remoteHostTunnelFakeStore) SaveRemoteHostTunnel(_ context.Context, t domain.RemoteHostTunnel) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	t.UpdatedAt = time.Now()
 	s.tunnels[t.HostID] = t
 	return nil
 }
-func (s *remoteHostTunnelFakeStore) TouchRemoteHostTunnel(context.Context, string) error { return nil }
+func (s *remoteHostTunnelFakeStore) TouchRemoteHostTunnel(context.Context, string, time.Time) error {
+	return nil
+}
 func (s *remoteHostTunnelFakeStore) DeleteRemoteHostTunnel(_ context.Context, hostID, tunnelID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.tunnels[hostID].TunnelID == tunnelID {
 		delete(s.tunnels, hostID)
 	}
@@ -194,12 +176,18 @@ type fakeTunnelAPI struct {
 	calls   int
 	tunnel  string
 	deleted bool
+	down    bool
 }
 
 func (f *fakeTunnelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	if f.down {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "errors": []any{map[string]any{"code": 1000, "message": "down"}}})
+		return
+	}
 	var result any = []any{}
 	switch {
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cfd_tunnel"):
@@ -248,11 +236,22 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 	digest := hex.EncodeToString(sum[:])
 	fixed := "https://" + s.hostTunnels.Hostname(hostID) + ":443"
 
-	// Registered before its tunnel exists, the host is listed at its fixed address.
+	// While Cloudflare cannot make the tunnel, the host is not listed: no
+	// device is told a name that has no DNS record.
+	api.down = true
 	w := httptest.NewRecorder()
 	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+token+`"}`, owner))
-	if w.Code != http.StatusNoContent || store.hosts[owner+":"+hostID].URL != fixed {
-		t.Fatalf("register: %d %s url=%q", w.Code, w.Body.String(), store.hosts[owner+":"+hostID].URL)
+	if _, listed := store.hosts[owner+":"+hostID]; w.Code != http.StatusBadGateway || listed {
+		t.Fatalf("register while Cloudflare is down: %d, listed %v", w.Code, listed)
+	}
+	api.down = false
+
+	// Registered before the machine asks, the tunnel and its record are made
+	// first and the host is listed at its fixed address.
+	w = httptest.NewRecorder()
+	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+token+`"}`, owner))
+	if _, made := store.tunnels[hostID]; w.Code != http.StatusNoContent || !made || store.hosts[owner+":"+hostID].URL != fixed {
+		t.Fatalf("register: %d %s url=%q, tunnel made %v", w.Code, w.Body.String(), store.hosts[owner+":"+hostID].URL, made)
 	}
 
 	if w := requestTunnel(s, hostID, strings.Repeat("b", 64), `{}`); w.Code != http.StatusUnauthorized {
@@ -268,9 +267,10 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 		t.Fatal("run token stored in plaintext")
 	}
 
-	// Later starts, and a repair right after provisioning, cost no Cloudflare call.
+	// The machine's first request, later starts, and a repair right after
+	// provisioning cost no Cloudflare call.
 	calls, _ := api.snapshot()
-	for _, body := range []string{`{}`, `{"repair":true}`} {
+	for _, body := range []string{`{}`, `{}`, `{"repair":true}`} {
 		if w := requestTunnel(s, hostID, digest, body); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "run-token-tun-1") {
 			t.Fatalf("%s: %d %s", body, w.Code, w.Body.String())
 		}
@@ -306,8 +306,6 @@ func TestRemovingTheLastRegistrationReleasesTheTunnel(t *testing.T) {
 		t.Fatalf("tunnel: %d", w.Code)
 	}
 	released := func() bool {
-		store.mu.Lock()
-		defer store.mu.Unlock()
 		_, kept := store.tunnels[hostID]
 		_, deleted := api.snapshot()
 		return deleted && !kept
@@ -318,19 +316,10 @@ func TestRemovingTheLastRegistrationReleasesTheTunnel(t *testing.T) {
 		if w.Code != http.StatusNoContent {
 			t.Fatalf("delete: %d", w.Code)
 		}
-		if i == 0 {
-			time.Sleep(100 * time.Millisecond)
-			if released() {
-				t.Fatal("tunnel released while another account still lists the host")
-			}
+		// Released before the removal answers, so a host added back next gets a new tunnel.
+		if last := i == len(owners)-1; released() != last {
+			t.Fatalf("after removal %d: released %v", i+1, !last)
 		}
-	}
-	deadline := time.Now().Add(2 * time.Second)
-	for !released() {
-		if time.Now().After(deadline) {
-			t.Fatal("tunnel kept after the last registration was removed")
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
