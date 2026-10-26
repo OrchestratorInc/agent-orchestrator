@@ -1,4 +1,5 @@
-import { ChevronDown, Cloud, File, FileText, Folder, Globe, Loader2, Plus, Search } from "lucide-react";
+import { BrowserIcon } from "./icons";
+import { ChevronDown, Cloud, File, FileText, Folder, Loader2, Plus, Search } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -162,7 +163,7 @@ function ArtifactListRow({ row }: { row: ArtifactRow }) {
 	const { t } = useTranslation();
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
-	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
+	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
 
 	const open = () => {
 		requestWorkspaceFileOpen(row.sessionId, row.path, undefined, "artifact");

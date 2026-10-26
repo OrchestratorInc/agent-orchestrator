@@ -2,7 +2,8 @@ name: Frontend
 
 # Runs the renderer vitest suite and typechecks the codebase.
 #
-# This job ensures both compiler/type checking passes and vitest tests succeed.
+# The vitest suite is sharded and typechecking runs in its own job so the
+# slowest pieces run in parallel; `test` gates on all of them.
 
 on:
   push:
@@ -68,7 +69,7 @@ jobs:
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/update-helper/tests" native/update-helper/UpdateProgressState.swift native/update-helper/StateTests.swift -o "$HOME/.ao/build-cache/update-helper/state-tests"
           "$HOME/.ao/build-cache/update-helper/state-tests"
 
-  test:
+  checks:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -146,17 +147,6 @@ jobs:
       - name: Build docs
         run: npm run build --prefix src/docs
 
-      - name: Typecheck project
-        run: npm run typecheck
-
-      - name: Typecheck E2E suite
-        run: npm run typecheck:e2e
-
-      - name: Run vitest suite
-        env:
-          AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
-        run: npx vitest run
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
@@ -176,6 +166,105 @@ jobs:
 
       - name: Run guarded-navigation browser integration
         run: npm run test:browser-postcondition-integration
+
+  typecheck:
+    runs-on: ubuntu-latest
+    env:
+      # tsc needs Electron's types, not its binary; skip the flaky download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "npm ci failed; retrying Electron dependency download ($attempt/3)"
+          done
+
+      # tsconfig maps @aoagents/product-ui to its source, whose imports resolve
+      # from packages/product-ui/node_modules.
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
+
+      - name: Typecheck project
+        run: npm run typecheck
+
+      - name: Typecheck E2E suite
+        run: npm run typecheck:e2e
+
+  vitest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "npm ci failed; retrying Electron dependency download ($attempt/3)"
+          done
+
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
+
+      - name: Prepare pinned agent-browser runtime
+        run: npm run browser-runtime:prepare -- --quiet
+
+      - name: Run vitest shard
+        env:
+          AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
+        run: npx vitest run --shard=${{ matrix.shard }}/4
+
+  # Keep the existing check name as the gate for the split frontend jobs.
+  test:
+    if: always()
+    needs: [checks, typecheck, vitest]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check frontend results
+        run: |
+          test '${{ needs.checks.result }}' = success
+          test '${{ needs.typecheck.result }}' = success
+          test '${{ needs.vitest.result }}' = success
 
   renderer-smoke:
     # RENDERER smoke (issue #2483, renderer slice) — the Playwright specs that run

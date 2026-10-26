@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -110,5 +111,9 @@ func TestParseCodexModelListFiltersHiddenModelsAndRetainsEfforts(t *testing.T) {
 		models[0].DefaultEffort != "medium" || len(models[0].Efforts) != 2 ||
 		models[0].Efforts[1] != "high" {
 		t.Fatalf("models = %+v, cursor = %q", models, cursor)
+	}
+	// Codex applies every approval mode as its own policy, whatever the model.
+	if got, want := models[0].ApprovalModes, []string{"default", "accept-edits", "auto", "bypass-permissions"}; !slices.Equal(got, want) {
+		t.Fatalf("Codex approval modes = %v, want %v", got, want)
 	}
 }

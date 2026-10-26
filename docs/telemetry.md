@@ -88,9 +88,8 @@ It also records these events when you create an automation:
 | Event | When it is sent | Automation-specific properties |
 | --- | --- | --- |
 | `ao.renderer.automation_create_opened` | You open the create dialog | None |
-| `ao.renderer.automation_create_requested` | You submit a form that passes local validation | `project_id_hash`, `schedule_preset`, `prompt_length_bucket` |
-| `ao.renderer.automation_create_succeeded` | The create request succeeds | The same properties as the request event |
-| `ao.renderer.automation_create_failed` | The create request fails | The same properties as the request event |
+| `ao.renderer.automation_create_succeeded` | The create request succeeds | `project_id_hash`, `schedule_preset`, `prompt_length_bucket` |
+| `ao.renderer.automation_create_failed` | The create request fails | The same properties as the success event |
 
 These events also include the standard installation and environment information
 described above. The project identifier is hashed before transmission.
@@ -114,7 +113,6 @@ also records these events when you start an artifact session from that page:
 
 | Event | When it is sent | Artifact-specific properties |
 | --- | --- | --- |
-| `ao.renderer.artifact_create_requested` | You pick the Scratchpad or a project in the Create artifact menu | `scope` |
 | `ao.renderer.artifact_create_succeeded` | The session starts | `scope` |
 | `ao.renderer.artifact_create_failed` | Starting the session fails | `scope` |
 
@@ -125,8 +123,8 @@ The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.
 Editing an existing automation does not emit these creation events. Closing the
 create dialog or failing local validation does not emit a separate event.
-Orchestrator.inc uses the creation events to understand completion and abandonment
-of the create flow and which schedule presets people choose.
+Orchestrator.inc uses the outcome events to understand which schedule presets
+people choose and whether creation succeeds.
 
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
@@ -183,6 +181,44 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
+- Remote HTTP 5xx events are not sampled. The minute rollup and the daily
+  rate limit bound them, and real HTTP 500 responses also go to the existing
+  gated Sentry capture once. The local diagnostic stream keeps every
+  occurrence. CLI usage errors are one event per command path and error kind
+  per install per completed UTC day, with `command_path`, `error_kind`, and
+  `count`. At most 20 of those events are sent per day. The minute rate limit
+  does not apply to this event, because each one is already a summary. Paths
+  that are not a known `ao` command are reported as `other`. No raw arguments
+  are included. Each event is stamped at the last millisecond of that UTC day.
+  The on-disk summary is removed on opt-out and when the install ID is retired.
+- Renderer API errors are not sampled. A daemon-unavailable report is skipped
+  while the daemon is still starting. HTTP 409 responses are dropped only for
+  `POST /api/v1/sessions/:id/workspace/diffs`,
+  `GET /api/v1/sessions/:id/conversation/config-options`,
+  `GET /api/v1/sessions/:id/conversation/models`, and
+  `GET /api/v1/sessions/:id/conversation/skills`. Codex
+  account management being unwired, and an already-closed shell terminal, are
+  not analytics events. An expired GitHub token still reports. A Codex login
+  terminal failure is `CODEX_LOGIN_TERMINAL_UNAVAILABLE`. An incomplete Codex
+  account setup is `CODEX_ACCOUNT_SETUP_INCOMPLETE`. Both still report on the
+  account routes. The account event stream stays open for setup-incomplete
+  and for account management that is not wired in this process, so those
+  conditions do not reconnect in a loop. A failed project add emits
+  `ao.renderer.project_add_failed` with `error_code`. A failed project clone
+  emits `ao.renderer.project_clone_failed` with `error_code`. The code is the
+  daemon's API error code, or `DAEMON_NOT_READY`, `REQUEST_FAILED` or
+  `NO_PROJECT` when the request never reached a usable response. A clone the
+  user cancels emits nothing.
+- An updater failure streak emits one `ao.renderer.update_failed` until a
+  successful download of that target, or a successful check for a check-phase
+  streak, clears it. Retries in the streak do not emit again. Each install
+  also emits one `ao.renderer.update_failures_daily` event, with the UTC day
+  and failure count, after that day ends. A rejected capture leaves the streak
+  unsent. A restart keeps the open streak.
+- `ao.review.triggered` counts a newly created or restarted run and does not
+  include a `reused` property. Reused sweeps are not events, and
+  `trigger_failed` is no longer a subset of `triggered`. The series breaks on
+  the merge of this change. Issue #4665 previously counted every attempt.
 - Session recording is disabled in the desktop and mobile apps. Orchestrator.inc does not
   automatically record screens, clicks, or touches.
 - Person profiles are off for anonymous events. A profile is created when a

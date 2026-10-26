@@ -1,6 +1,8 @@
 package sessionartifacts
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +37,7 @@ func TestList_ClassifiesByExtensionAndSortsByPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -76,7 +78,7 @@ func TestList_SkipsOSMetadataAndToolFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -96,7 +98,7 @@ func TestList_BoundsFileCount(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -121,7 +123,7 @@ func TestList_SkipsUnreadableSubdirInsteadOfFailing(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List returned error for unreadable subdir: %v", err)
 	}
@@ -140,7 +142,7 @@ func TestList_BoundsTraversalOfEmptyDirectories(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "zzz.txt"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -163,7 +165,7 @@ func TestList_SkipsTopLevelVersionsDir(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	files, err := List(dir)
+	files, err := List(context.Background(), dir)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -174,5 +176,17 @@ func TestList_SkipsTopLevelVersionsDir(t *testing.T) {
 	want := []string{"nested/" + VersionsDir + "/kept.md", "page.html"}
 	if fmt.Sprint(paths) != fmt.Sprint(want) {
 		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+}
+
+func TestList_StopsOnCancelledContext(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := List(ctx, dir); !errors.Is(err, context.Canceled) {
+		t.Fatalf("List with a cancelled context = %v, want context.Canceled", err)
 	}
 }

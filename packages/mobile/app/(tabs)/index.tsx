@@ -14,6 +14,8 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { Button, EmptyState, HeaderIconButton, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../lib/worker-board-list";
+import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
+import { hostedProjectKey } from "../../lib/hostedRows";
 import { WorkerDock } from "../../lib/worker-dock";
 import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../lib/worker-controls-sheet";
@@ -108,6 +110,21 @@ export default function FleetScreen() {
 		() => filterWorkersByEnvironmentAndProject(allSessions, workerEnvironmentId, workerProjectId, allProjects),
 		[allSessions, allProjects, workerEnvironmentId, workerProjectId],
 	);
+	// Each machine that pages its archive, narrowed by the same machine and
+	// project filters as the live list. Keyed on the facts it reads, because
+	// hostStates is a new array on every poll.
+	const archiveSourcesKey = JSON.stringify(hostStates.map((host) => [host.hostId, host.name, host.appearance.symbol, host.archive ?? null]))
+		+ `|${workerEnvironmentId}|${workerProjectId}|${JSON.stringify(allProjects.map(hostedProjectKey))}`;
+	const archiveSources = useMemo<ArchiveSource[]>(() => {
+		const project = workerProjectId === ALL_WORKER_PROJECTS ? undefined : allProjects.find((item) => hostedProjectKey(item) === workerProjectId);
+		return hostStates.flatMap((host): ArchiveSource[] => {
+			if (!host.archive) return [];
+			if (workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS && host.hostId !== workerEnvironmentId) return [];
+			if (workerProjectId !== ALL_WORKER_PROJECTS && project?.hostId !== host.hostId) return [];
+			return [{ hostId: host.hostId, projectId: project?.id, host: { name: host.name, appearance: host.appearance }, summary: host.archive }];
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- archiveSourcesKey covers every field read here
+	}, [archiveSourcesKey]);
 	const searchOpen = workerSearchPresentation(searchRequested, query) === "expanded";
 	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;
 	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
@@ -203,6 +220,7 @@ export default function FleetScreen() {
 				<WorkerBoardList
 					key={boardIdentityKey}
 					sessions={projectSessions}
+					archiveSources={archiveSources}
 					query={query}
 					identityKey={boardIdentityKey}
 					listRef={listRef}

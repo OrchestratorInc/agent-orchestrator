@@ -220,6 +220,27 @@ type ApiErrorCategory = "daemon_unavailable" | "network_error" | "http_4xx" | "h
 // makes every polling query fail at once and on every retry — the failure
 // signal matters, the storm does not.
 const API_ERROR_DEDUPE_MS = 30_000;
+// These codes are the successful or expected outcome of a probe: Codex is not
+// wired in this process, or a shell the user already closed. Other 401 and
+// 404 responses still report, including an expired GitHub token.
+const EXPECTED_API_ERROR_CODES = new Set([
+	"CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE",
+	"SHELL_TERMINAL_NOT_FOUND",
+]);
+
+// Conversation probes that 409 while the chat controller is not ready.
+// Exact normalized operations only, so a later 409 on another skills or
+// models route still reports.
+const EXPECTED_PROBE_CONFLICTS = new Set([
+	"POST /api/v1/sessions/:id/workspace/diffs",
+	"GET /api/v1/sessions/:id/conversation/config-options",
+	"GET /api/v1/sessions/:id/conversation/models",
+	"GET /api/v1/sessions/:id/conversation/skills",
+]);
+
+function expectedProbeConflict(operation: string, status?: number): boolean {
+	return status === 409 && EXPECTED_PROBE_CONFLICTS.has(operation);
+}
 const lastApiErrorAt = new Map<string, number>();
 
 function reportApiError(
@@ -246,7 +267,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
 	const baseUrl = runtimeApiBaseUrl;
 	if (baseUrl === null) {
-		reportApiError(operation, "daemon_unavailable", 503);
+		if (daemonStatus.state !== "starting") reportApiError(operation, "daemon_unavailable", 503);
 		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
 			status: 503,
 			headers: { "Content-Type": "application/json" },
@@ -307,7 +328,7 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		} catch {
 			// Non-JSON or empty body: fall back to status-only classification.
 		}
-		reportApiError(
+		if (!(code && EXPECTED_API_ERROR_CODES.has(code)) && !expectedProbeConflict(operation, response.status)) reportApiError(
 			operation,
 			response.status >= 500 ? "http_5xx" : "http_4xx",
 			response.status,

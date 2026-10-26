@@ -1,3 +1,4 @@
+import { BrowserIcon } from "./icons";
 import {
 	memo,
 	useCallback,
@@ -45,7 +46,6 @@ import {
 	Download,
 	Eye,
 	ExternalLink,
-	Globe2,
 	Maximize2,
 	Minimize2,
 	RotateCcw,
@@ -1457,19 +1457,17 @@ export function BrowserPanelView({
 						</DropdownMenuContent>
 					</DropdownMenu>
 				) : null}
-				{poppedOut ? (
-					<BrowserControlTooltip label={t("browser.returnToPanel")}>
-						<Button
-							aria-label={t("browser.returnToPanel")}
-							onClick={() => onTogglePopOut(false)}
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<Minimize2 aria-hidden="true" className="size-icon-base" />
-						</Button>
-					</BrowserControlTooltip>
-				) : null}
+				<BrowserControlTooltip label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}>
+					<Button
+						aria-label={t(poppedOut ? "common.returnToPanel" : "common.maximize")}
+						onClick={() => onTogglePopOut(!poppedOut)}
+						size="icon-sm"
+						type="button"
+						variant="ghost"
+					>
+						{poppedOut ? <Minimize2 aria-hidden="true" className="size-icon-base" /> : <Maximize2 aria-hidden="true" className="size-icon-base" />}
+					</Button>
+				</BrowserControlTooltip>
 				<DropdownMenu
 					onOpenChange={(open) => {
 						setControlsOpen(open);
@@ -1615,18 +1613,6 @@ export function BrowserPanelView({
 							</>
 						) : (
 							<>
-								{!poppedOut ? (
-									<>
-										<DropdownMenuItem
-											className="gap-2"
-											onSelect={() => onTogglePopOut(true)}
-										>
-										<Maximize2 aria-hidden="true" className="size-icon-base shrink-0" />
-											<span className="flex-1">{t("browser.popOut")}</span>
-										</DropdownMenuItem>
-										<div className="my-1 h-px bg-border" role="separator" />
-									</>
-								) : null}
 								<DropdownMenuItem
 									className="gap-2"
 									onSelect={(event) => {
@@ -1883,7 +1869,7 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					{tab.favicon ? (
 						<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
 					) : (
-						<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
+						<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
 					)}
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
@@ -1918,7 +1904,7 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				{tab.favicon ? (
 					<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
 				) : (
-					<Globe2 aria-hidden="true" className="browser-panel__tab-icon" />
+					<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
@@ -2038,7 +2024,7 @@ function BrowserSuggestionIcon({ cachedFavicon, url, viewId }: { cachedFavicon?:
 		};
 	}, [cachedFavicon, directFavicon, nativeCompositionEnabled, url, viewId]);
 	if (!favicon) {
-		return <Globe2 aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
+		return <BrowserIcon aria-hidden="true" className="size-icon-base shrink-0 text-settings-muted" />;
 	}
 	return (
 		<img

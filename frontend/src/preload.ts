@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -305,6 +306,13 @@ const api = {
 			ipcRenderer.on(APP_SHORTCUT_CHANNEL, wrapped);
 			return () => {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
+			};
+		},
+		onScrollPhase: (listener: (phase: ScrollPhase) => void) => {
+			const wrapped = (_event: unknown, phase: ScrollPhase) => listener(phase);
+			ipcRenderer.on(SCROLL_PHASE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(SCROLL_PHASE_CHANNEL, wrapped);
 			};
 		},
 	},
