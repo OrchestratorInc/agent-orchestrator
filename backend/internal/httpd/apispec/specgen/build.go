@@ -211,6 +211,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersConversationActivityResponse":              "ConversationActivityResponse",
 	"ControllersSendConversationMessageRequest":            "SendConversationMessageRequest",
 	"ControllersSetChatViewRequest":                        "SetChatViewRequest",
+	"ControllersSetChatViewResponse":                       "SetChatViewResponse",
 	"ControllersConversationPromptSuggestionRequest":       "ConversationPromptSuggestionRequest",
 	"ControllersConversationPromptSuggestionResponse":      "ConversationPromptSuggestionResponse",
 	"ControllersConversationImageContentRequest":           "ConversationImageContentRequest",
@@ -1093,7 +1094,7 @@ func shellTerminalOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}},
 			reqBody:    controllers.SetChatViewRequest{},
 			resps: []respUnit{
-				{http.StatusNoContent, nil},
+				{http.StatusOK, controllers.SetChatViewResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},

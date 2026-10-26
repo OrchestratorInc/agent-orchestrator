@@ -2720,6 +2720,13 @@ func (r *SetChatViewRequest) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// SetChatViewResponse reports whether opening the view resumed a hibernated
+// provider. Only then have the session and its conversation changed, so a
+// client can skip refetching them otherwise.
+type SetChatViewResponse struct {
+	Woke bool `json:"woke"`
+}
+
 // SendConversationMessageRequest is a message for a Chat session's agent.
 type SendConversationMessageRequest struct {
 	Text string `json:"text"`

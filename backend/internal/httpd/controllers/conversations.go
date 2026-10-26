@@ -79,7 +79,7 @@ type reviewerConversationService interface {
 }
 
 type chatViewService interface {
-	SetChatView(context.Context, domain.SessionID, string, bool) error
+	SetChatView(context.Context, domain.SessionID, string, bool) (bool, error)
 }
 
 type turnAutoResumeService interface {
@@ -186,11 +186,12 @@ func (c *ConversationsController) setChatView(w http.ResponseWriter, r *http.Req
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_VIEW_ACTIVE_INVALID", "active must be true or false", nil)
 		return
 	}
-	if err := svc.SetChatView(r.Context(), sessionID(r), req.ViewID, req.Active); err != nil {
+	woke, err := svc.SetChatView(r.Context(), sessionID(r), req.ViewID, req.Active)
+	if err != nil {
 		writeConversationError(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	envelope.WriteJSON(w, http.StatusOK, SetChatViewResponse{Woke: woke})
 }
 
 func (c *ConversationsController) reviewService(w http.ResponseWriter, r *http.Request) (reviewerConversationService, bool) {
