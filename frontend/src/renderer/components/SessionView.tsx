@@ -54,7 +54,8 @@ import {
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
+import { conversationQueryKey } from "../hooks/useConversation";
+import { useChatViewRegistration } from "../hooks/useChatViewRegistration";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
@@ -1432,53 +1433,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				!shellTerminals.some((shell) => shell.handleId === activeShellTerminalHandleId))) &&
 		!reviewerChatId &&
 		!fileTabs.activePath;
-	useEffect(() => {
-		if (!chatViewActive) return;
-		const viewId = crypto.randomUUID();
-		let left = false;
-		let refreshed = false;
-		let pending = Promise.resolve();
-		const setViewActive = async (active: boolean) => {
-			try {
-				const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/chat-view", {
-					params: { path: { sessionId } },
-					body: { viewId, active },
-				});
-				if (error) throw error;
-				// Remote conversations already refresh every two seconds. A ready or
-				// working chat hears every change through events, and a wake emits
-				// one, so only a chat still waking or stopped is refreshed here;
-				// refreshing a settled one reloaded every page it had on each return.
-				if (active && !left && !refreshed && !hostId) {
-					refreshed = true;
-					if (!conversationSettled(queryClient, sessionId)) {
-						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
-					}
-					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
-				}
-			} finally {
-				// Release a late registration too; leaving must not wait on wake.
-				if (active && left) void setViewActive(false).catch(() => {});
-			}
-		};
-		const renewView = () => {
-			pending = pending.catch(() => {}).then(() => {
-				return left ? undefined : setViewActive(true);
-			});
-			return pending;
-		};
-		const refreshAfterWakeError = () => {
-			if (left || hostId) return;
-			void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
-		};
-		void renewView().catch(refreshAfterWakeError);
-		const renewal = window.setInterval(() => { void renewView().catch(refreshAfterWakeError); }, 10_000);
-		return () => {
-			left = true;
-			window.clearInterval(renewal);
-			void setViewActive(false).catch(() => {});
-		};
-	}, [chatViewActive, hostId, queryClient, sessionId]);
+	useChatViewRegistration(sessionId, chatViewActive, hostId);
 	// A local session's tab menu holds the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
