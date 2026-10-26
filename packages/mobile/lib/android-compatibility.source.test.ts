@@ -128,23 +128,19 @@ describe("Android native compatibility boundaries", () => {
 		expect(spawn).toMatch(/content:\s*\{[^}]*paddingTop:\s*space\.lg/);
 	});
 
-	it("uses compact app-native choice rows instead of the unstable Compose picker", () => {
-		const path = fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./chat/ChatSettingsModal.android.tsx") : "";
-		expect(android).toContain("ChoicePage");
-		expect(android).toContain("SettingRow");
-		expect(android).not.toContain("Picker");
-		// The turn-settings route is already a native form sheet, so a choice list
-		// opens as a page within it rather than a sheet on top.
-		expect(android).not.toContain('@expo/ui/community/bottom-sheet');
-		expect(android).not.toMatch(/\bModal\b/);
-		expect(android).toContain('numberOfLines={1}');
-		expect(android).not.toContain('description ? <Text numberOfLines={1} style={styles.rowDescription}');
-		expect(android).toContain('<View style={styles.choiceCopy}>');
-		expect(android).toMatch(/choiceCopy:\s*\{\s*flex:\s*1,\s*minWidth:\s*0/);
-		expect(android).toMatch(/choiceRow:\s*\{[^}]*alignItems:\s*"flex-start"/s);
-		expect(android).not.toContain('width: "100%"');
+	// One turn-settings sheet serves both platforms. On Android its choices open
+	// in Compose's dropdown, not the exposed-dropdown picker, and inside the
+	// sheet rather than as a second sheet on top; its Compose rows sit in a
+	// React Native scroll view, which Material's sheet hands a drag to.
+	it("picks Android turn settings from Compose menus inside the sheet", () => {
+		expect(existsSync(fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url)))).toBe(false);
+		const sheet = source("./chat/ChatSettingsModal.tsx");
+		expect(sheet).toContain("<DropdownMenu expanded={expanded} onDismissRequest={() => setExpanded(false)}>");
+		expect(sheet).not.toContain("ExposedDropdownMenuBox");
+		expect(sheet).not.toContain('@expo/ui/community/bottom-sheet');
+		expect(sheet).not.toMatch(/\bModal\b/);
+		expect(sheet).toContain("<ScrollView\n\t\t\t\tnestedScrollEnabled");
+		expect(sheet).not.toContain('width: "100%"');
 	});
 
 	it("dismisses the Android keyboard before presenting chat sheets", () => {

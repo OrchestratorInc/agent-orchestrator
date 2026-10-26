@@ -1,4 +1,5 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // React Native's own Jest setup (packages/jest-preset/jest/setup.js) sets both:
@@ -6,31 +7,63 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // react-test-renderer's deprecation warning in a React Native test environment.
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
-const { haptics, hosts, Slider } = vi.hoisted(() => ({
+const { haptics, sliders, platform } = vi.hoisted(() => ({
 	haptics: { select: vi.fn() },
-	/** How many native slider hosts have mounted; a remount rebuilds the Compose slider. */
-	hosts: { mounted: 0 },
-	Slider: "Slider",
+	/** How many native sliders have mounted; a remount rebuilds the Compose slider. */
+	sliders: { mounted: 0 },
+	platform: { OS: "android" },
 }));
 
 vi.mock("@expo/ui", async () => {
 	const { createElement, useEffect } = await import("react");
-	function Host({ children }: { children?: unknown }) {
-		useEffect(() => { hosts.mounted += 1; }, []);
-		return createElement("Host", null, children as never);
+	const host = (name: string) => (props: { children?: ReactNode }) => createElement(name, props, props.children);
+	function Slider(props: object) {
+		useEffect(() => { sliders.mounted += 1; }, []);
+		return createElement("Slider", props);
 	}
-	return { Host, Slider, Switch: "Switch" };
+	const FieldGroup = Object.assign(host("FieldGroup"), { Section: host("FieldGroupSection"), SectionFooter: host("FieldGroupSectionFooter") });
+	return { Column: "Column", FieldGroup, Host: "Host", Slider, Switch: "Switch" };
 });
+vi.mock("@expo/ui/jetpack-compose", async () => {
+	const { createElement } = await import("react");
+	const host = (name: string) => (props: { children?: ReactNode }) => createElement(name, props, props.children);
+	return {
+		Column: "ComposeColumn",
+		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: host("DropdownMenuTrigger"), Items: host("DropdownMenuItems") }),
+		DropdownMenuItem: Object.assign(host("DropdownMenuItem"), { LeadingIcon: host("DropdownMenuItemLeadingIcon"), Text: host("DropdownMenuItemText") }),
+		RadioButton: "RadioButton",
+		Row: "ComposeRow",
+		Text: "ComposeText",
+	};
+});
+vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
+	alpha: (value: number) => ({ alpha: value }),
+	clickable: (handler: () => void) => ({ clickable: handler }),
+	fillMaxWidth: () => ({ fillMaxWidth: true }),
+	testID: (id: string) => ({ testID: id }),
+}));
+vi.mock("@expo/ui/swift-ui", () => ({ Picker: "SwiftUIPicker", Text: "SwiftUIText", VStack: "VStack" }));
+vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+	disabled: (value: boolean) => ({ disabled: value }),
+	font: (params: object) => ({ font: params }),
+	foregroundStyle: (style: unknown) => ({ foregroundStyle: style }),
+	labelsHidden: () => ({ labelsHidden: true }),
+	pickerStyle: (style: string) => ({ pickerStyle: style }),
+	refreshable: (handler: () => Promise<void>) => ({ refreshable: handler }),
+	scrollContentBackground: (visible: string) => ({ scrollContentBackground: visible }),
+	tag: (value: string) => ({ tag: value }),
+}));
 vi.mock("react-native", () => ({
-	ActivityIndicator: "ActivityIndicator",
-	Pressable: "Pressable",
+	Platform: { get OS() { return platform.OS; } },
+	RefreshControl: "RefreshControl",
 	ScrollView: "ScrollView",
 	StyleSheet: { create: (styles: unknown) => styles },
 	Text: "Text",
 	View: "View",
 }));
-vi.mock("../icons", () => ({ Feather: "Feather" }));
+vi.mock("../AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("../haptics", () => ({ haptics }));
+vi.mock("../refreshControlColors", () => ({ refreshControlColors: () => ({ tintColor: "blue" }) }));
 vi.mock("../ThemeProvider", () => ({
 	useTheme: () => ({ accent: "blue", textSecondary: "gray" }),
 	useThemedStyles: (factory: (theme: Record<string, string>) => unknown) => factory({ accent: "blue", textSecondary: "gray" }),
@@ -38,7 +71,8 @@ vi.mock("../ThemeProvider", () => ({
 }));
 vi.mock("../ui", () => ({ SheetHeader: "SheetHeader" }));
 
-import { EffortSlider } from "./ChatSettingsModal.android";
+import { ChatSettingsSheet, EffortSlider } from "./ChatSettingsModal";
+import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
 
 const choices = [
 	{ value: "low", label: "Low" },
@@ -56,12 +90,13 @@ function pendingWrite() {
 }
 
 function slider(renderer: ReactTestRenderer) {
-	return renderer.root.findByProps({ testID: "turn-settings-effort" });
+	return renderer.root.find((node) => (node.type as unknown) === "Slider" && node.props.testID === "turn-settings-effort");
 }
 
-/** What the user sees: the thumb's position and the level named in the header. */
+/** What the user sees: the thumb's position and the level named above it. */
 function shown(renderer: ReactTestRenderer) {
-	return { value: slider(renderer).props.value, label: renderer.root.findByProps({ testID: "turn-settings-effort-value" }).props.children };
+	const value = renderer.root.find((node) => (node.type as unknown) === "ComposeText" && node.props.modifiers?.some((modifier: { testID?: string }) => modifier.testID === "turn-settings-effort-value"));
+	return { value: slider(renderer).props.value, label: value.props.children };
 }
 
 describe("EffortSlider", () => {
@@ -69,7 +104,7 @@ describe("EffortSlider", () => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		haptics.select.mockClear();
-		hosts.mounted = 0;
+		sliders.mounted = 0;
 	});
 
 	it("does not write when an unlisted effort is mounted or refreshed", () => {
@@ -194,12 +229,12 @@ describe("EffortSlider", () => {
 		act(() => {
 			renderer.update(<EffortSlider choices={choices} selected="low" unplaced="Low" onChange={onChange} />);
 		});
-		expect(hosts.mounted).toBe(1);
+		expect(sliders.mounted).toBe(1);
 		await act(async () => write.answer());
 		expect(shown(renderer)).toEqual({ value: 0, label: "Low" });
 		// The Compose slider keeps a dragged thumb under a held finger whatever
 		// value it is given, so it is rebuilt on the saved level.
-		expect(hosts.mounted).toBe(2);
+		expect(sliders.mounted).toBe(2);
 		act(() => { vi.advanceTimersByTime(500); });
 		expect(onChange).toHaveBeenCalledOnce();
 		act(() => renderer.unmount());
@@ -217,7 +252,7 @@ describe("EffortSlider", () => {
 		await act(async () => { vi.advanceTimersByTime(180); });
 		expect(onChange).toHaveBeenCalledWith("medium");
 		expect(shown(renderer)).toEqual({ value: 0, label: "Not reported" });
-		expect(hosts.mounted).toBe(2);
+		expect(sliders.mounted).toBe(2);
 		act(() => renderer.unmount());
 	});
 
@@ -241,7 +276,7 @@ describe("EffortSlider", () => {
 		await act(async () => write.answer());
 		expect(shown(renderer)).toEqual({ value: 2, label: "High" });
 		// The thumb is already where the user left it: nothing to rebuild.
-		expect(hosts.mounted).toBe(1);
+		expect(sliders.mounted).toBe(1);
 		act(() => { vi.advanceTimersByTime(500); });
 		expect(onChange).toHaveBeenCalledOnce();
 		act(() => renderer.unmount());
@@ -262,14 +297,14 @@ describe("EffortSlider", () => {
 			renderer.update(<EffortSlider choices={choices} selected="low" unplaced="Low" disabled onChange={onChange} />);
 		});
 		expect(shown(renderer)).toEqual({ value: 0, label: "Low" });
-		expect(hosts.mounted).toBe(2);
+		expect(sliders.mounted).toBe(2);
 		act(() => { vi.advanceTimersByTime(500); });
 		expect(onChange).not.toHaveBeenCalled();
 		act(() => {
 			renderer.update(<EffortSlider choices={choices} selected="low" unplaced="Low" onChange={onChange} />);
 		});
 		expect(shown(renderer)).toEqual({ value: 0, label: "Low" });
-		expect(hosts.mounted).toBe(2);
+		expect(sliders.mounted).toBe(2);
 		act(() => renderer.unmount());
 	});
 
@@ -287,7 +322,7 @@ describe("EffortSlider", () => {
 			renderer.update(<EffortSlider choices={choices} selected="medium" unplaced="Medium" onChange={onChange} />);
 		});
 		expect(shown(renderer)).toEqual({ value: 1, label: "Medium" });
-		expect(hosts.mounted).toBe(2);
+		expect(sliders.mounted).toBe(2);
 		act(() => { vi.advanceTimersByTime(500); });
 		expect(onChange).not.toHaveBeenCalled();
 		act(() => renderer.unmount());
@@ -306,7 +341,7 @@ describe("EffortSlider", () => {
 		act(() => slider(renderer).props.onValueChange(0));
 		expect(shown(renderer)).toEqual({ value: 0, label: "Low" });
 		// The finger is on the saved level, so the slider it is dragging stays.
-		expect(hosts.mounted).toBe(1);
+		expect(sliders.mounted).toBe(1);
 		act(() => { vi.advanceTimersByTime(500); });
 		expect(onChange).not.toHaveBeenCalled();
 		act(() => renderer.unmount());
@@ -333,10 +368,129 @@ describe("EffortSlider", () => {
 
 		await act(async () => first.answer());
 		expect(shown(renderer)).toEqual({ value: 2, label: "High" });
-		expect(hosts.mounted).toBe(1);
+		expect(sliders.mounted).toBe(1);
 		await act(async () => second.answer());
 		expect(shown(renderer)).toEqual({ value: 0, label: "Low" });
-		expect(hosts.mounted).toBe(2);
+		expect(sliders.mounted).toBe(2);
+		act(() => renderer.unmount());
+	});
+});
+
+const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
+	conversationId: "c",
+	sessionId: "s",
+	harness: "claude-code",
+	mode: "chat",
+	controller: { state: "ready" },
+	latestSequence: 0,
+	oldestSequence: 0,
+	hasMoreBefore: false,
+	turns: [],
+	items: [],
+	settings: { model: "opus", approvalMode: "auto" },
+	capabilities: [],
+	...over,
+});
+const models: ChatModel[] = [
+	{ id: "opus", displayName: "Opus", description: "Most capable", default: true, efforts: ["low", "high"], defaultEffort: "low" },
+	{ id: "haiku", displayName: "Haiku", default: false },
+];
+const options: ChatConfigOption[] = [
+	{ id: "fast", name: "Fast mode", type: "boolean", currentBoolean: true, choices: [] },
+	{ id: "web", name: "Web search", description: "Lets the agent look things up", type: "boolean", currentBoolean: false, choices: [] },
+];
+
+function sheet(over: Partial<Parameters<typeof ChatSettingsSheet>[0]> = {}) {
+	const handlers = {
+		onRefresh: vi.fn(() => Promise.resolve()),
+		onSettings: vi.fn((_settings: unknown) => Promise.resolve()),
+		onOption: vi.fn((_id: string, _value: unknown) => Promise.resolve()),
+	};
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatSettingsSheet snapshot={snapshot()} models={models} options={options} {...handlers} {...over} />);
+	});
+	return { renderer, ...handlers };
+}
+const sectionTitles = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSection").map((node) => node.props.title);
+const footers = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSectionFooter").map((node) => node.findByType("ComposeText" as never).props.children);
+
+describe("turn settings sheet on Android", () => {
+	afterEach(() => {
+		platform.OS = "android";
+		haptics.select.mockClear();
+	});
+
+	it("groups the controls in sentence-case sections with their hints in the footers", () => {
+		const { renderer } = sheet();
+		expect(sectionTitles(renderer)).toEqual([undefined, "Model", "Reasoning effort", "Permissions", undefined]);
+		expect(footers(renderer)).toEqual([
+			"Faster responses on supported models",
+			"Most capable",
+			"More effort can improve harder tasks",
+			"The agent requests approval when it needs it",
+			"Lets the agent look things up",
+		]);
+		expect(renderer.root.findAllByType("Switch" as never).map((node) => [node.props.label, node.props.value])).toEqual([["Fast mode", true], ["Web search", false]]);
+		act(() => renderer.unmount());
+	});
+
+	it("picks from a Material menu whose current choice is the filled radio", () => {
+		const { renderer, onSettings } = sheet();
+		const model = renderer.root.findAll((node) => (node.type as unknown) === "DropdownMenu")[0];
+		expect(model.findAll((node) => (node.type as unknown) === "ComposeText").slice(0, 2).map((node) => node.props.children)).toEqual(["Model", "Opus"]);
+		expect(model.findAll((node) => (node.type as unknown) === "RadioButton").map((node) => node.props.selected)).toEqual([true, false]);
+		const trigger = model.find((node) => (node.type as unknown) === "ComposeColumn");
+		const open = trigger.props.modifiers.find((modifier: { clickable?: () => void }) => modifier.clickable).clickable;
+		act(() => open());
+		expect(model.props.expanded).toBe(true);
+		act(() => model.findAll((node) => (node.type as unknown) === "DropdownMenuItem")[1].props.onClick());
+		expect(onSettings).toHaveBeenCalledExactlyOnceWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
+		expect(haptics.select).toHaveBeenCalledOnce();
+		act(() => renderer.unmount());
+	});
+
+	it("refreshes the catalog from a pull on the list", () => {
+		const { renderer, onRefresh } = sheet({ refreshing: true });
+		const refresh = renderer.root.findByType("ScrollView" as never).props.refreshControl;
+		expect(refresh.props.refreshing).toBe(true);
+		refresh.props.onRefresh();
+		expect(onRefresh).toHaveBeenCalledOnce();
+		expect(renderer.root.findAll((node) => node.props.accessibilityLabel === "Refresh turn settings")).toHaveLength(0);
+		act(() => renderer.unmount());
+	});
+});
+
+describe("turn settings sheet on iOS", () => {
+	afterEach(() => {
+		platform.OS = "android";
+		haptics.select.mockClear();
+	});
+
+	it("is a Form of inline pickers, refreshed by pulling it down", async () => {
+		platform.OS = "ios";
+		const { renderer, onRefresh, onSettings } = sheet();
+		const form = renderer.root.find((node) => (node.type as unknown) === "FieldGroup");
+		const refreshable = form.props.modifiers.find((modifier: { refreshable?: () => Promise<void> }) => modifier.refreshable).refreshable;
+		await refreshable();
+		expect(onRefresh).toHaveBeenCalledOnce();
+		const pickers = renderer.root.findAllByType("SwiftUIPicker" as never);
+		expect(pickers.map((picker) => picker.props.label)).toEqual(["Model", "Reasoning effort", "Permission mode"]);
+		expect(pickers[0].props.modifiers).toEqual([{ pickerStyle: "inline" }, { labelsHidden: true }, { disabled: false }]);
+		expect(renderer.root.findAll((node) => (node.type as unknown) === "Slider")).toHaveLength(0);
+		act(() => pickers[1].props.onSelectionChange("high"));
+		expect(onSettings).toHaveBeenCalledExactlyOnceWith({ model: "opus", approvalMode: "auto", reasoningEffort: "high" });
+		act(() => renderer.unmount());
+	});
+
+	it("rebuilds its pickers on the saved value once a save comes back", () => {
+		platform.OS = "ios";
+		const { renderer, ...handlers } = sheet();
+		const before = renderer.root.findAllByType("SwiftUIPicker" as never)[0];
+		act(() => renderer.update(<ChatSettingsSheet snapshot={snapshot()} models={models} options={options} disabled {...handlers} />));
+		expect(renderer.root.findAllByType("SwiftUIPicker" as never)[0]).toBe(before);
+		act(() => renderer.update(<ChatSettingsSheet snapshot={snapshot()} models={models} options={options} {...handlers} />));
+		expect(renderer.root.findAllByType("SwiftUIPicker" as never)[0]).not.toBe(before);
 		act(() => renderer.unmount());
 	});
 });
