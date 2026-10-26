@@ -6,11 +6,12 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 
-export function ArtifactGalleryCard({ row, context, onPreview, actions }: {
+export function ArtifactGalleryCard({ row, context, onPreview, actions, previewHtml = true }: {
 	row: ArtifactRow;
 	context: string;
 	onPreview: () => void;
 	actions: ReactNode;
+	previewHtml?: boolean;
 }) {
 	const { t } = useTranslation();
 	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
@@ -23,7 +24,7 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions }: {
 				title={`${row.sessionTitle} · ${row.path}`}
 			>
 				<span className="relative block aspect-[16/9] overflow-hidden border-b border-border bg-[var(--solid-muted,var(--muted))]">
-					<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} />
+					<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewHtml={previewHtml} />
 				</span>
 				<span className="block space-y-1 px-3 py-2.5">
 					<span className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">

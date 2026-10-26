@@ -324,6 +324,45 @@ describe("ArtifactsView", () => {
 		expect(within(screen.getByRole("region", { name: "AO" })).getByTitle("No preview available")).toBeInTheDocument();
 	});
 
+	it("runs one HTML thumbnail across pinned, recent, and project copies", async () => {
+		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		html.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }, withArtifacts[1]];
+		useArtifactsViewStore.setState({ pinnedArtifactIds: [JSON.stringify(["ao-html", "page.html"])] });
+		const fetch = vi.fn().mockImplementation(async () => new Response("<h1>Design review</h1>"));
+		vi.stubGlobal("fetch", fetch);
+		const { container } = renderView();
+
+		await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(1));
+		expect(screen.getByRole("region", { name: "Pinned" }).querySelector("iframe")).not.toBeNull();
+		expect(screen.getByRole("region", { name: "Recent" }).querySelector("iframe")).toBeNull();
+		expect(screen.getByRole("region", { name: "AO" }).querySelector("iframe")).toBeNull();
+		expect(fetch).toHaveBeenCalledTimes(1);
+
+		await userEvent.click(screen.getByRole("button", { name: "Pinned" }));
+		expect(container.querySelectorAll("iframe")).toHaveLength(1);
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("caps live HTML thumbnails at four and keeps the remaining cards as placeholders", async () => {
+		const pages: Parameters<typeof session>[2] = Array.from({ length: 6 }, (_, index) => ({ name: `page-${index}.html`, kind: "html", updatedAt: "2026-10-11T10:00:00Z" }));
+		const html = session("ao-html", "Design review", pages);
+		for (const file of html.artifactFiles ?? []) {
+			file.inlineUrl = `http://ao-inline-artifact.ao-html.localhost:3002/${file.name}`;
+			file.rawUrl = `http://127.0.0.1:3002/${file.name}?raw=true`;
+		}
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
+		const fetch = vi.fn().mockImplementation(async () => new Response("<h1>Design review</h1>"));
+		vi.stubGlobal("fetch", fetch);
+		const { container } = renderView();
+
+		await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(4));
+		expect(screen.getAllByRole("listitem")).toHaveLength(6);
+		expect(screen.getAllByTitle("No preview available")).toHaveLength(2);
+		expect(fetch).toHaveBeenCalledTimes(4);
+	});
+
 	it.each(["missing", "network failure"])("shows an unavailable HTML preview for %s files after reopening", async (failure) => {
 		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
 		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";

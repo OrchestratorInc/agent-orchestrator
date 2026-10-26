@@ -269,6 +269,26 @@ describe("SessionArtifactsView", () => {
 		]);
 	});
 
+	it("caps the sidebar gallery at four live HTML previews", async () => {
+		const pages: SessionArtifact[] = Array.from({ length: 6 }, (_, index) => ({
+			kind: "html",
+			name: `page-${index}.html`,
+			path: `page-${index}.html`,
+			inlineUrl: `http://ao-inline-artifact.sess-1.localhost/page-${index}.html`,
+			rawUrl: `http://127.0.0.1:3002/page-${index}.html?raw=true`,
+			size: 20,
+			updatedAt: "2026-09-23T00:00:00Z",
+		}));
+		const fetch = vi.fn().mockImplementation(async () => new Response("<h1>Preview</h1>"));
+		vi.stubGlobal("fetch", fetch);
+		const { container } = renderView(<SessionArtifactsView session={session(pages)} />);
+
+		await vi.waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(4));
+		expect(screen.getAllByRole("listitem")).toHaveLength(6);
+		expect(screen.getAllByTitle("No preview available")).toHaveLength(2);
+		expect(fetch).toHaveBeenCalledTimes(4);
+	});
+
 	it("shows an empty state when the session has no artifacts", () => {
 		renderView(<SessionArtifactsView session={session([])} />);
 

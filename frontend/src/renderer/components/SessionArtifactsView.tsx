@@ -349,6 +349,9 @@ export function SessionArtifactsView({
 			),
 		[cloud, cloudRoot, session.artifactFiles],
 	);
+	const htmlPreviewPaths = useMemo(() => new Set(
+		artifacts.filter((artifact) => artifact.kind === "html" && artifact.inlineUrl && artifact.rawUrl).slice(0, 4).map((artifact) => artifact.path),
+	), [artifacts]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
 	const [editingPath, setEditingPath] = useState<string | null>(null);
 	const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
@@ -527,6 +530,7 @@ export function SessionArtifactsView({
 							<ArtifactGalleryCard
 								key={artifact.path}
 								row={row}
+								previewHtml={htmlPreviewPaths.has(artifact.path)}
 								context={session.title ?? ""}
 								onPreview={() => openArtifact(artifact)}
 								actions={<ArtifactActionsMenu

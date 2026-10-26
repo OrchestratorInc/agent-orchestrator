@@ -39,6 +39,7 @@ import { Input } from "./ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ARTIFACT_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4";
+const MAX_LIVE_HTML_PREVIEWS = 4;
 
 /**
  * Every artifact agents have written, grouped by project: on this machine, and
@@ -81,6 +82,22 @@ export function ArtifactsView() {
 			return card ? [card] : [];
 		});
 	}, [cards, pinnedArtifactIds]);
+	const htmlPreviewSections = useMemo(() => {
+		const owners = new Map<string, string>();
+		const sections = [
+			{ id: "pinned", rows: pinnedCards.map(({ row }) => row) },
+			...(showProjectSections ? [{ id: "recent", rows: cards.slice(0, 3).map(({ row }) => row) }] : []),
+			...visibleGroups.map((group) => ({ id: `project:${group.id}`, rows: group.rows })),
+		];
+		for (const section of sections) {
+			for (const row of section.rows) {
+				if (row.kind !== "html" || !row.inlineUrl || !row.rawUrl) continue;
+				const key = artifactKey(row);
+				if (!owners.has(key) && owners.size < MAX_LIVE_HTML_PREVIEWS) owners.set(key, section.id);
+			}
+		}
+		return owners;
+	}, [cards, pinnedCards, showProjectSections, visibleGroups]);
 	const createArtifact = useCreateArtifactSession();
 	const clearFilters = () => {
 		setQuery("");
@@ -181,12 +198,12 @@ export function ArtifactsView() {
 								<div>
 									{pinnedCards.length > 0 ? <ArtifactSection sectionId="pinned" name={t("artifacts.pinned")} icon={Pin} view={view}>
 										{pinnedCards.map(({ row, projectName }) => (
-											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName onPreview={openPreview} />
+											<ArtifactCard key={artifactKey(row)} row={row} projectName={projectName} view={view} showProjectName previewHtml={htmlPreviewSections.get(artifactKey(row)) === "pinned"} onPreview={openPreview} />
 										))}
 									</ArtifactSection> : null}
 									{showProjectSections ? <ArtifactSection sectionId="recent" name={t("artifacts.recent")} icon={Clock} view={view}>
 										{cards.slice(0, 3).map(({ row, projectName }) => (
-											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName onPreview={openPreview} />
+											<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName previewHtml={htmlPreviewSections.get(artifactKey(row)) === "recent"} onPreview={openPreview} />
 										))}
 									</ArtifactSection> : null}
 									{visibleGroups.map((group) => {
@@ -202,7 +219,7 @@ export function ArtifactsView() {
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
 											>
 												{group.rows.map((row) => (
-													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} onPreview={openPreview} />
+													<ArtifactCard key={`${row.sessionId}:${row.path}`} row={row} projectName={projectName} view={view} showProjectName={!showProjectSections} previewHtml={htmlPreviewSections.get(artifactKey(row)) === `project:${group.id}`} onPreview={openPreview} />
 												))}
 											</ArtifactSection>
 										);
@@ -269,7 +286,7 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 	);
 }
 
-function ArtifactCard({ row, projectName, view, showProjectName = false, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
+function ArtifactCard({ row, projectName, view, showProjectName = false, previewHtml = true, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewHtml?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
 	const { t } = useTranslation();
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
@@ -326,6 +343,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 	return (
 		<ArtifactGalleryCard
 			row={row}
+			previewHtml={previewHtml}
 			context={showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}
 			onPreview={open}
 			actions={
