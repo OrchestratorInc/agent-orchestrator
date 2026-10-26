@@ -504,11 +504,23 @@ export function WorkspaceReviewPane({
 		if (checked) collapsePath(file.path);
 	}, [collapsePath, toggleViewed]);
 	const collapseAll = useCallback(() => {
-		setCollapsedPaths(new Set(files.map((file) => file.path)));
+		setCollapsedPaths((current) => {
+			const next = new Set(current);
+			for (const file of files) next.add(file.path);
+			return next;
+		});
 	}, [files]);
 	const expandAll = useCallback(() => {
-		setLoadedDeferredPaths(new Set(files.filter(isDeferredByDefault).map((file) => file.path)));
-		setCollapsedPaths(new Set());
+		setLoadedDeferredPaths((current) => {
+			const next = new Set(current);
+			for (const file of files) if (isDeferredByDefault(file)) next.add(file.path);
+			return next;
+		});
+		setCollapsedPaths((current) => {
+			const next = new Set(current);
+			for (const file of files) next.delete(file.path);
+			return next;
+		});
 	}, [files]);
 	const allFilesCollapsed = files.length > 0 && files.every((file) => collapsedPaths.has(file.path));
 	useEffect(() => {

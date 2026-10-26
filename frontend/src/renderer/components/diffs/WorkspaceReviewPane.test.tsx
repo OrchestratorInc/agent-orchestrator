@@ -417,6 +417,44 @@ describe("WorkspaceReviewPane", () => {
 		expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(96);
 	}, 60_000);
 
+	it("keeps other pages' viewed and deferred files collapsed when collapsing or expanding a page", async () => {
+		const files = Array.from({ length: 99 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: index === 98 ? 600_000 : 20, binary: index !== 98 }));
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await userEvent.click(screen.getByRole("checkbox", { name: "Mark file-96.dat as viewed" }));
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByRole("checkbox", { name: "Mark file-96.dat as not viewed" })).toBeChecked();
+		expect(screen.getByRole("button", { name: "Expand file-96.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Expand file-98.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Collapse file-97.dat" })).toHaveAttribute("aria-expanded", "true");
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(screen.getByRole("button", { name: "Expand file-96.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Expand file-98.dat" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByRole("button", { name: "Collapse file-97.dat" })).toHaveAttribute("aria-expanded", "true");
+	}, 60_000);
+
+	it("keeps a deferred diff loaded after expanding all on another page", async () => {
+		const files = [
+			...Array.from({ length: 96 }, (_, index) => ({ path: `file-${index}.dat`, status: "modified" as const, additions: 0, deletions: 0, size: 20, binary: true })),
+			{ path: "src/App.tsx", status: "modified" as const, additions: 1, deletions: 1, size: 600_000, binary: false },
+		];
+		renderWithQuery(<ReviewWithCollapseControls annotation={annotation()} target={reviewTarget(workspace(files))} filter="" sessionId="sess-1" split={false} />);
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand src/App.tsx" }));
+		await screen.findByTestId("review-patch");
+		await userEvent.click(screen.getByRole("button", { name: "Previous files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Collapse all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Expand all files" }));
+		await userEvent.click(screen.getByRole("button", { name: "Next files" }));
+		expect(await screen.findByTestId("review-patch")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Collapse src/App.tsx" })).toHaveAttribute("aria-expanded", "true");
+		expect(screen.queryByRole("button", { name: "Load diff" })).not.toBeInTheDocument();
+	}, 60_000);
+
 	it("reuses prefetched batches when opening a review with more than 24 files", async () => {
 		const files = Array.from({ length: 57 }, (_, index) => ({ path: index === 0 ? "src/App.tsx" : `file-${index}.ts`, status: "modified" as const, additions: 1, deletions: 1, size: 20, binary: false }));
 		const data = workspace(files);
