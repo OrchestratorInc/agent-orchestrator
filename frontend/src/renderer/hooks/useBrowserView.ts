@@ -6,7 +6,6 @@ import type {
 	BrowserFindState,
 	BrowserNavState,
 	BrowserRect,
-	BrowserRuntimeState,
 	BrowserTabState,
 	BrowserTabsState,
 } from "../../main/browser-view-host";
@@ -53,10 +52,20 @@ function sameBrowserURL(left: string, right: string): boolean {
 	}
 }
 
+function sameBrowserOrigin(left: string, right: string): boolean {
+	try {
+		return new URL(left).origin === new URL(right).origin;
+	} catch {
+		return false;
+	}
+}
+
 type UseBrowserViewOptions = {
 	sessionId: string;
 	/** Source daemon for preview URLs; omitted for the local daemon. */
 	origin?: { hostId: string; sessionId: string; proxyBase: string };
+	/** A cloud session, whose agent browser the control plane serves. */
+	cloudAgentBrowser?: { baseUrl: string; orgId: string; sessionId: string };
 	active: boolean;
 	poppedOut: boolean;
 	/**
@@ -109,8 +118,6 @@ export type BrowserViewModel = {
 	setDevToolsPlacement: (placement: BrowserDevToolsPlacement) => Promise<void>;
 	agentBrowserActive: boolean;
 	agentBrowserActivity: BrowserAgentActivityState | null;
-	browserRuntimeConnected: boolean | null;
-	reconnectBrowserRuntime: () => Promise<void>;
 	destroy: () => void;
 	annotationMode: boolean;
 	annotationState?: Pick<BrowserAnnotationStatePayload, "count" | "screenshotCount" | "hasDraft">;
@@ -271,6 +278,7 @@ function hiddenByFullscreen(node: HTMLElement): boolean {
 export function useBrowserView({
 	sessionId,
 	origin,
+	cloudAgentBrowser,
 	active,
 	poppedOut,
 	terminated,
@@ -294,7 +302,6 @@ export function useBrowserView({
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
 	const [agentBrowserActive, setAgentBrowserActive] = useState(false);
 	const [agentBrowserActivity, setAgentBrowserActivity] = useState<BrowserAgentActivityState | null>(null);
-	const [browserRuntimeConnected, setBrowserRuntimeConnected] = useState<boolean | null>(null);
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	const slotNodeRef = useRef<HTMLDivElement | null>(null);
 	const viewIdRef = useRef("");
@@ -635,23 +642,6 @@ export function useBrowserView({
 		});
 	}, []);
 
-	useEffect(() => {
-		let disposed = false;
-		const applyState = (state: BrowserRuntimeState) => {
-			if (!disposed) setBrowserRuntimeConnected(state.connected);
-		};
-		const unsubscribe = window.ao?.browser.onRuntimeState(applyState);
-		void window.ao?.browser.getRuntimeState().then(applyState);
-		return () => {
-			disposed = true;
-			unsubscribe?.();
-		};
-	}, []);
-
-	const reconnectBrowserRuntime = useCallback(async () => {
-		await window.ao?.browser.reconnectRuntime();
-	}, []);
-
 	useEffect(
 		() => () => {
 			if (tabNoticeTimerRef.current !== null) window.clearTimeout(tabNoticeTimerRef.current);
@@ -810,8 +800,9 @@ export function useBrowserView({
 				// while it's still sitting right there in the live tab list. Only real,
 				// distinguishable tabs are worth keeping — a blank tab has nothing to
 				// reopen.
+				// An agent tab's page lives on the remote host, so it is not the person's to reopen.
 				const stillOpen = state.tabs.some((tab) => tab.id === tabId);
-				if (closing && !stillOpen && !isBlankTabUrl(closing.url)) {
+				if (closing && !stillOpen && !closing.remote && !isBlankTabUrl(closing.url)) {
 					const { id, title, url, favicon } = closing;
 					updateClosedTabs((current) => [{ id, title, url, favicon }, ...current.filter((t) => t.id !== id)].slice(0, MAX_CLOSED_TABS));
 				}
@@ -873,13 +864,14 @@ export function useBrowserView({
 				// Keep the last known tabs as a fallback if the native host is briefly
 				// unavailable; opening the link remains better than dropping the click.
 			}
-			const existingTab = tabs.find((tab) => !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
+			// A link is the person's: it never selects or loads into an agent tab.
+			const existingTab = tabs.find((tab) => !tab.remote && !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
 			if (existingTab) {
 				await selectTab(existingTab.id);
 				return;
 			}
 			const activeTab = tabs.find((tab) => tab.active);
-			if (activeTab && isBlankTabUrl(activeTab.url)) {
+			if (activeTab && !activeTab.remote && isBlankTabUrl(activeTab.url)) {
 				const state = await window.ao!.browser.navigate({ viewId: id, url });
 				if (viewIdRef.current === state.viewId) setNavState(state);
 				return;
@@ -973,6 +965,61 @@ export function useBrowserView({
 		[hasNativeBrowser, withView],
 	);
 
+	// A preview never lands in an agent tab: it goes to the person's preview
+	// tab (one on its origin or another preview's), else to a new tab.
+	const showPreview = useCallback(
+		async (url: string) => {
+			const id = viewIdRef.current;
+			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
+			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
+			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
+			if (!own) return openTab(url);
+			await selectTab(own.id);
+			return navigate(url);
+		},
+		[hasNativeBrowser, navigate, openTab, selectTab],
+	);
+
+	// A remote or cloud session's agent browser (the host's or sandbox's
+	// Chromium its agent drives, streamed) is part of the session's surface:
+	// main shows it as one tab per agent page. It is derived from the host
+	// whenever the view is built or the host reconnects, not remembered: a
+	// reopened window brings it back. A host with no agent browser to show yet
+	// (starting, asleep, redeploying, not set up, or an agent that has not
+	// used it) is asked again, backing off, for as long as the view stays.
+	useEffect(() => {
+		const agentBrowserUrl = origin
+			? () => aoBridge.remotes.agentBrowserUrl(origin.hostId, origin.sessionId)
+			: cloudAgentBrowser
+				? () => aoBridge.cloudCp.agentBrowserUrl(cloudAgentBrowser.baseUrl, cloudAgentBrowser.orgId, cloudAgentBrowser.sessionId)
+				: undefined;
+		if (!hasNativeBrowser || !agentBrowserUrl || !viewId || viewIdRef.current !== viewId || terminated) return;
+		let cancelled = false;
+		let retry = 0;
+		// ponytail: polls every 15 s at most while nothing shows; main could
+		// instead say when the agent browser comes up.
+		const again = (attempt: number) => {
+			if (!cancelled) retry = window.setTimeout(() => ask(attempt + 1), Math.min(2_000 * 2 ** attempt, 15_000));
+		};
+		const ask = (attempt: number) => {
+			void agentBrowserUrl().then(async (url) => {
+				if (cancelled || viewIdRef.current !== viewId) return;
+				if (!url) return again(attempt);
+				const state = await window.ao!.browser.openTab({ viewId, url });
+				if (viewIdRef.current === viewId) setTabsState(state);
+			}).catch((error) => {
+				if (attempt === 0) console.warn("Unable to open the agent browser", error);
+				again(attempt);
+			});
+		};
+		ask(0);
+		return () => {
+			cancelled = true;
+			window.clearTimeout(retry);
+		};
+	}, [hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, cloudAgentBrowser?.baseUrl, cloudAgentBrowser?.orgId, cloudAgentBrowser?.sessionId, terminated, viewId]);
+
 	const clear = useCallback(() => {
 		if (!hasNativeBrowser) {
 			setNavState((current) => ({
@@ -1047,14 +1094,14 @@ export function useBrowserView({
 				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
 				: Promise.resolve(target);
 			void resolved.then((url) => {
-				return cancelled ? undefined : navigate(url);
+				return cancelled ? undefined : showPreview(url);
 			}).catch((error) => console.warn("Unable to open browser preview", error));
 			return () => { cancelled = true; };
 		} else if ((revision !== null && revision > 0) || previous?.target) {
 			void clear();
 		}
 		return undefined;
-	}, [clear, hasNativeBrowser, navigate, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionId, terminated, viewId]);
+	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;
@@ -1119,8 +1166,6 @@ export function useBrowserView({
 		setDevToolsPlacement: (placement) => runDevtools("setPlacement", placement),
 		agentBrowserActive: stateBelongsToSession && agentBrowserActive,
 		agentBrowserActivity: stateBelongsToSession ? agentBrowserActivity : null,
-		browserRuntimeConnected,
-		reconnectBrowserRuntime,
 		destroy,
 		annotationMode,
 		annotationState,

@@ -64,6 +64,32 @@ describe("render activity", () => {
 		expect(frame().getAttribute("src")).toMatch(/^http:\/\/127\.0\.0\.1:3555\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
 	});
 
+	it("toggles reflow without reloading and shares the choice with the expanded page", async () => {
+		const user = userEvent.setup();
+		render(<ActivityRow activity={renderActivity()} />);
+		const inline = frame();
+		const src = inline.getAttribute("src");
+		const sent = vi.spyOn(inline.contentWindow!, "postMessage");
+		const wrap = screen.getByRole("button", { name: "Wrap content" });
+		expect(wrap).toHaveAttribute("aria-pressed", "false");
+		await user.click(wrap);
+		expect(wrap).toHaveAttribute("aria-pressed", "true");
+		expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ wrapContent: true }) }), "*");
+		expect(inline.getAttribute("src")).toBe(src);
+
+		await user.click(screen.getByRole("button", { name: "Expand page" }));
+		const dialog = await screen.findByRole("dialog");
+		const expanded = within(dialog).getByTitle("Turns by day") as HTMLIFrameElement;
+		expect(fragmentOf(expanded)).toMatchObject({ wrapContent: true });
+		const dialogWrap = within(dialog).getByRole("button", { name: "Wrap content" });
+		expect(dialogWrap).toHaveAttribute("aria-pressed", "true");
+		await user.click(dialogWrap);
+		expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ wrapContent: false }) }), "*");
+		await user.click(within(dialog).getByRole("button", { name: "Close" }));
+		expect(wrap).toHaveAttribute("aria-pressed", "false");
+		expect(inline.getAttribute("src")).toBe(src);
+	});
+
 	it("shows a note instead of a frame in a remote host's chat", () => {
 		// The local daemon has no copy of a remote host's render, and the remote
 		// proxy URL carries a capability token the page could read.
@@ -390,11 +416,12 @@ describe("render activity", () => {
 		const open = vi.spyOn(window, "open").mockReturnValue(null);
 		try {
 			const { user, dialog } = await expand();
+			await user.click(within(dialog).getByRole("button", { name: "Wrap content" }));
 			await user.click(within(dialog).getByRole("button", { name: "Open in external browser" }));
 			expect(open).toHaveBeenCalledTimes(1);
 			const [url, target, features] = open.mock.calls[0]!;
 			expect(url).toMatch(/^http:\/\/127\.0\.0\.1:3001\/api\/v1\/sessions\/proj-1\/renders\/r1#ao-theme=/);
-			expect(JSON.parse(decodeURIComponent(String(url).split("#ao-theme=")[1]!)).displayMode).toBe("fullscreen");
+			expect(JSON.parse(decodeURIComponent(String(url).split("#ao-theme=")[1]!))).toMatchObject({ displayMode: "fullscreen", wrapContent: true });
 			expect([target, features]).toEqual(["_blank", "noopener,noreferrer"]);
 		} finally {
 			open.mockRestore();
@@ -470,6 +497,15 @@ describe("artifact activity", () => {
 		expect(artifactFrame().style.height).toBe("400px");
 		post({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: 520 } }, artifactFrame().contentWindow);
 		expect(artifactFrame().style.height).toBe("520px");
+	});
+
+	it("offers wrapping for HTML artifacts too", async () => {
+		const user = userEvent.setup();
+		renderArtifact();
+		const inline = artifactFrame();
+		const sent = vi.spyOn(inline.contentWindow!, "postMessage");
+		await user.click(screen.getByRole("button", { name: "Wrap content" }));
+		expect(sent).toHaveBeenLastCalledWith(expect.objectContaining({ params: expect.objectContaining({ wrapContent: true, scrollable: true }) }), "*");
 	});
 
 	it("caps the inline artifact at 640 and lets the page scroll inside it, so a page sized to its viewport cannot ratchet the frame", () => {

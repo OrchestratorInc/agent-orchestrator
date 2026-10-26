@@ -47,6 +47,47 @@ RUN npm install --global \
     test -x /etc/skel/.local/bin/opencode && \
     test -x /etc/skel/.local/bin/codex
 
+# The agent browser ao-worker starts on first use: headless Chromium, fonts that
+# render CJK, Arabic and Devanagari pages instead of boxes, and the agent-browser
+# CLI. Ubuntu's chromium package is a snap stub that cannot run in a container,
+# so Chromium is Playwright's build (version kept in step with
+# frontend/package-lock.json) under a root-owned path every user can read,
+# linked to /usr/local/bin/chromium. Playwright 1.60 has no build for Ubuntu
+# releases after 25.x (enterprise-base:ubuntu is 26.04), so those take its 24.04
+# build and dependency list. agent-browser version and sha256 pins: keep in
+# lockstep with frontend/scripts/prepare-agent-browser.mjs.
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+      fonts-liberation \
+      fonts-noto-cjk \
+      fonts-noto-color-emoji \
+      fonts-noto-core && \
+    . /etc/os-release && \
+    case "$VERSION_ID" in \
+      2[0-5].*) ;; \
+      *) export PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="ubuntu24.04-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')" ;; \
+    esac && \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ao-browser \
+      npx --yes playwright@1.60.0 install --with-deps --no-shell chromium && \
+    rm -rf /var/lib/apt/lists/* /root/.npm && \
+    set -- /opt/ao-browser/chromium-*/chrome-linux*/chrome && \
+    if [ "$#" -ne 1 ] || [ ! -x "$1" ]; then echo "expected one Playwright Chromium, found: $*" >&2; exit 1; fi && \
+    ln -sfn "$1" /usr/local/bin/chromium && \
+    chromium --version && \
+    agent_browser_version=0.38.1 && \
+    case "$(dpkg --print-architecture)" in \
+      amd64) agent_browser_target=linux-x64 \
+        agent_browser_sha256=5100149a1903211c889de4e545bf36d90803740cea4f99aa22651649f9205ea1 ;; \
+      arm64) agent_browser_target=linux-arm64 \
+        agent_browser_sha256=937b315ee0761e8a62f7950ddcfef9b3d3d8e8d5eb9c9d2bf9e23e5725664511 ;; \
+      *) echo "unsupported agent-browser architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac && \
+    curl --fail --location --silent --show-error -o /usr/local/bin/agent-browser \
+      "https://github.com/vercel-labs/agent-browser/releases/download/v${agent_browser_version}/agent-browser-${agent_browser_target}" && \
+    echo "${agent_browser_sha256}  /usr/local/bin/agent-browser" | sha256sum -c - && \
+    chmod 0755 /usr/local/bin/agent-browser && \
+    agent-browser --version
+
 # cursor-agent ships as a native tarball (amd64 -> x64), not an npm package.
 RUN mkdir -p "/opt/cursor-agent/${CURSOR_AGENT_VERSION}" && \
     curl --fail --location --silent --show-error \

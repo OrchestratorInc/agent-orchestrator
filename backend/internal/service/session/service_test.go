@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -64,9 +63,6 @@ type fakeStore struct {
 	cleanupFacts        map[domain.SessionID]domain.SessionCleanupRecord
 	sessions            map[domain.SessionID]domain.SessionRecord
 	getSessionErr       error
-	activeSwitches      map[domain.SessionID]domain.AgentSwitch
-	activeSwitchGetErr  error
-	activeSwitchListErr error
 	pr                  map[domain.SessionID]domain.PRFacts
 	prFacts             map[domain.SessionID][]domain.PRFacts
 	prs                 map[domain.SessionID][]domain.PullRequest
@@ -80,15 +76,23 @@ type fakeStore struct {
 	comments            map[string][]domain.PullRequestComment
 	commentsErr         error
 	reviewRuns          map[domain.SessionID][]domain.CurrentHeadReviewRun
+	interrupted         map[domain.SessionID]bool
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+	conversations       map[domain.SessionID]domain.ConversationRecord
+	activities          []domain.ConversationActivity
+
+	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
+	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
+	getCleanupFactsCalls  int
+	listCleanupFactsCalls int
+	cleanupFactsRequested []domain.SessionID
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		sessions:       map[domain.SessionID]domain.SessionRecord{},
-		activeSwitches: map[domain.SessionID]domain.AgentSwitch{},
 		pr:             map[domain.SessionID]domain.PRFacts{},
 		prFacts:        map[domain.SessionID][]domain.PRFacts{},
 		prs:            map[domain.SessionID][]domain.PullRequest{},
@@ -105,6 +109,68 @@ func newFakeStore() *fakeStore {
 
 func (f *fakeStore) ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
+	conversation, ok := f.conversations[id]
+	if !ok {
+		return domain.ConversationRecord{}, domain.ErrNoConversation
+	}
+	return conversation, nil
+}
+
+func (f *fakeStore) SessionForActivityProviderItem(_ context.Context, providerItemID string) (domain.SessionID, bool, error) {
+	for _, activity := range f.activities {
+		if activity.ProviderItemID != providerItemID {
+			continue
+		}
+		for sessionID, conversation := range f.conversations {
+			if conversation.ID == activity.ConversationID {
+				return sessionID, true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	for _, existing := range f.activities {
+		if existing.ConversationID == conversationID && existing.ProviderItemID == providerItemID {
+			return existing.Status, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
+	if activity.ProviderItemID != "" {
+		for i, existing := range f.activities {
+			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
+				if activity.Kind == domain.ActivityKindAOAction &&
+					activity.Status == domain.ActivityStatusRunning &&
+					(existing.Status == domain.ActivityStatusCompleted ||
+						existing.Status == domain.ActivityStatusFailed ||
+						existing.Status == domain.ActivityStatusCancelled ||
+						existing.Status == domain.ActivityStatusResolved) {
+					return nil
+				}
+				activity.ID = existing.ID
+				activity.ConversationID = conversationID
+				activity.Sequence = existing.Sequence
+				activity.Revision = existing.Revision + 1
+				activity.UpdatedAt = now
+				f.activities[i] = activity
+				return nil
+			}
+		}
+	}
+	activity.ConversationID = conversationID
+	activity.Sequence = int64(len(f.activities) + 1)
+	activity.Revision = 1
+	activity.CreatedAt = now
+	activity.UpdatedAt = now
+	f.activities = append(f.activities, activity)
+	return nil
 }
 
 func TestListBatchesKanbanReads(t *testing.T) {
@@ -131,6 +197,35 @@ func TestListBatchesKanbanReads(t *testing.T) {
 	}
 }
 
+func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Mode: domain.SessionModeChat,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	st.interrupted = map[domain.SessionID]bool{"mer-1": true}
+	svc := &Service{store: st}
+
+	list, err := svc.List(context.Background(), ListFilter{ProjectID: "mer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	for _, sess := range list {
+		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
+			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
+		}
+	}
+	sess, err := svc.Get(context.Background(), "mer-1")
+	if err != nil || sess.DisplayStatus != "Interrupted" {
+		t.Fatalf("get displayStatus = %q, %v; want Interrupted", sess.DisplayStatus, err)
+	}
+}
+
 func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTaskPreparation: true}
@@ -153,23 +248,26 @@ func TestTaskPreparationsStayOutOfSessionReads(t *testing.T) {
 	}
 }
 
-func (f *fakeStore) GetActiveAgentSwitch(_ context.Context, id domain.SessionID) (domain.AgentSwitch, bool, error) {
-	if f.activeSwitchGetErr != nil {
-		return domain.AgentSwitch{}, false, f.activeSwitchGetErr
-	}
-	sw, ok := f.activeSwitches[id]
-	return sw, ok, nil
-}
+func TestGetRecordReadsOnlyTheStoredRow(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Metadata: domain.SessionMetadata{PreviewURL: "http://localhost:5173/"}}
+	st.sessions["mer-2"] = domain.SessionRecord{ID: "mer-2", ProjectID: "mer", IsTaskPreparation: true}
+	svc := &Service{store: st}
 
-func (f *fakeStore) ListActiveAgentSwitches(context.Context) ([]domain.AgentSwitch, error) {
-	if f.activeSwitchListErr != nil {
-		return nil, f.activeSwitchListErr
+	rec, err := svc.GetRecord(context.Background(), "mer-1")
+	if err != nil || rec.Metadata.PreviewURL != "http://localhost:5173/" {
+		t.Fatalf("GetRecord = %+v, %v", rec, err)
 	}
-	out := make([]domain.AgentSwitch, 0, len(f.activeSwitches))
-	for _, sw := range f.activeSwitches {
-		out = append(out, sw)
+	if st.listPRFactsCalls != 0 || st.listReviewRunsCalls != 0 {
+		t.Fatalf("GetRecord read PR facts %d times and review runs %d times, want none", st.listPRFactsCalls, st.listReviewRunsCalls)
 	}
-	return out, nil
+	for _, id := range []domain.SessionID{"mer-2", "missing"} {
+		_, err = svc.GetRecord(context.Background(), id)
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "SESSION_NOT_FOUND" {
+			t.Fatalf("GetRecord(%s) error = %v, want SESSION_NOT_FOUND", id, err)
+		}
+	}
 }
 
 func newWorkspaceRepo(t testing.TB) string {
@@ -462,6 +560,16 @@ func (f *fakeStore) ListCurrentHeadReviewRunsForSessions(_ context.Context, ids 
 	return out, nil
 }
 
+func (f *fakeStore) ListInterruptedSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error) {
+	out := make(map[domain.SessionID]bool, len(ids))
+	for _, id := range ids {
+		if f.interrupted[id] {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) ListChecks(_ context.Context, prURL string) ([]domain.PullRequestCheck, error) {
 	return append([]domain.PullRequestCheck(nil), f.checks[prURL]...), nil
 }
@@ -515,43 +623,6 @@ func TestSessionListAppliesActivityBeforePRFacts(t *testing.T) {
 				t.Fatalf("got %+v, want status %q", list, tt.want)
 			}
 		})
-	}
-}
-
-func TestSessionListProjectsActiveAgentSwitch(t *testing.T) {
-	st := newFakeStore()
-	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Activity: domain.Activity{State: domain.ActivityExited}}
-	st.sessions["other-1"] = domain.SessionRecord{ID: "other-1", ProjectID: "other", Activity: domain.Activity{State: domain.ActivityIdle}}
-	st.activeSwitches["mer-1"] = domain.AgentSwitch{
-		ID: "switch-1", SessionID: "mer-1", FromHarness: domain.HarnessClaudeCode,
-		TargetHarness: domain.HarnessCodex, State: domain.AgentSwitchPreparingHandoff,
-	}
-	st.activeSwitches["other-1"] = domain.AgentSwitch{ID: "switch-other", SessionID: "other-1", State: domain.AgentSwitchPreparingHandoff}
-
-	list, err := (&Service{store: st}).List(context.Background(), ListFilter{ProjectID: "mer"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(list) != 1 || list[0].ActiveAgentSwitch == nil || list[0].ActiveAgentSwitch.ID != "switch-1" {
-		t.Fatalf("list active switch projection = %+v", list)
-	}
-	if list[0].Status != domain.StatusExited {
-		t.Fatalf("session status = %q, want durable activity-derived exited", list[0].Status)
-	}
-	got, err := (&Service{store: st}).Get(context.Background(), "mer-1")
-	if err != nil || got.ActiveAgentSwitch == nil || got.ActiveAgentSwitch.ID != "switch-1" {
-		t.Fatalf("get active switch projection = %+v, err=%v", got.ActiveAgentSwitch, err)
-	}
-
-	st.activeSwitchListErr = errors.New("active switch read failed")
-	if _, err := (&Service{store: st}).List(context.Background(), ListFilter{ProjectID: "mer"}); err == nil || !strings.Contains(err.Error(), "active switch") {
-		t.Fatalf("active switch list error = %v", err)
-	}
-
-	st.activeSwitchListErr = nil
-	st.activeSwitchGetErr = errors.New("active switch read failed")
-	if _, err := (&Service{store: st}).Get(context.Background(), "mer-1"); err == nil || !strings.Contains(err.Error(), "active switch") {
-		t.Fatalf("active switch get error = %v", err)
 	}
 }
 
@@ -2548,37 +2619,40 @@ func TestSessionRenameMissingSessionReturnsNotFound(t *testing.T) {
 // fakeCommander records Kill/Spawn calls so a test can assert the
 // clean-orchestrator ordering without wiring a real session engine.
 type fakeCommander struct {
-	killed           []domain.SessionID
-	retired          []domain.SessionID
-	exited           []domain.SessionID
-	resumed          []domain.SessionID
-	ready            []domain.SessionID
-	sent             []domain.SessionID
-	sentMessages     []string
-	cleanupProjects  []domain.ProjectID
-	killErr          error
-	retireErr        error
-	retireFunc       func(context.Context, domain.SessionID) error
-	sendErr          error
-	sendFunc         func(domain.SessionID, string) error
-	cleanupErr       error
-	spawnErr         error
-	spawnRecord      domain.SessionRecord
-	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
-	spawnCalls       int
-	spawned          bool
-	spawnedCfg       ports.SpawnConfig
-	spawnCtx         context.Context
-	killsAtSpawn     int
-	restoreErr       error
-	restoreResult    sessionmanager.RestoreResult
-	readyErr         error
-	backgroundResult string
-	backgroundErr    error
-	backgroundFunc   func(backgroundTaskCall) (string, error)
-	backgroundCalls  []backgroundTaskCall
-	killFunc         func(domain.SessionID)
-	killMu           sync.Mutex
+	killed            []domain.SessionID
+	retired           []domain.SessionID
+	exited            []domain.SessionID
+	resumed           []domain.SessionID
+	ready             []domain.SessionID
+	sent              []domain.SessionID
+	sentMessages      []string
+	cleanupProjects   []domain.ProjectID
+	killErr           error
+	retireErr         error
+	retireFunc        func(context.Context, domain.SessionID) error
+	sendErr           error
+	sendFunc          func(domain.SessionID, string) error
+	cleanupErr        error
+	spawnErr          error
+	spawnWaitsForCtx  bool
+	spawnHook         func(context.Context)
+	spawnRecord       domain.SessionRecord
+	requestKillResult *sessionmanager.KillResult
+	spawnFunc         func(ports.SpawnConfig) domain.SessionRecord
+	spawnCalls        int
+	spawned           bool
+	spawnedCfg        ports.SpawnConfig
+	spawnCtx          context.Context
+	killsAtSpawn      int
+	restoreErr        error
+	restoreResult     sessionmanager.RestoreResult
+	readyErr          error
+	backgroundResult  string
+	backgroundErr     error
+	backgroundFunc    func(backgroundTaskCall) (string, error)
+	backgroundCalls   []backgroundTaskCall
+	killFunc          func(domain.SessionID)
+	killMu            sync.Mutex
 }
 
 type backgroundTaskCall struct {
@@ -2590,6 +2664,13 @@ type backgroundTaskCall struct {
 
 func (f *fakeCommander) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
 	f.spawnCtx = ctx
+	if f.spawnHook != nil {
+		f.spawnHook(ctx)
+	}
+	if f.spawnWaitsForCtx {
+		<-ctx.Done()
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ctx.Err())
+	}
 	if f.spawnErr != nil {
 		return domain.SessionRecord{}, 0, 0, f.spawnErr
 	}
@@ -2610,19 +2691,6 @@ func (*fakeCommander) PrepareTaskWorkspace(context.Context, domain.ProjectRecord
 }
 func (*fakeCommander) CancelTaskPreparation(context.Context, domain.TaskPreparationToken) error {
 	return nil
-}
-func (*fakeCommander) SwitchAgent(context.Context, domain.SessionID, sessionmanager.SwitchAgentConfig) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
-}
-
-func (*fakeCommander) RecoverAgentSwitch(context.Context, domain.SessionID, domain.AgentSwitchID) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
-}
-func (*fakeCommander) ListAgentSwitches(context.Context, domain.SessionID) ([]domain.AgentSwitch, error) {
-	return nil, nil
-}
-func (*fakeCommander) SubmitAgentHandoff(context.Context, domain.SessionID, domain.AgentSwitchID, domain.AgentGenerationID, json.RawMessage) (domain.AgentSwitch, error) {
-	return domain.AgentSwitch{}, nil
 }
 func (f *fakeCommander) RestoreWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error) {
 	if f.restoreErr != nil {
@@ -2905,6 +2973,55 @@ func TestSpawnOrchestratorCleanPreservesCancellationForReplacement(t *testing.T)
 	}
 }
 
+// A clean replacement runs the retired orchestrator's Cleanup before the
+// spawn extends the request's budget; the request used to die at its base
+// budget while the Cleanup ran.
+func TestSpawnOrchestratorCleanBudgetCoversTheRetiredOrchestratorsCleanup(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{PreRemove: []string{"make clean"}}}
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{
+		retireFunc: func(context.Context, domain.SessionID) error {
+			time.Sleep(80 * time.Millisecond)
+			return nil
+		},
+		spawnHook: func(ctx context.Context) { spawnErr = ctx.Err() },
+	}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", true, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("replacement spawn context Err() = %v, want live after the retirement's Cleanup", spawnErr)
+	}
+}
+
+// The spawn's own extension, from its own start, is not capped by the
+// orchestrator start's earlier one.
+func TestSpawnOrchestratorLeavesTheSpawnsOwnBudgetExtensionUncapped(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 30*time.Millisecond)
+	defer release()
+	var spawnErr error
+	fc := &fakeCommander{spawnHook: func(ctx context.Context) {
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 300*time.Millisecond)
+		defer cancel()
+		time.Sleep(100 * time.Millisecond)
+		spawnErr = ctx.Err()
+	}}
+	svc := &Service{manager: fc, store: st}
+	if _, err := svc.SpawnOrchestrator(ctx, "mer", false, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if spawnErr != nil {
+		t.Fatalf("spawn context Err() = %v, want live within the spawn's own extension", spawnErr)
+	}
+}
+
 func TestSpawnOrchestratorCleanPreservesPersistedMode(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
@@ -3118,6 +3235,34 @@ func TestSpawnStillRejectsFreshUnauthorizedCodexAccount(t *testing.T) {
 	}
 	if fc.spawnCalls != 0 {
 		t.Fatalf("manager.Spawn calls = %d, want fresh unauthorized Codex account blocked", fc.spawnCalls)
+	}
+}
+
+// The readiness gate reads the computer's own Codex login. A task that will run
+// on a saved account does not use that login, so its state is not a reason to
+// refuse; the launch checks the account it runs on.
+func TestSpawnOnASavedCodexAccountIgnoresTheComputersLogin(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	fc := &fakeCommander{}
+	readiness := &fakeAgentReadiness{snapshot: domain.AgentReadinessSnapshot{
+		ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled},
+		Authentication: domain.AgentAuthenticationObservation{
+			State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh,
+		},
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, AgentReadiness: readiness})
+	var asked []string
+	svc.SetComputerLoginCheck(func(_ context.Context, harness domain.AgentHarness, accountID string) bool {
+		asked = append(asked, string(harness)+":"+accountID)
+		return false
+	})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if fc.spawnCalls != 1 || len(asked) != 1 || asked[0] != "codex:" {
+		t.Fatalf("spawn calls = %d, asked %v; want the saved default to launch", fc.spawnCalls, asked)
 	}
 }
 
@@ -3583,6 +3728,22 @@ func TestSpawnEmitsTypedErrorCodeOnFailure(t *testing.T) {
 	}
 }
 
+// A spawn whose request budget runs out before it extends it (its project's
+// Setup steps) timed out; it is not a cancellation by the client.
+func TestSpawnReportsTimeoutWhenTheBaseRequestBudgetRunsOut(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{spawnWaitsForCtx: true}, Store: st, Clock: func() time.Time { return time.Unix(1700000000, 0).UTC() }})
+	ctx, _, release := ports.NewSpawnRequestContext(context.Background(), 20*time.Millisecond)
+	defer release()
+
+	_, _, _, err := svc.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex})
+	var e *apierr.Error
+	if !errors.As(err, &e) || e.Code != "SPAWN_TIMEOUT" {
+		t.Fatalf("Spawn error = %v, want SPAWN_TIMEOUT", err)
+	}
+}
+
 // TestSpawnOrchestratorUnknownProjectReturns404 is the orchestrator-side guard
 // for Bug 1: same pre-validation, same typed envelope.
 func TestSpawnOrchestratorUnknownProjectReturns404(t *testing.T) {
@@ -3625,24 +3786,13 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
+		{"delivery unconfirmed", fmt.Errorf("send mer-1: %w", sessionmanager.ErrDeliveryUnconfirmed), apierr.KindConflict, "SESSION_DELIVERY_UNCONFIRMED"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
+		{"composer busy", fmt.Errorf("send mer-1: %w", sessionmanager.ErrComposerBusy), apierr.KindConflict, "SESSION_COMPOSER_BUSY"},
 		{"agent exited", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAgentExited), apierr.KindConflict, "AGENT_EXITED"},
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
 		{"provider resume failed", fmt.Errorf("resume agent mer-1: %w", ports.ErrChatResumeFailed), apierr.KindConflict, "CHAT_RESUME_FAILED"},
-		{"target agent unauthorized", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrTargetAgentUnauthorized), apierr.KindInvalid, "TARGET_AGENT_UNAUTHORIZED"},
-		{"worker session required", fmt.Errorf("switch agent mer-orchestrator: %w", sessionmanager.ErrUnsupportedSwitchKind), apierr.KindInvalid, "WORKER_SESSION_REQUIRED"},
-		{"unsupported switch harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrUnsupportedSwitchHarness), apierr.KindInvalid, "UNSUPPORTED_SWITCH_HARNESS"},
-		{"already using harness", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrAlreadyUsingHarness), apierr.KindConflict, "ALREADY_USING_HARNESS"},
-		{"switch not found", fmt.Errorf("get switch: %w", sessionmanager.ErrSwitchNotFound), apierr.KindNotFound, "AGENT_SWITCH_NOT_FOUND"},
-		{"stale handoff", fmt.Errorf("submit handoff: %w", sessionmanager.ErrStaleHandoff), apierr.KindConflict, "STALE_AGENT_HANDOFF"},
-		{"invalid handoff", fmt.Errorf("submit handoff: %w", sessionmanager.ErrInvalidAgentHandoff), apierr.KindInvalid, "INVALID_AGENT_HANDOFF"},
-		{"switch delivery unconfirmed", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchDeliveryUnconfirmed), apierr.KindConflict, "AGENT_SWITCH_DELIVERY_UNCONFIRMED"},
-		{"manager switch in progress", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchInProgress), apierr.KindConflict, "AGENT_SWITCH_IN_PROGRESS"},
-		{"manager switch shutting down", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchShuttingDown), apierr.KindConflict, "AGENT_SWITCH_UNAVAILABLE"},
-		{"manager switch unavailable", fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchUnavailable), apierr.KindConflict, "AGENT_SWITCH_UNAVAILABLE"},
-		{"switch in progress", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchInProgress), apierr.KindConflict, "AGENT_SWITCH_IN_PROGRESS"},
-		{"switch idempotency conflict", fmt.Errorf("switch agent mer-1: %w", domain.ErrAgentSwitchIdempotencyConflict), apierr.KindConflict, "AGENT_SWITCH_IDEMPOTENCY_CONFLICT"},
 		{"chat mode unsupported", fmt.Errorf("spawn: %w", ports.ErrChatUnsupported), apierr.KindConflict, "SESSION_MODE_UNSUPPORTED"},
 		{"chat recovery inconclusive with deadline", fmt.Errorf("resume agent mer-1: resume chat: %w: persistent ACP host: %w",
 			ports.ErrChatRecoveryInconclusive, fmt.Errorf("chat host ownership is inconclusive: %w", context.DeadlineExceeded)),
@@ -3819,43 +3969,6 @@ func TestToSpawnAPIErrorIsIdempotentForMappedErrors(t *testing.T) {
 	}
 	if firstErr.Code != "RUNTIME_CREATE_FAILED" || secondErr.Code != "RUNTIME_CREATE_FAILED" {
 		t.Fatalf("codes = %q / %q, want RUNTIME_CREATE_FAILED", firstErr.Code, secondErr.Code)
-	}
-}
-
-func TestToAPIErrorSwitchDeliveryUnconfirmedMessage(t *testing.T) {
-	err := fmt.Errorf("switch agent mer-1: confirm continuation: %w", sessionmanager.ErrSwitchDeliveryUnconfirmed)
-	mapped := toAPIError(err)
-
-	var apiError *apierr.Error
-	if !errors.As(mapped, &apiError) {
-		t.Fatalf("mapped = %v, want *apierr.Error", mapped)
-	}
-	if apiError.Kind != apierr.KindConflict {
-		t.Fatalf("kind = %v, want %v", apiError.Kind, apierr.KindConflict)
-	}
-	if apiError.Code != "AGENT_SWITCH_DELIVERY_UNCONFIRMED" {
-		t.Fatalf("code = %q, want AGENT_SWITCH_DELIVERY_UNCONFIRMED", apiError.Code)
-	}
-	const wantMessage = "The target agent started, but AO could not confirm that it accepted the continuation"
-	if apiError.Message != wantMessage {
-		t.Fatalf("message = %q, want %q", apiError.Message, wantMessage)
-	}
-}
-
-func TestToAPIErrorPreservesReportingOwnerAcrossMapping(t *testing.T) {
-	raw := ownership.Own(
-		fmt.Errorf("switch agent mer-1: %w", sessionmanager.ErrSwitchInProgress),
-		ownership.OwnerAgentSwitchSaga,
-	)
-
-	mapped := toAPIError(raw)
-
-	if got := ownership.OwnerOf(mapped); got != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("OwnerOf(mapped) = %q, want %q", got, ownership.OwnerAgentSwitchSaga)
-	}
-	var apiError *apierr.Error
-	if !errors.As(mapped, &apiError) || apiError.Code != "AGENT_SWITCH_IN_PROGRESS" {
-		t.Fatalf("mapped = %v, want AGENT_SWITCH_IN_PROGRESS", mapped)
 	}
 }
 
@@ -5598,7 +5711,7 @@ func TestToSessionWithFactsRemapsTransferredAliasReviewRuns(t *testing.T) {
 		CreatedAt: rec.UpdatedAt,
 	}}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5656,7 +5769,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 	}
 
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID])
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, st.prFacts[rec.ID], st.reviewRuns[rec.ID], false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5792,10 +5905,27 @@ func TestGetReconcilesWhenPersistedArtifactOutputHasNoFilesLeft(t *testing.T) {
 }
 
 func (f *fakeStore) GetSessionCleanupFacts(_ context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
+	f.getCleanupFactsCalls++
 	rec, ok := f.cleanupFacts[id]
 	return rec, ok, nil
 }
+
+func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
+	f.listCleanupFactsCalls++
+	f.cleanupFactsRequested = append(f.cleanupFactsRequested, ids...)
+	out := make(map[domain.SessionID]domain.SessionCleanupRecord, len(ids))
+	for _, id := range ids {
+		if rec, ok := f.cleanupFacts[id]; ok {
+			out[id] = rec
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	if f.requestKillResult != nil {
+		return *f.requestKillResult, nil
+	}
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err
 }

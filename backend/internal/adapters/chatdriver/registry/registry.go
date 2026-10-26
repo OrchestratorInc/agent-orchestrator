@@ -49,6 +49,9 @@ import (
 // Registry maps a harness to its Chat driver.
 type Registry struct {
 	drivers map[domain.AgentHarness]ports.ChatDriver
+	// plugins are the drivers' own agent plugins, each caching the executable
+	// it resolved.
+	plugins map[domain.AgentHarness]ports.AgentBinaryResolutionInvalidator
 }
 
 var _ ports.ChatDriverRegistry = (*Registry)(nil)
@@ -80,24 +83,55 @@ func New(drivers ...ports.ChatDriver) *Registry {
 // reuses the harness's existing agent plugin for binary resolution and auth, so
 // registration adds no second answer to "is this agent installed and logged in".
 func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
-	return New(
-		codexappserver.New(codex.New(), log),
-		claudeacp.New(claudecode.New(), log, onClaudeAuthRejected),
-		opencodeacp.New(opencode.New(), log),
-		opencodev2acp.New(opencodev2.New(), log),
-		droidacp.New(droid.New(), log),
-		kimiacp.New(kimi.New(), log),
-		kimchiacp.New(kimchi.New(), log),
-		piacp.New(pi.New(), log),
-		cursoracp.New(cursor.New(), log),
-		ompacp.New(omp.New(), log),
-		qwenacp.New(qwen.New(), log),
-		unrealchat.New(unrealagent.New(), log),
-		deepseekharnessacp.New(deepseekharness.New(), log),
-		commandcodeacp.New(commandcodeagent.New(), log),
-		copilotacp.New(copilot.New(), log),
-		agyacp.New(agy.New(), log),
-	)
+	r := New()
+	r.plugins = make(map[domain.AgentHarness]ports.AgentBinaryResolutionInvalidator)
+	add := func(driver ports.ChatDriver, plugin any) {
+		r.drivers[driver.Harness()] = driver
+		if invalidator, ok := plugin.(ports.AgentBinaryResolutionInvalidator); ok {
+			r.plugins[driver.Harness()] = invalidator
+		}
+	}
+	codexPlugin := codex.New()
+	add(codexappserver.New(codexPlugin, log), codexPlugin)
+	claudePlugin := claudecode.New()
+	add(claudeacp.New(claudePlugin, log, onClaudeAuthRejected), claudePlugin)
+	opencodePlugin := opencode.New()
+	add(opencodeacp.New(opencodePlugin, log), opencodePlugin)
+	opencodeV2Plugin := opencodev2.New()
+	add(opencodev2acp.New(opencodeV2Plugin, log), opencodeV2Plugin)
+	droidPlugin := droid.New()
+	add(droidacp.New(droidPlugin, log), droidPlugin)
+	kimiPlugin := kimi.New()
+	add(kimiacp.New(kimiPlugin, log), kimiPlugin)
+	kimchiPlugin := kimchi.New()
+	add(kimchiacp.New(kimchiPlugin, log), kimchiPlugin)
+	piPlugin := pi.New()
+	add(piacp.New(piPlugin, log), piPlugin)
+	cursorPlugin := cursor.New()
+	add(cursoracp.New(cursorPlugin, log), cursorPlugin)
+	ompPlugin := omp.New()
+	add(ompacp.New(ompPlugin, log), ompPlugin)
+	qwenPlugin := qwen.New()
+	add(qwenacp.New(qwenPlugin, log), qwenPlugin)
+	unrealPlugin := unrealagent.New()
+	add(unrealchat.New(unrealPlugin, log), unrealPlugin)
+	deepseekPlugin := deepseekharness.New()
+	add(deepseekharnessacp.New(deepseekPlugin, log), deepseekPlugin)
+	commandCodePlugin := commandcodeagent.New()
+	add(commandcodeacp.New(commandCodePlugin, log), commandCodePlugin)
+	copilotPlugin := copilot.New()
+	add(copilotacp.New(copilotPlugin, log), copilotPlugin)
+	agyPlugin := agy.New()
+	add(agyacp.New(agyPlugin, log), agyPlugin)
+	return r
+}
+
+// InvalidateBinaryResolution makes harness's driver resolve its executable
+// again, after an install changed which one sessions should run.
+func (r *Registry) InvalidateBinaryResolution(harness domain.AgentHarness) {
+	if plugin, ok := r.plugins[harness]; ok {
+		plugin.InvalidateBinaryResolution()
+	}
 }
 
 // Driver returns the driver for a harness.

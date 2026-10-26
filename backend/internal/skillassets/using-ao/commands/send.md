@@ -1,6 +1,11 @@
 # ao send
 
-Send a message to a running agent session. Use this to correct or direct a live agent mid-stream without killing and respawning it.
+Send a message to a running agent session without killing and respawning it.
+
+Plain `ao send` delivers a separate message. If a Chat session is busy with a
+running turn, the message is queued and delivered as its own turn after the
+current turn ends; it does not reach the running turn. To correct or redirect
+an agent mid-turn, use `--steer`.
 
 ## Syntax
 
@@ -48,16 +53,16 @@ outcome, not that the agent acted on the guidance.
 ## Examples
 
 ```bash
-# Send a correction to a running session
-ao send --session mer-3 --message "Focus only on the backend; ignore frontend files."
+# Correct a running agent mid-turn (starts a normal turn if it is idle)
+ao send --session mer-3 --steer --message "Focus only on the backend; ignore frontend files."
 ```
 
 ```bash
 # Give the agent new instructions mid-task
-ao send --session mer-3 --message "The issue is in session_manager.go line 142, not in the CLI. Investigate there."
+ao send --session mer-3 --steer --message "The issue is in session_manager.go line 142, not in the CLI. Investigate there."
 ```
 
 ```bash
-# Steer the active Chat turn, or start a normal turn if it is idle
-ao send --session mer-3 --steer --message "Use the daemon DTO as the source of truth."
+# Send a separate message (queued behind a running Chat turn)
+ao send --session mer-3 --message "When you finish, also update the changelog."
 ```

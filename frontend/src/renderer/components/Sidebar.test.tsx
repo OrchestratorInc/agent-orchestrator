@@ -31,6 +31,7 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
@@ -233,19 +234,6 @@ const exitedOrchestrator: WorkspaceSession = {
 	isTerminated: false,
 };
 
-function activeAgentSwitch(
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: "switch-1",
-		state: "starting_target",
-		targetHarness: "codex",
-		...overrides,
-	};
-}
-
 function sidebarPR(overrides: Partial<WorkspaceSession["prs"][number]> = {}): WorkspaceSession["prs"][number] {
 	return {
 		url: "https://github.com/acme/project-one/pull/7",
@@ -406,6 +394,31 @@ it("keeps new projects at the top across refreshes and restores the order after 
 	expect(rows().map((row) => row.getAttribute("data-project-id"))).toEqual(["zulu", "alpha", "beta"]);
 });
 
+it("shows the creation order before the new project snapshot arrives and preserves it through refreshes", () => {
+	const alpha = { ...workspace, id: "alpha", name: "Alpha", sessions: [] };
+	const beta = { ...workspace, id: "beta", name: "Beta", sessions: [] };
+	const newest = { ...workspace, id: "zulu", name: "Zulu", sessions: [] };
+	const olderCloud = { ...workspace, id: "older-cloud", name: "Older cloud", kind: "cloud" as const, sessions: [] };
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const noop = vi.fn().mockResolvedValue(undefined);
+	const tree = (workspaces: WorkspaceSummary[]) => (
+		<QueryClientProvider client={client}><TooltipProvider><SidebarProvider>
+			<Sidebar workspaces={workspaces} onCloneProject={noop} onCreateProject={noop} onInitializeProject={noop} onRemoveProject={noop} onCreateRemoteProject={noop} onInitializeRemoteProject={noop} />
+		</SidebarProvider></TooltipProvider></QueryClientProvider>
+	);
+	window.localStorage.setItem("ao.sidebar.project-order", JSON.stringify(["beta", "alpha", "zulu"]));
+	useSidebarOrderStore.getState().setProjectOrder(["beta", "alpha", "zulu"]);
+	const view = render(tree([alpha, beta]));
+	act(() => useSidebarOrderStore.getState().moveProjectToTop("zulu"));
+	view.rerender(tree([alpha, beta, olderCloud, newest]));
+	const ids = () => Array.from(document.querySelectorAll("[data-project-drop-target][data-project-id]"), (row) => row.getAttribute("data-project-id"));
+	expect(ids()).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
+	view.rerender(tree([]));
+	view.rerender(tree([alpha, beta, olderCloud, newest]));
+	expect(ids()).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
+	expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
+});
+
 it.each(["invalid JSON", '{"unexpected":true}', '[4,null]'])("ignores invalid saved project order: %s", (saved) => {
 	window.localStorage.setItem("ao.sidebar.project-order", saved);
 	renderSidebar();
@@ -487,6 +500,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
@@ -515,7 +529,10 @@ beforeEach(() => {
 		error: undefined,
 	});
 	postMock.mockReset();
-	postMock.mockImplementation(async (path: string, options?: { body?: { importKind?: string; path?: string } }) => {
+	postMock.mockImplementation(async (path: string, options?: { body?: { importKind?: string; path?: string; remoteUrl?: string } }) => {
+		if (path === "/api/v1/projects/clone/check") {
+			return { data: { remoteUrl: options?.body?.remoteUrl ?? "", path: "/repo/web-app", exists: false, canUseExisting: false } };
+		}
 		if (path === "/api/v1/projects/clone/prepare") {
 			return {
 				data: { path: "/repo/web-app", remoteUrl: "git@github.com:acme/web-app.git", preparationId: "prep-web-app" },
@@ -626,7 +643,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		const signInControls = screen.getAllByLabelText("Sign in to AO Cloud");
+		const signInControls = screen.getAllByLabelText("Sign in to cloud");
 		expect(signInControls).toHaveLength(2);
 		const activeControl = signInControls.find((control) => control.tabIndex === 0);
 		expect(activeControl).toBeDefined();
@@ -643,23 +660,22 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("hides cloud account controls when the daemon reports the cloud offering off", () => {
+	it("keeps AO account controls visible for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
 		cloudSessionState.status = "authenticated";
 		cloudSessionState.session = { user: { email: "user@example.com" } };
 		renderSidebar();
 
-		expect(screen.queryByLabelText("Signed in as user@example.com")).not.toBeInTheDocument();
+		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("shows AO sign-in for developer-mode remote hosts when Cloud execution is off", () => {
+	it("shows AO sign-in for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
-		useUiStore.setState({ developerMode: true });
 		renderSidebar();
 
-		expect(screen.getAllByLabelText("Sign in to AO Cloud")).toHaveLength(2);
+		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
 	});
 
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
@@ -740,6 +756,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
+		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "0");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "0");
 		expect(expandedButton?.parentElement).not.toHaveAttribute("aria-hidden");
@@ -754,6 +771,7 @@ describe("Sidebar", () => {
 		const expandedButton = settingsButtons.find((button) => button.textContent?.includes("Settings"));
 		const collapsedButton = settingsButtons.find((button) => !button.textContent?.includes("Settings"));
 
+		expect(screen.getByTestId("awake-button")).toHaveAttribute("tabindex", "-1");
 		expect(settingsButtons).toHaveLength(2);
 		expect(expandedButton).toHaveAttribute("tabindex", "-1");
 		expect(expandedButton?.closest('[aria-hidden="true"]')).toBeInTheDocument();
@@ -821,23 +839,6 @@ describe("Sidebar", () => {
 			title: "Resume agent",
 			body: "resume request failed",
 			tone: "error",
-		});
-	});
-
-	it("opens an exited orchestrator without resuming while its agent switch is active", async () => {
-		const user = userEvent.setup();
-		const switchingOrchestrator: WorkspaceSession = {
-			...exitedOrchestrator,
-			activeAgentSwitch: activeAgentSwitch(),
-		};
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [switchingOrchestrator] }] });
-
-		await user.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
-
-		expect(resumeOrchestratorMock).not.toHaveBeenCalled();
-		expect(navigateMock).toHaveBeenCalledWith({
-			to: "/projects/$projectId/sessions/$sessionId",
-			params: { projectId: "proj-1", sessionId: "proj-1-orch" },
 		});
 	});
 
@@ -1038,7 +1039,7 @@ describe("Sidebar", () => {
 		expect(document.querySelector(`li[data-project-id="${STANDALONE_WORKSPACE_ID}"]`)).toBeNull();
 		const section = document.querySelector("[data-scratchpad-section]")!;
 		expect(section).toContainElement(screen.getByText("baby"));
-		expect(section).toHaveClass("mb-2", "shrink-0");
+		expect(section).toHaveClass("mb-2", "min-h-0");
 		expect(screen.queryByRole("button", { name: /show (more|fewer) agents/i })).not.toBeInTheDocument();
 		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("baby"));
 	});
@@ -1136,7 +1137,7 @@ describe("Sidebar", () => {
 		expect(scroller).toHaveClass("overflow-y-auto");
 		expect(scroller.style.height).toBe("");
 		expect(scroller.style.maxHeight).toBe("");
-		expect(document.querySelector("[data-scratchpad-section]")).toHaveStyle({ maxHeight: "calc(50cqh - var(--space-2))" });
+		expect(document.querySelector<HTMLElement>("[data-scratchpad-section]")!.style.maxHeight).toBe("");
 
 		await user.click(screen.getByRole("button", { name: "Show 3 more agents" }));
 
@@ -1583,7 +1584,7 @@ describe("Sidebar", () => {
 		await user.click(screen.getByRole("button", { name: "Continue" }));
 
 		expect(await screen.findByRole("dialog", { name: "Set up project" })).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: "Clone" }));
+		await user.click(screen.getByRole("button", { name: "Create and start" }));
 		await waitFor(() => expect(onCreateProject).toHaveBeenCalledWith(expect.objectContaining({
 			path: "/repo/web-app",
 			clonePreparationId: "prep-web-app",
@@ -2522,14 +2523,14 @@ describe("Sidebar", () => {
 		expect(section).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Scratchpad" })).toBeVisible();
 		expect(section).toContainElement(screen.getByText("adhoc one"));
-		// Scratchpad keeps a bounded, non-shrinking slot; Projects flexes into the rest
-		// and scrolls itself, so neither section can hide the other.
-		expect(section).toHaveClass("shrink-0");
-		expect(section.style.maxHeight).toBe("calc(50cqh - var(--space-2))");
+		// Both sections sit in auto-sized grid rows: each takes its content height,
+		// spare space goes to whichever needs it, and a tie splits the column evenly.
+		expect(section).not.toHaveClass("shrink-0");
+		expect(section.style.maxHeight).toBe("");
 		const projects = screen.getByTestId("sidebar-projects-scroller");
 		expect(projects).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
 		expect(projects.style.maxHeight).toBe("");
-		expect(section.parentElement).toHaveClass("flex", "flex-col", "min-h-0");
+		expect(section.parentElement).toHaveClass("grid", "min-h-0", "auto-rows-[minmax(0,auto)]");
 		expect(section.parentElement?.style.getPropertyValue("--sidebar-scratchpad-reserved-height")).toBe("");
 	});
 
@@ -2640,6 +2641,36 @@ describe("Sidebar", () => {
 		fireEvent.pointerUp(window);
 		expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
 		expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
+	});
+
+	it("never drops the floor below SIDEBAR_MIN_WIDTH and grows when the brand moves right", async () => {
+		// Titlebar brand as in native fullscreen: no traffic-light reserve, so the
+		// label alone would fit a sidebar narrower than the footer needs.
+		const brand = document.createElement("span");
+		brand.setAttribute("data-sidebar-brand", "");
+		const label = document.createElement("span");
+		label.setAttribute("data-brand-label", "");
+		brand.append(label);
+		document.body.append(brand);
+		brand.getBoundingClientRect = () => ({ width: 130 }) as DOMRect;
+		label.getBoundingClientRect = () => ({ left: 60 }) as DOMRect;
+		Object.defineProperty(label, "scrollWidth", { value: 100 });
+		try {
+			renderSidebar();
+			const gap = document.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+			fireEvent.pointerDown(screen.getByTestId("resize-handle"), { clientX: SIDEBAR_DEFAULT_WIDTH });
+			fireEvent.pointerMove(window, { clientX: 0 });
+			fireEvent.pointerUp(window);
+			expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH}px`);
+
+			// Leaving fullscreen moves the label right; TitlebarNav's resize nudge
+			// must grow the sidebar to fit it (60 → 140, + 100 label + 13 gap).
+			label.getBoundingClientRect = () => ({ left: 140 }) as DOMRect;
+			window.dispatchEvent(new Event("resize"));
+			await waitFor(() => expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe("253px"));
+		} finally {
+			brand.remove();
+		}
 	});
 
 	it("paints the dot from its board section while activity drives the pulse", () => {
@@ -2783,27 +2814,6 @@ describe("Sidebar", () => {
 		expect(idleDraftDot).toHaveClass("bg-status-in-review");
 		expect(idleActivityDot).not.toHaveClass("animate-status-pulse");
 		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
-	});
-
-	it("keeps a stopped agent dot neutral while showing switch progress separately", () => {
-		renderSidebar({
-			workspaces: [{
-				...workspace,
-				sessions: [{
-					...session,
-					status: "exited",
-					activity: { state: "exited", lastActivityAt: "2026-06-30T00:00:00Z" },
-					activeAgentSwitch: activeAgentSwitch(),
-				}],
-			}],
-		});
-
-		const row = screen.getByLabelText("Open fix login");
-		expect(row).toHaveAccessibleDescription("Switching to Codex");
-		expect(within(row).getByText("Switching to Codex")).toBeInTheDocument();
-		const dot = row.querySelector<HTMLElement>("[data-session-status]");
-		expect(dot).toHaveClass("bg-passive");
-		expect(dot).not.toHaveClass("animate-status-pulse");
 	});
 
 	it("shows sessions on load and hides them once collapsed", async () => {

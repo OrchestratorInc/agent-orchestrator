@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, ExternalLink, Loader2, Minus } from "lucide-react";
+import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useCloudBilling, cloudBillingQueryKey } from "../../hooks/useCloudBilling";
@@ -171,9 +171,10 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							t("settings.billing.freeLocal"),
 							t("settings.billing.freeAgents"),
 							t("settings.billing.freeOrchestrator"),
-							t("settings.billing.freeNoCloud"),
-							t("settings.billing.freeHosts"),
+							t("settings.billing.freeDevices"),
+							t("settings.billing.freeNetwork"),
 						]}
+						excluded={[t("settings.billing.freeNoCloud")]}
 						current={currentPlan === "free"}
 						action={endsAt ? (
 							<span className="text-control text-settings-muted">{t("settings.billing.freeStarts", { date: endsAt })}</span>
@@ -227,12 +228,14 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						name={t("settings.billing.planEnterprise")}
 						amount={t("settings.billing.enterprisePrice")}
 						features={[
-							t("settings.billing.enterpriseSessions"),
-							t("settings.billing.enterpriseOrchestrators"),
-							t("settings.billing.enterpriseHours"),
-							t("settings.billing.enterpriseCoder"),
+							t("settings.billing.enterpriseCollaborate"),
 							t("settings.billing.enterpriseSso"),
 							t("settings.billing.enterpriseSupport"),
+						]}
+						cloudLimits={[
+							t("settings.billing.enterpriseProjects"),
+							t("settings.billing.enterpriseAgents"),
+							t("settings.billing.enterpriseHours"),
 						]}
 						current={false}
 						action={(
@@ -415,10 +418,11 @@ function PlanGlow() {
 
 /**
  * One plan as a column: name and status, a large price, the plan action, then
- * what it adds over the plan below it. The current or recommended plan sits on
- * the raised surface; the rest stay on the quiet one, with no outlines.
+ * what it adds over the plan below it, what it leaves out, and its limits on
+ * cloud agents (local agents are never limited). The current or recommended
+ * plan sits on the raised surface; the rest stay on the quiet one, with no outlines.
  */
-function PlanCard({ plan, name, amount, interval, intro, features, current, recommended, action, t }: {
+function PlanCard({ plan, name, amount, interval, intro, features, excluded = [], cloudLimits = [], current, recommended, action, t }: {
 	/** Stable id (not the translated name) for tests and hooks. */
 	plan: string;
 	name: string;
@@ -426,11 +430,16 @@ function PlanCard({ plan, name, amount, interval, intro, features, current, reco
 	interval?: string;
 	intro?: string;
 	features: string[];
+	/** What the plan leaves out, shown without a check. */
+	excluded?: string[];
+	/** Limits that apply only to cloud agents, grouped under their own label. */
+	cloudLimits?: string[];
 	current: boolean;
 	recommended?: boolean;
 	action: React.ReactNode;
 	t: TFunction;
 }) {
+	const cloudLabelId = useId();
 	return (
 		<div
 			data-testid="plan-card"
@@ -460,15 +469,44 @@ function PlanCard({ plan, name, amount, interval, intro, features, current, reco
 			</div>
 			<div className="flex h-8 flex-col justify-center">{action}</div>
 			<p className="min-h-4 text-xs text-settings-muted">{intro}</p>
-			<ul className="flex flex-1 flex-col gap-2 border-t border-border pt-3">
-				{features.map((feature) => (
-					<li key={feature} className="flex items-start gap-2 text-control leading-5 text-settings-label">
-						<Check className="mt-0.5 size-icon-sm shrink-0 text-settings-muted" aria-hidden="true" />
-						{feature}
-					</li>
-				))}
-			</ul>
+			<div className="flex flex-1 flex-col gap-4 border-t border-border pt-3">
+				{features.length + excluded.length > 0 ? <ul className="flex flex-col gap-2">
+					{features.map((feature) => (
+						<PlanFeature key={feature} text={feature} />
+					))}
+					{excluded.map((feature) => (
+						<PlanFeature key={feature} text={feature} excluded />
+					))}
+				</ul> : null}
+				{cloudLimits.length > 0 ? (
+					<div className="flex flex-col gap-2">
+						<p id={cloudLabelId} className="text-xs text-settings-muted">{t("settings.billing.cloudLimits")}</p>
+						<ul aria-labelledby={cloudLabelId} className="flex flex-col gap-2">
+							{cloudLimits.map((limit) => (
+								<PlanFeature key={limit} text={limit} />
+							))}
+						</ul>
+					</div>
+				) : null}
+			</div>
 		</div>
+	);
+}
+
+/**
+ * One plan line: a check (or a dash for what the plan leaves out) centered on
+ * the first line of text, so wrapped lines keep the icon beside their start.
+ */
+function PlanFeature({ text, excluded }: { text: string; excluded?: boolean }) {
+	const Icon = excluded ? Minus : Check;
+	return (
+		// Not cn(): tailwind-merge reads text-control and the color as one group and drops the size.
+		<li className={`flex items-start gap-2 text-control leading-5 ${excluded ? "text-settings-muted" : "text-settings-label"}`}>
+			<span className="flex h-5 shrink-0 items-center">
+				<Icon className="size-icon-sm text-settings-muted" aria-hidden="true" />
+			</span>
+			{text}
+		</li>
 	);
 }
 
@@ -525,28 +563,30 @@ function planName(plan: string): string {
 
 /**
  * What a paid plan includes: what cloud adds over local (Starter lists it, Pro
- * builds on Starter), then the limits from its Stripe product.
+ * builds on Starter), then the limits from its Stripe product. The control
+ * plane enforces those limits only on cloud sessions, so they are listed apart.
+ * Session-hour windows and resets are left to the Usage section.
  */
-function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro?: string; features: string[] } {
+function planFeatures(plan: string, limits: CloudCpPlanLimits, t: TFunction): { intro?: string; features: string[]; cloudLimits: string[] } {
 	const starter = plan === RECOMMENDED_PLAN;
 	const pro = plan === "pro";
 	const included = starter
-		? [t("settings.billing.cloudAway"), t("settings.billing.cloudSandboxes"), t("settings.billing.cloudGithub"), t("settings.billing.starterHosts")]
+		? [
+			t("settings.billing.cloudAway"), t("settings.billing.cloudGithub"),
+			t("settings.billing.starterRelay"), t("settings.billing.starterDevices"),
+		]
 		: pro
-			? [t("settings.billing.proHosts")]
+			? [t("settings.billing.proCoder")]
 			: [];
-	const features = [
-		...included,
-		t("settings.billing.featureRunning", { count: runningSlots(limits) }),
-		t("settings.billing.featureTotal", { count: limits.maxActiveSandboxes }),
-		t("settings.billing.featureOrchestrators", { count: limits.orchestratorSlots }),
-		t("settings.billing.featureWindow", { hours: limits.windowSessionHours, window: limits.windowHours }),
-		t("settings.billing.featureWeekly", { hours: limits.weeklySessionHours }),
-		...(limits.manualResetsPerMonth > 0 ? [t("settings.billing.featureResets", { count: limits.manualResetsPerMonth })] : []),
+	const cloudLimits = [
+		t("settings.billing.featureProjects", { count: limits.orchestratorSlots }),
+		// Agents run in the plan's running slots; each cloud project's orchestrator is on top.
+		t("settings.billing.featureAgents", { count: runningSlots(limits) }),
 	];
 	return {
 		intro: starter ? t("settings.billing.everythingInFree") : pro ? t("settings.billing.everythingInStarter") : undefined,
-		features,
+		features: included,
+		cloudLimits,
 	};
 }
 

@@ -49,7 +49,8 @@ const commitCoordinatedSessionInterfaceSQL = `UPDATE ao_sessions AS session
 			  AND transition.claimed_by = $4
 			  AND transition.phase = 'source_stopped'
 			  AND transition.org_id = session.org_id
-			  AND transition.session_id = session.id`
+			  AND transition.session_id = session.id
+			RETURNING session.id`
 
 // StartSessionInterfaceTransition durably claims a session for an interface
 // handoff. It returns the committed transition and whether a new row was
@@ -127,11 +128,20 @@ func (s *Store) StartSessionInterfaceTransition(
 // Stop-now cancels turns that have not reached the Chat controller. The active
 // turn is interrupted by the worker; queued turns must not be claimed by the
 // replacement TUI after the handoff commits.
+//
+// The session's task is the exception while it never ran: a session created
+// in Chat queues its create prompt as its first turn (marked sessionTask, see
+// queueInitialChatTurnTx) and launches its terminal without it, so that turn
+// stays queued for the terminal's turn forwarder, which delivers it once the
+// agent starts. A session whose terminal launch still carries the prompt
+// (created before Chat sessions launched without it) gets it on the command
+// line, so its turn is cancelled with the rest.
 func interruptQueuedChatTurns(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
-	rows, err := tx.Query(ctx, `UPDATE ao_turns
+	rows, err := tx.Query(ctx, `UPDATE ao_turns turn
 		SET state = 'completed', completed_at = now(), updated_at = now()
-		WHERE org_id = $1 AND session_id = $2 AND state = 'queued'
-		RETURNING id, attempt_count`, orgID, sessionID)
+		WHERE turn.org_id = $1 AND turn.session_id = $2 AND turn.state = 'queued'
+		  AND NOT (`+unrunSessionTaskTurnSQL+`)
+		RETURNING turn.id, turn.attempt_count`, orgID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -162,6 +172,22 @@ func interruptQueuedChatTurns(ctx context.Context, tx pgx.Tx, orgID, sessionID s
 	}
 	return nil
 }
+
+// unrunSessionTaskTurnSQL is the condition that turn (an ao_turns alias, of
+// session $2 in organization $1) is the session's never-claimed task: the turn
+// its create queued for the prompt of a session that launches its terminal
+// without it.
+const unrunSessionTaskTurnSQL = `turn.attempt_count = 0
+		  AND EXISTS (
+			SELECT 1 FROM ao_events event
+			WHERE event.org_id = $1 AND event.session_id = $2
+			  AND event.sequence = turn.user_message_sequence AND event.type = 'chat.user_message'
+			  AND event.payload ->> '` + sessionTaskEventKey + `' = 'true'
+		  )
+		  AND EXISTS (
+			SELECT 1 FROM ao_sessions session
+			WHERE session.org_id = $1 AND session.id = $2 AND session.prompt = ''
+		  )`
 
 // GetActiveSessionInterfaceTransition returns the active transition for a
 // session, if any, under the caller's tenant context.
@@ -434,32 +460,41 @@ func deliverInterfaceTransitionMessages(ctx context.Context, tx pgx.Tx, orgID, s
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	delivered := false
-	for rows.Next() {
-		var messageID int64
-		var turnID string
-		var sequence int64
-		var modeCap string
-		var denied []string
-		if err := rows.Scan(&messageID, &turnID, &sequence, &modeCap, &denied); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO ao_turns (
-			id, org_id, session_id, user_message_sequence, mode_cap, denied_commands
-		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
-		ON CONFLICT (id) DO NOTHING`, turnID, orgID, sessionID, sequence, modeCap, nonNilStrings(denied)); err != nil {
-			return normalizeConstraintError(err)
-		}
-		if _, err := tx.Exec(ctx, `UPDATE ao_interface_transition_messages SET delivered_at = now() WHERE id = $1`, messageID); err != nil {
-			return err
-		}
-		delivered = true
+	// Read every held message before writing: a pgx transaction is one
+	// connection, which rejects a statement while a result set is still open
+	// ("conn busy").
+	type heldMessage struct {
+		id       int64
+		turnID   string
+		sequence int64
+		modeCap  string
+		denied   []string
 	}
+	var held []heldMessage
+	for rows.Next() {
+		var message heldMessage
+		if err := rows.Scan(&message.id, &message.turnID, &message.sequence, &message.modeCap, &message.denied); err != nil {
+			rows.Close()
+			return err
+		}
+		held = append(held, message)
+	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if delivered {
+	for _, message := range held {
+		if _, err := tx.Exec(ctx, `INSERT INTO ao_turns (
+			id, org_id, session_id, user_message_sequence, mode_cap, denied_commands
+		) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6)
+		ON CONFLICT (id) DO NOTHING`, message.turnID, orgID, sessionID, message.sequence, message.modeCap, nonNilStrings(message.denied)); err != nil {
+			return normalizeConstraintError(err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE ao_interface_transition_messages SET delivered_at = now() WHERE id = $1`, message.id); err != nil {
+			return err
+		}
+	}
+	if len(held) > 0 {
 		if _, err := tx.Exec(ctx, `SELECT pg_notify('ao_worker_work', $1)`, sessionID); err != nil {
 			return err
 		}
@@ -472,6 +507,22 @@ func deliverInterfaceTransitionMessages(ctx context.Context, tx pgx.Tx, orgID, s
 type CoordinatedInterfaceTransition struct {
 	domain.SessionInterfaceTransition
 	Harness string
+	// SessionActivityState is the session's provider-reported activity when
+	// the transition was claimed. A drain uses it only to decide how long to
+	// wait for a source that cannot prove it is idle, never to stop a source.
+	SessionActivityState string
+	// SessionActivityUnconfirmed reports an "active" state that AO set when it
+	// typed a message into the terminal and that no provider hook has
+	// confirmed since (activity_source_request_id is still set).
+	SessionActivityUnconfirmed bool
+	// SessionTerminated reports that the session was deleted (archived) when
+	// the transition was claimed: no worker will ever run its handoff steps.
+	SessionTerminated bool
+	// LiveWorkerEpoch is the epoch of the session's connected worker when a
+	// recovery_required transition was claimed, or 0 when none is connected
+	// (read for recovery only). A new epoch means a new worker came back, so a
+	// recovery waiting out its backoff tries again at once.
+	LiveWorkerEpoch int64
 }
 
 // ClaimCoordinatedInterfaceTransitions atomically claims one active or
@@ -490,7 +541,9 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 		rows, err := tx.Query(
 			ctx,
 			`WITH candidate AS (
-				SELECT t.id, session.harness
+				SELECT t.id, session.harness, session.activity_state,
+					session.activity_source_request_id IS NOT NULL AS activity_unconfirmed,
+					session.is_terminated
 				FROM ao_interface_transitions t
 				JOIN ao_sessions session
 					ON session.org_id = t.org_id AND session.id = t.session_id
@@ -514,7 +567,9 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				t.target_interface, t.policy, t.phase, t.native_conversation_id,
 				t.selected_model, t.selected_effort,
 				t.error_code, t.error_detail, t.notice_acknowledged_at,
-				t.created_at, t.updated_at, t.completed_at, candidate.harness`,
+				t.created_at, t.updated_at, t.completed_at, candidate.harness,
+				candidate.activity_state, candidate.activity_unconfirmed,
+				candidate.is_terminated`,
 			owner,
 			limit,
 			lease,
@@ -525,7 +580,8 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 		defer rows.Close()
 		for rows.Next() {
 			var transition domain.SessionInterfaceTransition
-			var harness string
+			var harness, activityState string
+			var activityUnconfirmed, terminated bool
 			if err := rows.Scan(
 				&transition.ID,
 				&transition.OrgID,
@@ -544,20 +600,141 @@ func (s *Store) ClaimCoordinatedInterfaceTransitions(
 				&transition.UpdatedAt,
 				&transition.CompletedAt,
 				&harness,
+				&activityState,
+				&activityUnconfirmed,
+				&terminated,
 			); err != nil {
 				return err
 			}
 			transitions = append(transitions, CoordinatedInterfaceTransition{
 				SessionInterfaceTransition: transition,
 				Harness:                    harness,
+				SessionActivityState:       activityState,
+				SessionActivityUnconfirmed: activityUnconfirmed,
+				SessionTerminated:          terminated,
 			})
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		for index := range transitions {
+			transition := &transitions[index]
+			if transition.Phase != domain.SessionInterfaceTransitionRecovery {
+				continue
+			}
+			// Worker connections are tenant rows: read them in the
+			// transition's tenant.
+			if _, err := tx.Exec(ctx, `SELECT set_config('ao.org_id', $1, true)`, transition.OrgID); err != nil {
+				return err
+			}
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(max(epoch), 0)
+				FROM ao_worker_connections
+				WHERE org_id = $1 AND session_id = $2 AND disconnected_at IS NULL`,
+				transition.OrgID, transition.SessionID).Scan(&transition.LiveWorkerEpoch); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return transitions, nil
+}
+
+// TerminatedInterfaceMessageError is what each prompt held by a handoff of a
+// deleted session says: it is shown as a failed turn, so the prompt is neither
+// lost silently nor run unasked once the session is restored.
+const TerminatedInterfaceMessageError = "This message was not sent because the session was deleted."
+
+// FailTerminatedInterfaceTransition ends a claimed handoff of a deleted
+// session as failed with errorCode and errorDetail. Each prompt it held
+// becomes a failed turn with TerminatedInterfaceMessageError (a
+// chat.turn_aborted event on its message), never a queued one, so a restored
+// session shows the prompts as not sent instead of running them late.
+func (s *Store) FailTerminatedInterfaceTransition(
+	ctx context.Context,
+	owner, transitionID string,
+	from domain.SessionInterfaceTransitionPhase,
+	errorCode, errorDetail string,
+) error {
+	return s.withService(ctx, func(tx pgx.Tx) error {
+		var orgID, sessionID string
+		if err := tx.QueryRow(ctx, `SELECT org_id, session_id FROM ao_interface_transitions
+			WHERE id = $1 AND claimed_by = $2 AND phase = $3 FOR UPDATE`,
+			transitionID, owner, from).Scan(&orgID, &sessionID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrTransitionStale
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, `SELECT set_config('ao.org_id', $1, true)`, orgID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT id, turn_id, user_message_sequence, mode_cap, denied_commands
+			FROM ao_interface_transition_messages
+			WHERE org_id = $1 AND transition_id = $2 AND delivered_at IS NULL
+			ORDER BY id FOR UPDATE`, orgID, transitionID)
+		if err != nil {
+			return err
+		}
+		type held struct {
+			id       int64
+			turnID   string
+			sequence int64
+			modeCap  string
+			denied   []string
+		}
+		var messages []held
+		for rows.Next() {
+			var message held
+			if err := rows.Scan(&message.id, &message.turnID, &message.sequence, &message.modeCap, &message.denied); err != nil {
+				rows.Close()
+				return err
+			}
+			messages = append(messages, message)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, message := range messages {
+			tag, err := tx.Exec(ctx, `INSERT INTO ao_turns (
+				id, org_id, session_id, user_message_sequence, mode_cap, denied_commands,
+				state, error_message, completed_at
+			) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, 'failed', $7, now())
+			ON CONFLICT (id) DO NOTHING`, message.turnID, orgID, sessionID, message.sequence,
+				message.modeCap, nonNilStrings(message.denied), TerminatedInterfaceMessageError)
+			if err != nil {
+				return normalizeConstraintError(err)
+			}
+			// Handled: the message never reaches a controller.
+			if _, err := tx.Exec(ctx, `UPDATE ao_interface_transition_messages SET delivered_at = now() WHERE id = $1`, message.id); err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				continue
+			}
+			if err := appendTypedEvent(ctx, tx, orgID, sessionID, "chat.turn_aborted", map[string]any{
+				"turnId": message.turnID, "attempt": 0, "error": TerminatedInterfaceMessageError,
+			}); err != nil {
+				return err
+			}
+		}
+		tag, err := tx.Exec(ctx, `UPDATE ao_interface_transitions
+			SET phase = 'failed', error_code = $3, error_detail = $4,
+				completed_at = now(), updated_at = now()
+			WHERE id = $1 AND claimed_by = $2 AND phase = $5`,
+			transitionID, owner, errorCode, errorDetail, from)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrTransitionStale
+		}
+		return nil
+	})
 }
 
 // RenewCoordinatedInterfaceClaim keeps a claimed transition leased to this
@@ -649,13 +826,25 @@ func (s *Store) CommitCoordinatedSessionInterface(
 ) (bool, error) {
 	var committed bool
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, commitCoordinatedSessionInterfaceSQL,
-			interfaceValue, transitionID, orgID, owner)
+		var sessionID string
+		err := tx.QueryRow(ctx, commitCoordinatedSessionInterfaceSQL,
+			interfaceValue, transitionID, orgID, owner).Scan(&sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrTransitionStale
+		}
 		if err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrTransitionStale
+		// A drain stops a Chat controller that never claimed the session's
+		// first turn without settling it. When the terminal starts with the
+		// prompt on its command line (a session created before Chat sessions
+		// launched without it) the prompt's turn is settled in the same
+		// transaction as the commit, as a start that falls back to the TUI does;
+		// otherwise it stays queued for the terminal's turn forwarder.
+		if interfaceValue == domain.SessionInterfaceTUI {
+			if err := settleUnclaimedPromptTurn(ctx, tx, orgID, sessionID); err != nil {
+				return err
+			}
 		}
 		committed = true
 		return nil

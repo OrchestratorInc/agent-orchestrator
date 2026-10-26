@@ -52,16 +52,26 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 		envelope.WriteError(w, r, err)
 		return
 	}
-	asset := chi.URLParam(r, "*")
-	// chi matches the escaped path whenever the request carried one, as a
-	// page's link to "chart (1).png" does.
-	if r.URL.RawPath != "" {
-		if asset, err = url.PathUnescape(asset); err != nil {
-			writeArtifactFileNotFound(w, r)
-			return
-		}
+	asset, _, err := wildcardPath(r)
+	if err != nil {
+		writeArtifactFileNotFound(w, r)
+		return
 	}
 	serveArtifactFile(w, r, renderContentSecurityPolicy, sess.Metadata.ArtifactDir, asset)
+}
+
+// wildcardPath returns the route's "*" tail unescaped. chi matches the escaped
+// path whenever the request carried a non-default escape, as a page's link to
+// "chart (1).png" or Turbopack's "%40swc" chunk names do; escaped is that
+// tail as sent then, and empty otherwise.
+func wildcardPath(r *http.Request) (tail, escaped string, err error) {
+	tail = chi.URLParam(r, "*")
+	if r.URL.RawPath == "" {
+		return tail, "", nil
+	}
+	escaped = tail
+	tail, err = url.PathUnescape(escaped)
+	return tail, escaped, err
 }
 
 // serveArtifactFile serves asset from the artifact directory root in the
@@ -120,7 +130,7 @@ func writeArtifactFileNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteArtifactFile removes one listed file from the session's artifact
-// directory and returns the session with its refreshed artifact list.
+// directory along with its kept versions, and returns the session with its refreshed artifact list.
 func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodDelete, artifactFilesPath)
@@ -143,6 +153,12 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 		}
 		envelope.WriteError(w, r, fmt.Errorf("delete artifact file: %w", err))
 		return
+	}
+	if c.ArtifactVersions != nil {
+		if err := c.ArtifactVersions.DeleteVersions(r.Context(), sess.SessionRecord, clean); err != nil {
+			envelope.WriteError(w, r, fmt.Errorf("delete artifact versions: %w", err))
+			return
+		}
 	}
 	updated, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {

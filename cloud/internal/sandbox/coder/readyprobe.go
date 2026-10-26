@@ -46,6 +46,9 @@ var readyProbeFirstSeen sync.Map // agent ID -> time.Time
 type readyProbeResult struct {
 	exitCode int
 	output   string
+	// raw is the command's output before the marker as the terminal sent
+	// it, up to the keep bytes runMarkedCommandOnce was asked for.
+	raw string
 }
 
 // waitForReadyProbe runs the connection's ready check as the workspace user
@@ -203,15 +206,16 @@ func (c *Client) runReadyProbe(ctx context.Context, ptyURL *url.URL) (readyProbe
 }
 
 func (c *Client) runReadyProbeOnce(ctx context.Context, ptyURL *url.URL) (readyProbeResult, error) {
-	result, _, err := c.runMarkedCommandOnce(ctx, ptyURL, readyProbeMarker, readyProbeAttemptWait)
+	result, _, err := c.runMarkedCommandOnce(ctx, ptyURL, readyProbeMarker, readyProbeAttemptWait, 2*readyProbeOutputLimit)
 	return result, err
 }
 
 // runMarkedCommandOnce opens the agent PTY for a command that prints its
 // output and then a "<marker>:<status>" line, and returns the output before
 // the marker, the status parsed as an exit code (-1 when it is not a number),
-// and the raw status. It waits at most wait for the marker.
-func (c *Client) runMarkedCommandOnce(ctx context.Context, ptyURL *url.URL, marker string, wait time.Duration) (readyProbeResult, string, error) {
+// and the raw status. It keeps at least the last keep bytes of the output and
+// waits at most wait for the marker.
+func (c *Client) runMarkedCommandOnce(ctx context.Context, ptyURL *url.URL, marker string, wait time.Duration, keep int) (readyProbeResult, string, error) {
 	attemptURL := *ptyURL
 	query := attemptURL.Query()
 	query.Set("reconnect", uuid.NewString())
@@ -254,11 +258,15 @@ func (c *Client) runMarkedCommandOnce(ctx context.Context, ptyURL *url.URL, mark
 				if convErr != nil {
 					code = -1
 				}
-				return readyProbeResult{exitCode: code, output: boundedProbeOutput(collected.String())}, status, nil
+				raw := collected.String()
+				if len(raw) > keep {
+					raw = raw[len(raw)-keep:]
+				}
+				return readyProbeResult{exitCode: code, output: boundedProbeOutput(collected.String()), raw: raw}, status, nil
 			}
 			collected.WriteString(line.data)
-			if collected.Len() > 4*readyProbeOutputLimit {
-				tail := collected.String()[collected.Len()-2*readyProbeOutputLimit:]
+			if collected.Len() > 2*keep {
+				tail := collected.String()[collected.Len()-keep:]
 				collected.Reset()
 				collected.WriteString(tail)
 			}

@@ -50,6 +50,7 @@ import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
 import { useConversationEventTransport } from "./chat/conversationEvents";
 import { commitHostSwitch, hostRouteMatches, promotableHostConfig } from "./hostRoute";
 import { emptyHostSnapshot, useOtherHosts, type HostSnapshot } from "./otherHosts";
+import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { createHostedRowsCache, type HostedOrchestrator, type HostedProject, type HostedSession } from "./hostedRows";
 import { reconcileRows } from "./rowSharing";
 import { machineAppearance } from "./machineAppearance";
@@ -97,6 +98,11 @@ type AppState = {
 	/** Whether the current projects value came from the latest daemon response. */
 	projectsKnown: boolean;
 	sessions: DashboardSession[];
+	/**
+	 * This machine's archive size when it pages its archive, which `sessions`
+	 * then leaves out. Null for a daemon that still sends the archive inline.
+	 */
+	archive: ArchiveSummary | null;
 	orchestrators: OrchestratorLink[];
 	orchestratorId: string | null;
 	stats: DashboardStats;
@@ -173,6 +179,7 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 			projects,
 			projectsKnown: host?.projectsKnown ?? false,
 			sessions: host?.sessions ?? [],
+			archive: host?.archive ?? null,
 			orchestrators: host?.orchestrators ?? [],
 			orchestratorId: host?.orchestratorId ?? null,
 			stats: host?.stats ?? {},
@@ -232,6 +239,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [activeEndpoints, setActiveEndpoints] = useState<Endpoint[]>([]);
 	const [knownProjects, setKnownProjects] = useState<KnownProjects>(NO_PROJECTS_KNOWN);
 	const [sessions, setSessions] = useState<DashboardSession[]>([]);
+	const [archive, setArchive] = useState<ArchiveSummary | null>(null);
 	const [orchestrators, setOrchestrators] = useState<OrchestratorLink[]>([]);
 	const [sessionMachine, setSessionMachine] = useState("");
 	const [orchestratorId, setOrchestratorId] = useState<string | null>(null);
@@ -253,6 +261,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const promotedConfigRef = useRef<ServerConfig | null>(null);
 	const primarySnapshotRef = useRef<HostSnapshot | null>(null);
 	const configResolution = useRef(0);
+	// The machine the board was showing when the app went to the background.
+	// Backgrounding drops the connection (see the AppState effect), and without
+	// this the board hid its rows until the endpoint race finished, so a
+	// one-second trip to another app came back to a full-screen loader. Rows
+	// are still keyed to this machine, so they show only while it is the one
+	// selected. "" means nothing is held. The ref keeps the host id for
+	// reloadConfig, which must not wipe rows for the same host on resume.
+	const [heldMachine, setHeldMachine] = useState("");
+	const heldHostIdRef = useRef<string | null>(null);
+	const releaseHeld = useCallback(() => {
+		heldHostIdRef.current = null;
+		setHeldMachine("");
+	}, []);
 	// Gate for the connected event: emit only on the not-open -> open transition,
 	// never on every poll tick. openRef tracks the current state; everConnectedRef
 	// tells a fresh launch apart from a later reconnect.
@@ -341,7 +362,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (resolution !== configResolution.current) return null;
 			setSelectedHostName(selected?.name ?? null);
 			setSelectedHostId(selected?.id ?? null);
-			if ((selected?.id ?? "") !== (cfgRef.current?.hostId ?? "")) {
+			const currentHostId = cfgRef.current ? cfgRef.current.hostId : heldHostIdRef.current;
+			if ((selected?.id ?? "") !== (currentHostId ?? "")) {
+				releaseHeld();
 				// Hide the previous machine's board and stop its in-flight polls
 				// before waiting for the newly selected machine to answer.
 				cfgRef.current = null;
@@ -349,6 +372,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setConfig(null);
 				setConfigResolved(false);
 				setSessions([]);
+				setArchive(null);
 				setOrchestrators([]);
 				setSessionMachine("");
 				setOrchestratorId(null);
@@ -378,6 +402,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (next !== prev) primaryLoadRef.current?.controller.abort();
 			cfgRef.current = next;
 			setConfig(next);
+			// Connected again: the live config names the machine from here on.
+			if (next && isConfigured(next)) releaseHeld();
 			// Read alongside the config so a failure can be explained: a stored
 			// tunnel that no longer answers is a rotated hostname, not a machine
 			// that is merely out of range.
@@ -390,6 +416,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (!(cause instanceof IncompatibleHostVersionError)) throw cause;
 			if (resolution !== configResolution.current) return null;
 			cfgRef.current = null;
+			releaseHeld();
 			setConfig(null);
 			setError(cause.message);
 			setErrorStatus(426);
@@ -405,7 +432,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				}
 			}
 		}
-	}, []);
+	}, [releaseHeld]);
 
 	useEffect(() => {
 		const sub = RNAppState.addEventListener("change", (state) => {
@@ -419,6 +446,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				// Keep display rows, but never reuse its old bearer connection.
 				configResolution.current++;
 				promotedConfigRef.current = null;
+				if (cfgRef.current && isConfigured(cfgRef.current)) {
+					heldHostIdRef.current = cfgRef.current.hostId ?? "";
+					setHeldMachine(machineIdentity(cfgRef.current));
+				}
 				cfgRef.current = null;
 				setConfig(null);
 				setConfigResolved(false);
@@ -465,6 +496,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				known: incoming.projectsKnown,
 			});
 			setSessions(incoming.sessions);
+			setArchive(incoming.archive ?? null);
 			setOrchestrators(incoming.orchestrators);
 			setSessionMachine(machineIdentity(incoming.config));
 			setOrchestratorId(incoming.orchestratorId);
@@ -484,6 +516,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		primaryLoadRef.current?.controller.abort();
 		promotedConfigRef.current = null;
 		cfgRef.current = null;
+		releaseHeld();
 		setConfig(null);
 		setConfigResolved(false);
 		try {
@@ -493,7 +526,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			throw error;
 		}
 		await reloadConfig();
-	}, [otherHosts.adoptPrimary, otherHosts.claimPrimary, otherHosts.snapshots, reloadConfig]);
+	}, [otherHosts.adoptPrimary, otherHosts.claimPrimary, otherHosts.snapshots, reloadConfig, releaseHeld]);
 
 	useEffect(() => {
 		void reloadConfig();
@@ -597,6 +630,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				machineIdentity(c),
 			));
 			setSessions((previous) => reconcileRows(previous, sess.sessions));
+			setArchive((previous) => (sameArchiveSummary(previous, sess.archive) ? previous : sess.archive ?? null));
 			setOrchestrators((previous) => reconcileRows(previous, sess.orchestrators));
 			setSessionMachine(machineIdentity(c));
 			setOrchestratorId(sess.orchestratorId);
@@ -767,11 +801,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	// During a re-pair, the previous machine's retained list is not evidence
 	// about the new machine. Keep it hidden until the active machine answers.
-	const activeMachine = config && isConfigured(config) ? machineIdentity(config) : "";
+	// While resuming, the held machine stands in so the rows already on screen
+	// stay up instead of a loader (see heldMachine).
+	const activeMachine = config && isConfigured(config) ? machineIdentity(config) : heldMachine;
 	const visibleSessions = useMemo(
 		() => sessionRowsForMachine(sessions, sessionMachine, activeMachine),
 		[sessions, sessionMachine, activeMachine],
 	);
+	// Like the rows: one machine's archive size is not evidence about another's.
+	const visibleArchive = sessionMachine === activeMachine ? archive : null;
 	const visibleOrchestrators = useMemo(
 		() => sessionRowsForMachine(orchestrators, sessionMachine, activeMachine),
 		[orchestrators, sessionMachine, activeMachine],
@@ -799,13 +837,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			sessions: visibleSessions,
+			archive: visibleArchive,
 			orchestrators: visibleOrchestrators,
 			orchestratorId,
 			stats,
 			notificationsUnread,
 			lastSyncAt: lastSyncAtRef.current,
 		};
-	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
+	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleArchive, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
 	// Published after commit, never during render: an interrupted or replayed
 	// render must not hand switchHost a snapshot that never reached the screen.
 	// A layout effect runs before any user event can call switchHost.
@@ -974,6 +1013,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			sessions: visibleSessions,
+			archive: visibleArchive,
 			orchestrators: visibleOrchestrators,
 			orchestratorId: sessionMachine === activeMachine ? orchestratorId : null,
 			stats: sessionMachine === activeMachine ? stats : {},
@@ -1015,6 +1055,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			projects,
 			projectsKnown,
 			visibleSessions,
+			visibleArchive,
 			visibleOrchestrators,
 			sessionMachine,
 			activeMachine,
