@@ -178,6 +178,10 @@ describe("iOS spawn selectors", () => {
 			const frame = modifier(identified(root, id), "frame");
 			expect(frame).toBeUndefined();
 		}
+		// The rail lays the agent's name out first, so the filling model menu
+		// can't squeeze it to an ellipsis.
+		expect(modifier(identified(root, "spawn-harness"), "layoutPriority")?.args).toEqual([1]);
+		expect(modifier(identified(root, "spawn-model"), "layoutPriority")).toBeUndefined();
 		expect(root.findByType("Host" as never).props.matchContents).toEqual({ vertical: true });
 	});
 });

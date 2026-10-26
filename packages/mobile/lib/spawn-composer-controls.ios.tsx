@@ -124,9 +124,12 @@ export function SpawnComposerControls({
 						<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
 					</Menu>
 
+					{/* The agent's name is laid out first, at its natural width, and
+					    the model fills what the rail has left. Given to the filling
+					    model instead, the priority squeezed the name to an ellipsis. */}
 					<Menu
 						label={<SelectorLabel icon={<HarnessImage uri={logoUris[harness]} harness={harness} />} title={harnessLabel} indicator="chevron.down" />}
-						modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
+						modifiers={[buttonStyle("plain"), menuOrder("fixed"), layoutPriority(1), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
 					>
 						{agents.map((agent) => (
 							<Choice key={agent.id} label={agent.label} icon={<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />} selected={agent.id === harness} onChoose={() => choose(onSelectHarness, agent.id)} />
@@ -145,7 +148,6 @@ export function SpawnComposerControls({
 							buttonStyle("plain"),
 							menuOrder("fixed"),
 							frame({ maxWidth: FILL_WIDTH, alignment: "leading" }),
-							layoutPriority(1),
 							tint(t.textSecondary),
 							opacity(models.length || modelSelection === "__auto__" ? 1 : stateOpacity.disabled),
 							accessibilityIdentifier("spawn-model"),

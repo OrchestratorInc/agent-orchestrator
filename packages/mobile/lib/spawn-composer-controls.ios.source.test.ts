@@ -14,7 +14,9 @@ describe("iOS spawn menu layout", () => {
 		expect(source).toContain("<Host matchContents={{ vertical: true }}");
 		expect(source).toContain("<Spacer minLength={0} />");
 		expect(source).toContain('frame({ maxWidth: FILL_WIDTH, alignment: "leading" })');
-		expect(source).toContain("layoutPriority(1)");
+		// The agent's name keeps its natural width; only the model fills.
+		expect(source).toContain('layoutPriority(1), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")');
+		expect(source.match(/layoutPriority\(/g)).toHaveLength(1);
 		for (const id of ["spawn-host", "spawn-project", "spawn-attachment", "spawn-harness", "spawn-model"]) {
 			expect(source).toContain(`accessibilityIdentifier("${id}")`);
 		}
