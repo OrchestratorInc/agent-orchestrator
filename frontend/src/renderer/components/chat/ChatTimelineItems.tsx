@@ -632,6 +632,30 @@ function formatMessageTimestamp(iso: string, now = new Date()): string {
 /* messages                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/** The user's bubble. A queued one reads as not-yet-sent rather than as sent-and-ignored. */
+export function humanBubbleClass(queued?: boolean): string {
+	return cn(
+		"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
+		queued ? "border border-dashed border-border-strong bg-transparent text-muted-foreground" : "bg-raised text-foreground",
+	);
+}
+
+export function MessageTimestamp({ createdAt }: { createdAt: string }) {
+	return (
+		<span className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75" aria-label={`Sent ${formatMessageTimestamp(createdAt)}`}>
+			{formatMessageTimestamp(createdAt)}
+		</span>
+	);
+}
+
+export function QueuedNote() {
+	return (
+		<div className="flex items-center gap-2 text-xs text-muted-foreground">
+			<span>Queued · sends when the agent finishes</span>
+		</div>
+	);
+}
+
 /** What the user typed. Right-aligned and enclosed so it reads as theirs. */
 const WORKER_REPORT_OPEN = "<ao-worker-reports>";
 const WORKER_REPORT_CLOSE = "</ao-worker-reports>";
@@ -734,13 +758,7 @@ export function HumanMessage({
 					/* Themes draw sent and queued differently; light theme needs to tell them
 					   apart in CSS because it paints an enclosure only around a sent one. */
 					data-queued={queued ? "" : undefined}
-					className={cn(
-						"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
-						animateIn && "chat-human-message-enter",
-						queued
-							? "border border-dashed border-border-strong bg-transparent text-muted-foreground"
-							: "bg-raised text-foreground",
-					)}
+					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
 					{excerptReferences.length > 0 ? (
 						<ChatAnnotationSummary
@@ -777,12 +795,7 @@ export function HumanMessage({
 			{editing ? null : (
 				<div className="mt-1 flex h-7 items-center gap-1">
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
-						<span
-							className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75"
-							aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
-						>
-							{formatMessageTimestamp(message.createdAt)}
-						</span>
+						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Tooltip>
 								<TooltipTrigger asChild>
@@ -815,11 +828,7 @@ export function HumanMessage({
 					) : null}
 				</div>
 			)}
-			{queued ? (
-				<div className="flex items-center gap-2 text-xs text-muted-foreground">
-					<span>Queued · sends when the agent finishes</span>
-				</div>
-			) : null}
+			{queued ? <QueuedNote /> : null}
 			{message.delivery && message.delivery !== "accepted" && message.delivery !== "sending" ? (
 				<DeliveryNote state={message.delivery} />
 			) : null}

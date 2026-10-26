@@ -77,7 +77,7 @@ function parseReports(text: string, createdAt: string, keyPrefix: string): Worke
 }
 
 /** Items never change in place, so each is parsed once however often the timeline renders. */
-function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationItem) => T {
+export function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationItem) => T {
 	const cache = new WeakMap<ConversationItem, T>();
 	return (item) => {
 		if (!cache.has(item)) cache.set(item, read(item));

@@ -10,10 +10,11 @@
  *   tinted by what it means, with the detail beneath.
  * - AO's own notices are one quiet line.
  *
- * Each is read back from the fixed text AO writes for it. Text that matches none
- * of them keeps the card.
+ * Each is read back from the fixed text AO writes for it, in that text's order,
+ * so what a reviewer or a CI log wrote inside it cannot pose as AO's structure.
+ * Text that matches none of them, or a message an agent sent, keeps the card.
  */
-// ponytail: reads AO's own message templates, so changing one means changing its reader here; structured metadata on the message would end the parsing.
+// ponytail: reads AO's own message templates, so changing one means changing its reader here, and a direct API send without a sender can still pass as the user's action. Persisting the daemon's AuthoredByUser and the nudge kind on the message would end both.
 
 import {
 	ArrowLeftRight,
@@ -29,15 +30,15 @@ import {
 	ChevronRight,
 	type LucideIcon,
 } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
 import { cn } from "../../lib/utils";
 import type { ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
-import { formatTime } from "./ChatTimelineItems";
-import { Folded } from "./WorkerUpdates";
+import { formatTime, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
+import { cachedBy, Folded } from "./WorkerUpdates";
 
 export type PullRequestRef = { number: number; title?: string; url?: string };
 
@@ -48,6 +49,8 @@ export type FileFeedback = {
 	code?: string;
 	/** Text selected in a rendered view, when the comment was on a selection. */
 	quote?: string;
+	/** The comment was on the whole file, not a line. */
+	wholeFile?: boolean;
 	feedback: string;
 };
 
@@ -74,6 +77,8 @@ export type Automation =
 // `PR #12 "title" (source → target)`, as lifecycle's prIdentity writes it.
 const PR_IDENTITY = /PR #(\d+)(?: ("(?:[^"\\\n]|\\.)*"))?(?: \([^\n]*? → [^\n]*?\))?/;
 const PR_LINE = /\nPR: (\S+)\s*$/;
+// A GitHub or GitLab login, or the daemon's stand-in. Never markup: it is interpolated into a translation.
+const LOGIN = String.raw`[\w.-]+(?:\[bot\])?|unknown reviewer`;
 
 function pullRequest(text: string, url?: string): PullRequestRef | undefined {
 	const match = PR_IDENTITY.exec(text.split("\n", 1)[0]!);
@@ -89,45 +94,74 @@ function pullRequest(text: string, url?: string): PullRequestRef | undefined {
 	return { number: Number(match[1]), title, url };
 }
 
+// One check as lifecycle's formatCIFailureMessage writes it. The log tail's fence is
+// longer than any backtick run inside it, so a log line cannot end the section.
+const FAILED_CHECK = /\nFailed: ([^\n]*) \(([^()\n]*)\)(?:\nFailure URL: (\S+))?(?:\n\nLog tail \(last \d+ lines?\):\n(`{3,})\n([\s\S]*?)\n\4)?\n/y;
+
+function failedChecks(text: string): FailedCheck[] | null {
+	const checks: FailedCheck[] = [];
+	let at = text.indexOf("\n") + 1;
+	while (at > 0) {
+		FAILED_CHECK.lastIndex = at;
+		const match = FAILED_CHECK.exec(text);
+		if (!match) break;
+		checks.push({ name: match[1]!, url: match[3], log: match[5] });
+		at = FAILED_CHECK.lastIndex;
+	}
+	return checks.length > 0 && text.startsWith("\nUse the included log tail", at) ? checks : null;
+}
+
+// Comment bodies are free text, so a body line can look like the next comment's
+// heading. Headings must number 1..N for the N the message announces; anything
+// else is not read as comments.
+function reviewComments(text: string, announced: number): ReviewComment[] | null {
+	const closing = text.lastIndexOf("\n\nAddress each comment and push fixes.");
+	const headings = [...text.matchAll(new RegExp(String.raw`\n\n(\d+)\. ([^\n]+) \(@(${LOGIN})\):\n`, "g"))];
+	if (closing < 0 || headings.length !== announced || headings.some((heading, index) => Number(heading[1]) !== index + 1)) return null;
+	return headings.map((heading, index) => {
+		const end = headings[index + 1]?.index ?? closing;
+		const lines = text.slice(heading.index! + heading[0].length, end).replace(/\s+$/, "").split("\n");
+		while (lines.length > 0 && /^ {3}(?:https?:\/\/\S+|Thread ID: .*)$/.test(lines.at(-1)!)) lines.pop();
+		const at = heading[2] === "(general)" ? undefined : /^(.*?)(?::(\d+))?$/.exec(heading[2]!);
+		return { path: at?.[1] || undefined, line: at?.[2] ? Number(at[2]) : undefined, author: heading[3]!, body: lines.join("\n").trim() };
+	});
+}
+
+// Read from the end: the review URL and ID follow the free-text body.
+function changesRequested(text: string): { body: string; url?: string } | null {
+	const closing = text.lastIndexOf("\n\nAddress the requested changes and push.");
+	if (closing < 0) return null;
+	let rest = text.slice(0, closing);
+	const id = /\nReview ID: [^\n]*$/.exec(rest);
+	if (id) rest = rest.slice(0, id.index);
+	const url = /\n\nReview URL: (\S+)$/.exec(rest);
+	if (url) rest = rest.slice(0, url.index);
+	const bodyAt = rest.indexOf("\n\nReview body:\n");
+	return { body: bodyAt < 0 ? "" : rest.slice(bodyAt + "\n\nReview body:\n".length).trim(), url: url?.[1] };
+}
+
 function readPullRequestNudge(text: string): Automation | null {
+	const prURL = PR_LINE.exec(text)?.[1];
 	if (text.startsWith("There are merge conflicts on ")) {
-		const pr = pullRequest(text, PR_LINE.exec(text)?.[1]);
+		const pr = pullRequest(text, prURL);
 		return pr ? { kind: "mergeConflict", pr } : null;
 	}
 	if (text.startsWith("CI is failing on ")) {
-		const pr = pullRequest(text, PR_LINE.exec(text)?.[1]);
-		if (!pr) return null;
-		const headers = [...text.matchAll(/^Failed: (.+) \(([^()\n]*)\)$/gm)];
-		const checks = headers.map((header, index) => {
-			const end = headers[index + 1]?.index ?? text.indexOf("\nUse the included log tail");
-			const section = text.slice(header.index!, end < 0 ? undefined : end);
-			const log = /Log tail \(last \d+ lines?\):\n(`{3,})\n([\s\S]*?)\n\1/.exec(section)?.[2];
-			return { name: header[1]!, url: /^Failure URL: (\S+)$/m.exec(section)?.[1], log };
-		});
-		return checks.length > 0 ? { kind: "ciFailing", pr, checks } : null;
+		const pr = pullRequest(text, prURL);
+		const checks = pr ? failedChecks(text) : null;
+		return pr && checks ? { kind: "ciFailing", pr, checks } : null;
 	}
-	if (/^The following \d+ unresolved review comment\(s\) are on /.test(text)) {
-		const pr = pullRequest(text, PR_LINE.exec(text)?.[1]);
-		if (!pr) return null;
-		const closing = text.indexOf("\nAddress each comment and push fixes.");
-		const items = [...text.matchAll(/^\d+\. (.+) \(@([^)\n]*)\):$/gm)];
-		const comments = items.map((item, index) => {
-			const end = items[index + 1]?.index ?? (closing < 0 ? text.length : closing);
-			const lines = text.slice(item.index! + item[0].length + 1, end).replace(/\s+$/, "").split("\n");
-			while (lines.length > 0 && /^ {3}(?:https?:\/\/\S+|Thread ID: .*)$/.test(lines.at(-1)!)) lines.pop();
-			const location = item[1]!;
-			const at = location === "(general)" ? undefined : /^(.*?)(?::(\d+))?$/.exec(location);
-			return { path: at?.[1] || undefined, line: at?.[2] ? Number(at[2]) : undefined, author: item[2]!, body: lines.join("\n").trim() };
-		});
-		return comments.length > 0 ? { kind: "reviewComments", pr, comments } : null;
+	const announced = /^The following (\d+) unresolved review comment\(s\) are on /.exec(text);
+	if (announced) {
+		const pr = pullRequest(text, prURL);
+		const comments = pr ? reviewComments(text, Number(announced[1])) : null;
+		return pr && comments ? { kind: "reviewComments", pr, comments } : null;
 	}
-	const changes = /^A changes-requested review from @(.+?) is on /.exec(text);
-	if (changes) {
-		const url = /\n\nReview URL: (\S+)/.exec(text)?.[1] ?? PR_LINE.exec(text)?.[1];
-		const pr = pullRequest(text, url);
-		if (!pr) return null;
-		const body = /\n\nReview body:\n([\s\S]*?)(?=\n\nReview URL: |\nReview ID: |\n\nAddress the requested changes)/.exec(text)?.[1] ?? "";
-		return { kind: "changesRequested", pr, author: changes[1], body: body.trim() };
+	const reviewer = new RegExp(String.raw`^A changes-requested review from @(${LOGIN}) is on `).exec(text);
+	if (reviewer) {
+		const review = changesRequested(text.replace(PR_LINE, ""));
+		const pr = review ? pullRequest(text, review.url ?? prURL) : undefined;
+		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body } : null;
 	}
 	// AO's own reviewer, before its findings became GitHub reviews; only old history carries these.
 	if (text.startsWith("[AO reviewer] ")) {
@@ -151,16 +185,22 @@ function fileFeedback(block: string): FileFeedback | null {
 	}
 	const path = fields.get("Path");
 	if (!path) return null;
-	const line = Number(fields.get("New line") ?? fields.get("Old line") ?? /line (\d+)$/.exec(fields.get("Location") ?? "")?.[1]);
+	// Only a new-side line exists in the file Files opens; a deleted line has none.
+	const location = fields.get("Location");
+	const line = Number(fields.get("New line") ?? /^New side, line (\d+)$/.exec(location ?? "")?.[1]);
 	const code = fields.get("Code");
 	return {
 		path,
 		line: Number.isSafeInteger(line) && line > 0 ? line : undefined,
 		code: code && code !== "(blank line)" ? code : undefined,
 		quote: fields.get("Selected text"),
+		wholeFile: location === "Entire file" || undefined,
 		feedback: feedback[1]!.trim() === "(empty)" ? "" : feedback[1]!.trim(),
 	};
 }
+
+// diff-selection's message; its instruction and path are each one line.
+const DIFF_SELECTION = /^The user selected lines in the diff viewer and asked for a change\.\n\nInstruction:\n([^\n]*)\n\nFile: ([^\n]+)\n(?:(?:Comparison scope|Workspace version|File fingerprint): [^\n]*\n)*Selected lines (?:(\d+)-(\d+)|[^\n]*):\n\n/;
 
 function readUserAction(text: string): Automation | null {
 	if (text.startsWith("The user left inline feedback while reviewing a file in AO and asked for a change.\n")) {
@@ -172,17 +212,22 @@ function readUserAction(text: string): Automation | null {
 		const comments = blocks.map(fileFeedback);
 		return comments.length > 0 && comments.every(Boolean) ? { kind: "fileFeedback", comments: comments as FileFeedback[] } : null;
 	}
-	if (text.startsWith("The user selected lines in the diff viewer and asked for a change.\n")) {
-		const instruction = /\nInstruction:\n([\s\S]*?)\n\nFile: /.exec(text)?.[1];
-		const path = /^File: (.+)$/m.exec(text)?.[1];
-		if (instruction === undefined || !path) return null;
-		const range = /^Selected lines (\d+)-(\d+):$/m.exec(text);
+	const selection = DIFF_SELECTION.exec(text);
+	if (selection) {
+		const [, instruction, path, start, end] = selection;
+		// diff-selection numbers the range by the new side unless an end of it is a
+		// deleted line ("- " row); only new-side numbers name a line in the file.
+		const rows = text.slice(selection[0].length).split("\n");
+		const truncated = rows.at(-1) === "[truncated]";
+		const newSide = rows.some((row) => !row.startsWith("-"));
+		const startsNew = newSide && rows[0] !== undefined && !rows[0].startsWith("-");
+		const endsNew = newSide && !truncated && !rows.at(-1)!.startsWith("-");
 		return {
 			kind: "diffSelection",
-			path,
-			start: range ? Number(range[1]) : undefined,
-			end: range ? Number(range[2]) : undefined,
-			instruction: instruction.trim() === "(empty)" ? "" : instruction.trim(),
+			path: path!,
+			start: start && startsNew ? Number(start) : undefined,
+			end: start && startsNew && endsNew ? Number(end) : undefined,
+			instruction: instruction === "(empty)" ? "" : instruction!,
 		};
 	}
 	// The instructions SessionBranchSummary's git buttons send.
@@ -208,44 +253,63 @@ export function readAutomation(text: string): Automation | null {
 	return readUserAction(trimmed) ?? readPullRequestNudge(trimmed) ?? readNotice(trimmed);
 }
 
+// A message an agent sent is the agent's, whatever its text says.
+const automationOf = cachedBy((item) =>
+	item.kind === "message" && !item.senderSessionId && !/^\s*\[from /.test(item.text) ? readAutomation(item.text) : null,
+);
+
 /* -------------------------------------------------------------------------- */
 /* drawing                                                                     */
 /* -------------------------------------------------------------------------- */
 
+type UserAction = Extract<Automation, { kind: "fileFeedback" | "diffSelection" | "gitAction" | "browserFeedback" }>;
+type PullRequestAutomation = Extract<Automation, { pr: PullRequestRef }>;
+
 /** An automation message drawn as what it is, or `fallback` when AO cannot tell. */
-export function AutomationMessage({ message, fallback }: { message: ConversationMessage; fallback: ReactNode }) {
-	const automation = useMemo(() => readAutomation(message.text), [message.text]);
+export function AutomationMessage({ message, queued, fallback }: { message: ConversationMessage; queued?: boolean; fallback: ReactNode }) {
+	const automation = automationOf(message);
 	if (!automation) return <>{fallback}</>;
-	switch (automation.kind) {
-		case "fileFeedback":
-			return <FileFeedbackMessage comments={automation.comments} />;
-		case "diffSelection":
-			return (
-				<YourAction>
-					<FileChip path={automation.path} line={automation.start} end={automation.end} />
-					{automation.instruction ? <p className="mt-1.5 whitespace-pre-wrap">{automation.instruction}</p> : null}
-				</YourAction>
-			);
-		case "gitAction":
-			return <GitActionMessage action={automation.action} base={automation.base} />;
-		case "browserFeedback":
-			return <BrowserFeedbackMessage annotations={automation.annotations} />;
-		case "notice":
-			return <NoticeLine notice={automation.notice} />;
-		default:
-			return <PullRequestEvent automation={automation} createdAt={message.createdAt} />;
-	}
+	if (automation.kind === "notice") return <NoticeLine notice={automation.notice} />;
+	if ("pr" in automation) return <PullRequestEvent automation={automation} createdAt={message.createdAt} />;
+	return (
+		<YourAction queued={queued} createdAt={message.createdAt}>
+			<UserActionBody action={automation} />
+		</YourAction>
+	);
 }
 
-/** Something the user did through AO, drawn as the user's own message. */
-function YourAction({ children }: { children: ReactNode }) {
+/** Something the user did through AO, drawn as the user's own message: queued until sent, with its time on hover. */
+function YourAction({ queued, createdAt, children }: { queued?: boolean; createdAt: string; children: ReactNode }) {
 	return (
-		<div className="flex flex-col items-end" data-testid="your-action">
-			<div className="cursor-chat-human-message w-fit min-w-0 max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-sm leading-[1.55] text-foreground">
+		<div className="group/message flex flex-col items-end gap-1" data-testid="your-action">
+			{/* Themes draw sent and queued differently; light theme tells them apart in CSS. */}
+			<div data-queued={queued ? "" : undefined} className={cn(humanBubbleClass(queued), "min-w-0")}>
 				{children}
 			</div>
+			<div className="mt-1 flex h-7 items-center opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 motion-reduce:transition-none">
+				<MessageTimestamp createdAt={createdAt} />
+			</div>
+			{queued ? <QueuedNote /> : null}
 		</div>
 	);
+}
+
+function UserActionBody({ action }: { action: UserAction }) {
+	switch (action.kind) {
+		case "fileFeedback":
+			return <FileFeedbackBody comments={action.comments} />;
+		case "diffSelection":
+			return (
+				<>
+					<FileChip path={action.path} line={action.start} end={action.end} />
+					{action.instruction ? <p className="mt-1.5 whitespace-pre-wrap">{action.instruction}</p> : null}
+				</>
+			);
+		case "gitAction":
+			return <GitActionBody action={action.action} base={action.base} />;
+		case "browserFeedback":
+			return <BrowserFeedbackBody annotations={action.annotations} />;
+	}
 }
 
 const chip = "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md bg-foreground/[0.06] px-1.5 py-0.5 text-xs text-muted-foreground transition-colors enabled:hover:text-foreground";
@@ -261,26 +325,24 @@ function FileChip({ path, line, end }: { path: string; line?: number; end?: numb
 	);
 }
 
-function FileFeedbackMessage({ comments }: { comments: readonly FileFeedback[] }) {
+function FileFeedbackBody({ comments }: { comments: readonly FileFeedback[] }) {
 	const { t } = useTranslation();
 	return (
-		<YourAction>
-			<div className="flex min-w-0 flex-col gap-3">
-				{comments.map((comment, index) => (
-					<div key={index} className="min-w-0">
-						<FileChip path={comment.path} line={comment.line} />
-						{comment.code || comment.quote ? (
-							<p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={comment.code ?? comment.quote}>
-								{comment.code ?? comment.quote}
-							</p>
-						) : !comment.line ? (
-							<p className="mt-1 text-xs text-muted-foreground">{t("chat.automation.entireFile")}</p>
-						) : null}
-						{comment.feedback ? <p className="mt-1.5 whitespace-pre-wrap">{comment.feedback}</p> : null}
-					</div>
-				))}
-			</div>
-		</YourAction>
+		<div className="flex min-w-0 flex-col gap-3">
+			{comments.map((comment, index) => (
+				<div key={index} className="min-w-0">
+					<FileChip path={comment.path} line={comment.line} />
+					{comment.code || comment.quote ? (
+						<p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={comment.code ?? comment.quote}>
+							{comment.code ?? comment.quote}
+						</p>
+					) : comment.wholeFile ? (
+						<p className="mt-1 text-xs text-muted-foreground">{t("chat.automation.entireFile")}</p>
+					) : null}
+					{comment.feedback ? <p className="mt-1.5 whitespace-pre-wrap">{comment.feedback}</p> : null}
+				</div>
+			))}
+		</div>
 	);
 }
 
@@ -292,30 +354,28 @@ const GIT_ACTIONS: Record<GitAction, { icon: LucideIcon; label: MessageKey }> = 
 	push: { icon: ArrowUpFromLine, label: "inspector.git.push" },
 };
 
-function GitActionMessage({ action, base }: { action: GitAction; base?: string }) {
+function GitActionBody({ action, base }: { action: GitAction; base?: string }) {
 	const { t } = useTranslation();
 	const { icon: Icon, label } = GIT_ACTIONS[action];
 	return (
-		<YourAction>
-			<span className="inline-flex min-w-0 items-center gap-2">
-				<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-				<span>{t(label)}</span>
-				{base ? (
-					<>
-						<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
-						<span className="truncate font-mono text-xs text-muted-foreground">{base}</span>
-					</>
-				) : null}
-			</span>
-		</YourAction>
+		<span className="inline-flex min-w-0 items-center gap-2">
+			<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+			<span>{t(label)}</span>
+			{base ? (
+				<>
+					<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
+					<span className="truncate font-mono text-xs text-muted-foreground">{base}</span>
+				</>
+			) : null}
+		</span>
 	);
 }
 
-function BrowserFeedbackMessage({ annotations }: { annotations: ParsedBrowserAnnotationMessage }) {
+function BrowserFeedbackBody({ annotations }: { annotations: ParsedBrowserAnnotationMessage }) {
 	const { t } = useTranslation();
 	return (
-		<YourAction>
-			<span className={cn(chip, "max-w-full")} title={annotations.pageUrl || annotations.pageTitle}>
+		<>
+			<span className={chip} title={annotations.pageUrl || annotations.pageTitle}>
 				<MousePointer2 aria-hidden="true" className="size-3 shrink-0" />
 				<span className="truncate">{annotations.pageTitle}</span>
 			</span>
@@ -334,7 +394,7 @@ function BrowserFeedbackMessage({ annotations }: { annotations: ParsedBrowserAnn
 			{annotations.screenshotCount > 0 ? (
 				<p className="mt-1.5 text-xs text-muted-foreground">{t("chat.automation.screenshots", { count: annotations.screenshotCount })}</p>
 			) : null}
-		</YourAction>
+		</>
 	);
 }
 
@@ -355,17 +415,38 @@ function NoticeLine({ notice }: { notice: AutomationNotice }) {
 	);
 }
 
-type PullRequestAutomation = Extract<Automation, { pr: PullRequestRef }>;
+// The forges AO reads PRs from. A URL in the message's text is a link only to
+// these, so a message that merely looks like AO's cannot send the user elsewhere.
+const FORGE_HOSTS = new Set(["github.com", "gitlab.com"]);
+
+function forgeURL(url: string | undefined): string | undefined {
+	if (!url) return undefined;
+	try {
+		const { protocol, hostname } = new URL(url);
+		return protocol === "https:" && FORGE_HOSTS.has(hostname) ? url : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** `children` linked to `url` when it is on a known forge; plain text otherwise. */
+function ForgeLink({ url, className, children }: { url?: string; className?: string; children?: ReactNode }) {
+	const href = forgeURL(url);
+	if (!href) return <span className={className}>{children}</span>;
+	return (
+		<SessionLabelLink href={href} className={cn(className, "decoration-foreground/40 underline-offset-2 hover:underline")}>
+			{children}
+		</SessionLabelLink>
+	);
+}
 
 /** What GitHub reported on the session's PR, in the PR glyph tinted by what it means. */
 function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { pr } = automation;
 	const components = {
 		strong: <span className="font-medium text-foreground" />,
-		pr: pr.url && /^https?:\/\//.test(pr.url)
-			? <SessionLabelLink href={pr.url} className="font-medium text-foreground decoration-foreground/40 underline-offset-2 hover:underline">{null}</SessionLabelLink>
-			: <span className="font-medium text-foreground" />,
+		pr: <ForgeLink url={pr.url} className="font-medium text-foreground" />,
 	};
 	// A narrow key keeps Trans's typing tractable; the full MessageKey union is too complex for it (TS2590).
 	const lead = (key: `chat.automation.${"ciFailing" | "reviewComment" | "changesRequested" | "mergeConflict"}`, author?: string) => (
@@ -384,19 +465,25 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 				</ul>
 			);
 			break;
-		case "reviewComments":
-			heading = lead("chat.automation.reviewComment", `@${automation.comments[0]!.author}`);
+		case "reviewComments": {
+			const authors = [...new Set(automation.comments.map((comment) => `@${comment.author}`))];
+			heading = lead("chat.automation.reviewComment", new Intl.ListFormat(i18n.language, { type: "conjunction" }).format(authors));
 			detail = automation.comments.map((comment, index) => (
 				<div key={index} className="min-w-0">
-					{comment.path ? <FileChip path={comment.path} line={comment.line} /> : null}
-					<div className={cn(comment.path && "mt-1")}>
-						<Folded watch={comment.body}>
-							<ChatMarkdown text={comment.body} safeOrigin />
-						</Folded>
-					</div>
+					{comment.path || authors.length > 1 ? (
+						<div className="mb-1 flex min-w-0 items-center gap-2">
+							{/* Several reviewers: each comment says whose it is. */}
+							{authors.length > 1 ? <span className="shrink-0 text-xs font-medium text-foreground">{`@${comment.author}`}</span> : null}
+							{comment.path ? <FileChip path={comment.path} line={comment.line} /> : null}
+						</div>
+					) : null}
+					<Folded watch={comment.body}>
+						<ChatMarkdown text={comment.body} safeOrigin />
+					</Folded>
 				</div>
 			));
 			break;
+		}
 		case "changesRequested":
 			heading = lead("chat.automation.changesRequested", automation.author ? `@${automation.author}` : t("chat.automation.aoReviewer"));
 			detail = automation.body ? (
@@ -406,6 +493,8 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			) : null;
 			break;
 		case "mergeConflict":
+			// The PR cannot merge until the agent rebases: a failure, like failing CI.
+			tone = "text-status-exited";
 			heading = lead("chat.automation.mergeConflict");
 			break;
 	}
@@ -431,13 +520,9 @@ function FailedCheckLine({ check }: { check: FailedCheck }) {
 		<li className="min-w-0 text-xs">
 			<div className="flex min-w-0 items-center gap-2">
 				<CircleX aria-hidden="true" className="size-3 shrink-0 text-status-exited" />
-				{check.url && /^https?:\/\//.test(check.url) ? (
-					<SessionLabelLink href={check.url} className="min-w-0 truncate font-medium text-foreground decoration-foreground/40 underline-offset-2 hover:underline">
-						{check.name}
-					</SessionLabelLink>
-				) : (
-					<span className="min-w-0 truncate font-medium text-foreground">{check.name}</span>
-				)}
+				<ForgeLink url={check.url} className="min-w-0 truncate font-medium text-foreground">
+					{check.name}
+				</ForgeLink>
 				{check.log ? (
 					<button
 						type="button"

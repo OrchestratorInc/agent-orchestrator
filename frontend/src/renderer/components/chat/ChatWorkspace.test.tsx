@@ -3269,6 +3269,7 @@ describe("automation reports", () => {
 		const feedback = screen.getByTestId("your-action");
 		expect(feedback).toHaveTextContent("Example");
 		expect(feedback).toHaveTextContent("Make this clearer.");
+		expect(feedback).toHaveTextContent("Queued · sends when the agent finishes");
 	});
 
 	it("renders browser annotation transport as the user's feedback, without its transport details", () => {

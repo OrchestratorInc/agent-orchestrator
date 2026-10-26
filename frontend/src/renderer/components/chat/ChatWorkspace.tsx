@@ -4751,7 +4751,7 @@ function TimelineItem({
 		}
 		return (
 			<FromAgent item={item}>
-				<AutomationMessage message={item} fallback={<OriginMessage message={item} />} />
+				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
 	}

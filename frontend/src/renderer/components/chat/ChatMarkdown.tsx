@@ -444,17 +444,24 @@ function MermaidFence({ code }: { code: string }) {
 		: diagram;
 }
 
+/** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
+function useWorkspaceFile(path: string | undefined) {
+	const { openFile, workspacePaths } = useContext(OpenChatLink);
+	const filePath = path && openFile ? findWorkspaceFilePath(path, workspacePaths) : undefined;
+	if (!path || !filePath || !openFile) return undefined;
+	const target = workspaceFileOpenTarget(path, filePath);
+	return { filePath, open: (line?: number) => (line == null ? openFile(target) : openFile(target, line)) };
+}
+
 /**
  * A workspace file named outside markdown: opens in Files at the line when this
  * chat can find it, as an inline code path does; otherwise plain text.
  */
 export function FileReference({ path, line, className, children }: { path: string; line?: number; className?: string; children: ReactNode }) {
-	const { openFile, workspacePaths } = useContext(OpenChatLink);
-	const filePath = openFile ? findWorkspaceFilePath(path, workspacePaths) : undefined;
-	if (!filePath || !openFile) return <span className={className} title={path}>{children}</span>;
-	const target = workspaceFileOpenTarget(path, filePath);
+	const file = useWorkspaceFile(path);
+	if (!file) return <span className={className} title={path}>{children}</span>;
 	return (
-		<button type="button" className={className} title={path} onClick={() => (line ? openFile(target, line) : openFile(target))}>
+		<button type="button" className={className} title={path} onClick={() => file.open(line)}>
 			{children}
 		</button>
 	);
@@ -474,27 +481,22 @@ export function ArtifactPathCode({ text, children }: { text: string; children: R
 }
 
 function InlineCode({ children }: { children?: ReactNode }) {
-	const { openFile: onFileOpen, openSession, workspacePaths } = useContext(OpenChatLink);
+	const { openSession } = useContext(OpenChatLink);
 	const insideLink = useContext(InsideMarkdownLink);
 	const text = typeof children === "string" ? children : undefined;
-	const filePath = text && onFileOpen ? findWorkspaceFilePath(text, workspacePaths) : undefined;
+	const file = useWorkspaceFile(text);
 	const code = (
 		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
 		</code>
 	);
 	if (insideLink) return code;
-	if (!filePath || !onFileOpen) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
+	if (!file) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
 	return (
 		<button
 			type="button"
-			onClick={() => {
-				const line = workspaceFileReferenceLine(text ?? "");
-				const target = workspaceFileOpenTarget(text ?? "", filePath);
-				if (line == null) onFileOpen(target);
-				else onFileOpen(target, line);
-			}}
-			aria-label={`Open ${filePath} in Files`}
+			onClick={() => file.open(workspaceFileReferenceLine(text ?? ""))}
+			aria-label={`Open ${file.filePath} in Files`}
 			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
 		>
 			{code}
