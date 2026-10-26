@@ -75,6 +75,14 @@ const REDIRECT_URI =
     : "http://127.0.0.1:3000/callback");
 const useLoopbackRedirect = isLoopbackRedirect(REDIRECT_URI);
 const AUTH_STORE_FILE = "cloud-auth.bin";
+// Plaintext, non-secret identity (publicAccount: user/orgs, never tokens) kept
+// next to the encrypted store so the renderer's startup session read can render
+// the signed-in UI without decrypting. Decrypting cloud-auth.bin on cold open
+// is what popped a macOS keychain prompt on every start of a rebuilt (unsigned,
+// self-built) binary: the rebuilt binary never matches the store's keychain ACL.
+// Tokens are decrypted only when cloud is actually used — sign-in/sign-out, or
+// getCloudAccessToken on the CP proxy path.
+const IDENTITY_FILE = "cloud-identity.json";
 const LEGACY_SESSION_FILE = "cloud-session.json";
 const PKCE_TTL_MS = 10 * 60 * 1000;
 const workos = CLIENT_ID ? createWorkOS({ clientId: CLIENT_ID }) : null;
@@ -156,6 +164,28 @@ function storePath(dataDir: string): string {
   return path.join(dataDir, AUTH_STORE_FILE);
 }
 
+function identityPath(dataDir: string): string {
+  return path.join(dataDir, IDENTITY_FILE);
+}
+
+async function writeIdentityFile(dataDir: string, account: CloudAccount): Promise<void> {
+  const target = identityPath(dataDir);
+  await writeFile(target, JSON.stringify(account), { mode: 0o600 });
+  await chmod(target, 0o600);
+}
+
+async function readIdentity(dataDir: string): Promise<CloudAccount | null> {
+  try {
+    const parsed = JSON.parse(await readFile(identityPath(dataDir), "utf8")) as CloudAccount | null;
+    if (!parsed || typeof parsed !== "object" || !parsed.user?.id || !parsed.authProvider) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function protectedStorageAvailable(): boolean {
   if (!safeStorage.isEncryptionAvailable()) return false;
   if (process.platform !== "linux") return true;
@@ -196,6 +226,7 @@ export async function writeAuthStore(
     // using an unprotected hardcoded password, so keep that process-local too.
     memoryStores.set(dataDir, store);
     await rm(storePath(dataDir), { force: true });
+    await rm(identityPath(dataDir), { force: true });
     return;
   }
   memoryStores.delete(dataDir);
@@ -203,12 +234,18 @@ export async function writeAuthStore(
   const target = storePath(dataDir);
   await writeFile(target, encodeStore(store), { mode: 0o600 });
   await chmod(target, 0o600);
+  if (store.session) {
+    await writeIdentityFile(dataDir, publicAccount(store.session));
+  } else {
+    await rm(identityPath(dataDir), { force: true });
+  }
 }
 
 export async function removeAuthStore(dataDir: string): Promise<void> {
   memoryStores.delete(dataDir);
   await Promise.all([
     rm(storePath(dataDir), { force: true }),
+    rm(identityPath(dataDir), { force: true }),
     rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
   ]);
 }
@@ -326,30 +363,40 @@ export async function getCloudSession(
 }
 
 /**
- * Fast, non-blocking variant of getCloudSession for the renderer's initial
- * mount. Returns the on-disk identity immediately (no WorkOS round-trip), so
- * the sidebar and the create-project Cloud tab render right away instead of
- * blanking for seconds while a token refresh runs on cold open. If the stored
- * token is stale, the refresh runs in the background and the corrected result
- * (rotated session, or null on terminal failure) is pushed over
- * cloud:sessionChanged, which the renderer already subscribes to. The CP proxy
- * refreshes independently via getCloudAccessToken, so outbound requests stay
- * authorized regardless.
+ * The renderer's initial-mount session read. Serves the plaintext identity
+ * sidecar and never decrypts: a cold open of a rebuilt (unsigned, self-built)
+ * binary would otherwise prompt for keychain access on every start, because
+ * the rebuilt binary never matches the store's keychain ACL. Tokens decrypt
+ * only when cloud is actually used — sign-in/sign-out, or getCloudAccessToken
+ * on the CP proxy path, which refreshes independently and pushes corrections
+ * to renderers over cloud:sessionChanged.
+ *
+ * Stores written before the sidecar existed get one migration read: the first
+ * cached lookup decrypts the legacy store, seeds the sidecar, and every later
+ * start reads plaintext only.
  */
 export async function getCloudSessionCached(
   dataDir: string,
 ): Promise<CloudAccount | null> {
-  const store = await readAuthStore(dataDir);
-  // Local sessions carry no rotating token — return the stored identity as-is.
-  if (isLocalSession(store.session)) return publicAccount(store.session);
-  if (!workos) return null;
-  if (!store.session) return null;
-  if (tokenExpiresSoon(store.session.accessToken)) {
-    void getCloudSession(dataDir)
-      .then((refreshed) => notifyRenderersFn?.(refreshed))
-      .catch(() => {});
+  const identity = await readIdentity(dataDir);
+  if (identity) {
+    // Mirror getCloudSession's provider gate: a local session needs no WorkOS
+    // client, a WorkOS identity is only meaningful with one.
+    return identity.authProvider === "local" || workos ? identity : null;
   }
-  return publicAccount(store.session);
+  const store = await readAuthStore(dataDir);
+  if (!store.session) return null;
+  const account = publicAccount(store.session);
+  // A memory-only store (OS encryption unavailable) never persists anything,
+  // so seed the sidecar only for genuinely protected stores.
+  if (!memoryStores.has(dataDir)) {
+    try {
+      await writeIdentityFile(dataDir, account);
+    } catch {
+      // Best-effort: failing to seed just means the next start migrates again.
+    }
+  }
+  return account;
 }
 
 /**

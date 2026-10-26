@@ -63,6 +63,7 @@ import {
   beginCloudSignIn,
   getCloudAccessToken,
   getCloudSession,
+  getCloudSessionCached,
   handleCloudDeepLink,
   installCloudIPC,
   readAuthStore,
@@ -306,6 +307,93 @@ describe("native WorkOS authentication", () => {
       user: { email: "person@example.com" },
     });
     await signOutCloud(dataDir);
+  });
+
+  describe("startup session read", () => {
+    const identityFile = () => path.join(dataDir, "cloud-identity.json");
+    const signIn = () =>
+      beginCloudSignIn(dataDir).then(() =>
+        handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir),
+      );
+
+    it("serves the signed-in identity without decrypting the auth store", async () => {
+      await signIn();
+      mocks.decryptString.mockClear();
+
+      await expect(getCloudSessionCached(dataDir)).resolves.toMatchObject({
+        authProvider: "workos",
+        user: { email: "person@example.com" },
+      });
+      expect(mocks.decryptString).not.toHaveBeenCalled();
+    });
+
+    it("does not start a token refresh from the startup read", async () => {
+      mocks.authenticateWithCode.mockResolvedValueOnce({
+        accessToken: EXPIRED_ACCESS_TOKEN,
+        refreshToken: "refresh_123",
+        user: {
+          id: "user_123",
+          email: "person@example.com",
+          name: "Person Example",
+        },
+      });
+      await signIn();
+      mocks.decryptString.mockClear();
+
+      await expect(getCloudSessionCached(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      expect(mocks.authenticateWithRefreshToken).not.toHaveBeenCalled();
+      expect(mocks.decryptString).not.toHaveBeenCalled();
+    });
+
+    it("seeds the identity sidecar from a store written before it existed, once", async () => {
+      await signIn();
+      await rm(identityFile(), { force: true });
+      mocks.decryptString.mockClear();
+
+      await expect(getCloudSessionCached(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      expect(mocks.decryptString).toHaveBeenCalledTimes(1);
+      await expect(readFile(identityFile(), "utf8")).resolves.toContain(
+        "person@example.com",
+      );
+
+      mocks.decryptString.mockClear();
+      await expect(getCloudSessionCached(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      expect(mocks.decryptString).not.toHaveBeenCalled();
+    });
+
+    it("clears the identity sidecar on sign-out so the app starts signed out", async () => {
+      await signIn();
+      await signOutCloud(dataDir);
+
+      await expect(getCloudSessionCached(dataDir)).resolves.toBeNull();
+      await expect(
+        readFile(identityFile(), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("keeps the identity out of disk when OS encryption is unavailable", async () => {
+      mocks.encryptionAvailable = false;
+      await signIn();
+
+      await expect(
+        readFile(identityFile(), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      // The live session still resolves from the process-local store, but the
+      // persisted sidecar that would outlive it is never written.
+      await expect(getCloudSessionCached(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      await expect(
+        readFile(identityFile(), "utf8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await signOutCloud(dataDir);
+    });
   });
 
   it("shows a bounded error when the callback cannot be completed", async () => {
