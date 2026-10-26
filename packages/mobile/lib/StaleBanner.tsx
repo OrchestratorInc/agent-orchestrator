@@ -1,12 +1,6 @@
-import { Feather } from "./icons";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-
-import { haptics } from "./haptics";
+import { InlineBanner } from "./InlineBanner";
 import { staleAgeLabel } from "./screenState";
 import { useApp } from "./store";
-import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { fontScaleCap, space, type } from "./tokens";
 import { useStaleness } from "./useStaleness";
 
 /**
@@ -22,10 +16,11 @@ import { useStaleness } from "./useStaleness";
  * that called it would re-render its whole list on a timer. Here the cost is one
  * small component. It also self-gates to null when the data is current, so
  * screens can render it unconditionally.
+ *
+ * It draws the chat screen's banner, so the app has one banner language rather
+ * than two that nearly match.
  */
 export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRetry?: () => void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
 	const { getLastSyncAt, config } = useApp();
 	const { stale, ageMs } = useStaleness(getLastSyncAt);
 
@@ -33,10 +28,6 @@ export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRet
 	// keeps the caller free of a conditional.
 	if (!stale && !error) return null;
 
-	// A reachability failure is worth more alarm than mere age: one means the
-	// desktop is gone, the other can just be a laptop that slept.
-	const tone = error ? t.red : t.amber;
-	const fill = error ? t.tintRed : t.tintAmber;
 	const host = config?.host?.trim();
 	const age = staleAgeLabel(ageMs);
 	const text = error
@@ -46,52 +37,17 @@ export function StaleBanner({ error = false, onRetry }: { error?: boolean; onRet
 		: `Showing data from ${age}`;
 
 	return (
-		<View
+		<InlineBanner
 			accessibilityRole="alert"
 			accessibilityLabel={text}
-			style={[styles.banner, { backgroundColor: fill }]}
-		>
-			<Feather name={error ? "wifi-off" : "clock"} size={12} color={tone} />
-			<Text
-				numberOfLines={1}
-				maxFontSizeMultiplier={fontScaleCap.chrome}
-				style={styles.bannerText}
-			>
-				{text}
-			</Text>
-			{onRetry ? (
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel="Retry now"
-					hitSlop={7}
-					onPress={() => {
-						haptics.tap();
-						onRetry();
-					}}
-				>
-					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.bannerAction, { color: tone }]}>
-						Retry
-					</Text>
-				</Pressable>
-			) : null}
-		</View>
+			// A reachability failure is worth more alarm than mere age: one means the
+			// desktop is gone, the other can just be a laptop that slept.
+			tone={error ? "danger" : "warning"}
+			icon={error ? "offline" : "history"}
+			title={text}
+			action={onRetry ? "Retry" : undefined}
+			actionLabel="Retry now"
+			onPress={onRetry}
+		/>
 	);
 }
-
-// Metrics mirror the chat screen's InlineBanner so the app has one banner
-// language rather than two that nearly match.
-const makeStyles = (t: Theme) =>
-	StyleSheet.create({
-		banner: {
-			minHeight: 35,
-			flexDirection: "row",
-			alignItems: "center",
-			gap: space.sm,
-			paddingHorizontal: space.md,
-			paddingVertical: space.xs,
-			borderBottomWidth: 1,
-			borderBottomColor: t.borderSubtle,
-		},
-		bannerText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		bannerAction: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, fontWeight: "600" },
-	});
