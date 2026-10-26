@@ -148,6 +148,17 @@ describe("disclosure rows", () => {
 	});
 });
 
+describe("letter case", () => {
+	// Neither HIG nor Material sets labels in tracked capitals; they read as shouting.
+	it("labels in sentence case", () => {
+		for (const label of ["STEERED", "AGENT TYPED", "SUBAGENT", "HISTORY COMPACTED", "STILL CHANGING", "GROWING", "PROGRESS", "FULL"]) expect(source).not.toContain(label);
+		for (const label of [">Steered<", ">Agent typed<", "Subagent · {count}", "History compacted{", ">Still changing<", ">Growing<", ">Progress<"]) expect(source).toContain(label);
+		expect(source).not.toContain("{label.toUpperCase()}");
+		expect(source).not.toContain('textTransform: "uppercase"');
+		expect(source).not.toContain("letterSpacing");
+	});
+});
+
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");

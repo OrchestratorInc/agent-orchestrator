@@ -459,7 +459,7 @@ const TimelineItem = memo(function TimelineItem({
 	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		return <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
+		return <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
@@ -647,7 +647,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 function TerminalInput({ text, truncated }: { text: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
+	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailHeading}>Agent typed</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
 }
 
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
@@ -665,14 +665,14 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
 			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 		</Pressable>
-		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
+		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailHeading}>Progress</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
 	</View>;
 }
 
 function JsonPayload({ label, value }: { label: string; value: unknown }) {
 	const styles = useThemedStyles(makeStyles);
 	const note = truncationNote(value);
-	return <View><Text style={styles.detailLabel}>{label.toUpperCase()}</Text>{note ? <Text style={styles.detailCopy}>{note}</Text> : <CodeOutput value={printable(value)} />}</View>;
+	return <View><Text style={styles.detailHeading}>{label}</Text>{note ? <Text style={styles.detailCopy}>{note}</Text> : <CodeOutput value={printable(value)} />}</View>;
 }
 
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
@@ -683,7 +683,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const denied = String(detail.status ?? "").toLowerCase().includes("den");
 	const paths = reviewPaths(detail.files);
 	const body = Boolean(detail.rationale || detail.command || detail.cwd || detail.host || detail.decisionSource || paths.length);
-	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.activityRow}><Feather name={denied ? "shield-off" : "shield"} size={12} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{detail.riskLevel}</Text> : null}{body ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
+	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.activityRow}><Feather name={denied ? "shield-off" : "shield"} size={12} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{sentenceCase(detail.riskLevel)}</Text> : null}{body ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
 }
 
 function FileChangeActivity({ activity }: { activity: ConversationActivity }) {
@@ -776,7 +776,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 			style={styles.subagentHeader}
 		>
 			<Feather name="git-branch" size={12} color={t.textTertiary} />
-			<Text style={styles.subagentLabel}>SUBAGENT · {count} {count === 1 ? "STEP" : "STEPS"}</Text>
+			<Text style={styles.subagentLabel}>Subagent · {count} {count === 1 ? "step" : "steps"}</Text>
 			{running ? <ActivityIndicator size="small" color={t.textTertiary} /> : null}
 			<FoldChevron open={open} color={t.textTertiary} />
 		</Pressable>
@@ -894,7 +894,7 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 				>
 				<Feather name="list" size={12} color={t.textTertiary} />
 				<Text style={styles.planTitle}>Plan</Text>
-				{turn.state === "running" ? <Text style={styles.planLive}>STILL CHANGING</Text> : null}
+				{turn.state === "running" ? <Text style={styles.planLive}>Still changing</Text> : null}
 				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
 				<FoldChevron open={open} color={t.textTertiary} />
 			</Pressable>
@@ -903,7 +903,7 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 				{turn.plan?.steps.map((step, index) => <View key={index} accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
 					<Feather name={step.status === "completed" ? "check-circle" : step.status === "in_progress" ? "circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} />
 					<Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text>
-					<Text style={styles.planStepState}>{step.status.replace("_", " ")}</Text>
+					<Text style={styles.planStepState}>{sentenceCase(step.status.replace("_", " "))}</Text>
 				</View>)}
 			</View> : null}
 		</View>
@@ -929,7 +929,7 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 				>
 				<Feather name="file-text" size={12} color={t.textTertiary} />
 				<Text numberOfLines={1} style={[styles.planTitle, styles.changedTitle]}>{files ? `${changed.length} ${changed.length === 1 ? "file" : "files"}` : `${changed.length} changed ${changed.length === 1 ? "file" : "files"}`}</Text>
-				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>GROWING</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
+				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>Growing</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
 				<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{additions}</Text>
 				<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{deletions}</Text>
 				<FoldChevron open={open} color={t.textTertiary} />
@@ -1130,7 +1130,7 @@ function CompactionMarker({ activity }: { activity: ConversationActivity }) {
 	const styles = useThemedStyles(makeStyles);
 	const after = activity.detail?.tokensAfter;
 	const window = activity.detail?.contextWindow;
-	return <View style={styles.compaction}><Feather name="archive" size={12} color={t.textFaint} /><Text style={styles.compactionText}>HISTORY COMPACTED{activity.detail?.tokensReclaimed ? `  −${formatTokens(activity.detail.tokensReclaimed)}` : ""}{after && window ? `  ${Math.round((after / window) * 100)}% FULL` : ""}</Text></View>;
+	return <View style={styles.compaction}><Feather name="archive" size={12} color={t.textFaint} /><Text style={styles.compactionText}>History compacted{activity.detail?.tokensReclaimed ? ` · −${formatTokens(activity.detail.tokensReclaimed)}` : ""}{after && window ? ` · ${Math.round((after / window) * 100)}% full` : ""}</Text></View>;
 }
 
 function ErrorActivity({ activity }: { activity: ConversationActivity }) {
@@ -1188,6 +1188,9 @@ function formatBytes(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** "high" or "HIGH" as "High": a provider's word, shown in sentence case. */
+function sentenceCase(value: string): string { return value ? value[0].toUpperCase() + value.slice(1).toLowerCase() : value; }
+
 function lastLine(value: string): string { return value.trimEnd().split("\n").at(-1) ?? ""; }
 
 function activityMeta(activity: ConversationActivity): { icon: keyof typeof Feather.glyphMap; prefix?: string; color(t: Theme): string } {
@@ -1228,12 +1231,12 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	attachmentRetry: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	originMessage: { marginVertical: space.sm, borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.sm, gap: space.xxs },
 	originHeader: { flexDirection: "row", alignItems: "center", gap: space.xxs },
-	originLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.7 },
+	originLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	originText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
 	originMore: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xxs },
 	originMoreText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	steerBubble: { backgroundColor: t.bgSubtle },
-	steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, letterSpacing: 1, fontWeight: "600", marginBottom: space.hair },
+	steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.hair },
 	assistantRow: { paddingVertical: space.lg },
 	sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.xxs },
 	responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
@@ -1253,7 +1256,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	terminalInput: { gap: space.xxs },
 	terminalInputTitle: { flexDirection: "row", alignItems: "center", gap: space.xxs },
 	reviewDecision: { fontFamily: "Geist_600SemiBold", color: t.green, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	risk: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.caption2.fontSize, fontWeight: "600", textTransform: "uppercase" },
+	risk: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	reviewRationale: { fontFamily: "Geist_400Regular", color: t.textPrimary, backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	runWrap: { paddingVertical: space.hair },
 	runSummary: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
@@ -1263,10 +1266,12 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	runDetail: { marginBottom: space.xs, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, backgroundColor: t.bgSubtle, paddingHorizontal: space.sm, paddingVertical: space.hair },
 	subagent: { marginLeft: space.xl, marginBottom: space.xxs, borderLeftWidth: 1, borderLeftColor: t.borderStrong, paddingLeft: space.sm },
 	subagentHeader: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
-	subagentLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textFaint, fontSize: type.caption2.fontSize, letterSpacing: 0.8 },
+	subagentLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textFaint, fontSize: type.caption2.fontSize },
 	detailCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	labelValue: { flexDirection: "row", gap: space.sm },
 	detailLabel: { width: 30, color: t.textFaint, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
+	// Names a block of detail: what the agent typed, a tool's arguments or result.
+	detailHeading: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	detailValue: { flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
 	output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
@@ -1287,12 +1292,12 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	changedReview: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: 999, backgroundColor: t.bgElevatedHover, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
 	changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, color: t.textPrimary },
 	planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, letterSpacing: 0.7, fontWeight: "600" },
+	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
 	planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
 	planStep: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
 	planStepText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	planStepState: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, textTransform: "uppercase" },
+	planStepState: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
 	planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 	fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 	fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
@@ -1325,7 +1330,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	requestCommand: { flex: 1, color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	form: { gap: space.sm },
 	field: { gap: space.xs },
-	inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase" },
+	inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	inputQuestion: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
 	inputLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	inputHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
@@ -1337,7 +1342,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	urlText: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	validation: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	compaction: { alignSelf: "center", flexDirection: "row", alignItems: "center", gap: space.xs, marginVertical: space.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 12, backgroundColor: t.bgSubtle },
-	compactionText: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, letterSpacing: 1 },
+	compactionText: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
 	errorCard: { marginVertical: space.sm, flexDirection: "row", gap: space.sm, backgroundColor: t.tintRed, borderRadius: 12, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: space.md },
 	errorTitle: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	errorCopy: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
