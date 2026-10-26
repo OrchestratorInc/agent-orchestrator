@@ -84,6 +84,7 @@
 	"chat.usageLimit.resetsAt": "<time>{{time}}</time> にリセット",
 	"chat.usageLimit.manualResumeHint": "手動で再開を試すことができます。",
 	"chat.usageLimit.ready": "リセット時刻になりました。再開できます。",
+	"chat.usageLimit.accountChanged": "このチャットは別のアカウントを使うようになりました。今すぐ再開できます。",
 	"chat.usageLimit.availableIn": "<duration>{{duration}}</duration>後に再開できます。",
 	"chat.usageLimit.scheduled": "自動再開を予約しています。",
 	"chat.usageLimit.waiting": "自動再開は再試行を待っています。",

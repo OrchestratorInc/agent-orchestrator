@@ -3896,6 +3896,9 @@ func (s *Store) LoadConversationSnapshotPage(
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
+	if err := s.markUsageLimitAccountChanges(ctx, snapshot.Turns); err != nil {
+		return ConversationSnapshot{}, err
+	}
 	// SQL returns newest-first so LIMIT is useful; the API contract remains
 	// oldest-first inside each page.
 	for i := len(messageRows) - 1; i >= 0; i-- {
@@ -4043,6 +4046,9 @@ func (s *Store) LoadConversationSnapshot(
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
+	if err := s.markUsageLimitAccountChanges(ctx, snapshot.Turns); err != nil {
+		return ConversationSnapshot{}, err
+	}
 	for _, row := range messageRows {
 		snapshot.Messages = append(snapshot.Messages, messageToDomain(row))
 	}
@@ -4050,6 +4056,27 @@ func (s *Store) LoadConversationSnapshot(
 		snapshot.Activities = append(snapshot.Activities, activityToDomain(row))
 	}
 	return snapshot, nil
+}
+
+// markUsageLimitAccountChanges flags a usage limit hit on an account the
+// session has since moved off. The quota that ran out belongs to the old
+// account, and AO already refuses auto-resume across such a move, so the
+// chat can resume on the new account now instead of waiting for that reset.
+func (s *Store) markUsageLimitAccountChanges(ctx context.Context, turns []domain.ConversationTurn) error {
+	for i := range turns {
+		limit := turns[i].UsageLimit
+		if limit == nil || turns[i].HandledBySessionID == "" {
+			continue
+		}
+		changed, err := s.qr.SessionAgentAccountChangedSince(ctx, gen.SessionAgentAccountChangedSinceParams{
+			SessionID: turns[i].HandledBySessionID, RequestedAt: turns[i].RequestedAt,
+		})
+		if err != nil {
+			return fmt.Errorf("read usage-limit account binding: %w", err)
+		}
+		limit.AccountChanged = changed
+	}
+	return nil
 }
 
 func (s *Store) conversationRetriedSources(ctx context.Context, conversationID string) (map[string]bool, error) {

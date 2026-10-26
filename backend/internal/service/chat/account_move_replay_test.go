@@ -96,7 +96,7 @@ func TestAccountMoveProviderHelper(t *testing.T) {
 		if json.Unmarshal(scanner.Bytes(), &request) != nil || len(request.ID) == 0 {
 			continue
 		}
-		id := json.RawMessage(request.ID)
+		id := request.ID
 		switch request.Method {
 		case "initialize":
 			write(map[string]any{"id": id, "result": map[string]any{

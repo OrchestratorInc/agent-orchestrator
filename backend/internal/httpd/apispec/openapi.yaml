@@ -16099,6 +16099,8 @@ components:
       type: object
     ConversationUsageLimitResponse:
       properties:
+        accountChanged:
+          type: boolean
         autoResume:
           type: boolean
         resetsAt:

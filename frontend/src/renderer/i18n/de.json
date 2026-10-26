@@ -84,6 +84,7 @@
 	"chat.usageLimit.resetsAt": "Wird am <time>{{time}}</time> zurückgesetzt",
 	"chat.usageLimit.manualResumeHint": "Du kannst versuchen, manuell fortzusetzen.",
 	"chat.usageLimit.ready": "Der Zeitpunkt für die Zurücksetzung ist erreicht. Du kannst jetzt fortsetzen.",
+	"chat.usageLimit.accountChanged": "Dieser Chat nutzt jetzt ein anderes Konto. Du kannst jetzt fortsetzen.",
 	"chat.usageLimit.availableIn": "Verfügbar in <duration>{{duration}}</duration>.",
 	"chat.usageLimit.scheduled": "Die automatische Fortsetzung ist geplant.",
 	"chat.usageLimit.waiting": "Die automatische Fortsetzung wartet auf einen erneuten Versuch.",

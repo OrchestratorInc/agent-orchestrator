@@ -3084,6 +3084,9 @@ type ConversationUsageLimitResponse struct {
 	ResetsAt    *string `json:"resetsAt,omitempty"`
 	AutoResume  bool    `json:"autoResume"`
 	ResumeError string  `json:"resumeError,omitempty"`
+	// AccountChanged means the session has moved to another account since this
+	// limit, so it can resume now rather than at ResetsAt.
+	AccountChanged bool `json:"accountChanged,omitempty"`
 }
 
 // ConversationPlanResponse is the agent's plan for one turn.
