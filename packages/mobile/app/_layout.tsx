@@ -45,14 +45,20 @@ import { sheetCornerRadius } from "../lib/tokens";
 // what an action sheet needs. iOS keeps both detents: UIKit's sheet dismisses
 // from the lower one with an ordinary swipe.
 const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitToContents"; androidDetents?: readonly [number] }[] = [
-	{ name: "sheets/agent", detents: [0.5, 0.95] },
-	{ name: "sheets/model", detents: [0.5, 0.95] },
-	{ name: "sheets/chat-settings", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-map", detents: [0.5, 0.95] },
 	{ name: "sheets/conversation-usage", detents: "fitToContents" },
 	{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] },
 	{ name: "files/[sessionId]/review", detents: [0.5, 1] },
 ];
+
+// Picker sheets that iOS titles in a native bar, as it does a form sheet's;
+// Android keeps the title in the sheet's body. A page may retitle its bar, as
+// the agent picker does for Chat.
+const PICKER_SHEETS = [
+	{ name: "sheets/agent", title: "Agent" },
+	{ name: "sheets/model", title: "Model" },
+	{ name: "sheets/chat-settings", title: "Turn settings" },
+] as const;
 
 // The manual-connect form — the only sheet with text inputs, and the only one
 // that has to move for the keyboard.
@@ -279,6 +285,26 @@ function Shell() {
 							sheetGrabberVisible: true,
 							sheetCornerRadius,
 							headerShown: false,
+							contentStyle: { backgroundColor: t.bgSurface },
+						}}
+					/>
+				))}
+				{/* Shown from the start rather than by the page, because a modal whose
+				    header appears after it mounts is rebuilt. The bar takes the
+				    grouped page colour of the iOS list below it. */}
+				{PICKER_SHEETS.map(({ name, title }) => (
+					<Stack.Screen
+						key={name}
+						name={name}
+						options={{
+							presentation: "formSheet",
+							sheetAllowedDetents: [0.5, 0.95],
+							sheetInitialDetentIndex: 0,
+							sheetGrabberVisible: true,
+							sheetCornerRadius,
+							headerShown: Platform.OS === "ios",
+							title,
+							headerStyle: { backgroundColor: t.bgBase },
 							contentStyle: { backgroundColor: t.bgSurface },
 						}}
 					/>

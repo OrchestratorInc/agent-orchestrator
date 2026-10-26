@@ -1,4 +1,4 @@
-import { StyleSheet, Text } from "react-native";
+import { Platform, StyleSheet, Text } from "react-native";
 import { AgentLogo } from "./AgentLogo";
 import type { RankedAgent } from "./agentPicker";
 import { haptics } from "./haptics";
@@ -36,6 +36,7 @@ export function AgentPickerSheet({
 	onRefresh: () => Promise<void>;
 	refreshing?: boolean;
 	error?: string | null;
+	/** Android's, in the body; iOS carries the title in the sheet's native bar. */
 	title?: string;
 	subtitle?: string;
 }) {
@@ -43,7 +44,7 @@ export function AgentPickerSheet({
 	return (
 		<NativePickerList
 			header={<>
-				<SheetHeader title={title} subtitle={subtitle} />
+				<SheetHeader title={Platform.OS === "ios" ? undefined : title} subtitle={subtitle} />
 				{error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
 			</>}
 			options={agents.map((agent) => ({

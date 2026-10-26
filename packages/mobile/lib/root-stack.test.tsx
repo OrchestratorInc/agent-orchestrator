@@ -133,6 +133,29 @@ describe("root stack", () => {
 		}
 	});
 
+	// iOS bars a picker sheet natively from the start, in the grouped colour of
+	// the list under it; Android keeps the title in the sheet's body.
+	it.each(["ios", "android"])("titles the picker sheets in a native bar only on iOS, on %s", async (platform) => {
+		const renderer = await renderRoot(platform);
+		try {
+			for (const [name, title] of [["sheets/agent", "Agent"], ["sheets/model", "Model"], ["sheets/chat-settings", "Turn settings"]]) {
+				expect(renderer.root.findByProps({ name }).props.options).toMatchObject({
+					presentation: "formSheet",
+					title,
+					headerShown: platform === "ios",
+					headerStyle: { backgroundColor: "#bgBase" },
+				});
+			}
+		} finally {
+			act(() => renderer.unmount());
+		}
+		const source = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+		expect(source("./ModelPickerSheet.tsx")).toContain('<SheetHeader title={Platform.OS === "ios" ? undefined : "Model"}');
+		expect(source("./AgentPickerSheet.tsx")).toContain('<SheetHeader title={Platform.OS === "ios" ? undefined : title}');
+		// The agent picker retitles its bar for Chat.
+		expect(source("../app/sheets/agent.tsx")).toContain("<Stack.Screen options={{ title }} />");
+	});
+
 	it.each(["ios", "android"])("gives every pushed page the system back button on %s", async (platform) => {
 		const renderer = await renderRoot(platform);
 		try {

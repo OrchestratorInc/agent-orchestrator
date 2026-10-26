@@ -141,7 +141,8 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 
 	return <View style={styles.screen}>
 		<View style={styles.header}>
-			<SheetHeader title="Turn settings" subtitle="Changes apply to the next message." />
+			{/* iOS titles the sheet in its native bar. */}
+			<SheetHeader title={ios ? undefined : "Turn settings"} subtitle="Changes apply to the next message." />
 			{error ? <Notice color={t.red} background={t.tintRed} icon="error" text={error} /> : null}
 			{snapshot.modelReroute ? <Notice color={t.amber} background={t.tintAmber} icon="warning" text={`Currently answered by ${snapshot.modelReroute.toModel}`} detail={rerouteDetail(snapshot.modelReroute)} /> : null}
 		</View>

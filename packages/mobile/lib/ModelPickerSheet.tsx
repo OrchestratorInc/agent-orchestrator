@@ -38,7 +38,8 @@ export function ModelPickerSheet({ catalog, selected, loading, refreshing, error
 	return (
 		<NativePickerList
 			header={<>
-				<SheetHeader title="Model" subtitle="Choose how this agent runs the task." />
+				{/* iOS titles the sheet in its native bar. */}
+				<SheetHeader title={Platform.OS === "ios" ? undefined : "Model"} subtitle="Choose how this agent runs the task." />
 				{notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
 				{loading ? <Spinner size="large" accessibilityLabel="Loading models" style={styles.loading} /> : null}
 			</>}

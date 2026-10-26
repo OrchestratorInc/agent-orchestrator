@@ -497,6 +497,17 @@ describe("turn settings sheet on either platform", () => {
 	const notice = (renderer: ReactTestRenderer) => renderer.root.find((node) => (node.type as unknown) === "View" && node.props.accessibilityRole === "alert");
 	const texts = (node: ReturnType<typeof notice>) => node.findAllByType("Text" as never).map((text) => text.props.children);
 
+	// iOS titles the sheet in its native bar, which the route registers; the
+	// body keeps the subtitle. Android titles it in the body.
+	it.each([["ios", undefined], ["android", "Turn settings"]])("titles the sheet on %s where the platform does", (os, title) => {
+		platform.OS = os;
+		const { renderer } = sheet();
+		const header = renderer.root.findByType("SheetHeader" as never);
+		expect(header.props.title).toBe(title);
+		expect(header.props.subtitle).toBe("Changes apply to the next message.");
+		act(() => renderer.unmount());
+	});
+
 	it.each(["ios", "android"])("says on %s which model was requested and why another answers", (os) => {
 		platform.OS = os;
 		const at = "2026-10-26T00:00:00Z";
