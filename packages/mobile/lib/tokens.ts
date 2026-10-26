@@ -140,6 +140,16 @@ export const radius = {
 	pill: 999,
 } as const;
 
+/**
+ * Colours drawn over a live camera preview. The preview is dark whatever the
+ * theme, so these stay fixed: the backdrop behind it before the first frame
+ * arrives, and the reticle that shows where to hold a code.
+ */
+export const onCamera = {
+	backdrop: "#0c0d10",
+	reticle: "rgba(255,255,255,0.92)",
+} as const;
+
 /** Icon ladder. Match the stroke to the weight of the text beside it. */
 export const iconSize = {
 	xs: 12,

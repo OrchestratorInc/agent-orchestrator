@@ -255,7 +255,10 @@ function Shell() {
 				{/* The page renames itself to the project once it loads. */}
 				<Stack.Screen name="project/[id]" options={{ title: "Project" }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
-				<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: false }} />
+				{/* iOS bars the modal natively, with its close item; Android keeps a
+				    full-screen page with Material's close button in the body. Fixed
+				    here, as the page cannot toggle a modal's header without a rebuild. */}
+				<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: Platform.OS === "ios", title: "Pair a machine" }} />
 
 				{/* Sheets. `formSheet` is a real UIKit sheet, so the drag-to-dismiss,
 				    the grabber and the rubber-banding come from the OS rather than
