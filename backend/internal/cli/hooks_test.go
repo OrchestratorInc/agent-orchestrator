@@ -2481,7 +2481,8 @@ func TestClaudeHookDeniesFirstArtifactUseOnly(t *testing.T) {
 	}
 	if got.HookSpecificOutput.HookEventName != "PreToolUse" ||
 		got.HookSpecificOutput.PermissionDecision != "deny" ||
-		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "ao report --artifact") {
+		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "html_render") ||
+		strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "ao report") {
 		t.Fatalf("unexpected decision: %+v", got)
 	}
 	if capture.hits != hits+1 {

@@ -535,8 +535,8 @@ type claudePreToolUseDenyOutput struct {
 
 const artifactToolName = "Artifact"
 
-const artifactNudgeReason = "AO does not show Claude artifacts. Write the deliverable to the session artifact directory " +
-	"and attach it with `ao report --artifact <path>`; in a chat session, use html_render."
+const artifactNudgeReason = "AO does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
+	"in a chat session, use html_render."
 
 // claimArtifactNudge reports whether this is the session's first Artifact tool
 // use, by atomically creating a marker file under AO_DATA_DIR. Any failure
