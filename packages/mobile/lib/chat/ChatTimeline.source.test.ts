@@ -159,6 +159,20 @@ describe("letter case", () => {
 	});
 });
 
+describe("card shape", () => {
+	const styles = source.slice(source.indexOf("const makeStyles"));
+
+	// r8 with 1px, r12 with a hairline and r16 had grown up side by side.
+	it("gives every card one radius and one edge width", () => {
+		expect(styles).toContain('const card = { borderRadius: radius.md, borderCurve: "continuous", borderWidth: rowDividerWidth } as const;');
+		for (const name of ["systemSignal", "runDetail", "planCard", "requestCard", "errorCard"]) expect(styles).toMatch(new RegExp(`\\n\\t+${name}: \\{ \\.\\.\\.card,`));
+		expect(styles).not.toMatch(/borderRadius: \d/);
+		// The origin message's 2pt bar is a quote mark, not an edge.
+		expect(styles).not.toMatch(/[bB]order(?!LeftWidth: 2)\w*Width: \d/);
+		expect(styles).not.toContain("hairlineWidth");
+	});
+});
+
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");

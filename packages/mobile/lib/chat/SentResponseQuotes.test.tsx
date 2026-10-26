@@ -2,7 +2,7 @@ import { act, create } from "react-test-renderer";
 import { expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-vi.mock("react-native", () => ({ Text: "Text", View: "View" }));
+vi.mock("react-native", () => ({ Platform: { OS: "ios" }, StyleSheet: { hairlineWidth: 0.5 }, Text: "Text", View: "View" }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({ textSecondary: "gray", accentTint: "selection" }) }));
 import { SentResponseQuotes } from "./SentResponseQuotes";
 
