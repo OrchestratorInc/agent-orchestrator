@@ -52,6 +52,29 @@ describe("spawnOrchestrator", () => {
 		vi.clearAllMocks();
 	});
 
+	it("retries a transient 503 SERVICE_UNAVAILABLE for a non-clean spawn", async () => {
+		vi.useFakeTimers();
+		const post = apiClient.POST as ReturnType<typeof vi.fn>;
+		post
+			.mockResolvedValueOnce({ data: undefined, error: { code: "SERVICE_UNAVAILABLE", message: "busy" }, response: { status: 503 } })
+			.mockResolvedValueOnce({ data: { orchestrator: { id: "proj-1" } }, error: undefined, response: { status: 201 } });
+		const pending = spawnOrchestrator("proj", "restore_dialog");
+		await vi.runAllTimersAsync();
+		expect(await pending).toBe("proj-1");
+		expect(post).toHaveBeenCalledTimes(2);
+		vi.useRealTimers();
+	});
+
+	it("never replays a clean spawn on 503", async () => {
+		(apiClient.POST as ReturnType<typeof vi.fn>).mockResolvedValue({
+			data: undefined,
+			error: { code: "SERVICE_UNAVAILABLE", message: "busy" },
+			response: { status: 503 },
+		});
+		await expect(spawnOrchestrator("proj", "restore_dialog", true)).rejects.toMatchObject({ status: 503 });
+		expect(apiClient.POST).toHaveBeenCalledTimes(1);
+	});
+
 	it("sends clean:true through to the request body when asked", async () => {
 		(apiClient.POST as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { orchestrator: { id: "proj-9" } },

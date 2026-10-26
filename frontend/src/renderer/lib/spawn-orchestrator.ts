@@ -21,6 +21,12 @@ const CHAT_PREFLIGHT_CODES = new Set([
 	"CHAT_AUTH_REQUIRED",
 ]);
 
+const TRANSIENT_RETRY_DELAYS_MS = [500, 1500];
+
+function isTransientUnavailable({ error, response }: { error?: unknown; response: Response }): boolean {
+	return response.status === 503 && apiErrorCode(error) === "SERVICE_UNAVAILABLE";
+}
+
 /** A rejected orchestrator spawn without flattening the daemon's error envelope. */
 export class OrchestratorSpawnError extends Error {
 	constructor(
@@ -66,9 +72,20 @@ export async function spawnOrchestrator(
 	hostId?: string,
 ): Promise<string> {
 	try {
-		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
-			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
-		});
+		const post = () =>
+			clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
+				body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
+			});
+		let result = await post();
+		// A non-clean spawn is idempotent and the daemon's 503 SERVICE_UNAVAILABLE
+		// means a momentary database-busy or deadline condition, so retry it a
+		// couple of times. A clean spawn retires the live orchestrator first and
+		// is never replayed.
+		for (let attempt = 0; !clean && attempt < TRANSIENT_RETRY_DELAYS_MS.length && isTransientUnavailable(result); attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, TRANSIENT_RETRY_DELAYS_MS[attempt]));
+			result = await post();
+		}
+		const { data, error, response } = result;
 
 		if (error || !data?.orchestrator?.id) {
 			const message = error

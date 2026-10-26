@@ -90,6 +90,9 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 								payload["error_code"] = errorCode
 							}
 							payload["fingerprint"] = fingerprint
+							if cause := telemetrymeta.TransientCause(capErr); cause != "" {
+								payload["transient_cause"] = cause
+							}
 						}
 						for key, value := range captured.Fields {
 							payload[key] = value

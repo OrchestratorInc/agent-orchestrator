@@ -113,11 +113,11 @@ func TestWriteError_TransientMapsTo503(t *testing.T) {
 		name string
 		err  error
 	}{
-		{"sqlite busy", codeErr{code: sqliteBusy, msg: "database is locked"}},
-		{"sqlite locked", codeErr{code: sqliteLocked, msg: "database table is locked"}},
+		{"sqlite busy", codeErr{code: 5, msg: "database is locked"}},
+		{"sqlite locked", codeErr{code: 6, msg: "database table is locked"}},
 		{"sqlite busy extended", codeErr{code: 261, msg: "SQLITE_BUSY_RECOVERY"}}, // 261 & 0xFF == 5
 		{"sqlite locked extended", codeErr{code: 262, msg: "SQLITE_LOCKED_SHAREDCACHE"}},
-		{"wrapped busy", fmt.Errorf("get session: %w", codeErr{code: sqliteBusy, msg: "database is locked"})},
+		{"wrapped busy", fmt.Errorf("get session: %w", codeErr{code: 5, msg: "database is locked"})},
 		{"deadline exceeded", context.DeadlineExceeded},
 		{"wrapped deadline", fmt.Errorf("query: %w", context.DeadlineExceeded)},
 		{"apierr unavailable", apierr.Unavailable("SERVICE_UNAVAILABLE", "busy")},
