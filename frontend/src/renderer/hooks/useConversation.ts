@@ -559,8 +559,10 @@ export function conversationQueryOptions(sessionId: string, hostId?: string) {
 		// A local chat changes only through events, which invalidate it even while
 		// it is closed, and a reconnect invalidates every chat. Opening an unchanged
 		// chat again therefore needs no request; refetching here reloaded every page
-		// it had. Remote chats keep the default and their own polling.
-		...(hostId ? {} : { staleTime: Infinity }),
+		// it had. Remote chats keep the default and their own polling. A page
+		// restored from the last launch heard none of those events, so it stays
+		// stale until a fetch replaces it.
+		...(hostId ? {} : { staleTime: (query: { state: { data: unknown; dataUpdatedAt: number } }) => (isRestoredQueryData(query.state) ? 0 : Infinity) }),
 		gcTime: 30 * 60_000,
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading

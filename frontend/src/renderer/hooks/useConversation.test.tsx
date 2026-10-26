@@ -1418,3 +1418,27 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
 });
+
+it("refetches a local page restored from the last launch on mount, but not a live cached one", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	const wire = (latestSequence: number) => ({
+		conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+		latestSequence, oldestSequence: 1, hasMoreBefore: false, turns: [], messages: [], activities: [],
+	});
+	getMock.mockReset().mockResolvedValue({ data: wire(21), error: undefined });
+	const cached = (latestSequence: number) => ({ pages: [toSnapshot(wire(latestSequence) as never)], pageParams: [undefined] });
+
+	queryClient.setQueryData(["conversation", "ao-1"], cached(20), { updatedAt: 0 });
+	const restored = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	expect(restored.result.current.restored).toBe(true);
+	await waitFor(() => expect(restored.result.current.snapshot?.latestSequence).toBe(21));
+	expect(restored.result.current.restored).toBe(false);
+	restored.unmount();
+
+	getMock.mockClear();
+	queryClient.setQueryData(["conversation", "ao-2"], cached(20));
+	renderHook(() => useConversation("ao-2"), { wrapper: local });
+	await act(async () => {});
+	expect(getMock).not.toHaveBeenCalled();
+});
