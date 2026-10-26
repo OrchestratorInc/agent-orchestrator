@@ -189,7 +189,7 @@ export default function SettingsScreen() {
 								Alert.alert("Could not sign in", error instanceof Error ? error.message : "Try again.");
 							}).finally(() => setAccountBusy(false));
 						}} />
-						{account ? <CardRow icon="log-out" label="Sign out" onPress={() => {
+						{account ? <CardRow icon="log-out" label="Sign out" onPress={() => confirmSignOut(() => {
 							setAccountBusy(true);
 							void signOutOfAccount().then(async () => {
 								await clearAccountHosts();
@@ -197,7 +197,7 @@ export default function SettingsScreen() {
 								setPairedHosts(await loadHosts());
 								await reloadConfig();
 							}).catch(() => Alert.alert("Could not sign out", "Try again.")).finally(() => setAccountBusy(false));
-						}} disabled={accountBusy} /> : null}
+						})} disabled={accountBusy} /> : null}
 					</SettingsCard>
 				</SettingsSection>
 
@@ -231,6 +231,22 @@ export default function SettingsScreen() {
 				<VersionFooter />
 			</ScrollView>
 		</View>
+	);
+}
+
+/**
+ * Signing out forgets every machine the account synced to this phone, so it
+ * asks first, the way the system confirms any destructive step.
+ */
+function confirmSignOut(signOut: () => void) {
+	Alert.alert(
+		"Sign out of Orchestrator Cloud?",
+		"Machines synced from your account will be removed from this phone.",
+		[
+			{ text: "Cancel", style: "cancel" },
+			{ text: "Sign out", style: "destructive", onPress: signOut },
+		],
+		{ cancelable: true },
 	);
 }
 

@@ -4,6 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const fixtures = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	back: vi.fn(),
+	alert: vi.fn(),
+	account: null as { email: string } | null,
+	signOut: vi.fn(async () => {}),
+	clearAccountHosts: vi.fn(async () => {}),
 	platform: { OS: "android" },
 	hosts: [{ id: "dev", name: "Dev", endpoints: [], token: "token", platform: "darwin", lastConnected: 1 }],
 	theme: new Proxy({}, { get: () => "#000000" }),
@@ -19,7 +23,7 @@ vi.mock("expo-router", async () => {
 	};
 });
 vi.mock("react-native", () => ({
-	ActivityIndicator: "ActivityIndicator", Alert: { alert: vi.fn() }, Linking: {},
+	ActivityIndicator: "ActivityIndicator", Alert: { alert: fixtures.alert }, Linking: {},
 	Platform: fixtures.platform, Pressable: "Pressable", ScrollView: "ScrollView",
 	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 }, Text: "Text", View: "View",
 }));
@@ -36,8 +40,8 @@ vi.mock("expo-constants", () => ({ default: { expoConfig: {} } }));
 vi.mock("expo-updates", () => ({ isEnabled: false, updateId: null, channel: null, runtimeVersion: "1", useUpdates: () => ({}) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./api", () => ({ ApiError: class ApiError extends Error {}, pingServer: vi.fn() }));
-vi.mock("./account", () => ({ loadAccount: async () => null, signInToAccount: vi.fn(), signOutOfAccount: vi.fn() }));
-vi.mock("./accountHosts", () => ({ clearAccountHosts: vi.fn(), syncAccountHosts: vi.fn() }));
+vi.mock("./account", () => ({ loadAccount: async () => fixtures.account, signInToAccount: vi.fn(), signOutOfAccount: fixtures.signOut }));
+vi.mock("./accountHosts", () => ({ clearAccountHosts: fixtures.clearAccountHosts, syncAccountHosts: vi.fn() }));
 vi.mock("./config", () => ({ isConfigured: () => false }));
 vi.mock("./hosts", () => ({ activeHost: async () => fixtures.hosts[0], loadHosts: async () => fixtures.hosts }));
 vi.mock("./disconnect", () => ({ forgetPairedHost: vi.fn(), forgetServer: vi.fn() }));
@@ -49,7 +53,7 @@ vi.mock("./push", () => ({
 	getPushStatus: async () => ({ osPermission: "undetermined", registered: false, localToken: null }),
 	openNotificationSettings: vi.fn(), registerForPush: vi.fn(), unregisterFromPush: vi.fn(),
 }));
-vi.mock("./store", () => ({ useApp: () => ({ config: null, configured: false, selectedHostName: "Dev", connection: "closed", activeEndpoints: [] }) }));
+vi.mock("./store", () => ({ useApp: () => ({ config: null, configured: false, selectedHostName: "Dev", connection: "closed", activeEndpoints: [], reloadConfig: async () => null }) }));
 vi.mock("./ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
 	useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme),
@@ -67,6 +71,10 @@ beforeEach(() => {
 	vi.stubGlobal("__DEV__", false);
 	fixtures.navigate.mockClear();
 	fixtures.back.mockClear();
+	fixtures.alert.mockClear();
+	fixtures.signOut.mockClear();
+	fixtures.clearAccountHosts.mockClear();
+	fixtures.account = null;
 	fixtures.platform.OS = "android";
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
@@ -139,4 +147,21 @@ it.each(["ios", "android"])("leaves the title to the native header and closes fr
 	expect(close[0].props).toMatchObject({ icon: "xmark", accessibilityLabel: "Close settings" });
 	act(() => close[0].props.onPress());
 	expect(fixtures.back).toHaveBeenCalledTimes(1);
+});
+
+// Signing out forgets every machine the account synced here, so it asks first.
+it("confirms before signing out and removing synced machines", async () => {
+	fixtures.account = { email: "me@example.com" };
+	await act(async () => { renderer = create(<SettingsScreen />); });
+	const signOut = renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === "Sign out")[0].parent!;
+
+	act(() => signOut.props.onPress());
+	expect(fixtures.signOut).not.toHaveBeenCalled();
+	const [title, , buttons] = fixtures.alert.mock.calls.at(-1)!;
+	expect(title).toBe("Sign out of Orchestrator Cloud?");
+	expect(buttons.map((button: { text: string; style?: string }) => [button.text, button.style])).toEqual([["Cancel", "cancel"], ["Sign out", "destructive"]]);
+
+	await act(async () => { buttons[1].onPress(); });
+	expect(fixtures.signOut).toHaveBeenCalledOnce();
+	expect(fixtures.clearAccountHosts).toHaveBeenCalledOnce();
 });
