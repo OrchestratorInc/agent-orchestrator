@@ -85,8 +85,10 @@ const headline = { typography: "bodyLarge", fontFamily: font.regular } as const;
 const supporting = { typography: "bodyMedium", fontFamily: font.regular } as const;
 
 /**
- * Material's switch row: the whole item toggles, and screen readers hear the
- * title, the description and the state as one switch.
+ * Material's switch row: a tap anywhere on the item toggles it, and TalkBack
+ * reads the item as a switch with its title and description. @expo/ui's Switch
+ * always takes its own taps, so TalkBack also stops on the switch itself and
+ * reads only its state; @expo/ui has no way yet to fold it into the row.
  */
 function PolicyItem({ policy, locked, onChange }: { policy: ReviewPolicyRow; locked: boolean; onChange: (key: ReviewPolicyRow["key"], value: boolean) => void }) {
 	const t = useTheme();
