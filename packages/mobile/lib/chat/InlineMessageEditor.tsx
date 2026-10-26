@@ -142,7 +142,7 @@ export function InlineMessageEditor({
 				onPress={() => void send()}
 				android_ripple={sendFeedback.android_ripple}
 				style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed, sendDisabled && !sending && { opacity: stateOpacity.disabled }]}
-			>{sending ? <Spinner size={iconSize.md} color={t.bgBase} /> : <AppSymbol name="send" size={iconSize.md} color={t.bgBase} />}</Pressable>
+			>{sending ? <Spinner size={iconSize.md} color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.md} color={t.onAccent} />}</Pressable>
 		</View>
 	</View>;
 }

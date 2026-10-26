@@ -3,7 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({
 	ids: 0,
-	theme: new Proxy({}, { get: () => "#000000" }),
+	// Each token reads back as its own name, so a test can tell which one a control used.
+	theme: new Proxy({}, { get: (_, key) => typeof key === "string" ? `theme.${key}` : undefined }),
 }));
 vi.mock("react-native", () => ({
 	Platform: { OS: "android" }, View: "View", Text: "Text", TextInput: "TextInput", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator",
@@ -106,4 +107,18 @@ it("answers a send once, with its outcome, and cancels quietly", async () => {
 	act(() => button("Cancel edit").props.onPress());
 	expect(onCancel).toHaveBeenCalledOnce();
 	expect(haptics.tap).not.toHaveBeenCalled();
+});
+
+// Send is filled with the accent, so its glyph and spinner take the accent's own ink.
+it("inks Send in the accent's foreground, idle and sending", async () => {
+	let finish!: () => void;
+	const onEdit = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+	open(draft(), onEdit);
+	const sendButton = () => button("Send edited message");
+	expect(sendButton().props.style({ pressed: false })).toContainEqual(expect.objectContaining({ backgroundColor: "theme.accent" }));
+	expect(sendButton().findByType("SymbolView" as never).props.tintColor).toBe("theme.onAccent");
+	act(() => input().props.onChangeText("Fix the other bug"));
+	await act(async () => { sendButton().props.onPress(); });
+	expect(sendButton().findByType("ActivityIndicator" as never).props.color).toBe("theme.onAccent");
+	await act(async () => finish());
 });
