@@ -30,7 +30,7 @@ import {
 	useConversationSkills,
 	toSnapshot,
 } from "./useConversation";
-import type { ConversationSnapshot } from "../types/conversation";
+import type { ConversationMessage, ConversationSnapshot } from "../types/conversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -1423,7 +1423,12 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 
 describe("local conversation deltas", () => {
 	function cachedLive() {
-		return { ...toSnapshot(WIRE as Parameters<typeof toSnapshot>[0]), changeCursor: 10, oldestSequence: 2, hasMoreBefore: true };
+		return toSnapshot({
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready",
+			latestSequence: 3, changeCursor: 10, oldestSequence: 2, hasMoreBefore: true,
+			continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0,
+			settings: {}, messages: [], activities: [], turns: [],
+		});
 	}
 	async function activeCache() {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1483,7 +1488,7 @@ describe("local conversation deltas", () => {
 	});
 	it("keeps the highest revision when a rewritten older row overlaps loaded history", () => {
 		const live = cachedLive();
-		const row = { kind: "message" as const, id: "older-message", sequence: 1, revision: 3, text: "corrected" } as ConversationSnapshot["items"][number];
+		const row = { kind: "message" as const, id: "older-message", sequence: 1, revision: 3, text: "corrected" } as ConversationMessage;
 		const result = mergeConversationPages([{ ...live, items: [row] }, { ...live, items: [{ ...row, revision: 4, text: "newer" }] }]);
 		expect(result?.items).toEqual([{ ...row, revision: 4, text: "newer" }]);
 	});
