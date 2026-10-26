@@ -152,6 +152,44 @@ func (c *stalledHistoryConversation) RefreshHistory(ctx context.Context) ([]port
 	return nil, fmt.Errorf("refresh ACP session history: %w", ctx.Err())
 }
 
+// deadlineThenSettledHistoryConversation is an ACP-like reader whose first
+// session/load runs out of time without a provider verdict (the slow-machine
+// -32602 replay) and whose second reaches AO's checkpoint. It records each
+// attempt's deadline so a test can assert the escalating attempt budget.
+type deadlineThenSettledHistoryConversation struct {
+	*fakeConversation
+	mu        sync.Mutex
+	refreshes int
+	deadlines []time.Time
+	events    []ports.ChatEvent
+}
+
+func (c *deadlineThenSettledHistoryConversation) ReadHistory(context.Context) ([]ports.ChatEvent, error) {
+	return nil, ports.ErrChatHistoryUnsettled
+}
+
+func (c *deadlineThenSettledHistoryConversation) RefreshHistory(ctx context.Context) ([]ports.ChatEvent, error) {
+	deadline, _ := ctx.Deadline()
+	c.mu.Lock()
+	c.refreshes++
+	c.deadlines = append(c.deadlines, deadline)
+	refreshes := c.refreshes
+	c.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("refresh ACP session history: %w", ctx.Err())
+	case <-time.After(20 * time.Millisecond):
+	}
+	if refreshes == 1 {
+		return nil, fmt.Errorf("refresh ACP session history: %w: "+
+			`{"code":-32602,"message":"Internal error","data":{"error":"context deadline exceeded"}}`,
+			ports.ErrChatHistoryLoadDeadline)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]ports.ChatEvent(nil), c.events...), nil
+}
+
 type convergingHistoryConversation struct {
 	*fakeConversation
 	mu             sync.Mutex
@@ -1613,12 +1651,16 @@ func TestInterfaceHandoffStopsPollingWhenProviderRejectsHistoryLoad(t *testing.T
 	}
 }
 
-// A session/load that never returns must be cut off by the per-attempt bound
-// and reported as a load failure while the settle budget is still live, instead
-// of holding the transition for the whole nativeHistorySettleLimit.
-func TestInterfaceHandoffBoundsStalledHistoryLoadAttempt(t *testing.T) {
+// A session/load that never returns must not hold the transition forever, but
+// it also must not fail on the first attempt: the per-attempt bound cuts the
+// first load, later attempts escalate to the whole remaining settle budget, and
+// when the budget itself ends the typed settle failure reports the checkpoint
+// that was never reached.
+func TestInterfaceHandoffExhaustsSettleBudgetWhenHistoryLoadStalls(t *testing.T) {
 	restore := chatsvc.SetNativeHistoryLoadAttemptLimit(200 * time.Millisecond)
 	t.Cleanup(restore)
+	restoreLimit := chatsvc.SetNativeHistorySettleLimit(1 * time.Second)
+	t.Cleanup(restoreLimit)
 	st := openStore(t)
 	conv := &stalledHistoryConversation{fakeConversation: newFakeConversation()}
 	svc := chatsvc.New(chatsvc.Options{
@@ -1634,20 +1676,93 @@ func TestInterfaceHandoffBoundsStalledHistoryLoadAttempt(t *testing.T) {
 		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessClaudeCode,
 		WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryRequired,
 	})
-	if !errors.Is(err, ports.ErrChatHistoryLoadFailed) {
-		t.Fatalf("Start error = %v, want ErrChatHistoryLoadFailed", err)
+	if !errors.Is(err, ports.ErrChatHistoryUnsettled) {
+		t.Fatalf("Start error = %v, want the typed unsettled settle failure", err)
 	}
-	if errors.Is(err, ports.ErrChatHistoryUnsettled) {
-		t.Fatalf("Start error = %v, must not read as a retryable unsettled wait", err)
+	if errors.Is(err, ports.ErrChatHistoryLoadFailed) {
+		t.Fatalf("Start error = %v, a stalled load must not read as a terminal provider failure", err)
 	}
-	if got := conv.refreshes.Load(); got != 1 {
-		t.Fatalf("refreshes = %d, want the single bounded attempt", got)
+	if got := conv.refreshes.Load(); got < 2 {
+		t.Fatalf("refreshes = %d, want the first bound cut plus at least one escalated retry", got)
 	}
 	if !conv.refreshCtxDone.Load() {
 		t.Fatal("refresh context never ended; the attempt bound did not cancel the load")
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("settle wait took %v, want the 200ms attempt bound, not the 45s settle limit", elapsed)
+		t.Fatalf("settle wait took %v, want the 1s settle budget, not the 120s default", elapsed)
+	}
+}
+
+// A first session/load that runs out of time without a verdict — the
+// slow-machine -32602 replay — must be retried with an escalating attempt
+// budget instead of failing the switch, and a second load that reaches the
+// checkpoint completes it.
+func TestInterfaceHandoffRetriesDeadlineLoadWithEscalatingAttemptBudget(t *testing.T) {
+	attemptLimit := 150 * time.Millisecond
+	restore := chatsvc.SetNativeHistoryLoadAttemptLimit(attemptLimit)
+	t.Cleanup(restore)
+	st := openStore(t)
+	rec, found, err := st.GetSession(context.Background(), testSession)
+	if err != nil || !found {
+		t.Fatalf("load session: found=%v err=%v", found, err)
+	}
+	rec.Metadata.LatestUserPrompt = "Finish the work."
+	rec.Metadata.LatestAssistantUpdate = "Settled answer."
+	if err := st.UpdateSession(context.Background(), rec); err != nil {
+		t.Fatalf("seed native replay checkpoint: %v", err)
+	}
+	conv := &deadlineThenSettledHistoryConversation{
+		fakeConversation: newFakeConversation(),
+		events: []ports.ChatEvent{
+			{Kind: ports.ChatEventTurnStarted, ProviderEventID: "history-start", ProviderTurnID: "native-turn-1"},
+			{
+				Kind: ports.ChatEventUserMessageCompleted, ProviderEventID: "history-user",
+				ProviderTurnID: "native-turn-1", ProviderItemID: "native-user-1", Text: "Finish the work.",
+			},
+			{
+				Kind: ports.ChatEventMessageCompleted, ProviderEventID: "history-answer",
+				ProviderTurnID: "native-turn-1", ProviderItemID: "native-answer-1", Text: "Settled answer.",
+			},
+			{
+				Kind: ports.ChatEventTurnCompleted, ProviderEventID: "history-complete",
+				ProviderTurnID: "native-turn-1", TurnState: domain.TurnStateCompleted,
+			},
+		},
+	}
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return fmt.Sprintf("deadline-retry-%d", time.Now().UnixNano()) },
+	})
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), testSession) })
+
+	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessClaudeCode,
+		WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryRequired,
+	})
+	if err != nil {
+		t.Fatalf("Start handoff: %v", err)
+	}
+	conv.mu.Lock()
+	refreshes := conv.refreshes
+	deadlines := append([]time.Time(nil), conv.deadlines...)
+	conv.mu.Unlock()
+	if refreshes != 2 {
+		t.Fatalf("refreshes = %d, want one deadline attempt plus one successful retry", refreshes)
+	}
+	if len(deadlines) != 2 || !deadlines[1].After(deadlines[0]) ||
+		deadlines[1].Sub(deadlines[0]) <= attemptLimit {
+		t.Fatalf("attempt deadlines = %v, want the second attempt escalated past the fixed %v bound",
+			deadlines, attemptLimit)
+	}
+	snapshot, err := st.LoadConversationSnapshot(context.Background(), ctrl.ConversationID())
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	if len(snapshot.Messages) != 2 || snapshot.Messages[0].Text != "Finish the work." ||
+		snapshot.Messages[1].Text != "Settled answer." {
+		t.Fatalf("messages = %#v, want checkpoint prompt and settled native answer", snapshot.Messages)
 	}
 }
 

@@ -1119,14 +1119,47 @@ func normalizeACPError(operation string, err error) error {
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
+// isACPDeadlineError reports whether err is a provider JSON-RPC -32602 whose
+// text carries a context deadline: the agent's own session/load handler ran
+// out of time while AO's calling context is still live, so no verdict on the
+// transcript exists. The reason travels either in the RPC message or in the
+// unstructured data payload (the shape observed in the field is
+// {"code":-32602,"message":"Internal error","data":{"error":"context deadline
+// exceeded"}}). A -32603 carrying deadline text stays a provider failure: the
+// SDK synthesizes -32603 only from the caller's own context, and a handler
+// error it coerces is the agent's verdict. See normalizeACPLoadError.
+func isACPDeadlineError(err error) bool {
+	var requestErr *acpsdk.RequestError
+	if !errors.As(err, &requestErr) || requestErr.Code != -32602 {
+		return false
+	}
+	if strings.Contains(strings.ToLower(requestErr.Message), "context deadline exceeded") {
+		return true
+	}
+	if requestErr.Data != nil {
+		if b, merr := json.Marshal(requestErr.Data); merr == nil {
+			return strings.Contains(strings.ToLower(string(b)), "context deadline exceeded")
+		}
+	}
+	return false
+}
+
 // normalizeACPLoadError normalizes a failed ACP session/load whose calling
 // context is still alive. A -32603 answer then means the provider itself could
 // not replay the transcript; it is mapped to ports.ErrChatHistoryLoadFailed so
 // the settle loop stops re-sending the same load and the interface transition
-// reports a dedicated code instead of a generic resume failure. Callers must
-// check their own context first: the SDK also synthesizes -32603 when the
-// caller's context ends mid-request.
+// reports a dedicated code instead of a generic resume failure. A -32602
+// carrying a context deadline instead maps to ports.ErrChatHistoryLoadDeadline:
+// the provider ran out of its own time without a verdict, so the settle loop
+// retries inside its budget. Callers must check their own context first: the
+// SDK also synthesizes -32603 when the caller's context ends mid-request.
 func normalizeACPLoadError(operation string, err error) error {
+	if isACPAuthRequired(err) {
+		return fmt.Errorf("%w: %s: %w", ports.ErrChatAuthRequired, operation, err)
+	}
+	if isACPDeadlineError(err) {
+		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadDeadline, operation, err)
+	}
 	if isACPInternalError(err) && !isACPAuthRequired(err) {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadFailed, operation, err)
 	}

@@ -10,6 +10,14 @@ func SetNativeHistoryLoadAttemptLimit(limit time.Duration) (restore func()) {
 	return func() { nativeHistoryLoadAttemptLimit = previous }
 }
 
+// SetNativeHistorySettleLimit shortens the total settle wait for tests and
+// returns a restore function.
+func SetNativeHistorySettleLimit(limit time.Duration) (restore func()) {
+	previous := nativeHistorySettleLimit
+	nativeHistorySettleLimit = limit
+	return func() { nativeHistorySettleLimit = previous }
+}
+
 // SetRenderMeasureTimeout shortens how long publishing waits for heights, for
 // tests, and returns a restore function.
 func SetRenderMeasureTimeout(timeout time.Duration) (restore func()) {
