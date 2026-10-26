@@ -3,6 +3,7 @@ package mobilebridge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,12 +16,16 @@ import (
 
 // fakeCloudflare keeps just enough state for one tunnel and its DNS record.
 type fakeCloudflare struct {
-	mu        sync.Mutex
-	calls     []string
-	tunnel    string // id, once created
-	configSrc string // config_src of the created tunnel
-	record    string // CNAME content, once created
-	proxied   bool
+	mu          sync.Mutex
+	calls       []string
+	created     int
+	tunnel      string // live tunnel id, "" when there is none
+	remote      bool   // the live tunnel is remotely managed
+	configSrc   string // config_src of the last created tunnel
+	record      string // CNAME content, once created
+	proxied     bool
+	zoneAccount string // account owning zone-1; "" means acct
+	emptyToken  bool
 }
 
 func (f *fakeCloudflare) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -37,18 +42,23 @@ func (f *fakeCloudflare) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result any
 	switch call {
 	case "GET /zones/zone-1":
-		result = map[string]string{"name": "example.dev"}
+		account := f.zoneAccount
+		if account == "" {
+			account = "acct"
+		}
+		result = map[string]any{"name": "example.dev", "account": map[string]string{"id": account}}
 	case "GET /accounts/acct/cfd_tunnel":
-		list := []map[string]string{}
+		list := []map[string]any{}
 		if f.tunnel != "" {
-			list = append(list, map[string]string{"id": f.tunnel, "name": r.URL.Query().Get("name")})
+			list = append(list, map[string]any{"id": f.tunnel, "name": r.URL.Query().Get("name"), "remote_config": f.remote})
 		}
 		result = list
 	case "POST /accounts/acct/cfd_tunnel":
 		var in map[string]any
 		_ = json.Unmarshal(body, &in)
 		f.configSrc, _ = in["config_src"].(string)
-		f.tunnel = "tun-1"
+		f.created++
+		f.tunnel = fmt.Sprintf("tun-%d", f.created)
 		result = map[string]string{"id": f.tunnel}
 	case "GET /zones/zone-1/dns_records":
 		list := []map[string]any{}
@@ -61,8 +71,11 @@ func (f *fakeCloudflare) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal(body, &rec)
 		f.record, _ = rec["content"].(string)
 		f.proxied, _ = rec["proxied"].(bool)
-	case "GET /accounts/acct/cfd_tunnel/tun-1/token":
-		result = "run-token"
+	case "GET /accounts/acct/cfd_tunnel/" + f.tunnel + "/token":
+		result = "run-token-" + f.tunnel
+		if f.emptyToken {
+			result = ""
+		}
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"success":false,"errors":[{"code":7003,"message":"no route"}]}`))
@@ -90,54 +103,54 @@ func newFakeCloudflare(t *testing.T) (*fakeCloudflare, NamedTunnelConfig) {
 	}
 }
 
-func TestNamedTunnelForProvisionsOnceThenRunsFromCache(t *testing.T) {
+func TestNamedTunnelForProvisionsEveryStartAndFallsBackToTheCache(t *testing.T) {
 	cf, cfg := newFakeCloudflare(t)
 	ctx := context.Background()
+	host := NamedTunnelHostname("host-uuid", "example.dev")
 
-	first, err := NamedTunnelFor(ctx, cfg, "host-uuid", true)
+	first, err := NamedTunnelFor(ctx, cfg, "host-uuid")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := NamedTunnelHostname("host-uuid", "example.dev"); first.Hostname != want {
-		t.Fatalf("hostname = %q, want %q (one level under the zone apex)", first.Hostname, want)
-	}
-	if first.RunToken != "run-token" || !first.NewRecord || cf.record != "tun-1.cfargotunnel.com" || !cf.proxied || cf.configSrc != "local" {
-		t.Fatalf("first provision = %+v, record=%q proxied=%v config_src=%q", first, cf.record, cf.proxied, cf.configSrc)
+	if first.Hostname != host || first.RunToken != "run-token-tun-1" || !first.NewRecord ||
+		cf.record != "tun-1.cfargotunnel.com" || !cf.proxied || cf.configSrc != "local" {
+		t.Fatalf("first = %+v, record=%q proxied=%v config_src=%q", first, cf.record, cf.proxied, cf.configSrc)
 	}
 
-	// A restart, on any port, runs from the cache without touching the API.
+	// A restart provisions again, without the zone read and without writing.
 	cf.takeCalls()
-	cached, err := NamedTunnelFor(ctx, cfg, "host-uuid", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls := cf.takeCalls(); len(calls) != 0 {
-		t.Fatalf("cached start called the API: %v", calls)
-	}
-	if cached.Hostname != first.Hostname || cached.RunToken != "run-token" || cached.NewRecord {
-		t.Fatalf("cached = %+v", cached)
-	}
-
-	// After a run that never reached an edge, it asks again but finds what exists.
-	again, err := NamedTunnelFor(ctx, cfg, "host-uuid", false)
+	again, err := NamedTunnelFor(ctx, cfg, "host-uuid")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, call := range cf.takeCalls() {
-		if !strings.HasPrefix(call, "GET") {
-			t.Fatalf("re-provision wrote %s", call)
+		if call == "GET /zones/zone-1" || !strings.HasPrefix(call, "GET") {
+			t.Fatalf("restart called %s", call)
 		}
 	}
-	if again.Hostname != first.Hostname || again.NewRecord {
-		t.Fatalf("re-provision = %+v", again)
+	if again.Hostname != host || again.RunToken != first.RunToken || again.NewRecord {
+		t.Fatalf("again = %+v", again)
 	}
 
-	// A cache written for another host is not reused.
-	if _, err := NamedTunnelFor(ctx, cfg, "other-host", true); err != nil {
+	// A deleted tunnel is recreated under the same address.
+	cf.tunnel = ""
+	recreated, err := NamedTunnelFor(ctx, cfg, "host-uuid")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cf.takeCalls()) == 0 {
-		t.Fatal("another host's cache entry was reused")
+	if recreated.Hostname != host || recreated.RunToken != "run-token-tun-2" || recreated.NewRecord || cf.record != "tun-2.cfargotunnel.com" {
+		t.Fatalf("recreated = %+v, record=%q", recreated, cf.record)
+	}
+
+	// With the API refusing, the cached tunnel still starts.
+	cfg.APIToken = "wrong"
+	cached, err := NamedTunnelFor(ctx, cfg, "host-uuid")
+	if err == nil || !strings.Contains(err.Error(), "Authentication error") || cached.RunToken != "run-token-tun-2" || cached.Hostname != host {
+		t.Fatalf("fallback = %+v, %v", cached, err)
+	}
+	// Another host's cache is never borrowed.
+	if other, err := NamedTunnelFor(ctx, cfg, "other-host"); err == nil || other.RunToken != "" {
+		t.Fatalf("other host = %+v, %v", other, err)
 	}
 }
 
@@ -153,7 +166,7 @@ func TestProvisionNamedTunnelRepairsItsDNSRecord(t *testing.T) {
 			cf, cfg := newFakeCloudflare(t)
 			cf.tunnel, cf.record, cf.proxied = "tun-1", preset.content, preset.proxied
 
-			got, err := ProvisionNamedTunnel(context.Background(), cfg, "host-uuid")
+			got, err := ProvisionNamedTunnel(context.Background(), cfg, "host-uuid", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -164,11 +177,23 @@ func TestProvisionNamedTunnelRepairsItsDNSRecord(t *testing.T) {
 	}
 }
 
-func TestProvisionNamedTunnelReportsCloudflareErrors(t *testing.T) {
-	_, cfg := newFakeCloudflare(t)
-	cfg.APIToken = "wrong"
-	if _, err := ProvisionNamedTunnel(context.Background(), cfg, "host-uuid"); err == nil || !strings.Contains(err.Error(), "Authentication error") {
-		t.Fatalf("bad token error = %v", err)
+func TestProvisionNamedTunnelRefusesWhatCannotServe(t *testing.T) {
+	for name, tc := range map[string]struct {
+		setup func(*fakeCloudflare, *NamedTunnelConfig)
+		want  string
+	}{
+		"zone in another account": {func(f *fakeCloudflare, _ *NamedTunnelConfig) { f.zoneAccount = "other" }, "belongs to account other"},
+		"remotely managed tunnel": {func(f *fakeCloudflare, _ *NamedTunnelConfig) { f.tunnel, f.remote = "tun-1", true }, "managed remotely"},
+		"empty run token":         {func(f *fakeCloudflare, _ *NamedTunnelConfig) { f.emptyToken = true }, "empty run token"},
+		"bad API token":           {func(_ *fakeCloudflare, c *NamedTunnelConfig) { c.APIToken = "wrong" }, "Authentication error"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cf, cfg := newFakeCloudflare(t)
+			tc.setup(cf, &cfg)
+			if _, err := ProvisionNamedTunnel(context.Background(), cfg, "host-uuid", ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

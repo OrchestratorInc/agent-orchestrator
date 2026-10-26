@@ -8,7 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -34,10 +36,9 @@ type TunnelRunner struct {
 	// Named, when set, runs this host's named tunnel instead of a quick tunnel.
 	Named  *NamedTunnelConfig
 	HostID string
-	// reprovision is set when a named connector exited without reaching an
-	// edge, so the next start asks Cloudflare rather than trusting the cached
-	// run token: the tunnel may have been deleted.
-	reprovision bool
+
+	probeBase  string        // tests replace https://<hostname>
+	probeEvery time.Duration // zero uses namedProbeInterval
 }
 
 // Run supervises the connector until ctx is cancelled. It blocks, so callers
@@ -73,7 +74,9 @@ func (t *TunnelRunner) Run(ctx context.Context) {
 const stableTunnelRun = 60 * time.Second
 
 // namedProvisionTimeout bounds all of one named tunnel provision's API calls.
-const namedProvisionTimeout = 30 * time.Second
+// Every start provisions, and an unreachable API delays a cached start by this
+// much, so it is short: a provision is three to five calls of under a second.
+const namedProvisionTimeout = 15 * time.Second
 
 func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	var named NamedTunnel
@@ -82,13 +85,15 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		// counts as a stable run that resets the backoff ladder.
 		provisionCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
 		var err error
-		named, err = NamedTunnelFor(provisionCtx, *t.Named, t.HostID, !t.reprovision)
+		named, err = NamedTunnelFor(provisionCtx, *t.Named, t.HostID)
 		cancel()
-		if err != nil {
+		if named.RunToken == "" {
 			t.Runtime.Exited(err)
 			return fmt.Errorf("provision named tunnel: %w", err)
 		}
-		t.reprovision = false
+		if err != nil {
+			t.logger().Warn("could not provision the named tunnel; starting the cached one", "error", err)
+		}
 	}
 
 	// Reserved after provisioning, which can take seconds, to keep the
@@ -97,13 +102,17 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reserve metrics port: %w", err)
 	}
+
+	// Its own context, so a connector nobody can reach any more can be stopped
+	// without stopping the runner.
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
 	args := CloudflaredArgs(t.LocalPort, metricsPort)
-	if named.RunToken != "" {
+	if t.Named != nil {
 		args = NamedCloudflaredArgs(t.LocalPort, metricsPort)
 	}
-
-	cmd := aoprocess.CommandContext(ctx, t.Binary, args...)
-	if named.RunToken != "" {
+	cmd := aoprocess.CommandContext(runCtx, t.Binary, args...)
+	if t.Named != nil {
 		cmd.Env = append(os.Environ(), "TUNNEL_TOKEN="+named.RunToken)
 	}
 	// cloudflared logs to stderr; the hostname is only available there.
@@ -131,13 +140,18 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// on an earlier start has nothing left to wait for.
 	settleCtx, stopSettle := context.WithCancel(ctx)
 	defer stopSettle()
-	if named.Hostname != "" {
+	if t.Named != nil {
 		t.Runtime.NamedHostname(named.Hostname)
 	}
-	if named.Hostname != "" && !named.NewRecord {
+	if t.Named != nil && !named.NewRecord {
 		t.Runtime.Settled()
 	} else {
 		go t.awaitSettled(settleCtx)
+	}
+
+	var unserved atomic.Bool
+	if t.Named != nil {
+		go t.watchNamedAddress(runCtx, named.Hostname, func() { unserved.Store(true); stopRun() })
 	}
 
 	scanner := bufio.NewScanner(stderr)
@@ -149,10 +163,10 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	}
 
 	waitErr := cmd.Wait()
-	t.Runtime.Exited(waitErr)
-	if t.Named != nil && !t.Runtime.Registered() {
-		t.reprovision = true
+	if unserved.Load() {
+		waitErr = errors.New("cloudflare kept answering the named address with 530: no connector serves the tunnel")
 	}
+	t.Runtime.Exited(waitErr)
 	// Only if this runner still owns the record: a replacement started while
 	// this one was unwinding will already have written its own pid there.
 	_ = pidOwner.release(cmd.Process.Pid)
@@ -161,6 +175,59 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	}
 	return errors.New("connector exited")
 }
+
+// watchNamedAddress calls stop once Cloudflare keeps answering this host's
+// address with HTTP 530, its "no connector serves this tunnel" page. That is
+// what a deleted tunnel or a replaced token looks like from outside, and
+// nothing local shows it: measured with a tunnel deleted while connected,
+// cloudflared kept running for minutes, printed only generic connection
+// retries and still reported two ready connections. Stopping it lets the next
+// start provision the tunnel again.
+//
+// Only 530 counts. A network error says nothing about the tunnel, and acting
+// on it would restart a working connector whenever this machine is offline.
+func (t *TunnelRunner) watchNamedAddress(ctx context.Context, hostname string, stop func()) {
+	base, every := t.probeBase, t.probeEvery
+	if base == "" {
+		base = "https://" + hostname
+	}
+	if every == 0 {
+		every = namedProbeInterval
+	}
+	misses := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/identity", nil)
+		if err != nil {
+			return
+		}
+		resp, err := namedProbeClient.Do(req)
+		if err != nil {
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 530 {
+			misses = 0
+			continue
+		}
+		if misses++; misses >= namedProbeMisses {
+			stop()
+			return
+		}
+	}
+}
+
+// Probing the named address: about every 30s, and three 530s in a row.
+const (
+	namedProbeInterval = 30 * time.Second
+	namedProbeMisses   = 3
+)
+
+var namedProbeClient = &http.Client{Timeout: 10 * time.Second}
 
 // awaitSettled holds the tunnel out of the endpoint list until its freshly
 // issued hostname has had time to appear in DNS.

@@ -377,13 +377,6 @@ func (r *TunnelRuntime) NamedHostname(hostname string) {
 	r.log.URL = "https://" + hostname
 }
 
-// Registered reports whether this run's connector reached an edge.
-func (r *TunnelRuntime) Registered() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.log.Connections > 0
-}
-
 // UnsettledHostname is a registered hostname still inside its settling window,
 // or "" when nothing is waiting — not registered yet, or already settled.
 func (r *TunnelRuntime) UnsettledHostname() string {
@@ -446,26 +439,26 @@ func TunnelBackoff(attempt int) time.Duration {
 // self-update could swap the binary out from under that pinned format. The
 // metrics listener is what /ready is polled on, which is a far more reliable
 // readiness signal than the log alone.
+//
+// The empty --config keeps a personal ~/.cloudflared/config.yml out: cloudflared
+// prefers its ingress rules over --url, and a catch-all there would publish
+// whatever it points at. Measured: such a rule answered on this address
+// instead of the daemon.
 func CloudflaredArgs(localPort, metricsPort int) []string {
 	return []string{
 		"tunnel",
 		"--url", fmt.Sprintf("http://127.0.0.1:%d", localPort),
 		"--metrics", fmt.Sprintf("127.0.0.1:%d", metricsPort),
 		"--no-autoupdate",
+		"--config", os.DevNull,
 	}
 }
 
 // NamedCloudflaredArgs runs a locally configured named tunnel (see
-// ProvisionNamedTunnel) at localPort. Its run token arrives in TUNNEL_TOKEN,
-// which keeps it out of the process list.
+// ProvisionNamedTunnel). Its run token arrives in TUNNEL_TOKEN, which keeps it
+// out of the process list.
 func NamedCloudflaredArgs(localPort, metricsPort int) []string {
-	return []string{
-		"tunnel",
-		"--no-autoupdate",
-		"--url", fmt.Sprintf("http://127.0.0.1:%d", localPort),
-		"--metrics", fmt.Sprintf("127.0.0.1:%d", metricsPort),
-		"run",
-	}
+	return append(CloudflaredArgs(localPort, metricsPort), "run")
 }
 
 var tunnelPIDLocks = struct {

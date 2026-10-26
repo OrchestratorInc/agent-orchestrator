@@ -73,6 +73,8 @@ func NamedTunnelHostname(hostID, zone string) string {
 type NamedTunnel struct {
 	Hostname string `json:"hostname"`
 	RunToken string `json:"runToken"`
+	// Zone is the zone apex, cached so later provisions skip the zone read.
+	Zone string `json:"zone"`
 	// NewRecord is set when this provision published the DNS record, so
 	// resolvers that asked for the name earlier may still hold an NXDOMAIN.
 	NewRecord bool `json:"-"`
@@ -83,64 +85,93 @@ type cachedNamedTunnel struct {
 	Tunnel NamedTunnel `json:"tunnel"`
 }
 
-// NamedTunnelFor returns this host's tunnel. With useCache it reuses the last
-// provisioned one without calling the Cloudflare API: the run token is all a
-// connector needs, so remote access survives the API being unreachable and a
-// restart costs nothing. The cache is keyed by account, zone and host, so
-// pointing cloudflare.json elsewhere provisions afresh.
-func NamedTunnelFor(ctx context.Context, c NamedTunnelConfig, hostID string, useCache bool) (NamedTunnel, error) {
+// NamedTunnelFor provisions this host's tunnel and caches the result. Every
+// connector start calls it, so a deleted tunnel or a broken DNS record is
+// repaired by the next start.
+//
+// When provisioning fails it returns the cached tunnel together with the
+// error, so the caller can log it and still start the connector: the run
+// token is all a connector needs, so remote access survives the API being
+// unreachable or the API token being revoked. A tunnel with an empty RunToken
+// is unusable. The cache is keyed by account, zone and host, so pointing
+// cloudflare.json elsewhere never reuses it.
+func NamedTunnelFor(ctx context.Context, c NamedTunnelConfig, hostID string) (NamedTunnel, error) {
 	key := c.AccountID + "/" + c.ZoneID + "/" + hostID
-	if useCache {
-		var cached cachedNamedTunnel
-		if b, err := os.ReadFile(c.cachePath); err == nil && json.Unmarshal(b, &cached) == nil &&
-			cached.Key == key && cached.Tunnel.Hostname != "" && cached.Tunnel.RunToken != "" {
-			return cached.Tunnel, nil
-		}
-	}
-	t, err := ProvisionNamedTunnel(ctx, c, hostID)
+	cached := loadNamedTunnelCache(c.cachePath, key)
+	t, err := ProvisionNamedTunnel(ctx, c, hostID, cached.Zone)
 	if err != nil {
-		return NamedTunnel{}, err
+		return cached, err // the zero value when nothing is cached
 	}
-	// A lost cache only costs one more provision on the next start.
+	// A lost cache only costs the fallback until the next good provision.
 	if b, err := json.Marshal(cachedNamedTunnel{Key: key, Tunnel: t}); err == nil && c.cachePath != "" {
 		_ = os.WriteFile(c.cachePath, b, 0o600)
 	}
 	return t, nil
 }
 
+func loadNamedTunnelCache(path, key string) NamedTunnel {
+	var cached cachedNamedTunnel
+	b, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(b, &cached) != nil || cached.Key != key ||
+		cached.Tunnel.Hostname == "" || cached.Tunnel.RunToken == "" {
+		return NamedTunnel{}
+	}
+	return cached.Tunnel
+}
+
 // ProvisionNamedTunnel makes this host's tunnel and its proxied DNS record
-// exist, then returns them with the connector's run token. Idempotent. The
-// tunnel is locally configured: the connector's --url names the port, so a port
-// change needs no API call, and a connector left running by a crashed daemon
-// keeps its old target instead of following a shared remote ingress.
-func ProvisionNamedTunnel(ctx context.Context, c NamedTunnelConfig, hostID string) (NamedTunnel, error) {
+// exist, then returns them with the connector's run token. Idempotent. zone is
+// the zone apex when already known; empty reads it, and checks the zone
+// belongs to the tunnel's account.
+//
+// The tunnel is locally configured: the connector's --url names the port, so
+// a port change needs no API call.
+func ProvisionNamedTunnel(ctx context.Context, c NamedTunnelConfig, hostID, zone string) (NamedTunnel, error) {
 	api := cloudflareAPI{base: c.apiBase, token: c.APIToken}
 
-	var zone struct {
-		Name string `json:"name"`
-	}
-	if err := api.do(ctx, http.MethodGet, "/zones/"+url.PathEscape(c.ZoneID), nil, &zone); err != nil {
-		return NamedTunnel{}, fmt.Errorf("read zone: %w", err)
-	}
-	if zone.Name == "" {
-		return NamedTunnel{}, errors.New("cloudflare returned a zone without a name")
+	if zone == "" {
+		var z struct {
+			Name    string `json:"name"`
+			Account struct {
+				ID string `json:"id"`
+			} `json:"account"`
+		}
+		if err := api.do(ctx, http.MethodGet, "/zones/"+url.PathEscape(c.ZoneID), nil, &z); err != nil {
+			return NamedTunnel{}, fmt.Errorf("read zone: %w", err)
+		}
+		if z.Name == "" {
+			return NamedTunnel{}, errors.New("cloudflare returned a zone without a name")
+		}
+		// The edge refuses a CNAME to another account's tunnel (error 1014)
+		// while the connector still registers, so it would look healthy.
+		if z.Account.ID != c.AccountID {
+			return NamedTunnel{}, fmt.Errorf("zone %s belongs to account %s, not %s", z.Name, z.Account.ID, c.AccountID)
+		}
+		zone = z.Name
 	}
 
 	tunnels := "/accounts/" + url.PathEscape(c.AccountID) + "/cfd_tunnel"
 	name := "ao-" + hostID
 	var found []struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
+		ID           string `json:"id"`
+		Name         string `json:"name"`
+		RemoteConfig bool   `json:"remote_config"`
 	}
 	if err := api.do(ctx, http.MethodGet, tunnels+"?is_deleted=false&name="+url.QueryEscape(name), nil, &found); err != nil {
 		return NamedTunnel{}, fmt.Errorf("list tunnels: %w", err)
 	}
 	var id string
 	for _, t := range found {
-		if t.Name == name {
-			id = t.ID
-			break
+		if t.Name != name {
+			continue
 		}
+		// A remotely managed tunnel's ingress overrides --url, and Cloudflare
+		// cannot switch it back to local management.
+		if t.RemoteConfig {
+			return NamedTunnel{}, fmt.Errorf("tunnel %s is managed remotely, so it ignores this connector's port; delete it in the Cloudflare dashboard", name)
+		}
+		id = t.ID
+		break
 	}
 	if id == "" {
 		var created struct {
@@ -155,7 +186,7 @@ func ProvisionNamedTunnel(ctx context.Context, c NamedTunnelConfig, hostID strin
 		return NamedTunnel{}, errors.New("cloudflare returned a tunnel without an id")
 	}
 
-	out := NamedTunnel{Hostname: NamedTunnelHostname(hostID, zone.Name)}
+	out := NamedTunnel{Hostname: NamedTunnelHostname(hostID, zone), Zone: zone}
 	target := id + ".cfargotunnel.com"
 	records := "/zones/" + url.PathEscape(c.ZoneID) + "/dns_records"
 	record := map[string]any{"type": "CNAME", "name": out.Hostname, "content": target, "proxied": true, "ttl": 1}
@@ -183,6 +214,9 @@ func ProvisionNamedTunnel(ctx context.Context, c NamedTunnelConfig, hostID strin
 
 	if err := api.do(ctx, http.MethodGet, tunnels+"/"+id+"/token", nil, &out.RunToken); err != nil {
 		return NamedTunnel{}, fmt.Errorf("get run token: %w", err)
+	}
+	if out.RunToken == "" {
+		return NamedTunnel{}, errors.New("cloudflare returned an empty run token")
 	}
 	return out, nil
 }
