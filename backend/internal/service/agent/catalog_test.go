@@ -1795,6 +1795,9 @@ func TestCachedModelsExposeMissingCLIWithoutDiscardingSavedChoices(t *testing.T)
 	if err != nil || got.WarningCode != ports.ModelCatalogWarningNotInstalled || !got.Stale || len(got.Models) != 1 || got.Models[0].ID != "cached-model" {
 		t.Fatalf("cached missing-CLI catalog = %#v, %v", got, err)
 	}
+	if want := "Gemini: " + ports.ErrAgentBinaryNotFound.Error(); got.Warning != want {
+		t.Fatalf("cached warning = %q, want manifest display name in %q", got.Warning, want)
+	}
 	agent.installed.Store(true)
 	if _, err := svc.readiness.Force(context.Background(), []string{"gemini"}, domain.AgentReadinessPurposeDisplay); err != nil {
 		t.Fatal(err)
