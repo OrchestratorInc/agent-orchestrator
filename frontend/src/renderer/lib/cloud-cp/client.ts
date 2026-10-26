@@ -59,6 +59,7 @@ import type {
 	CloudCpComposerAnswer,
 	CloudCpSessionChatSettings,
 	CloudCpSharedSessionParticipants,
+	CloudCpMergeRequest,
 	CloudCpCreateShareLinkRequest,
 	CloudCpShareLink,
 	CloudCpSharedProject,
@@ -334,6 +335,13 @@ export interface CloudCpClient {
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpSessionReviewState>;
 	mergePullRequest(orgId: string, sessionId: string, number: number, prUrl: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ status: string }>;
+	/** Ask a shared project's owner to merge a pull request this person may not merge. */
+	requestPullRequestMerge(orgId: string, sessionId: string, number: number, prUrl: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
+	/** A project's merge requests: all for its owner, a guest's own for them. */
+	listProjectMergeRequests(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequests: CloudCpMergeRequest[] }>;
+	/** Merge a requested pull request as its owner. */
+	approveMergeRequest(orgId: string, requestId: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
+	rejectMergeRequest(orgId: string, requestId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
 	deleteSession(
 		orgId: string,
 		sessionId: string,
@@ -836,6 +844,16 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests`, {
 				signal: o?.signal,
 			}),
+		requestPullRequestMerge: (orgId, sessionId, number, prUrl, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests/${seg(String(number))}/merge-requests`, {
+				body: { prUrl }, signal: o?.signal,
+			}),
+		listProjectMergeRequests: (orgId, projectId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/merge-requests`, { signal: o?.signal }),
+		approveMergeRequest: (orgId, requestId, expectedHeadSha, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/merge-requests/${seg(requestId)}/approve`, { body: { expectedHeadSha }, signal: o?.signal }),
+		rejectMergeRequest: (orgId, requestId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/merge-requests/${seg(requestId)}/reject`, { signal: o?.signal }),
 		mergePullRequest: (orgId, sessionId, number, prUrl, expectedHeadSha, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/pull-requests/${seg(String(number))}/merge`, {
 				body: { prUrl, expectedHeadSha }, signal: o?.signal,

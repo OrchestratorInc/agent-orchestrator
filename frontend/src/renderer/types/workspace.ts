@@ -239,6 +239,8 @@ export type WorkspaceSession = {
 		orgId: string;
 		/** Reached through a share link: what this person may do comes from its grant. */
 		shared?: boolean;
+		/** The guest the session was started for, when someone the project was shared with asked for it. */
+		requestedBy?: { userId: string; name: string };
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;

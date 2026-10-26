@@ -39,6 +39,7 @@ import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
+import { SessionOwnerTag } from "./SessionOwnerTag";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -313,6 +314,7 @@ function DesktopSessionCard({
 				url: prBrowserUrl(pr),
 			}))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
+			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
 			session={
 				hideTerminatedStatus
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))

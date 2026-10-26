@@ -635,6 +635,8 @@ export interface CloudCpSession {
 	workerEpoch?: number;
 	/** The deliverable the session was created for. */
 	requestedOutput?: "artifact";
+	/** The guest the session was started for, when someone the project was shared with asked its orchestrator for it. */
+	requestedBy?: CloudCpPersonRef;
 	/** What the session owns. Absent from older control planes. */
 	outputType?: "none" | "pr" | "artifact" | "pr_artifact";
 	/** How many committed artifact files the session has, while the deployment keeps artifacts. */
@@ -1567,6 +1569,26 @@ export interface CloudCpSessionLive {
 }
 
 /** A session's owner-set turn settings; an absent field means the default. */
+/** A person named by the control plane: their id and display name. */
+export interface CloudCpPersonRef {
+	userId: string;
+	name: string;
+}
+
+/** A guest's request that a shared project's owner merge a pull request. */
+export interface CloudCpMergeRequest {
+	id: string;
+	projectId: string;
+	sessionId: string;
+	sessionName: string;
+	pullRequest: { id: string; number: number; url: string; title: string; repository: string };
+	requestedBy: CloudCpPersonRef;
+	status: "pending" | "merged" | "rejected";
+	decidedBy?: CloudCpPersonRef;
+	decidedAt?: string;
+	createdAt: string;
+}
+
 /** One person in a shared session, as a board shows them. */
 export interface CloudCpSessionParticipant {
 	userId: string;

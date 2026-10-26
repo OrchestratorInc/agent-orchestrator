@@ -103,6 +103,7 @@ import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type Sessio
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
+import { SharedProjectPanel } from "./SharedProjectPanel";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
 import { openComposerModelPicker } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
@@ -1950,6 +1951,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							data-testid="session-topbar-host"
 						/>
 						<div className="relative min-h-0 flex-1">
+							{isOrchestrator && session?.cloud && routedWorkspace ? (
+								<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
+							) : null}
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : null}
 							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
 							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (

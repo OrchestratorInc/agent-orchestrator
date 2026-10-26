@@ -23,21 +23,51 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
-type ShareAccess = "viewer" | "editor";
-type ShareExpiry = "24" | "168" | "never";
-type ShareModeCap = "read-only" | "standard" | "trusted";
+export type ShareScope = "session" | "project";
+export type ShareAccess = "viewer" | "editor";
+export type ShareExpiry = "24" | "168" | "never";
+export type ShareModeCap = "read-only" | "standard" | "trusted";
 
 const EXPIRY_HOURS: Record<ShareExpiry, number | undefined> = { "24": 24, "168": 168, never: undefined };
+
+/**
+ * The link a choice in the dialog makes: one session, or the whole project
+ * (no session). Only an editor link may write; a viewer link is read-only.
+ */
+export function shareLinkRequest({ scope, access, modeCap, expiry, sessionId }: {
+	scope: ShareScope;
+	access: ShareAccess;
+	modeCap: ShareModeCap;
+	expiry: ShareExpiry;
+	sessionId: string;
+}) {
+	const hours = EXPIRY_HOURS[expiry];
+	return {
+		...(scope === "session" ? { sessionId } : {}),
+		role: access,
+		accessScope: "anyone" as const,
+		interaction: access === "editor" ? "interact" as const : "view" as const,
+		modeCap: access === "editor" ? modeCap : "read-only" as const,
+		...(hours ? { expiresInHours: hours } : {}),
+	};
+}
+
+/** What an active link lets people do, naming a whole-project link as such. */
+export function shareLinkLabel(link: Pick<CloudCpShareLink, "role" | "sessionId">, t: (key: "share.accessEditor" | "share.accessViewer" | "share.accessStartSessions" | "share.wholeProject") => string): string {
+	if (link.sessionId) return link.role === "editor" ? t("share.accessEditor") : t("share.accessViewer");
+	return `${t("share.wholeProject")} · ${link.role === "editor" ? t("share.accessStartSessions") : t("share.accessViewer")}`;
+}
 
 export function shareLinksQueryKey(baseUrl: string, orgId: string, projectId: string) {
 	return ["cloud-share-links", baseUrl, orgId, projectId] as const;
 }
 
-/** The session topbar's Share control for a cloud session the person's organization owns. */
 /**
- * Makes a link that lets other people open this cloud session, and lists the
- * session's live links so they can be revoked. The link is shown once: the
- * control plane keeps only a hash of its token.
+ * Makes a link to this cloud session or to its whole project, and lists the
+ * live links for either so they can be revoked. A project link that may write
+ * lets its guest start sessions through the project's orchestrator; everything
+ * else in the project they watch. The link is shown once: the control plane
+ * keeps only a hash of its token.
  */
 export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId }: {
 	open: boolean;
@@ -50,6 +80,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	const { client, baseUrl, ready } = useCloudCp();
 	const queryClient = useQueryClient();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
+	const [scope, setScope] = useState<ShareScope>("session");
 	const [access, setAccess] = useState<ShareAccess>("viewer");
 	const [modeCap, setModeCap] = useState<ShareModeCap>("standard");
 	const [expiry, setExpiry] = useState<ShareExpiry>("168");
@@ -60,19 +91,11 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 		queryKey: linksKey,
 		enabled: open && ready,
 		queryFn: async () => (await client.listShareLinks(orgId, projectId)).links,
-		select: (all: CloudCpShareLink[]) => all.filter((link) => link.sessionId === sessionId && link.status === "active"),
+		select: (all: CloudCpShareLink[]) => all.filter((link) => link.status === "active" && (link.sessionId === sessionId || !link.sessionId)),
 	});
 	const create = useMutation({
 		mutationFn: async () => {
-			const hours = EXPIRY_HOURS[expiry];
-			const { link } = await client.createShareLink(orgId, projectId, {
-				sessionId,
-				role: access,
-				accessScope: "anyone",
-				interaction: access === "editor" ? "interact" : "view",
-				...(access === "editor" ? { modeCap } : { modeCap: "read-only" as const }),
-				...(hours ? { expiresInHours: hours } : {}),
-			});
+			const { link } = await client.createShareLink(orgId, projectId, shareLinkRequest({ scope, access, modeCap, expiry, sessionId }));
 			if (!link.token) throw new Error(t("share.noToken"));
 			return shareLinkUrl(baseUrl, orgId, link.token);
 		},
@@ -117,16 +140,26 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				</DialogClose>
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
 					<DialogTitle className="settings-dialog-title text-base">{t("share.title")}</DialogTitle>
-					<DialogDescription className="text-control leading-5 text-settings-muted">{t("share.description")}</DialogDescription>
+					<DialogDescription className="text-control leading-5 text-settings-muted">
+						{scope === "project" ? t("share.projectDescription") : t("share.description")}
+					</DialogDescription>
 				</div>
 				<div className={cn(settingsDialogBodyClass, "gap-3 px-5 pt-0 pb-5")}>
 					<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
+						<Label htmlFor="share-scope" className="text-control">{t("share.scope")}</Label>
+						<Select value={scope} onValueChange={(value) => { setScope(value as ShareScope); setCreated(undefined); create.reset(); }}>
+							<SelectTrigger id="share-scope" className="w-full min-w-0"><SelectValue /></SelectTrigger>
+							<SelectContent>
+								<SelectItem value="session">{t("share.scopeSession")}</SelectItem>
+								<SelectItem value="project">{t("share.scopeProject")}</SelectItem>
+							</SelectContent>
+						</Select>
 						<Label htmlFor="share-access" className="text-control">{t("share.access")}</Label>
 						<Select value={access} onValueChange={(value) => setAccess(value as ShareAccess)}>
 							<SelectTrigger id="share-access" className="w-full min-w-0"><SelectValue /></SelectTrigger>
 							<SelectContent>
 								<SelectItem value="viewer">{t("share.accessViewer")}</SelectItem>
-								<SelectItem value="editor">{t("share.accessEditor")}</SelectItem>
+								<SelectItem value="editor">{scope === "project" ? t("share.accessStartSessions") : t("share.accessEditor")}</SelectItem>
 							</SelectContent>
 						</Select>
 						{access === "editor" ? (
@@ -175,7 +208,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 								{links.data.map((link) => (
 									<li key={link.id} className="flex items-center gap-2 px-3 py-1.5 text-control">
 										<span className="min-w-0 flex-1 truncate">
-											{link.role === "editor" ? t("share.accessEditor") : t("share.accessViewer")}
+											{shareLinkLabel(link, t)}
 											<span className="text-muted-foreground"> · {link.expiresAt
 												? t("share.expiresOn", { date: new Date(link.expiresAt).toLocaleDateString() })
 												: t("share.expiryNever")}</span>

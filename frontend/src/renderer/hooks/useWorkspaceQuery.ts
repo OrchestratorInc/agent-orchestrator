@@ -476,6 +476,7 @@ export function toCloudWorkspaceSession(
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
+			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,
