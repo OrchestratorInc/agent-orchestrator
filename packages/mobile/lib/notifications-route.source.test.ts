@@ -53,6 +53,12 @@ describe("notifications body", () => {
 		expect(page).not.toMatch(/hairlineWidth|NotificationSectionHeader|Feather/);
 	});
 
+	// EmptyState picks the lone action's style per platform: prominent on iOS,
+	// tonal on Android. Naming a variant would override that on both.
+	it("leaves the offline retry to each platform's empty-state default", () => {
+		expect(page).toContain('action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}');
+	});
+
 	// From a pushed page, navigate would put a second board on the stack.
 	it("returns to the PRs tab by popping to the board", () => {
 		expect(page).toContain('router.dismissTo({ pathname: "/prs", params: { hostId: notification.hostId } })');

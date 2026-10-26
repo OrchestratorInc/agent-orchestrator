@@ -516,7 +516,7 @@ function NotificationsContent() {
 								icon="wifi-off"
 								title="Machines are offline"
 								message="Notifications will appear when at least one paired machine reconnects."
-								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={() => void load("refresh")} />}
+								action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}
 							/>
 						) : hostStates.length === 0 ? (
 							// Shared with the tabs: "Connecting…" while the launch race runs,
