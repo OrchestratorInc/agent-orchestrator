@@ -13,21 +13,33 @@ vi.mock("react-native", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
 		ActivityIndicator: host("ActivityIndicator"), Pressable: host("Pressable"), Text: host("Text"), View: host("View"),
+		Platform: { OS: "ios" },
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
 	};
 });
-vi.mock("expo-router", () => ({
-	useLocalSearchParams: () => fixtures.params,
-	useNavigation: () => fixtures.navigation,
-	useRouter: () => ({ navigate: vi.fn() }),
-}));
+vi.mock("expo-router", async () => {
+	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	return {
+		Stack: {
+			Toolbar: Object.assign(host("StackToolbar"), {
+				Button: host("StackToolbarButton"),
+				Menu: host("StackToolbarMenu"),
+				MenuAction: host("StackToolbarMenuAction"),
+			}),
+		},
+		useLocalSearchParams: () => fixtures.params,
+		useNavigation: () => fixtures.navigation,
+		useRouter: () => ({ navigate: vi.fn() }),
+	};
+});
 vi.mock("react-native-webview", async () => {
 	const React = await import("react");
 	return { WebView: (props: object) => React.createElement("WebView", props) };
 });
 vi.mock("./api", () => ({ getPreview: fixtures.getPreview }));
 vi.mock("./config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }) }));
-vi.mock("./haptics", () => ({ haptics: { tap: vi.fn() } }));
+vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 vi.mock("./connectionError", () => ({ userFacingError: String }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./store", () => ({
@@ -55,26 +67,30 @@ import SessionPreviewScreen from "../app/preview/[id]";
 
 const appPreview = { entry: "index.html", url: "http://desktop.local:3011/preview/artifacts/index.html", authenticated: true };
 let screen: ReactTestRenderer;
-let header: ReactTestRenderer;
 const nodes = (name: string) => screen.root.findAll((node) => (node.type as unknown) === name);
 
-function updateHeader() {
-	const options = fixtures.navigation.setOptions.mock.lastCall?.[0];
-	act(() => header.update(options.headerRight?.() ?? <></>));
+/** The header's view menu: Desktop browser or Mobile view, with the system's check on the one showing. */
+function modeMenu() {
+	const [menu] = nodes("StackToolbarMenu").filter((node) => String(node.props.accessibilityLabel).startsWith("View, "));
+	expect(menu, "the header has the view menu").toBeDefined();
+	return menu;
 }
 
-function toggle() {
-	updateHeader();
-	return header.root.find((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityRole === "switch");
+function modeAction(label: "Desktop browser" | "Mobile view") {
+	return modeMenu().find((node) => (node.type as unknown) === "StackToolbarMenuAction" && node.props.children === label);
+}
+
+function mobileView() {
+	const action = modeAction("Mobile view");
+	return { checked: Boolean(action.props.isOn), disabled: Boolean(action.props.disabled) };
 }
 
 async function openPreview() {
-	await act(async () => { screen = create(<SessionPreviewScreen />); header = create(<></>); });
+	await act(async () => { screen = create(<SessionPreviewScreen />); });
 }
 
 async function setMobile(enabled: boolean) {
-	const control = toggle();
-	if (control.props.accessibilityState.checked !== enabled) await act(async () => control.props.onPress());
+	await act(async () => modeAction(enabled ? "Mobile view" : "Desktop browser").props.onPress());
 }
 
 beforeEach(() => {
@@ -89,35 +105,36 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	act(() => { screen?.unmount(); header?.unmount(); });
+	act(() => { screen?.unmount(); });
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });
 
 describe("session preview mode", () => {
 
-	it("defaults to the live browser with a labelled toggle only in the header", async () => {
+	it("defaults to the live browser with the view choice as a native header menu", async () => {
 		await openPreview();
 		expect(fixtures.getPreview).toHaveBeenCalledWith(fixtures.config, "session-1");
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
 		expect(nodes("WebView")).toHaveLength(0);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "switch")).toHaveLength(0);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "tablist")).toHaveLength(0);
-		expect(toggle().props).toMatchObject({ accessibilityLabel: "Mobile view", accessibilityState: { checked: false, disabled: false }, disabled: false });
-		expect(toggle().find((node) => (node.type as unknown) === "Text").props.children).toBe("Mobile view");
-		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("smartphone");
+		expect(nodes("StackToolbar")[0].props.placement).toBe("right");
+		expect(modeMenu().props).toMatchObject({ accessibilityLabel: "View, Desktop browser", icon: "desktopcomputer" });
+		expect(modeAction("Desktop browser").props.isOn).toBe(true);
+		expect(mobileView()).toEqual({ checked: false, disabled: false });
 	});
 
 	it("falls back to Mobile view when sharing is disabled and preserves an explicit switch back", async () => {
 		await openPreview();
 		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
 		expect(nodes("WebView")[0].props.source.uri).toBe(appPreview.url);
-		expect(toggle().props.accessibilityState.checked).toBe(true);
+		expect(mobileView().checked).toBe(true);
 		await setMobile(false);
 		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.accessibilityState.checked).toBe(false);
+		expect(mobileView().checked).toBe(false);
 	});
 
 	it("waits for a selected preview before applying the disabled-sharing fallback", async () => {
@@ -126,7 +143,7 @@ describe("session preview mode", () => {
 		await openPreview();
 		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.accessibilityState.disabled).toBe(true);
+		expect(mobileView().disabled).toBe(true);
 		await act(async () => resolve(appPreview));
 		expect(nodes("WebView")[0].props.source.uri).toBe(appPreview.url);
 	});
@@ -138,7 +155,7 @@ describe("session preview mode", () => {
 		fixtures.params.id = "session-2";
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
-		expect(toggle().props.accessibilityState.checked).toBe(false);
+		expect(mobileView().checked).toBe(false);
 	});
 
 	it.each(["explicit", "disabled-sharing fallback"])("preserves %s Mobile view across a LAN-to-tunnel endpoint switch", async (choice) => {
@@ -153,12 +170,12 @@ describe("session preview mode", () => {
 		// An old URL must never be rendered with the new endpoint's credentials.
 		expect(nodes("BrowserLivePane")).toHaveLength(0);
 		expect(nodes("WebView")).toHaveLength(0);
-		expect(toggle().props.accessibilityState.checked).toBe(true);
+		expect(mobileView().checked).toBe(true);
 		const updated = { ...appPreview, url: "https://tunnel.example.com/preview/artifacts/index.html" };
 		await act(async () => resolve(updated));
 		expect(nodes("BrowserLivePane")).toHaveLength(0);
 		expect(nodes("WebView")[0].props.source.uri).toBe(updated.url);
-		expect(toggle().props.accessibilityState.checked).toBe(true);
+		expect(mobileView().checked).toBe(true);
 	});
 
 	it("preserves an explicit Browser choice across an endpoint switch after disabled sharing", async () => {
@@ -169,7 +186,7 @@ describe("session preview mode", () => {
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		await act(async () => nodes("BrowserLivePane")[0].props.onDisabled());
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.accessibilityState.checked).toBe(false);
+		expect(mobileView().checked).toBe(false);
 	});
 
 	it("starts a different host in streaming mode rather than keeping its predecessor's selection", async () => {
@@ -179,20 +196,21 @@ describe("session preview mode", () => {
 		fixtures.config = { ...fixtures.config, hostId: "host-2" };
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.accessibilityState.checked).toBe(false);
+		expect(mobileView().checked).toBe(false);
 	});
 
-	it("keeps the phone icon while switching to the responsive preview and back to streaming", async () => {
+	it("shows the view's own device in the bar while switching to the responsive preview and back", async () => {
 		await openPreview();
 		await setMobile(true);
 		expect(nodes("BrowserLivePane")).toHaveLength(0);
 		expect(nodes("WebView")[0].props.source).toEqual({ uri: appPreview.url, headers: { Authorization: "Bearer test" } });
-		expect(toggle().props.accessibilityState.checked).toBe(true);
-		expect(toggle().find((node) => (node.type as unknown) === "Feather").props.name).toBe("smartphone");
+		expect(mobileView().checked).toBe(true);
+		expect(modeMenu().props).toMatchObject({ accessibilityLabel: "View, Mobile view", icon: "iphone" });
 		await setMobile(false);
 		expect(nodes("WebView")).toHaveLength(0);
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.accessibilityState.checked).toBe(false);
+		expect(mobileView().checked).toBe(false);
+		expect(modeMenu().props.icon).toBe("desktopcomputer");
 	});
 
 	it("keeps the chosen mode during preview polls while updating the app URL", async () => {
@@ -201,22 +219,23 @@ describe("session preview mode", () => {
 		fixtures.getPreview.mockResolvedValue({ ...appPreview, url: "http://desktop.local:4317/updated" });
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("WebView")[0].props.source.uri).toBe("http://desktop.local:4317/updated");
-		expect(toggle().props.accessibilityState.checked).toBe(true);
+		expect(mobileView().checked).toBe(true);
 		await setMobile(false);
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props.accessibilityState.checked).toBe(false);
+		expect(mobileView().checked).toBe(false);
 	});
 
 	it("disables responsive mode without an app preview and stays live when one becomes available", async () => {
 		fixtures.getPreview.mockResolvedValue(null);
 		await openPreview();
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props).toMatchObject({ accessibilityState: { checked: false, disabled: true }, disabled: true });
+		expect(mobileView()).toEqual({ checked: false, disabled: true });
+		expect(modeAction("Mobile view").props.subtitle).toBe("No app preview for this session yet");
 		fixtures.getPreview.mockResolvedValue(appPreview);
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props).toMatchObject({ accessibilityState: { checked: false, disabled: false }, disabled: false });
+		expect(mobileView()).toEqual({ checked: false, disabled: false });
 	});
 
 	it("returns to the live browser if the selected app preview is cleared", async () => {
@@ -225,7 +244,7 @@ describe("session preview mode", () => {
 		fixtures.getPreview.mockResolvedValue(null);
 		await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
 		expect(nodes("BrowserLivePane")).toHaveLength(1);
-		expect(toggle().props).toMatchObject({ accessibilityState: { checked: false, disabled: true }, disabled: true });
+		expect(mobileView()).toEqual({ checked: false, disabled: true });
 	});
 
 	it("starts another session in streaming mode after using its predecessor's responsive preview", async () => {
@@ -234,6 +253,6 @@ describe("session preview mode", () => {
 		fixtures.params.id = "session-2";
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
-		expect(toggle().props.accessibilityState.checked).toBe(false);
+		expect(mobileView().checked).toBe(false);
 	});
 });

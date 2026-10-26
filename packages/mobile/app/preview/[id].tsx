@@ -1,6 +1,6 @@
 import { Feather } from "../../lib/icons";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { getPreview } from "../../lib/api";
@@ -8,6 +8,7 @@ import { authHeaders } from "../../lib/config";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches, previewForConfig } from "../../lib/hostRoute";
 import { BrowserLivePane } from "../../lib/preview/BrowserLivePane";
+import { previewModeMenu, type PreviewMode } from "../../lib/preview/previewModeMenu";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -52,24 +53,19 @@ function SessionPreviewContent() {
 	}, [routeHostId, sessionID]);
 
 	useLayoutEffect(() => {
-		navigation.setOptions({
-			title: title || "Preview",
-			unstable_headerRightItems: undefined,
-			headerRight: hostMatches && config ? () => <Pressable
-				accessibilityRole="switch"
-				hitSlop={4}
-				accessibilityLabel="Mobile view"
-				accessibilityState={{ checked: responsive, disabled: !canShowResponsive }}
-				accessibilityHint={canShowResponsive ? "Turn on for the mobile app preview. Turn off for the live desktop browser." : "No app preview is available for this session yet."}
-				disabled={!canShowResponsive}
-				onPress={() => { haptics.tap(); setActive(responsive ? "browser" : "app"); }}
-				style={({ pressed }) => [styles.modeToggle, responsive && styles.modeToggleActive, (!canShowResponsive || pressed) && styles.modeToggleDimmed]}
-			>
-				<Feather name="smartphone" size={iconSize.sm} color={responsive ? t.onAccent : t.textSecondary} />
-				<Text style={[styles.modeLabel, responsive && styles.modeLabelActive]}>Mobile view</Text>
-			</Pressable> : undefined,
-		});
-	}, [canShowResponsive, config, hostMatches, navigation, responsive, styles.modeLabel, styles.modeLabelActive, styles.modeToggle, styles.modeToggleActive, styles.modeToggleDimmed, t.onAccent, t.textSecondary, title]);
+		navigation.setOptions({ title: title || "Preview" });
+	}, [navigation, title]);
+
+	// The choice between the two views, as a native menu in the bar. Memoized:
+	// each new element re-registers the header's items, and the page re-renders
+	// on every preview poll.
+	const mode: PreviewMode = responsive ? "app" : "browser";
+	const showMenu = hostMatches && Boolean(config);
+	const headerItems = useMemo(() => showMenu ? (
+		<Stack.Toolbar placement="right">
+			{previewModeMenu({ mode, appAvailable: canShowResponsive, onSelect: setActive })}
+		</Stack.Toolbar>
+	) : null, [canShowResponsive, mode, showMenu]);
 
 	const refreshPreview = useCallback(async () => {
 		if (!hostMatches || !config || !sessionID) return;
@@ -104,6 +100,7 @@ function SessionPreviewContent() {
 	if (!config) return <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Connecting to this machine…</Text></View>;
 
 	return <View style={styles.screen}>
+		{headerItems}
 		{refreshingResponsive ? <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Loading mobile preview…</Text></View> : !responsive || !preview ? <BrowserLivePane sessionID={sessionID} onDisabled={onBrowserDisabled} /> : <View style={styles.appPane}>
 			<View style={styles.appBar}>
 				<Feather name="globe" size={iconSize.sm} color={t.textTertiary} />
@@ -135,11 +132,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	copy: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	modeToggle: { height: 36, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 18, borderCurve: "circular", overflow: "hidden" },
-	modeToggleActive: { backgroundColor: t.blue },
-	modeToggleDimmed: { opacity: 0.5 },
-	modeLabel: { color: t.textSecondary, fontFamily: "Geist_500Medium", fontSize: type.footnote.fontSize },
-	modeLabelActive: { color: t.onAccent },
 	appPane: { flex: 1, backgroundColor: t.bgBase },
 	appBar: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.md, paddingRight: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgSurface },
 	appPath: { flex: 1, color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
