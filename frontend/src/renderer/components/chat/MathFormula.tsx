@@ -22,11 +22,7 @@ let katex: Katex | undefined;
 let katexPromise: Promise<Katex> | undefined;
 
 function loadKatex(): Promise<Katex> {
-	katexPromise ??= Promise.all([
-		import("katex"),
-		import("katex/dist/katex.min.css"),
-		import("katex/contrib/copy-tex"),
-	]).then(([module]) => (katex = module.default));
+	katexPromise ??= import("../../lib/katex").then((module) => (katex = module.default));
 	return katexPromise;
 }
 
