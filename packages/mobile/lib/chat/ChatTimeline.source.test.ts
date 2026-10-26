@@ -135,6 +135,19 @@ describe("elicitation boolean input", () => {
 	});
 });
 
+describe("disclosure rows", () => {
+	// Opening a fold or a page is not a haptic moment on either platform.
+	it("toggle and navigate without a haptic", () => {
+		expect(source).not.toContain("haptics.tap()");
+		expect(source).not.toContain("haptics.select()");
+	});
+
+	it("draw the system's disclosure chevron", () => {
+		expect(source).not.toMatch(/<Feather name=\{[^}]*chevron/);
+		expect(source.match(/<FoldChevron open=/g)?.length).toBeGreaterThanOrEqual(12);
+	});
+});
+
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");

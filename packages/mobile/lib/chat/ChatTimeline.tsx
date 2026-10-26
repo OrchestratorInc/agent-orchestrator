@@ -537,13 +537,13 @@ function StagedAttachment({ name, source, tileSize }: { name: string; source?: A
 	if (!isSameAttachmentLoad(failedLoad, source)) {
 		// Cover-cropping a square reads as a deliberate thumbnail; the viewer shows the whole image.
 		return <>
-			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => { haptics.tap(); setViewerOpen(true); }} style={[styles.attachmentTile, { width: tileSize, height: tileSize }]}>
+			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => setViewerOpen(true)} style={[styles.attachmentTile, { width: tileSize, height: tileSize }]}>
 				<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
 			</Pressable>
 			<ImageViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
 	}
-	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={6} onPress={() => { haptics.tap(); setFailedLoad(undefined); }} style={styles.attachmentChip}>
+	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={6} onPress={() => setFailedLoad(undefined)} style={styles.attachmentChip}>
 		<Feather name="refresh-cw" size={12} color={t.textTertiary} />
 		<Text numberOfLines={1} style={styles.attachmentName}>{name}</Text>
 		<Text style={styles.attachmentRetry}>Tap to retry</Text>
@@ -568,7 +568,7 @@ function OriginMessage({ message }: { message: Extract<ConversationItem, { kind:
 	return <View style={styles.originMessage}>
 		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
 		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
-		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { haptics.tap(); setExpanded((value) => !value); }} style={styles.originMore}><Feather name={expanded ? "chevron-up" : "chevron-right"} size={12} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
+		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} style={styles.originMore}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
 }
 
@@ -618,7 +618,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				accessibilityRole={expandable ? "button" : undefined}
 				accessibilityState={expandable ? { expanded: open } : undefined}
 				disabled={!expandable}
-				onPress={() => { haptics.tap(); setOpenOverride(!open); }}
+				onPress={() => setOpenOverride(!open)}
 				style={styles.activityRow}
 			>
 				<Feather name={meta.icon} size={12} color={meta.color(t)} />
@@ -627,7 +627,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				</Text>
 				{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : null}
 				{activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : null}
-				{expandable ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}
+				{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 			</Pressable>
 			{open ? (
 				<View style={styles.activityDetail}>
@@ -658,12 +658,12 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const failed = activity.status === "failed" || detail.success === false || Boolean(detail.error);
 	const body = detail.arguments !== undefined || detail.result !== undefined || Boolean(detail.error || detail.progress);
 	return <View style={styles.activityWrap}>
-		<Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.activityRow}>
+		<Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.activityRow}>
 			<Feather name="tool" size={12} color={failed ? t.red : t.textSecondary} />
 			<Text style={[styles.server, failed && { color: t.red }]}>{detail.server ?? detail.namespace ? `${detail.server ?? detail.namespace}/` : ""}</Text>
 			<Text numberOfLines={1} style={[styles.activitySummary, failed && { color: t.red }]}>{detail.toolName || activity.summary}</Text>
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
-			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}
+			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 		</Pressable>
 		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
 	</View>;
@@ -683,7 +683,7 @@ function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const denied = String(detail.status ?? "").toLowerCase().includes("den");
 	const paths = reviewPaths(detail.files);
 	const body = Boolean(detail.rationale || detail.command || detail.cwd || detail.host || detail.decisionSource || paths.length);
-	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.activityRow}><Feather name={denied ? "shield-off" : "shield"} size={12} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{detail.riskLevel}</Text> : null}{body ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
+	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.activityRow}><Feather name={denied ? "shield-off" : "shield"} size={12} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{detail.riskLevel}</Text> : null}{body ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
 }
 
 function FileChangeActivity({ activity }: { activity: ConversationActivity }) {
@@ -697,7 +697,7 @@ function ExpandableFileList({ title, files, fallbackPatch, fallbackPatchTruncate
 	const [openOverride, setOpenOverride] = useState<boolean | null>(null);
 	const open = openOverride ?? Boolean(live && (fallbackPatch || files.some((file) => file.patch)));
 	const expandable = files.length > 0 || Boolean(fallbackPatch);
-	return <View><Pressable disabled={!expandable} accessibilityRole={expandable ? "button" : undefined} accessibilityState={expandable ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpenOverride(!open); }} style={styles.activityRow}><Feather name="edit-3" size={12} color={t.accent} /><Text numberOfLines={2} style={styles.activitySummary}>{title}</Text>{expandable ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}</Pressable>{open ? <View style={styles.activityDetail}>{files.map((file) => <FileChangeRow key={`${file.oldPath ?? ""}:${file.path}`} file={file} live={live} />)}{fallbackPatch ? <PatchBlock patch={fallbackPatch} truncated={fallbackPatchTruncated} /> : null}</View> : null}</View>;
+	return <View><Pressable disabled={!expandable} accessibilityRole={expandable ? "button" : undefined} accessibilityState={expandable ? { expanded: open } : undefined} onPress={() => setOpenOverride(!open)} style={styles.activityRow}><Feather name="edit-3" size={12} color={t.accent} /><Text numberOfLines={2} style={styles.activitySummary}>{title}</Text>{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open ? <View style={styles.activityDetail}>{files.map((file) => <FileChangeRow key={`${file.oldPath ?? ""}:${file.path}`} file={file} live={live} />)}{fallbackPatch ? <PatchBlock patch={fallbackPatch} truncated={fallbackPatchTruncated} /> : null}</View> : null}</View>;
 }
 
 function FileChangeRow({ file, live }: { file: ReturnType<typeof fileChanges>[number]; live?: boolean }) {
@@ -706,7 +706,7 @@ function FileChangeRow({ file, live }: { file: ReturnType<typeof fileChanges>[nu
 	const [open, setOpen] = useState(Boolean(live && file.patch));
 	const hasPatch = Boolean(file.patch);
 	const mark = file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : "M";
-	return <View><Pressable disabled={!hasPatch} accessibilityRole={hasPatch ? "button" : undefined} accessibilityState={hasPatch ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.fileRow}><Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{mark}</Text><Text selectable numberOfLines={2} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text><Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>{hasPatch ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}</Pressable>{open && file.patch ? <PatchBlock patch={file.patch} truncated={file.patchTruncated} /> : null}</View>;
+	return <View><Pressable disabled={!hasPatch} accessibilityRole={hasPatch ? "button" : undefined} accessibilityState={hasPatch ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} style={styles.fileRow}><Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{mark}</Text><Text selectable numberOfLines={2} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text><Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>{hasPatch ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && file.patch ? <PatchBlock patch={file.patch} truncated={file.patchTruncated} /> : null}</View>;
 }
 
 function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }) {
@@ -724,8 +724,8 @@ function PlanActivity({ activity }: { activity: ConversationActivity }) {
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
 			style={styles.planHeader}
-			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-			><Feather name="list" size={12} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} style={styles.planStep}><Feather name={step.status === "completed" ? "check-circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
+			onPress={() => setOpen((value) => !value)}
+			><Feather name="list" size={12} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><FoldChevron open={open} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} style={styles.planStep}><Feather name={step.status === "completed" ? "check-circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
 }
 
 function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
@@ -743,14 +743,14 @@ function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
 		<Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
-			onPress={() => { haptics.tap(); setOverride(!open); }}
+			onPress={() => setOverride(!open)}
 			style={styles.runSummary}
 		>
 			<Text style={styles.runText}>{summarizeActivities(activities)}</Text>
 			{failed ? <Text style={styles.runFailed}>{failed} failed</Text> : null}
 			{cancelled ? <Text style={styles.runStopped}>{cancelled} stopped</Text> : null}
 			{running ? <ActivityIndicator size="small" color={t.textTertiary} /> : null}
-			<Feather name={open ? "chevron-down" : "chevron-right"} size={12} color={t.textFaint} />
+			<FoldChevron open={open} color={t.textTertiary} />
 		</Pressable>
 		{open ? <View style={styles.runDetail}>{hierarchy.map((node) => <ActivityTree key={node.activity.id} node={node} />)}</View> : null}
 	</View>;
@@ -772,13 +772,13 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 			accessibilityRole="button"
 			accessibilityLabel={`${open ? "Hide" : "Show"} subagent work, ${count} ${count === 1 ? "step" : "steps"}`}
 			accessibilityState={{ expanded: open }}
-			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+			onPress={() => setOpen((value) => !value)}
 			style={styles.subagentHeader}
 		>
 			<Feather name="git-branch" size={12} color={t.textTertiary} />
 			<Text style={styles.subagentLabel}>SUBAGENT · {count} {count === 1 ? "STEP" : "STEPS"}</Text>
 			{running ? <ActivityIndicator size="small" color={t.textTertiary} /> : null}
-			<Feather name={open ? "chevron-down" : "chevron-right"} size={12} color={t.textFaint} />
+			<FoldChevron open={open} color={t.textTertiary} />
 		</Pressable>
 		{open ? nodes.map((child) => <ActivityTree key={child.activity.id} node={child} />) : null}
 	</View>;
@@ -818,12 +818,12 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		accessibilityRole={foldable ? "button" : undefined}
 		accessibilityState={foldable ? { expanded: open } : undefined}
 		disabled={!foldable}
-		onPress={() => { haptics.tap(); onToggle(); }}
+		onPress={onToggle}
 		style={styles.statusRow}
 	>
 		{running ? <StatusSpinner><Spinner size={iconSize.xs} color={t.textTertiary} /></StatusSpinner> : null}
 		<StatusLabel>{text}</StatusLabel>
-		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
+		{foldable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 	</Pressable>;
 }
 
@@ -890,13 +890,13 @@ function TurnPlan({ turn }: { turn: ConversationTurn }) {
 				accessibilityRole="button"
 				accessibilityState={{ expanded: open }}
 				style={styles.planHeader}
-				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+				onPress={() => setOpen((value) => !value)}
 				>
 				<Feather name="list" size={12} color={t.textTertiary} />
 				<Text style={styles.planTitle}>Plan</Text>
 				{turn.state === "running" ? <Text style={styles.planLive}>STILL CHANGING</Text> : null}
 				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
-				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
+				<FoldChevron open={open} color={t.textTertiary} />
 			</Pressable>
 			{open ? <View style={styles.planBody}>
 				{turn.plan?.explanation ? <Text style={styles.detailCopy}>{turn.plan.explanation}</Text> : null}
@@ -925,21 +925,21 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 				accessibilityState={{ expanded: open }}
 				accessibilityLabel={`${changed.length} changed ${changed.length === 1 ? "file" : "files"}, ${additions} lines added, ${deletions} removed`}
 				style={[styles.planHeader, styles.changedToggle]}
-				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+				onPress={() => setOpen((value) => !value)}
 				>
 				<Feather name="file-text" size={12} color={t.textTertiary} />
 				<Text numberOfLines={1} style={[styles.planTitle, styles.changedTitle]}>{files ? `${changed.length} ${changed.length === 1 ? "file" : "files"}` : `${changed.length} changed ${changed.length === 1 ? "file" : "files"}`}</Text>
 				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>GROWING</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
 				<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{additions}</Text>
 				<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{deletions}</Text>
-				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
+				<FoldChevron open={open} color={t.textTertiary} />
 			</Pressable>
 			{files ? <Pressable
 				accessibilityRole="button"
 				accessibilityLabel="Review changes"
 				accessibilityHint="Opens every changed file in this session"
 				hitSlop={6}
-				onPress={() => { haptics.tap(); files.openChanges(); }}
+				onPress={() => files.openChanges()}
 				style={({ pressed }) => [styles.changedReview, pressed && { opacity: press.opacity }]}
 			>
 				<Feather name="file-diff" size={12} color={t.textPrimary} />
@@ -951,7 +951,7 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 				<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
 				<Text selectable={!files} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
 				<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
-				{files ? <Feather name="chevron-right" size={12} color={t.textFaint} /> : null}
+				{files ? <AppSymbol name="chevronForward" size={iconSize.sm} color={t.textTertiary} /> : null}
 			</>;
 			return files
 				? <Pressable
@@ -959,7 +959,7 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 					accessibilityRole="button"
 					accessibilityLabel={`${file.path}, ${file.status}, ${file.additions} added, ${file.deletions} removed`}
 					accessibilityHint="Opens the diff"
-					onPress={() => { haptics.tap(); files.openFile(file.path, file.oldPath); }}
+					onPress={() => files.openFile(file.path, file.oldPath)}
 					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && { opacity: press.opacity }]}
 				>{row}</Pressable>
 				: <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>{row}</View>;
