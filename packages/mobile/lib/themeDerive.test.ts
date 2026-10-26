@@ -100,6 +100,13 @@ describe("themeFor with a named theme", () => {
 		expect(contrastRatio(t.onDestructive, t.red)).toBeGreaterThanOrEqual(FAINT_CONTRAST);
 	});
 
+	// The success button's title and the merge track's label sit on these fills.
+	it.each([...CASES, [DEFAULT_THEME_STYLE, "dark"], [DEFAULT_THEME_STYLE, "light"]] as const)("%s %s ink on green and purple reads as text", (style, scheme) => {
+		const t = themeFor(scheme, style);
+		expect(contrastRatio(t.onStatus, t.green)).toBeGreaterThanOrEqual(TEXT_CONTRAST);
+		expect(contrastRatio(t.onStatus, t.purple)).toBeGreaterThanOrEqual(TEXT_CONTRAST);
+	});
+
 	it.each(NAMED)("%s light lifts cards off the base", (style) => {
 		const t = themeFor("light", style);
 		expect(contrastRatio(t.bgElevated, t.bgBase)).toBeGreaterThanOrEqual(1.05);

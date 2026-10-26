@@ -93,6 +93,12 @@ export type Theme = {
 	onAccent: string;
 	/** Ink on a filled `red` surface (the recording mic): white, as the system draws it. */
 	onDestructive: string;
+	/**
+	 * Ink, text included, on a filled `green` or `purple` surface (the success
+	 * button, the merge track): white where it reads, dark on a dark theme's pale
+	 * fills.
+	 */
+	onStatus: string;
 	/** Scrim behind modals. */
 	scrim: string;
 
@@ -148,6 +154,8 @@ export const darkTheme: Theme = {
 	// Near-black ink on the near-white accent.
 	onAccent: "#0b0c0e",
 	onDestructive: "#ffffff",
+	// The page colour: white is under 2.4:1 on these pale fills.
+	onStatus: "#0a0b0d",
 	scrim: "rgba(0,0,0,0.6)",
 
 	fontMono: FONT_MONO,
@@ -201,6 +209,7 @@ export const lightTheme: Theme = {
 
 	onAccent: "#ffffff",
 	onDestructive: "#ffffff",
+	onStatus: "#ffffff",
 	scrim: "rgba(0,0,0,0.45)",
 
 	fontMono: FONT_MONO,

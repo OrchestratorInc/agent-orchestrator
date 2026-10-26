@@ -180,8 +180,8 @@ export function SwipeToMerge({
 		opacity: Math.max(pinned.value, interpolate(ratio(translateX.value, travel.value), [0, 0.6], [1, 0.45], "clamp")),
 	}));
 
-	// Ink on the solid fill is the success button's, which reads on every theme's green.
-	const ink = t.bgBase;
+	// The success button's ink, which reads as text on every theme's green and purple.
+	const ink = t.onStatus;
 	return (
 		// One accessible element: screen readers announce the merge as a button.
 		<View

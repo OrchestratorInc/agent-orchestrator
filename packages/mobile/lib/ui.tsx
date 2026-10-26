@@ -270,7 +270,7 @@ function buttonColors(t: Theme, variant: ButtonVariant): { fill: string; ink: st
 		case "danger":
 			return { fill: t.tintRed, ink: t.red, ripple: "destructive" };
 		case "success":
-			return { fill: t.green, ink: t.bgBase, ripple: "onAccent" };
+			return { fill: t.green, ink: t.onStatus, ripple: "onAccent" };
 	}
 }
 

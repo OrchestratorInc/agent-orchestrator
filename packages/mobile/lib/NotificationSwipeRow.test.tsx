@@ -24,7 +24,7 @@ vi.mock("react-native-reanimated", async () => {
 	};
 });
 vi.mock("react-native-worklets", () => ({ scheduleOnRN: (fn: () => void) => fn() }));
-vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ red: "red", bgBase: "black" }) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ red: "red", bgBase: "black", onDestructive: "white" }) }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 const haptics = vi.hoisted(() => ({ armed: vi.fn() }));
 vi.mock("./haptics", () => ({ haptics }));
@@ -81,5 +81,6 @@ it("draws the delete rail with the system trash symbol", () => {
 	act(() => { renderer = create(<NotificationSwipeRow onClear={() => true}><></></NotificationSwipeRow>); });
 	const glyph = renderer!.root.findByType("SymbolView" as never);
 	expect(glyph.props.name).toEqual({ ios: "trash", android: "delete" });
-	expect(glyph.props.tintColor).toBe("black");
+	// The ink for a red fill, not the page colour standing in for it.
+	expect(glyph.props.tintColor).toBe("white");
 });

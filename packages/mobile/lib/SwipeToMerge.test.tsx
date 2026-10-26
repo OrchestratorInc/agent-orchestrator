@@ -142,7 +142,7 @@ it("fills the bar while the merge runs, with a spinner on the knob", () => {
 	act(() => { renderer = create(<SwipeToMerge label="Swipe to merge PR #1" busyLabel="Merging…" busy onMerge={async () => true} onAccessibilityActivate={() => {}} />); });
 	const label = renderer!.root.findByType("Text" as never);
 	expect(label.props.children).toBe("Merging…");
-	expect(label.props.style).toContainEqual({ color: "#bgBase" });
+	expect(label.props.style).toContainEqual({ color: "#onStatus" });
 	expect(renderer!.root.findAllByType("ActivityIndicator" as never)).toHaveLength(1);
 	const control = renderer!.root.findAll((node) => node.props.accessible === true)[0];
 	expect(control.props.accessibilityState).toEqual({ busy: true, disabled: true });

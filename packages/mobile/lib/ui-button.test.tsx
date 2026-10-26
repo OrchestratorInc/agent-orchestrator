@@ -100,6 +100,12 @@ describe("Button", () => {
 		expect(styleOf(render(<Button title="Go" variant={variant} onPress={() => {}} />)).backgroundColor).toBe(fill);
 	});
 
+	// The title on the green fill takes the ink made for status fills.
+	it("writes a success button's title in the status ink", () => {
+		render(<Button title="Merge" variant="success" onPress={() => {}} />);
+		expect(renderer!.root.findByType("Text" as never).props.style).toEqual(expect.arrayContaining([{ color: darkTheme.onStatus }]));
+	});
+
 	it("draws a ghost button as text alone, with no fill or border", () => {
 		const style = styleOf(render(<Button title="Discard" variant="ghost" onPress={() => {}} />));
 		expect(style.backgroundColor).toBe("transparent");

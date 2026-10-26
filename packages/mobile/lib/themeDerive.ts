@@ -129,6 +129,9 @@ export function deriveMobileTheme(p: ThemePalette, scheme: ColorScheme, fontMono
 		// White, as on the hand-tuned palettes, unless a theme's red is too pale to
 		// carry it; then it darkens until the glyph clears the non-text floor.
 		onDestructive: ensureContrast("#ffffff", red, FAINT_CONTRAST, "#000000"),
+		// White where it reads as text on both fills, as it does on every light
+		// palette; otherwise the base, which each state hue clears by construction.
+		onStatus: [green, purple].every((fill) => contrastRatio("#ffffff", fill) >= TEXT_CONTRAST) ? "#ffffff" : bgBase,
 		scrim: dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.45)",
 
 		fontMono,

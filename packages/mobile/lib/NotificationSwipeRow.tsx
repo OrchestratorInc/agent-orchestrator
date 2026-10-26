@@ -101,9 +101,8 @@ export function NotificationSwipeRow({
 	return (
 		<View onLayout={onLayout} style={[styles.shell, style]}>
 			<View pointerEvents="none" style={[styles.deleteRail, { backgroundColor: t.red }]}>
-				{/* The page colour as ink, as a filled status button draws it: light
-				    on light mode's deep red, dark on dark mode's pale one. */}
-				<AppSymbol name="delete" size={iconSize.xl} color={t.bgBase} />
+				{/* White on red, as the system's own delete action draws it. */}
+				<AppSymbol name="delete" size={iconSize.xl} color={t.onDestructive} />
 			</View>
 			<GestureDetector gesture={pan}>
 				<Animated.View style={[styles.foreground, { backgroundColor: t.bgBase }, animatedStyle]}>
