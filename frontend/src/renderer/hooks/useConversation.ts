@@ -19,7 +19,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -838,32 +838,48 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		onSuccess: invalidate,
 	});
 
+	// The picker stays usable while a pick is being saved, so picks can overlap. Each is
+	// written after the one before it, and only the newest one's answer is kept.
+	const settingsWrites = useRef({ queue: Promise.resolve() as Promise<unknown>, latest: 0 });
+	const setSnapshotSettings = (targetSessionId: string, settings: TurnSettings) =>
+		queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(targetSessionId, hostId), (current) =>
+			current ? {
+				...current,
+				pages: current.pages.map((page, index) => index === 0 ? { ...page, settings } : page),
+			} : current,
+		);
 	const chooseSettings = useMutation({
+		// Shown at once, so the next pick builds on this one rather than on the saved settings.
+		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
+			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });
+			setSnapshotSettings(targetSessionId, settings);
+			return { write: ++settingsWrites.current.latest };
+		},
 		mutationFn: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
-			const { data, error } = await clientForSessionHost(hostId).PATCH(
-				"/api/v1/sessions/{sessionId}/conversation/settings",
-				{
-					params: { path: { sessionId: targetSessionId } },
-					body: settings,
-				},
-			);
-			if (error) throw error;
-			return data;
+			const write = settingsWrites.current.queue.then(async () => {
+				const { data, error } = await clientForSessionHost(hostId).PATCH(
+					"/api/v1/sessions/{sessionId}/conversation/settings",
+					{
+						params: { path: { sessionId: targetSessionId } },
+						body: settings,
+					},
+				);
+				if (error) throw error;
+				return data;
+			});
+			settingsWrites.current.queue = write.catch(() => undefined);
+			return write;
+		},
+		onError: (_error, { targetSessionId }, context) => {
+			if (context?.write === settingsWrites.current.latest) refreshSessionInBackground(targetSessionId);
 		},
 		// Confirm from the daemon's response before enabling Remember. A background
 		// snapshot refetch can be slow; it must not expose the previous permission.
-		onSuccess: async (settings, { targetSessionId }) => {
+		onSuccess: async (settings, { targetSessionId }, context) => {
+			if (context?.write !== settingsWrites.current.latest) return;
 			const queryKey = conversationQueryKey(targetSessionId, hostId);
 			await queryClient.cancelQueries({ queryKey });
-			if (settings) {
-				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(queryKey, (current) =>
-					current ? {
-						...current,
-						pages: current.pages.map((page, index) => index === 0
-							? { ...page, settings: settings as TurnSettings } : page),
-					} : current,
-				);
-			}
+			if (settings) setSnapshotSettings(targetSessionId, settings as TurnSettings);
 			refreshSessionInBackground(targetSessionId);
 		},
 	});
@@ -1465,6 +1481,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 	// start a fresh read mid-write whose pre-change catalog lands after the
 	// mutation's own result and reverts the picker the user just used.
 	const [writing, setWriting] = useState(false);
+	// Picks can overlap while one is being saved: each is written after the one before
+	// it, and only the newest one's answer replaces the catalog.
+	const writes = useRef({ queue: Promise.resolve() as Promise<unknown>, latest: 0, open: 0 });
 	const query = useQuery({
 		queryKey,
 		enabled: Boolean(sessionId) && enabled,
@@ -1490,19 +1509,25 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// so no poll can start or land inside that window.
 		// The picked value shows at once; the agent's (possibly slow) reply brings what depends on it.
 		onMutate: async ({ optionId, value }) => {
+			writes.current.open += 1;
 			setWriting(true);
 			await queryClient.cancelQueries({ queryKey });
 			const previous = queryClient.getQueryData<ChatConfigOption[]>(queryKey);
 			queryClient.setQueryData<ChatConfigOption[]>(queryKey, previous?.map((option) => option.id !== optionId ? option
 				: "value" in value ? { ...option, currentValue: value.value } : { ...option, currentBoolean: value.enabled }));
-			return { previous, controllerEpoch: conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId)) };
+			return { previous, write: ++writes.current.latest, controllerEpoch: conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId)) };
 		},
 		onError: (_error, _variables, context) => {
 			// A switch since the pick replaced the list; the old agent's must not come back.
 			if (!context?.previous || context.controllerEpoch !== conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId))) return;
+			// A later pick is still being saved, so its value stays; the poll corrects the rest.
+			if (context.write !== writes.current.latest) return;
 			queryClient.setQueryData(queryKey, context.previous);
 		},
-		onSettled: () => setWriting(false),
+		onSettled: () => {
+			writes.current.open -= 1;
+			if (writes.current.open === 0) setWriting(false);
+		},
 		mutationFn: async ({
 			optionId,
 			value,
@@ -1510,38 +1535,45 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			optionId: string;
 			value: ChatConfigOptionValue;
 		}) => {
-			const controllerEpoch = conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId));
-			// A read already in flight when the user picked would otherwise land
-			// after this mutation's setQueryData and put the pre-change catalog
-			// back, reverting the picker to the old value until the next poll.
-			await queryClient.cancelQueries({ queryKey });
-			const { data, error } = await clientForSessionHost(hostId).PATCH(
-				"/api/v1/sessions/{sessionId}/conversation/config-options/{configId}",
-				{
-					params: {
-						path: {
-							sessionId: sessionId as string,
-							configId: optionId,
-						},
-					},
-					body: value,
-					// An agent that never answers must not hold the settings locked.
-					signal: AbortSignal.timeout(CONFIG_OPTION_WRITE_TIMEOUT_MS),
-				},
-			);
-			if (error) throw error;
-			return {
-				controllerEpoch,
-				options: (data?.options ?? []) as ChatConfigOption[],
-			};
+			const write = writes.current.queue.then(() => writeConfigOption(optionId, value));
+			writes.current.queue = write.catch(() => undefined);
+			return write;
 		},
-		onSuccess: ({ controllerEpoch, options }) => {
+		onSuccess: ({ controllerEpoch, options }, _variables, context) => {
+			if (context?.write !== writes.current.latest) return;
 			if (controllerEpoch !== conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId))) {
 				return;
 			}
 			queryClient.setQueryData(queryKey, options);
 		},
 	});
+
+	async function writeConfigOption(optionId: string, value: ChatConfigOptionValue) {
+		const controllerEpoch = conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId));
+		// A read already in flight when the user picked would otherwise land
+		// after this mutation's setQueryData and put the pre-change catalog
+		// back, reverting the picker to the old value until the next poll.
+		await queryClient.cancelQueries({ queryKey });
+		const { data, error } = await clientForSessionHost(hostId).PATCH(
+			"/api/v1/sessions/{sessionId}/conversation/config-options/{configId}",
+			{
+				params: {
+					path: {
+						sessionId: sessionId as string,
+						configId: optionId,
+					},
+				},
+				body: value,
+				// An agent that never answers must not hold the settings locked.
+				signal: AbortSignal.timeout(CONFIG_OPTION_WRITE_TIMEOUT_MS),
+			},
+		);
+		if (error) throw error;
+		return {
+			controllerEpoch,
+			options: (data?.options ?? []) as ChatConfigOption[],
+		};
+	}
 
 	return {
 		options: query.data ?? [],

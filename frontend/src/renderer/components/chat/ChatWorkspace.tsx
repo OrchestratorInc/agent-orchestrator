@@ -1491,7 +1491,8 @@ function ChatWorkspaceContent({
 							)) ||
 							settingsLoading ||
 							session?.provisionState === "provisioning" ||
-							controllerTransitioning || configOptionPending || newWorkDisabled || settingsLocked
+							// A save in flight is not here: the bar holds back what cannot overlap one.
+							controllerTransitioning || newWorkDisabled || settingsLocked
 						}
 				/>
 			) : null,

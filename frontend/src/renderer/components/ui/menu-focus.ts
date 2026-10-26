@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, type PointerEvent } from "react";
 
 /**
  * Focus hand-off between a menu that is closing and the surface its selected
@@ -168,4 +168,17 @@ export function composeMenuCloseAutoFocus(handler?: (event: Event) => void) {
 		const menu = event.currentTarget ?? event.target;
 		if (menu instanceof HTMLElement) publishMenuTeardownComplete(menu);
 	};
+}
+
+/**
+ * Pointer-leave for a menu row. Radix moves focus to the menu itself when the
+ * pointer leaves a row and then on to the next row, so going from one row to the
+ * next changes focus twice, and each change restyles the page. Going straight to
+ * a sibling row skips the first: that row's own hover takes focus.
+ */
+export function skipFocusHopToSibling(event: PointerEvent<HTMLElement>) {
+	const next = event.relatedTarget instanceof Element ? event.relatedTarget.closest('[role^="menuitem"]') : null;
+	if (next && next !== event.currentTarget && next.closest('[role="menu"]') === event.currentTarget.closest('[role="menu"]')) {
+		event.preventDefault();
+	}
 }

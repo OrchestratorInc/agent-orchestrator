@@ -1,7 +1,7 @@
 import { Check, ChevronRight } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
-import { composeMenuCloseAutoFocus, useMenuReturnTarget } from "./menu-focus";
+import { composeMenuCloseAutoFocus, skipFocusHopToSibling, useMenuReturnTarget } from "./menu-focus";
 import {
 	actionMenuContentClass,
 	actionMenuItemClass,
@@ -9,7 +9,14 @@ import {
 	actionMenuSeparatorClass,
 } from "./menu-styles";
 
-export const DropdownMenu = DropdownMenuPrimitive.Root;
+/**
+ * Not modal by default. A modal menu locks scrolling (a stylesheet added and removed)
+ * and turns off pointer events on <body>; either restyles every element on the page
+ * when the menu opens and again when it closes.
+ */
+export function DropdownMenu({ modal = false, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+	return <DropdownMenuPrimitive.Root modal={modal} {...props} />;
+}
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const DropdownMenuGroup = DropdownMenuPrimitive.Group;
 export const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
@@ -45,6 +52,7 @@ export function DropdownMenuContent({
 export function DropdownMenuItem({
 	className,
 	inset,
+	onPointerLeave,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & { inset?: boolean }) {
 	return (
@@ -54,6 +62,10 @@ export function DropdownMenuItem({
 				inset && "pl-8",
 				className,
 			)}
+			onPointerLeave={(event) => {
+				onPointerLeave?.(event);
+				skipFocusHopToSibling(event);
+			}}
 			{...props}
 		/>
 	);
