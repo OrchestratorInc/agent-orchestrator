@@ -13951,6 +13951,8 @@ components:
           type: string
         displayName:
           type: string
+        effort:
+          type: string
         enabled:
           type: boolean
         harness:
@@ -13969,6 +13971,10 @@ components:
           - string
         latestRun:
           $ref: '#/components/schemas/AutomationRunSummaryResponse'
+        mode:
+          type: string
+        model:
+          type: string
         nextRunAt:
           format: date-time
           type: string
@@ -16575,6 +16581,8 @@ components:
           type: string
         displayName:
           type: string
+        effort:
+          type: string
         enabled:
           type:
           - "null"
@@ -16585,6 +16593,10 @@ components:
           enum:
           - worker
           - orchestrator
+          type: string
+        mode:
+          type: string
+        model:
           type: string
         projectId:
           type: string
@@ -21457,6 +21469,10 @@ components:
           type:
           - "null"
           - string
+        effort:
+          type:
+          - "null"
+          - string
         enabled:
           type:
           - "null"
@@ -21469,6 +21485,14 @@ components:
           enum:
           - worker
           - orchestrator
+          type:
+          - "null"
+          - string
+        mode:
+          type:
+          - "null"
+          - string
+        model:
           type:
           - "null"
           - string
