@@ -174,14 +174,19 @@ describe("ToastHost on Android", () => {
 	});
 
 	// The Compose host ignores `pointerEvents`, so an RN view around it decides.
-	it("lets touches through a plain message", async () => {
+	// A "none" view also withholds the hover events TalkBack's explore-by-touch
+	// rides on, so even a plain message must take the touches over itself.
+	it("takes touches over a plain message only while it is up", async () => {
+		let finish!: (result: string) => void;
+		fixtures.showSnackbar.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
 		render(<Screen android bottomOffset={96} />);
 		const anchor = () => renderer!.root.findByType("View" as never);
 		expect(anchor().props).toMatchObject({ collapsable: false, pointerEvents: "none" });
 		expect(anchor().props.style[1]).toEqual({ bottom: 96 });
 		expect(renderer!.root.findByType("ComposeHost" as never).props).not.toHaveProperty("pointerEvents");
-		fixtures.showSnackbar.mockReturnValueOnce(new Promise(() => {}));
 		act(() => toast.show("Path copied."));
+		expect(anchor().props.pointerEvents).toBe("box-none");
+		await act(async () => finish("dismissed"));
 		expect(anchor().props.pointerEvents).toBe("none");
 	});
 
@@ -198,17 +203,22 @@ describe("ToastHost on Android", () => {
 		expect(anchor().props.pointerEvents).toBe("none");
 	});
 
-	// Compose queues: a plain message shown after a dismissible one waits behind
-	// it, so the close button must stay reachable until that one has gone.
-	it("keeps a dismissible snackbar closable while a newer message queues behind it", async () => {
+	// Compose queues: a message shown after another waits behind it, so the
+	// snackbar keeps the touches until the last of them has gone.
+	it("keeps the touches while a newer message queues behind a snackbar", async () => {
 		let close!: (result: string) => void;
-		fixtures.showSnackbar.mockReturnValueOnce(new Promise((resolve) => { close = resolve; })).mockReturnValueOnce(new Promise(() => {}));
+		let finish!: (result: string) => void;
+		fixtures.showSnackbar
+			.mockReturnValueOnce(new Promise((resolve) => { close = resolve; }))
+			.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
 		render(<Screen android />);
 		const anchor = () => renderer!.root.findByType("View" as never);
 		act(() => toast.show("Message not sent.", { dismissible: true }));
 		act(() => toast.show("Sent to the terminal."));
 		expect(anchor().props.pointerEvents).toBe("box-none");
 		await act(async () => close("dismissed"));
+		expect(anchor().props.pointerEvents).toBe("box-none");
+		await act(async () => finish("dismissed"));
 		expect(anchor().props.pointerEvents).toBe("none");
 	});
 

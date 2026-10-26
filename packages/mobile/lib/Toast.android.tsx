@@ -13,39 +13,40 @@ export type { ToastController, ToastDuration, ToastHostProps, ToastMessage, Toas
  * colours, with Compose's timing, motion and TalkBack announcement.
  *
  * The host stays mounted and takes the snackbar's height, so it covers nothing
- * while no message is up. A plain message carries nothing to tap, so touches
- * pass through it; a dismissible one has a close button, so while one is up
- * (or queued) the snackbar takes the touches over itself. Compose queues a
- * message shown while another is up and cannot take one down early, so `hide`
- * has no effect on a snackbar already showing.
+ * while no message is up. While one is up (or queued) the snackbar takes the
+ * touches over itself, as a native one does: a dismissible one's close button
+ * needs them, and so does TalkBack's explore-by-touch, to find any message.
+ * Compose queues a message shown while another is up and cannot take one down
+ * early, so `hide` has no effect on a snackbar already showing.
  */
 export function ToastHost({ toast, bottomOffset }: ToastHostProps) {
 	const { scheme } = useThemeState();
 	const insets = useSafeAreaInsets();
 	const snackbar = useRef<SnackbarHostRef>(null);
-	// Dismissible snackbars that Compose has not finished with, on screen or queued.
-	const [closable, setClosable] = useState(0);
+	// Snackbars that Compose has not finished with, on screen or queued.
+	const [pending, setPending] = useState(0);
 	const { current, hide } = toast;
 
 	useEffect(() => {
 		if (!current) return;
 		const shown = snackbar.current?.showSnackbar({ message: current.text, duration: current.duration, withDismissAction: current.dismissible });
 		if (!shown) return;
-		if (current.dismissible) setClosable((count) => count + 1);
+		setPending((count) => count + 1);
 		const done = () => {
 			hide(current.id);
-			if (current.dismissible) setClosable((count) => count - 1);
+			setPending((count) => count - 1);
 		};
 		shown.then(done, done);
 	}, [current, hide]);
 
 	return (
 		// The Compose host ignores `pointerEvents`, so this view decides whether
-		// touches reach the snackbar. Not collapsable: flattening it away when it
-		// turns touchable would move the host, and the snackbar with it.
+		// touches, and the hover events explore-by-touch rides on, reach the
+		// snackbar. Not collapsable: flattening it away when it turns touchable
+		// would move the host, and the snackbar with it.
 		<View
 			collapsable={false}
-			pointerEvents={closable > 0 ? "box-none" : "none"}
+			pointerEvents={pending > 0 ? "box-none" : "none"}
 			style={[styles.anchor, { bottom: bottomOffset ?? insets.bottom + space.xl }]}
 		>
 			<Host

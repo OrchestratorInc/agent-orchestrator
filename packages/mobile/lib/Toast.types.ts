@@ -21,9 +21,9 @@ export type ToastOptions = {
 	tone?: ToastTone;
 	/**
 	 * Adds a way to close the message before it times out, for a failure the
-	 * user may want gone sooner. Android gives the snackbar its close button and
-	 * lets it take touches while it is up. iOS ignores it: the HUD never takes a
-	 * touch and is gone within six seconds anyway.
+	 * user may want gone sooner. Android gives the snackbar its close button.
+	 * iOS ignores it: the HUD never takes a touch and is gone within six seconds
+	 * anyway.
 	 */
 	dismissible?: boolean;
 };
