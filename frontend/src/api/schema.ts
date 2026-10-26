@@ -15083,7 +15083,7 @@ export interface operations {
                 beforeSequence?: null | number;
                 /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
-                /** @description preview cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities and marks them detailOmitted. Read the full row from the activity endpoint. Defaults to full. */
+                /** @description preview drops copies of detail.command from every activity (a rawCommand equal to it; a summary equal to it is sent empty), and cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities, marking them detailOmitted. Read the full row from the activity endpoint. Defaults to full. */
                 activityDetail?: "full" | "preview" | null;
             };
             header?: never;
@@ -16830,7 +16830,7 @@ export interface operations {
                 beforeSequence?: null | number;
                 /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
-                /** @description preview cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities and marks them detailOmitted. Read the full row from the activity endpoint. Defaults to full. */
+                /** @description preview drops copies of detail.command from every activity (a rawCommand equal to it; a summary equal to it is sent empty), and cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities, marking them detailOmitted. Read the full row from the activity endpoint. Defaults to full. */
                 activityDetail?: "full" | "preview" | null;
             };
             header?: never;

@@ -1084,7 +1084,7 @@ type renderSourceQuery struct {
 type conversationSnapshotQuery struct {
 	BeforeSequence *int64  `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
 	Limit          *int64  `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
-	ActivityDetail *string `query:"activityDetail,omitempty" enum:"full,preview" description:"preview cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities and marks them detailOmitted. Read the full row from the activity endpoint. Defaults to full."`
+	ActivityDetail *string `query:"activityDetail,omitempty" enum:"full,preview" description:"preview drops copies of detail.command from every activity (a rawCommand equal to it; a summary equal to it is sent empty), and cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities, marking them detailOmitted. Read the full row from the activity endpoint. Defaults to full."`
 }
 
 func usageOperations() []operation {
