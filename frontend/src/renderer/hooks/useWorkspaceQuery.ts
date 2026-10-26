@@ -163,7 +163,7 @@ export function patchWorkspaceSession(
 		project ??= { id: STANDALONE_WORKSPACE_ID, name: standaloneWorkspaceName(), kind: STANDALONE_PROJECT_KIND, path: "Not attached to a project", sessions: [] };
 		// Active-only caches carry archive counts; legacy daemon snapshots may
 		// still contain terminated rows and keep their previous semantics.
-		const activeOnly = "archivedCount" in project && project.archivedCount !== undefined;
+		const activeOnly = current.some((workspace) => "archivedCount" in workspace && workspace.archivedCount !== undefined);
 		const previous = project.sessions.find((candidate) => candidate.id === session.id);
 		const wasArchived = activeOnly && previous === undefined && queryClient.getQueriesData<components["schemas"]["ControllersSessionView"][]>({ queryKey: ["archived-sessions"] })
 			.some(([, rows]) => rows?.some((candidate) => candidate.id === session.id));

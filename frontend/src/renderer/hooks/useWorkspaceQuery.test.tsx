@@ -1015,6 +1015,13 @@ describe("patchWorkspaceSession", () => {
 		expect(invalidate).not.toHaveBeenCalled();
 		client.clear();
 	});
+	it("does not create a live standalone group for an ended row in an active-only snapshot", () => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 0, sessions: [] }]);
+		expect(patchWorkspaceSession(client, { ...row, projectId: "", isTerminated: true })).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)).toHaveLength(1);
+		client.clear();
+	});
 	it("creates the standalone workspace and preserves pending optimistic kills", async () => {
 		const { trackOptimisticSessionKill, clearOptimisticSessionKill } = await import("./optimistic-session-kills");
 		const client = new QueryClient();
