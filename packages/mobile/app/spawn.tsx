@@ -1,5 +1,4 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { Feather } from "../lib/icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -8,13 +7,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	InteractionManager,
 	Platform,
-	Pressable,
 	StyleSheet,
 	Text,
 	View,
 } from "react-native";
 import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
+import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
 import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
 import { userFacingError } from "../lib/connectionError";
@@ -33,7 +32,7 @@ import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
-import { iconSize, space, type } from "../lib/tokens";
+import { iconSize, radius, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
@@ -292,7 +291,7 @@ function SpawnModalContent() {
 	};
 	const voiceFeedback = listening ? (
 		<View style={styles.voice}>
-			<Feather name="mic" size={iconSize.xs} color={t.red} />
+			<AppSymbol name="mic" size={iconSize.sm} color={t.red} />
 			<Text numberOfLines={2} style={styles.voiceText}>
 				{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}
 			</Text>
@@ -383,9 +382,9 @@ function SpawnModalContent() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
-			// Closed while the request ran (Android's sheet can still be pulled
-			// down): the worker shows up on the board, and closing the sheet
-			// again would pop the page that was under it.
+			// Left while the request ran (a notification or link can still
+			// navigate away): the worker shows up on the board, and closing the
+			// sheet again would pop the page that was under it.
 			if (!navigation.isFocused()) return;
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
@@ -451,7 +450,7 @@ function SpawnModalContent() {
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
 					{Platform.OS === "android" ? voiceFeedback : null}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
-					{error ? <Text style={styles.error}>{error}</Text> : null}
+					{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 					{offerTUI ? <Button title="Create as Terminal UI instead" variant="secondary" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
 				</View> : null}
 
@@ -500,9 +499,11 @@ function SpawnModalContent() {
 	if (Platform.OS === "android") {
 		return (
 			<View style={styles.androidModalRoot}>
+				{/* Like the iOS sheet, it holds still while a started request runs:
+				    no drag, back press or outside tap can close it mid-spawn. */}
 				<BottomSheet
 					index={0}
-					enablePanDownToClose
+					enablePanDownToClose={!busy}
 					enableDynamicSizing
 					backgroundStyle={{ backgroundColor: t.bgBase }}
 					onClose={() => backOr(router)}
@@ -543,8 +544,8 @@ const makeStyles = (t: Theme) =>
 		},
 		androidContent: { flex: 0, paddingTop: space.md, paddingBottom: space.none },
 		messages: { gap: space.xs },
-		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs },
-		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
+		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
+		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
 		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
 		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },

@@ -30,6 +30,8 @@ describe("spawn sheet header", () => {
 	// success path close the sheet a second time, popping the page under it.
 	it("holds the sheet while a spawn runs and navigates only from a sheet still on top", () => {
 		expect(spawn).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true });\n\t}, [busy, navigation]);");
+		// Android's Material sheet: no drag, back press or outside tap mid-request.
+		expect(spawn).toContain("enablePanDownToClose={!busy}");
 		const success = spawn.slice(spawn.indexOf("const session = await spawn("), spawn.indexOf("} catch (e) {", spawn.indexOf("const session = await spawn(")));
 		expect(success.indexOf("if (!navigation.isFocused()) return;")).toBeGreaterThan(0);
 		expect(success.indexOf("if (!navigation.isFocused()) return;")).toBeLessThan(success.indexOf("backOr(router);"));
