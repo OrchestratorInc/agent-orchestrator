@@ -8,12 +8,12 @@ import { materialDrawable } from "./toolbarIcon.android";
 // name in settingsIcons. A `require` of a missing one fails at bundle time
 // instead of drawing an empty slot, and the Record type keeps the list complete.
 const drawables: Record<SettingsIconName, ImageSourcePropType> = {
-	defaultMachine: require("../assets/icons/desktop_windows.xml"),
+	defaultMachine: materialDrawable("desktop_windows"),
 	status: require("../assets/icons/sensors.xml"),
 	testConnection: require("../assets/icons/network_check.xml"),
 	scan: require("../assets/icons/qr_code_scanner.xml"),
 	addMachine: materialDrawable("add"),
-	retry: require("../assets/icons/refresh.xml"),
+	retry: materialDrawable("refresh"),
 	environments: require("../assets/icons/dns.xml"),
 	account: require("../assets/icons/account_circle.xml"),
 	signOut: require("../assets/icons/logout.xml"),
