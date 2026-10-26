@@ -70,14 +70,14 @@ describe("Android native compatibility boundaries", () => {
 		expect(icons).toContain('"message-square-plus": MessageSquarePlus');
 	});
 
-	it("uses a rounded native Android attachment chooser instead of the square popup menu", () => {
-		const path = fileURLToPath(new URL("./chat/ChatAttachmentMenu.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./chat/ChatAttachmentMenu.android.tsx") : "";
-		expect(android).toContain('@expo/ui/community/bottom-sheet');
-		expect(android).toContain("enablePanDownToClose");
-		expect(android).toContain("borderRadius: radius.pill");
-		expect(android).not.toContain("MenuView");
+	// The attachment chooser is the same pull-down menu on both platforms, so
+	// Android gets Compose's dropdown with Material Symbol icons, not a sheet.
+	it("attaches through the shared native menu instead of an Android sheet", () => {
+		expect(existsSync(fileURLToPath(new URL("./chat/ChatAttachmentMenu.android.tsx", import.meta.url)))).toBe(false);
+		const menu = source("./chat/ChatAttachmentMenu.tsx");
+		expect(menu).toContain("<MenuView ref={menu}");
+		expect(menu).toContain('image: chatMenuIcon("photo")');
+		expect(menu).not.toContain("bottom-sheet");
 	});
 
 	it("uses React Native Android inputs for elicitation", () => {

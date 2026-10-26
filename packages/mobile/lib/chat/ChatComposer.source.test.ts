@@ -93,7 +93,7 @@ describe("chat composer pill", () => {
 	});
 
 	it("opens the row with a plus rather than a paperclip", () => {
-		expect(source("./ChatAttachmentMenu.tsx")).toContain('name="plus"');
+		expect(source("./ChatAttachmentMenu.tsx")).toContain('<AppSymbol name="add"');
 	});
 
 	// The dock used to swap its inset for the keyboard gap on a visibility flag,
