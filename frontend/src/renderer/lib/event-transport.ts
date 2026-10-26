@@ -365,11 +365,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				let modelCatalogOnly = false;
 				let idOnlySessionUpdate = false;
 				if (event === undefined) {
-					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
-					// carries no event, so we cannot know which conversations moved. Normally the
-					// replay that follows tells us, but when the event log has been truncated the
-					// daemon starts us at head and no CDC arrives at all. EventSource cannot read
-					// the header reporting that clamp, so refresh every conversation instead of
+					// A lifecycle refresh -- first open, reset frame, reconnect to a daemon that
+					// cannot announce resets, daemon status change -- carries no event, so we
+					// cannot know which conversations moved. Refresh every one instead of
 					// leaving an open chat frozen on its pre-gap snapshot.
 					allConversationsInvalidationPending = true;
 					allEditorHandoffsInvalidationPending = true;
@@ -538,15 +536,35 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					source = new EventSource(useCursor ? `${streamUrl}?after=latest` : streamUrl);
 					const connectedSource = source;
 					let opened = false;
+					// Set by the first cursor frame of a daemon that sends a reset frame
+					// whenever a resumed stream lost events.
+					let resetsAnnounced = false;
 					source.onopen = () => {
 						if (disposed || source !== connectedSource) return;
+						const resumed = opened;
 						opened = true;
 						healthAttempt += 1;
 						retries = 0;
 						setEventsConnectionState("connected");
-						// Events emitted during the gap were lost; refetch once on (re)open.
-						refreshWorkspaces();
+						// A first open starts at the newest event, so whatever changed before it
+						// is unknown: refetch once. The browser resumes later reconnects from
+						// Last-Event-ID, and the replay covers the gap unless the daemon resets
+						// it. A daemon that never announced resets may have dropped the gap
+						// silently, so it keeps the refetch.
+						if (!resumed || !resetsAnnounced) refreshWorkspaces();
 					};
+					source.addEventListener("cursor", (event) => {
+						if (source !== connectedSource || !("data" in event)) return;
+						try {
+							resetsAnnounced = (JSON.parse(String((event as MessageEvent).data)) as { resets?: unknown }).resets === true;
+						} catch {
+							resetsAnnounced = false;
+						}
+					});
+					source.addEventListener("reset", () => {
+						if (disposed || source !== connectedSource) return;
+						refreshWorkspaces();
+					});
 					source.onerror = () => {
 						if (disposed || source !== connectedSource) return;
 						// While readyState is CONNECTING the browser retries on its own;

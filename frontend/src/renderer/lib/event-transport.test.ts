@@ -458,11 +458,8 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	// A reconnect resumes via Last-Event-ID. When the event log has been truncated
-	// or replaced, that cursor is ahead of head and the daemon starts the client at
-	// head instead of replaying — correct, but it means no conversation CDC arrives
-	// to invalidate an open chat. EventSource cannot read the response header that
-	// reports the clamp, so reopening must refresh conversations unconditionally.
+	// The first open starts at the newest event, so it refreshes everything once.
+	// Later reconnects are covered below by the reset tests.
 	it("refreshes open conversations on reopen, not just workspaces", async () => {
 		vi.useFakeTimers();
 		try {
@@ -479,6 +476,52 @@ describe("createEventTransport", () => {
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation", "closed"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["conversation", "open"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["conversation"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// A reconnect resumes via Last-Event-ID and the daemon replays the gap. Only a
+	// daemon that announced reset frames can say when that replay is incomplete
+	// (a truncated or pruned log); for it, a resumed open trusts the replay.
+	it("trusts a resumed replay from a daemon that announces resets, and refetches on reset", async () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			const source = cdcSources()[0];
+			const editorHandoffRefreshes = () => vi.mocked(queryClient.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(["editor-handoff"])).length;
+			source.onopen?.();
+			source.emit("cursor", JSON.stringify({ resets: true }));
+			await vi.advanceTimersByTimeAsync(200);
+			expect(editorHandoffRefreshes()).toBe(1);
+
+			source.onopen?.();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(editorHandoffRefreshes()).toBe(1);
+
+			source.emit("reset", "{}");
+			await vi.advanceTimersByTimeAsync(200);
+			expect(editorHandoffRefreshes()).toBe(2);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refetches on every reopen from a daemon that never announced resets", async () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			const source = cdcSources()[0];
+			const editorHandoffRefreshes = () => vi.mocked(queryClient.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(["editor-handoff"])).length;
+			source.onopen?.();
+			source.emit("cursor", "{}");
+			await vi.advanceTimersByTimeAsync(200);
+			source.onopen?.();
+			await vi.advanceTimersByTimeAsync(200);
+			expect(editorHandoffRefreshes()).toBe(2);
 		} finally {
 			vi.useRealTimers();
 		}

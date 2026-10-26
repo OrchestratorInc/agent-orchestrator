@@ -203,10 +203,15 @@ func TestEventsStreamClampsCursorAheadOfCurrentDatabaseToHead(t *testing.T) {
 		t.Fatalf("X-AO-Event-After = %q, want 1 (head, not a replay from zero)", got)
 	}
 
+	// The client is told that its gap is lost, with head as its new cursor.
+	reader := bufio.NewReader(resp.Body)
+	if frame := readSSEFrame(t, reader); frame != "id: 1|event: reset|data: {}" {
+		t.Fatalf("first frame = %q, want a reset carrying the head cursor", frame)
+	}
 	// The replayed event (seq 1) is at the cursor, so it is not re-sent. Only a
 	// genuinely newer event reaches the client — proving no backlog was replayed.
 	live.publish(testCDCEvent(2))
-	if ids := readSSEIDs(t, resp.Body, 1); ids[0] != "2" {
+	if ids := readSSEIDs(t, reader, 1); ids[0] != "2" {
 		t.Fatalf("id = %q, want 2 (history before head must not be replayed)", ids[0])
 	}
 	if src.after != 1 {
@@ -240,7 +245,7 @@ func TestEventsStreamStartsAtLatestAndRetainsCursor(t *testing.T) {
 		}
 		cursor = append(cursor, scanner.Text())
 	}
-	if got := strings.Join(cursor, "|"); got != "id: 1|event: cursor|data: {}" {
+	if got := strings.Join(cursor, "|"); got != `id: 1|event: cursor|data: {"resets":true}` {
 		t.Fatalf("initial SSE frame = %q, want ID-bearing cursor event", got)
 	}
 	live.publish(testCDCEvent(2))
@@ -524,4 +529,65 @@ func TestEventsStreamHeartbeatsWhileIdle(t *testing.T) {
 		}
 	}
 	t.Fatalf("idle stream sent no heartbeat frame in 4s (got %q); a buffering proxy has nothing to flush an event through", seen)
+}
+
+func readSSEFrame(t *testing.T, r *bufio.Reader) string {
+	t.Helper()
+	var lines []string
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read stream: %v", err)
+		}
+		line = strings.TrimSuffix(line, "\n")
+		if line == "" {
+			return strings.Join(lines, "|")
+		}
+		lines = append(lines, line)
+	}
+}
+
+// prunedEventSource retains events from seq 50 on; older rows were pruned.
+type prunedEventSource struct{}
+
+func (prunedEventSource) EventsAfter(_ context.Context, after int64, limit int) ([]cdc.Event, error) {
+	var events []cdc.Event
+	for seq := max(after+1, 50); seq <= 52 && len(events) < limit; seq++ {
+		events = append(events, testCDCEvent(seq))
+	}
+	return events, nil
+}
+
+func (prunedEventSource) LatestSeq(context.Context) (int64, error) { return 52, nil }
+
+// A resumed cursor is reset when retention pruned part of its gap, and trusted
+// when the log still holds every event after it.
+func TestEventsStreamResetsAResumeWhoseGapWasPruned(t *testing.T) {
+	live := &fakeEventSubscriber{}
+	router := NewRouterWithControl(config.Config{}, discardLogger(), nil, APIDeps{CDC: prunedEventSource{}, Events: live}, ControlDeps{})
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	for _, tc := range []struct {
+		lastEventID string
+		first       string
+	}{
+		{lastEventID: "10", first: "id: 10|event: reset|data: {}"},
+		{lastEventID: "49", first: "id: 50|event: session_updated|"},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/v1/events?after=latest", nil)
+		req.Header.Set("Last-Event-ID", tc.lastEventID)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			cancel()
+			t.Fatalf("GET /api/v1/events: %v", err)
+		}
+		frame := readSSEFrame(t, bufio.NewReader(resp.Body))
+		_ = resp.Body.Close()
+		cancel()
+		if !strings.HasPrefix(frame, tc.first) {
+			t.Fatalf("Last-Event-ID %s: first frame = %q, want prefix %q", tc.lastEventID, frame, tc.first)
+		}
+	}
 }
