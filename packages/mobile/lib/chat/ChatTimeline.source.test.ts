@@ -75,6 +75,19 @@ describe("sent human message actions", () => {
 	});
 });
 
+describe("response copy control", () => {
+	const control = source.slice(source.indexOf("function CopyResponseButton"), source.indexOf("function SystemSignal"));
+
+	// A 12pt faint glyph in a 28pt box was nearly invisible and under the
+	// minimum target on both platforms.
+	it("is a visible system glyph in a touch-target-sized button", () => {
+		expect(control).toContain('accessibilityLabel="Copy response"');
+		expect(control).toContain('<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />');
+		expect(source).toMatch(/copy: \{[^}]*width: touchTarget, height: touchTarget/);
+		expect(control).not.toContain("t.textFaint");
+	});
+});
+
 describe("turn rollback", () => {
 	const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function TurnPlan"));
 

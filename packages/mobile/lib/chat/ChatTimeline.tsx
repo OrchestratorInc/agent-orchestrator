@@ -411,7 +411,6 @@ const TimelineItem = memo(function TimelineItem({
 	answeredBelow?: number;
 	showCursor?: boolean;
 }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	if (item.kind === "message") {
 		if (item.role === "user" && item.origin === "human") {
@@ -444,7 +443,7 @@ const TimelineItem = memo(function TimelineItem({
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
 				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
 				{!item.streaming && item.text ? <View style={styles.responseActions}>
-					<Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable>
+					<CopyResponseButton text={item.text} />
 				</View> : null}
 			</View>
 		);
@@ -470,6 +469,31 @@ const TimelineItem = memo(function TimelineItem({
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
 });
+
+/** How long a copy control shows its checkmark before it turns back. */
+const COPIED_MS = 1_400;
+
+/** Copies the whole reply in one tap, without selecting it first. */
+function CopyResponseButton({ text }: { text: string }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("icon");
+	const [copied, setCopied] = useState(false);
+	useEffect(() => {
+		if (!copied) return;
+		const timer = setTimeout(() => setCopied(false), COPIED_MS);
+		return () => clearTimeout(timer);
+	}, [copied]);
+	return <Pressable
+		accessibilityRole="button"
+		accessibilityLabel="Copy response"
+		onPress={() => { void Clipboard.setStringAsync(text); haptics.success(); setCopied(true); }}
+		android_ripple={feedback.android_ripple}
+		style={({ pressed }) => [styles.copy, pressed && feedback.pressed]}
+	>
+		<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />
+	</Pressable>;
+}
 
 function SystemSignal({ icon, title, detail, danger }: { icon: keyof typeof Feather.glyphMap; title: string; detail?: unknown; danger?: boolean }) {
 	const t = useTheme();
@@ -1191,7 +1215,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	assistantRow: { paddingVertical: space.lg },
 	sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.xxs },
 	responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
-	copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: 28, height: 28, marginTop: space.hair, marginLeft: -7 },
+	// The glyph lines up with the reply's left edge. The target reaches into the
+	// row's bottom padding rather than up over the text, where a long press selects.
+	copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: touchTarget, height: touchTarget, marginLeft: -(touchTarget - iconSize.md) / 2, marginBottom: -space.md },
 	jump: { position: "absolute", right: 14, bottom: 12, minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 16, backgroundColor: jumpToLatestColors(t).backgroundColor, borderWidth: 1, borderColor: t.borderStrong },
 	jumpText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
 	systemSignal: { marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 8, backgroundColor: t.bgSurface, padding: space.sm },
