@@ -25,10 +25,15 @@ export function ConversationRenamePrompt({ request, onClose }: ConversationRenam
 	const close = useRef(onClose);
 	close.current = onClose;
 	useEffect(() => {
-		if (request) askForTitle(request, request.initialTitle, () => close.current());
+		// Once per request: the screen can remount this while the alert is up.
+		if (!request || asked.has(request)) return;
+		asked.add(request);
+		askForTitle(request, request.initialTitle, () => close.current());
 	}, [request]);
 	return null;
 }
+
+const asked = new WeakSet<ConversationRenameRequest>();
 
 function askForTitle(request: ConversationRenameRequest, draft: string, done: () => void) {
 	Alert.prompt(

@@ -89,6 +89,16 @@ describe("iOS rename prompt", () => {
 		expect((buttons as Button[]).map((button) => [button.text, button.style])).toEqual([["Cancel", "cancel"], ["Save", undefined]]);
 	});
 
+	it("asks once per request, even when the screen remounts it", () => {
+		const request = { id: 1, initialTitle: "Fix login", onRename: vi.fn() };
+		const tree = render(<ConversationRenamePrompt request={request} onClose={vi.fn()} />);
+		act(() => tree.update(<></>));
+		act(() => tree.update(<ConversationRenamePrompt request={request} onClose={vi.fn()} />));
+		expect(fixtures.prompt).toHaveBeenCalledTimes(1);
+		act(() => tree.update(<ConversationRenamePrompt request={{ ...request, id: 2 }} onClose={vi.fn()} />));
+		expect(fixtures.prompt).toHaveBeenCalledTimes(2);
+	});
+
 	it("renames to the trimmed title and closes", async () => {
 		const onRename = vi.fn(async () => {});
 		const onClose = vi.fn();
