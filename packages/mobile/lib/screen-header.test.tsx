@@ -92,6 +92,14 @@ describe("ListSectionHeader", () => {
 		expect(flat(pressable.props.style({ pressed: true })).backgroundColor).toBeUndefined();
 	});
 
+	// The board's headers sit among footnote row metadata, so they share its
+	// 13pt step rather than dropping below it.
+	it("sets its label and count at the footnote floor", () => {
+		const renderer = render(<ListSectionHeader label="Pinned" count={3} />);
+		const sizes = renderer.root.findAllByType("Text" as never).map((node) => flat(node.props.style).fontSize);
+		expect(sizes).toEqual([type.footnote.fontSize, type.footnote.fontSize]);
+	});
+
 	it("draws its disclosure chevron as a system symbol", () => {
 		const renderer = render(<ListSectionHeader label="Recent" open={false} onToggle={() => {}} />);
 		expect(renderer.root.findByType("SymbolView" as never).props.name).toEqual({ ios: "chevron.forward", android: "chevron_right" });

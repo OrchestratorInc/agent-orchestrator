@@ -551,9 +551,9 @@ const makeStyles = (t: Theme) =>
 			paddingTop: space.lg,
 			paddingBottom: space.xxs,
 		},
-		listSectionLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
+		listSectionLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		// Mono and tabular so a count changing from 9 to 10 does not shift the rule.
-		listSectionCount: { color: t.textFaint, fontSize: type.caption1.fontSize, fontWeight: "600", fontFamily: t.fontMono },
+		listSectionCount: { color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600", fontFamily: t.fontMono },
 
 		// Enlarged from 30x26: the wand-tip lamp replaced the "live" pill, so the tip
 		// has to be big enough for the dot to actually read as a status light.

@@ -6,6 +6,7 @@ import { machineAppearancePalette, machineSymbolNames } from "./machineAppearanc
 import { machineMenuImage } from "./machine-menu-image";
 import { symbols } from "./symbols";
 import { materialDrawableNames } from "./toolbarIcon.types";
+import { type } from "./tokens";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
@@ -47,6 +48,16 @@ describe("MachineIdentity", () => {
 		expect(glyph.props.tintColor).toBe("gray");
 		expect(glyph.props.size).toBe(16);
 		expect(surfaceStyle.backgroundColor).toBeUndefined();
+	});
+
+	// It shares a row's metadata line, which is footnote, the 13pt floor.
+	it("names the machine at the row metadata's footnote step", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(<MachineIdentity name="Studio" appearance={{ symbol: "desktop" }} />);
+		});
+		const name = renderer.root.findByProps({ testID: "machine-identity-name" });
+		expect(name.props.style).toMatchObject({ fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight });
 	});
 
 	// The machine shapes are system symbols on both platforms, not drawings.

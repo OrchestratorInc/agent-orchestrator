@@ -85,6 +85,15 @@ describe("board chrome", () => {
 		expect(list).toContain('const feedback = usePressFeedback("button", { tone: "onAccent" });');
 		expect(list).toContain("borderRadius: radius.pill");
 	});
+
+	// Archive heads a section like the board's other headers, at their footnote
+	// step: no header on the board drops below 13pt or mixes sizes with another.
+	it("sets the Archive header at the section headers' footnote step", () => {
+		expect(list).not.toMatch(/type\.caption[12]/);
+		expect(list).toMatch(/archiveLabel: \{[^}]*fontSize: type\.footnote\.fontSize/);
+		expect(list).toMatch(/archiveCount: \{[^}]*fontSize: type\.footnote\.fontSize/);
+		expect(source("./ui.tsx")).toMatch(/listSectionLabel: \{[^}]*fontSize: type\.footnote\.fontSize/);
+	});
 });
 
 describe("board sections that cannot be folded", () => {
