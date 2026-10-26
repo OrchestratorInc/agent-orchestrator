@@ -16,7 +16,7 @@ vi.mock("react-native", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		ActivityIndicator: host("ActivityIndicator"), Pressable: host("Pressable"), Text: host("Text"), View: host("View"),
+		Pressable: host("Pressable"), Text: host("Text"), View: host("View"),
 		Platform: fixtures.platform,
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
 		BackHandler: {
@@ -65,10 +65,6 @@ vi.mock("./ThemeProvider", () => {
 		useThemeState: () => ({ theme, scheme: "dark" }),
 		useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme),
 	};
-});
-vi.mock("./icons", async () => {
-	const React = await import("react");
-	return { Feather: (props: object) => React.createElement("Feather", props) };
 });
 vi.mock("./ui", async () => {
 	const React = await import("react");
