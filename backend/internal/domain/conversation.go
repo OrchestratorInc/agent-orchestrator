@@ -562,6 +562,7 @@ type ConversationTurn struct {
 	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
 	ErrorMessage string                  `json:"errorMessage,omitempty"`
+	FailureCode  ConversationFailureCode `json:"failureCode,omitempty"`
 	UsageLimit   *ConversationUsageLimit `json:"usageLimit,omitempty"`
 	RequestedAt  time.Time               `json:"requestedAt"`
 	StartedAt    *time.Time              `json:"startedAt,omitempty"`
@@ -582,6 +583,11 @@ type ConversationTurn struct {
 	// earlier ones are the same plan with fewer steps ticked off.
 	Plan *ConversationPlan `json:"plan,omitempty"`
 }
+
+// ConversationFailureCode identifies a provider failure with a known recovery path.
+type ConversationFailureCode string
+
+const ConversationFailureProviderKeyMissing ConversationFailureCode = "provider_key_missing"
 
 // ConversationTurnDiff is the turn's changed-file summary.
 //
