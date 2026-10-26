@@ -160,8 +160,7 @@ import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
-import { UsageLimitNotice } from "./UsageLimitNotice";
-import { useUsageLimitContinue } from "../../hooks/useUsageLimitContinue";
+import { UsageLimitDock } from "./UsageLimitDock";
 import {
 	activeTurn,
 	activityPlan,
@@ -821,13 +820,6 @@ function ChatWorkspaceContent({
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
 		latestSettledTurn.hasHumanPrompt
 		? latestSettledTurn : undefined;
-	const continueOn = useUsageLimitContinue({
-		sessionId: snapshot.sessionId,
-		harness: snapshot.harness,
-		limitedTurnId: limitedTurn?.id,
-		enabled: Boolean(limitedTurn && !limitedTurn.usageLimit?.accountChanged && !activeRemoteHostId && !session?.cloud),
-		retry: retryControl?.retry,
-	});
 	// The primary Chat view wakes a sleeping provider in the background. Its
 	// marker clears before the new controller is ready, so an intermediate
 	// "stopped" snapshot is still part of that wake, not a crashed agent.
@@ -1914,8 +1906,13 @@ function ChatWorkspaceContent({
 							>
 								{discarded > 0 ? <RolledBackNotice count={discarded} /> : null}
 								{limitedTurn?.usageLimit && retryControl ? (
-									<UsageLimitNotice
+									<UsageLimitDock
 										key={limitedTurn.id}
+										sessionId={snapshot.sessionId}
+										harness={snapshot.harness}
+										turnId={limitedTurn.id}
+										continueEnabled={!limitedTurn.usageLimit.accountChanged && !activeRemoteHostId && !session?.cloud}
+										retry={retryControl.retry}
 										usageLimit={limitedTurn.usageLimit}
 										onResume={() => { void Promise.resolve(retryControl.retry(limitedTurn.id)).catch(() => undefined); }}
 										onAutoResumeChange={retryControl.setAutoResume
@@ -1925,9 +1922,6 @@ function ChatWorkspaceContent({
 										disabled={Boolean(turn || busy || newWorkDisabled || agentInputDisabled || controllerTransitioning || agentResuming)}
 										error={(retryControl.turnId === limitedTurn.id ? retryControl.error : undefined) ??
 											(retryControl.autoResumeTurnId === limitedTurn.id ? retryControl.autoResumeError : undefined)}
-										continueOn={continueOn
-											? { account: continueOn.account, onContinue: continueOn.start, pending: continueOn.pending, error: continueOn.error }
-											: undefined}
 									/>
 								) : null}
 								{conversationEmpty ? (
