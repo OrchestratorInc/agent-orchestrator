@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Platform, Text, View } from "react-native";
 import { ManualConnectSheet } from "../../lib/ManualConnectSheet";
@@ -13,21 +13,29 @@ import { useTheme } from "../../lib/ThemeProvider";
 // Manual pairing and editing use the same native connection form.
 export default function ConnectSheetRoute() {
 	const router = useRouter();
+	const navigation = useNavigation();
 	const { resultKey, hostId } = useLocalSearchParams<{ resultKey?: string; hostId?: string }>();
 	const { config, currentHostId, reloadConfig } = useApp();
 	const theme = useTheme();
 	const [editingHost, setEditingHost] = useState<Host | null | undefined>(hostId === undefined ? null : undefined);
+	const [busy, setBusy] = useState(false);
 	// iOS: the sheet's native bar carries the title, known from the link before
 	// the machine loads, and Cancel in every state. The form adds its own
-	// confirm on the right.
+	// confirm on the right. A connect that has started can't be called back,
+	// so while one runs Cancel is disabled and the sheet can't be swiped away.
 	const header = useMemo(() => Platform.OS === "ios" ? (
 		<>
 			<Stack.Screen options={{ title: hostId === undefined ? "Connect manually" : "Edit connection" }} />
 			<Stack.Toolbar placement="left">
-				<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
+				<Stack.Toolbar.Button disabled={busy} onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
 			</Stack.Toolbar>
 		</>
-	) : null, [hostId, router]);
+	) : null, [busy, hostId, router]);
+	useEffect(() => {
+		if (!busy) return;
+		navigation.setOptions({ gestureEnabled: false });
+		return () => navigation.setOptions({ gestureEnabled: true });
+	}, [busy, navigation]);
 
 	useEffect(() => () => releaseSheetResult(resultKey), [resultKey]);
 	useEffect(() => {
@@ -49,6 +57,7 @@ export default function ConnectSheetRoute() {
 			<ManualConnectSheet
 				editingHost={editingHost ?? undefined}
 				editingEndpointIndex={activeEndpointIndex < 0 ? 0 : activeEndpointIndex}
+				onBusyChange={setBusy}
 				onConnected={() => {
 					void loadAccount().then(async (account) => {
 						if (account) {
@@ -59,6 +68,10 @@ export default function ConnectSheetRoute() {
 					}).catch(() => {});
 					const done = takeSheetResult<void>(resultKey);
 					if (editingHost) void reloadConfig().catch(() => {});
+					// Closed while it connected (Android's sheet can still be pulled
+					// down or backed out of): closing it again would pop the screen
+					// under it, and the opener's callback was already released.
+					if (!navigation.isFocused()) return;
 					backOr(router);
 					done?.();
 				}}

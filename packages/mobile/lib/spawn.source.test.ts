@@ -19,10 +19,21 @@ describe("spawn sheet header", () => {
 	});
 
 	it("cancels from the leading bar item on iOS only", () => {
-		expect(spawn).toContain('const headerItems = useMemo(() => Platform.OS === "ios" ? (\n\t\t<Stack.Toolbar placement="left">\n\t\t\t<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>');
+		expect(spawn).toContain('const headerItems = useMemo(() => Platform.OS === "ios" ? (\n\t\t<Stack.Toolbar placement="left">\n\t\t\t<Stack.Toolbar.Button disabled={busy} onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>');
+		expect(spawn).toContain(") : null, [busy, router]);");
 		expect(spawn).toContain("return <View style={styles.screen}>{headerItems}{content}</View>;");
 		// Start keeps its place with the selectors, riding the keyboard.
 		expect(spawn).toContain("onSpawn={() => { void onSpawn(); }}");
+	});
+
+	// A started spawn can't be called back. Leaving mid-request used to let the
+	// success path close the sheet a second time, popping the page under it.
+	it("holds the sheet while a spawn runs and navigates only from a sheet still on top", () => {
+		expect(spawn).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true });\n\t}, [busy, navigation]);");
+		const success = spawn.slice(spawn.indexOf("const session = await spawn("), spawn.indexOf("} catch (e) {", spawn.indexOf("const session = await spawn(")));
+		expect(success.indexOf("if (!navigation.isFocused()) return;")).toBeGreaterThan(0);
+		expect(success.indexOf("if (!navigation.isFocused()) return;")).toBeLessThan(success.indexOf("backOr(router);"));
+		expect(success.indexOf("backOr(router);")).toBeLessThan(success.indexOf('pathname: "/session/[id]"'));
 	});
 });
 

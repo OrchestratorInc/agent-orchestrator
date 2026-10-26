@@ -28,8 +28,18 @@ describe("manual connect sheet header", () => {
 
 	it("titles the bar from the link and cancels from it in every state", () => {
 		expect(route).toContain('<Stack.Screen options={{ title: hostId === undefined ? "Connect manually" : "Edit connection" }} />');
-		expect(route).toContain('<Stack.Toolbar placement="left">\n\t\t\t\t<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>');
+		expect(route).toContain('<Stack.Toolbar placement="left">\n\t\t\t\t<Stack.Toolbar.Button disabled={busy} onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>');
+		expect(route).toContain(") : null, [busy, hostId, router]);");
 		expect(route.match(/\{header\}/g)).toHaveLength(3);
+	});
+
+	// A started connect can't be called back. Leaving mid-request used to let
+	// onConnected close the sheet a second time, popping the pair flow under it.
+	it("holds the sheet while connecting and closes it only while it is still on top", () => {
+		expect(sheet).toContain("useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);");
+		expect(route).toContain("onBusyChange={setBusy}");
+		expect(route).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true });\n\t}, [busy, navigation]);");
+		expect(route).toContain("if (!navigation.isFocused()) return;\n\t\t\t\t\tbackOr(router);\n\t\t\t\t\tdone?.();");
 	});
 
 	it("confirms from the bar on iOS with the form's handler and disabled state", () => {

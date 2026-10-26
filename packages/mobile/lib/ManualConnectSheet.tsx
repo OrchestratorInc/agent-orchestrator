@@ -1,6 +1,6 @@
 import { Stack } from "expo-router";
 import { Feather } from "./icons";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
@@ -30,8 +30,10 @@ import { iconSize, space, touchTarget, type } from "./tokens";
 
 // The typing fallback behind the QR scanner, also reused to edit a pairing.
 // The legacy mux port is unused against the Go daemon, so it stays hidden.
-export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIndex = 0 }: {
+export function ManualConnectSheet({ onConnected, onBusyChange, editingHost, editingEndpointIndex = 0 }: {
 	onConnected: () => void;
+	/** Told when a connect or save starts and ends, so the route can hold its sheet. */
+	onBusyChange?: (busy: boolean) => void;
 	editingHost?: Host;
 	editingEndpointIndex?: number;
 }) {
@@ -44,6 +46,7 @@ export function ManualConnectSheet({ onConnected, editingHost, editingEndpointIn
 	});
 	const [machineName, setMachineName] = useState(editingHost?.name ?? "");
 	const [busy, setBusy] = useState(false);
+	useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
 	const [showPassword, setShowPassword] = useState(false);
 

@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { Feather } from "../lib/icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
@@ -46,6 +46,7 @@ function SpawnModalContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
 	const { hostStates, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
 	const connectedHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -382,6 +383,10 @@ function SpawnModalContent() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
+			// Closed while the request ran (Android's sheet can still be pulled
+			// down): the worker shows up on the board, and closing the sheet
+			// again would pop the page that was under it.
+			if (!navigation.isFocused()) return;
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the
@@ -407,11 +412,19 @@ function SpawnModalContent() {
 
 	// iOS: Cancel leads the sheet's bar, across from its title. Start stays with
 	// the selectors above the keyboard, where it shows its own progress.
+	// A started request can't be called back, so while it runs Cancel is
+	// disabled and the sheet can't be swiped away; it closes itself on success
+	// or stays to show the error.
 	const headerItems = useMemo(() => Platform.OS === "ios" ? (
 		<Stack.Toolbar placement="left">
-			<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
+			<Stack.Toolbar.Button disabled={busy} onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
 		</Stack.Toolbar>
-	) : null, [router]);
+	) : null, [busy, router]);
+	useEffect(() => {
+		if (!busy) return;
+		navigation.setOptions({ gestureEnabled: false });
+		return () => navigation.setOptions({ gestureEnabled: true });
+	}, [busy, navigation]);
 
 	const content = (
 		<View style={[
