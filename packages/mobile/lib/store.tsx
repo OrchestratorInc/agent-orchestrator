@@ -206,6 +206,22 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 	return <AppContext.Provider value={scoped}>{children}</AppContext.Provider>;
 }
 
+/**
+ * While `frozen`, everything below sees the state as it was when it froze, so a
+ * poll does not re-render it. It catches up as soon as it thaws.
+ *
+ * The board's tabs all stay mounted, each keeping its list and scroll position,
+ * but only the one on screen has to follow the store. Unlike react-freeze, which
+ * hides what it freezes, the content stays drawn: a tab the platform switches
+ * to natively shows what it had until the switch reaches JS.
+ */
+export function FrozenAppScope({ frozen, children }: { frozen: boolean; children: ReactNode }) {
+	const app = useApp();
+	const held = useRef(app);
+	if (!frozen) held.current = app;
+	return <AppContext.Provider value={held.current}>{children}</AppContext.Provider>;
+}
+
 function HostConversationTransport({ config }: { config: ServerConfig }) {
 	useConversationEventTransport(config);
 	return null;

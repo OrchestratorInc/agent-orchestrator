@@ -1,5 +1,7 @@
-import { Stack } from "expo-router";
+import { Stack, useIsFocused, useRoute } from "expo-router";
+import { useNavigationState } from "expo-router/react-navigation";
 import { largeTitleScreenOptions, stackScreenOptions } from "./stackScreenOptions";
+import { FrozenAppScope } from "./store";
 import { useTheme } from "./ThemeProvider";
 
 /**
@@ -9,12 +11,23 @@ import { useTheme } from "./ThemeProvider";
  * that collapses into the bar as the list scrolls and a top app bar on Android.
  * The page declares its own header items with `Stack.Toolbar`. Everything the
  * page opens is pushed on the root stack, as before, so it covers the tabs.
+ *
+ * Every tab stays mounted, so a tab that is not selected is frozen at the state
+ * it last showed rather than re-rendering its board on every poll.
  */
 export function TabStack({ screen, title }: { screen: string; title: string }) {
 	const t = useTheme();
+	const route = useRoute();
+	const selected = useNavigationState((state) => state.routes[state.index]?.key === route.key);
+	// Focus turns over in the same render as the tab does, so the page has the
+	// latest state before its focus effects run; the selection only reaches this
+	// a commit later. Selection keeps the tab live under a page pushed over it.
+	const live = useIsFocused() || selected;
 	return (
-		<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>
-			<Stack.Screen name={screen} options={{ title }} />
-		</Stack>
+		<FrozenAppScope frozen={!live}>
+			<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>
+				<Stack.Screen name={screen} options={{ title }} />
+			</Stack>
+		</FrozenAppScope>
 	);
 }
