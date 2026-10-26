@@ -480,6 +480,18 @@ describe("a machine that pages its archive", () => {
 		await act(async () => { archivePages.requests.shift()!.resolve(page); });
 	};
 
+	// A full-width disclosure row: the platform's touch target, and the row
+	// highlight rather than a fade.
+	it("draws the Archive header as a full-height disclosure row", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live])); });
+		const header = archiveHeader(renderer);
+		expect(header.props.accessibilityState).toEqual({ expanded: false });
+		expect(Object.assign({}, ...header.props.style({ pressed: true }).filter(Boolean))).toMatchObject({ minHeight: 44, backgroundColor: "hover" });
+		expect(header.findByType("SymbolView" as never).props.name).toEqual({ ios: "chevron.forward", android: "chevron_right" });
+		act(() => renderer.unmount());
+	});
+
 	// The poll no longer carries the archive, only its size; the rows are
 	// fetched a page at a time, and only once someone opens it.
 	it("counts the archive from the poll and fetches pages only once Archive opens", async () => {

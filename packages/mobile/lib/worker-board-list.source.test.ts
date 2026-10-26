@@ -73,6 +73,19 @@ describe("worker row working indicator", () => {
 	});
 });
 
+describe("board chrome", () => {
+	// The pill, Archive header and archive status share the app's press,
+	// glyph and colour rules rather than each inventing its own.
+	it("draws system symbols, platform press feedback and theme colours", () => {
+		expect(list).not.toContain("<Feather");
+		expect(list).not.toMatch(/opacity: 0\.\d/);
+		expect(list).not.toContain('"#000"');
+		expect(list).not.toContain("<ActivityIndicator");
+		expect(list).toContain('const feedback = usePressFeedback("button", { tone: "onAccent" });');
+		expect(list).toContain("borderRadius: radius.pill");
+	});
+});
+
 describe("board sections that cannot be folded", () => {
 	const board = source("./worker-board-list.tsx");
 
