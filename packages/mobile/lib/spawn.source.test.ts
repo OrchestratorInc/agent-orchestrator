@@ -5,6 +5,26 @@ import { describe, expect, it } from "vitest";
 const spawn = readFileSync(fileURLToPath(new URL("../app/spawn.tsx", import.meta.url)), "utf8");
 const attachmentRow = readFileSync(fileURLToPath(new URL("./spawn-attachment-row.tsx", import.meta.url)), "utf8");
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
+const layout = readFileSync(fileURLToPath(new URL("../app/_layout.tsx", import.meta.url)), "utf8");
+
+// The iOS sheet says what it is and how to leave it without a drag: a native
+// bar titled "New task" with Cancel across from the title. Android keeps its
+// Material bottom sheet, which has neither bar nor title.
+describe("spawn sheet header", () => {
+	it("shows the iOS bar from the first frame, titled New task", () => {
+		const options = layout.slice(layout.indexOf('name="spawn"'), layout.indexOf("/>", layout.indexOf('name="spawn"')));
+		expect(options).toContain('headerShown: Platform.OS === "ios",');
+		expect(options).toContain('title: "New task",');
+		expect(options).toContain('presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal",');
+	});
+
+	it("cancels from the leading bar item on iOS only", () => {
+		expect(spawn).toContain('const headerItems = useMemo(() => Platform.OS === "ios" ? (\n\t\t<Stack.Toolbar placement="left">\n\t\t\t<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>');
+		expect(spawn).toContain("return <View style={styles.screen}>{headerItems}{content}</View>;");
+		// Start keeps its place with the selectors, riding the keyboard.
+		expect(spawn).toContain("onSpawn={() => { void onSpawn(); }}");
+	});
+});
 
 describe("spawn composer", () => {
 	it("puts Standalone agent after projects with a section break", () => {

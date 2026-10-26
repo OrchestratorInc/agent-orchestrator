@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "../lib/icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
@@ -405,10 +405,17 @@ function SpawnModalContent() {
 		}
 	};
 
+	// iOS: Cancel leads the sheet's bar, across from its title. Start stays with
+	// the selectors above the keyboard, where it shows its own progress.
+	const headerItems = useMemo(() => Platform.OS === "ios" ? (
+		<Stack.Toolbar placement="left">
+			<Stack.Toolbar.Button onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
+		</Stack.Toolbar>
+	) : null, [router]);
+
 	const content = (
 		<View style={[
 			styles.content,
-			Platform.OS === "ios" && styles.iosContent,
 			Platform.OS === "android" && styles.androidContent,
 		]}>
 				<View
@@ -495,7 +502,7 @@ function SpawnModalContent() {
 		);
 	}
 
-	return <View style={styles.screen}>{content}</View>;
+	return <View style={styles.screen}>{headerItems}{content}</View>;
 }
 
 // Human copy for a failed spawn, matching every other screen. Never the wire
@@ -515,7 +522,6 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		content: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm, gap: space.sm },
-		iosContent: { paddingTop: space.xxxl },
 		androidModalRoot: { flex: 1, backgroundColor: "transparent" },
 		androidSheet: {
 			paddingTop: space.xs,

@@ -228,7 +228,11 @@ function Shell() {
 						// Spawn render a compact, content-sized sheet and lets RN's
 						// KeyboardAvoidingView keep it directly above the keyboard.
 						presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal",
-						headerShown: false,
+						// iOS titles the sheet in a native bar that holds its Cancel.
+						// Shown from the start rather than by the page: a modal whose
+						// header appears after it mounts is rebuilt, losing the draft.
+						headerShown: Platform.OS === "ios",
+						title: "New task",
 						sheetAllowedDetents: Platform.OS === "ios" ? [0.5, 0.9] : undefined,
 						// Opens tall on iOS. At the half detent the keyboard is taller
 						// than the sheet, so the selectors and Start task had nowhere to

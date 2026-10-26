@@ -117,10 +117,12 @@ describe("Android native compatibility boundaries", () => {
 		expect(ios).toMatch(/style=\{\[styles\.input,\s*\{\s*height,/);
 	});
 
-	it("gives the iOS Spawn prompt modest top breathing room", () => {
+	// The native bar now heads the iOS sheet, so the prompt starts at the
+	// content's own inset below it rather than leaving room for the grabber.
+	it("starts the iOS Spawn prompt at the content inset below the native bar", () => {
 		const spawn = source("../app/spawn.tsx");
-		expect(spawn).toContain('Platform.OS === "ios" && styles.iosContent');
-		expect(spawn).toContain("iosContent: { paddingTop: space.xxxl }");
+		expect(spawn).not.toContain("iosContent");
+		expect(spawn).toMatch(/content:\s*\{[^}]*paddingTop:\s*space\.lg/);
 	});
 
 	it("uses compact app-native choice rows instead of the unstable Compose picker", () => {
