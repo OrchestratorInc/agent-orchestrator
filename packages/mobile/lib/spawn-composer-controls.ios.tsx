@@ -1,14 +1,17 @@
 import { Host, RNHostView } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Divider, Group, HStack, Image, Menu, Spacer, Text, VStack } from "@expo/ui/swift-ui";
+import { Button, Divider, Group, HStack, Image, Label, Menu, ProgressView, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
+	accessibilityLabel,
 	aspectRatio,
 	backgroundOverlay,
 	buttonStyle,
 	clipShape,
-	containerRelativeFrame,
+	controlSize,
+	disabled as disabledModifier,
 	font,
+	foregroundStyle,
 	frame,
 	labelStyle,
 	layoutPriority,
@@ -20,28 +23,31 @@ import {
 	tint,
 	truncationMode,
 } from "@expo/ui/swift-ui/modifiers";
-import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text as RNText, View } from "react-native";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Platform, StyleSheet, View } from "react-native";
 import { chipColorFor } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
 import { glassPanel } from "./glass";
 import { haptics } from "./haptics";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
+import type { IOSSymbol } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { iconSize, press, space, type } from "./tokens";
+import { iconSize, space, stateOpacity, touchTarget } from "./tokens";
 import { MicKey } from "./voice/MicKey";
 
-// The paperclip's frame, so the rail's two icon buttons match.
-const MIC_KEY_SIZE = 38;
-// Keep the project trigger compact and left-anchored. A max-width frame makes
-// the native Menu fill the host, which centers its popup over the whole sheet.
-const PROJECT_MENU_WIDTH = 224;
-const HOST_MENU_WIDTH = 144;
-// Reserve the harness slot so a different agent name cannot move the model
-// selector sideways. The model still uses the remaining width of the rail,
-// but common harness names should not truncate while "Automatic" has slack.
-const HARNESS_MENU_WIDTH = 124;
+// SwiftUI's `.infinity` can't cross the bridge, and any width past the sheet's
+// does the same job: take all the room the row offers.
+const FILL_WIDTH = 10_000;
+// Liquid Glass's prominent style only exists from iOS 26; before it SwiftUI
+// would fall back to a plain text button, so Start keeps the filled style there.
+const startStyle = parseInt(String(Platform.Version), 10) >= 26 ? "glassProminent" : "borderedProminent";
 
+/**
+ * Spawn's selectors as SwiftUI menus whose options are the system's checkable
+ * items, so the current choice carries a real checkmark and selected state
+ * rather than a drawn one. The triggers keep their icon and name, size to their
+ * content and scale with Dynamic Type.
+ */
 export function SpawnComposerControls({
 	hosts,
 	hostId,
@@ -66,66 +72,41 @@ export function SpawnComposerControls({
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const logoUris = useHarnessLogoUris(agents);
-	const selectedHost = hosts.find((host) => host.id === hostId);
 	const selectedProject = projects.find((project) => project.id === projectId);
-	const hostLabel = selectedHost?.label ?? "Choose machine";
+	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
+	// A choice only fires when it changes, so each one is worth the tick.
+	const choose = (apply: (id: string) => void, id: string) => {
+		haptics.select();
+		apply(id);
+	};
 
 	return (
-		<View style={styles.stack}>
-			<Host style={styles.controlsHost} colorScheme={scheme}>
-				<VStack alignment="leading" spacing={10} modifiers={[frame({ height: 104, maxWidth: 1000 })]}>
-					<HStack spacing={8}>
-						<Menu
-							label={
-								<HStack spacing={7}>
-									<Image systemName="desktopcomputer" size={iconSize.sm} />
-									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>Run on {hostLabel}</Text>
-									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
-								</HStack>
-							}
-							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: HOST_MENU_WIDTH, alignment: "leading" }), accessibilityIdentifier("spawn-host")]}
-						>
-							{hosts.map((host) => (
-								<Button key={host.id} label={host.label} systemImage={host.id === hostId ? "checkmark" : undefined} onPress={() => { haptics.select(); onSelectHost(host.id); }} />
-							))}
-						</Menu>
-						<Menu
-							label={
-								<HStack spacing={7}>
-									<Image systemName={projectSystemImage(selectedProject)} size={iconSize.sm} />
-									<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{projectLabel}</Text>
-									<Image systemName="chevron.up.chevron.down" size={iconSize.xs} />
-								</HStack>
-							}
-							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH - 42, alignment: "leading" }), accessibilityIdentifier("spawn-project")]}
-						>
-							{projects.map((project) => (
-								<Group key={project.id}>
-									{project.sectionBreakBefore ? <Divider /> : null}
-									<Button onPress={() => { haptics.select(); onSelectProject(project.id); }}>
-										<HStack spacing={9}>
-											<Image systemName={projectSystemImage(project)} size={iconSize.sm} />
-											<Text>{project.label}</Text>
-											<Spacer />
-											{project.id === projectId ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
-										</HStack>
-									</Button>
-								</Group>
-							))}
-						</Menu>
-					</HStack>
+		<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.host}>
+			<VStack alignment="leading" spacing={space.sm}>
+				{/* Compact and left-anchored: a max-width frame would make a Menu
+				    fill the row, which centers its popup over the whole sheet. */}
+				<HStack spacing={space.sm}>
+					<Menu
+						label={<SelectorLabel icon={<SelectorGlyph name="desktopcomputer" />} title={`Run on ${hostLabel}`} indicator="chevron.up.chevron.down" />}
+						modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-host")]}
+					>
+						{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => choose(onSelectHost, host.id)} />)}
+					</Menu>
+					<Menu
+						label={<SelectorLabel icon={<SelectorGlyph name={projectSystemImage(selectedProject)} />} title={projectLabel} indicator="chevron.up.chevron.down" />}
+						modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityIdentifier("spawn-project")]}
+					>
+						{projects.flatMap((project) => [
+							project.sectionBreakBefore ? <Divider key={`${project.id}-break`} /> : null,
+							<Choice key={project.id} label={project.label} systemImage={projectSystemImage(project)} selected={project.id === projectId} onChoose={() => choose(onSelectProject, project.id)} />,
+						])}
+					</Menu>
+					<Spacer minLength={0} />
+				</HStack>
 
-				<HStack
-					spacing={6}
-					modifiers={[
-						padding({ horizontal: 8 }),
-						containerRelativeFrame({ axes: "horizontal" }),
-						frame({ height: 54 }),
-						glassPanel(),
-					]}
-				>
+				<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.sm, vertical: space.xxs }), glassPanel()]}>
 					<Menu
 						label="Attach"
 						systemImage="paperclip"
@@ -133,66 +114,45 @@ export function SpawnComposerControls({
 							buttonStyle("plain"),
 							labelStyle("iconOnly"),
 							menuOrder("fixed"),
-							frame({ width: 38, height: 38 }),
+							frame({ minWidth: touchTarget, minHeight: touchTarget }),
+							font({ textStyle: "body" }),
 							tint(t.textPrimary),
 							accessibilityIdentifier("spawn-attachment"),
 						]}
 					>
-						<Button label="Choose Photo" systemImage="photo" onPress={() => { haptics.tap(); onChoosePhoto(); }} />
-						<Button label="Choose File" systemImage="doc" onPress={() => { haptics.tap(); onChooseFile(); }} />
+						<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />
+						<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
 					</Menu>
 
 					<Menu
-						label={
-							<HStack spacing={6}>
-								<HarnessImage uri={logoUris[harness]} harness={harness} />
-								<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{harnessLabel}</Text>
-								<Image systemName="chevron.down" size={iconSize.xs} />
-							</HStack>
-						}
-						modifiers={[buttonStyle("plain"), frame({ width: HARNESS_MENU_WIDTH }), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
+						label={<SelectorLabel icon={<HarnessImage uri={logoUris[harness]} harness={harness} />} title={harnessLabel} indicator="chevron.down" />}
+						modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textPrimary), accessibilityIdentifier("spawn-harness")]}
 					>
 						{agents.map((agent) => (
-							<Button key={agent.id} onPress={() => { haptics.select(); onSelectHarness(agent.id); }}>
-								<HStack spacing={9}>
-									<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />
-									<Text>{agent.label}</Text>
-									<Spacer />
-									{agent.id === harness ? <Image systemName="checkmark" size={iconSize.xs} /> : null}
-								</HStack>
-							</Button>
+							<Choice key={agent.id} label={agent.label} icon={<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />} selected={agent.id === harness} onChoose={() => choose(onSelectHarness, agent.id)} />
 						))}
 					</Menu>
 
 					<Menu
 						label={
-							<HStack spacing={5} modifiers={[frame({ maxWidth: 1000, alignment: "leading" })]}>
-								<Text modifiers={[font({ size: 14, weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{modelLabel}</Text>
+							<HStack spacing={space.xxs} modifiers={[frame({ maxWidth: FILL_WIDTH, alignment: "leading" })]}>
+								<SelectorText>{modelLabel}</SelectorText>
 								<Spacer />
-								<Image systemName="chevron.down" size={iconSize.xs} />
+								<SelectorGlyph name="chevron.down" indicator />
 							</HStack>
 						}
 						modifiers={[
 							buttonStyle("plain"),
-							frame({ maxWidth: 1000, alignment: "leading" }),
+							menuOrder("fixed"),
+							frame({ maxWidth: FILL_WIDTH, alignment: "leading" }),
 							layoutPriority(1),
 							tint(t.textSecondary),
-							opacity(models.length || modelSelection === "__auto__" ? 1 : 0.45),
+							opacity(models.length || modelSelection === "__auto__" ? 1 : stateOpacity.disabled),
 							accessibilityIdentifier("spawn-model"),
 						]}
 					>
-						<Button
-							label="Automatic"
-							systemImage={modelSelection === "__auto__" ? "checkmark" : undefined}
-							onPress={() => { haptics.select(); onSelectModel("__auto__"); }}
-						/>
-						{models.map((model) => (
-							<Button
-								key={model.id}
-								label={model.label}
-								systemImage={model.id === modelSelection ? "checkmark" : undefined}
-								onPress={() => { haptics.select(); onSelectModel(model.id); }}
-							/>
+						{[{ id: "__auto__", label: "Automatic" }, ...models].map((model) => (
+							<Choice key={model.id} label={model.label} selected={model.id === modelSelection} onChoose={() => choose(onSelectModel, model.id)} />
 						))}
 					</Menu>
 
@@ -204,7 +164,7 @@ export function SpawnComposerControls({
 						<View style={styles.micSlot}>
 							<MicKey
 								variant="plain"
-								size={MIC_KEY_SIZE}
+								size={touchTarget}
 								glyphSize={iconSize.md}
 								state={voice.state}
 								mode={voice.mode}
@@ -215,28 +175,69 @@ export function SpawnComposerControls({
 					</RNHostView>
 				</HStack>
 
-				</VStack>
-			</Host>
-
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={busy ? "Starting task" : "Start task"}
-				accessibilityState={{ disabled }}
-				testID="spawn-submit"
-				disabled={disabled}
-				onPress={() => { haptics.tap(); onSpawn(); }}
-				style={({ pressed }) => [
-					styles.spawnButton,
-					{ backgroundColor: disabled ? t.bgElevatedHover : t.accent },
-					pressed && !disabled && styles.spawnButtonPressed,
-				]}
-			>
-				<RNText style={[styles.spawnLabel, { color: disabled ? t.textFaint : t.onAccent }]}>
-					{busy ? "Starting…" : "Start task"}
-				</RNText>
-			</Pressable>
-		</View>
+				{/* The success and failure haptics come from the request itself, so
+				    the press adds none of its own. */}
+				<Button
+					onPress={onSpawn}
+					testID="spawn-submit"
+					modifiers={[
+						buttonStyle(startStyle),
+						controlSize("large"),
+						tint(t.accent),
+						disabledModifier(disabled),
+						accessibilityLabel(busy ? "Starting task" : "Start task"),
+						accessibilityIdentifier("spawn-submit"),
+					]}
+				>
+					<HStack spacing={space.sm} modifiers={[frame({ maxWidth: FILL_WIDTH })]}>
+						{busy ? <ProgressView /> : null}
+						{/* The accent's own ink while it can be pressed; disabled, the
+						    system's dimmed label reads on its grey fill. */}
+						<Text modifiers={[font({ textStyle: "headline" }), ...(disabled ? [] : [foregroundStyle(t.onAccent)])]}>
+							{busy ? "Starting…" : "Start task"}
+						</Text>
+					</HStack>
+				</Button>
+			</VStack>
+		</Host>
 	);
+}
+
+/**
+ * One option in a selector menu. A Toggle is the system's checkable menu item:
+ * it draws the checkmark and VoiceOver's selected state from `selected` alone,
+ * and turning the current choice off again changes nothing.
+ */
+function Choice({ label, systemImage, icon, selected, onChoose }: {
+	label: string;
+	systemImage?: IOSSymbol;
+	icon?: ReactNode;
+	selected: boolean;
+	onChoose: () => void;
+}) {
+	const onIsOnChange = (on: boolean) => { if (on) onChoose(); };
+	return icon
+		? <Toggle isOn={selected} onIsOnChange={onIsOnChange}><Label title={label} icon={icon} /></Toggle>
+		: <Toggle isOn={selected} onIsOnChange={onIsOnChange} label={label} systemImage={systemImage} />;
+}
+
+function SelectorLabel({ icon, title, indicator }: { icon: ReactNode; title: string; indicator: IOSSymbol }) {
+	return (
+		<HStack spacing={space.xs}>
+			{icon}
+			<SelectorText>{title}</SelectorText>
+			<SelectorGlyph name={indicator} indicator />
+		</HStack>
+	);
+}
+
+function SelectorText({ children }: { children: string }) {
+	return <Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{children}</Text>;
+}
+
+/** A symbol that scales with the label beside it; the disclosure arrow sits a step smaller. */
+function SelectorGlyph({ name, indicator = false }: { name: IOSSymbol; indicator?: boolean }) {
+	return <Image systemName={name} modifiers={[font(indicator ? { textStyle: "caption2", weight: "semibold" } : { textStyle: "subheadline" })]} />;
 }
 
 function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {
@@ -244,18 +245,8 @@ function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "fol
 }
 
 const styles = StyleSheet.create({
-	stack: { width: "100%", height: 150, gap: space.hair },
-	controlsHost: { width: "100%", height: 104 },
-	micSlot: { width: MIC_KEY_SIZE, height: MIC_KEY_SIZE, alignItems: "center", justifyContent: "center" },
-	spawnButton: {
-		height: 44,
-		borderRadius: 16,
-		borderCurve: "continuous",
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	spawnButtonPressed: { opacity: press.opacity, transform: [{ scale: press.scale }] },
-	spawnLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	host: { width: "100%" },
+	micSlot: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
 });
 
 // The mark's box, and the chip it sits on when it needs one to stay visible.
@@ -266,7 +257,7 @@ const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
 const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
 
 export function HarnessImage({ uri, harness }: { uri?: string; harness: string }) {
-	if (!uri) return <Image systemName="terminal" size={iconSize.sm} />;
+	if (!uri) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" })]} />;
 	const mark = [resizable(), aspectRatio({ contentMode: "fit" }), frame({ width: MARK_SIZE - CHIP_INSET * 2, height: MARK_SIZE - CHIP_INSET * 2 })];
 	const chip = chipColorFor(harness);
 	// opencode's mark is pure white and cursor's likewise, so on the light theme

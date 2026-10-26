@@ -5,34 +5,55 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync(fileURLToPath(new URL("./spawn-composer-controls.ios.tsx", import.meta.url)), "utf8");
 
 describe("iOS spawn menu layout", () => {
-	it("keeps the project trigger compact and gives the harness enough label room", () => {
-		expect(source).toContain("const HARNESS_MENU_WIDTH = 124");
-		expect(source).toContain('frame({ width: HARNESS_MENU_WIDTH })');
-		expect(source).toContain('const PROJECT_MENU_WIDTH = 224');
-		expect(source).toContain('{projectLabel}</Text>');
-		expect(source).toContain('<Image systemName="chevron.up.chevron.down"');
-		expect(source).toContain('padding({ horizontal: 4 }), frame({ width: PROJECT_MENU_WIDTH - 42, alignment: "leading" })');
-		expect(source).toContain('layoutPriority(1)');
-		expect(source).toContain('accessibilityIdentifier("spawn-project")');
-		expect(source).toContain('accessibilityIdentifier("spawn-model")');
+	// Fixed widths truncated longer names and fixed heights clipped the rail at
+	// large text sizes; the host now takes the height its content asks for.
+	it("lets the selectors size to their content", () => {
+		expect(source).not.toMatch(/MENU_WIDTH/);
+		expect(source).not.toMatch(/frame\(\{ height:/);
+		expect(source).not.toMatch(/height: \d+/);
+		expect(source).toContain("<Host matchContents={{ vertical: true }}");
+		expect(source).toContain("<Spacer minLength={0} />");
+		expect(source).toContain('frame({ maxWidth: FILL_WIDTH, alignment: "leading" })');
+		expect(source).toContain("layoutPriority(1)");
+		for (const id of ["spawn-host", "spawn-project", "spawn-attachment", "spawn-harness", "spawn-model"]) {
+			expect(source).toContain(`accessibilityIdentifier("${id}")`);
+		}
+	});
+
+	it("scales every label with Dynamic Type", () => {
+		expect(source).not.toMatch(/font\(\{ size/);
+		expect(source).toContain('font({ textStyle: "subheadline", weight: "medium" })');
+	});
+
+	// Checkmark images on plain buttons drew a selection VoiceOver never heard.
+	it("checks the current choice with the system's checkable menu item", () => {
+		expect(source).not.toContain('"checkmark"');
+		expect(source).toContain("<Toggle isOn={selected} onIsOnChange={onIsOnChange}");
 	});
 
 	it("separates standalone from the project rows", () => {
-		expect(source).toContain("Button, Divider, Group");
 		expect(source).toContain('menuOrder("fixed")');
-		expect(source).toContain("project.sectionBreakBefore ? <Divider /> : null");
-		expect(source).toContain("<Divider />");
+		expect(source).toContain("project.sectionBreakBefore ? <Divider");
 	});
 
-	it("uses the standalone agent logo in the trigger and project rows", () => {
+	it("uses the standalone agent mark in the trigger and project rows", () => {
 		expect(source).toContain('project?.icon === "message-square-plus" ? "plus.bubble" : "folder"');
-		expect(source).toContain("systemName={projectSystemImage(selectedProject)}");
-		expect(source).toContain("systemName={projectSystemImage(project)}");
+		expect(source).toContain("name={projectSystemImage(selectedProject)}");
+		expect(source).toContain("systemImage={projectSystemImage(project)}");
 	});
 
 	it("lets the attach button choose a photo or a file", () => {
 		expect(source).toContain('systemImage="paperclip"');
 		expect(source).toContain('<Button label="Choose Photo" systemImage="photo"');
 		expect(source).toContain('<Button label="Choose File" systemImage="doc"');
+	});
+
+	// Liquid Glass's prominent style falls back to a plain text button before
+	// iOS 26, so the filled style stands in there.
+	it("starts from a native prominent button rather than a scaling Pressable", () => {
+		expect(source).not.toContain("Pressable");
+		expect(source).toContain('parseInt(String(Platform.Version), 10) >= 26 ? "glassProminent" : "borderedProminent"');
+		expect(source).toContain("buttonStyle(startStyle)");
+		expect(source).toContain("disabledModifier(disabled)");
 	});
 });
