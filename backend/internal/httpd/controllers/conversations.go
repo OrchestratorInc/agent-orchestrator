@@ -918,6 +918,20 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_ACTIVITY_DETAIL_INVALID", "activityDetail must be full or preview", nil)
 		return
 	}
+	var cursor *conversationChangeCursor
+	if raw := r.URL.Query().Get("changedSince"); raw != "" {
+		if before != 0 {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", "changedSince reads the newest page and cannot be combined with beforeSequence", nil)
+			return
+		}
+		decoded, decodeErr := decodeConversationChangeCursor(raw)
+		if decodeErr != nil {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CONVERSATION_CURSOR_INVALID", decodeErr.Error(), nil)
+			return
+		}
+		cursor = &decoded
+	}
+	readAt := time.Now()
 	var snapshot chatsvc.Snapshot
 	if paged, ok := c.Svc.(pagedConversationService); ok {
 		snapshot, err = paged.SnapshotPage(r.Context(), session, before, limit)
@@ -929,6 +943,13 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	response := conversationSnapshotResponse(snapshot)
+	if before == 0 && snapshot.Conversation.ID != "" {
+		response.ChangeCursor = encodeConversationChangeCursor(snapshot, readAt)
+		if cursor != nil {
+			conversationChangesOnly(&response, snapshot, *cursor)
+		}
+	}
+	// Only the rows still sent after the change filter need a preview.
 	if activityDetail == "preview" {
 		for i := range response.Activities {
 			previewActivity(&response.Activities[i])

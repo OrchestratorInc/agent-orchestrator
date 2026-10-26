@@ -3322,6 +3322,18 @@ type ConversationSnapshotResponse struct {
 	LatestSequence int64  `json:"latestSequence"`
 	OldestSequence int64  `json:"oldestSequence,omitempty"`
 	HasMoreBefore  bool   `json:"hasMoreBefore"`
+	// ChangeCursor is set on the newest page. Pass it back as changedSince to read
+	// only the rows that changed since this response.
+	ChangeCursor string `json:"changeCursor,omitempty"`
+	// ChangesOnly marks a changedSince answer: messages and activities hold only
+	// the rows of the newest page that changed since the cursor. Turns and the
+	// conversation metadata are complete.
+	ChangesOnly bool `json:"changesOnly,omitempty"`
+	// PageDigest is set with ChangesOnly. It is the FNV-1a 32-bit hash, as 8 hex
+	// digits, of "<kind>:<id>:<revision>\n" for every message and activity of the
+	// full newest page in sequence order (kind is message or activity). A client
+	// whose merged page hashes differently must read the full page.
+	PageDigest string `json:"pageDigest,omitempty"`
 	// NativeForkAvailableAfterSequence is the first provider-backed human prompt
 	// in the active provider scope. It keeps edit gating exact across bounded pages.
 	NativeForkAvailableAfterSequence int64                             `json:"nativeForkAvailableAfterSequence"`

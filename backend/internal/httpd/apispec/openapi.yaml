@@ -6731,6 +6731,16 @@ paths:
           type:
           - "null"
           - string
+      - description: changeCursor from an earlier newest-page response. The answer
+          is the newest page with only the rows changed since then (changesOnly),
+          or the full page when the cursor no longer applies. Not allowed with beforeSequence.
+        in: query
+        name: changedSince
+        schema:
+          description: changeCursor from an earlier newest-page response. The answer
+            is the newest page with only the rows changed since then (changesOnly),
+            or the full page when the cursor no longer applies. Not allowed with beforeSequence.
+          type: string
       responses:
         "200":
           content:
@@ -16748,6 +16758,10 @@ components:
           items:
             type: string
           type: array
+        changeCursor:
+          type: string
+        changesOnly:
+          type: boolean
         compactedAt:
           type:
           - "null"
@@ -16793,6 +16807,8 @@ components:
         oldestSequence:
           format: int64
           type: integer
+        pageDigest:
+          type: string
         rateLimits:
           $ref: '#/components/schemas/ConversationRateLimitsPayload'
         sessionId:
