@@ -232,8 +232,9 @@ export function useVoiceInput({
 		if (tapWindowRef.current) {
 			clearTimeout(tapWindowRef.current);
 			tapWindowRef.current = null;
+			// No haptic of its own: the key already tapped for this press, and the
+			// mic buzzes again once it is listening.
 			startedLatchedRef.current = true;
-			haptics.tap();
 			// The tap's own recording was aborted a moment ago; give the native
 			// recogniser time to finish tearing down before asking it to start again.
 			restartRef.current = setTimeout(() => beginRecording("latched"), RESTART_DELAY_MS);

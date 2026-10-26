@@ -24,7 +24,7 @@ function fakeProvider() {
 }
 
 let renderer: ReactTestRenderer | undefined;
-afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; });
+afterEach(() => { if (renderer) act(() => renderer!.unmount()); renderer = undefined; vi.clearAllMocks(); });
 
 function mount(provider: VoiceProvider, onTranscript = vi.fn()) {
 	const voice: { current?: UseVoiceInput } = {};
@@ -55,6 +55,29 @@ it("latches hands-free dictation on one activation and finishes it on the next",
 	act(() => started[0].callbacks.onFinal("ship it"));
 	expect(onTranscript).toHaveBeenCalledWith("ship it");
 	expect(voice.current.state).toBe("idle");
+});
+
+// The key taps for every press, so the double tap that latches must not tap
+// again from here; the next buzz is the one that says the mic is listening.
+it("latches on a double tap without a second haptic of its own", async () => {
+	vi.useFakeTimers();
+	try {
+		const { haptics } = await import("../haptics");
+		const { provider, started } = fakeProvider();
+		const voice = mount(provider);
+		await act(async () => voice.current.pressIn());
+		act(() => voice.current.pressOut());
+		act(() => voice.current.pressIn());
+		await act(async () => { vi.advanceTimersByTime(200); });
+		// The first tap's push recording is thrown away, and the latched one follows.
+		expect(started.map((entry) => entry.mode)).toEqual(["push", "latched"]);
+		expect(provider.abort).toHaveBeenCalledOnce();
+		expect(haptics.tap).not.toHaveBeenCalled();
+		act(() => started[1].callbacks.onReady());
+		expect(haptics.select).toHaveBeenCalledOnce();
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it("drops a latched start that is still warming up when activated again", async () => {
