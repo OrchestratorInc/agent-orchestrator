@@ -1,33 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-	ActivityIndicator,
 	Image,
 	PanResponder,
-	Pressable,
 	StyleSheet,
-	Text,
 	View,
 } from "react-native";
 import { BrowserLiveClient } from "../browserLive";
 import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, type BrowserFrameRect } from "../browserLiveProtocol";
-import { Feather } from "../icons";
 import { useApp } from "../store";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import type { Theme } from "../theme";
-import { iconSize, space, type } from "../tokens";
+import { ToastHost } from "../Toast";
+import { Button, EmptyState } from "../ui";
+import { useToast } from "../useToast";
 
 type BrowserStatus = "connecting" | "open" | "error";
 
 export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; onDisabled?(): void }) {
 	const { config } = useApp();
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const toast = useToast();
+	const showNotice = toast.show;
 	const client = useRef<BrowserLiveClient | null>(null);
-	const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [attempt, setAttempt] = useState(0);
 	const [status, setStatus] = useState<BrowserStatus>("connecting");
 	const [error, setError] = useState<string>();
-	const [notice, setNotice] = useState<string>();
 	const [frameURI, setFrameURI] = useState<string>();
 	const [frameSize, setFrameSize] = useState({ width: 1, height: 1 });
 	const [viewportSize, setViewportSize] = useState({ width: 1, height: 1 });
@@ -62,18 +59,9 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 				setStatus(next === "open" ? "open" : next === "connecting" ? "connecting" : "error");
 				if (next === "open") {
 					setError(undefined);
-					if (message) {
-						if (noticeTimer.current) clearTimeout(noticeTimer.current);
-						setNotice(message);
-						noticeTimer.current = setTimeout(() => {
-							noticeTimer.current = null;
-							setNotice(undefined);
-						}, 2500);
-					}
+					// A refused command leaves the stream open: say why, and keep the page up.
+					if (message) showNotice(message);
 				} else {
-					if (noticeTimer.current) clearTimeout(noticeTimer.current);
-					noticeTimer.current = null;
-					setNotice(undefined);
 					setError(message);
 				}
 			},
@@ -99,12 +87,10 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 
 		return () => {
 			disposed = true;
-			if (noticeTimer.current) clearTimeout(noticeTimer.current);
-			noticeTimer.current = null;
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
-	}, [attempt, config, onDisabled, sessionID]);
+	}, [attempt, config, onDisabled, sessionID, showNotice]);
 
 	const normalizedPoint = (x: number, y: number) => {
 		const rect = frameRectRef.current;
@@ -149,11 +135,11 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 			{...responder.panHandlers}
 		>
 			{frameURI && !blank ? <View pointerEvents="none" style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
-			{status === "open" && blank ? <View pointerEvents="none" style={styles.center}><Feather name="monitor" size={iconSize.lg} color={t.textTertiary} /><Text style={styles.supporting}>Nothing is open in the desktop browser yet.</Text></View> : null}
-			{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.supporting}>Waiting for the desktop browser…</Text></View> : null}
-			{status === "open" && notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
-			{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
 		</View>
+		{status === "open" && blank ? <View pointerEvents="none" style={styles.overlay}><EmptyState icon="desktop" title="Nothing is open in the desktop browser yet" /></View> : null}
+		{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
+		{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
+		<ToastHost toast={toast} />
 	</View>;
 }
 
@@ -161,30 +147,26 @@ function BrowserState({ status, error, retry }: { status: BrowserStatus; error?:
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	if (status === "connecting") {
-		return <View style={styles.stateOverlay}><ActivityIndicator color={t.accent} /><Text style={styles.stateTitle}>Connecting to browser…</Text></View>;
+		return <View style={[styles.overlay, styles.opaque]}><EmptyState busy title="Connecting to browser…" /></View>;
 	}
-	return <View accessibilityRole="alert" style={styles.stateOverlay}>
-		<View style={[styles.stateIcon, styles.stateIconError]}><Feather name="alert-triangle" size={iconSize.lg} color={t.red} /></View>
-		<Text style={styles.stateTitle}>Couldn't connect to the browser</Text>
-		<Text style={styles.stateCopy}>{error || "Couldn't reach the desktop browser. Make sure browser sharing is on in Connect Mobile, the session is still running, and another phone isn't already controlling it."}</Text>
-		<Pressable accessibilityRole="button" onPress={retry} style={styles.retry}><Feather name="refresh-cw" size={iconSize.sm} color={t.onAccent} /><Text style={styles.retryText}>Check again</Text></Pressable>
+	return <View accessibilityRole="alert" style={[styles.overlay, styles.opaque]}>
+		<EmptyState
+			icon="warning"
+			iconColor={t.red}
+			title="Couldn't connect to the browser"
+			message={error || "Couldn't reach the desktop browser. Make sure browser sharing is on in Connect Mobile, the session is still running, and another phone isn't already controlling it."}
+			action={<Button title="Check again" icon="refresh" onPress={retry} />}
+		/>
 	</View>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	root: { flex: 1, backgroundColor: t.bgBase },
-	viewport: { flex: 1, overflow: "hidden", backgroundColor: "#050505" },
+	// The letterbox around the fitted frame is the page itself, so it follows the
+	// theme instead of drawing black bars in light mode.
+	viewport: { flex: 1, overflow: "hidden", backgroundColor: t.bgBase },
 	frame: { position: "absolute" },
 	frameImage: { width: "100%", height: "100%" },
-	center: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: space.sm },
-	supporting: { color: t.textTertiary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
-	stateOverlay: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
-	notice: { position: "absolute", left: space.md, right: space.md, bottom: space.md, alignItems: "center", padding: space.sm, borderRadius: 10, backgroundColor: t.bgElevated },
-	noticeText: { color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.caption1.fontSize, textAlign: "center" },
-	stateIcon: { width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center", backgroundColor: t.accentTint },
-	stateIconError: { backgroundColor: t.tintRed },
-	stateTitle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontSize: type.body.fontSize, fontWeight: "600", textAlign: "center" },
-	stateCopy: { maxWidth: 310, color: t.textSecondary, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	retry: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, borderRadius: 12, paddingHorizontal: space.lg, backgroundColor: t.accent },
-	retryText: { color: t.onAccent, fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, fontWeight: "600" },
+	overlay: { ...StyleSheet.absoluteFill },
+	opaque: { backgroundColor: t.bgBase },
 });
