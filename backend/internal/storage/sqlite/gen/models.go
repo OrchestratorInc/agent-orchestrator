@@ -895,6 +895,7 @@ type UsagePRMeasurement struct {
 	PRKey              string
 	ProjectID          string
 	Historical         int64
+	HistoricalMerged   int64
 	AssociatedReported int64
 	MergedReported     int64
 }
