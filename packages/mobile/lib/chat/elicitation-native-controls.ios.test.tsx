@@ -13,16 +13,20 @@ vi.mock("@expo/ui/swift-ui", () => ({
 	Text: "Text", TextField: "TextField", VStack: "VStack", useNativeState: () => native,
 }));
 // Each modifier records its name and arguments, so a test can read what a view was given.
-vi.mock("@expo/ui/swift-ui/modifiers", () => Object.fromEntries([
-	"accessibilityAddTraits", "accessibilityHidden", "buttonStyle", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
-	"multilineTextAlignment", "padding", "textFieldStyle", "tint",
-].map((name) => [name, (...args: unknown[]) => ({ [name]: args })])));
+vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+	...Object.fromEntries([
+		"accessibilityAddTraits", "accessibilityHidden", "buttonStyle", "contentShape", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
+		"multilineTextAlignment", "padding", "textFieldStyle", "tint",
+	].map((name) => [name, (...args: unknown[]) => ({ [name]: args })])),
+	shapes: { rectangle: () => ({ shape: "rectangle" }) },
+}));
 vi.mock("../glass", () => ({ glassPanel: () => ({}) }));
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemeState: () => ({ scheme: "light" }) }));
 
 import { Host } from "@expo/ui";
-import { Button, TextField } from "@expo/ui/swift-ui";
+import { Button, Text, TextField } from "@expo/ui/swift-ui";
+import { touchTarget } from "../tokens";
 import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls.ios";
 
 let renderer: ReactTestRenderer | undefined;
@@ -110,7 +114,8 @@ it.each([false, true])("handles repeated native values followed by an external r
 function actionParts() {
 	const [measure, visible] = renderer!.root.findAllByType(Host);
 	const [probe, button] = renderer!.root.findAllByType(Button);
-	return { measure, visible, probe, button };
+	const [, label] = renderer!.root.findAllByType(Text);
+	return { measure, visible, probe, button, label };
 }
 function modifier(node: ReactTestInstance, name: string): unknown {
 	return (node.props.modifiers as Record<string, unknown>[]).find((entry) => name in entry)?.[name];
@@ -125,10 +130,10 @@ function measure(row: number, label: number) {
 it("lets an action take its label's width instead of a guessed one", () => {
 	const onPress = vi.fn();
 	act(() => { renderer = create(<ElicitationAction label="Allow once" primary width={82} onPress={onPress} />); });
-	const { measure: copy, visible, probe, button } = actionParts();
+	const { measure: copy, visible, probe, button, label } = actionParts();
 	expect(visible.props.matchContents).toBe(true);
 	expect(visible.props.style).toEqual({ maxWidth: "100%" });
-	expect(button.props.label).toBe("Allow once");
+	expect(label.props.children).toBe("Allow once");
 	expect(modifier(button, "frame")).toEqual([{ minWidth: 82 }]);
 	// The copy spans the row at its natural width, out of reach of touch and screen readers.
 	expect(copy.props.matchContents).toBeUndefined();
@@ -162,4 +167,17 @@ it("wraps a decision wider than its row instead of running past the card", () =>
 	expect(modifier(actionParts().button, "frame")).toBeUndefined();
 	measure(300, 96);
 	expect(modifier(actionParts().button, "frame")).toBeUndefined();
+});
+
+it("gives every action at least a touch target", () => {
+	act(() => { renderer = create(<ElicitationAction label="Skip" onPress={vi.fn()} />); });
+	const { button, label } = actionParts();
+	expect(modifier(button, "buttonStyle")).toEqual(["plain"]);
+	// A plain button is only as tappable as its label, so the label carries the target.
+	expect(modifier(label, "frame")).toEqual([{ minWidth: touchTarget, minHeight: touchTarget }]);
+	expect(modifier(label, "contentShape")).toEqual([{ shape: "rectangle" }]);
+	act(() => renderer!.update(<ElicitationAction label="Submit" primary onPress={vi.fn()} />));
+	expect(modifier(actionParts().button, "buttonStyle")).toEqual(["borderedProminent"]);
+	expect(modifier(actionParts().button, "controlSize")).toEqual(["large"]);
+	expect(actionParts().label.props.modifiers).toEqual([]);
 });

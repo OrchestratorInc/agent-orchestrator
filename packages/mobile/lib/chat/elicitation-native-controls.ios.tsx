@@ -4,6 +4,7 @@ import {
 	accessibilityAddTraits,
 	accessibilityHidden,
 	buttonStyle,
+	contentShape,
 	controlSize,
 	disabled as disabledModifier,
 	fixedSize,
@@ -12,6 +13,7 @@ import {
 	frame,
 	multilineTextAlignment,
 	padding,
+	shapes,
 	textFieldStyle,
 	tint,
 	type ViewModifier,
@@ -92,18 +94,21 @@ export function ElicitationAction({ label, primary, disabled, width, onPress }: 
 	const { scheme } = useThemeState();
 	const fit = useActionFit(label);
 	const button = (cap: number | undefined, extra: ViewModifier[], press?: () => void) => <Button
-		label={label}
 		onPress={press}
 		modifiers={[
 			buttonStyle(primary ? "borderedProminent" : "plain"),
-			controlSize("regular"),
+			// The large prominent button is at least the 44pt target. A plain one is
+			// only as tappable as its label, so the label carries the target.
+			controlSize(primary ? "large" : "regular"),
 			...(cap !== undefined ? [frame({ width: cap })] : width ? [frame({ minWidth: width })] : []),
 			multilineTextAlignment("center"),
 			tint(primary ? t.accent : t.textSecondary),
 			disabledModifier(disabled),
 			...extra,
 		]}
-	/>;
+	>
+		<Text modifiers={primary ? [] : [frame({ minWidth: touchTarget, minHeight: touchTarget }), contentShape(shapes.rectangle())]}>{label}</Text>
+	</Button>;
 	// The button takes its label's own width, so a long decision is never cut
 	// short, and wraps only when that is wider than the row. `width` reserves a
 	// slot the button may outgrow.

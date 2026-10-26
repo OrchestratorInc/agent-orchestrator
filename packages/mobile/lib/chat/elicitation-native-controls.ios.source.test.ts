@@ -42,4 +42,9 @@ describe("iOS elicitation controls", () => {
 		expect(source).not.toContain("resolvedWidth");
 		expect(source).not.toContain("label.length");
 	});
+
+	it("gives every action at least the 44pt target", () => {
+		expect(source).toContain('controlSize(primary ? "large" : "regular")');
+		expect(source).toContain("frame({ minWidth: touchTarget, minHeight: touchTarget }), contentShape(shapes.rectangle())");
+	});
 });
