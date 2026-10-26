@@ -45,7 +45,6 @@ import { sheetCornerRadius } from "../lib/tokens";
 // what an action sheet needs. iOS keeps both detents: UIKit's sheet dismisses
 // from the lower one with an ordinary swipe.
 const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitToContents"; androidDetents?: readonly [number] }[] = [
-	{ name: "sheets/project", detents: [0.5, 0.95] },
 	{ name: "sheets/agent", detents: [0.5, 0.95] },
 	{ name: "sheets/model", detents: [0.5, 0.95] },
 	{ name: "sheets/chat-settings", detents: [0.5, 0.95] },

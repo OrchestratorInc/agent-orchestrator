@@ -41,10 +41,11 @@ describe("Interface affordances", () => {
 	});
 
 	describe("selection and disclosure carry state", () => {
-		it("marks the active project on the project picker's rows", () => {
-			const sheet = source("./ProjectPickerSheet.tsx");
-			expect(sheet).toContain("accessibilityState={{ selected }}");
-			expect(sheet).toContain('accessibilityRole="button"');
+		// The system menu checks the chosen project, and the trigger names it.
+		it("marks the active project in the project picker", () => {
+			const switcher = source("./ProjectSwitcher.tsx");
+			expect(switcher).toContain('state: action.id === applied ? "on" : "off"');
+			expect(switcher).toContain("accessibilityLabel: `Project, ${label}`");
 		});
 
 		it("marks every collapsible row in the timeline as expandable", () => {

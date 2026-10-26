@@ -47,7 +47,6 @@ const sheetRoutes = [
 	"sheets/conversation-usage.tsx",
 	"sheets/machine-name.tsx",
 	"sheets/model.tsx",
-	"sheets/project.tsx",
 	"sheets/review-actions.tsx",
 	"files/[sessionId]/review.tsx",
 ];
