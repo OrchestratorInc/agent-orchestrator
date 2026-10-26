@@ -6,15 +6,17 @@ import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { settingsQueryKey } from "./useSettings";
 import { useUiStore } from "../stores/ui-store";
 
-const { createCloudClientMock, deleteSessionMock, postMock, remotePostMock } = vi.hoisted(() => ({
+const { createCloudClientMock, deleteSessionMock, getMock, postMock, remotePostMock } = vi.hoisted(() => ({
 	createCloudClientMock: vi.fn(),
 	deleteSessionMock: vi.fn(),
+	getMock: vi.fn(),
 	postMock: vi.fn(),
 	remotePostMock: vi.fn(),
 }));
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: postMock },
+	apiClient: { POST: postMock, GET: getMock },
+	hasTrustedApiBaseUrl: () => true,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
@@ -28,7 +30,7 @@ vi.mock("../lib/host-clients", () => ({
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 
 import { useTerminateSession, useTerminateSessionState } from "./useTerminateSession";
-import { remoteWorkspaceQueryKey, workspaceQueryKey } from "./useWorkspaceQuery";
+import { remoteWorkspaceQueryKey, workspaceQueryKey, workspaceQueryOptions } from "./useWorkspaceQuery";
 
 const localSession: WorkspaceSession = {
 	id: "session-1",
@@ -76,6 +78,7 @@ function newQueryClient() {
 }
 
 beforeEach(() => {
+	getMock.mockReset();
 	createCloudClientMock.mockReset();
 	deleteSessionMock.mockReset().mockResolvedValue({ session: { id: "session-1", desiredState: "deleted" } });
 	createCloudClientMock.mockReturnValue({ deleteSession: deleteSessionMock });
@@ -267,6 +270,31 @@ describe("useTerminateSession", () => {
 			resolveKill?.();
 		});
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+	});
+
+	it("rolls back a failed kill after two structurally unchanged real workspace reads", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/projects"
+			? { data: { projects: [{ id: "proj-1", name: "my-app", kind: "single_repo", path: "/repos/my-app" }] } }
+			: { data: { sessions: [{ id: session.id, projectId: "proj-1", harness: "codex", status: "working", isTerminated: false, activity: session.activity, prs: [] }] } });
+		await queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		const snapshot = queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)!;
+		await queryClient.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		expect(queryClient.getQueryData(workspaceQueryKey)).toBe(snapshot);
+		let failKill!: () => void;
+		postMock.mockImplementation(() => new Promise((resolve) => {
+			failKill = () => resolve({ error: { message: "nope" }, response: { status: 500 } });
+		}));
+		const { result, unmount } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		act(() => result.current.mutate(snapshot[0].sessions[0]));
+		await waitFor(() => expect(queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(true));
+		await act(async () => failKill());
+		await waitFor(() => expect(result.current.isError).toBe(true));
+		expect(queryClient.getQueryData(workspaceQueryKey)).toEqual(snapshot);
+		expect(queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(false);
+		expect(getMock).toHaveBeenCalledTimes(4); // Rollback requires no rescue poll.
+		unmount();
+		queryClient.clear();
 	});
 
 	it("leaves the board untouched when the kill fails", async () => {

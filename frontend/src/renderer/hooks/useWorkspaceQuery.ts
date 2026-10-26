@@ -461,6 +461,9 @@ export const workspaceQueryOptions = {
 	structuralSharing: (oldData: unknown, newData: unknown) => {
 		const list = Array.isArray(newData) ? workspaceListReads.get(newData) : undefined;
 		if (!list) return replaceEqualDeep(oldData, newData);
+		// The tag belongs to this network commit, not to the cached array's
+		// lifetime: later explicit writes may restore it as a mutation rollback.
+		workspaceListReads.delete(newData as WorkspaceSummary[]);
 		const reads = readsFor(list.client);
 		if (list.version < reads.listVersion) return oldData;
 		reads.listVersion = list.version;
