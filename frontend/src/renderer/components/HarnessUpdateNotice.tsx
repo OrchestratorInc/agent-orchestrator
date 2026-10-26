@@ -486,13 +486,13 @@ function VersionChange({ from, to }: { from: string; to: string }) {
 // A notice nobody is looking at or working with leaves on its own, which
 // quiets its harnesses like a swipe or × (see QUIET_MS).
 const AUTO_HIDE_MS = 10_000;
-// Longer than the list's and a closing row's height transitions (200ms, 180ms).
+// Longer than the list's, a closing row's and the top-bar slide's transitions (200ms, 180ms, 200ms).
 const MOTION_SETTLE_MS = 260;
 const UPDATED_MS = 4_000;
 
-/** The notice's frame in the top-right corner of the framed center panel,
- * below the tallest top bar a panel can have, so it is the same place on every
- * page and never covers a page's own actions. A fixed box that tracks the panel
+/** The notice's frame in the top-right corner of the framed center panel, just
+ * below the page's top bar when it has one, so it never covers a page's own
+ * actions and slides, rather than jumps, between pages. A fixed box that tracks the panel
  * clips it, so a swipe slides it out under the panel's edge instead of over the
  * window frame.
  *
@@ -519,8 +519,8 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 	useLayoutEffect(() => {
 		const element = frameRef.current;
 		if (!element) return;
-		// While a height transition runs (the list opening, a row closing) the
-		// size changes every frame; measuring then would re-render every reader
+		// While a height or position transition runs (the list opening, a row
+		// closing, the notice following a top bar) the rect changes every frame; measuring then would re-render every reader
 		// of the rect each frame, so it measures once the motion has settled.
 		let settle: number | undefined;
 		const measure = () => {
@@ -530,7 +530,7 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 			setBox((current) => (current && next && current.left === next.left && current.top === next.top && current.right === next.right && current.bottom === next.bottom ? current : next));
 		};
 		const onTransition = (event: TransitionEvent) => {
-			if (event.propertyName !== "height") return;
+			if (event.propertyName !== "height" && event.propertyName !== "translate") return;
 			window.clearTimeout(settle);
 			settle = window.setTimeout(() => {
 				settle = undefined;
@@ -582,14 +582,16 @@ function NoticeFrame({ label, holdOpen, onAutoHide, children }: {
 		style={{ left: area.left, top: area.top, width: area.right - area.left, height: area.bottom - area.top, borderRadius: panel?.radius }}>
 		<aside ref={frameRef} role="region" aria-label={label} inert={covered} aria-hidden={covered || undefined}
 			// Its own compositor layer: the card's height animation repaints only the card.
-			className={cn("harness-update-notice pointer-events-auto absolute top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))] right-3 w-[min(320px,calc(100%-24px))] text-card-foreground will-change-transform",
+			// Below the page's top bar when it has one, sliding to match as pages
+			// change; `translate` stays clear of the enter and exit transforms.
+			className={cn("harness-update-notice pointer-events-auto absolute top-3 right-3 w-[min(320px,calc(100%-24px))] text-card-foreground will-change-transform transition-[translate] duration-200 ease-out motion-reduce:transition-none",
 				covered && "invisible", leaving ? "toast-exit" : "toast-enter")}
 			onPointerEnter={() => setEngaged(true)}
 			onPointerLeave={(event) => setEngaged(event.currentTarget.contains(document.activeElement))}
 			onFocus={() => setEngaged(true)}
 			onBlur={(event) => setEngaged(event.currentTarget.contains(event.relatedTarget as Node | null) || event.currentTarget.matches(":hover"))}
 			// The window's drag region would otherwise swallow the notice's clicks.
-			style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
+			style={{ WebkitAppRegion: "no-drag", translate: `0 ${panel?.topInset ?? 0}px` } as CSSProperties}>
 			{children}
 		</aside>
 	</div>;

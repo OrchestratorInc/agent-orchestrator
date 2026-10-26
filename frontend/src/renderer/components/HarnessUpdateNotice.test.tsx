@@ -76,7 +76,7 @@ describe("startup harness update notice", () => {
 		mountNotice();
 		const notice = await screen.findByRole("region", { name: "Agent updates available" });
 		expect(notice).not.toHaveAttribute("data-browser-native-overlay");
-		expect(notice).toHaveClass("absolute", "right-3", "top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))]");
+		expect(notice).toHaveClass("absolute", "top-3", "right-3");
 	});
 
 	it("publishes the corner it covers while shown, so session content can keep clear of it", async () => {
@@ -130,14 +130,39 @@ describe("startup harness update notice", () => {
 				await waitFor(() => {
 					const notice = screen.queryByRole("region", { name: "Agent updates available" });
 					if (!visible) { expect(notice).toBeNull(); return; }
-					expect(notice, `browser ${rect.left},${rect.top},${rect.right},${rect.bottom}`).toHaveClass("absolute", "right-3", "top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))]");
+					expect(notice, `browser ${rect.left},${rect.top},${rect.right},${rect.bottom}`).toHaveClass("absolute", "top-3", "right-3");
 					expect(notice).not.toHaveAttribute("data-browser-native-overlay");
 				});
 			}
 			await act(async () => { browser.remove(); });
-			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("absolute", "right-3", "top-[calc(max(var(--size-toolbar),var(--size-session-topbar))+var(--space-3))]"));
+			await waitFor(() => expect(screen.getByRole("region", { name: "Agent updates available" })).toHaveClass("absolute", "top-3", "right-3"));
 		} finally {
 			browser.remove();
+		}
+	});
+
+	it("slides below a top bar laid across the panel's top edge, and back up when it goes", async () => {
+		const originalRect = HTMLElement.prototype.getBoundingClientRect;
+		vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (this.classList.contains("center-panel-surface")) return new DOMRect(260, 6, 1054, 848);
+			if (this.classList.contains("workspace-topbar-container")) return new DOMRect(260, 6, 1054, 38);
+			return originalRect.call(this);
+		});
+		const panel = document.createElement("div");
+		panel.className = "center-panel-surface";
+		const bar = document.createElement("div");
+		bar.className = "workspace-topbar-container";
+		document.body.append(panel);
+		try {
+			mountNotice();
+			const notice = await screen.findByRole("region", { name: "Agent updates available" });
+			await waitFor(() => expect(notice.style.translate).toBe("0 0px"));
+			await act(async () => { panel.append(bar); });
+			await waitFor(() => expect(notice.style.translate).toBe("0 38px"));
+			await act(async () => { bar.remove(); });
+			await waitFor(() => expect(notice.style.translate).toBe("0 0px"));
+		} finally {
+			panel.remove();
 		}
 	});
 
