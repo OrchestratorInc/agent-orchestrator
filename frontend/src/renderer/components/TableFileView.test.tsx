@@ -16,6 +16,14 @@ describe("TableFileView", () => {
 		expect(column(1)).toEqual(["1,000", "999", "5", "1.5", "1.10", "-5", ""]);
 	});
 
+	it("does not read a comma decimal as a thousands-separated number", async () => {
+		render(<TableFileView content={"name,ratio\na,\"1,5\"\nb,2\nc,\"1,25\"\n"} path="ratios.csv" />);
+		expect(screen.getByRole("columnheader", { name: "ratio" })).not.toHaveClass("text-right");
+		await userEvent.click(screen.getByRole("button", { name: "ratio" }));
+		// Sorted as text, so `1,5` is not treated as 15 and placed after `2`.
+		expect(column(1).indexOf("1,5")).toBeLessThan(column(1).indexOf("2"));
+	});
+
 	it("sorts a text column with natural ordering", async () => {
 		render(<TableFileView content={"file\nitem10\nItem2\nitem1\n"} path="files.csv" />);
 		await userEvent.click(screen.getByRole("button", { name: "file" }));

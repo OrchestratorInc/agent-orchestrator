@@ -9,7 +9,9 @@ import { PanelMessage } from "./WorkspaceDiffView";
 type Sort = { column: number; direction: "ascending" | "descending" };
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-const NUMBER = /^-?[\d,]*\.?\d+(?:e[+-]?\d+)?%?$/i;
+// A comma is accepted only as a thousands separator (`1,000`), so a locale
+// decimal like `1,5` is not read as a number.
+const NUMBER = /^-?(?=\.?\d)(?:\d{1,3}(?:,\d{3})+|\d*)(?:\.\d+)?(?:e[+-]?\d+)?%?$/i;
 
 /** A numeric cell's value without thousands separators or a percent sign. */
 function cellNumber(cell: string): number {
