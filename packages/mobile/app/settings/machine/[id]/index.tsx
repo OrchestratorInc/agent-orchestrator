@@ -1,5 +1,5 @@
 import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 import { forgetEnvironmentMachine } from "../../../../lib/environmentActions";
 import { postEnvironmentNotice } from "../../../../lib/environmentNotice";
@@ -49,6 +49,14 @@ export default function MachineDetailScreen() {
 	const edit = useCallback(() => {
 		router.push({ pathname: "/settings/machine/[id]/edit", params: { id } });
 	}, [id, router]);
+
+	// Titled for the machine. Memoized on the name, so a fleet poll that
+	// re-renders the page doesn't set the header's options again.
+	const machineName = host?.name;
+	const titleScreen = useMemo(
+		() => machineName === undefined ? null : <Stack.Screen options={{ title: machineName }} />,
+		[machineName],
+	);
 
 	if (host === undefined) {
 		return <View style={[styles.screen, styles.center, { backgroundColor: t.bgBase }]}><Spinner size="large" accessibilityLabel="Loading machine" /></View>;
@@ -114,7 +122,7 @@ export default function MachineDetailScreen() {
 
 	return (
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]}>
-			<Stack.Screen options={{ title: machine.name }} />
+			{titleScreen}
 			<MachineDetail
 				host={machine}
 				activeConfig={snapshot?.config ?? configForHost(machine.id) ?? undefined}

@@ -95,7 +95,7 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions]) mock.mockReset();
+	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions, ...Object.values(fixtures.haptics)]) mock.mockReset();
 	fixtures.focused.current = true;
 	fixtures.loadHosts.mockResolvedValue([a, b]);
 	fixtures.activeHost.mockResolvedValue(b);
@@ -135,6 +135,15 @@ describe("a machine's page on iOS", () => {
 		expect(edit.props).toMatchObject({ accessibilityLabel: "Edit Studio Mac", children: "Edit" });
 		act(() => edit.props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/settings/machine/[id]/edit", params: { id: "a" } });
+	});
+
+	// Each new options object sets the header again, and the page re-renders on
+	// every fleet poll.
+	it("keeps the title's options across re-renders", async () => {
+		await open();
+		const options = renderer!.root.findByType("StackScreen" as never).props.options;
+		await act(async () => byTestID("environment-make-default-a").props.onPress());
+		expect(renderer!.root.findByType("StackScreen" as never).props.options).toBe(options);
 	});
 
 	it("shows the status in words, the active route and the other routes in a disclosure group", async () => {
