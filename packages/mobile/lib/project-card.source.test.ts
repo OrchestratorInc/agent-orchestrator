@@ -44,6 +44,13 @@ describe("project page", () => {
 		expect(card).toContain("styles.stats");
 	});
 
+	// The header is hidden, but a session opened from here lists the project in
+	// its back-history menu by the route's title.
+	it("gives its route the project's name", () => {
+		expect(page).toContain('const title = row?.project.name ?? "Project";');
+		expect(page).toContain("navigation.setOptions({ title })");
+	});
+
 	// Reuses the board rather than copying it, so the two cannot drift.
 	it("lists workers with the Workers board, archive included", () => {
 		expect(page).toContain("<WorkerBoardList");

@@ -5,6 +5,7 @@ import { Geist_500Medium } from "@expo-google-fonts/geist/500Medium";
 import { Geist_600SemiBold } from "@expo-google-fonts/geist/600SemiBold";
 import { GeistMono_400Regular } from "@expo-google-fonts/geist-mono/400Regular";
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider as NavigationThemeProvider } from "expo-router";
+import { getFocusedRouteNameFromRoute } from "expo-router/react-navigation";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
@@ -19,6 +20,7 @@ import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { LayoutGrid } from "../lib/layoutGrid";
+import { boardTitle } from "../lib/sidebar-navigation";
 import { stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { symbolFonts } from "../lib/symbolFonts";
@@ -184,7 +186,14 @@ function Shell() {
 			    native layer instead. */}
 			<NavigationThemeProvider value={navigationTheme}>
 			<Stack screenOptions={stackScreenOptions(t)}>
-				<Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+				{/* A hidden header still needs a title: iOS lists the pages under the
+				    current one by title in the back button's long-press menu, and an
+				    untitled route shows up there as its file name. The board goes by
+				    the tab it is showing. */}
+				<Stack.Screen
+					name="(tabs)"
+					options={({ route }) => ({ headerShown: false, title: boardTitle(getFocusedRouteNameFromRoute(route)) })}
+				/>
 				<Stack.Screen
 					name="settings"
 					options={{
@@ -233,17 +242,12 @@ function Shell() {
 						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgSurface : "transparent" },
 					}}
 				/>
-				{/* Reachable from Settings and from the board's bell, so naming either one
-				    in the back label would be wrong half the time. "minimal" drops the
-				    label entirely and leaves the bare chevron. */}
-				<Stack.Screen
-					name="notifications"
-					options={{
-						headerShown: false,
-					}}
-				/>
-				{/* Draws its own header, like notifications, so the title can be the project. */}
-				<Stack.Screen name="project/[id]" options={{ headerShown: false }} />
+				{/* Draws its own header. The title is for the back-history menu, like the
+				    board's. */}
+				<Stack.Screen name="notifications" options={{ headerShown: false, title: "Notifications" }} />
+				{/* Draws its own header, like notifications, so the title can be the
+				    project. The page renames itself to the project once it loads. */}
+				<Stack.Screen name="project/[id]" options={{ headerShown: false, title: "Project" }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
 				<Stack.Screen name="pair" options={{ presentation: "modal", headerShown: false }} />
 

@@ -13,6 +13,10 @@ vi.mock("expo-router", async () => {
 	const Stack = Object.assign(({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Stack", props, children), { Screen: "StackScreen" });
 	return { Stack, ThemeProvider: "NavigationThemeProvider", DarkTheme: { colors: {} }, DefaultTheme: { colors: {} } };
 });
+vi.mock("expo-router/react-navigation", () => ({
+	getFocusedRouteNameFromRoute: (route: { state?: { index?: number; routes: { name: string }[] } }) =>
+		route.state?.routes[route.state.index ?? 0]?.name,
+}));
 vi.mock("@expo-google-fonts/geist/400Regular", () => ({ Geist_400Regular: 1 }));
 vi.mock("@expo-google-fonts/geist/500Medium", () => ({ Geist_500Medium: 2 }));
 vi.mock("@expo-google-fonts/geist/600SemiBold", () => ({ Geist_600SemiBold: 3 }));
@@ -102,6 +106,29 @@ describe("root stack", () => {
 				expect(sheet.props.options.sheetCornerRadius).toBeUndefined();
 				expect(sheet.props.options.sheetAllowedDetents).toBeDefined();
 			}
+		} finally {
+			act(() => renderer.unmount());
+		}
+	});
+
+	// iOS lists the pages under the current one by title in the back button's
+	// long-press menu. A route that hides its header still lands there, and
+	// without a title it shows as its file name: "(tabs)", "project/[id]".
+	it("names every page that hides its header", async () => {
+		const renderer = await renderRoot("ios");
+		try {
+			const options = (name: string, route: object = { name }) => {
+				const value = renderer.root.findByProps({ name }).props.options;
+				return typeof value === "function" ? value({ route }) : value;
+			};
+			const board = (index: number) => ({ name: "(tabs)", state: { index, routes: [{ name: "index" }, { name: "projects" }, { name: "prs" }] } });
+			expect(options("(tabs)").title).toBe("Workers");
+			expect(options("(tabs)", board(0)).title).toBe("Workers");
+			expect(options("(tabs)", board(1)).title).toBe("Projects");
+			expect(options("(tabs)", board(2)).title).toBe("Pull Requests");
+			expect(options("(tabs)").headerShown).toBe(false);
+			expect(options("notifications")).toMatchObject({ headerShown: false, title: "Notifications" });
+			expect(options("project/[id]")).toMatchObject({ headerShown: false, title: "Project" });
 		} finally {
 			act(() => renderer.unmount());
 		}

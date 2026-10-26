@@ -8,6 +8,7 @@ vi.mock("expo-router", async () => {
 	const Stack = Object.assign(({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Stack", props, children), { Screen: "StackScreen" });
 	return { Stack, ThemeProvider: "NavigationThemeProvider", DarkTheme: { colors: {} }, DefaultTheme: { colors: {} } };
 });
+vi.mock("expo-router/react-navigation", () => ({ getFocusedRouteNameFromRoute: () => undefined }));
 vi.mock("@expo-google-fonts/geist/400Regular", () => ({ Geist_400Regular: 1 }));
 vi.mock("@expo-google-fonts/geist/500Medium", () => ({ Geist_500Medium: 2 }));
 vi.mock("@expo-google-fonts/geist/600SemiBold", () => ({ Geist_600SemiBold: 3 }));

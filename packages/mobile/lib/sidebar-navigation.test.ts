@@ -4,6 +4,7 @@ import type { DashboardSession } from "./api";
 import { hostedSessionKey, type HostedSession } from "./hostedRows";
 import {
 	activeSidebarDestination,
+	boardTitle,
 	sidebarDestinationBadge,
 	RECENT_WORKERS_LABEL,
 	scrollSidebarRefToTop,
@@ -93,6 +94,15 @@ describe("sidebar navigation", () => {
 		["/settings", "settings"],
 	])("selects the matching destination for %s", (pathname, expected) => {
 		expect(activeSidebarDestination(pathname)).toBe(expected);
+	});
+
+	it.each([
+		[undefined, "Workers"],
+		["index", "Workers"],
+		["projects", "Projects"],
+		["prs", "Pull Requests"],
+	])("names the board after its %s tab", (tab, expected) => {
+		expect(boardTitle(tab)).toBe(expected);
 	});
 
 	it("keeps the previous primary destination selected while settings is presented", () => {

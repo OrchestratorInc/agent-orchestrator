@@ -1,5 +1,5 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
@@ -35,6 +35,7 @@ function ProjectScreenContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
 	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive } = useApp();
@@ -50,6 +51,10 @@ function ProjectScreenContent() {
 			: undefined,
 		[projects, sessions, orchestrators, id, hostMatches],
 	);
+	const title = row?.project.name ?? "Project";
+	// The header below is the page's own, but a page opened from here lists this
+	// one in its back-history menu by the route's title.
+	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
 	const projectSessions = useMemo(() => hostMatches ? projectDetailSessions(id ?? "", sessions) : [], [hostMatches, id, sessions]);
 	// The archive is counted, not listed, by a machine that pages it.
 	const pagedArchived = hostMatches && id ? archive?.byProject[id] ?? 0 : 0;
@@ -82,7 +87,7 @@ function ProjectScreenContent() {
 		<View style={styles.screen}>
 			<View style={{ height: insets.top }} />
 			<ScreenHeader
-				title={row?.project.name ?? "Project"}
+				title={title}
 				left={
 					<HeaderIconButton
 						icon="back"
