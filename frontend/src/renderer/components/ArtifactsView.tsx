@@ -344,15 +344,16 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 
 	return (
 		<li className="group relative min-w-0 rounded-md bg-card">
+			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
+				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
+			</span>
 			<button
 				type="button"
 				className="block w-full overflow-hidden rounded-md text-left transition-none hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
 				onClick={open}
 				title={`${row.sessionTitle} · ${row.path}`}
 			>
-				<span className="relative block aspect-[16/9] overflow-hidden border-b border-border bg-[var(--solid-muted,var(--muted))]">
-					<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
-				</span>
+				<span className="relative block aspect-[16/9] border-b border-border bg-[var(--solid-muted,var(--muted))]" />
 				<span className="block space-y-1 px-3 py-2.5">
 					<span className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">
 						{row.generating ? (
@@ -367,7 +368,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 					</span>
 				</span>
 			</button>
-			<div className="absolute right-2 top-2 flex items-center gap-1">
+			<div className="absolute right-2 top-2 z-[2] flex items-center gap-1">
 				<ArtifactActionsMenu
 					artifact={row}
 					session={{ id: row.sessionId, cloud: row.cloud }}
