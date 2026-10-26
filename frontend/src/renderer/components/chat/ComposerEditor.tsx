@@ -447,13 +447,14 @@ const EditorBridge = forwardRef<
 		disabled?: boolean;
 		promptSuggestion?: ComposerPromptSuggestion;
 		onDismissSuggestion: () => void;
+		onEmptyChange: (empty: boolean) => void;
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
 		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
->(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, onChange, onComplete, onEnter }, ref) {
+>(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, onEmptyChange, attachedImages, onChange, onComplete, onEnter }, ref) {
 	const [editor] = useLexicalComposerContext();
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
@@ -513,16 +514,15 @@ const EditorBridge = forwardRef<
 	);
 
 	useLayoutEffect(() => {
-		const dismissIfNotEmpty = () => {
-			if (promptSuggestion && $serializeComposer().length > 0) onDismissSuggestion();
-		};
-		editor.getEditorState().read(dismissIfNotEmpty);
+		// Draft edits only hide the hint; accepting it or pressing Escape dismisses it.
+		const updateEmpty = () => onEmptyChange($serializeComposer().length === 0);
+		editor.getEditorState().read(updateEmpty);
 		return editor.registerUpdateListener(({ editorState, tags }) => {
-			editorState.read(dismissIfNotEmpty);
+			editorState.read(updateEmpty);
 			if (tags.has(PROGRAMMATIC_TEXT_UPDATE_TAG)) return;
 			editorState.read(() => onChange(editorSnapshot()));
 		});
-	}, [editor, onChange, onDismissSuggestion, promptSuggestion]);
+	}, [editor, onChange, onEmptyChange]);
 
 	useEffect(() => {
 		const complete = (event: globalThis.KeyboardEvent | null, key: "Enter" | "Tab") => {
@@ -665,7 +665,8 @@ export const ComposerEditor = forwardRef<
 	const { t } = useTranslation();
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
-	const suggestion = !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
+	const [empty, setEmpty] = useState(true);
+	const suggestion = empty && !disabled && !concealed && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -753,6 +754,7 @@ export const ComposerEditor = forwardRef<
 					disabled={disabled}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}
+					onEmptyChange={setEmpty}
 					attachedImages={attachedImages}
 					onChange={onChange}
 					onComplete={onComplete}
