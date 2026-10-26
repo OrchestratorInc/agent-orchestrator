@@ -862,6 +862,8 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					{
 						params: { path: { sessionId: targetSessionId } },
 						body: settings,
+						// Later picks wait behind this one, so it must not hang forever.
+						signal: AbortSignal.timeout(CONFIG_OPTION_WRITE_TIMEOUT_MS),
 					},
 				);
 				if (error) throw error;
@@ -1473,6 +1475,12 @@ export function useConversationModels(sessionId: string | undefined, enabled: bo
  * the effort choices, for example). The daemon therefore returns the complete
  * catalog after every mutation and that response replaces the cache atomically.
  */
+function offersValue(options: ChatConfigOption[], optionId: string, value: ChatConfigOptionValue): boolean {
+	const option = options.find((candidate) => candidate.id === optionId);
+	if (!option) return false;
+	return !("value" in value) || option.type !== "select" || option.choices.some((choice) => choice.value === value.value);
+}
+
 export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "", hostId);
@@ -1483,7 +1491,15 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 	const [writing, setWriting] = useState(false);
 	// Picks can overlap while one is being saved: each is written after the one before
 	// it, and only the newest one's answer replaces the catalog.
-	const writes = useRef({ queue: Promise.resolve() as Promise<unknown>, latest: 0, open: 0 });
+	const writes = useRef({
+		queue: Promise.resolve() as Promise<unknown>,
+		latest: 0,
+		open: 0,
+		// Writes still in flight per option, so a failed one is only undone when no later pick replaced it.
+		pendingByOption: new Map<string, number>(),
+		// The catalog the agent last returned, which a queued pick is checked against before it is sent.
+		confirmed: undefined as ChatConfigOption[] | undefined,
+	});
 	const query = useQuery({
 		queryKey,
 		enabled: Boolean(sessionId) && enabled,
@@ -1510,6 +1526,7 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		// The picked value shows at once; the agent's (possibly slow) reply brings what depends on it.
 		onMutate: async ({ optionId, value }) => {
 			writes.current.open += 1;
+			writes.current.pendingByOption.set(optionId, (writes.current.pendingByOption.get(optionId) ?? 0) + 1);
 			setWriting(true);
 			await queryClient.cancelQueries({ queryKey });
 			const previous = queryClient.getQueryData<ChatConfigOption[]>(queryKey);
@@ -1517,16 +1534,27 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 				: "value" in value ? { ...option, currentValue: value.value } : { ...option, currentBoolean: value.enabled }));
 			return { previous, write: ++writes.current.latest, controllerEpoch: conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId)) };
 		},
-		onError: (_error, _variables, context) => {
+		onError: (_error, { optionId }, context) => {
 			// A switch since the pick replaced the list; the old agent's must not come back.
 			if (!context?.previous || context.controllerEpoch !== conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId))) return;
-			// A later pick is still being saved, so its value stays; the poll corrects the rest.
-			if (context.write !== writes.current.latest) return;
-			queryClient.setQueryData(queryKey, context.previous);
+			if (context.write === writes.current.latest) {
+				queryClient.setQueryData(queryKey, writes.current.confirmed ?? context.previous);
+				return;
+			}
+			// Later picks are still being saved: undo only this option, unless one of them set it again.
+			if ((writes.current.pendingByOption.get(optionId) ?? 0) > 1) return;
+			const before = context.previous.find((option) => option.id === optionId);
+			if (before) queryClient.setQueryData<ChatConfigOption[]>(queryKey, (current) => current?.map((option) => option.id === optionId ? before : option));
 		},
-		onSettled: () => {
+		onSettled: (_data, _error, { optionId }) => {
 			writes.current.open -= 1;
-			if (writes.current.open === 0) setWriting(false);
+			const left = (writes.current.pendingByOption.get(optionId) ?? 1) - 1;
+			if (left > 0) writes.current.pendingByOption.set(optionId, left);
+			else writes.current.pendingByOption.delete(optionId);
+			if (writes.current.open === 0) {
+				writes.current.confirmed = undefined;
+				setWriting(false);
+			}
 		},
 		mutationFn: async ({
 			optionId,
@@ -1550,6 +1578,11 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 
 	async function writeConfigOption(optionId: string, value: ChatConfigOptionValue) {
 		const controllerEpoch = conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId));
+		// A pick made while an earlier one was saving was chosen from the old catalog. If the
+		// agent's answer to that earlier pick dropped the option or this value (a new model
+		// with other efforts), sending it would only be refused, so it is dropped instead.
+		const confirmed = writes.current.confirmed;
+		if (confirmed && !offersValue(confirmed, optionId, value)) return { controllerEpoch, options: confirmed };
 		// A read already in flight when the user picked would otherwise land
 		// after this mutation's setQueryData and put the pre-change catalog
 		// back, reverting the picker to the old value until the next poll.
@@ -1569,10 +1602,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			},
 		);
 		if (error) throw error;
-		return {
-			controllerEpoch,
-			options: (data?.options ?? []) as ChatConfigOption[],
-		};
+		const options = (data?.options ?? []) as ChatConfigOption[];
+		writes.current.confirmed = options;
+		return { controllerEpoch, options };
 	}
 
 	return {

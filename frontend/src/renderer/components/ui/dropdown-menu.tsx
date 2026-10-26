@@ -1,7 +1,8 @@
+import { useContext } from "react";
 import { Check, ChevronRight } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
-import { composeMenuCloseAutoFocus, skipFocusHopToSibling, useMenuReturnTarget } from "./menu-focus";
+import { composeMenuCloseAutoFocus, ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter, useMenuReturnTarget } from "./menu-focus";
 import {
 	actionMenuContentClass,
 	actionMenuItemClass,
@@ -12,10 +13,15 @@ import {
 /**
  * Not modal by default. A modal menu locks scrolling (a stylesheet added and removed)
  * and turns off pointer events on <body>; either restyles every element on the page
- * when the menu opens and again when it closes.
+ * when the menu opens and again when it closes. Unless `modal` is passed, an outside
+ * click still only closes the menu, as a modal one's would.
  */
-export function DropdownMenu({ modal = false, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-	return <DropdownMenuPrimitive.Root modal={modal} {...props} />;
+export function DropdownMenu({ modal, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+	return (
+		<ShieldOutsideClick.Provider value={modal === undefined}>
+			<DropdownMenuPrimitive.Root modal={modal ?? false} {...props} />
+		</ShieldOutsideClick.Provider>
+	);
 }
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const DropdownMenuGroup = DropdownMenuPrimitive.Group;
@@ -26,16 +32,22 @@ export function DropdownMenuContent({
 	onCloseAutoFocus,
 	portalContainer,
 	sideOffset = 6,
+	onPointerDownOutside,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
 	portalContainer?: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>["container"];
 }) {
 	const rememberReturnTarget = useMenuReturnTarget<HTMLDivElement>();
+	const shield = useContext(ShieldOutsideClick);
 	return (
 		<DropdownMenuPrimitive.Portal container={portalContainer}>
 			<DropdownMenuPrimitive.Content
 				ref={rememberReturnTarget}
 				onCloseAutoFocus={composeMenuCloseAutoFocus(onCloseAutoFocus)}
+				onPointerDownOutside={(event) => {
+					onPointerDownOutside?.(event);
+					if (shield) swallowClickAfter(event);
+				}}
 				sideOffset={sideOffset}
 				className={cn(
 					actionMenuContentClass,

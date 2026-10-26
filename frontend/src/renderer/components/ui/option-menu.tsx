@@ -1,8 +1,8 @@
-import { forwardRef, useCallback, useRef, type ButtonHTMLAttributes } from "react";
+import { forwardRef, useCallback, useContext, useRef, type ButtonHTMLAttributes } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
-import { skipFocusHopToSibling } from "./menu-focus";
+import { ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter } from "./menu-focus";
 
 const SURFACE =
 	"settings-menu-surface min-w-[14rem] rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)";
@@ -31,10 +31,15 @@ const TRIGGER = cn("group/option-menu-trigger", MENU_TRIGGER_CHROME);
 /**
  * Not modal by default. A modal menu locks scrolling (a stylesheet added and removed)
  * and turns off pointer events on <body>; either restyles every element on the page
- * when the menu opens and again when it closes.
+ * when the menu opens and again when it closes. Unless `modal` is passed, an outside
+ * click still only closes the menu, as a modal one's would.
  */
-export function OptionMenu({ modal = false, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
-	return <DropdownMenuPrimitive.Root modal={modal} {...props} />;
+export function OptionMenu({ modal, ...props }: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+	return (
+		<ShieldOutsideClick.Provider value={modal === undefined}>
+			<DropdownMenuPrimitive.Root modal={modal ?? false} {...props} />
+		</ShieldOutsideClick.Provider>
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +74,7 @@ export function OptionMenuContent({
 	sideOffset = 6,
 	steady,
 	children,
+	onPointerDownOutside,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
 	/**
@@ -78,10 +84,15 @@ export function OptionMenuContent({
 	steady?: boolean;
 }) {
 	const steadyRef = useSteadyHeight(steady);
+	const shield = useContext(ShieldOutsideClick);
 	return (
 		<DropdownMenuPrimitive.Portal>
 			<DropdownMenuPrimitive.Content
 				ref={steadyRef}
+				onPointerDownOutside={(event) => {
+					onPointerDownOutside?.(event);
+					if (shield) swallowClickAfter(event);
+				}}
 				data-browser-native-overlay="true"
 				sideOffset={sideOffset}
 				collisionPadding={16}
@@ -101,23 +112,35 @@ export function OptionMenuContent({
 }
 
 /**
- * Shrinks the panel from the bottom. The height it loses becomes a bottom margin,
- * which the positioned wrapper still counts, so the top edge and every row stay
- * put; the space sits outside the panel, between it and the trigger.
+ * Shrinks the panel from the bottom while the pointer is on it. The height it loses
+ * becomes a bottom margin, which the positioned wrapper still counts, so the top edge
+ * and every row stay put; the space sits outside the panel, between it and the
+ * trigger. Once the pointer leaves for anywhere but a submenu, the panel settles
+ * back onto its trigger.
  */
 function useSteadyHeight(enabled: boolean | undefined) {
-	const observer = useRef<ResizeObserver | null>(null);
+	const cleanup = useRef<(() => void) | null>(null);
 	return useCallback((node: HTMLDivElement | null) => {
-		observer.current?.disconnect();
-		observer.current = null;
+		cleanup.current?.();
+		cleanup.current = null;
 		if (!node || !enabled) return;
 		let tallest = 0;
-		observer.current = new ResizeObserver(() => {
+		const observer = new ResizeObserver(() => {
 			const height = node.offsetHeight;
 			tallest = Math.max(tallest, height);
 			node.style.marginBottom = tallest > height ? `${tallest - height}px` : "";
 		});
-		observer.current.observe(node);
+		const settle = (event: PointerEvent) => {
+			if (event.relatedTarget instanceof Element && event.relatedTarget.closest('[role="menu"]')) return;
+			tallest = node.offsetHeight;
+			node.style.marginBottom = "";
+		};
+		observer.observe(node);
+		node.addEventListener("pointerleave", settle);
+		cleanup.current = () => {
+			observer.disconnect();
+			node.removeEventListener("pointerleave", settle);
+		};
 	}, [enabled]);
 }
 
