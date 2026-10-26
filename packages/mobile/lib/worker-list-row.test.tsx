@@ -314,7 +314,8 @@ describe("worker board haptics", () => {
 });
 
 // An inline rename has no Save or Cancel buttons: Return or leaving the field
-// commits, as a list's own rename does, and Escape or Android's back cancels.
+// commits, as a list's own rename does, and Android's back or VoiceOver's
+// escape scrub cancels.
 describe("renaming a worker in place", () => {
 	const flush = async () => { await act(async () => { await Promise.resolve(); }); };
 	function renaming(onRename = vi.fn(async (_title: string) => {})) {
@@ -371,10 +372,11 @@ describe("renaming a worker in place", () => {
 		}
 	});
 
-	it("cancels on Escape and on Android's back, without saving", () => {
+	it("cancels on VoiceOver's escape and on Android's back, without saving", () => {
 		const viaEscape = renaming();
 		act(() => viaEscape.field().props.onChangeText("Ship the board"));
-		act(() => viaEscape.field().props.onKeyPress({ nativeEvent: { key: "Escape" } }));
+		act(() => viaEscape.field().props.onAccessibilityEscape());
+		// The blur from the keyboard going away must not save after all.
 		act(() => viaEscape.field().props.onBlur());
 		expect(viaEscape.onRename).not.toHaveBeenCalled();
 		expect(viaEscape.onRenameCancel).toHaveBeenCalledTimes(1);

@@ -111,7 +111,7 @@ export const WorkerListRow = memo(
 		onRenameCancel();
 	}, [onRenameCancel]);
 	// An inline rename commits the way each platform's own lists do: Return, or
-	// leaving the field. Escape and Android's back cancel.
+	// leaving the field. Android's back and VoiceOver's escape scrub cancel.
 	const commitRename = useCallback(async () => {
 		if (renameSettled.current) return;
 		renameSettled.current = true;
@@ -348,10 +348,6 @@ function WorkerRowContents({
 						returnKeyType="done"
 						onSubmitEditing={onRenameCommit}
 						onBlur={onRenameCommit}
-						onKeyPress={(event) => {
-							// A hardware keyboard's Escape backs out, as it does in a list's own rename.
-							if (event.nativeEvent.key === "Escape") onRenameCancel?.();
-						}}
 						style={styles.renameInput}
 					/>
 					{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
