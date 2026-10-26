@@ -74,6 +74,22 @@ type PaletteView =
 	| { mode: "file-session-picker"; projectId: string }
 	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" };
 
+/**
+ * Whether two search keys differ only in their query text, so an answer for
+ * the previous key belongs to the same host, org and session.
+ */
+function sameSearchTarget(previous: readonly unknown[] | undefined, current: readonly unknown[], query: string): boolean {
+	if (!previous || previous.length !== current.length) return false;
+	const queryAt = current.lastIndexOf(query);
+	return queryAt >= 0 && previous.every((part, index) => index === queryAt || part === current[index]);
+}
+
+/** Keys cmdk moves the selection with: arrows, Home/End and its Ctrl+N/J/P/K. */
+function isRowNavigationKey(event: { key: string; ctrlKey: boolean }): boolean {
+	return ["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)
+		|| (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key));
+}
+
 export function CommandPalette() {
 	const { i18n, t } = useTranslation();
 	const enabled = useCommandPaletteEnabled();
@@ -106,7 +122,12 @@ export function CommandPalette() {
 	const [createProjectFlowMounted, setCreateProjectFlowMounted] = useState(false);
 	const [createProjectFlowOpenSignal, setCreateProjectFlowOpenSignal] = useState(0);
 	const [createProjectFlowPendingOpen, setCreateProjectFlowPendingOpen] = useState(false);
-	const pendingRef = useRef(false);
+	// The action that holds the palette, so a finished older one can't release a
+	// newer one that is still running.
+	const pendingRef = useRef<symbol | null>(null);
+	// cmdk picks the first row by itself whenever the query changes; only a key
+	// press or pointer move counts as the user choosing one.
+	const userPickRef = useRef(false);
 	const runGenerationRef = useRef(0);
 	const viewRef = useRef(view);
 	viewRef.current = view;
@@ -172,22 +193,25 @@ export function CommandPalette() {
 	});
 	// Each search keeps its last answer on screen until the next one lands, so
 	// typing never blanks the rows the user is reading. File answers are kept
-	// only for the same session: another session's paths would open in this one.
-	const keepSameSession = activeFileTarget?.sessionId;
+	// only for the same target (host, org and session): another target's paths
+	// would open in this one.
 	const fileSearchQuery = useQuery<CommandPaletteFileSearchResponse>({
 		...fileSearchOptions,
 		enabled: fileSearchEnabled,
-		placeholderData: (previous, previousQuery) => keepSameSession && previousQuery?.queryKey.includes(keepSameSession) ? previous : undefined,
+		placeholderData: (previous, previousQuery) =>
+			sameSearchTarget(previousQuery?.queryKey, fileSearchOptions.queryKey, normalizedFileQuery) ? previous : undefined,
 	});
 	// File contents (this session's daemon) and chats (this machine) are searched
 	// beside file names; Cloud sessions have no daemon to search their contents.
 	const searchQueryReady = isOpen && normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS;
 	const contentTarget = activeFileTarget && !activeFileTarget.cloudOrgId ? activeFileTarget : undefined;
 	const contentSearchEnabled = searchQueryReady && (view.mode === "root" || view.mode === "file-search") && Boolean(contentTarget);
+	const contentSearchOptions = commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError"));
 	const contentSearchQuery = useQuery({
-		...commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError")),
+		...contentSearchOptions,
 		enabled: contentSearchEnabled,
-		placeholderData: (previous, previousQuery) => keepSameSession && previousQuery?.queryKey.includes(keepSameSession) ? previous : undefined,
+		placeholderData: (previous, previousQuery) =>
+			sameSearchTarget(previousQuery?.queryKey, contentSearchOptions.queryKey, normalizedFileQuery) ? previous : undefined,
 	});
 	const chatSearchEnabled = searchQueryReady && view.mode === "root";
 	const chatSearchQuery = useQuery({
@@ -344,6 +368,16 @@ export function CommandPalette() {
 		|| contentSearchQuery.isPlaceholderData
 		|| chatSearchQuery.isPlaceholderData;
 	const autoSelectable = (item: CommandItemModel) => !item.disabled && !(searchStale && isSearchGroup(item.group));
+	const autoSelectableRef = useRef(autoSelectable);
+	autoSelectableRef.current = autoSelectable;
+	const visibleItemsRef = useRef(visibleItems);
+	visibleItemsRef.current = visibleItems;
+	// A stale search row cmdk picked on its own must not become Enter's target.
+	const handleValueChange = useCallback((next: string) => {
+		const item = visibleItemsRef.current.find((candidate) => candidate.id === next);
+		if (item && !userPickRef.current && !autoSelectableRef.current(item)) return;
+		setSelectedValue(next);
+	}, []);
 	const value =
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
 			? selectedValue
@@ -364,7 +398,7 @@ export function CommandPalette() {
 		runGenerationRef.current += 1;
 		// An action still running belongs to the closed palette; the next open
 		// must not have its rows blocked by it.
-		pendingRef.current = false;
+		pendingRef.current = null;
 		setPendingId(null);
 		setOpen(false);
 		setView({ mode: "root" });
@@ -580,7 +614,8 @@ export function CommandPalette() {
 			const action = item.action;
 			if (!action) return;
 			setError(null);
-			pendingRef.current = true;
+			const owner = Symbol(item.id);
+			pendingRef.current = owner;
 			setPendingId(item.id);
 			const generation = runGenerationRef.current;
 			const isCurrentRun = () => runGenerationRef.current === generation;
@@ -709,8 +744,10 @@ export function CommandPalette() {
 			} catch (err) {
 				if (isCurrentRun()) setError(err instanceof Error ? err.message : t("command.failed"));
 			} finally {
-				pendingRef.current = false;
-				setPendingId(null);
+				if (pendingRef.current === owner) {
+					pendingRef.current = null;
+					setPendingId(null);
+				}
 			}
 		},
 		[findLocalChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
@@ -860,7 +897,13 @@ export function CommandPalette() {
 				commandProps={{
 					shouldFilter: false,
 					value,
-					onValueChange: setSelectedValue,
+					onValueChange: handleValueChange,
+					onKeyDownCapture: (event) => {
+						if (isRowNavigationKey(event)) userPickRef.current = true;
+					},
+					onPointerMoveCapture: () => {
+						userPickRef.current = true;
+					},
 					loop: true,
 					label: contextLabel || t("command.palette"),
 				}}
@@ -873,6 +916,7 @@ export function CommandPalette() {
 								setQuery(next);
 								setError(null);
 								// A new query picks its own first row.
+								userPickRef.current = false;
 								setSelectedValue("");
 							}}
 							leading={backButton}

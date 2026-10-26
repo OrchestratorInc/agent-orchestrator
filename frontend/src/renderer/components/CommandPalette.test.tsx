@@ -322,6 +322,66 @@ describe("CommandPalette workspace file search", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
+	it("does not open an earlier query's file when Enter lands before the next answer", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockImplementation(async (path: string, init: { params: { query: { query: string } } }) => {
+			if (path.endsWith("/workspace/search")) {
+				if (init.params.query.query === "zqx1") return { data: { query: "zqx1", results: [{ path: "src/zqx1.ts" }], truncated: false } };
+				return new Promise(() => {});
+			}
+			if (path.endsWith("/workspace/search/content")) return { data: { results: [] } };
+			if (path === "/api/v1/conversations/search") return { data: { results: [] } };
+			return { data: {} };
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "zqx1" } });
+		await screen.findByText(rowTitle("zqx1.ts"), {}, { timeout: 2_000 });
+
+		fireEvent.change(input, { target: { value: "zqx2" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		// Past the debounce, the next search is in flight and the old row still shows.
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
+			expect.stringContaining("/workspace/search"),
+			expect.objectContaining({ params: expect.objectContaining({ query: { query: "zqx2", limit: 20 } }) }),
+		));
+		expect(screen.getByText(rowTitle("zqx1.ts"))).toBeInTheDocument();
+		fireEvent.keyDown(input, { key: "Enter" });
+
+		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+	});
+
+	it("does not show another host's file results for the same session id", async () => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		getMock.mockImplementation(async (path: string, init: { params: { query: { query: string } } }) => {
+			if (path.endsWith("/workspace/search")) {
+				if (init.params.query.query === "zqx1") return { data: { query: "zqx1", results: [{ path: "src/local-only.ts" }], truncated: false } };
+				return new Promise(() => {});
+			}
+			if (path.endsWith("/workspace/search/content")) return { data: { results: [] } };
+			if (path === "/api/v1/conversations/search") return { data: { results: [] } };
+			return { data: {} };
+		});
+		const { rerenderPalette } = renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "zqx1" } });
+		await screen.findByText(rowTitle("local-only.ts"), {}, { timeout: 2_000 });
+
+		// The same session id, now on a remote host.
+		ctx.workspaces[0].hostId = "host-a";
+		for (const session of ctx.workspaces[0].sessions) session.hostId = "host-a";
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix", hostId: "host-a" };
+		rerenderPalette();
+		fireEvent.change(input, { target: { value: "zqx2" } });
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
+			expect.stringContaining("/workspace/search"),
+			expect.objectContaining({ params: expect.objectContaining({ query: { query: "zqx2", limit: 20 } }) }),
+		));
+		expect(screen.queryByText(rowTitle("local-only.ts"))).not.toBeInTheDocument();
+	});
+
 	it("asks for a worktree on a project page before searching", async () => {
 		ctx.params = { projectId: "proj-1" };
 		renderPalette();
@@ -803,6 +863,30 @@ describe("CommandPalette actions", () => {
 		fireEvent.click(item);
 		fireEvent.click(item);
 		expect(spawnMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps a newer action locked when an older one finishes after a reopen", async () => {
+		ctx.params = { projectId: "proj-2" };
+		let finishFirst: (value: string) => void = () => {};
+		spawnMock
+			.mockReturnValueOnce(new Promise<string>((resolve) => {
+				finishFirst = resolve;
+			}))
+			.mockReturnValueOnce(new Promise<string>(() => {}));
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
+		pressEscape();
+		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
+
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
+		await act(async () => finishFirst("orch-1"));
+		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
+
+		expect(spawnMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("keeps the palette open and shows an error when spawning an orchestrator fails", async () => {
