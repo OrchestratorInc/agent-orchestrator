@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
+import { useUiStore } from "../../stores/ui-store";
 import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -948,5 +949,52 @@ describe("ChatMarkdown streaming fade", () => {
 			</ChatLinkProvider>,
 		);
 		expect(screen.getByRole("link")).toHaveTextContent("docs");
+	});
+});
+
+describe("ChatMarkdown math", () => {
+	afterEach(() => useUiStore.setState({ renderMath: false }));
+
+	it("leaves dollar signs as text while the setting is off", () => {
+		const { container } = render(<ChatMarkdown text="Costs $5 and $10, or $x^2$." />);
+		expect(container).toHaveTextContent("Costs $5 and $10, or $x^2$.");
+		expect(container.querySelector("[data-math]")).toBeNull();
+	});
+
+	it("typesets inline and display formulas in every delimiter when on", async () => {
+		useUiStore.setState({ renderMath: true });
+		const { container } = render(
+			<ChatMarkdown text={"Euler $e^{i\\pi}+1=0$ and \\(x^2\\).\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$"} />,
+		);
+		await waitFor(() => expect(container.querySelectorAll('[data-math="inline"] .katex')).toHaveLength(2));
+		expect(container.querySelectorAll('[data-math="display"] .katex-display')).toHaveLength(2);
+		expect(container).not.toHaveTextContent("\\(");
+	});
+
+	it("typesets a ```math fence without the setting", async () => {
+		const { container } = render(<ChatMarkdown text={"```math\na^2+b^2=c^2\n```"} />);
+		await waitFor(() => expect(container.querySelector('[data-math="display"] .katex-display')).not.toBeNull());
+		expect(container.querySelector("pre")).toBeNull();
+	});
+
+	it("copies a selected formula as its TeX, not its glyphs", async () => {
+		useUiStore.setState({ renderMath: true });
+		const { container } = render(<ChatMarkdown text={"Area $\\pi r^2$ here."} />);
+		await waitFor(() => expect(container.querySelector(".katex")).not.toBeNull());
+		const selection = window.getSelection()!;
+		selection.selectAllChildren(container);
+		const copied = new Map<string, string>();
+		const event = new Event("copy", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", { value: { setData: (type: string, value: string) => copied.set(type, value) } });
+		container.dispatchEvent(event);
+		expect(copied.get("text/plain")).toBe("Area $\\pi r^2$ here.");
+	});
+
+	it("shows the TeX source when KaTeX cannot parse it", async () => {
+		useUiStore.setState({ renderMath: true });
+		const { container } = render(<ChatMarkdown text={"Try $\\notacommand{x}$ and $y$."} />);
+		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
+		expect(container.querySelectorAll('[data-math="inline"] .katex')).toHaveLength(1);
+		expect(container).toHaveTextContent("$\\notacommand{x}$");
 	});
 });

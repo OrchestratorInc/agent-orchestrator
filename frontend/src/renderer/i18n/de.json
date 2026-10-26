@@ -1410,6 +1410,8 @@
 	"settings.navigation": "Navigation",
 	"settings.navigationGestures": "Navigationsgesten",
 	"settings.navigationGesturesHint": "Mit zwei Fingern horizontal wischen, um zurück oder vorwärts zu navigieren.",
+	"settings.renderMath": "Mathematik darstellen",
+	"settings.renderMathHint": "$…$, $$…$$, \\(…\\) und \\[…\\] in Chats und Markdown-Vorschauen als Formeln anzeigen. Ein Preis mit $ kann als Formel erscheinen.",
 	"settings.terminalCopyOnSelect": "Bei Auswahl kopieren",
 	"settings.general": "Allgemein",
 	"settings.appearance": "Erscheinungsbild",

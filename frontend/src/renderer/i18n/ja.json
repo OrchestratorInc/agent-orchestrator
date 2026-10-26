@@ -1410,6 +1410,8 @@
 	"settings.navigation": "ナビゲーション",
 	"settings.navigationGestures": "ナビゲーションジェスチャー",
 	"settings.navigationGesturesHint": "2本指で左右にスワイプして、前後に移動します。",
+	"settings.renderMath": "数式を表示",
+	"settings.renderMathHint": "チャットと Markdown プレビューで $…$、$$…$$、\\(…\\)、\\[…\\] を数式として表示します。$ を使った価格が数式として表示されることがあります。",
 	"settings.terminalCopyOnSelect": "選択時にコピー",
 	"settings.general": "一般",
 	"settings.appearance": "外観",

@@ -1392,6 +1392,8 @@
 	"settings.navigation": "导航",
 	"settings.navigationGestures": "导航手势",
 	"settings.navigationGesturesHint": "用双指水平滑动来后退或前进。",
+	"settings.renderMath": "渲染数学公式",
+	"settings.renderMathHint": "在聊天和 Markdown 预览中将 $…$、$$…$$、\\(…\\) 和 \\[…\\] 显示为公式。用 $ 书写的价格可能会显示为公式。",
 	"settings.terminalCopyOnSelect": "选中即复制",
 	"settings.general": "通用",
 	"settings.appearance": "外观",

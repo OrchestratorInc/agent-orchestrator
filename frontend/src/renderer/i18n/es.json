@@ -1436,6 +1436,8 @@
 	"settings.navigation": "Navegación",
 	"settings.navigationGestures": "Gestos de navegación",
 	"settings.navigationGesturesHint": "Desliza horizontalmente con dos dedos para ir hacia atrás o hacia delante.",
+	"settings.renderMath": "Mostrar fórmulas",
+	"settings.renderMathHint": "Muestra $…$, $$…$$, \\(…\\) y \\[…\\] como ecuaciones en chats y vistas previas de Markdown. Un precio escrito con $ puede mostrarse como fórmula.",
 	"settings.terminalCopyOnSelect": "Copiar al seleccionar",
 	"settings.general": "General",
 	"settings.appearance": "Apariencia",
