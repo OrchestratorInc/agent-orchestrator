@@ -85,6 +85,7 @@ import {
 } from "./shared/daemon-startup-status";
 import { toggleAppDevTools } from "./main/app-devtools";
 import { attachAppShortcuts } from "./main/app-shortcuts";
+import { relayScrollPhases } from "./main/scroll-phase";
 import {
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	OPEN_SETTINGS_SHORTCUT_CHANNEL,
@@ -121,7 +122,13 @@ import {
 	resolveDaemonFromPort,
 	resolveDaemonFromRunFile,
 } from "./shared/daemon-attach";
-import { browserDaemonOwnershipDecision, portHolderPidToReplace } from "./shared/daemon-takeover";
+import {
+	browserDaemonOwnershipDecision,
+	browserRuntimeRecoveryDecision,
+	keepAliveForReplacement,
+	portHolderPidToReplace,
+	shouldReplaceDaemonForStartup,
+} from "./shared/daemon-takeover";
 import {
 	buildDaemonEnv,
 	devDaemonAllowedOrigins,
@@ -182,6 +189,7 @@ import {
 	connectBrowserRuntime,
 	type BrowserRuntimeLinkHandle,
 } from "./main/browser-runtime-link";
+import { resolveBrowserRuntimeToken } from "./main/browser-runtime-token";
 import { checkRender, measureRender } from "./main/render-check";
 import {
 	connectBrowserStream,
@@ -299,7 +307,8 @@ const ANALYTICS_OPT_OUT_CHANGED_CHANNEL = "telemetry:analyticsOptOutChanged";
 const telemetryIdentity = new TelemetryIdentityController(
 	desktopDataDir,
 	() => (daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null),
-	(url, init) => net.fetch(url, init),
+	// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
+	(url, init) => fetch(url, init),
 	(optedOut) => {
 		for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(ANALYTICS_OPT_OUT_CHANGED_CHANNEL, optedOut);
 	},
@@ -364,7 +373,8 @@ let daemonStartEpoch = 0;
 let daemonStatus: DaemonStatus = { state: "stopped" };
 const awakeDownloads = createAwakeDownloadBridge({
  baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
- request: (url, init) => net.fetch(url, init),
+ // Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
+ request: (url, init) => fetch(url, init),
 });
 app.once("will-quit", () => awakeDownloads.dispose());
 
@@ -420,6 +430,11 @@ const quitConfirm = createQuitConfirmController({
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
+// One adopted-daemon replacement per launch; see handleBrowserRuntimeRejection.
+let browserRuntimeRecoveryAttempted = false;
+// Set when a recovery asks for a replacement and cleared once we own the daemon,
+// so an ordinary later startup is not forced to retire it. See startDaemon.
+let forceReplaceAdoptedRequested = false;
 let browserStreamLink: BrowserStreamLinkHandle | null = null;
 let browserStreamLinkIdentity: BrowserRuntimeIdentity | null = null;
 let keybindingOverrides: KeybindingOverrides = {};
@@ -882,6 +897,7 @@ async function createWindowInternal(): Promise<void> {
 	const shellWebContents = getShellWebContents();
 	if (!shellWebContents) throw new Error("AO shell WebContents was not created");
 	trustedShellWebContents.set(shellWebContents.id, shellWebContents);
+	relayScrollPhases(shellWebContents);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
 		quitConfirm.reset();
@@ -1260,7 +1276,8 @@ async function fetchDesktopSessionPath(
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
 	try {
-		const response = await net.fetch(
+		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
+		const response = await fetch(
 			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/${route}`,
 			{ signal: controller.signal },
 		).catch((error: unknown) => {
@@ -1467,7 +1484,22 @@ if (process.platform !== "win32") {
 // (including supervisor restarts) reports the same run. An explicit
 // AO_APP_RUN_ID in the environment wins, which lets a test or a wrapper pin it.
 const appRunId = process.env.AO_APP_RUN_ID ?? `apprun-${randomUUID()}`;
-const browserRuntimeToken = randomBytes(32).toString("base64url");
+// The browser runtime token identifies this app to the daemon's runtime broker.
+// It is derived from an owner-only key in the data dir so it survives an app
+// restart: a daemon kept alive by AO_KEEP_DAEMON (or adopted under a pinned
+// AO_APP_RUN_ID) outlives the launch that spawned it, and a per-launch token left
+// that daemon permanently unable to authenticate this app. Falls back to a
+// per-launch token when the key cannot be persisted, which restores the old
+// behavior — the daemon is replaced instead of adopted — rather than failing to
+// start.
+const browserRuntimeToken = (() => {
+	try {
+		return resolveBrowserRuntimeToken(desktopDataDir);
+	} catch (error) {
+		console.warn(`AO: browser runtime key unavailable (${String(error)}); using a per-launch token`);
+		return randomBytes(32).toString("base64url");
+	}
+})();
 let stagedBundledTmuxBinary: string | null = null;
 
 async function ensureBundledTmuxStaged(): Promise<void> {
@@ -1520,7 +1552,9 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
             : path.join(app.getAppPath(), "wake-helper", "ao-wake") } : {}),
 		// The browser runtime token is handed over through the child's private
 		// stdin pipe below. Never put it in the daemon environment, where a
-		// same-UID worker could inspect the parent process.
+		// same-UID worker could inspect the parent process, and never in argv.
+		// It is derived from an owner-only key in the data dir so an app restart
+		// can still authenticate a kept-alive daemon it adopts.
 		AO_BROWSER_RUNTIME_TOKEN: "",
 		AO_BROWSER_RUNTIME_TOKEN_STDIN: "1",
 		// Under AppImage, APPIMAGE is the stable outer .AppImage file path (the
@@ -1582,7 +1616,8 @@ async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz"): Pr
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
 	try {
-		const response = await net.fetch(`http://127.0.0.1:${port}/${endpoint}`, { signal: controller.signal });
+		// Electron net.fetch adds browser metadata without Origin, which the daemon rejects.
+		const response = await fetch(`http://127.0.0.1:${port}/${endpoint}`, { signal: controller.signal });
 		if (!response.ok) return null;
 		return parseDaemonProbe(endpoint, await response.json());
 	} catch {
@@ -1709,8 +1744,33 @@ function establishBrowserRuntimeLink(): void {
 		},
 		log: (message) => console.log(`AO: ${message}`),
 		onStateChange: publishBrowserRuntimeState,
+		onHandshakeRejected: handleBrowserRuntimeRejection,
 	});
 	browserRuntimeLinkIdentity = identity;
+}
+
+/**
+ * A daemon we only adopted holds the runtime token of the launch that started it,
+ * so an `invalid-token` refusal is permanent for this launch: retrying cannot
+ * help, and the browser panel stays unusable. Retire that daemon and start our
+ * own, which is handed the current token. Bounded to one attempt per launch by
+ * browserRuntimeRecoveryDecision.
+ */
+function handleBrowserRuntimeRejection(reason: string): void {
+	const decision = browserRuntimeRecoveryDecision({
+		rejectedReason: reason,
+		spawnedHere: daemonProcess !== null,
+		attempted: browserRuntimeRecoveryAttempted,
+	});
+	if (decision.action === "wait") return;
+	browserRuntimeRecoveryAttempted = true;
+	console.warn(`AO: replacing an adopted daemon that refused this app's browser runtime (${decision.reason})`);
+	disposeBrowserRuntimeLink();
+	setDaemonStatus({
+		state: "starting",
+		message: "Restarting the AO daemon to restore the browser runtime.",
+	});
+	void startDaemon({ forceReplaceAdopted: true });
 }
 
 function disposeBrowserStreamLink(): void {
@@ -1866,7 +1926,15 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 	return daemonStatus;
 }
 
-async function startDaemon(): Promise<DaemonStatus> {
+async function startDaemon(options: { forceReplaceAdopted?: boolean } = {}): Promise<DaemonStatus> {
+	// Sticky, not a parameter of the in-flight call: the renderer's first
+	// daemon.getStatus() can attach while boot is still awaiting the shell
+	// environment, so a forced replacement requested in that window must be
+	// honored by the startup already running instead of being dropped by the
+	// memoized promise. startDaemonInner reads it at each attach decision.
+	if (options.forceReplaceAdopted) {
+		forceReplaceAdoptedRequested = true;
+	}
 	if (daemonStartPromise) {
 		return daemonStartPromise;
 	}
@@ -1988,10 +2056,13 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	}
 	if (existing) {
 		const ownership = browserDaemonOwnershipDecision(appRunId, existing);
-		if (ownership.action === "replace") {
+		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			try {
 				await gracefullyReplaceDaemonForBrowser(existing.status);
-				replacementKeepAlive = ownership.keepAlive;
+				replacementKeepAlive = keepAliveForReplacement({
+					ownership,
+					forceRequested: forceReplaceAdoptedRequested,
+				});
 			} catch (err) {
 				setDaemonStatus({
 					state: "error",
@@ -2052,10 +2123,13 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 			owner: portAttachOwner,
 			appRunId: portAttachAppRunId,
 		});
-		if (ownership.action === "replace") {
+		if (shouldReplaceDaemonForStartup({ ownership, forceRequested: forceReplaceAdoptedRequested })) {
 			try {
 				await gracefullyReplaceDaemonForBrowser(directDaemon);
-				replacementKeepAlive = ownership.keepAlive;
+				replacementKeepAlive = keepAliveForReplacement({
+					ownership,
+					forceRequested: forceReplaceAdoptedRequested,
+				});
 			} catch (err) {
 				setDaemonStatus({
 					state: "error",
@@ -2200,6 +2274,10 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// child so the parent does not wait on it. Port discovery then relies on the
 	// running.json handshake (the log pipe scan is skipped).
 	const keep = replacementKeepAlive ?? keepDaemonAlive(process.env);
+	// We are about to own the daemon and hand it this launch's runtime token, so
+	// any forced replacement has been honored and must not leak into a later
+	// startup in this process.
+	forceReplaceAdoptedRequested = false;
 	let keepDaemonLogFd: number | undefined;
 	let stdio: "pipe" | "ignore" | ["pipe", number | "ignore", number | "ignore"] = "pipe";
 	if (keep) {

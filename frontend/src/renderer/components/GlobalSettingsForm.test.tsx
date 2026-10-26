@@ -229,13 +229,26 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, navigationGestures: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
 describe("GlobalSettingsForm", () => {
+	it("offers navigation gestures off by default and saves the switch", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		const toggle = screen.getByRole("switch", { name: "Navigation gestures" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+		await user.click(toggle);
+		expect(toggle).toHaveAttribute("aria-checked", "true");
+		expect(useUiStore.getState().navigationGestures).toBe(true);
+		expect(window.localStorage.getItem("ao.navigationGestures")).toBe("true");
+		await user.click(toggle);
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+	});
+
 	it("keeps window transparency in Appearance when Developer Mode changes", async () => {
 		isMacPlatform.mockReturnValue(true);
 		const user = userEvent.setup();
@@ -347,7 +360,6 @@ describe("GlobalSettingsForm", () => {
 
 	it("keeps Remote hosts in its own page and persists the enable switch", async () => {
 		const user = userEvent.setup();
-		useUiStore.getState().setDeveloperMode(true);
 		renderForm("remoteHosts");
 		const remoteHosts = await screen.findByRole("switch", { name: "Connect to remote hosts" });
 		expect(remoteHosts).toHaveAttribute("aria-checked", "false");

@@ -95,6 +95,9 @@ type Config struct {
 	SandboxStartupTimeout time.Duration
 	// WorkerHeartbeatTimeout is how long a silent worker is tolerated.
 	WorkerHeartbeatTimeout time.Duration
+	// WorkerCheckInTimeout is how long a launched worker may take to check in
+	// before the reconciler relaunches it (see reconcile.Options).
+	WorkerCheckInTimeout time.Duration
 	// IdlePauseInterval is how often the idle-pause scanner runs.
 	IdlePauseInterval time.Duration
 	// IdlePauseThreshold is how long a session must be quiet, with no turn in
@@ -380,6 +383,7 @@ func Load() (Config, error) {
 		// DefaultStartupTimeout fallback), so it is the one that has to change.
 		SandboxStartupTimeout:  durationEnv("AO_CLOUD_SANDBOX_STARTUP_TIMEOUT", 6*time.Minute),
 		WorkerHeartbeatTimeout: durationEnv("AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT", time.Minute),
+		WorkerCheckInTimeout:   durationEnv("AO_CLOUD_WORKER_CHECKIN_TIMEOUT", 12*time.Minute),
 		IdlePauseInterval:      durationEnv("AO_CLOUD_IDLE_PAUSE_INTERVAL", defaultIdlePauseInterval),
 		IdlePauseThreshold:     durationEnv("AO_CLOUD_IDLE_PAUSE_THRESHOLD", defaultIdlePauseThreshold),
 		FreestyleIdlePauseThreshold: durationEnv(
@@ -680,6 +684,12 @@ func Load() (Config, error) {
 	}
 	if cfg.WorkerHeartbeatTimeout < 30*time.Second {
 		return Config{}, errors.New("AO_CLOUD_WORKER_HEARTBEAT_TIMEOUT must be at least 30s")
+	}
+	// A launched worker retries its own bootstrap for up to 8 minutes, inside
+	// the control plane's 10-minute retry window. Relaunching sooner would
+	// replace a worker that is still checking in.
+	if cfg.WorkerCheckInTimeout < 10*time.Minute {
+		return Config{}, errors.New("AO_CLOUD_WORKER_CHECKIN_TIMEOUT must be at least 10m")
 	}
 	if cfg.IdlePauseInterval <= 0 {
 		return Config{}, errors.New("AO_CLOUD_IDLE_PAUSE_INTERVAL must be positive")

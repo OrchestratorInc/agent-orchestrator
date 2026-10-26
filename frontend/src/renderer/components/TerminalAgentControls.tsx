@@ -1,4 +1,4 @@
-import { MoreHorizontal } from "lucide-react";
+import { MoreVertical } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useProviderSwitchCommand } from "../hooks/useConversation";
@@ -85,7 +85,7 @@ export function SessionTabMenu({
 					type="button"
 					variant="icon"
 				>
-					<MoreHorizontal aria-hidden="true" className="size-icon-md" />
+					<MoreVertical aria-hidden="true" className="size-icon-md" />
 				</TopbarButton>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-48">

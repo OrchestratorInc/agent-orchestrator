@@ -17,7 +17,7 @@ export function useHostConnection(hostId?: HostId) {
 }
 
 export function useConnectedHosts(): HostId[] {
-	const enabled = useUiStore((state) => state.developerMode && state.remoteHosts);
+	const enabled = useUiStore((state) => state.remoteHosts);
 	const hosts = useSyncExternalStore(subscribeConnectedHosts, connectedHosts, connectedHosts);
 	return enabled ? hosts : NO_HOSTS;
 }

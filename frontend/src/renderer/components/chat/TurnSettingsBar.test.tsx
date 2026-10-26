@@ -944,6 +944,23 @@ describe("remember project permissions", () => {
 		expect(screen.queryByRole("menuitemradio", { name: "Full access" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitemradio", { name: "Bypass permissions" })).not.toBeInTheDocument();
 	});
+	it("shows a mode the selected model cannot run as unavailable, and says which mode runs instead", async () => {
+		const user = userEvent.setup();
+		const onChange = vi.fn();
+		render(<TurnSettingsBar models={[]} harness="claude-code" settings={{ approvalMode: "accept-edits" }}
+			approvalModes={["default", "accept-edits", "bypass-permissions"]}
+			approvalModeLimits={{ model: "Haiku", unavailable: ["auto"], requested: "auto" }} onChange={onChange} />);
+		const trigger = screen.getByRole("button", { name: "Approval policy for the next turn" });
+		expect(trigger).toHaveTextContent("Accept edits");
+		await user.click(trigger);
+		expect(screen.getByRole("note")).toHaveTextContent("Auto-approve isn't available for Haiku; using Accept edits.");
+		const auto = screen.getByRole("menuitemradio", { name: /Auto-approve/ });
+		expect(auto).toHaveTextContent("Not available for Haiku");
+		expect(auto).toHaveAttribute("aria-disabled", "true");
+		await user.click(auto);
+		expect(onChange).not.toHaveBeenCalled();
+		expect(screen.getByRole("menuitemradio", { name: "Accept edits" })).toHaveAttribute("aria-checked", "true");
+	});
 	it("keeps choosing a session policy separate from remembering the confirmed policy", async () => {
 		const user = userEvent.setup();
 		const onChange = vi.fn();

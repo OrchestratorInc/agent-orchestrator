@@ -345,8 +345,11 @@ function NotificationsContent() {
 		return {
 			terminated: Boolean(session?.isTerminated || session?.status === "terminated"),
 			// Without the board we cannot tell a terminated session from a live one,
-			// and guessing lands on a screen that cannot resolve it.
-			sessionsReady: Boolean(host && !host.loading && host.sessions.length > 0),
+			// and guessing lands on a screen that cannot resolve it. A machine that
+			// pages its archive has answered once it reports the archive's size,
+			// even with no live workers. Its archived workers are not in `sessions`,
+			// so one of those offers Open, whose screen offers Restore.
+			sessionsReady: Boolean(host && !host.loading && (host.sessions.length > 0 || host.archive)),
 		};
 	}
 

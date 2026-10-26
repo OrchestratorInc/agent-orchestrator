@@ -491,6 +491,10 @@ type ConversationPlan struct {
 	// Explanation is the agent's note about the plan as a whole, when it gives one.
 	Explanation string                 `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStep `json:"steps"`
+	// SpansTurns marks a list the agent keeps across turns, such as Claude's task
+	// list, rather than one plan per turn. A turn ending says nothing about its
+	// steps, and the copy each later turn receives is the same list, not a new plan.
+	SpansTurns bool `json:"spansTurns,omitempty"`
 }
 
 // ConversationPlanStep is one step of a plan.

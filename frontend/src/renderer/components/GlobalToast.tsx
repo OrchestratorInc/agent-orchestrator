@@ -57,7 +57,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 		<section
 			aria-live={isError ? "assertive" : "polite"}
 			className={`${exiting ? "toast-exit" : "toast-enter"} pointer-events-auto flex items-start gap-3 rounded-welcome-panel px-3.5 py-3 text-xs shadow-[var(--shadow-import-modal)] ${
-				isError ? "border border-destructive/40 bg-destructive/10" : "border border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-modal)]"
+				isError ? "border border-destructive/40 bg-destructive/10" : "border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)]"
 			}`}
 			role={isError ? "alert" : "status"}
 			onMouseEnter={() => setPaused(true)}

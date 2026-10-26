@@ -114,6 +114,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		// existing - the true occurrence count of a burst - is silently
 		// stripped before it ever reaches PostHog.
 		"count":        {},
+		"day":          {},
 		"window_start": {},
 		"window_end":   {},
 	},
@@ -165,8 +166,8 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"created_runs": {},
 		"harness":      {},
 		"rerun":        {},
-		"reused":       {},
-		"trigger":      {},
+
+		"trigger": {},
 	},
 	"ao.review.trigger_failed": {
 		"error_kind": {},
@@ -627,6 +628,9 @@ func isAllowedCommandValue(key, value string) bool {
 		}
 		_, ok := remoteCommandTokens[value]
 		return ok
+	}
+	if key == "command_path" && value == "other" {
+		return true
 	}
 	if key != "command_path" || tokens[0] != "ao" {
 		return false
