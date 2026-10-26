@@ -1264,6 +1264,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const headerActions = useRef({ requestInterfaceSwitch, toggleBrowser, openFiles, confirmKill, zoom, fitWidth });
 	headerActions.current = { requestInterfaceSwitch, toggleBrowser, openFiles, confirmKill, zoom, fitWidth };
 	const chatSwitchBusy = rechecking || interfaceSwitch.starting;
+	// A machine picked but never paired: no terminal, and no notice row to say
+	// why an archive failed, so the menu stays out (see the early return below).
+	const unpaired = Boolean(activeConfig && !isConfigured(activeConfig));
 	const chatSwitchReady = Boolean(interfaceSwitch.status?.supported);
 	const grid = size ? `${size.cols} × ${size.rows}` : undefined;
 	const headerItems = useMemo(() => {
@@ -1273,7 +1276,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		const ios = Platform.OS === "ios";
 		// A dead session's way back is Restore, in the overlay; a dead shell can
 		// still be closed.
-		const canClose = shellOnly || !dead;
+		const canClose = !unpaired && (shellOnly || !dead);
 		const close = reviewerPane
 			? { label: "Stop reviewer", symbol: "stop.circle" as const }
 			: shellOnly
@@ -1285,10 +1288,10 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		const groups: ReactElement[][] = [];
 		// iOS heads the menu with the shared grid's size; an M3 menu has no title,
 		// so Android lists it as an inert first row.
-		if (grid && !ios && !dead) groups.push([<Stack.Toolbar.MenuAction key="grid" disabled>{`Grid ${grid}`}</Stack.Toolbar.MenuAction>]);
+		if (grid && !ios && !dead && !unpaired) groups.push([<Stack.Toolbar.MenuAction key="grid" disabled>{`Grid ${grid}`}</Stack.Toolbar.MenuAction>]);
 		// Zoom only the mobile viewport; the shared PTY grid stays unchanged.
 		// Pinch and double-tap zoom too.
-		if (!dead) {
+		if (!dead && !unpaired) {
 			groups.push([
 				<Stack.Toolbar.MenuAction key="smaller" icon={ios ? "textformat.size.smaller" : undefined} onPress={() => headerActions.current.zoom(-1)}>Smaller</Stack.Toolbar.MenuAction>,
 				<Stack.Toolbar.MenuAction key="larger" icon={ios ? "textformat.size.larger" : undefined} onPress={() => headerActions.current.zoom(1)}>Larger</Stack.Toolbar.MenuAction>,
@@ -1356,7 +1359,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				) : null}
 			</Stack.Toolbar>
 		);
-	}, [chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, styles, t]);
+	}, [chatSwitchBusy, chatSwitchReady, dead, grid, hasPreview, headerRightReady, interfaceTransitionActive, reviewerPane, shellOnly, styles, t, unpaired]);
 
 	const webViewOptions = useMemo(
 		() => ({
@@ -1377,7 +1380,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		[showNotice],
 	);
 
-	if (activeConfig && !isConfigured(activeConfig)) {
+	if (unpaired) {
 		return (
 			<View style={styles.center}>
 				{headerItems}

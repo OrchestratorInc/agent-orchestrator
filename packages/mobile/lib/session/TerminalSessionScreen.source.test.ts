@@ -38,6 +38,13 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).toContain('{status !== "open" && !dead ? (');
 	});
 
+	it("keeps the overflow menu off a screen with no paired machine", () => {
+		// Nothing there to zoom, and no notice row to explain a failed archive.
+		expect(screen).toContain("const canClose = !unpaired && (shellOnly || !dead);");
+		expect(screen).toContain("if (!dead && !unpaired) {");
+		expect(screen).toMatch(/if \(unpaired\) \{\s*return \(\s*<View style=\{styles\.center\}>\s*\{headerItems\}/);
+	});
+
 	it("raises messages as platform notices that tell failures from news", () => {
 		expect(screen).toContain("<TerminalNotice notice={notice} onDismiss={clearNotice} />");
 		expect(screen).toContain("<TerminalNoticeHost notice={notice} onDismiss={clearNotice} bottomOffset={rootPad + dockHeight + space.sm} />");
