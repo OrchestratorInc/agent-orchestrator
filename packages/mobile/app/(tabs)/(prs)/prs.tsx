@@ -154,6 +154,7 @@ export default function PRsScreen() {
 							hostId={session.hostId}
 							hostName={hostStates.length > 1 ? session.hostName : undefined}
 							summary={config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
+							onLinkCopied={linkCopied}
 						/>;
 					}}
 					ListEmptyComponent={

@@ -43,14 +43,14 @@ vi.mock("./sentry", () => ({}));
 vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all", refreshAll: vi.fn() }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: object) => object) => factory(fixture.theme) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
-vi.mock("./haptics", () => ({ haptics: { tap: vi.fn() } }));
+vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn() } }));
 vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("@expo/ui/community/menu", async () => {
 	const React = await import("react");
 	return { MenuView: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("MenuView", props, children) };
 });
-vi.mock("./Toast", () => ({ ToastHost: () => null }));
+vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
 vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
 vi.mock("./pr-filter-control", () => ({ PRFilterControl: "PRFilterControl" }));
 vi.mock("./ProjectSwitcher", () => ({ ProjectSwitcher: "ProjectSwitcher" }));
@@ -180,6 +180,15 @@ it("heads the list with the Open / Merged / All filter and its counts", () => {
 	expect(fixture.cardRenders.at(-1)).toContain("windows");
 	expect(list().props.contentContainerStyle).toEqual({ flexGrow: 1, paddingBottom: 24 });
 	expect(renderer!.root.findAllByType("PRFilterDock" as never)).toHaveLength(0);
+});
+
+// iOS has no system confirmation for a copy; the page shows one.
+it("confirms a copied pull-request link without redrawing the cards", () => {
+	act(() => { renderer = create(<PRsScreen />); });
+	fixture.cardRenders = [];
+	act(() => renderer!.root.findAllByType("MenuView" as never)[0].props.onPressAction({ nativeEvent: { event: "copyLink" } }));
+	expect(renderer!.root.findByType("ToastHost" as never).props.toast.current?.text).toBe("Link copied.");
+	expect(fixture.cardRenders).toEqual([]);
 });
 
 it("badges the Notifications header item with every machine's unread count", () => {
