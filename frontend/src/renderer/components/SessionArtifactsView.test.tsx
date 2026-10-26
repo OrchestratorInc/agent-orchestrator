@@ -421,6 +421,30 @@ describe("SessionArtifactsView", () => {
 		writeText.mockRestore();
 	});
 
+	it.each([
+		{ location: "local", hostId: undefined, cloud: false, path: "chart.png", separators: 1, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Delete artifact"] },
+		{ location: "remote", hostId: "remote-1", cloud: false, path: "chart.png", separators: 0, actions: ["Delete artifact"] },
+		{ location: "cloud", hostId: undefined, cloud: true, path: "chart.png", separators: 1, actions: ["Download", "Delete artifact"] },
+		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"] },
+		{ location: "remote", hostId: "remote-1", cloud: false, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Delete artifact"] },
+		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Download", "Delete artifact"] },
+	])("separates only populated action groups for $location $path", async ({ hostId, cloud, path, separators, actions }) => {
+		const artifact: SessionArtifact = { kind: "file", name: path, path, size: 2, updatedAt: "2026-09-24T00:00:00Z" };
+		const currentSession = { ...session([artifact]), ...(cloud ? { cloud: { orgId: "org-1" } } : {}) } as WorkspaceSession;
+		renderView(<SessionArtifactsView hostId={hostId} request={{ key: 1, path }} session={currentSession} />);
+
+		await userEvent.click(screen.getByRole("button", { name: path }));
+		const menu = screen.getByRole("menu");
+		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(actions);
+		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators);
+		const children = Array.from(menu.children);
+		expect(children[0]).not.toHaveAttribute("role", "separator");
+		expect(children.at(-1)).not.toHaveAttribute("role", "separator");
+		for (let index = 1; index < children.length; index += 1) {
+			if (children[index].getAttribute("role") === "separator") expect(children[index - 1]).not.toHaveAttribute("role", "separator");
+		}
+	});
+
 	it("copies the contents of any other artifact, and offers only that on a remote host", async () => {
 		const writeText = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
 		const other: SessionArtifact = { kind: "file", name: "data.json", path: "data.json", size: 2, updatedAt: "2026-09-24T00:00:00Z" };
