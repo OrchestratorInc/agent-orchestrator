@@ -11,6 +11,12 @@ type Sort = { column: number; direction: "ascending" | "descending" };
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const NUMBER = /^-?[\d,]*\.?\d+(?:e[+-]?\d+)?%?$/i;
 
+/** A numeric cell's value without thousands separators or a percent sign; null when empty. */
+function cellNumber(cell: string): number | null {
+	const trimmed = cell.trim();
+	return trimmed ? Number(trimmed.replace(/[,%]/g, "")) : null;
+}
+
 /**
  * A CSV or TSV file's rendered view: the first row is the header, and clicking
  * a header sorts by that column (ascending, descending, then file order).
@@ -33,8 +39,12 @@ export function TableFileView({ content, path }: { content: string; path: string
 	const sortedRows = useMemo(() => {
 		if (!sort) return rows;
 		const order = sort.direction === "ascending" ? 1 : -1;
-		return [...rows].sort((a, b) => order * collator.compare(a[sort.column], b[sort.column]));
-	}, [rows, sort]);
+		if (!numeric[sort.column]) return [...rows].sort((a, b) => order * collator.compare(a[sort.column], b[sort.column]));
+		// Numeric columns sort by value; empty cells stay last either way.
+		const keyed = rows.map((row) => ({ row, value: cellNumber(row[sort.column]) }));
+		keyed.sort((a, b) => a.value === null ? (b.value === null ? 0 : 1) : b.value === null ? -1 : order * (a.value - b.value));
+		return keyed.map(({ row }) => row);
+	}, [numeric, rows, sort]);
 
 	if (header.length === 0) return <PanelMessage>{t("files.emptyTable")}</PanelMessage>;
 	const toggleSort = (column: number) => setSort((current) =>
