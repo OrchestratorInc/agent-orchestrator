@@ -85,6 +85,21 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
+	"ao.usage.messages_sent": {
+		"project_telemetry_id": {},
+		"session_telemetry_id": {},
+		"count":                {},
+	},
+	"ao.usage.worker_pr_associated": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+	},
+	"ao.usage.worker_pr_merged": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+	},
 	// Reported by the LAN listener on the first authenticated request per
 	// transport per day (httpd/mobile_connect_telemetry.go). "transport" is a
 	// closed vocabulary — lan / tailscale / loopback / other — never an address.
@@ -666,6 +681,12 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 		if value == "" {
 			return nil, false
 		}
+		if key == "project_telemetry_id" && !uuidPattern.MatchString(value) {
+			return nil, false
+		}
+		if key == "session_telemetry_id" && !sessionTelemetryIDPattern.MatchString(value) {
+			return nil, false
+		}
 		if (key == "command" || key == "command_path") && !isAllowedCommandValue(key, value) {
 			return "sha256:" + sha256String(value)[:16], true
 		}
@@ -706,6 +727,9 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 		return nil, false
 	}
 }
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+var sessionTelemetryIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 // agentSlugPattern is the shape of a real adapter id (claude-code, codex, ...).
 // AO_AGENT is free text and cfg.Agent is only validated against the registry

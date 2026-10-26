@@ -5930,6 +5930,20 @@ func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (s
 	return sessionmanager.KillResult{Freed: freed}, err
 }
 
+func TestArchiveFlushesPendingUsageSummary(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st})
+	flushed := 0
+	svc.SetUsageArchiveFlush(func(context.Context) { flushed++ })
+	if _, err := svc.RequestKill(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if flushed != 1 {
+		t.Fatalf("usage flushes = %d, want 1 after archive", flushed)
+	}
+}
+
 func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}

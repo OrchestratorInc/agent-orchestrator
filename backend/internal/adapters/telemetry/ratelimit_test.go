@@ -57,6 +57,21 @@ func TestRateLimitedSinkLetsPreSummarizedNamesExceedTheMinuteCap(t *testing.T) {
 	}
 }
 
+func TestRateLimitedSinkKeepsDurableUsageSummariesBeyondGenericCaps(t *testing.T) {
+	s := NewRateLimitedSink(&recordingSink{}, nil)
+	s.SkipMinuteWindow("ao.usage.messages_sent")
+	s.SkipDailyWindow("ao.usage.messages_sent")
+	now := time.Now()
+	for i := 0; i < eventsPerNamePerDay+10; i++ {
+		if !s.reserve("ao.usage.messages_sent", now) {
+			t.Fatalf("usage summary %d was dropped", i)
+		}
+	}
+	if s.reserve("ao.http.5xx", now) == false {
+		t.Fatal("ordinary event cap changed")
+	}
+}
+
 func TestRateLimitedSinkCapsTotalPerDayEvenWhenPacedUnderBurstLimit(t *testing.T) {
 	s := NewRateLimitedSink(&recordingSink{}, nil)
 	start := time.Now()

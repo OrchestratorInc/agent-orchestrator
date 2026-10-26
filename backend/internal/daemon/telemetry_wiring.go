@@ -61,6 +61,8 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// CLI usage is already one event per command path and error kind. The
 	// minute cap would drop most of that daily burst. The day cap stays.
 	rateLimited.SkipMinuteWindow("ao.cli.usage_errors")
+	rateLimited.SkipMinuteWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged")
+	rateLimited.SkipDailyWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged")
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
 	// Keep the full local error stream. Remote HTTP 5xx is not sampled: the
 	// minute rollup and the rate limit already bound it. CLI usage is one

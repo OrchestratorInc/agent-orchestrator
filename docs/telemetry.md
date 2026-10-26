@@ -108,6 +108,48 @@ in plain text. These identifiers are distinct from the explicit GitHub account
 attribution on session-start events, but events that share an installation
 identifier can still be associated with that attribution in PostHog.
 
+## Usage counts by project
+
+The daemon sends three usage summaries when remote product telemetry is enabled:
+
+| Event | What is counted |
+| --- | --- |
+| `ao.usage.messages_sent` | New, direct human Chat messages accepted into a session. One count per accepted message. |
+| `ao.usage.worker_pr_associated` | A provider PR first associated with an AO worker session. This is not proof the worker created the PR. |
+| `ao.usage.worker_pr_merged` | An associated worker PR first observed as merged. |
+
+The project grouping value, `project_telemetry_id`, is a random UUID persisted
+locally for each project and installation. It is not a hash of a repository,
+project name, path, or content. A different installation gets a different value
+for the same repository. The daemon does not send the local project ID, PR URL,
+PR title, repository, branch, or message content in these events. Message
+summaries also carry a `session_telemetry_id` derived from the random project
+value and the local session ID. It groups batches from one session on this
+installation without making the local session ID available remotely. The
+usual `install_id` and signed-in account attribution still apply.
+
+The message count covers Chat messages that have a human origin and no sending
+worker. It includes a newly queued prompt but excludes a repeated client
+request, a retry or replay of an existing prompt, reviewer Chat, worker
+automation sent into another session, provider messages, tool calls, and
+terminal input in TUI sessions. Counts are stored per session without content.
+They flush about every 30 minutes, when a session is archived, when the
+desktop app exits, and when the daemon stops. Pending counts survive a daemon
+restart. A summary is reserved before entering the existing best-effort
+remote queue, so a crash or export failure after reservation can lose that
+batch; it will not duplicate the count on restart.
+
+PR counts use the provider PR associated with a worker in AO's durable PR
+table, not a session spawn or provider poll. One local provider identity is
+counted once even if ownership moves between workers. Orchestrator-owned PRs
+are excluded. Repeated observations do not add counts. A PR already associated
+with a worker when this measurement is first installed contributes one
+association count, and an already merged PR also contributes one merged
+count. Both carry `historical: true`; newly observed associations and merges
+carry `historical: false`. Counts are grouped per project at each flush.
+PRs and messages accepted while product telemetry is off are not exported
+after a later opt-in.
+
 ## Automation usage and creation
 
 When desktop product telemetry is enabled, Orchestrator.inc records visits to the

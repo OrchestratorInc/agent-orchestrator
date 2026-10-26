@@ -50,6 +50,7 @@ type RateLimitedSink struct {
 	// burst of those summaries must not hit the per-minute cap. The daily
 	// cap still applies.
 	skipMinute map[string]struct{}
+	skipDay    map[string]struct{}
 
 	mu      sync.Mutex
 	minutes map[string]*rateWindow
@@ -74,8 +75,22 @@ func NewRateLimitedSink(next ports.EventSink, aggregatedNames []string) *RateLim
 		next:       next,
 		aggregated: aggregated,
 		skipMinute: map[string]struct{}{},
+		skipDay:    map[string]struct{}{},
 		minutes:    make(map[string]*rateWindow),
 		days:       make(map[string]*rateWindow),
+	}
+}
+
+// SkipDailyWindow exempts durable summary events whose own aggregation
+// bounds volume and whose counts must not be silently truncated.
+func (s *RateLimitedSink) SkipDailyWindow(names ...string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, name := range names {
+		s.skipDay[name] = struct{}{}
 	}
 }
 
@@ -109,6 +124,9 @@ func (s *RateLimitedSink) reserve(name string, now time.Time) bool {
 		if !reserveWindow(s.minutes, name, now, time.Minute, eventsPerNamePerMinute) {
 			return false
 		}
+	}
+	if _, skip := s.skipDay[name]; skip {
+		return true
 	}
 	dayLimit := eventsPerNamePerDay
 	if _, ok := s.aggregated[name]; ok {

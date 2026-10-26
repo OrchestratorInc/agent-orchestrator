@@ -929,6 +929,26 @@ func (q *Queries) HasPendingConversationInteractions(ctx context.Context, conver
 	return exists, err
 }
 
+const incrementUsageMessageSummary = `-- name: IncrementUsageMessageSummary :exec
+INSERT INTO usage_message_summary (session_id, pending_count, first_at, last_at)
+VALUES (?, 1, ?, ?)
+ON CONFLICT(session_id) DO UPDATE SET
+    pending_count = MIN(usage_message_summary.pending_count + 1, 1000000000),
+    first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),
+    last_at = excluded.last_at
+`
+
+type IncrementUsageMessageSummaryParams struct {
+	SessionID string
+	FirstAt   sql.NullTime
+	LastAt    sql.NullTime
+}
+
+func (q *Queries) IncrementUsageMessageSummary(ctx context.Context, arg IncrementUsageMessageSummaryParams) error {
+	_, err := q.db.ExecContext(ctx, incrementUsageMessageSummary, arg.SessionID, arg.FirstAt, arg.LastAt)
+	return err
+}
+
 const insertConversation = `-- name: InsertConversation :exec
 
 INSERT INTO conversations (

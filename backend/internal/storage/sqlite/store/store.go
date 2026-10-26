@@ -18,11 +18,22 @@ import (
 // CDC is captured by DB triggers (migration 0001), NOT by this layer: the store
 // never writes change_log, it only reads it for the CDC poller.
 type Store struct {
-	writeDB *sql.DB
-	readDB  *sql.DB
-	qw      *gen.Queries // bound to the single writer connection
-	qr      *gen.Queries // bound to the reader pool
-	writeMu *contextMutex
+	writeDB               *sql.DB
+	readDB                *sql.DB
+	qw                    *gen.Queries // bound to the single writer connection
+	qr                    *gen.Queries // bound to the reader pool
+	writeMu               *contextMutex
+	usageTelemetryAllowed func() bool
+}
+
+// SetUsageTelemetryAllowed installs the live consent check before session
+// services start. Usage facts are recorded only while export is permitted.
+func (s *Store) SetUsageTelemetryAllowed(allowed func() bool) {
+	s.usageTelemetryAllowed = allowed
+}
+
+func (s *Store) usageAllowed() bool {
+	return s.usageTelemetryAllowed != nil && s.usageTelemetryAllowed()
 }
 
 type contextMutex struct {
