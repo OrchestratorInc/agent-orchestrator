@@ -12,7 +12,8 @@ import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { getWorkspaceTree, searchWorkspaceFiles, type WorkspaceSearchResult, type WorkspaceTreeEntry } from "../../../lib/files/api";
-import { ChangeRow, FileTypeIcon, FolderTypeIcon, LineCounts, ReviewTray, SegmentedTabs } from "../../../lib/files/components";
+import { ChangeRow, FileTypeIcon, FolderTypeIcon, LineCounts, ReviewTray } from "../../../lib/files/components";
+import { SegmentedChoice } from "../../../lib/files/SegmentedChoice";
 import { changeGroups, plural, splitPath, type ChangeEntry } from "../../../lib/files/model";
 import { reviewKey } from "../../../lib/files/reviewStore";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
@@ -66,12 +67,13 @@ function SessionFilesContent() {
 	const summary = manifest?.summary;
 	const header = (
 		<View style={styles.header}>
-			<SegmentedTabs<Tab>
+			<SegmentedChoice<Tab>
 				value={tab}
 				onChange={setTab}
+				accessibilityLabel="Files to show"
 				options={[
-					{ key: "changes", label: "Changes", icon: "file-diff", badge: summary?.files || undefined },
-					{ key: "all", label: "All files", icon: "list-tree" },
+					{ key: "changes", label: summary?.files ? `Changes ${summary.files}` : "Changes" },
+					{ key: "all", label: "All files" },
 				]}
 			/>
 			{tab === "changes" && manifest ? <ChangesSummary manifest={manifest} /> : null}

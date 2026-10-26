@@ -17,7 +17,7 @@ import { toolbarIcon } from "../../../lib/toolbarIcon";
 import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
-import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SegmentedTabs, SelectionComposer, FileTypeIcon, type ComposerAction } from "../../../lib/files/components";
+import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SelectionComposer, FileTypeIcon, type ComposerAction } from "../../../lib/files/components";
 import {
 	annotationTarget,
 	changeGroups,
@@ -42,10 +42,13 @@ import { addReviewComment, reviewKey } from "../../../lib/files/reviewStore";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
+import { SegmentedChoice, type SegmentedChoiceOption } from "../../../lib/files/SegmentedChoice";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
 type Mode = "diff" | "file";
+/** The one control over how the file reads: its diff, its text, or a markdown file rendered. */
+type ViewChoice = "diff" | "file" | "preview" | "source";
 type Selection = { anchor: number; focus: number };
 
 export default function SessionFileScreen() {
@@ -192,6 +195,24 @@ function SessionFileContent() {
 		setRevealed((current) => ({ ...current, [foldId]: (current[foldId] ?? 0) + CONTEXT_STEP }));
 	}, []);
 
+	// Changes, then the file itself: rendered and as source for markdown, as text
+	// otherwise. A file with nothing to compare shows only the ways it reads.
+	const comparable = changed && !detail?.deleted;
+	const readable = markdown && !detail?.binary && !detail?.deleted;
+	const viewOptions: SegmentedChoiceOption<ViewChoice>[] = [
+		...(comparable ? [{ key: "diff" as const, label: "Changes" }] : []),
+		...(readable ? [{ key: "preview" as const, label: "Preview" }, { key: "source" as const, label: "Source" }] : comparable ? [{ key: "file" as const, label: "File" }] : []),
+	];
+	const view: ViewChoice = effectiveMode === "diff" ? "diff" : readable ? (rendered ? "preview" : "source") : "file";
+	const chooseView = useCallback((next: ViewChoice) => {
+		const nextMode: Mode = next === "diff" ? "diff" : "file";
+		if (next === "preview" || next === "source") setRendered(next === "preview");
+		if (nextMode !== mode) {
+			setMode(nextMode);
+			setSelection(null);
+		}
+	}, [mode]);
+
 	const chosen = useMemo(() => selection ? selectedLines(rows, selection.anchor, selection.focus) : [], [rows, selection]);
 	const selectionStart = selection ? Math.min(selection.anchor, selection.focus) : -1;
 	const selectionEnd = selection ? Math.max(selection.anchor, selection.focus) : -1;
@@ -291,20 +312,7 @@ function SessionFileContent() {
 				{detail && changed ? <LineCounts additions={detail.additions} deletions={detail.deletions} binary={detail.binary} /> : null}
 			</Pressable>
 			{detail?.previousPath ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.renamed}>{`Renamed from ${detail.previousPath}`}</Text> : null}
-			{changed && !detail?.deleted ? (
-				<SegmentedTabs<Mode>
-					value={effectiveMode}
-					onChange={(next) => { setMode(next); setSelection(null); }}
-					options={[{ key: "diff", label: "Changes", icon: "file-diff" }, { key: "file", label: "File", icon: "file-text" }]}
-				/>
-			) : null}
-			{markdown && effectiveMode === "file" && !detail?.binary ? (
-				<SegmentedTabs<"rendered" | "source">
-					value={rendered ? "rendered" : "source"}
-					onChange={(next) => setRendered(next === "rendered")}
-					options={[{ key: "rendered", label: "Preview", icon: "eye" }, { key: "source", label: "Source", icon: "code" }]}
-				/>
-			) : null}
+			{viewOptions.length > 1 ? <SegmentedChoice<ViewChoice> value={view} options={viewOptions} onChange={chooseView} accessibilityLabel="View" /> : null}
 			{detail?.diffTruncated && effectiveMode === "diff" ? <Text style={styles.warn}>This diff is too large to show in full; the end is cut off.</Text> : null}
 			{detail?.contentTruncated && effectiveMode === "file" ? <Text style={styles.warn}>This file is too large to show in full.</Text> : null}
 		</View>

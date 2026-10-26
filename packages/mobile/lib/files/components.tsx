@@ -18,7 +18,7 @@ import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
 import { dockRestingInset, KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { highlightCode, type SyntaxTokenKind } from "../chat/syntaxHighlight";
 import { haptics } from "../haptics";
-import { Feather, type FeatherIconName } from "../icons";
+import { Feather } from "../icons";
 import type { Theme } from "../theme";
 import { textSelectionColors } from "../textSelection";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
@@ -27,38 +27,6 @@ import type { WorkspaceFileStatus } from "./api";
 import { fileIconSvg, folderIconSvg } from "./fileTypeIcon";
 import { changeAccessibilityLabel, plural, sectionLabel, splitPath, statusLabel, type ChangeEntry, type DisplayRow, type LineRow } from "./model";
 import type { ReviewComment } from "./reviewStore";
-
-// ---- Segmented tabs -----------------------------------------------------------
-
-export function SegmentedTabs<K extends string>({ value, options, onChange }: {
-	value: K;
-	options: Array<{ key: K; label: string; icon?: FeatherIconName; badge?: number }>;
-	onChange: (key: K) => void;
-}) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<View accessibilityRole="tablist" style={styles.segmented}>
-			{options.map((option) => {
-				const selected = option.key === value;
-				return (
-					<Pressable
-						key={option.key}
-						accessibilityRole="tab"
-						accessibilityState={{ selected }}
-						accessibilityLabel={option.badge ? `${option.label}, ${option.badge}` : option.label}
-						onPress={() => { if (!selected) { haptics.select(); onChange(option.key); } }}
-						style={({ pressed }) => [styles.segment, selected && styles.segmentOn, pressed && !selected && { opacity: press.opacity }]}
-					>
-						{option.icon ? <Feather name={option.icon} size={iconSize.sm} color={selected ? t.textPrimary : t.textTertiary} /> : null}
-						<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.segmentLabel, selected && styles.segmentLabelOn]}>{option.label}</Text>
-						{option.badge ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.segmentBadge}>{option.badge}</Text> : null}
-					</Pressable>
-				);
-			})}
-		</View>
-	);
-}
 
 // ---- Status + counts ------------------------------------------------------------
 
@@ -507,13 +475,6 @@ export function ReviewTray({
 // ---- Styles ------------------------------------------------------------------------
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	segmented: { flexDirection: "row", padding: space.hair, borderRadius: radius.sm + space.hair, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-	segment: { flex: 1, minHeight: 34, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, borderRadius: radius.sm, paddingHorizontal: space.sm },
-	segmentOn: { backgroundColor: t.bgElevatedHover, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	segmentLabel: { fontFamily: font.medium, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textTertiary },
-	segmentLabelOn: { color: t.textPrimary },
-	segmentBadge: { fontFamily: font.medium, fontSize: type.caption2.fontSize, color: t.textSecondary, backgroundColor: t.bgSubtle, borderRadius: radius.pill, paddingHorizontal: space.xs, overflow: "hidden" },
-
 	typeIcon: { alignItems: "center", justifyContent: "center" },
 	statusLetter: { position: "absolute", right: -3, bottom: -3, fontFamily: t.fontMono, fontSize: 10, lineHeight: 12, fontWeight: "700" },
 	counts: { fontFamily: t.fontMono, fontSize: type.caption1.fontSize, color: t.textSecondary },
