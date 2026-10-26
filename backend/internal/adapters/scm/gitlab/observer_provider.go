@@ -1010,6 +1010,11 @@ func isFailingCheckStatus(s domain.PRCheckStatus) bool {
 }
 
 func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMergeabilityObservation {
+	// A merged MR has no mergeability; GitLab's cached merge_status stays
+	// stale after the merge, so never map it to a conflict.
+	if mr.State == "merged" {
+		return ports.SCMMergeabilityObservation{State: string(domain.MergeUnknown)}
+	}
 	ms := effectiveMergeStatus(mr)
 	var blockers []string
 

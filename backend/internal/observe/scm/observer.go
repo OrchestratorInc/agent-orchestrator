@@ -1771,6 +1771,17 @@ func (o *Observer) needsReviewRefresh(key string, local domain.PullRequest, deci
 }
 
 func (o *Observer) prepareForPersistence(obs ports.SCMObservation, local domain.PullRequest, opts persistenceOptions, now time.Time) ports.SCMObservation {
+	// After a force-push GitHub recomputes mergeability asynchronously and
+	// serves the value cached for the previous head in the meantime. A
+	// CONFLICTING verdict observed against a head the local row has never seen
+	// may be that stale cache, so demote it to unknown for this tick; the next
+	// observation of the same head is a settled provider answer and is
+	// trusted as-is. A real conflict therefore surfaces one poll late instead
+	// of a phantom one latching until the row freezes.
+	if obs.Mergeability.State == string(domain.MergeConflicting) &&
+		local.HeadSHA != "" && obs.PR.HeadSHA != "" && obs.PR.HeadSHA != local.HeadSHA {
+		obs.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeUnknown)}
+	}
 	metadataHash := metadataSemanticHash(obs)
 	if opts.preserveLocalMetadataHash {
 		metadataHash = local.MetadataHash
@@ -1975,6 +1986,11 @@ func failedFingerprintFromCIHash(hash string) string {
 }
 
 func mergeabilityObservationFromLocal(pr domain.PullRequest) ports.SCMMergeabilityObservation {
+	// A merged PR has no mergeability; provider facts frozen in the row are
+	// stale by definition (mirrors the github/gitlab derivation guards).
+	if pr.Merged {
+		return ports.SCMMergeabilityObservation{State: string(domain.MergeUnknown)}
+	}
 	out := mergeabilityFromProviderFacts(pr.ProviderMergeable, pr.ProviderMergeStateStatus, string(pr.CI), string(pr.Review), pr.Draft)
 	if pr.Mergeability != "" && out.State != string(pr.Mergeability) {
 		out = ports.SCMMergeabilityObservation{State: string(pr.Mergeability)}

@@ -1309,6 +1309,36 @@ func TestSCMObservationCarriesStableIDAndRequestedURLAlias(t *testing.T) {
 	}
 }
 
+// A merged PR has no mergeability: GitHub keeps serving its cached
+// mergeable/mergeStateStatus after the merge, so the batch observation must
+// never report a conflict (or any verdict) for one.
+func TestSCMObservationMergedPRIsNeverConflicting(t *testing.T) {
+	fx := basePRFixture()
+	var pr map[string]any
+	fx.prData(func(m map[string]any) {
+		pr = m
+		m["merged"] = true
+		m["state"] = "MERGED"
+		m["mergeable"] = "CONFLICTING"
+		m["mergeStateStatus"] = "DIRTY"
+	})
+	ref := ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello"}, Number: 42}
+
+	obs := scmObservationFromGraphQL(ref, pr)
+	if obs.Mergeability.State != string(domain.MergeUnknown) || obs.Mergeability.Conflict {
+		t.Fatalf("merged PR mergeability = %+v, want unknown without conflict", obs.Mergeability)
+	}
+}
+
+func TestMergeabilityFromGraphQLMergedPRIsUnknown(t *testing.T) {
+	if got := mergeabilityFromGraphQL(map[string]any{"merged": true, "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY"}, restPull{Merged: true}, domain.CIPassing, domain.ReviewApproved); got != domain.MergeUnknown {
+		t.Fatalf("merged PR mergeability = %q, want unknown", got)
+	}
+	if got := mergeabilityFromGraphQL(map[string]any{"merged": true}, restPull{}, domain.CIPassing, domain.ReviewApproved); got != domain.MergeUnknown {
+		t.Fatalf("GraphQL-merged PR mergeability = %q, want unknown", got)
+	}
+}
+
 func TestSCMMergeabilityBlocksReviewRequiredAndDraft(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -1321,7 +1351,7 @@ func TestSCMMergeabilityBlocksReviewRequiredAndDraft(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mergeabilityObservation("MERGEABLE", "CLEAN", string(domain.CIPassing), tc.review, tc.draft)
+			got := mergeabilityObservation("MERGEABLE", "CLEAN", string(domain.CIPassing), tc.review, tc.draft, false)
 			if got.State != string(domain.MergeBlocked) || got.Mergeable {
 				t.Fatalf("mergeability = %+v, want blocked and not mergeable", got)
 			}
@@ -1851,6 +1881,7 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 		ci           string
 		review       string
 		draft        bool
+		merged       bool
 		want         domain.Mergeability
 		wantBlockers []string
 		wantBehind   bool
@@ -1903,10 +1934,26 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 			ci: string(domain.CIPassing), review: string(domain.ReviewApproved),
 			want: domain.MergeMergeable,
 		},
+		// A merged PR has no mergeability: GitHub keeps serving its cached
+		// mergeable/mergeStateStatus after the merge, so the conflict branch
+		// must be unreachable for one and no verdict may leak either.
+		{
+			name:      "merged PR with stale conflicting cache is unknown",
+			mergeable: "CONFLICTING", state: "DIRTY",
+			merged: true,
+			want:   domain.MergeUnknown,
+		},
+		{
+			name:      "merged PR with clean signals stays unknown",
+			mergeable: "MERGEABLE", state: "CLEAN",
+			ci: string(domain.CIPassing), review: string(domain.ReviewApproved),
+			merged: true,
+			want:   domain.MergeUnknown,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mergeabilityObservation(tc.mergeable, tc.state, tc.ci, tc.review, tc.draft)
+			got := mergeabilityObservation(tc.mergeable, tc.state, tc.ci, tc.review, tc.draft, tc.merged)
 			if got.State != string(tc.want) {
 				t.Fatalf("State = %q, want %q", got.State, tc.want)
 			}

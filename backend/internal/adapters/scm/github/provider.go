@@ -406,6 +406,11 @@ func reviewDecisionFromGraphQL(pr map[string]any) domain.ReviewDecision {
 // and the already-derived CIState + ReviewDecision. The rules follow the
 // spec table in doc.go.
 func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState, review domain.ReviewDecision) domain.Mergeability {
+	// A merged PR has no mergeability; GitHub's cached mergeable fields stay
+	// stale after the merge, so never map them to a conflict (or any verdict).
+	if rest.Merged || boolv(pr["merged"]) {
+		return domain.MergeUnknown
+	}
 	// REST's mergeable_state is the tiebreaker: GraphQL's
 	// mergeStateStatus enum (DIRTY / BLOCKED / UNSTABLE / CLEAN /
 	// UNKNOWN) is the primary; if it is empty we fall back to the

@@ -465,6 +465,16 @@ func reviewAfter(a, b domain.PullRequestReview) bool {
 }
 
 func summarizeMergeability(pr domain.PullRequest, _ []domain.PullRequestReviewThread) PRMergeabilitySummary {
+	// A terminal PR has no mergeability. Sessions whose agent already exited
+	// are never re-observed, so a conflicting verdict latched before the merge
+	// would otherwise be displayed forever; answer unknown instead of
+	// re-reporting the stale conflict.
+	if pr.Merged || pr.Closed {
+		return PRMergeabilitySummary{
+			State: domain.MergeUnknown,
+			PRURL: firstNonEmpty(pr.HTMLURL, pr.URL),
+		}
+	}
 	return PRMergeabilitySummary{
 		State:   mergeabilityOrUnknown(pr.Mergeability),
 		Reasons: mergeabilityReasons(pr),

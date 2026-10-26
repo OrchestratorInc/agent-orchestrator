@@ -545,7 +545,7 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 		},
 		Review: ports.SCMReviewObservation{Decision: review},
 	}
-	obs.Mergeability = mergeabilityObservation(providerMergeable, providerMergeState, ci, review, draft)
+	obs.Mergeability = mergeabilityObservation(providerMergeable, providerMergeState, ci, review, draft, merged)
 	return obs
 }
 
@@ -616,11 +616,18 @@ func githubFailedFingerprint(head string, checks []ports.SCMCheckObservation) st
 	return stableCheckFingerprint(parts)
 }
 
-func mergeabilityObservation(providerMergeable, providerMergeState, ci, review string, draft bool) ports.SCMMergeabilityObservation {
+// mergeabilityObservation derives the mergeability verdict from the provider
+// facts of one observation. A merged PR has no mergeability: GitHub keeps
+// serving its cached mergeable/mergeStateStatus after the merge, so the
+// DIRTY/CONFLICTING branch must be unreachable for one.
+func mergeabilityObservation(providerMergeable, providerMergeState, ci, review string, draft, merged bool) ports.SCMMergeabilityObservation {
 	state := strings.ToUpper(strings.TrimSpace(providerMergeState))
 	mergeable := strings.ToUpper(strings.TrimSpace(providerMergeable))
 	out := ports.SCMMergeabilityObservation{State: string(domain.MergeUnknown)}
 	addBlocker := func(b string) { out.Blockers = append(out.Blockers, b) }
+	if merged {
+		return out
+	}
 	if state == "DIRTY" || mergeable == "CONFLICTING" {
 		out.State = string(domain.MergeConflicting)
 		out.Conflict = true

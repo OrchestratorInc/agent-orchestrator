@@ -972,6 +972,16 @@ func TestCommitChecksGuard_ThenFetchPullRequests_Pipelines304Reused(t *testing.T
 	}
 }
 
+// A merged MR has no mergeability: GitLab's cached merge_status stays stale
+// after the merge, so it must never surface as a conflict.
+func TestMergeabilityFromMRMergedIsUnknown(t *testing.T) {
+	mr := &restMR{State: "merged", MergeStatus: "cannot_be_merged", DetailedMergeStatus: "conflict"}
+	got := mergeabilityFromMR(mr, "passing", "approved")
+	if got.State != string(domain.MergeUnknown) || got.Conflict {
+		t.Fatalf("merged MR mergeability = %+v, want unknown without conflict", got)
+	}
+}
+
 func TestMergeabilityFromMR(t *testing.T) {
 	tests := []struct {
 		name           string

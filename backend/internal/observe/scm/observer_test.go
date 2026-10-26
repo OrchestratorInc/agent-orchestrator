@@ -3603,3 +3603,82 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 		})
 	}
 }
+
+// TestMergeabilityObservationFromLocalMergedIsUnknown pins the terminal-PR
+// invariant: a merged PR has no mergeability, and a conflict latched in the
+// frozen row before the merge must not be re-reported by the local recompute.
+func TestMergeabilityObservationFromLocalMergedIsUnknown(t *testing.T) {
+	pr := knownPR(1)
+	pr.Mergeability = domain.MergeConflicting
+	pr.Merged = true
+	got := mergeabilityObservationFromLocal(pr)
+	if got.State != string(domain.MergeUnknown) || got.Conflict {
+		t.Fatalf("merged local mergeability = %+v, want unknown without conflict", got)
+	}
+}
+
+// TestPoll_FreshHeadConflictingDemotedUntilConfirmed pins the force-push
+// transitional window: GitHub recomputes mergeability asynchronously after a
+// push and serves the value cached for the previous head in the meantime, so
+// a CONFLICTING verdict observed against a head the local row has never seen
+// is demoted to unknown for that tick. The next observation of the same head
+// is a settled provider answer and persists as conflicting.
+func TestPoll_FreshHeadConflictingDemotedUntilConfirmed(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	local.MetadataHash = "durable-meta"
+	local.CIHash = "durable-ci"
+	local.ReviewHash = "durable-review"
+	store.prs["p-1"] = []domain.PullRequest{local}
+
+	conflicting := testObs(1)
+	conflicting.PR.HeadSHA = "sha2"
+	conflicting.CI.HeadSHA = "sha2"
+	conflicting.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeConflicting), Conflict: true, Blockers: []string{"conflicts"}}
+	provider := &fakeProvider{
+		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
+		openPRs:    map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {{Number: 1, State: "open", SourceBranch: "feat", HeadRepo: "o/r", TargetBranch: "main", HeadSHA: "sha2"}}},
+		observations: map[string]ports.SCMObservation{
+			prKey(testRepo, 1): conflicting,
+		},
+	}
+	now := time.Unix(1600, 0).UTC()
+	o := newTestObserver(store, provider, &fakeLifecycle{}, now)
+	o.Cache.RepoPRListETag[prKey(testRepo, 0)] = "repo1"
+	o.Cache.LastSyncCursor[prKey(testRepo, 0)] = now.Add(-time.Hour)
+
+	// Poll 1: conflicting verdict on a first-seen head -> demoted to unknown.
+	if err := o.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	persisted := domain.PullRequest{}
+	for _, w := range store.writes {
+		if w.pr.Number == 1 {
+			persisted = w.pr
+		}
+	}
+	if persisted.Mergeability != domain.MergeUnknown {
+		t.Fatalf("fresh-head conflicting persisted as %q, want unknown", persisted.Mergeability)
+	}
+	if persisted.HeadSHA != "sha2" {
+		t.Fatalf("HeadSHA = %q, want sha2 (observation persisted, not dropped)", persisted.HeadSHA)
+	}
+
+	// The next poll must see the poll-1 row, like the real store would.
+	store.prs["p-1"] = []domain.PullRequest{persisted}
+	writesBefore := len(store.writes)
+	now2 := now.Add(time.Minute)
+	o.clock = func() time.Time { return now2 }
+	if err := o.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	confirmed := domain.PullRequest{}
+	for _, w := range store.writes[writesBefore:] {
+		if w.pr.Number == 1 {
+			confirmed = w.pr
+		}
+	}
+	if confirmed.Mergeability != domain.MergeConflicting {
+		t.Fatalf("same-head conflicting persisted as %q, want conflicting", confirmed.Mergeability)
+	}
+}
