@@ -302,34 +302,47 @@ export function HeaderIconButton({
 	);
 }
 
+// `mascot.png` is the desktop mascot (frontend/assets/ao-mascot.png) cropped to
+// its artwork, with the eye sockets filled so they stay dark on light themes.
+// Its aspect ratio, as height / width.
+export const MASCOT_ASPECT = 200 / 256;
+// Where the wand tip sits in the artwork, as fractions of its width and height.
+const WAND_TIP_X = 0.972;
+const WAND_TIP_Y = 0.032;
+const LAMP_DOT = 7;
+const LAMP_HALO = 16;
+
 // The mascot, with the tip of its wand doubling as the connection lamp: it glows
-// green when the daemon is reachable and goes dark when it isn't. The tip sits
-// at ~85% across and ~7% down `mascot.png` — where `wandTip`/`wandHalo` below
-// get their offsets from.
+// green when the daemon is reachable and goes dark when it isn't.
 export function MascotLamp({ status, size = 40 }: { status?: ConnStatus; size?: number }) {
 	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
 	const color = status === "open" ? t.green : status === "connecting" ? t.amber : t.textFaint;
 	const lit = status === "open" || status === "connecting";
 	const label = status === "open" ? "Connected" : status === "connecting" ? "Connecting" : "Offline";
-	// Every offset below is a fraction of the artwork's 40x35 box, so the lamp
-	// stays on the wand tip at whatever size the logo is drawn.
+	// The lamp and halo scale with the logo and are centred on the wand tip, so
+	// they stay on it at whatever size the logo is drawn.
 	const k = size / 40;
+	const height = size * MASCOT_ASPECT;
+	const tipX = size * WAND_TIP_X;
+	const tipY = height * WAND_TIP_Y;
+	const dot = LAMP_DOT * k;
+	const halo = LAMP_HALO * k;
 	return (
 		<View
-			style={[s.mascotWrap, { width: size, height: 35 * k }]}
+			style={[s.mascotWrap, { width: size, height }]}
 			accessible
 			accessibilityRole="image"
 			accessibilityLabel={status ? `Orchestrator mascot, ${label}` : "Orchestrator mascot"}
 		>
-			<Image source={MASCOT} style={{ width: size, height: 35 * k }} resizeMode="contain" />
+			<Image source={MASCOT} style={{ width: size, height }} resizeMode="contain" />
 			{status ? (
 				<>
 					{/* Halo first, dot on top: RN has no boxShadow, so the glow is a
 					    larger translucent circle plus a platform shadow/elevation. */}
-					{lit ? <View style={[s.wandHalo, { left: 26 * k, top: -4 * k, width: 16 * k, height: 16 * k, borderRadius: 8 * k, backgroundColor: color, shadowColor: color }]} /> : null}
-					<View style={[s.wandTip, { left: 30.5 * k }]}>
-						<Dot color={color} size={7 * k} breathing={status === "connecting"} />
+					{lit ? <View style={[s.wandHalo, { left: tipX - halo / 2, top: tipY - halo / 2, width: halo, height: halo, borderRadius: halo / 2, backgroundColor: color, shadowColor: color }]} /> : null}
+					<View style={[s.wandTip, { left: tipX - dot / 2, top: tipY - dot / 2 }]}>
+						<Dot color={color} size={dot} breathing={status === "connecting"} />
 					</View>
 				</>
 			) : null}
@@ -927,21 +940,14 @@ const makeStyles = (t: Theme) =>
 		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		// Enlarged from 30x26: the wand-tip lamp replaced the "live" pill, so the tip
 		// has to be big enough for the dot to actually read as a status light.
-		mascotWrap: { width: 40, height: 35, marginTop: space.hair },
-		mascot: { width: 40, height: 35 },
-		// Positioned on the wand tip — see the note above MascotLamp. Offsets are the
-		// tip fraction of the 40x35 box, less half the dot/halo so they sit centred.
+		mascotWrap: { marginTop: space.hair },
+		// Positioned on the wand tip by MascotLamp, which centres them on it.
 		// zIndex, not paint order: Android orders siblings by elevation/zIndex, and
 		// the halo used to carry `elevation` — which put a 28%-opacity circle *over*
 		// the dot and washed it out. Stating both keeps the dot on top everywhere.
-		wandTip: { position: "absolute", left: 30.5, top: 0, zIndex: 1 },
+		wandTip: { position: "absolute", zIndex: 1 },
 		wandHalo: {
 			position: "absolute",
-			left: 26,
-			top: -4,
-			width: 16,
-			height: 16,
-			borderRadius: 8,
 			opacity: 0.28,
 			zIndex: 0,
 			// iOS-only; Android has no glow-style shadow, so there the halo circle

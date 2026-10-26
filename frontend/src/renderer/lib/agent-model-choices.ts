@@ -1,5 +1,50 @@
+import { collapseModelVariants, listsModelVariants } from "./model-variants";
+
 export function isConcreteModelID(id: string): boolean {
 	return id !== "" && id.toLowerCase() !== "default";
+}
+
+/**
+ * Leaves out the models switched off in Settings → Harness → Models. An empty
+ * or unset list means every model, and models a catalog adds later are offered.
+ * Ids in `keep` (a model a project, draft, or session already uses) stay listed
+ * so a saved choice never vanishes. `modelID` maps an entry to its catalog id
+ * when the list names models another way (Claude's chat aliases).
+ * `narrowed` is true only when some catalog model was hidden.
+ */
+export function filterDisabledModels<T extends { id: string }>(
+	models: T[],
+	disabled: readonly string[] | undefined,
+	keep: ReadonlyArray<string | undefined> = [],
+	modelID: (model: T) => string = (model) => model.id,
+): { models: T[]; narrowed: boolean } {
+	if (!disabled?.length) return { models, narrowed: false };
+	const kept = new Set(keep.filter((id): id is string => !!id));
+	const hidden = new Set(disabled);
+	const filtered = models.filter((model) => kept.has(model.id) || !hidden.has(modelID(model)));
+	// A picker needs a model, so a list that switches off every model offers the whole catalog.
+	if (filtered.length === 0 || filtered.length === models.length) return { models, narrowed: false };
+	return { models: filtered, narrowed: true };
+}
+
+/**
+ * The catalog models a not-yet-running agent would offer: its credentialed providers' (as its
+ * own session lists), minus those switched off in Settings. Offered whole if none match.
+ */
+export function offeredCatalogModels<T extends { id: string; provider?: string }>(
+	catalog: { models: T[]; configuredProviders?: string[]; runnableModels?: string[] } | undefined,
+	disabled: readonly string[] | undefined,
+	keep: ReadonlyArray<string | undefined> = [],
+): T[] {
+	const models = catalog?.models ?? [];
+	// An agent that names the models it can run (OpenCode) is taken at its word;
+	// the rest of its catalog is every model it knows of, there to browse.
+	const runnable = new Set([...(catalog?.runnableModels ?? []), ...keep.filter((id): id is string => Boolean(id))]);
+	const configured = new Set(catalog?.configuredProviders ?? []);
+	const usable = catalog?.runnableModels?.length
+		? models.filter((model) => runnable.has(model.id))
+		: configured.size > 0 ? models.filter((model) => !model.provider || configured.has(model.provider)) : models;
+	return filterDisabledModels(usable.length > 0 ? usable : models, disabled, keep).models;
 }
 
 export function isDefaultPlaceholderLabel(label: string): boolean {
@@ -38,7 +83,8 @@ function compareVersionsDesc(a: number[], b: number[]) {
 // A context variant ("opus[1m]", "Opus 5.5 (1M context)") is its own choice,
 // not an older release of its family.
 function claudeVariant(model: { id: string; label: string }): string {
-	return (model.id.match(/\[.*?\]/)?.[0] ?? model.label.match(/\(.*?\)/)?.[0] ?? "").toLowerCase();
+	const variant = model.id.match(/\[(.*?)\]/)?.[1] ?? model.label.match(/\((.*?)\)/)?.[1] ?? "";
+	return variant.toLowerCase().replace(/\s*context\s*$/, "").replace(/\s+/g, "");
 }
 
 /** The newest model of each Claude family (and context variant), in Fable, Opus, Sonnet, Haiku order, then everything else, newest first. Models without a family and version stay current. */
@@ -60,6 +106,31 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
 	return { current, other };
 }
 
+/**
+ * Claude's chat model option offers family aliases ("opus", "sonnet[1m]") and bare ids.
+ * Maps a choice to its catalog entry: an id to itself, an alias by the name Claude gives
+ * it, since an alias can name an older model ("haiku" is Haiku 4.5), and with no name to
+ * the newest model of its family and context variant.
+ */
+export function claudeChoiceModel<T extends { id: string; label: string }>(catalog: T[]): ((value: string, name?: string) => T | undefined) | undefined {
+	if (catalog.length === 0) return undefined;
+	const newest = splitClaudeModels(catalog).current;
+	return (value: string, name?: string) => {
+		const id = value.toLowerCase();
+		const exact = catalog.find((model) => model.id.toLowerCase() === id);
+		if (exact) return exact;
+		const named = name?.trim().toLowerCase();
+		if (named && /\d/.test(named)) {
+			return catalog.find((model) => agentModelDisplayLabel("claude-code", model.label).toLowerCase() === named);
+		}
+		const family = id.replace(/\[.*?\]$/, "");
+		const variant = claudeVariant({ id, label: "" });
+		return newest.find((model) => claudeVariant(model) === variant
+			&& (model.id.toLowerCase().includes(`-${family}-`)
+				|| agentModelDisplayLabel("claude-code", model.label).toLowerCase().startsWith(family)));
+	};
+}
+
 /** A configured family alias ("sonnet") duplicates that family's newest model, so mark that model as the default instead. */
 export function foldClaudeAliasDefault<T extends { id: string; label: string; isDefault?: boolean }>(models: T[]): T[] {
 	const alias = models.find((model) => model.isDefault && CLAUDE_FAMILIES.includes(model.id));
@@ -68,4 +139,15 @@ export function foldClaudeAliasDefault<T extends { id: string; label: string; is
 	const family = CLAUDE_FAMILIES.indexOf(alias.id);
 	const newest = splitClaudeModels(rest).current.find((model) => claudeFamilyVersion(model)?.family === family && claudeVariant(model) === "");
 	return newest ? rest.map((model) => (model === newest ? { ...model, isDefault: true } : model)) : models;
+}
+
+/** A recorded model id by its name in the agent's list, however that agent's chat spells the id. */
+export function recordedModelName(harness: string, model: string, models: Array<{ id: string; label: string }>): string {
+	const id = model.replace(/\[.*$/, "");
+	const label = models.find((entry) => entry.id === id)?.label
+		// Cursor's chat names a model once; its list has an entry per setting.
+		?? (listsModelVariants(harness) ? collapseModelVariants(models).find((family) => family.id === id)?.label : undefined)
+		// Claude Code's "opus" is the newest model of that family.
+		?? (harness === "claude-code" ? splitClaudeModels(models).current.find((entry) => entry.id.includes(`-${id}-`))?.label : undefined);
+	return agentModelDisplayLabel(harness, label ?? id);
 }

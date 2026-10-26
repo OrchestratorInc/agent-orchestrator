@@ -74,6 +74,44 @@ describe("resolveCloudOffering", () => {
 		expect(resolveCloudOffering(me, undefined, true)?.billingMode).toBe("off");
 	});
 
+	it("reads customCoder from the server, and from the providers on an older control plane", () => {
+		const generic = (customCoder?: boolean): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["coder", "freestyle"], defaultProvider: "freestyle", kind: "both", customCoder }),
+		});
+		expect(resolveCloudOffering(generic(false))?.customCoder).toBe(false);
+		expect(resolveCloudOffering(generic(true))?.customCoder).toBe(true);
+		// A control plane without the field offered Coder only to orgs with the
+		// coder capability.
+		expect(resolveCloudOffering(generic(undefined))?.customCoder).toBe(true);
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["freestyle"], default: "freestyle" } };
+		expect(resolveCloudOffering(legacy)?.customCoder).toBe(false);
+	});
+
+	it("reads artifacts from the server, off for a control plane that does not say", () => {
+		const me = (artifacts?: boolean): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["freestyle"], defaultProvider: "freestyle", kind: "b2c", artifacts }),
+		});
+		expect(resolveCloudOffering(me(true))?.artifacts).toBe(true);
+		expect(resolveCloudOffering(me(false))?.artifacts).toBe(false);
+		expect(resolveCloudOffering(me(undefined))?.artifacts).toBe(false);
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["freestyle"], default: "freestyle" } };
+		expect(resolveCloudOffering(legacy)?.artifacts).toBe(false);
+	});
+
+	it("reads coderWorkerWorkingFolder from the server, and as off from an older control plane", () => {
+		const generic = (coderWorkerWorkingFolder?: boolean): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["coder"], defaultProvider: "coder", kind: "b2b", coderWorkerWorkingFolder }),
+		});
+		expect(resolveCloudOffering(generic(true))?.coderWorkerWorkingFolder).toBe(true);
+		expect(resolveCloudOffering(generic(false))?.coderWorkerWorkingFolder).toBe(false);
+		expect(resolveCloudOffering(generic(undefined))?.coderWorkerWorkingFolder).toBe(false);
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["coder"], default: "coder" } };
+		expect(resolveCloudOffering(legacy)?.coderWorkerWorkingFolder).toBe(false);
+	});
+
 	it("resolves nothing before /me loads, and no cloud without providers", () => {
 		expect(resolveCloudOffering(undefined)).toBeUndefined();
 		expect(resolveCloudOffering({ user, organizations: [] })).toMatchObject({ providers: [], defaultProvider: "", kind: "none" });
@@ -115,6 +153,12 @@ describe("projectSandboxProvider", () => {
 		expect(projectSandboxProvider({ sandboxProvider: "Coder" }, { defaultProvider: "freestyle" })).toBe("coder");
 		expect(projectSandboxProvider({}, { defaultProvider: "freestyle" })).toBe("freestyle");
 		expect(projectSandboxProvider(undefined, undefined)).toBe("");
+	});
+
+	it("keeps a project with Coder config on Coder whatever the org default", () => {
+		expect(projectSandboxProvider({ coder: { templateId: "tpl-1" } }, { defaultProvider: "freestyle" })).toBe("coder");
+		expect(projectSandboxProvider({ coder: null }, { defaultProvider: "freestyle" })).toBe("freestyle");
+		expect(projectSandboxProvider({ sandboxProvider: "freestyle", coder: {} }, { defaultProvider: "coder" })).toBe("freestyle");
 	});
 });
 

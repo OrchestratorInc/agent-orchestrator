@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useRef } from "react";
+import { mediaCrossOrigin } from "../lib/file-media";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
@@ -13,6 +14,9 @@ import { AO_PIERRE_SURFACE_CSS } from "./diffs/pierreTheme";
 import { SelectionAskButton } from "./diffs/SelectionAskButton";
 import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
+
+/** How long a revealed line stays marked, matching the chat and settings focus highlights. */
+export const REVEALED_LINE_HIGHLIGHT_MS = 2_000;
 
 function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
@@ -41,6 +45,7 @@ export function ReadOnlyFileView({
 	scope = "combined",
 	sessionId,
 	hostId,
+	imageUrl,
 	side = "after",
 }: {
 	annotation: FileAnnotationModel;
@@ -53,6 +58,8 @@ export function ReadOnlyFileView({
 	scope?: WorkspaceDiffScope;
 	sessionId: string;
 	hostId?: string;
+	/** Where to load an image file from, when not the workspace blob route (an artifact's raw URL). */
+	imageUrl?: string;
 	side?: "before" | "after";
 }) {
 	const { t } = useTranslation();
@@ -61,6 +68,8 @@ export function ReadOnlyFileView({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const pendingRevealRef = useRef(revealLine);
 	const consumedRevealRequestKeysRef = useRef(new Set<number>());
+	// The line a reveal brought into view, marked briefly so the eye lands on it.
+	const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
 	const editorInstanceId = useId();
 	const gutterHover = usePersistentGutterUtility(containerRef);
 	const revealRequestedLine = useCallback(() => {
@@ -74,6 +83,7 @@ export function ReadOnlyFileView({
 		const line = diffsContainer?.shadowRoot?.querySelector<HTMLElement>(`[data-line="${target.line}"]`);
 		if (!line) return;
 		line.scrollIntoView({ block: "center" });
+		setHighlightedLine(target.line);
 		consumedRevealRequestKeysRef.current.add(target.requestKey);
 		pendingRevealRef.current = undefined;
 		onRevealLineConsumed?.(target.requestKey);
@@ -87,6 +97,11 @@ export function ReadOnlyFileView({
 		const frame = requestAnimationFrame(revealRequestedLine);
 		return () => cancelAnimationFrame(frame);
 	}, [revealLine?.line, revealLine?.requestKey, revealRequestedLine]);
+	useEffect(() => {
+		if (highlightedLine === null) return;
+		const timer = window.setTimeout(() => setHighlightedLine(null), REVEALED_LINE_HIGHLIGHT_MS);
+		return () => window.clearTimeout(timer);
+	}, [highlightedLine]);
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer; in edit mode a selection belongs to the editor.
 	const askInChat = useAskInChat(sessionId, hostId);
@@ -96,9 +111,10 @@ export function ReadOnlyFileView({
 			return (
 				<div className="grid place-items-center p-3">
 					<img
+						crossOrigin={mediaCrossOrigin(imageUrl ?? workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl))}
 						alt={detail.path}
 						className="max-h-[70vh] max-w-full object-contain"
-						src={workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl)}
+						src={imageUrl ?? workspaceRawImageUrl(sessionId, detail.path, side, hostId, remoteBaseUrl)}
 					/>
 				</div>
 			);
@@ -151,6 +167,7 @@ export function ReadOnlyFileView({
 				}}
 				file={file}
 				lineAnnotations={lineAnnotations}
+				selectedLines={highlightedLine === null ? null : { start: highlightedLine, end: highlightedLine }}
 				options={{
 					disableFileHeader: true,
 					enableGutterUtility: true,

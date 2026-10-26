@@ -81,7 +81,15 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	let disposed = false;
 	let exited = false;
 	let connectionState: MuxConnectionState | undefined;
+	// pendingResize is the newest size the pane asked for; it is replayed on
+	// every (re)connect. sentResize is the size last sent on the current socket,
+	// so an unchanged size is never sent twice.
 	let pendingResize: { cols: number; rows: number } | null = null;
+	let sentResize: { cols: number; rows: number } | null = null;
+	let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+	// reflowed records that the pane fitted to a size other than the last one
+	// sent since that send, so the screen no longer matches the program's.
+	let reflowed = false;
 	const pendingInput: string[] = [];
 
 	const setConnectionState = (next: MuxConnectionState) => {
@@ -179,7 +187,10 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		socket = ws;
 		ws.addEventListener("open", () => {
 			if (disposed || socket !== ws) return;
-			if (pendingResize) sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows });
+			// A new socket may reach a new worker PTY, so the current size always
+			// goes out once, without waiting for the debounce.
+			sentResize = null;
+			flushResize();
 			for (const input of pendingInput.splice(0)) sendJSON({ type: "input", data: input });
 			setConnectionState("open");
 		});
@@ -255,10 +266,40 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	// nothing, so the shared PTY is never resized from an off-screen grid.)
 	const MIN_RESIZE_COLS = 20;
 	const MIN_RESIZE_ROWS = 4;
+	// Every resize the PTY receives makes a full-screen TUI redraw its whole
+	// screen, and a dragged side panel fires dozens of fits a second. Coalesce
+	// them: a trailing debounce sends only the size the pane settles on, an
+	// unchanged size is not sent again, and the final size always goes out.
+	// Resizes travel on the open terminal socket, the same live path as input;
+	// while disconnected the newest size waits and is sent on open.
+	const RESIZE_DEBOUNCE_MS = 150;
+	const flushResize = () => {
+		if (resizeTimer !== null) {
+			clearTimeout(resizeTimer);
+			resizeTimer = null;
+		}
+		if (!pendingResize) return;
+		if (sentResize && sentResize.cols === pendingResize.cols && sentResize.rows === pendingResize.rows) {
+			// The burst ended at the size the program already has, so no size
+			// change goes out; but the screen reflowed at the sizes in between.
+			// Ask the program to redraw it (an older control plane ignores the
+			// flag and applies a same-size resize, which changes nothing).
+			if (reflowed && sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows, repaint: true })) {
+				reflowed = false;
+			}
+			return;
+		}
+		if (sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows })) {
+			sentResize = pendingResize;
+			reflowed = false;
+		}
+	};
 	const sendResize = (cols: number, rows: number) => {
 		if (cols < MIN_RESIZE_COLS || rows < MIN_RESIZE_ROWS) return;
+		if (sentResize && (sentResize.cols !== cols || sentResize.rows !== rows)) reflowed = true;
 		pendingResize = { cols, rows };
-		sendJSON({ type: "resize", columns: cols, rows });
+		if (resizeTimer !== null) clearTimeout(resizeTimer);
+		resizeTimer = setTimeout(flushResize, RESIZE_DEBOUNCE_MS);
 	};
 
 	return {
@@ -303,6 +344,8 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
+			if (resizeTimer !== null) clearTimeout(resizeTimer);
+			resizeTimer = null;
 			dataListeners.clear();
 			exitListeners.clear();
 			openedListeners.clear();

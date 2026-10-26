@@ -5,19 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const generation = "7f80c8a9-ec67-4a16-a067-a444ffcc5cca"
 
-func readRaw(t *testing.T, raw string) (ports.AgentSwitchFailureAuthoritySnapshot, error) {
+func readRaw(t *testing.T, raw string) (Snapshot, error) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "telemetry_policy.json")
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := New(path).ReadAgentSwitchFailureAuthority(context.Background())
+	snapshot, err := New(path).Read(context.Background())
 	return snapshot, err
 }
 
@@ -61,5 +59,37 @@ func TestReaderRejectsRecordsWhoseShapeDoesNotMatchTheirVersion(t *testing.T) {
 				t.Fatalf("accepted %s: %+v", name, got)
 			}
 		})
+	}
+}
+
+func TestEventsAllowedFollowsTheFileOverTheEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	reader := New(filepath.Join(dir, FileName))
+	ctx := context.Background()
+	if !reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("no policy file: want the explicit environment to allow events")
+	}
+	if reader.EventsAllowed(ctx, true, false) {
+		t.Fatal("events not set explicitly: want them off")
+	}
+	write := func(raw string, mode os.FileMode) {
+		if err := os.WriteFile(filepath.Join(dir, FileName), []byte(raw), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(dir, FileName), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"schema_version":1,"events_enabled":false,"consent_generation":"`+generation+`","updated_at":"2026-08-28T10:15:30.000Z"}`, 0o600)
+	if reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("opted out in the app: want events off")
+	}
+	write(`{"schema_version":1,"events_enabled":true,"consent_generation":"`+generation+`","updated_at":"2026-08-28T10:15:30.000Z"}`, 0o600)
+	if !reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("opted in: want events on")
+	}
+	write(`{"schema_version":1,"events_enabled":true,"consent_generation":"`+generation+`","updated_at":"2026-08-28T10:15:30.000Z"}`, 0o644)
+	if reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("unsafe file: want events off")
 	}
 }

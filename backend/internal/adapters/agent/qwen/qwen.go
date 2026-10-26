@@ -448,7 +448,9 @@ func qwenWorkerRemoteInputCommand(qwenCmd []string, cfg ports.LaunchConfig) ([]s
 		script.WriteString(" ")
 		script.WriteString(qwenShellQuote(arg))
 	}
-	return []string{"sh", "-lc", script.String()}, nil
+	// The daemon already selected the runtime and hook PATH. Login profiles
+	// can replace it with an older Node and send callbacks to another AO.
+	return []string{"sh", "-c", script.String()}, nil
 }
 
 func safeQwenSessionKey(sessionID string) string {

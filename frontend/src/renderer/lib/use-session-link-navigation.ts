@@ -6,7 +6,7 @@ import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSummary } from "../types/workspace";
 import { LOCAL_HOST } from "./hosts";
 import { useNavigateToSession } from "./navigate-to-session";
-import { parseSessionLink, resolveSessionLink } from "./session-links";
+import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
 
 export type SessionLinkSource = {
 	ready: boolean;
@@ -62,8 +62,10 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	return useCallback((url: string) => {
-		const target = parseSessionLink(url);
+		const artifact = parseArtifactLink(url);
+		const target = parseSessionLink(url) ?? artifact;
 		if (!target) {
 			showGlobalToast("This AO session link is malformed or unsupported.", undefined, {
 				tone: "error",
@@ -92,7 +94,8 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			});
 			return false;
 		}
-		if (resolved.isTerminated) {
+		// A terminated session's artifacts are still served, so its artifact links still open.
+		if (resolved.isTerminated && !artifact) {
 			showGlobalToast(`Session ${resolved.sessionId} is terminated`, undefined, {
 				placement: "top-center",
 				dismissible: true,
@@ -101,8 +104,9 @@ export function useSessionLinkNavigation(sourceHostId?: string, sourceKind?: "cl
 			});
 			return false;
 		}
+		if (artifact) requestWorkspaceFileOpen(resolved.sessionId, artifact.path, remoteHostId, "artifact");
 		if (remoteHostId) navigateToSession(resolved.projectId, resolved.sessionId, remoteHostId);
 		else navigateToSession(resolved.projectId, resolved.sessionId);
 		return true;
-	}, [navigateToSession, remoteHostId, showGlobalToast, source, sourceKind]);
+	}, [navigateToSession, remoteHostId, requestWorkspaceFileOpen, showGlobalToast, source, sourceKind]);
 }

@@ -1,6 +1,5 @@
 import { isAgentActivityWorking } from "@aoagents/product-ui";
 import {
-	CLOUD_PROJECT_KIND,
 	sessionArtifacts,
 	STANDALONE_WORKSPACE_ID,
 	workerSessions,
@@ -31,18 +30,20 @@ export type ArtifactGroup = {
 	id: string;
 	name: string;
 	isScratchpad: boolean;
+	/** A Cloud project's group. */
+	cloud: boolean;
 	rows: ArtifactRow[];
 };
 
 /**
- * Groups every artifact from live local worker sessions by project. Archived
- * sessions and projects without artifacts are left out; rows sort newest
- * first and groups by their newest row.
+ * Groups every artifact from live local and cloud worker sessions by project.
+ * Remote-host projects, archived sessions and projects without artifacts are
+ * left out; rows sort newest first and groups by their newest row.
  */
 export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[]): ArtifactGroup[] {
 	const groups: ArtifactGroup[] = [];
 	for (const workspace of workspaces) {
-		if (workspace.kind === CLOUD_PROJECT_KIND || workspace.hostId) continue;
+		if (workspace.hostId) continue;
 		const isScratchpad = workspace.id === STANDALONE_WORKSPACE_ID;
 		const rows = workerSessions(workspace.sessions)
 			.filter((session) => !isArchivedSession(session))
@@ -62,7 +63,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 			)
 			.sort(newestFirst);
 		if (rows.length === 0) continue;
-		groups.push({ id: workspace.id, name: workspace.name, isScratchpad, rows });
+		groups.push({ id: workspace.id, name: workspace.name, isScratchpad, cloud: workspace.kind === "cloud", rows });
 	}
 	return groups.sort((left, right) => newestFirst(left.rows[0], right.rows[0]));
 }

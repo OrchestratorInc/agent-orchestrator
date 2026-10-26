@@ -406,7 +406,7 @@ describe("NotificationCenter", () => {
 		expect(localClear.closest("[title='Open session']")).not.toBeNull();
 		expect(localClear).toHaveAttribute("title", "");
 		expect(screen.getByRole("button", { name: "Clear notification: Pull request ready to merge" })).toHaveAttribute("title", "");
-		expect(screen.getByRole("button", { name: "Restore session" })).toHaveAttribute("title", "");
+		expect(screen.getByRole("button", { name: "This session was archived. Restore it?" })).toHaveAttribute("title", "");
 	});
 
 	it("clears one notification without opening its session", async () => {
@@ -792,7 +792,7 @@ describe("NotificationCenter", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 		expect(restoreSessionMock).not.toHaveBeenCalled();
 
-		await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+		await userEvent.click(screen.getByRole("button", { name: "This session was archived. Restore it?" }));
 		await waitFor(() => expect(restoreSessionMock).toHaveBeenCalledWith("sess-dead"));
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
@@ -837,7 +837,7 @@ describe("NotificationCenter", () => {
 		renderNotificationCenter();
 		await clickOpen();
 
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "This session was archived. Restore it?" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByText("The agent session has ended."));
 		expect(restoreSessionMock).not.toHaveBeenCalled();
@@ -860,7 +860,7 @@ describe("NotificationCenter", () => {
 
 		await userEvent.click(screen.getByText("The agent is waiting for your response."));
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "This session was archived. Restore it?" })).not.toBeInTheDocument();
 	});
 
 	it("does not treat terminated sessions as live when the workspace query fails", async () => {
@@ -881,7 +881,7 @@ describe("NotificationCenter", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByText("The agent session has ended."));
 		expect(navigateMock).not.toHaveBeenCalled();
-		expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "This session was archived. Restore it?" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(refetch).toHaveBeenCalledTimes(1);
