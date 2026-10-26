@@ -38,6 +38,7 @@ describe("tool content images", () => {
 		{ ...block, data: "iVBOR<invalid>" },
 		{ ...block, mimeType: data },
 		{ type: "image" },
+		{ type: "image", source: { data: "CSV source text", media_type: "text/plain" } },
 		{ ...block, truncated: true },
 		{ truncated: true, content: [block] },
 		{ source: { data: "iVBOR-prefix", media_type: "image/png" } },
@@ -81,6 +82,24 @@ describe("MCP result image sanitization", () => {
 		const result = splitToolResult({ structuredContent: { screenshot: { text: "caption", source: { data, media_type: "image/png" } } } });
 		expect(result.images).toHaveLength(1);
 		expect(JSON.stringify(result.value)).toContain("caption");
+		expect(JSON.stringify(result.value)).not.toContain("iVBOR");
+	});
+
+	it.each([
+		{ data: "CSV source text", media_type: "text/plain" },
+		{ data: "untyped source data" },
+		{ data: { rows: 2 }, media_type: "application/json" },
+	])("preserves non-image structured sources without inventing images", (source) => {
+		const input = { content: [{ type: "text", text: "loaded" }], structuredContent: { source, rows: 2 } };
+		expect(splitToolResult(input)).toEqual({ images: [], value: input });
+		expect(normalizeToolContent(input).some((part) => part.kind === "image")).toBe(false);
+	});
+
+	it("preserves non-image source data next to a real image", () => {
+		const input = { content: [block], structuredContent: { source: { data: "CSV source text", media_type: "text/plain" }, rows: 2 } };
+		const result = splitToolResult(input);
+		expect(result.images).toHaveLength(1);
+		expect(result.value).toMatchObject({ structuredContent: input.structuredContent });
 		expect(JSON.stringify(result.value)).not.toContain("iVBOR");
 	});
 

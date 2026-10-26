@@ -15,7 +15,7 @@ const samples: unknown[] = [
 	{ text: "Malformed image", content: { ...image, data: "iVBOR-invalid" } },
 	{ type: "text", text: "Text-only result" },
 	{ type: "text", text: "-old\n+new" },
-	{ content: [image, { type: "resource", resource: { uri: "fixture:///report", text: "resource body" } }], structuredContent: { answer: 42 } },
+	{ content: [image, { type: "resource", resource: { uri: "fixture:///report", text: "resource body" } }], structuredContent: { answer: 42, source: { data: "CSV source text", media_type: "text/plain" } } },
 ];
 createRoot(document.getElementById("root")!).render(
 	<TooltipProvider><main className="mx-auto max-w-2xl space-y-4 bg-background p-6 text-foreground">
