@@ -642,7 +642,7 @@ func compressPreviewResponse(res *http.Response) {
 	// A 204 or 304 has ContentLength 0; a HEAD carries the GET's length.
 	if !compressible || strings.Contains(contentType, "event-stream") || res.ContentLength < 1024 || res.ContentLength > previewGzipMaxBytes ||
 		res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Encoding") != "" || res.Request == nil ||
-		res.Request.Method == http.MethodHead || res.Request.Header.Get("Range") != "" || !acceptsGzip(res.Request.Header.Get("Accept-Encoding")) {
+		res.Request.Method == http.MethodHead || res.Request.Header.Get("Range") != "" || !AcceptsGzip(res.Request.Header.Get("Accept-Encoding")) {
 		return
 	}
 	body := make([]byte, res.ContentLength)
@@ -672,7 +672,8 @@ func compressPreviewResponse(res *http.Response) {
 	}
 }
 
-func acceptsGzip(acceptEncoding string) bool {
+// AcceptsGzip reports whether an Accept-Encoding header admits gzip.
+func AcceptsGzip(acceptEncoding string) bool {
 	for _, part := range strings.Split(acceptEncoding, ",") {
 		coding, params, _ := strings.Cut(part, ";")
 		if !strings.EqualFold(strings.TrimSpace(coding), "gzip") {

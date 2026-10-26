@@ -42,6 +42,7 @@ type ControlDeps struct {
 //	recoverer     → turn a handler panic into 500 instead of crashing the daemon
 //	accountOrigin → exact renderer-origin boundary for Codex account management
 //	cors          → CORS allowlist for the Electron renderer / dev origins
+//	compressJSON  → gzip JSON bodies over 1 KB for clients that accept it
 //
 // The per-request timeout is deliberately not global: it wraps only bounded
 // REST routes, never long-lived terminal streams or health probes.
@@ -59,6 +60,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
+	r.Use(compressJSON)
 
 	// JSON envelopes for unmatched routes / methods — chi's defaults are
 	// text/plain, which would break consumers that parse every response as
