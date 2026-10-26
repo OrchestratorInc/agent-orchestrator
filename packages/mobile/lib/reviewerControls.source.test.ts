@@ -104,8 +104,8 @@ describe("reviewer control integration", () => {
 
 	it("chooses Open, Restore, or Stop from what is actually available", () => {
 		expect(detail).toContain("const controls = reviewerControls(data, review, sessionId);");
-		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <RowPill label=\"Open\"");
-		expect(detail).toContain(": controls.restore ? <RowPill label=\"Restore\"");
+		expect(detail).toContain("{controls.open\n\t\t\t\t\t\t? <ReviewActionButton label=\"Open\"");
+		expect(detail).toContain(": controls.restore ? <ReviewActionButton label=\"Restore\"");
 		expect(detail).toContain("Push a new commit to run another review.");
 	});
 
@@ -119,8 +119,8 @@ describe("reviewer control integration", () => {
 
 	// A native menu nested in the row's Pressable lost its tap to the row, which
 	// opened the reviewer instead of the menu.
-	it("lays the reviewer's pill and menu over its row instead of nesting them", () => {
-		const start = detail.indexOf("onPress={openReviewer} style=");
+	it("lays the reviewer's button and menu over its row instead of nesting them", () => {
+		const start = detail.indexOf("onPress={openReviewer} android_ripple=");
 		const end = detail.indexOf('<ListSectionHeader label="Orchestrator review" />');
 		expect(start).toBeGreaterThanOrEqual(0);
 		expect(end).toBeGreaterThan(start);
@@ -141,6 +141,20 @@ describe("reviewer control integration", () => {
 		for (const path of ["./PRCard.tsx", "./worker-list-row.tsx", "./chat/ChatSessionScreen.tsx", "../app/review/[sessionId].tsx"]) {
 			expect(source(path)).not.toMatch(/router\.(push|navigate)\((reviewRoute|route|destination)\)/);
 		}
+	});
+
+	// Row actions are each platform's own small buttons, and the page's chrome
+	// glyphs come from the system symbol sets rather than a second icon family.
+	it("draws the review page with native buttons and system symbols", () => {
+		expect(detail).not.toContain("@expo/vector-icons");
+		expect(detail).not.toContain("RowPill");
+		expect(detail).toContain('<ReviewActionButton label="Open" icon={controls.open === "chat" ? symbols.chat : symbols.terminal} tone="filled"');
+		expect(detail).toContain('tone={primaryAction === "cancel" ? "destructive" : primaryAction === "start" ? "filled" : "outlined"}');
+		expect(detail).toContain("{...refreshControlColors(t)}");
+		// Nothing under the 13pt footnote step, and dividers that draw on Android.
+		expect(detail).not.toMatch(/caption[12]/);
+		expect(detail).not.toContain("hairlineWidth");
+		expect(detail).not.toContain("hitSlop");
 	});
 
 	it("lays the review screen out as flat board rows, not cards", () => {

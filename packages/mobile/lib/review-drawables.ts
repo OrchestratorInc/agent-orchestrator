@@ -5,11 +5,16 @@ import type { ImageSourcePropType } from "react-native";
 // agree exactly. Generate a new one with
 // `node packages/mobile/scripts/generate-material-drawables.mjs <name>`.
 const drawables = {
+	chat_bubble: require("../assets/icons/chat_bubble.xml"),
 	check_circle: require("../assets/icons/check_circle.xml"),
+	close: require("../assets/icons/close.xml"),
 	more_horiz: require("../assets/icons/more_horiz.xml"),
 	open_in_new: require("../assets/icons/open_in_new.xml"),
+	play_arrow: require("../assets/icons/play_arrow.xml"),
 	power_settings_new: require("../assets/icons/power_settings_new.xml"),
+	refresh: require("../assets/icons/refresh.xml"),
 	send: require("../assets/icons/send.xml"),
+	terminal: require("../assets/icons/terminal.xml"),
 } satisfies Record<string, ImageSourcePropType>;
 
 /** A Material Symbol the review screens draw through Compose, by its Android name. */
