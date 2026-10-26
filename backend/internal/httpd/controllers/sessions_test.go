@@ -4687,7 +4687,7 @@ func TestSessionsAPI_PreparesAndCancelsTaskWorkspace(t *testing.T) {
 func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", 4097)
+	brief := strings.Repeat("a", 100<<10)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4708,7 +4708,7 @@ func TestSessionsAPI_DelegateTaskAcceptsLongBrief(t *testing.T) {
 func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)
-	brief := strings.Repeat("a", (16<<10)+1)
+	brief := strings.Repeat("a", (100<<10)+1)
 	payload, err := json.Marshal(map[string]string{
 		"projectId": "ao",
 		"brief":     brief,
@@ -4723,7 +4723,7 @@ func TestSessionsAPI_DelegateTaskRejectsBriefPastLaunchSafeLimit(t *testing.T) {
 		Message string `json:"message"`
 	}
 	mustJSON(t, body, &got)
-	if got.Message != "Task must be 16 KiB or fewer" {
+	if got.Message != "Task must be 100 KiB or fewer" {
 		t.Fatalf("error message = %q, want actionable size limit", got.Message)
 	}
 	if svc.delegationInput.ProjectID != "" {
