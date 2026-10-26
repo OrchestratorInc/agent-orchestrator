@@ -190,7 +190,15 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						refreshRemote(hostId);
 						if (!("data" in event)) return;
 						try {
-							const decoded = JSON.parse(String((event as MessageEvent).data)) as { sessionId?: unknown; payload?: { conversationId?: unknown; reviewId?: unknown } };
+							const decoded = JSON.parse(String((event as MessageEvent).data)) as {
+								sessionId?: unknown;
+								payload?: { conversationId?: unknown; reviewId?: unknown; kind?: unknown; agentId?: unknown };
+							};
+							if (decoded.payload?.kind === "model_catalog" && typeof decoded.payload.agentId === "string") {
+								// refreshRemote only stopped sharing this host's reads. Its
+								// catalog changed, so restart reads already awaiting it.
+								discardPendingAgentModelReads(["agent-models", hostId, decoded.payload.agentId], { reread: true });
+							}
 							if (typeof decoded.sessionId === "string" && typeof decoded.payload?.conversationId === "string" && typeof decoded.payload.reviewId !== "string") {
 								refreshRemoteConversationOnce(hostId, decoded.sessionId);
 							}

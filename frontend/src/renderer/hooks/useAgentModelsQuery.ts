@@ -16,21 +16,27 @@ const MODEL_CATALOG_REFRESH_POLL_MS = 3_000;
 // credential scopes separate. Login invalidation drops pending reads too.
 type PendingOpenCodeCatalog = { promise: Promise<AgentModelCatalog>; queryKey: QueryKey; invalidated: boolean };
 const pendingOpenCodeCatalogs = new Map<string, PendingOpenCodeCatalog>();
+// Every unsettled read, including ones evicted from sharing, so a later
+// catalog change still reaches queryFns awaiting them.
+const liveOpenCodeCatalogs = new Set<PendingOpenCodeCatalog>();
 const openCodeRequestPrefix = (agentId: string, hostId?: string) => JSON.stringify([hostId || LOCAL_HOST, agentId]) + ":";
 
 /**
  * Stop sharing pending OpenCode reads for queries an invalidation covers.
  * TanStack emits no invalidate event while a query is still invalidated, so
  * the event transport calls this directly. After an actual catalog change,
- * `reread` also makes any queryFn still awaiting one read again: an
- * observerless prefetch gets no cancellation or catch-up. Periodic refreshes
- * must not set it, or a read slower than the polling interval never finishes.
+ * `reread` also makes any queryFn still awaiting a covered read, evicted or
+ * not, read again: an observerless prefetch gets no cancellation or catch-up.
+ * Periodic refreshes must not set it, or a read slower than the polling
+ * interval never finishes.
  */
 export function discardPendingAgentModelReads(queryKey: QueryKey, { reread = false }: { reread?: boolean } = {}): void {
 	for (const [requestKey, pending] of pendingOpenCodeCatalogs) {
-		if (!partialMatchKey(pending.queryKey, queryKey)) continue;
-		if (reread) pending.invalidated = true;
-		pendingOpenCodeCatalogs.delete(requestKey);
+		if (partialMatchKey(pending.queryKey, queryKey)) pendingOpenCodeCatalogs.delete(requestKey);
+	}
+	if (!reread) return;
+	for (const pending of liveOpenCodeCatalogs) {
+		if (partialMatchKey(pending.queryKey, queryKey)) pending.invalidated = true;
 	}
 }
 
@@ -106,8 +112,10 @@ export function agentModelsQueryOptions(agentId: string, scope: string, hostId?:
 					if (!pending) {
 						pending = { promise: requestAgentModels(agentId, catalogScope, "cached", hostId), queryKey: key, invalidated: false };
 						pendingOpenCodeCatalogs.set(requestKey, pending);
+						liveOpenCodeCatalogs.add(pending);
 						const active = pending;
 						void active.promise.finally(() => {
+							liveOpenCodeCatalogs.delete(active);
 							if (pendingOpenCodeCatalogs.get(requestKey) === active) pendingOpenCodeCatalogs.delete(requestKey);
 						}).catch(() => {});
 					}
