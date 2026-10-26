@@ -5,6 +5,7 @@ import type { HostSnapshot } from "./otherHosts";
 
 const fixtures = vi.hoisted(() => ({
 	platform: "ios",
+	keyboard: { height: 0, isVisible: false, progress: 0 },
 	hostStates: [] as HostSnapshot[],
 	refreshAll: vi.fn(async () => {}),
 	refreshHost: vi.fn(async (_hostId: string) => {}),
@@ -28,11 +29,15 @@ vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator", FlatList: "FlatList", ScrollView: "ScrollView", View: "View", Text: "Text", Pressable: "Pressable", Platform: { get OS() { return fixtures.platform; } },
 	Keyboard: { dismiss: vi.fn() }, StyleSheet: { create: (styles: object) => styles },
 }));
-vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, useAnimatedStyle: () => ({}) }));
+vi.mock("react-native-reanimated", () => ({ default: { View: "AnimatedView" }, useAnimatedStyle: (style: () => object) => style() }));
 vi.mock("react-native-keyboard-controller", () => ({
-	useKeyboardState: () => 0, useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }),
+	useKeyboardState: (select: (state: typeof fixtures.keyboard) => unknown) => select(fixtures.keyboard),
+	useReanimatedKeyboardAnimation: () => ({ progress: { value: fixtures.keyboard.progress } }),
 }));
-vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) }));
+vi.mock("react-native-safe-area-context", () => ({
+	useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
+	useSafeAreaFrame: () => ({ x: 0, y: 0, width: 412, height: 900 }),
+}));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn() } }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
@@ -77,6 +82,7 @@ vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import FleetScreen from "../app/(tabs)/(workers)/index";
 import { WorkerBoardList } from "./worker-board-list";
+import { workerListBottomInset } from "./worker-dock-layout";
 
 let renderer: ReactTestRenderer;
 function selectWindows() {
@@ -106,6 +112,7 @@ function snapshot(patch: Partial<HostSnapshot>): HostSnapshot {
 
 beforeEach(() => {
 	fixtures.platform = "ios";
+	fixtures.keyboard = { height: 0, isVisible: false, progress: 0 };
 	fixtures.configured = true;
 	fixtures.notificationsUnread = 0;
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
@@ -166,6 +173,37 @@ describe("Workers header", () => {
 		const first = screen.children[0] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string } };
 		expect(first.type).toBe(WorkerBoardList);
 		expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
+	});
+});
+
+// The keyboard's height runs from the bottom of the window. Android's page stops
+// at the tab bar above that, so measuring the dock's lift from the page's own
+// bottom edge floated it a whole tab bar above the keys.
+describe("Workers dock over the keyboard", () => {
+	it("sets the dock down just above the Android keyboard, clear of the tab bar", () => {
+		fixtures.platform = "android";
+		fixtures.keyboard = { height: 400, isVisible: true, progress: 1 };
+		// A 900dp window whose page ends at 764dp, above a 136dp tab bar.
+		act(() => {
+			renderer = create(<FleetScreen />, {
+				createNodeMock: () => ({ measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(0, 120, 412, 644) }),
+			});
+		});
+		const page = renderer.root.findAllByType("View" as never)[0];
+		act(() => page.props.onLayout());
+		const [, resting, rise] = renderer.root.findByType("AnimatedView" as never).props.style;
+		const fromWindowBottom = 136 + resting.bottom - rise.transform[0].translateY;
+		expect(fromWindowBottom).toBe(400 + 8);
+		expect(renderer.root.findByType(WorkerBoardList).props.contentBottomInset).toBe(workerListBottomInset(400 - 136 + 12));
+	});
+
+	// iOS lays the page out under the tab bar to the bottom of the window, so the
+	// keyboard's own height is already the page's.
+	it("sets the dock down just above the iOS keyboard", () => {
+		fixtures.keyboard = { height: 336, isVisible: true, progress: 1 };
+		act(() => { renderer = create(<FleetScreen />); });
+		const [, resting, rise] = renderer.root.findByType("AnimatedView" as never).props.style;
+		expect(resting.bottom - rise.transform[0].translateY).toBe(336 + 8);
 	});
 });
 

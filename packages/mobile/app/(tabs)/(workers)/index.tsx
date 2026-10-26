@@ -13,12 +13,13 @@ import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { useTabBarInset } from "../../../lib/useTabBarInset";
+import { useTabPageBottomGap } from "../../../lib/useTabPageBottomGap";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
 import { hostedProjectKey } from "../../../lib/hostedRows";
 import { WorkerDock } from "../../../lib/worker-dock";
-import { workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../../lib/worker-dock-layout";
+import { keyboardOverPage, workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../../lib/worker-dock-layout";
 import { WorkerControlsSheet } from "../../../lib/worker-controls-sheet";
 import { WorkerMachineState } from "../../../lib/worker-machine-state";
 import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
@@ -44,6 +45,7 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const tabBarInset = useTabBarInset();
+	const page = useTabPageBottomGap();
 	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
@@ -169,13 +171,16 @@ export default function FleetScreen() {
 		finally { setRefreshing(false); }
 	}, [refreshAll, refreshHost, selectedHost?.hostId]);
 
-	const keyboardLayout = workerDockKeyboardLayout(keyboardHeight, tabBarInset, keyboardVisible);
+	// The keyboard's height runs from the window's bottom edge, which Android's
+	// page stops short of: it ends at the tab bar.
+	const keyboardOverlap = keyboardOverPage(keyboardHeight, page.gap);
+	const keyboardLayout = workerDockKeyboardLayout(keyboardOverlap, tabBarInset, keyboardVisible);
 	// `progress`, not the animated `height`: that value is the keyboard's frame
 	// origin, which is negative while the keyboard is up (the library's own
 	// avoiding view negates it before use). Feeding it to a `max(…, 0)` produced a
 	// lift of exactly nothing, which parked the search field under the keyboard.
 	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardHeight, tabBarInset) }],
+		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardOverlap, tabBarInset) }],
 	}));
 
 	if (!configured && hostStates.length === 0) {
@@ -207,7 +212,7 @@ export default function FleetScreen() {
 	);
 
 	return (
-		<View style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
+		<View ref={page.ref} onLayout={page.onLayout} style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
 			{!selectedHost && fleetLoading && allSessions.length === 0 ? (
 				<TabPageScroll>
 					{listHeader}

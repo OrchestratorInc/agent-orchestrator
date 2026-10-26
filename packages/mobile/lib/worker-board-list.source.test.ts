@@ -29,7 +29,7 @@ describe("worker dock keyboard lift", () => {
 	// use. Feeding it to a `max(…, 0)` gave a lift of exactly zero, which parked
 	// the search field under the keyboard instead of above it.
 	it("drives the lift from progress, not from the animated height", () => {
-		expect(board).toContain("-keyboardAnimation.progress.value * workerDockLift(keyboardHeight, tabBarInset)");
+		expect(board).toContain("-keyboardAnimation.progress.value * workerDockLift(keyboardOverlap, tabBarInset)");
 		expect(board).not.toContain("keyboardAnimation.height.value");
 	});
 });

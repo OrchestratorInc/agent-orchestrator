@@ -11,6 +11,15 @@ const KEYBOARD_DOCK_GAP = 8;
 const DOCK_HEIGHT = 52;
 const LIST_GAP = 16;
 
+/**
+ * How far the keyboard reaches above the bottom of a page that stops short of
+ * the window's bottom edge, the edge the keyboard's height is measured from.
+ * Every keyboard distance below is taken from the page's bottom edge.
+ */
+export function keyboardOverPage(keyboardHeight: number, pageBottomGap: number): number {
+	return Math.max(keyboardHeight - pageBottomGap, 0);
+}
+
 /** Where the dock sits with the keyboard down. */
 export function workerDockRestingBottom(safeAreaBottom: number): number {
 	return safeAreaBottom + RESTING_GAP;

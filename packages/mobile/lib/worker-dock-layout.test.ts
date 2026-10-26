@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { workerDockKeyboardLayout, workerDockLift, workerDockRestingBottom, workerDockVisibility, workerListBottomInset } from "./worker-dock-layout";
+import { keyboardOverPage, workerDockKeyboardLayout, workerDockLift, workerDockRestingBottom, workerDockVisibility, workerListBottomInset } from "./worker-dock-layout";
 
 describe("worker dock keyboard layout", () => {
 	it("anchors the controls directly above the keyboard", () => {
@@ -53,6 +53,20 @@ describe("worker dock lift", () => {
 
 	it("never lifts by the home indicator alone", () => {
 		expect(workerDockLift(20, 34)).toBe(0);
+	});
+
+	// Android's board page ends at the tab bar, but the keyboard's height is taken
+	// from the window's bottom edge, the tab bar's height further down.
+	it("sets the dock down 8pt above the keyboard from a page that ends at the tab bar", () => {
+		const tabBar = 136;
+		const overlap = keyboardOverPage(400, tabBar);
+		expect(tabBar + workerDockRestingBottom(0) + workerDockLift(overlap, 0)).toBe(400 + 8);
+		expect(workerDockKeyboardLayout(overlap, 0, true).dockBottom).toBe(400 - tabBar + 12);
+	});
+
+	it("has no keyboard over a page whose bottom it does not reach", () => {
+		expect(keyboardOverPage(120, 136)).toBe(0);
+		expect(keyboardOverPage(336, 0)).toBe(336);
 	});
 });
 
