@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
 import { ArtifactSelectionAsk } from "./ArtifactSelectionAsk";
 import { FileContentPane, type FileViewMode } from "./FileContentPane";
-import { isSvgPath } from "../lib/image-files";
+import { isDelimitedTextPath } from "../lib/delimited-text";
+import { isMermaidPath, isSvgPath } from "../lib/image-files";
 
-// Mirrors FileContentPane's own canRenderMarkdown/canRenderSvg extension checks:
-// a markdown or SVG artifact should open already rendered, the same way GitHub
+// Mirrors FileContentPane's own canRender* extension checks: a markdown, SVG,
+// CSV/TSV or Mermaid artifact opens already rendered, the same way GitHub
 // opens a README, rather than making the reader click over to "Rendered".
 function initialModeFor(path: string): FileViewMode {
-	return /\.(md|markdown)$/i.test(path) || isSvgPath(path) ? "rendered" : "file";
+	return /\.(md|markdown)$/i.test(path) || isSvgPath(path) || isDelimitedTextPath(path) || isMermaidPath(path) ? "rendered" : "file";
 }
 
 /**
@@ -20,10 +21,11 @@ function initialModeFor(path: string): FileViewMode {
  * live outside the git workspace and have no diff/status.
  *
  * One view, no display mode switch: a markdown artifact renders, any other
- * text file shows as code, and media streams through native image/player
- * elements. A complete text file can be edited (saved through
- * the artifact write endpoint) unless `readOnly`. Text selected in the
- * rendered markdown can be sent to the worker.
+ * text file shows as code, a CSV/TSV file as a table, a Mermaid file as its
+ * diagram, media streams through native image/player elements, and a PDF
+ * renders its pages. A complete text file can be edited (saved through the
+ * artifact write endpoint) unless `readOnly`. Text selected in the rendered
+ * markdown, a table, or a PDF page can be sent to the worker.
  */
 export function ArtifactFileView({
 	artifactName,

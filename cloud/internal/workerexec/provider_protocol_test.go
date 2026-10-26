@@ -552,6 +552,9 @@ type claudeModelAgent struct {
 	modeSpyAgent
 	mu       sync.Mutex
 	switched []string
+	// stuck, when set, answers every model change with that model's options,
+	// as an adapter that silently stayed put would.
+	stuck string
 }
 
 func (a *claudeModelAgent) SetSessionConfigOption(_ context.Context, request acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
@@ -561,6 +564,9 @@ func (a *claudeModelAgent) SetSessionConfigOption(_ context.Context, request acp
 	model := string(request.ValueId.Value)
 	a.mu.Lock()
 	a.switched = append(a.switched, model)
+	if a.stuck != "" {
+		model = a.stuck
+	}
 	a.mu.Unlock()
 	return acp.SetSessionConfigOptionResponse{ConfigOptions: claudeTestOptions(model)}, nil
 }
