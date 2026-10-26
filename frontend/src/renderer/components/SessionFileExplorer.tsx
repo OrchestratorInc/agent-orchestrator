@@ -322,7 +322,7 @@ export function SessionFileExplorer({
 			<TooltipTrigger asChild onFocus={(event) => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>
 				{/* Sized and toned like the pinned top-bar buttons beside it. */}
 				<Button
-					aria-label={isMaximized ? t("files.minimize") : t("files.maximize")}
+					aria-label={isMaximized ? t("common.returnToPanel") : t("common.maximize")}
 					className="shrink-0 text-muted-foreground hover:text-foreground"
 					onClick={() => onToggleMaximized(!isMaximized)}
 					size="icon-sm"
@@ -336,7 +336,7 @@ export function SessionFileExplorer({
 					)}
 				</Button>
 			</TooltipTrigger>
-			<TooltipContent side="bottom">{isMaximized ? t("files.minimize") : t("files.maximize")}</TooltipContent>
+			<TooltipContent side="bottom">{isMaximized ? t("common.returnToPanel") : t("common.maximize")}</TooltipContent>
 		</Tooltip>
 	) : null;
 

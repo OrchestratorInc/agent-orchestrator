@@ -35,12 +35,11 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Lightbulb, Loader2, MessageSquarePlus, TriangleAlert, Undo2 } from "lucide-react";
+import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
-import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "../NavRowHighlight";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
@@ -128,7 +127,7 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
-	FromOrchestrator,
+	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
 	OrchestratorReply,
@@ -143,6 +142,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
+import { AutomationMessage } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -157,7 +157,7 @@ import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
-import { ComposerModeItems, TurnSettingsBar } from "./TurnSettingsBar";
+import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { UsageLimitNotice } from "./UsageLimitNotice";
@@ -488,6 +488,8 @@ export interface ChatWorkspaceProps {
 	onRememberPermissions?: (mode: ApprovalMode | null) => Promise<unknown> | void;
 	showApprovalMode?: boolean;
 	approvalModes?: ApprovalMode[];
+	/** Approval modes the session allows that the selected model cannot run. */
+	approvalModeLimits?: ApprovalModeLimits;
 	rememberPermissionsPending?: boolean;
 	rememberPermissionsError?: string;
 	rememberedPermissionMode?: ApprovalMode;
@@ -574,6 +576,23 @@ export interface ChatWorkspaceProps {
 	promoteQueuedTurnPendingTurnId?: string;
 	cancelQueuedTurnPendingTurnId?: string;
 	editQueuedTurnPendingTurnId?: string;
+	/** Replaces the turn settings bar, for a chat whose session does not exist yet. */
+	draftSettings?: ReactNode;
+	/** Shown under the composer, for a chat whose session does not exist yet. */
+	draftNotice?: ReactNode;
+	/**
+	 * When the user sent the brief that started this chat. Until the first turn
+	 * settles the chat reads as working from that moment, with no connecting banner.
+	 */
+	openingStartedAt?: string;
+	/** A tray tucked under the composer while the chat is empty, e.g. the new chat page's project picker. */
+	composerTray?: ReactNode;
+	/** An empty header strip sits above: center the empty chat in the window, not below the strip. */
+	centerInWindow?: boolean;
+	/** The project has a setup script, so the start-up checklist lists that step. */
+	showSetupStep?: boolean;
+	/** Show the attach control, disabled, before there is a workspace to attach into. */
+	attachLater?: boolean;
 }
 
 type ChatWorkspaceActivation =
@@ -728,6 +747,7 @@ function ChatWorkspaceContent({
 	onRememberPermissions,
 	showApprovalMode,
 	approvalModes,
+	approvalModeLimits,
 	rememberPermissionsPending,
 	rememberPermissionsError,
 	rememberedPermissionMode,
@@ -768,6 +788,13 @@ function ChatWorkspaceContent({
 	promoteQueuedTurnPendingTurnId,
 	cancelQueuedTurnPendingTurnId,
 	editQueuedTurnPendingTurnId,
+	draftSettings,
+	draftNotice,
+	openingStartedAt,
+	composerTray,
+	centerInWindow = false,
+	showSetupStep = true,
+	attachLater,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -811,7 +838,14 @@ function ChatWorkspaceContent({
 			: undefined;
 	// While a session starts, its opening brief reads as sent: the setup checklist
 	// under it explains why nothing has answered yet. Later messages still queue.
-	const provisionSteps = session?.provisionSteps ?? startingSteps;
+	const plannedSteps = session?.provisionSteps ?? startingSteps;
+	// Named tasks keep a setup checkpoint even when the project has no setup script;
+	// the checklist names that step only when there is a script to run, or it failed
+	// (the step still running when the start failed).
+	const provisionSteps = useMemo(
+		() => plannedSteps?.filter((step) => step.id !== "setup" || showSetupStep || (startupState === "failed" && step.status === "running")),
+		[plannedSteps, showSetupStep, startupState],
+	);
 	// Ready can arrive before the first turn does. Keep its setup slot through
 	// that gap; selecting the first turn also never promotes a queued follow-up.
 	const hasStartup = Boolean(
@@ -1138,6 +1172,10 @@ function ChatWorkspaceContent({
 				}
 				return;
 			}
+			// Where the composer stands now is where the docking slide starts from.
+			if (wasConversationEmpty.current && composerBoxRef.current) {
+				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
+			}
 			return onSend?.(text, attachments, clientMessageId, excerpts);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
@@ -1204,8 +1242,12 @@ function ChatWorkspaceContent({
 	const composerFocusRef = useRef<ChatComposerHandle>(null);
 	const artifactSession = session?.requestedOutput === "artifact";
 	// The sample prompts show only while the composer is empty: picking one hides
-	// them, and clearing the draft brings them back.
-	const [composerEmpty, setComposerEmpty] = useState(true);
+	// them, and clearing the draft brings them back. A saved draft hides them from
+	// the first frame, so a remount (such as a project switch) never flashes them.
+	const [composerEmpty, setComposerEmpty] = useState(() => {
+		const { composer } = readChatSessionDraft(draftScope);
+		return !composer.text.trim() && composer.attachments.length === 0 && !composer.excerpts?.length;
+	});
 	const annotationNavigationRef = useRef<((annotation: { text: string; messageId?: string; revision?: number }) => void) | null>(null);
 	const navigateToAnnotation = useCallback((annotation: { text: string; messageId?: string; revision?: number }) => {
 		annotationNavigationRef.current?.(annotation);
@@ -1423,6 +1465,7 @@ function ChatWorkspaceContent({
 					harness={snapshot.harness}
 					showApprovalMode={showApprovalMode ?? !session?.cloud}
 					approvalModes={approvalModes}
+					approvalModeLimits={approvalModeLimits}
 					reroute={stableModelReroute}
 					onChange={newWorkDisabled ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
@@ -1464,6 +1507,7 @@ function ChatWorkspaceContent({
 			rememberedPermissionMode,
 			showApprovalMode,
 			approvalModes,
+			approvalModeLimits,
 			session?.cloud,
 			snapshot.controller.state,
 			snapshot.items.length,
@@ -1563,6 +1607,20 @@ function ChatWorkspaceContent({
 	// Arriving in a chat that already has messages docks the composer at the
 	// bottom while they load; a chat with none opens centered like any new chat.
 	const arrivingWithHistory = arrivingInChat && Boolean(session?.lastUserMessageAt);
+	// A chat started from the new chat page holds the start-up shimmer from the
+	// send until the agent picks the brief up, on that page and on the session's.
+	// Arriving from the new chat page, whose header strip is empty, the session's
+	// header slides into that strip. Only on that arrival, not on a later visit.
+	const [headerSlideIn] = useState(() => {
+		const slideKey = uiSessionId ?? snapshot.sessionId;
+		if (!openingStartedAt || Date.now() - Date.parse(openingStartedAt) > 15_000 || headerSlidSessions.has(slideKey)) return false;
+		headerSlidSessions.add(slideKey);
+		// Past the arrival window the start time alone rules out a replay.
+		setTimeout(() => headerSlidSessions.delete(slideKey), 15_000);
+		return true;
+	});
+	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !firstTurnSettled(snapshot) &&
+		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
 	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
@@ -1597,7 +1655,7 @@ function ChatWorkspaceContent({
 
 		const composerTop = () => (composerBoxRef.current ?? dock).getBoundingClientRect().top;
 		if (conversationEmpty) {
-			composerCenteredTopRef.current = composerTop();
+			composerCenteredTopRef.current ??= composerTop();
 			composerFlipDyRef.current = null;
 			return;
 		}
@@ -1689,6 +1747,7 @@ function ChatWorkspaceContent({
 				orderedAuxiliaryTabs={orderedAuxiliaryTabs}
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen || inlineHeader}
+				slideIn={headerSlideIn}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -1765,6 +1824,7 @@ function ChatWorkspaceContent({
 					) : null}
 					<ControllerBanner
 						controller={snapshot.controller}
+						quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
 						provisionState={orchestratorStarting ? "provisioning" : session?.provisionState}
 						transitioning={controllerTransitioning || agentResuming}
 						automaticWakePending={suppressStopped}
@@ -1784,7 +1844,7 @@ function ChatWorkspaceContent({
 						agentStopped={snapshot.controller.state === "stopped" && !(controllerTransitioning || agentResuming || suppressStopped || resumingAgent || startupReconnecting)}
 					/>
 					<div
-						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
+						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
@@ -1831,6 +1891,7 @@ function ChatWorkspaceContent({
 									rollbackDisabled={Boolean(turn || rollbackPending || newWorkDisabled)}
 									localEchos={localEchos}
 									startup={sessionRole === "orchestrator" ? undefined : startup}
+									openingStartedAt={openingStartedAt}
 									arriving={arrivingInChat}
 								/>
 							</ChatHostId.Provider>
@@ -1868,7 +1929,7 @@ function ChatWorkspaceContent({
 									artifact={artifactSession}
 									onPick={(text) => composerFocusRef.current?.setDraft(text)}
 								/>
-								<div ref={composerBoxRef} className="relative">
+								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
 									{welcomeLeaving ? (
 										<h1
 											aria-hidden="true"
@@ -1915,10 +1976,10 @@ function ChatWorkspaceContent({
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
-										onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
-										onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
+										onInterrupt={turn && !newWorkDisabled && !openingStarting ? stableInterrupt : undefined}
+										onContinue={canContinue && !queueEdit && !openingStarting ? onContinueTurn : undefined}
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
-										settings={<>
+										settings={draftSettings ?? <>
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{composerSettings}
 										</>}
@@ -1941,10 +2002,13 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											arrivingInChat
 												? arrivingPlaceholder
+												: openingStarting && !session
+												// Same words the session shows once it can queue, so nothing changes on handoff.
+												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: orchestratorStarting
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
@@ -1964,6 +2028,7 @@ function ChatWorkspaceContent({
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
+										attachLater={attachLater}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
@@ -1987,7 +2052,9 @@ function ChatWorkspaceContent({
 										acceptedClientMessageIds={acceptedClientMessageIds}
 									/>
 								</div>
+								{conversationEmpty && composerTray ? <div className="chat-composer-tray flex items-center">{composerTray}</div> : null}
 								{compactStartup ? <OrchestratorStartupStatus {...compactStartup} /> : null}
+								{draftNotice}
 							</div>
 						</div>
 					</div>
@@ -2172,6 +2239,7 @@ function ChatHeader({
 	orderedAuxiliaryTabs,
 	onReorderAuxiliaryTabs,
 	inline,
+	slideIn = false,
 	session,
 	onSessionRenamed,
 }: {
@@ -2202,6 +2270,7 @@ function ChatHeader({
 	onSessionRenamed?: () => void | Promise<void>;
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
+	slideIn?: boolean;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -2235,7 +2304,7 @@ function ChatHeader({
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
-		<header className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
+		<header className={cn("flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar", slideIn && "chat-header-slide-in")}>
 			<div
 				className="session-topbar-surface flex min-w-0 flex-1"
 				data-testid="session-workspace-topbar"
@@ -2374,8 +2443,11 @@ function ControllerBanner({
 	onOpenShell,
 	openingShell,
 	shellError,
+	quietConnect = false,
 }: {
 	controller: { state: ControllerState; error?: string };
+	/** The chat already shows the opening brief as working; connecting needs no banner. */
+	quietConnect?: boolean;
 	provisionState?: WorkspaceSession["provisionState"];
 	transitioning?: boolean;
 	automaticWakePending?: boolean;
@@ -2403,6 +2475,7 @@ function ControllerBanner({
 	// presenting its intermediate snapshot as a crash produces a red false alarm.
 	if (controller.state === "ready" || controller.state === "busy" || controller.state === "hibernated") return null;
 	if (controller.state === "stopped" && (transitioning || automaticWakePending)) return null;
+	if (controller.state === "connecting" && quietConnect) return null;
 
 	const copy: Partial<Record<ControllerState, { title: string; tone: string }>> = {
 		connecting: {
@@ -2555,6 +2628,7 @@ export function Timeline({
 	startup,
 	arriving = false,
 	workerUpdates = false,
+	openingStartedAt,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -2595,6 +2669,8 @@ export function Timeline({
 	arriving?: boolean;
 	/** Orchestrator chat: draw worker messages and reports as rows, and the orchestrator's handling under them. */
 	workerUpdates?: boolean;
+	/** When the brief that started this chat was sent; see ChatWorkspaceProps. */
+	openingStartedAt?: string;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -2892,8 +2968,10 @@ export function Timeline({
 	const queued = useMemo(() => {
 		const ids = queuedTurnIds(snapshot);
 		if (openingTurnId) ids.delete(openingTurnId);
+		const firstTurn = snapshot.turns[0];
+		if (openingStartedAt && firstTurn && !firstTurnSettled(snapshot)) ids.delete(firstTurn.id);
 		return ids;
-	}, [openingTurnId, snapshot]);
+	}, [openingStartedAt, openingTurnId, snapshot]);
 	const decide = useStableCallback(onDecide);
 	const rollback = useStableCallback(onRollback);
 	const openFiles = useStableCallback(onOpenFiles);
@@ -3397,19 +3475,22 @@ export function Timeline({
 			lastSeenLatestSequence.current = snapshot.latestSequence;
 			return;
 		}
+		const openingTurnId = openingStartedAt ? snapshot.turns[0]?.id : undefined;
 		const added = new Set(
 			humanMessages
 				.filter(
 					(item) =>
 						!seenHumanMessageIds.current?.has(itemKey(item)) &&
-						item.sequence > (lastSeenLatestSequence.current ?? -Infinity),
+						item.sequence > (lastSeenLatestSequence.current ?? -Infinity) &&
+						// The brief that started the chat made its entrance on the new chat page.
+						!(openingTurnId && item.turnId === openingTurnId),
 				)
 				.map(itemKey),
 		);
 		seenHumanMessageIds.current = humanMessageKeys;
 		lastSeenLatestSequence.current = snapshot.latestSequence;
 		if (added.size > 0) setNewHumanMessageIds(added);
-	}, [timelineItems, snapshot.latestSequence]);
+	}, [timelineItems, snapshot.latestSequence, openingStartedAt, snapshot.turns]);
 	const previousEchoIds = useRef<ReadonlySet<string>>(new Set(localEchos.map((echo) => echo.clientMessageId)));
 	useLayoutEffect(() => {
 		const ids = new Set(localEchos.map((echo) => echo.clientMessageId));
@@ -3419,15 +3500,35 @@ export function Timeline({
 		// The reader just sent: bring them to their prompt even if they had scrolled away.
 		requestGlideToEnd();
 	}, [localEchos, requestGlideToEnd]);
+	// The brief that started this chat reads as working from the moment it was
+	// sent, through the agent connecting, until its turn settles.
+	const openingPending = Boolean(openingStartedAt) && !firstTurnSettled(snapshot);
 	const grouped = useMemo(() => {
 		const hiddenTurns = hiddenTimelineTurnIds(snapshot);
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
-		return groupByTurn({ ...snapshot, items: timelineItems }).filter(
-			(group) => !group.turnId || !hiddenTurns.has(group.turnId),
-		);
-	}, [openingTurnId, snapshot, timelineItems]);
+		const firstTurn = snapshot.turns[0];
+		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
+		return groupByTurn({ ...snapshot, items: timelineItems })
+			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
+			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
+				? { ...group, live: true, liveStartedAt: openingStartedAt }
+				: group);
+	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
+	// One slot carries the start-up row from the first frame: the opening turn's
+	// group, or before that turn exists, the brief's own live group. Drawing it
+	// anywhere else first would make it jump lines when the turn arrives.
+	// A chat started from the new chat page reads as setting up from the send, before
+	// its session reports any steps, so the row keeps its label through the handoff
+	// and the steps fill in under it.
+	const openingSetup = !startup && openingPending && turn?.state !== "running"
+		? { failed: false, steps: [], agentName: agentLabel(snapshot.harness) }
+		: undefined;
+	const rowStartup = startup ?? openingSetup;
+	const startupGroupKey = rowStartup && (openingSetup || showStartup)
+		? groups.find((group) => (openingTurnId ? group.turnId === openingTurnId : group.live))?.key
+		: undefined;
 	// Read by syncScrollLayout (a stable callback) so the initial snap only latches
 	// once real conversation content exists (history can load after the chat opens).
 	const groupCountRef = useRef(groups.length);
@@ -3556,6 +3657,14 @@ export function Timeline({
 						const delta = nextRect.top + nextRect.height / 2 - (scrollerRect.top + scrollerRect.height / 2);
 						scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
 					}
+				}
+			} else if (scrollerNode) {
+				// The text is not an exact match for the rendered message (a search
+				// snippet of raw Markdown, say): still bring the whole message into view.
+				const sourceRect = source.getBoundingClientRect();
+				const scrollerRect = scrollerNode.getBoundingClientRect();
+				if (sourceRect.top < scrollerRect.top || sourceRect.bottom > scrollerRect.bottom) {
+					source.scrollIntoView({ behavior: "auto", block: sourceRect.height > scrollerRect.height ? "start" : "center" });
 				}
 			}
 			annotationHighlightTimer.current = window.setTimeout(() => annotationHighlightCleanup.current?.(), 2200);
@@ -3805,6 +3914,10 @@ export function Timeline({
 			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
+		// Older history loads as the reader scrolls up within a screen of the top,
+		// before they reach it. The button above the first turn stays as the
+		// loading state and for histories too short to scroll.
+		if (movedUp && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
 		updateScrollbar();
 	}
 
@@ -3956,7 +4069,7 @@ export function Timeline({
 					ref={selectionButton}
 					style={{ left: selectionPosition?.left ?? 0, top: selectionPosition?.top ?? 0, visibility: selectionPosition?.visible ? "visible" : "hidden" }}
 					onMouseDown={(event) => event.preventDefault()}
-					className={cn(actionMenuContentClass, "absolute flex-row min-w-0 w-max max-w-full shadow-lg")}
+					className={cn(actionMenuContentClass, "absolute flex-row min-w-0 w-max max-w-full")}
 				>
 					<button type="button" onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
 						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
@@ -4041,7 +4154,7 @@ export function Timeline({
 									workerUpdates={workerUpdates}
 									// Consecutive quiet worker turns read as one list of rows, not separate turns.
 									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
-									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
+									startup={group.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
 									activityDisclosureOverrides={activityDisclosureOverrides}
 									onActivityDisclosureChange={onActivityDisclosureChange}
@@ -4090,12 +4203,15 @@ export function Timeline({
 					</div>
 					{/* Normally drawn inside the opening turn's group; this covers a start
 					    whose brief is not in the timeline. */}
-					{startup && showStartup && !groups.some((group) => group.turnId === openingTurnId) ? (
-						<LiveResponseStatus startupLabel={t(startup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={startup.failed}>
-							<SessionStartup {...startup} />
+					{rowStartup && (openingSetup || showStartup) && !startupGroupKey ? (
+						<LiveResponseStatus startupLabel={t(rowStartup.failed ? "chat.startup.failed" : "chat.startup.running")} failed={rowStartup.failed}>
+							{rowStartup.steps.length > 0 || rowStartup.failed ? <SessionStartup {...rowStartup} /> : null}
 						</LiveResponseStatus>
 					) : turn?.state === "running" && !groups.some((group) => group.turnId === turn.id) ? (
 						<LiveResponseStatus startedAt={turn.startedAt ?? turn.requestedAt} />
+					) : openingPending && !groups.some((group) => group.live) ? (
+						// Before the brief has a turn of its own (still being created).
+						<LiveResponseStatus startedAt={openingStartedAt} />
 					) : null}
 					{messageEdit && !editedMessageVisible ? (
 						<div className="flex justify-end" data-chat-scroll-anchor="">
@@ -4209,7 +4325,7 @@ export function Timeline({
 				previews[hoveredMarker] ? (
 					<div
 						role="tooltip"
-						className="chat-scroll-preview pointer-events-none absolute right-full z-20 mr-3 w-80 rounded-xl border border-border-strong bg-raised px-3.5 py-3 shadow-lg"
+						className="chat-scroll-preview pointer-events-none absolute right-full z-20 mr-3 w-80 rounded-xl border border-(--color-border-overlay) bg-raised px-3.5 py-3 shadow-(--shadow-popover)"
 						style={{
 							top: `clamp(4rem, ${scrollbar.markers[hoveredMarker].top}px, calc(100% - 4rem))`,
 						}}
@@ -4479,7 +4595,7 @@ const TurnGroup = memo(function TurnGroup({
 				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
 			>
-				{startup ? <SessionStartup {...startup} /> : null}
+				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
 			</LiveResponseStatus>,
 		);
 	}
@@ -4735,7 +4851,11 @@ function TimelineItem({
 				/>
 			);
 		}
-		return <FromOrchestrator item={item}><OriginMessage message={item} /></FromOrchestrator>;
+		return (
+			<FromAgent item={item}>
+				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
+			</FromAgent>
+		);
 	}
 	if (item.activityKind === "approval") {
 		// Pending approval owns the composer. Keeping it in the grouping model still
@@ -4757,9 +4877,9 @@ function TimelineItem({
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
 		return (
-			<FromOrchestrator item={item}>
+			<FromAgent item={item}>
 				<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
-			</FromOrchestrator>
+			</FromAgent>
 		);
 	}
 	// A plan whose turn AO never correlated — one from before this controller
@@ -4848,6 +4968,7 @@ function echoMatchesItem(
 	backgroundQueuedTurnIds: ReadonlySet<string>,
 ): boolean {
 	if (item.kind !== "message" || item.role !== "user" || item.origin !== "human") return false;
+	if (echo.opening) return true;
 	// A background wake keeps its echo in the timeline while the durable turn sits queued.
 	if (echo.turnId && backgroundQueuedTurnIds.has(echo.turnId) && item.turnId === echo.turnId) return false;
 	if (item.clientMessageId) return item.clientMessageId === echo.clientMessageId;
@@ -5071,6 +5192,15 @@ function previewText(value: string, limit: number): string {
 	return plain.length > limit ? `${plain.slice(0, limit - 1).trimEnd()}…` : plain;
 }
 
+/** Sessions whose header already slid in on arrival from the new chat page. */
+const headerSlidSessions = new Set<string>();
+
+/** The first turn has an outcome, so the opening brief no longer reads as pending. */
+function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
+	const first = snapshot.turns[0];
+	return Boolean(first && first.state !== "queued" && first.state !== "running");
+}
+
 /**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
@@ -5286,16 +5416,19 @@ function rendersNothing(run: TimelineRun): boolean {
 	return (item.activityKind === "user_input" || item.activityKind === "approval") && item.status === "pending";
 }
 
-const ARTIFACT_PROMPT_KEYS = [
-	"chat.welcome.artifactPrompt.plan",
-	"chat.welcome.artifactPrompt.compare",
-	"chat.welcome.artifactPrompt.notes",
+// Each chip names its request in a few words; picking it fills in the whole request.
+const ARTIFACT_PROMPTS = [
+	{ prompt: "chat.welcome.artifactPrompt.plan", chip: "chat.welcome.chip.plan", icon: ListTodo },
+	{ prompt: "chat.welcome.artifactPrompt.compare", chip: "chat.welcome.chip.compare", icon: Columns2 },
+	{ prompt: "chat.welcome.artifactPrompt.notes", chip: "chat.welcome.chip.notes", icon: NotebookPen },
+	{ prompt: "chat.welcome.artifactPrompt.slides", chip: "chat.welcome.chip.slides", icon: Presentation },
 ] as const;
 
-const CHAT_PROMPT_KEYS = [
-	"chat.welcome.prompt.review",
-	"chat.welcome.prompt.tests",
-	"chat.welcome.prompt.trace",
+const CHAT_PROMPTS = [
+	{ prompt: "chat.welcome.prompt.review", chip: "chat.welcome.chip.review", icon: ScanSearch },
+	{ prompt: "chat.welcome.prompt.tests", chip: "chat.welcome.chip.tests", icon: FlaskConical },
+	{ prompt: "chat.welcome.prompt.trace", chip: "chat.welcome.chip.trace", icon: Route },
+	{ prompt: "chat.welcome.prompt.simplify", chip: "chat.welcome.chip.simplify", icon: WandSparkles },
 ] as const;
 
 /**
@@ -5306,7 +5439,7 @@ const CHAT_PROMPT_KEYS = [
 function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; artifact: boolean; onPick: (text: string) => void }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	const keys = artifact ? ARTIFACT_PROMPT_KEYS : CHAT_PROMPT_KEYS;
+	const prompts = artifact ? ARTIFACT_PROMPTS : CHAT_PROMPTS;
 	return (
 		<AnimatePresence initial={false}>
 			{open ? (
@@ -5314,26 +5447,31 @@ function WelcomePromptSuggestions({ open, artifact, onPick }: { open: boolean; a
 					key="welcome-prompts"
 					initial={{ height: 0, opacity: 0 }}
 					animate={{ height: "auto", opacity: 1, transition: { duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] } }}
-					exit={{ height: 0, opacity: 0, transition: { duration: reducedMotion ? 0 : 0.16, ease: [0.4, 0, 1, 1] } }}
+					// The chips fade first, then the row folds away with a soft ease in and out,
+					// so the composer below settles instead of being yanked up.
+					exit={{
+						height: 0,
+						opacity: 0,
+						transition: reducedMotion ? { duration: 0 } : {
+							height: { duration: 0.32, ease: [0.65, 0, 0.35, 1] },
+							opacity: { duration: 0.14, ease: "easeOut" },
+						},
+					}}
 					// The dock's gap-2 sits outside this box. Cancel it and put the space back as
 					// padding inside, so it collapses with the height instead of snapping.
 					className="-mb-2 overflow-hidden"
 				>
-					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-col divide-y divide-border pb-3">
-						{keys.map((key) => (
-							<li key={key} className="py-0.5">
+					<ul aria-label={t(artifact ? "chat.welcome.artifactPrompts" : "chat.welcome.prompts")} className="flex flex-wrap justify-center gap-2 pb-4">
+						{prompts.map(({ prompt, chip, icon: Icon }) => (
+							<li key={prompt}>
 								<button
 									type="button"
-									// Same growing pill as the sidebar rows; the host stays transparent.
-									className={cn(
-										"welcome-prompt-suggestion flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-control text-muted-foreground focus-visible:outline-none",
-										NAV_ROW_HIGHLIGHT_HOST_CLASS,
-									)}
-									onClick={() => onPick(t(key))}
+									title={t(prompt)}
+									className="welcome-prompt-suggestion inline-flex h-8 items-center gap-1.5 rounded-full border border-border px-3 text-control text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:border-ring focus-visible:bg-interactive-hover focus-visible:text-foreground"
+									onClick={() => onPick(t(prompt))}
 								>
-									<NavRowHighlight />
-									<Lightbulb aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0" />
-									<span className="relative z-[1] truncate">{t(key)}</span>
+									<Icon aria-hidden="true" className="size-icon-sm shrink-0" />
+									<span className="whitespace-nowrap">{t(chip)}</span>
 								</button>
 							</li>
 						))}

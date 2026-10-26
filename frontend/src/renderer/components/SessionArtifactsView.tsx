@@ -1,8 +1,9 @@
+import { BrowserIcon } from "./icons";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronLeft, Copy, Download, FileText, FolderOpen, Globe, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, Copy, Download, FileText, FolderOpen, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
@@ -535,7 +536,7 @@ export function SessionArtifactsView({
 		if (!selected) setFullscreen(false);
 	}, [selected]);
 	if (selected) {
-		const fullscreenLabel = t(fullscreen ? "artifacts.exitFullscreen" : "artifacts.fullscreen");
+		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onExitFullscreen={exitFullscreen}>
@@ -631,7 +632,7 @@ export function SessionArtifactsView({
 					{artifacts.map((artifact) => {
 						// A local HTML artifact opens in the Browser panel; a cloud one in this viewer.
 						const html = !cloud && artifact.kind === "html" && Boolean(artifact.previewUrl);
-						const Icon = artifact.kind === "html" && (html || cloud) ? Globe : FileText;
+						const Icon = artifact.kind === "html" && (html || cloud) ? BrowserIcon : FileText;
 						return (
 							<li key={artifact.path}>
 								<button

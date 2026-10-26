@@ -2591,6 +2591,8 @@ export interface components {
             default: boolean;
             efforts?: string[];
             defaultEffort?: string;
+            /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
+            approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];

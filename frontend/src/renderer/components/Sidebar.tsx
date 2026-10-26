@@ -88,7 +88,6 @@ import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
 import { useLatestCallback, useStableArray } from "../hooks/useStable";
-import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudLocalAuth } from "../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useShellMaybe } from "../lib/shell-context";
@@ -326,10 +325,11 @@ export const SIDEBAR_DEFAULT_WIDTH = 240;
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_BRAND_TRAILING_GAP = 12;
-/** Narrowest the sidebar may get: just wide enough to show the whole brand
- *  label. Measured, because the label's left edge moves with window zoom (the
- *  traffic-light reserve is divided by the zoom factor). Falls back to
- *  SIDEBAR_MIN_WIDTH when no brand is rendered (collapsed rail, tests). */
+/** Narrowest the sidebar may get: SIDEBAR_MIN_WIDTH, widened to show the whole
+ *  brand label. Measured, because the label's left edge moves with window zoom
+ *  (the traffic-light reserve is divided by the zoom factor) and native
+ *  fullscreen (no reserve). The label alone fits in less than the footer's
+ *  Settings row needs, so never go below SIDEBAR_MIN_WIDTH. */
 function sidebarMinWidth(): number {
 	const brand = Array.from(document.querySelectorAll<HTMLElement>("[data-sidebar-brand]")).find(
 		(el) => el.getBoundingClientRect().width > 0,
@@ -345,7 +345,7 @@ function sidebarMinWidth(): number {
 	const fit = label
 		? Math.ceil(label.getBoundingClientRect().left + label.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP + 1)
 		: Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
-	return Math.min(SIDEBAR_MAX_WIDTH, fit);
+	return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, fit));
 }
 /** Initial item count shown in expanded sections; Show more/less toggles the remainder.
  *  Collapsed icon rail always shows the full list so projects stay reachable. */
@@ -2684,17 +2684,15 @@ const SessionActions = memo(function SessionActions({
 	);
 });
 
-// AO account sign-in is shared by Cloud execution and developer-mode remote hosts.
+// AO account sign-in is shared by Cloud execution and remote hosts.
 function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
+	if (!configured || status !== "unauthenticated") return null;
 
 	return (
 		<button
@@ -2716,14 +2714,12 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 // Icon-rail variant for the collapsed sidebar.
 function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, status, signIn } = useCloudSession();
 	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "unauthenticated") return null;
+	if (!configured || status !== "unauthenticated") return null;
 
 	return (
 		<Tooltip>
@@ -2750,13 +2746,11 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 // session (the signed-in state). The sign-in entry point is CloudSignInRow.
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
 	// The plan badge is self-serve billing only; a contract org has no plan to show.
 	const billing = useCloudBilling();
 	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	if (!configured || status !== "authenticated") return null;
 	const name = accountName(session?.user);
 
 	return (
@@ -2833,10 +2827,8 @@ function AccountAvatar({ user }: { user: { displayName?: string; email?: string;
 // Icon-rail variant for collapsed sidebar.
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
-	const { cloudEnabled } = useCloudGate();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const { configured, session, status, signOut } = useCloudSession();
-	if (!configured || (!cloudEnabled && !developerMode) || status !== "authenticated") return null;
+	if (!configured || status !== "authenticated") return null;
 
 	return (
 		<Tooltip>

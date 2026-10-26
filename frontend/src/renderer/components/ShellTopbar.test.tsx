@@ -90,7 +90,6 @@ vi.mock("../lib/telemetry", () => ({
 	captureRendererEvent: vi.fn(),
 	captureRendererException: vi.fn(),
 }));
-vi.mock("./NewTaskDialog", () => ({ NewTaskDialog: () => null }));
 vi.mock("./NotificationCenter", () => ({
 	NotificationCenter: () => <button aria-label="Notifications" type="button" />,
 }));
@@ -710,7 +709,7 @@ describe("TopbarArchiveButton", () => {
 		await userEvent.click(archiveButton);
 		expect(postMock).not.toHaveBeenCalled();
 		const confirmation = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
-		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-popover", "p-0");
+		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-overlay", "p-0");
 		expect(confirmation).toHaveTextContent("You can always restore it from the Archive section later.");
 		expect(within(confirmation).getByRole("button", { name: "No" })).toBeInTheDocument();
 		expect(within(confirmation).getByRole("button", { name: "Confirm, archive session" })).toHaveTextContent("Confirm");

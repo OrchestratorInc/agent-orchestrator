@@ -21,7 +21,7 @@ Watch provider activities and changed files in Chat. If an approval or structure
 
 ## Use a native Terminal UI
 
-Create another task and choose **Terminal UI**. Orchestrator creates the worktree and launches the harness's native interface through native PTY hosts on macOS/Linux (tmux for legacy/fallback) or ConPTY on Windows.
+Set the default interface in **Settings → General** to **Terminal**, then create another task. Orchestrator creates the worktree and launches the harness's native interface through native PTY hosts on macOS/Linux (tmux for legacy/fallback) or ConPTY on Windows.
 
 Use the desktop terminal for native interactive commands. Send normal follow-up guidance through Orchestrator's message controls:
 
@@ -132,7 +132,7 @@ Workers can use `ao report "Tests passed; ready for review"` to report to an exi
 
 ## Standalone work, reports, and recovery
 
-For a task without a repository, choose **New task → Standalone** and pick an agent, or run:
+For a task without a repository, open **New task**, choose **Scratchpad** in the project selector under the composer, and pick an agent, or run:
 
 ```bash
 ao spawn --standalone --agent codex --name notes --prompt "Draft release notes"

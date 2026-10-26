@@ -1007,6 +1007,7 @@ func Run(buildVersion string) error {
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
+		ConversationSearch: store,
 		Settings:           settingsSvc,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,

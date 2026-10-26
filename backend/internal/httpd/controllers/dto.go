@@ -396,6 +396,16 @@ type WorkspaceSearchQuery struct {
 	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100" description:"Maximum results. Defaults to 50."`
 }
 
+// WorkspaceContentSearchQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/search/content.
+type WorkspaceContentSearchQuery struct {
+	Query string `query:"query" required:"true" description:"Words to find in file contents, case-insensitive and in any order."`
+}
+
+// ConversationSearchQuery is the query string accepted by GET /api/v1/conversations/search.
+type ConversationSearchQuery struct {
+	Query string `query:"query" required:"true" description:"Words to find in chat messages, matched by word form."`
+}
+
 // WorkspaceResolveQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/resolve.
 type WorkspaceResolveQuery struct {
 	Path string `query:"path" required:"true" description:"Absolute or workspace-relative file path to classify."`
@@ -890,6 +900,34 @@ type WorkspaceFileSearchResponse struct {
 	Results    []WorkspaceFileSearchResultResponse `json:"results"`
 	NextCursor string                              `json:"nextCursor,omitempty"`
 	Truncated  bool                                `json:"truncated"`
+}
+
+// WorkspaceContentSearchHitResponse is the best matching line of one file.
+type WorkspaceContentSearchHitResponse struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Text string `json:"text" description:"The line, with each match wrapped in U+0002 and U+0003."`
+}
+
+// WorkspaceContentSearchResponse lists files whose contents match, best first.
+type WorkspaceContentSearchResponse struct {
+	Results []WorkspaceContentSearchHitResponse `json:"results"`
+}
+
+// ConversationSearchHitResponse is one visible chat message that matches,
+// with where to open it. SessionID is empty for a chat no session holds.
+type ConversationSearchHitResponse struct {
+	MessageID string `json:"messageId"`
+	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	ReviewID  string `json:"reviewId,omitempty"`
+	Title     string `json:"title"`
+	Text      string `json:"text" description:"A passage of the message, with each match wrapped in U+0002 and U+0003."`
+}
+
+// ConversationSearchResponse lists matching chat messages, best first.
+type ConversationSearchResponse struct {
+	Results []ConversationSearchHitResponse `json:"results"`
 }
 
 // WorkspacePathResolutionResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/resolve.

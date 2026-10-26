@@ -36,6 +36,7 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",

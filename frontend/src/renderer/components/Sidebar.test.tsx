@@ -660,20 +660,19 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("hides cloud account controls when the daemon reports the cloud offering off", () => {
+	it("keeps AO account controls visible for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
 		cloudSessionState.status = "authenticated";
 		cloudSessionState.session = { user: { email: "user@example.com" } };
 		renderSidebar();
 
-		expect(screen.queryByLabelText("Signed in as user@example.com")).not.toBeInTheDocument();
+		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("shows AO sign-in for developer-mode remote hosts when Cloud execution is off", () => {
+	it("shows AO sign-in for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
-		useUiStore.setState({ developerMode: true });
 		renderSidebar();
 
 		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
@@ -2642,6 +2641,36 @@ describe("Sidebar", () => {
 		fireEvent.pointerUp(window);
 		expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
 		expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
+	});
+
+	it("never drops the floor below SIDEBAR_MIN_WIDTH and grows when the brand moves right", async () => {
+		// Titlebar brand as in native fullscreen: no traffic-light reserve, so the
+		// label alone would fit a sidebar narrower than the footer needs.
+		const brand = document.createElement("span");
+		brand.setAttribute("data-sidebar-brand", "");
+		const label = document.createElement("span");
+		label.setAttribute("data-brand-label", "");
+		brand.append(label);
+		document.body.append(brand);
+		brand.getBoundingClientRect = () => ({ width: 130 }) as DOMRect;
+		label.getBoundingClientRect = () => ({ left: 60 }) as DOMRect;
+		Object.defineProperty(label, "scrollWidth", { value: 100 });
+		try {
+			renderSidebar();
+			const gap = document.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+			fireEvent.pointerDown(screen.getByTestId("resize-handle"), { clientX: SIDEBAR_DEFAULT_WIDTH });
+			fireEvent.pointerMove(window, { clientX: 0 });
+			fireEvent.pointerUp(window);
+			expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH}px`);
+
+			// Leaving fullscreen moves the label right; TitlebarNav's resize nudge
+			// must grow the sidebar to fit it (60 → 140, + 100 label + 13 gap).
+			label.getBoundingClientRect = () => ({ left: 140 }) as DOMRect;
+			window.dispatchEvent(new Event("resize"));
+			await waitFor(() => expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe("253px"));
+		} finally {
+			brand.remove();
+		}
 	});
 
 	it("paints the dot from its board section while activity drives the pulse", () => {
