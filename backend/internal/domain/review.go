@@ -56,6 +56,41 @@ const (
 	ReviewerInterfaceChat ReviewerInterfaceMode = "chat"
 )
 
+// ReviewerEnforcement states how AO enforces the reviewer policy (read and
+// report only; never edit, push, or manage sessions) for one harness. The
+// daemon's reviewer gate applies to every harness on top of this.
+type ReviewerEnforcement string
+
+const (
+	// ReviewerEnforcedHook means a native pre-tool hook asks the shared policy
+	// before every tool call.
+	ReviewerEnforcedHook ReviewerEnforcement = "hook"
+	// ReviewerEnforcedConfig means the harness's permission configuration is
+	// generated from the shared policy's allowlist.
+	ReviewerEnforcedConfig ReviewerEnforcement = "config"
+	// ReviewerEnforcedSandbox means a provider OS sandbox blocks writes and no
+	// approval can lift it.
+	ReviewerEnforcedSandbox ReviewerEnforcement = "sandbox"
+	// ReviewerEnforcedGateway means the harness has no shell; its only tools are
+	// AO-owned review tools.
+	ReviewerEnforcedGateway ReviewerEnforcement = "gateway"
+	// ReviewerUserApproved means the harness keeps its native prompts and a human
+	// answers them.
+	ReviewerUserApproved ReviewerEnforcement = "user-approved"
+	// ReviewerHostTrusted means AO cannot restrict the harness's tools.
+	ReviewerHostTrusted ReviewerEnforcement = "host-trusted"
+)
+
+// IsKnown reports whether e is one of the declared enforcement levels.
+func (e ReviewerEnforcement) IsKnown() bool {
+	switch e {
+	case ReviewerEnforcedHook, ReviewerEnforcedConfig, ReviewerEnforcedSandbox,
+		ReviewerEnforcedGateway, ReviewerUserApproved, ReviewerHostTrusted:
+		return true
+	}
+	return false
+}
+
 // ReviewerSurface gives clients one stable identifier for either reviewer UI.
 type ReviewerSurface struct {
 	Mode            ReviewerInterfaceMode `json:"mode"`

@@ -38,6 +38,13 @@ func New() *Reviewer {
 // Harness returns Droid's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerDroid }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Droid runs
+// with high autonomy and no tool policy.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerHostTrusted
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)

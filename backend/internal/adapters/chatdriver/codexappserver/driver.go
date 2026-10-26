@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -323,7 +324,14 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// thread/start has no top-level effort field either; carry the durable AO
 	// choice as a config override like thread/resume does, so a fresh thread
 	// does not silently fall back to the provider default.
-	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+	config := threadConfig(cfg.Effort, cfg.MCPServers)
+	if cfg.ReviewGuard {
+		if err := addReviewGuard(config); err != nil {
+			_ = conv.Terminate()
+			return nil, err
+		}
+	}
+	if len(config) > 0 {
 		params["config"] = config
 	}
 	if cfg.SystemPrompt != "" {
@@ -406,7 +414,14 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// thread/resume has no top-level effort field. Codex exposes persistent
 	// reasoning effort as a config override, so carry the durable AO choice into
 	// the resumed thread instead of silently falling back to the provider default.
-	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+	config := threadConfig(cfg.Effort, cfg.MCPServers)
+	if cfg.ReviewGuard {
+		if err := addReviewGuard(config); err != nil {
+			_ = conv.Terminate()
+			return nil, err
+		}
+	}
+	if len(config) > 0 {
 		params["config"] = config
 	}
 	// Developer instructions are launch context, not durable conversation
@@ -479,6 +494,37 @@ func codexThreadMissing(err error) bool {
 // Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
 // request under on-request and was refused under never/read-only, and
 // default_tools_approval_mode "approve" removed both.
+// addReviewGuard registers AO's review-guard as the thread's PreToolUse hook,
+// so a review conversation's shell commands pass the shared reviewer policy
+// before they run. Its read-only sandbox has network, which lets a command
+// such as `git push` to a remote or `gh pr merge` through without the guard
+// (verified on codex-cli 0.154). Codex runs a command whose hook fails, so a
+// review thread is not opened without a resolvable AO binary.
+func addReviewGuard(config map[string]any) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("codex review guard: resolve AO executable: %w", err)
+	}
+	if !filepath.IsAbs(executable) {
+		if executable, err = filepath.Abs(executable); err != nil {
+			return fmt.Errorf("codex review guard: make AO executable absolute: %w", err)
+		}
+	}
+	config["hooks"] = map[string]any{"PreToolUse": []any{map[string]any{"hooks": []any{map[string]any{
+		"type": "command", "command": reviewGuardCommand(executable), "timeout": 30,
+	}}}}}
+	return nil
+}
+
+// reviewGuardCommand quotes the AO path for the shell Codex runs hook commands
+// through; PowerShell on Windows needs the call operator.
+func reviewGuardCommand(executable string) string {
+	if runtime.GOOS == "windows" {
+		return `& "` + executable + `" hooks codex review-guard`
+	}
+	return `'` + strings.ReplaceAll(executable, `'`, `'"'"'`) + `' hooks codex review-guard`
+}
+
 func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
 	config := map[string]any{}
 	if effort != "" {
@@ -841,7 +887,14 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	}
 	// Same overrides as thread/start and thread/resume: without the MCP servers
 	// a fresh fork has no AO tools until a restart resumes it.
-	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+	config := threadConfig(cfg.Effort, cfg.MCPServers)
+	if cfg.ReviewGuard {
+		if err := addReviewGuard(config); err != nil {
+			_ = conv.Terminate()
+			return nil, err
+		}
+	}
+	if len(config) > 0 {
 		params["config"] = config
 	}
 	if cfg.SystemPrompt != "" {

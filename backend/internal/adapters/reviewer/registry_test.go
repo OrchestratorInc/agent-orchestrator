@@ -139,3 +139,63 @@ func TestCachingReviewersForwardBinaryInvalidation(t *testing.T) {
 		}
 	}
 }
+
+// unverified marks a level taken from the adapter's launch code alone: the
+// harness was not installed when the level was set, so no live probe run
+// confirmed it.
+const unverified = "unverified: level read from the adapter's launch code, not run live"
+
+// TestEveryReviewerDeclaresPolicyEnforcement pins how the #6842 reviewer
+// policy is enforced for each harness, and the evidence for that level, so
+// changing a level (or registering a reviewer) is a deliberate, reviewed
+// decision rather than a silent default. "Verified" means the conformance
+// probes (ao spawn/send/kill/stop, writes, commits, pushes, a legitimate
+// submit) were run live against that harness version.
+func TestEveryReviewerDeclaresPolicyEnforcement(t *testing.T) {
+	type pin struct {
+		level    domain.ReviewerEnforcement
+		evidence string
+	}
+	want := map[domain.ReviewerHarness]pin{
+		domain.ReviewerClaudeCode: {domain.ReviewerEnforcedHook, "verified live: Claude Code 2.1.310"},
+		domain.ReviewerCodex:      {domain.ReviewerEnforcedSandbox, "verified live: codex-cli 0.154 (Terminal and Chat; sandbox plus review-guard hook)"},
+		domain.ReviewerCursor:     {domain.ReviewerUserApproved, "verified live: Cursor CLI 2026.10.22 (asks before commands; reviewer profile not applied, #7297)"},
+		domain.ReviewerCopilot:    {domain.ReviewerEnforcedConfig, "verified live: Copilot CLI 1.0.98 (commit/push denied; gh api cannot be scoped)"},
+		domain.ReviewerOpenCode:   {domain.ReviewerEnforcedConfig, "verified live: OpenCode 1.19.3 (submit with any review text; redirects denied)"},
+		domain.ReviewerOpenCodeV2: {domain.ReviewerEnforcedConfig, "verified live: OpenCode 2.0.20"},
+		domain.ReviewerAutohand:   {domain.ReviewerUserApproved, "verified live: Autohand 0.9.8 (asks before every command; declining blocks it)"},
+		domain.ReviewerAgy:        {domain.ReviewerHostTrusted, "verified live: Agy 1.4.7 asks before commands, but its sandbox is not OS isolation and offers always-allow"},
+		domain.ReviewerKiloCode:   {domain.ReviewerEnforcedConfig, unverified},
+		domain.ReviewerKiro:       {domain.ReviewerEnforcedConfig, unverified},
+		domain.ReviewerPi:         {domain.ReviewerEnforcedGateway, unverified},
+		domain.ReviewerAmp:        {domain.ReviewerUserApproved, unverified},
+		domain.ReviewerAider:      {domain.ReviewerUserApproved, unverified},
+		domain.ReviewerAuggie:     {domain.ReviewerUserApproved, unverified},
+		domain.ReviewerCline:      {domain.ReviewerUserApproved, unverified},
+		domain.ReviewerCrush:      {domain.ReviewerUserApproved, unverified},
+		domain.ReviewerGrok:       {domain.ReviewerUserApproved, unverified},
+		domain.ReviewerMuse:       {domain.ReviewerHostTrusted, unverified},
+		domain.ReviewerDevin:      {domain.ReviewerHostTrusted, unverified},
+		domain.ReviewerDroid:      {domain.ReviewerHostTrusted, unverified},
+		domain.ReviewerKimchi:     {domain.ReviewerHostTrusted, unverified},
+		domain.ReviewerKimi:       {domain.ReviewerHostTrusted, unverified},
+	}
+	adapters := Constructors()
+	if len(adapters) != len(want) {
+		t.Fatalf("%d reviewers registered, %d pinned: pin the new reviewer's enforcement and evidence here", len(adapters), len(want))
+	}
+	for _, a := range adapters {
+		got := a.ReviewEnforcement()
+		pinned, ok := want[a.Harness()]
+		if !ok || pinned.evidence == "" {
+			t.Errorf("%s has no pinned enforcement evidence", a.Harness())
+			continue
+		}
+		if !got.IsKnown() {
+			t.Errorf("%s declares unknown enforcement %q", a.Harness(), got)
+		}
+		if got != pinned.level {
+			t.Errorf("%s enforcement = %q, want %q (%s)", a.Harness(), got, pinned.level, pinned.evidence)
+		}
+	}
+}

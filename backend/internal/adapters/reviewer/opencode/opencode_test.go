@@ -336,3 +336,26 @@ func simplePicomatchGlobMatches(t *testing.T, pattern, command string) bool {
 	}
 	return re.MatchString(command)
 }
+
+// TestBashPolicyAdmitsSubmitPrintfSegmentWithoutRedirects pins the rules live
+// verification on OpenCode 1.19.3 required (#6842): OpenCode checks each
+// pipeline segment on its own, so the submit pipes need their printf half,
+// allowed only up to its closing quote; a redirection after that quote is
+// denied, while a '>' inside the review text still submits.
+func TestBashPolicyAdmitsSubmitPrintfSegmentWithoutRedirects(t *testing.T) {
+	bash := reviewerConfigBashPolicy(t)
+	for pattern, want := range map[string]string{
+		"printf '%s' '*'":     "allow",
+		"printf '%s' '*' *>*": "deny",
+		"printf '%s' '*'>*":   "deny",
+	} {
+		if bash[pattern] != want {
+			t.Errorf("bash[%q] = %q, want %q", pattern, bash[pattern], want)
+		}
+	}
+	for _, loose := range []string{"printf *", "printf '%s' *", "printf '%s' *>*"} {
+		if _, ok := bash[loose]; ok {
+			t.Errorf("bash policy keeps loose pattern %q: it admits any printf or refuses a '>' inside the review text", loose)
+		}
+	}
+}

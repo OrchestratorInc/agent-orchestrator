@@ -24,6 +24,13 @@ func New() *Reviewer { return &Reviewer{resolveBinary: workerauggie.ResolveAuggi
 // Harness returns Auggie's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerAuggie }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Auggie keeps
+// the user's own permission prompts.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerUserApproved
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerReusePolicy = (*Reviewer)(nil)

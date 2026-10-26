@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
+	"github.com/aoagents/agent-orchestrator/backend/internal/reviewpolicy"
 )
 
 // sessionIDPattern bounds the AO_SESSION_ID we will place in a request path to
@@ -575,56 +576,81 @@ func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, paylo
 	}
 }
 
-// reviewerSubmitCommandPattern matches the exact command shapes the review
-// prompt dictates: a single-quoted JSON literal fed through `printf '%s'` into
-// either the GitHub review POST or `ao review submit`. Claude Code ≥ 2.1.257
-// prompts on any Bash command its analyzer cannot verify statically, and allow
-// rules never match such commands, so the headless reviewer would hang. The
-// shape is safe to auto-allow: `printf '%s'` performs no format interpretation
-// and a single-quoted operand (quote-backslash-quote-quote for embedded single
-// quotes, as the prompt instructs) cannot expand or run anything. The
-// captured session id is checked against AO_REVIEW_WORKER_SESSION_ID after the
-// match.
-const reviewerSubmitJSONLiteral = `'[^']*(?:'\\''[^']*)*'`
+// reviewGuardEvent is the hook event AO passes to reviewer harnesses through
+// their launch settings (never through the checkout under review). It asks the
+// shared reviewer policy before every tool call (#6842).
+const reviewGuardEvent = "review-guard"
 
-var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| (?:` +
-	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
-	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
-
-const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
-	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+// reviewerGrant scopes the policy to the worker whose PR this reviewer
+// reviews. An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
+// launcher always sets it); the empty grant then admits no submit at all.
+func reviewerGrant() reviewpolicy.Grant {
+	return reviewpolicy.Grant{WorkerSessionID: strings.TrimSpace(os.Getenv("AO_REVIEW_WORKER_SESSION_ID"))}
+}
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
-// allow the exact submit shapes, deny everything else so the session degrades
-// into a denial the model can route around instead of an unanswered prompt.
-func reviewerPermissionDecision(payload []byte, workerSessionID string) claudePermissionHookOutput {
-	var p struct {
-		ToolName  string `json:"tool_name"`
-		ToolInput struct {
-			Command string `json:"command"`
-		} `json:"tool_input"`
-	}
-	_ = json.Unmarshal(payload, &p)
+// shell commands follow the shared reviewer policy, and any other tool that
+// still prompts (for example a read outside the checkout) is denied, so the
+// session degrades into a denial the model can route around instead of an
+// unanswered prompt.
+func reviewerPermissionDecision(payload []byte, grant reviewpolicy.Grant) claudePermissionHookOutput {
 	var out claudePermissionHookOutput
 	out.HookSpecificOutput.HookEventName = "PermissionRequest"
+	decision := reviewpolicy.Decision{Reason: reviewpolicy.DenyPrefix + "this tool needs a permission prompt that no one can answer in a headless reviewer."}
+	if call, err := reviewpolicy.DecodeClaudeHookCall(payload); err == nil && call.Kind == reviewpolicy.KindShell {
+		decision = reviewpolicy.Evaluate(call, grant)
+	}
+	if decision.Allow {
+		out.HookSpecificOutput.Decision.Behavior = "allow"
+		return out
+	}
 	out.HookSpecificOutput.Decision.Behavior = "deny"
-	out.HookSpecificOutput.Decision.Message = reviewerPermissionDenyMessage
-	if p.ToolName != "Bash" {
-		return out
-	}
-	m := reviewerSubmitCommandPattern.FindStringSubmatch(strings.TrimSpace(p.ToolInput.Command))
-	if m == nil {
-		return out
-	}
-	if session := m[reviewerSubmitCommandPattern.SubexpIndex("session")]; workerSessionID == "" || (session != "" && session != workerSessionID) {
-		// An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
-		// launcher always sets it); admit nothing rather than any worker.
-		return out
-	}
-	out.HookSpecificOutput.Decision.Behavior = "allow"
-	out.HookSpecificOutput.Decision.Message = ""
+	out.HookSpecificOutput.Decision.Message = decision.Reason
 	return out
+}
+
+// reviewerPreToolUseDecision answers a Claude-compatible PreToolUse hook
+// (Claude Code and Codex). It
+// returns nil to stay silent for an allowed call, so Claude's own permission
+// flow still applies, and a deny for anything the policy refuses. A payload it
+// cannot read is denied: the guard fails closed.
+func reviewerPreToolUseDecision(payload []byte, grant reviewpolicy.Grant) *claudePreToolUseDenyOutput {
+	call, err := reviewpolicy.DecodeClaudeHookCall(payload)
+	decision := reviewpolicy.Decision{Reason: reviewpolicy.DenyPrefix + "the tool call could not be read, so it was blocked."}
+	if err == nil {
+		decision = reviewpolicy.Evaluate(call, grant)
+	}
+	if decision.Allow {
+		return nil
+	}
+	out := &claudePreToolUseDenyOutput{}
+	out.HookSpecificOutput.HookEventName = "PreToolUse"
+	out.HookSpecificOutput.PermissionDecision = "deny"
+	out.HookSpecificOutput.PermissionDecisionReason = decision.Reason
+	return out
+}
+
+// runReviewGuard answers the review-guard hook. It is registered only on
+// reviewer launches, so reaching it without reviewer identity means a broken
+// launch: deny rather than let the call through.
+func (c *commandContext) runReviewGuard(agent string) error {
+	// An unreadable payload decodes as no tool call, which the policy denies.
+	payload, _ := io.ReadAll(c.deps.In)
+	if !sessionIDPattern.MatchString(strings.TrimSpace(os.Getenv("AO_REVIEW_SESSION_ID"))) {
+		payload = nil
+	}
+	switch domain.AgentHarness(agent) {
+	case domain.HarnessClaudeCode, domain.HarnessCodex:
+		// Codex sends Claude's PreToolUse payload and honors the same deny
+		// (verified on codex-cli 0.154).
+		out := reviewerPreToolUseDecision(payload, reviewerGrant())
+		if out == nil {
+			return nil
+		}
+		return json.NewEncoder(c.deps.Out).Encode(out)
+	default:
+		return fmt.Errorf("review guard: no decision format for %q", agent)
+	}
 }
 
 // newHooksCommand builds the hidden `ao hooks <agent> <event>` command that
@@ -653,6 +679,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// AGY requires every modern hook handler to return a JSON object, even
 		// when the command is running outside an AO-managed session.
 		_, _ = fmt.Fprintln(c.deps.Out, "{}")
+	}
+	if event == reviewGuardEvent {
+		return c.runReviewGuard(agent)
 	}
 	reviewSessionID := strings.TrimSpace(os.Getenv("AO_REVIEW_SESSION_ID"))
 	if reviewSessionID != "" {
@@ -926,7 +955,7 @@ func (c *commandContext) runReviewHook(ctx context.Context, agent, event, review
 	}
 	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && event == "permission-request" {
 		// Answered here, so the reviewer never parks in blocked (#4810).
-		out := reviewerPermissionDecision(payload, strings.TrimSpace(os.Getenv("AO_REVIEW_WORKER_SESSION_ID")))
+		out := reviewerPermissionDecision(payload, reviewerGrant())
 		if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
 			c.reportHookFailure(agent, event, reviewSessionID, fmt.Errorf("write permission response: %w", err))
 		}

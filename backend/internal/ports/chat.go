@@ -322,6 +322,10 @@ type ChatStartConfig struct {
 	// ReadOnly requires a provider-enforced sandbox that cannot modify the
 	// workspace. It is used for review-owned conversations.
 	ReadOnly bool
+	// ReviewGuard asks drivers whose provider supports pre-tool hooks to run
+	// AO's reviewer policy (`ao hooks <harness> review-guard`) before every
+	// tool call. It is set only for review-owned conversations (#6842).
+	ReviewGuard bool
 	// DisableNetwork requests tool network isolation for read-only background
 	// conversations. Supporting drivers must not inherit reviewer network access.
 	DisableNetwork bool
@@ -371,6 +375,8 @@ type ChatResumeConfig struct {
 	Effort      string
 	Permissions PermissionMode
 	ReadOnly    bool
+	// ReviewGuard mirrors ChatStartConfig.ReviewGuard for a resumed conversation.
+	ReviewGuard bool
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
 	// to the provider process. It is not persisted in the conversation transcript.
 	SystemPrompt string

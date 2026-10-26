@@ -88,6 +88,10 @@ type ReviewInvocation struct {
 	// ReviewerID is a stable id for the reviewer's runtime instance (pane,
 	// native session id), derived from the worker session.
 	ReviewerID string
+	// ReviewSessionID is the review AO_REVIEW_SESSION_ID names in the reviewer's
+	// environment. Harnesses that filter shell environments pass it through so
+	// the daemon recognizes the reviewer's `ao` calls (#6842).
+	ReviewSessionID string
 	// RunID is the review_run this pass completes; the reviewer passes it to
 	// `ao review submit`.
 	RunID string

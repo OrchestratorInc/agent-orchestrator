@@ -32,10 +32,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Adapter is a registered reviewer: a ports.Reviewer that names its harness.
+// Adapter is a registered reviewer: a ports.Reviewer that names its harness
+// and declares how the shared reviewer policy is enforced for it, so a new
+// reviewer cannot be registered without taking a position on #6842.
 type Adapter interface {
 	ports.Reviewer
 	Harness() domain.ReviewerHarness
+	ReviewEnforcement() domain.ReviewerEnforcement
 }
 
 // Constructors returns every reviewer adapter the daemon ships. Add a reviewer
@@ -86,6 +89,9 @@ func NewResolver() (*Resolver, error) {
 		}
 		if _, dup := m[h]; dup {
 			return nil, fmt.Errorf("reviewer harness %q is registered twice", h)
+		}
+		if e := a.ReviewEnforcement(); !e.IsKnown() {
+			return nil, fmt.Errorf("reviewer harness %q declares unknown enforcement %q", h, e)
 		}
 		m[h] = a
 	}

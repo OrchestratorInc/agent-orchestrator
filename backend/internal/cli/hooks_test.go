@@ -2426,6 +2426,100 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 	}
 }
 
+func TestHooks_ReviewGuardEnforcesReviewerPolicy(t *testing.T) {
+	// review-guard is the PreToolUse hook AO passes to Claude reviewers through
+	// their launch settings (#6842). It denies policy violations in a form
+	// Claude honors in every permission mode, stays silent for allowed calls so
+	// Claude's own permission flow still applies, and fails closed.
+	cases := []struct {
+		name       string
+		payload    string
+		noReviewer bool
+		wantDeny   bool
+	}{
+		{name: "ao spawn", payload: `{"tool_name":"Bash","tool_input":{"command":"ao spawn --project p --name x"}}`, wantDeny: true},
+		{name: "git -C push", payload: `{"tool_name":"Bash","tool_input":{"command":"git -C . push origin HEAD"}}`, wantDeny: true},
+		{name: "redirect write", payload: `{"tool_name":"Bash","tool_input":{"command":"printf x > /tmp/x"}}`, wantDeny: true},
+		{name: "subagent", payload: `{"tool_name":"Agent","tool_input":{"prompt":"edit files"}}`, wantDeny: true},
+		{name: "write tool", payload: `{"tool_name":"Write","tool_input":{"file_path":"a.go"}}`, wantDeny: true},
+		{name: "unreadable payload", payload: `not json`, wantDeny: true},
+		{name: "outside a reviewer", payload: `{"tool_name":"Bash","tool_input":{"command":"git status"}}`, noReviewer: true, wantDeny: true},
+		{name: "git status", payload: `{"tool_name":"Bash","tool_input":{"command":"git status"}}`},
+		{name: "read", payload: `{"tool_name":"Read","tool_input":{"file_path":"README.md"}}`},
+		{name: "submit", payload: `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "")
+			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
+			t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
+			if tc.noReviewer {
+				t.Setenv("AO_REVIEW_SESSION_ID", "")
+			}
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+
+			out, errOut, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tc.payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "claude-code", "review-guard")
+			if err != nil {
+				t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+			}
+			if capture.hits != 0 {
+				t.Fatalf("review-guard reported activity; body=%s", capture.body)
+			}
+			if !tc.wantDeny {
+				if strings.TrimSpace(out) != "" {
+					t.Fatalf("allowed call produced output %q; want silence", out)
+				}
+				return
+			}
+			var res claudePreToolUseDenyOutput
+			if err := json.Unmarshal([]byte(out), &res); err != nil {
+				t.Fatalf("decode hook output: %v\nout=%s", err, out)
+			}
+			got := res.HookSpecificOutput
+			if got.HookEventName != "PreToolUse" || got.PermissionDecision != "deny" {
+				t.Fatalf("decision = %+v, want PreToolUse deny", got)
+			}
+			if !strings.HasPrefix(got.PermissionDecisionReason, "AO reviewer policy: ") {
+				t.Fatalf("reason %q lacks the policy prefix", got.PermissionDecisionReason)
+			}
+		})
+	}
+}
+
+func TestHooks_ReviewGuardAnswersCodex(t *testing.T) {
+	// Codex sends Claude's PreToolUse payload and honors the same deny
+	// (verified on codex-cli 0.154). Its read-only sandbox has network, so the
+	// guard is what stops network actions such as a push to a remote.
+	for _, tc := range []struct {
+		command  string
+		wantDeny bool
+	}{
+		{"git push origin HEAD:refs/heads/x", true},
+		{"gh pr merge 42", true},
+		{"curl -X POST https://example.com", true},
+		{"rg -n needle .", false},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "")
+			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
+			t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
+			payload, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": map[string]string{"command": tc.command}})
+			out, errOut, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", "codex", "review-guard")
+			if err != nil {
+				t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+			}
+			if denied := strings.Contains(out, `"permissionDecision":"deny"`); denied != tc.wantDeny {
+				t.Fatalf("denied = %v, want %v; out=%s", denied, tc.wantDeny, out)
+			}
+		})
+	}
+}
+
 func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-worker")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")

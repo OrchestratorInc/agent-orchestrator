@@ -193,7 +193,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		Binary:           binary,
 		SessionID:        cfg.SessionID,
 		NativeSessionID:  nativeSessionID,
-		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(permissions)),
+		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(permissions), cfg.ProviderSettings),
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,
@@ -208,8 +208,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 // claudeLaunchSettingsArgs passes a session's launch choices to Claude Code as
 // settings: Ultracode, and the token count at which it compacts on its own.
 // They share one --settings flag with the auto-mode dialog guard (see
-// autoDefaultNudgeGuardArgs).
-func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentruntime.PermissionPolicy) []string {
+// autoDefaultNudgeGuardArgs) and any host-owned provider settings, which are
+// merged last so they win.
+func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentruntime.PermissionPolicy, provider map[string]any) []string {
 	settings := autoDefaultNudgeGuardSettings(policy)
 	if settings == nil {
 		settings = map[string]any{}
@@ -221,11 +222,30 @@ func claudeLaunchSettingsArgs(options domain.AgentLaunchOptions, policy agentrun
 		settings["autoCompactEnabled"] = true
 		settings["autoCompactWindow"] = tokens
 	}
+	mergeClaudeSettings(settings, provider)
 	if len(settings) == 0 {
 		return nil
 	}
 	encoded, _ := json.Marshal(settings)
 	return []string{"--settings", string(encoded)}
+}
+
+// mergeClaudeSettings deep-merges src into dst: nested objects merge key by
+// key, and any other src value replaces dst's.
+func mergeClaudeSettings(dst, src map[string]any) {
+	for key, value := range src {
+		if nested, ok := value.(map[string]any); ok {
+			if existing, ok := dst[key].(map[string]any); ok {
+				mergeClaudeSettings(existing, nested)
+				continue
+			}
+			copied := map[string]any{}
+			mergeClaudeSettings(copied, nested)
+			dst[key] = copied
+			continue
+		}
+		dst[key] = value
+	}
 }
 
 // freshLaunchNativeSessionID keeps a fresh launch from adopting someone else's
@@ -410,7 +430,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		Binary:           binary,
 		SessionID:        cfg.Session.ID,
 		Metadata:         cfg.Session.Metadata,
-		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(cfg.Permissions)),
+		ProviderArgs:     claudeLaunchSettingsArgs(cfg.Config.Launch, agentruntime.PermissionPolicy(cfg.Permissions), cfg.ProviderSettings),
 		Model:            cfg.Config.Model,
 		Effort:           cfg.Config.Effort,
 		Prompt:           cfg.Prompt,

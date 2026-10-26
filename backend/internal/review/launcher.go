@@ -320,6 +320,7 @@ func (l *agentLauncher) invocation(spec LaunchSpec) ports.ReviewInvocation {
 	prompt, systemPrompt := reviewTexts(spec)
 	return ports.ReviewInvocation{
 		ReviewerID:      reviewerHandleID(spec.WorkerID),
+		ReviewSessionID: spec.ReviewSessionID,
 		RunID:           spec.RunID,
 		WorkerSessionID: spec.WorkerID,
 		AgentSessionID:  spec.AgentSessionID,
@@ -400,6 +401,7 @@ func (l *agentLauncher) prepareIdleInvocation(spec LaunchSpec) (ports.ReviewInvo
 	prompt := fmt.Sprintf("Reviewer terminal restored for worker session %s.\n\n%s\n\nWait for AO to send the next review task file path before submitting a new review.", spec.WorkerID, previousReviewHistoryText(spec.PreviousRuns))
 	return ports.ReviewInvocation{
 		ReviewerID:       reviewerHandleID(spec.WorkerID),
+		ReviewSessionID:  spec.ReviewSessionID,
 		WorkerSessionID:  spec.WorkerID,
 		AgentSessionID:   spec.AgentSessionID,
 		Config:           spec.AgentConfig,

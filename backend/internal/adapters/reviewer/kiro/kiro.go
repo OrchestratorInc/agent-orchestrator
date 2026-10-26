@@ -30,6 +30,13 @@ func New() *Reviewer {
 // Harness identifies Kiro in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerKiro }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: the custom
+// agent denies shell by default and admits only the review command shapes.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerEnforcedConfig
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)

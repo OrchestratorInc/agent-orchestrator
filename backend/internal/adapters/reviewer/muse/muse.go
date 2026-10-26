@@ -25,6 +25,13 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerMuse
 }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: --disable-
+// write blocks file-edit tools only, so shell commands keep host authority.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerHostTrusted
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)

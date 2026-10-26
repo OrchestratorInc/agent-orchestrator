@@ -30,6 +30,14 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerOpenCode
 }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: OpenCode's own
+// permission rules, written to match the shared reviewer policy, deny
+// everything but the review's read and report commands (verified on
+// OpenCode 1.19.3).
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerEnforcedConfig
+}
+
 // InvalidateBinaryResolution forgets the worker plugin's cached executable, so
 // the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {
@@ -92,6 +100,14 @@ func buildReviewerConfig(taskPromptRoot string) (string, error) {
 			"ao review submit *":            "allow",
 			"printf * | gh api *":           "allow",
 			"printf * | ao review submit *": "allow",
+			// Each pipeline segment is checked on its own, so the submit pipes
+			// need their printf half: only `printf '%s' '<literal>'`, ending in
+			// its closing quote. A redirection after that quote stays inside the
+			// match, so it is denied explicitly; a '>' inside the review text is
+			// not, because it sits before the closing quote (verified on OpenCode 1.19.3).
+			"printf '%s' '*'":     "allow",
+			"printf '%s' '*' *>*": "deny",
+			"printf '%s' '*'>*":   "deny",
 		},
 	}
 	if taskPromptRoot != "" {

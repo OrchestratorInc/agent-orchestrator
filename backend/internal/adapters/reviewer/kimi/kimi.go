@@ -36,6 +36,13 @@ func New() *Reviewer {
 // Harness returns Kimi's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerKimi }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Kimi has no
+// OS isolation and its terminal can leave Plan mode.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerHostTrusted
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)

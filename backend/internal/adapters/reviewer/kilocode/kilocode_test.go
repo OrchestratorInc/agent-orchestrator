@@ -96,7 +96,10 @@ func TestReviewCommandPreservesAgentAndAppliesReadOnlyPolicy(t *testing.T) {
 	if config.Permission.Bash["*"] != "deny" ||
 		config.Permission.Bash["gh api *"] != "allow" ||
 		config.Permission.Bash["ao review submit *"] != "allow" ||
-		config.Permission.Bash["printf *"] != "allow" {
+		config.Permission.Bash["printf *"] != "" ||
+		config.Permission.Bash["printf '%s' '*'"] != "allow" ||
+		config.Permission.Bash["printf '%s' '*' *>*"] != "deny" ||
+		config.Permission.Bash["printf '%s' *>*"] != "" {
 		t.Fatalf("bash policy = %#v", config.Permission.Bash)
 	}
 	wantPromptPattern := filepath.ToSlash(filepath.Join("ao", "prompts", "reviewer", "**"))

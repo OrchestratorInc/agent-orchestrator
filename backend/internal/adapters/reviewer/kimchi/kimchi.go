@@ -90,6 +90,13 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerKimchi
 }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Kimchi's
+// allow/deny rules run under --auto and are not OS isolation.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerHostTrusted
+}
+
 // InvalidateBinaryResolution forgets the worker plugin's cached executable, so
 // the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {

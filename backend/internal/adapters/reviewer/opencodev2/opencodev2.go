@@ -36,6 +36,14 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerOpenCodeV2
 }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: the agent's own
+// ordered permission rules, written to match the shared reviewer policy, deny
+// everything but the review's read and report commands (verified on
+// OpenCode 2.0.20).
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerEnforcedConfig
+}
+
 // InvalidateBinaryResolution forgets the worker plugin's cached executable, so
 // the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {
