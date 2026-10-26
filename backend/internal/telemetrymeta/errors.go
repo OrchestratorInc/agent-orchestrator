@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -83,6 +84,40 @@ func StatusFamily(status int) string {
 // SafeRoute is a registered route template or a fixed fallback. Its value cannot
 // be built from a request URL path, which may contain user-provided names.
 type SafeRoute struct{ pattern string }
+
+// FailureSite is a function name obtained from the running AO binary.
+// Request and error strings cannot construct one.
+type FailureSite struct {
+	function string
+	line     int
+}
+
+func (site FailureSite) String() string { return site.function }
+
+// Line returns the source line in the running AO binary.
+func (site FailureSite) Line() int { return site.line }
+
+// CurrentFailureSite finds the first application frame outside observability
+// wrappers. For an HTTP error this is the controller recording the failure;
+// during panic recovery it is the interrupted handler frame.
+func CurrentFailureSite() FailureSite {
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		name := frame.Function
+		if strings.Contains(name, "github.com/aoagents/agent-orchestrator/backend/internal/") &&
+			!strings.Contains(name, "/telemetrymeta.") &&
+			!strings.Contains(name, "/httpd/envelope.") &&
+			!strings.Contains(name, "/httpd.recoverTelemetry") {
+			return FailureSite{function: name, line: frame.Line}
+		}
+		if !more {
+			return FailureSite{}
+		}
+	}
+}
 
 func (route SafeRoute) String() string {
 	if route.pattern == "" {

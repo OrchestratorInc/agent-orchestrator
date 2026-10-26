@@ -28,6 +28,7 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 					if rec == http.ErrAbortHandler { //nolint:errorlint // net/http aborts quietly on exactly this value
 						panic(rec)
 					}
+					failureSite := telemetrymeta.CurrentFailureSite()
 					stack := string(debug.Stack())
 					log.Error("http handler panic",
 						"id", middleware.GetReqID(r.Context()),
@@ -66,7 +67,7 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 						"path":       path,
 						"panic_kind": panicKind,
 						"request_id": middleware.GetReqID(r.Context()),
-					}, fingerprint, route)
+					}, fingerprint, route, failureSite)
 					writeRecoveredError(w, r)
 				}
 			}()

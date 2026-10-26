@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamp"
 )
 
 const updateSessionFromActivitySignal = `-- name: UpdateSessionFromActivitySignal :execrows
@@ -50,7 +51,7 @@ type UpdateSessionFromActivitySignalParams struct {
 	FirstSignalAt                    sql.NullTime
 	AgentSessionID                   string
 	AgentSessionIDLaunchID           string
-	NativeIdentityObservedAt         sql.NullTime
+	NativeIdentityObservedAt         timestamp.ObservedAt
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
 	LatestAssistantUpdate            string

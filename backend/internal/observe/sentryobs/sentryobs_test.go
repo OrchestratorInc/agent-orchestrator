@@ -12,6 +12,7 @@ import (
 
 	"github.com/getsentry/sentry-go"
 	"github.com/go-chi/chi/v5"
+	sqlite3 "modernc.org/sqlite"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
@@ -48,7 +49,7 @@ func TestInitNoDSNIsNoOp(t *testing.T) {
 
 func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "1.2.3", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
@@ -58,6 +59,9 @@ func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	case event := <-transport.events:
 		if event.Tags["install_id"] != "ins_stable" {
 			t.Fatalf("install tag = %q", event.Tags["install_id"])
+		}
+		if event.User.ID != "ins_stable" || event.User.Email != "" || event.Release != "1.2.3" || event.Environment != "stable" {
+			t.Fatalf("Sentry identity or build context = user=%+v release=%q environment=%q", event.User, event.Release, event.Environment)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Sentry event missing")
@@ -79,6 +83,12 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	case event := <-transport.events:
 		if _, ok := event.Tags["install_id"]; ok {
 			t.Fatal("event used a caller supplied installation ID")
+		}
+		if event.User.ID != "" {
+			t.Fatalf("event used a caller supplied user ID: %+v", event.User)
+		}
+		if event.Release != "unknown" || event.Environment != "unknown" {
+			t.Fatalf("missing build context fallback: release=%q environment=%q", event.Release, event.Environment)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Sentry event missing")
@@ -174,12 +184,19 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 		}
 	}
 
+	panicSite := telemetrymeta.CurrentFailureSite()
 	CapturePanic(context.Background(), "panic in "+secret, map[string]string{
 		"component": "httpd", "operation": "http_request_panic", "panic_kind": "string", "path": "/" + secret,
-	}, "fedcba9876543210", telemetrymeta.RoutePattern(nil))
+	}, "fedcba9876543210", telemetrymeta.RoutePattern(nil), panicSite)
 	event := <-transport.events
 	if event.Message != "http handler panic" || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
 		t.Fatalf("unsafe panic title: %+v", event)
+	}
+	if event.User.ID != "ins_stable" || event.Release == "" || event.Environment == "" {
+		t.Fatalf("panic lost Sentry identity or build context: %+v", event)
+	}
+	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != telemetrymeta.Fingerprint("sentry", "http_request_panic", panicSite.String()) || event.Exception[0].Stacktrace.Frames[0].Function != panicSite.String() {
+		t.Fatalf("panic did not group at AO failure site: %+v", event)
 	}
 	encoded, err := event.MarshalJSON()
 	if err != nil || strings.Contains(string(encoded), secret) {
@@ -225,6 +242,45 @@ func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
 	}
 }
 
+func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "nightly", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	const secret = "PrivateProjectOrSession_Z9"
+	tags := map[string]string{"operation": "http_request", "error_code": "WORKSPACE_GIT_READ_FAILED", "area": "git", "path": "/" + secret}
+	site := telemetrymeta.CurrentFailureSite()
+	CaptureHTTPError(context.Background(), fmt.Errorf("get project %s: git failed", secret), tags, "0123456789abcdef", telemetrymeta.RoutePattern(nil), site)
+	event := <-transport.events
+	if site.String() == "" || strings.Contains(site.String(), "sentryobs.CaptureHTTPError") {
+		t.Fatalf("failure site = %q", site.String())
+	}
+	if event.Message != "Git operation failed (WORKSPACE_GIT_READ_FAILED)" || event.Tags["area"] != "git" {
+		t.Fatalf("fixed diagnostics lost: %+v", event)
+	}
+	wantGroup := telemetrymeta.Fingerprint("sentry", "http_request", site.String(), "WORKSPACE_GIT_READ_FAILED")
+	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != wantGroup {
+		t.Fatalf("failure-site fingerprint = %v, want %q", event.Fingerprint, wantGroup)
+	}
+	frames := event.Exception[0].Stacktrace.Frames
+	if len(frames) != 1 || frames[0].Function != site.String() || frames[0].Lineno != site.Line() || strings.Contains(frames[0].Function, "sentryobs.CaptureHTTPError") {
+		t.Fatalf("failure stack = %+v, want AO site %q:%d", frames, site.String(), site.Line())
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("sensitive outbound event: %s, marshal error: %v", encoded, err)
+	}
+
+	CaptureHTTPError(context.Background(), fmt.Errorf("request canceled: %w", context.Canceled), tags, "0123456789abcdef", telemetrymeta.RoutePattern(nil), site)
+	select {
+	case event := <-transport.events:
+		t.Fatalf("canceled request captured: %+v", event)
+	default:
+	}
+}
+
 func TestSentryTagRules(t *testing.T) {
 	t.Parallel()
 	for value, want := range map[string]bool{"500": true, "502": true, "503": false, "499": false, "500x": false} {
@@ -234,6 +290,24 @@ func TestSentryTagRules(t *testing.T) {
 	}
 	if !safeErrorCode("INTERNAL_ERROR") || safeErrorCode("PRIVATEPROJECTORSESSION_Z9") {
 		t.Fatal("error code allowlist accepted a synthetic code or rejected a known code")
+	}
+}
+
+func TestAreaRequiresErrorEvidence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err  error
+		code string
+		want string
+	}{
+		{errString("project PrivateProjectOrSession_Z9"), "", ""},
+		{errString("git failure"), "WORKSPACE_GIT_READ_FAILED", "git"},
+		{errString("agent failure"), "SPAWN_CREATE_FAILED", "agent"},
+		{&sqlite3.Error{}, "", "db"},
+	} {
+		if got := Area(tc.err, tc.code); got != tc.want {
+			t.Fatalf("Area(%q, %q) = %q, want %q", tc.err, tc.code, got, tc.want)
+		}
 	}
 }
 

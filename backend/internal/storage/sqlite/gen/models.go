@@ -10,6 +10,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/timestamp"
 )
 
 type AgentAccount struct {
@@ -711,7 +712,7 @@ type Session struct {
 	Revision                         int64
 	NativeCheckpointEvidence         string
 	LatestAssistantUpdateAt          sql.NullTime
-	NativeIdentityObservedAt         sql.NullTime
+	NativeIdentityObservedAt         timestamp.ObservedAt
 	Effort                           string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string

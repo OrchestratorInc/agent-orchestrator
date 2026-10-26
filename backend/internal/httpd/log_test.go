@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -136,7 +138,7 @@ func TestRequestLoggerSkipsExpectedCodexUnavailableAndCapturesReal500Once(t *tes
 	log := slog.New(slog.NewTextHandler(&buf, nil))
 	sink := &captureSink{}
 	captures := 0
-	handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute) {
+	handler := requestLoggerWithCapture(log, sink, func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute, telemetrymeta.FailureSite) {
 		captures++
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/unavailable" {
@@ -153,6 +155,34 @@ func TestRequestLoggerSkipsExpectedCodexUnavailableAndCapturesReal500Once(t *tes
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/real", nil))
 	if len(sink.events) != 1 || sink.events[0].Name != "ao.http.5xx" || captures != 1 {
 		t.Fatalf("real failure events=%#v captures=%d, want one PostHog event and one Sentry capture", sink.events, captures)
+	}
+}
+
+func TestRequestLoggerSkipsOnlyExpectedLinkPreviewBadGateway(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	captures := 0
+	router := chi.NewRouter()
+	router.Use(requestLoggerWithCapture(log, nil, func(_ context.Context, _ error, _ map[string]string, _ string, _ telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
+		captures++
+		if site.String() == "" || strings.Contains(site.String(), "sentryobs") {
+			t.Fatalf("failure site = %q", site.String())
+		}
+	}))
+	router.Get("/api/v1/link-preview", func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "LINK_PREVIEW_FETCH_FAILED", "upstream fetch failed", nil)
+	})
+	router.Get("/api/v1/other", func(w http.ResponseWriter, r *http.Request) {
+		envelope.CaptureError(r, errors.New("other gateway failure"))
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "OTHER_GATEWAY_FAILURE", "other gateway failed", nil)
+	})
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/link-preview?url=https://example.test", nil))
+	if captures != 0 {
+		t.Fatalf("expected link preview failure captured %d times", captures)
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/other", nil))
+	if captures != 1 {
+		t.Fatalf("unrelated failure captured %d times, want one", captures)
 	}
 }
 

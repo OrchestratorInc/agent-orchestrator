@@ -304,6 +304,13 @@ func TestActivateConversationBranchMovesProviderAndGenerationTogether(t *testing
 	if got.Metadata.ProviderConversationID != "thread-child" || got.Metadata.ControllerGeneration != "generation-child" {
 		t.Fatalf("session controller metadata = %+v", got.Metadata)
 	}
+	listed, err := s.ListSessions(ctx, session.ProjectID)
+	if err != nil {
+		t.Fatalf("ListSessions after branch activation: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != session.ID || !listed[0].Metadata.NativeIdentityObservedAt.Equal(testNow) {
+		t.Fatalf("listed sessions after branch activation = %+v", listed)
+	}
 	branches, err := s.ConversationBranches(ctx, conversation.ID)
 	if err != nil {
 		t.Fatalf("ConversationBranches: %v", err)

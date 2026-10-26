@@ -1,7 +1,7 @@
 // Package sentryobs is the daemon-side Sentry integration. It captures genuine
-// server faults (5xx and panics) with their Go stack, grouped by the same
-// telemetrymeta fingerprint the PostHog path uses so an issue lines up across
-// both. It is the surface where the daemon's INTERNAL_ERROR 500 root causes
+// server faults (5xx and panics) with their Go stack, grouped by the AO
+// function that recorded the failure when that site is available. It is the
+// surface where the daemon's INTERNAL_ERROR 500 root causes
 // finally get a stack instead of an opaque count.
 //
 // It is a no-op until a DSN is configured (AO_SENTRY_DSN), and deny-by-default
@@ -13,22 +13,27 @@ package sentryobs
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"net"
 	"net/http"
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	sqlite3 "modernc.org/sqlite"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 var enabled atomic.Bool
 var installID atomic.Pointer[string]
+var release atomic.Pointer[string]
+var environment atomic.Pointer[string]
 
 var captureGate = struct {
 	sync.Mutex
@@ -39,6 +44,7 @@ var captureGate = struct {
 
 var (
 	safeFingerprint = regexp.MustCompile(`^[0-9a-f]{16}$`)
+	safeRelease     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,79}$`)
 )
 
 // New daemon Sentry capture operations and tags must be registered here.
@@ -113,6 +119,18 @@ type Config struct {
 func Init(cfg Config) error {
 	enabled.Store(false)
 	installID.Store(&cfg.InstallID)
+	version := cfg.Release
+	if !safeRelease.MatchString(version) {
+		version = "unknown"
+	}
+	channel := cfg.Environment
+	switch channel {
+	case "stable", "nightly", "development":
+	default:
+		channel = "unknown"
+	}
+	release.Store(&version)
+	environment.Store(&channel)
 	if cfg.DSN == "" {
 		return nil
 	}
@@ -129,8 +147,8 @@ func Init(cfg Config) error {
 	}
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:           cfg.DSN,
-		Release:       cfg.Release,
-		Environment:   cfg.Environment,
+		Release:       version,
+		Environment:   channel,
 		EnableTracing: false,
 		SampleRate:    rate,
 		Transport:     transport,
@@ -214,6 +232,20 @@ func scrubEvent(event *sentry.Event) *sentry.Event {
 	if known, ok := operationLabels[event.Tags["operation"]]; ok {
 		label = known
 	}
+	if event.Tags["operation"] == "http_request" {
+		switch event.Tags["area"] {
+		case "git":
+			label = "Git operation failed"
+		case "db":
+			label = "Database operation failed"
+		case "agent":
+			label = "Agent operation failed"
+		case "network":
+			label = "Network operation failed"
+		case "update":
+			label = "Update operation failed"
+		}
+	}
 	if code := event.Tags["error_code"]; safeErrorCode(code) {
 		label += " (" + code + ")"
 	}
@@ -236,6 +268,15 @@ func scrubEvent(event *sentry.Event) *sentry.Event {
 	event.Spans = nil
 	event.DebugMeta = nil
 	event.User = sentry.User{}
+	if id := installID.Load(); id != nil && *id != "" {
+		event.User.ID = *id
+	}
+	if v := release.Load(); v != nil {
+		event.Release = *v
+	}
+	if v := environment.Load(); v != nil {
+		event.Environment = *v
+	}
 	for _, fingerprint := range event.Fingerprint {
 		if !safeFingerprint.MatchString(fingerprint) {
 			event.Fingerprint = nil
@@ -290,6 +331,11 @@ func safeSentryTag(key, value string) bool {
 		return err == nil && ShouldCaptureStatus(status)
 	case "category":
 		return value == "http_5xx"
+	case "area":
+		switch value {
+		case "git", "db", "agent", "network", "update":
+			return true
+		}
 	case "error_kind":
 		return telemetrymeta.IsErrorKind(value)
 	case "panic_kind":
@@ -314,26 +360,32 @@ func ShouldCaptureStatus(status int) bool {
 	return status >= http.StatusInternalServerError && status != http.StatusServiceUnavailable
 }
 
-// CaptureHTTPError captures a server-fault error with the given tags and a
-// fingerprint identical to the PostHog grouping key. No-op when disabled or the
-// error is nil.
-func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute) {
-	if err == nil || ctx.Err() != nil || !enterCapture() {
+// CaptureHTTPError captures a server-fault error with safe tags and a stable
+// AO failure-site fingerprint when available. No-op when disabled or canceled.
+func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site ...telemetrymeta.FailureSite) {
+	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture() {
 		return
 	}
 	defer leaveCapture()
 	sentry.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(sentry.LevelError)
 		applyTags(scope, tags, route)
-		if fingerprint != "" {
-			scope.SetFingerprint([]string{fingerprint})
+		group := fingerprint
+		if len(site) > 0 && site[0].String() != "" {
+			group = telemetrymeta.Fingerprint("sentry", tags["operation"], site[0].String(), tags["error_code"])
 		}
-		sentry.CaptureException(err)
+		if group != "" {
+			scope.SetFingerprint([]string{group})
+		}
+		event := sentry.NewEvent()
+		event.Level = sentry.LevelError
+		event.Exception = []sentry.Exception{{Stacktrace: stackAtSite(site)}}
+		sentry.CaptureEvent(event)
 	})
 }
 
 // CapturePanic captures a recovered panic at fatal level. No-op when disabled.
-func CapturePanic(ctx context.Context, recovered any, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute) {
+func CapturePanic(ctx context.Context, recovered any, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site ...telemetrymeta.FailureSite) {
 	if ctx.Err() != nil || !enterCapture() {
 		return
 	}
@@ -341,17 +393,31 @@ func CapturePanic(ctx context.Context, recovered any, tags map[string]string, fi
 	sentry.WithScope(func(scope *sentry.Scope) {
 		scope.SetLevel(sentry.LevelFatal)
 		applyTags(scope, tags, route)
-		if fingerprint != "" {
-			scope.SetFingerprint([]string{fingerprint})
+		group := fingerprint
+		if len(site) > 0 && site[0].String() != "" {
+			group = telemetrymeta.Fingerprint("sentry", tags["operation"], site[0].String())
 		}
-		sentry.CaptureException(fmt.Errorf("panic: %v", recovered))
+		if group != "" {
+			scope.SetFingerprint([]string{group})
+		}
+		event := sentry.NewEvent()
+		event.Level = sentry.LevelFatal
+		event.Exception = []sentry.Exception{{Stacktrace: stackAtSite(site)}}
+		sentry.CaptureEvent(event)
 	})
+}
+
+func stackAtSite(sites []telemetrymeta.FailureSite) *sentry.Stacktrace {
+	if len(sites) > 0 && sites[0].String() != "" {
+		return &sentry.Stacktrace{Frames: []sentry.Frame{{Function: sites[0].String(), Lineno: sites[0].Line(), InApp: true}}}
+	}
+	return sentry.NewStacktrace()
 }
 
 func applyTags(scope *sentry.Scope, tags map[string]string, route telemetrymeta.SafeRoute) {
 	scope.SetTag("platform", "daemon")
 	for k, v := range tags {
-		if k == "install_id" || k == "path" {
+		if k == "install_id" || k == "path" || k == "area" {
 			continue
 		}
 		if v != "" {
@@ -359,9 +425,31 @@ func applyTags(scope *sentry.Scope, tags map[string]string, route telemetrymeta.
 		}
 	}
 	scope.SetTag("path", route.String())
+	if area := tags["area"]; safeSentryTag("area", area) {
+		scope.SetTag("area", area)
+	}
 	if id := installID.Load(); id != nil && *id != "" {
 		scope.SetTag("install_id", *id)
 	}
+}
+
+// Area classifies only errors with concrete type or code evidence.
+func Area(err error, code string) string {
+	switch {
+	case code == "WORKSPACE_GIT_READ_FAILED":
+		return "git"
+	case strings.HasPrefix(code, "AGENT_AUTH_"), strings.HasPrefix(code, "RUNTIME_"), strings.HasPrefix(code, "SPAWN_"):
+		return "agent"
+	}
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return "db"
+	}
+	var networkErr net.Error
+	if errors.As(err, &networkErr) {
+		return "network"
+	}
+	return ""
 }
 
 // Flush waits up to timeout for buffered events to send. Call on shutdown.
