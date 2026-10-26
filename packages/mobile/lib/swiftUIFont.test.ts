@@ -47,4 +47,12 @@ describe("geistFont", () => {
 			.filter((path) => /\bfont\(\{[^}]*\bfamily:/.test(readFileSync(join(root, path), "utf8")));
 		expect(direct).toEqual([]);
 	});
+
+	// A point size alone ignores Dynamic Type, so every SwiftUI font scales from
+	// a text style.
+	it("sizes every SwiftUI font from a text style", () => {
+		const fixed = [...sources("app"), ...sources("lib")]
+			.filter((path) => (readFileSync(join(root, path), "utf8").match(/\bfont\(\{[^}]*\}/g) ?? []).some((call) => !call.includes("textStyle")));
+		expect(fixed).toEqual([]);
+	});
 });
