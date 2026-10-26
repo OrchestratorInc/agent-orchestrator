@@ -36,6 +36,17 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).toContain('{status !== "open" && !dead ? (');
 	});
 
+	it("raises messages as platform notices that tell failures from news", () => {
+		expect(screen).toContain("<TerminalNotice notice={notice} onDismiss={clearNotice} />");
+		expect(screen).toContain("<TerminalNoticeHost notice={notice} onDismiss={clearNotice} bottomOffset={rootPad + dockHeight + space.sm} />");
+		expect(screen).toContain('showNotice(TERMINAL_MODE_NOTICE, "info");');
+		expect(screen).toContain('showNotice(REROUTED_NOTICE, "info");');
+		expect(screen).toContain("showNotice(TERMINAL_UNAVAILABLE_NOTICE);");
+		expect(screen).not.toContain("(tap to dismiss)");
+		expect(screen).not.toContain("setBanner");
+		expect(screen).not.toContain("t.amber");
+	});
+
 	it("keeps pinch and double-tap zoom, and adds a fit-to-width step", () => {
 		expect(screen).toContain("window.__aoAdjustTerminalZoom = function (direction)");
 		expect(screen).toContain("window.__aoFitTerminalWidth = function ()");

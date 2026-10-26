@@ -43,6 +43,8 @@ import { toolbarIcon } from "../toolbarIcon";
 import { Spinner } from "../Spinner";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
+import { Button } from "../ui";
+import { TerminalNotice, TerminalNoticeHost, type TerminalNoticeMessage, type TerminalNoticeTone } from "./TerminalNotice";
 import { backOr } from "../backNavigation";
 import { userFacingError } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -608,7 +610,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 	const [status, setStatus] = useState<MuxStatus>("connecting");
 	const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
-	const [banner, setBanner] = useState<string | null>(null);
+	// One notice at a time, the newest winning: an inline row on iOS, a snackbar
+	// on Android (see TerminalNotice).
+	const [notice, setNotice] = useState<TerminalNoticeMessage | null>(null);
+	const noticeId = useRef(0);
+	const showNotice = useCallback((text: string, tone: TerminalNoticeTone = "error") => {
+		noticeId.current += 1;
+		setNotice({ id: noticeId.current, text, tone });
+	}, []);
+	const clearNotice = useCallback(() => setNotice(null), []);
+	const [dockHeight, setDockHeight] = useState(0);
 	const [kbHeight, setKbHeight] = useState(0); // iOS: space to reserve for keyboard
 	const [kbVisible, setKbVisible] = useState(false); // both platforms
 	const [msg, setMsg] = useState("");
@@ -802,16 +813,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				},
 				onTerminalExited: (tid, code) => {
 					if (tid === terminalHandleId) {
-						setBanner(terminalExitedCopy(code));
+						showNotice(terminalExitedCopy(code), code === 0 ? "info" : "error");
 						setNotFound(true);
 					}
 				},
 				onTerminalError: (tid, msg) => {
 					if (tid !== terminalHandleId) return;
 					// A missing PTY means the session is terminated - offer Restore
-					// instead of surfacing it as a raw error banner.
+					// instead of surfacing it as a raw error notice.
 					if (isTerminalGoneError(msg)) setNotFound(true);
-					else setBanner(terminalErrorCopy(msg));
+					else showNotice(terminalErrorCopy(msg));
 				},
 				onTerminalResize: (tid, cols, rows) => {
 					if (tid !== terminalHandleId) return;
@@ -946,7 +957,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// terminated or exited session has no PTY, and rerouting there would swallow
 	// the user's text and report success.
 	//
-	// The reroute is announced in the banner rather than done silently, and the
+	// The reroute is announced in a notice rather than done silently, and the
 	// text stays in the field on any failure we did NOT handle, so nothing typed
 	// is ever lost.
 	const sendPrompt = useCallback(async () => {
@@ -957,10 +968,10 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				muxRef.current.sendInput(terminalHandleId, terminalPayload(text), projectId);
 				haptics.success();
 				setMsg("");
-				setBanner(TERMINAL_MODE_NOTICE);
+				showNotice(TERMINAL_MODE_NOTICE, "info");
 			} else {
 				haptics.error();
-				setBanner(TERMINAL_UNAVAILABLE_NOTICE);
+				showNotice(TERMINAL_UNAVAILABLE_NOTICE);
 			}
 			return;
 		}
@@ -979,15 +990,15 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				haptics.success();
 				setMsg("");
 				setSendTarget("terminal");
-				setBanner(REROUTED_NOTICE);
+				showNotice(REROUTED_NOTICE, "info");
 			} else {
 				haptics.error();
-				setBanner(`Message not sent. ${userFacingError(e)}`);
+				showNotice(`Message not sent. ${userFacingError(e)}`);
 			}
 		} finally {
 			setSending(false);
 		}
-	}, [msg, sendTarget, activeConfig, id, terminalHandleId, projectId, status]);
+	}, [msg, sendTarget, activeConfig, id, terminalHandleId, projectId, status, showNotice]);
 
 	// Push-to-talk dictation, captured on the PHONE rather than by the harness.
 	//
@@ -1015,10 +1026,10 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		}, []),
 	});
 
-	// Recognition failures surface in the existing banner rather than new UI.
+	// Recognition failures surface as a notice rather than new UI.
 	useEffect(() => {
-		if (voice.error) setBanner(voice.error);
-	}, [voice.error]);
+		if (voice.error) showNotice(voice.error);
+	}, [voice.error, showNotice]);
 
 	// Preview is one session-level destination: the live desktop browser first,
 	// with the generated app/document preview available as a second tab.
@@ -1037,12 +1048,12 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		async (policy: "drain" | "interrupt") => {
 			try {
 				await interfaceSwitch.start("chat", policy);
-				setBanner(null);
+				clearNotice();
 			} catch (cause) {
-				setBanner(`Couldn't switch interface. ${userFacingError(cause)}`);
+				showNotice(`Couldn't switch interface. ${userFacingError(cause)}`);
 			}
 		},
-		[interfaceSwitch],
+		[clearNotice, interfaceSwitch, showNotice],
 	);
 
 	const requestInterfaceSwitch = useCallback(async () => {
@@ -1148,7 +1159,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				leave();
 			} catch (e) {
 				haptics.error();
-				setBanner(`${reviewerPane ? "Couldn't stop the reviewer" : shellOnly ? "Couldn't close the shell" : "Couldn't archive the session"}. ${userFacingError(e)}`);
+				showNotice(`${reviewerPane ? "Couldn't stop the reviewer" : shellOnly ? "Couldn't close the shell" : "Couldn't archive the session"}. ${userFacingError(e)}`);
 			}
 		};
 		if (Platform.OS === "web") {
@@ -1168,7 +1179,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			{ text: shellOnly ? "Cancel" : ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
 			{ text: shellOnly ? "Close" : ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: doKill },
 		]);
-	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly]);
+	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly, showNotice]);
 
 	// Restore a terminated session: the daemon re-attaches its worktree agent and
 	// its PTY comes back, so we re-open the terminal once restore succeeds.
@@ -1176,7 +1187,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		setRestoring(true);
 		try {
 			await restore(id);
-			setBanner(null);
+			clearNotice();
 			setNotFound(false);
 			openedRef.current = false;
 			// Give the daemon a moment to bring the PTY up, then re-attach.
@@ -1188,11 +1199,11 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				if (d) muxRef.current?.resize(terminalHandleId, d.cols, d.rows, projectId);
 			}, 1200);
 		} catch (e) {
-			setBanner(`Couldn't restore the session. ${userFacingError(e)}`);
+			showNotice(`Couldn't restore the session. ${userFacingError(e)}`);
 		} finally {
 			setRestoring(false);
 		}
-	}, [restore, id, terminalHandleId, projectId]);
+	}, [restore, id, terminalHandleId, projectId, clearNotice, showNotice]);
 
 	const xtermOptions = useMemo(
 		() => ({
@@ -1340,16 +1351,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			nestedScrollEnabled: true,
 			// Surface an Android WebView render-process crash instead of a silent black
 			// screen, so the user can tell the terminal died vs. never loaded.
-			onRenderProcessGone: () => setBanner("The terminal view stopped working. Go back and open the session again."),
+			onRenderProcessGone: () => showNotice("The terminal view stopped working. Go back and open the session again."),
 		}),
-		[],
+		[showNotice],
 	);
 
 	if (activeConfig && !isConfigured(activeConfig)) {
 		return (
 			<View style={styles.center}>
 				{headerItems}
-				<Text style={styles.bannerText}>No machine paired.</Text>
+				<Text style={styles.centerText}>No machine paired.</Text>
 			</View>
 		);
 	}
@@ -1364,46 +1375,38 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	return (
 		<View style={[styles.screen, rootPad > 0 && { paddingBottom: rootPad }]}>
 			{headerItems}
-			{banner && (
-				<Pressable onPress={() => { haptics.tap(); setBanner(null); }} style={styles.banner}>
-					<Text style={styles.bannerText}>{banner} (tap to dismiss)</Text>
-				</Pressable>
-			)}
+			<TerminalNotice notice={notice} onDismiss={clearNotice} />
 			{interfaceTransitionNotice ? (
-				<View style={styles.banner}>
-					<Text style={styles.bannerText}>
-						{interfaceTransitionNoticeText}
-						{interfaceSwitch.acknowledgeNoticeError
-							? ` Couldn't dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
-							: ""}
-					</Text>
-					<View style={styles.interfaceFailureActions}>
+				// Not a transient notice: it waits for the user to acknowledge it, and
+				// it can carry a recovery action, so it is a row on both platforms.
+				<View style={[styles.transitionNotice, !interfaceTransitionRecovered && styles.transitionNoticeFailed]} accessibilityRole="alert">
+					<View style={styles.transitionNoticeRow}>
+						<AppSymbol
+							name={interfaceTransitionRecovered ? "info" : "error"}
+							size={iconSize.md}
+							color={interfaceTransitionRecovered ? t.textSecondary : t.red}
+						/>
+						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.transitionNoticeText, !interfaceTransitionRecovered && styles.transitionNoticeTextFailed]}>
+							{interfaceTransitionNoticeText}
+							{interfaceSwitch.acknowledgeNoticeError
+								? ` Couldn't dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
+								: ""}
+						</Text>
+					</View>
+					<View style={styles.transitionNoticeActions}>
 						{interfaceFailureRecovery ? (
-							<Pressable
-								accessibilityRole="button"
-								onPress={() => {
-									haptics.tap();
-									requestInterfaceFailureRecovery();
-								}}
-							>
-								<Text style={styles.interfaceFailureActionText}>{interfaceFailureRecovery.actionLabel}</Text>
-							</Pressable>
+							<Button variant="danger" title={interfaceFailureRecovery.actionLabel} onPress={requestInterfaceFailureRecovery} />
 						) : null}
-						<Pressable
-							accessibilityRole="button"
-							accessibilityLabel="Dismiss interface switch error"
-							disabled={interfaceSwitch.acknowledgingNotice}
+						<Button
+							variant="ghost"
+							title="Dismiss"
+							loading={interfaceSwitch.acknowledgingNotice}
 							onPress={() => {
-								haptics.tap();
 								void interfaceSwitch
 									.acknowledgeNotice(interfaceTransitionNotice.id)
 									.catch(() => {});
 							}}
-						>
-							<Text style={styles.interfaceFailureDismissText}>
-								{interfaceSwitch.acknowledgingNotice ? "Dismissing…" : "Dismiss"}
-							</Text>
-						</Pressable>
+						/>
 					</View>
 				</View>
 			) : null}
@@ -1484,7 +1487,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 			{/* The input dock. One container, one bottom inset, fixed slots — every
 			    control sits in the same place in every state the screen can reach. */}
-			<View style={[styles.dock, { paddingBottom: bottomPad }]}>
+			<View style={[styles.dock, { paddingBottom: bottomPad }]} onLayout={(e) => setDockHeight(Math.round(e.nativeEvent.layout.height))}>
 				{/* Live dictation readout. Deliberately not inside the field: the
 				    partial transcript changes on every syllable, and rewriting the
 				    input under the user's caret is hostile. */}
@@ -1521,6 +1524,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					targetLocked={shellOnly}
 				/>
 			</View>
+			{/* Absolutely placed, so it comes last and draws over the dock's
+			    neighbours; the offset clears the keyboard pad and the dock. */}
+			<TerminalNoticeHost notice={notice} onDismiss={clearNotice} bottomOffset={rootPad + dockHeight + space.sm} />
 		</View>
 	);
 }
@@ -1548,23 +1554,20 @@ const makeStyles = (t: Theme) =>
 		borderColor: t.borderDefault,
 	},
 	statusText: { flexShrink: 1, fontFamily: font.medium, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	banner: {
+	centerText: { fontFamily: font.regular, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	transitionNotice: {
+		paddingTop: space.sm,
+		paddingLeft: space.lg,
+		paddingRight: space.sm,
 		backgroundColor: t.bgElevated,
-		paddingHorizontal: space.md,
-		paddingVertical: space.sm,
-		borderBottomWidth: 1,
-		borderBottomColor: t.borderDefault,
+		borderBottomWidth: rowDividerWidth,
+		borderBottomColor: t.borderSubtle,
 	},
-	bannerText: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.caption1.fontSize },
-	interfaceFailureActions: {
-		marginTop: space.sm,
-		flexDirection: "row",
-		alignItems: "center",
-		justifyContent: "flex-end",
-		gap: space.lg,
-	},
-	interfaceFailureActionText: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	interfaceFailureDismissText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
+	transitionNoticeFailed: { backgroundColor: t.tintRed },
+	transitionNoticeRow: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, paddingRight: space.sm },
+	transitionNoticeText: { flex: 1, fontFamily: font.regular, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	transitionNoticeTextFailed: { color: t.red },
+	transitionNoticeActions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.xs },
 	termWrap: { flex: 1, backgroundColor: t.bgBase },
 	dock: {
 		borderTopWidth: 1,
