@@ -8,7 +8,7 @@ const block = { type: "image", data, mimeType: "image/png" };
 
 function Content({ value }: { value: unknown }) {
 	return <>{normalizeToolContent(value).map((part, index) => part.kind === "image"
-		? <ToolImage key={index} image={part} /> : <pre key={index}>{part.text}</pre>)}</>;
+		? <ToolImage key={index} image={part} /> : <pre key={index}>{part.kind === "text" ? part.text : JSON.stringify(part.value)}</pre>)}</>;
 }
 
 describe("tool content images", () => {
