@@ -15,6 +15,8 @@ const fixtures = vi.hoisted(() => ({
 	dismissTo: vi.fn(),
 	setSheetOptions: vi.fn(),
 	focused: { current: true },
+	copy: vi.fn(async () => true),
+	platform: { OS: "android", Version: 34 },
 	hostStates: [] as { hostId: string; connection: "closed" | "connecting" | "open"; loading: boolean; config: ServerConfig | null }[],
 	haptics: { select: vi.fn(), error: vi.fn(), warning: vi.fn(), success: vi.fn() },
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", green: "green", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
@@ -38,6 +40,7 @@ vi.mock("expo-router", async () => {
 });
 vi.mock("react-native", () => ({
 	Alert: { alert: fixtures.alert },
+	Platform: fixtures.platform,
 	StyleSheet: { create: (styles: object) => styles },
 	View: "View",
 }));
@@ -54,6 +57,8 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", async () => ({
 	graphicsLayer: (value: unknown) => ({ $type: "graphicsLayer", args: [value] }),
 }));
 vi.mock("./formDrawables.android", () => ({ formDrawables: { edit: "edit.xml", expandMore: "expand_more.xml" } }));
+vi.mock("expo-clipboard", () => ({ setStringAsync: fixtures.copy }));
+vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
 vi.mock("./environmentActions", () => ({ forgetEnvironmentMachine: fixtures.forget }));
 vi.mock("./hosts", () => ({ activeHost: fixtures.activeHost, loadHosts: fixtures.loadHosts }));
 vi.mock("./store", () => ({
@@ -95,8 +100,9 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions, ...Object.values(fixtures.haptics)]) mock.mockReset();
+	for (const mock of [fixtures.loadHosts, fixtures.activeHost, fixtures.switchHost, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.forget, fixtures.alert, fixtures.push, fixtures.dismissTo, fixtures.setSheetOptions, fixtures.copy, ...Object.values(fixtures.haptics)]) mock.mockReset();
 	fixtures.focused.current = true;
+	fixtures.platform.Version = 34;
 	fixtures.loadHosts.mockResolvedValue([a, b]);
 	fixtures.activeHost.mockResolvedValue(b);
 	fixtures.switchHost.mockResolvedValue(undefined);
@@ -282,6 +288,30 @@ describe("a machine's page on Android", () => {
 		act(() => click(toggle)!());
 		expect(byTestID("environment-other-route-lan://192.168.1.24:3011")).toBeTruthy();
 		expect(byTestID("environment-other-routes-a").findByType("Icon" as never).props.contentDescription).toBe("Hide other routes");
+	});
+
+	// Compose text can't be selected, so a route row copies its address, on a
+	// tap or the long press a settings row answers.
+	it("copies a route's address from its row", async () => {
+		await render();
+		const active = byTestID("environment-active-address-a");
+		const press = modifiersOf(active).find((m) => m.$type === "combinedClickable")!.args[0] as { onClick: () => void; onLongClick: () => void };
+		act(() => press.onClick());
+		expect(fixtures.copy).toHaveBeenLastCalledWith("studio.tail123.ts.net:3011");
+		act(() => click(byTestID("environment-other-routes-a"))!());
+		const other = byTestID("environment-other-route-lan://192.168.1.24:3011");
+		act(() => (modifiersOf(other).find((m) => m.$type === "combinedClickable")!.args[0] as { onLongClick: () => void }).onLongClick());
+		expect(fixtures.copy).toHaveBeenLastCalledWith("192.168.1.24:3011");
+		// Android 13 and later confirm the copy themselves.
+		expect(renderer!.root.findByType("ToastHost" as never).props.toast.current).toBeUndefined();
+	});
+
+	it("confirms a copy itself before Android 13", async () => {
+		fixtures.platform.Version = 32;
+		await render();
+		const active = byTestID("environment-active-address-a");
+		act(() => (modifiersOf(active).find((m) => m.$type === "combinedClickable")!.args[0] as { onLongClick: () => void }).onLongClick());
+		expect(renderer!.root.findByType("ToastHost" as never).props.toast.current.text).toBe("Address copied.");
 	});
 
 	it("draws Forget in the error colour and holds it while a forget runs", async () => {

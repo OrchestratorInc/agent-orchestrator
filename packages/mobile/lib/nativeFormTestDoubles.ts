@@ -83,7 +83,7 @@ export function composeDouble() {
 }
 
 export const composeModifierNames = [
-	"animateContentSize", "background", "clickable", "clip", "fillMaxSize", "fillMaxWidth", "padding",
+	"animateContentSize", "background", "clickable", "clip", "combinedClickable", "fillMaxSize", "fillMaxWidth", "padding",
 	"paddingAll", "semantics", "testID", "toggleable", "weight",
 ] as const;
 

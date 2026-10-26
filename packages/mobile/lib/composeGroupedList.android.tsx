@@ -1,5 +1,5 @@
 import { Column, ListItem, Text } from "@expo/ui/jetpack-compose";
-import { alpha, clickable, clip, fillMaxWidth, padding, Shapes, testID as testTag } from "@expo/ui/jetpack-compose/modifiers";
+import { alpha, clickable, clip, combinedClickable, fillMaxWidth, padding, Shapes, testID as testTag } from "@expo/ui/jetpack-compose/modifiers";
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { useTheme } from "./ThemeProvider";
 import { stateOpacity } from "./tokens";
@@ -51,12 +51,14 @@ export function GroupedSection({ title, footer, footerColor, children }: {
 }
 
 /** One row of a GroupedSection. A row with `onPress` is clickable across its width and ripples. */
-export function GroupedRow({ headline, supporting, leading, trailing, onPress, disabled = false, destructive = false, testID, position = "only" }: {
+export function GroupedRow({ headline, supporting, leading, trailing, onPress, onLongPress, disabled = false, destructive = false, testID, position = "only" }: {
 	headline: string;
 	supporting?: string;
 	leading?: ReactNode;
 	trailing?: ReactNode;
 	onPress?: () => void;
+	/** A long press too, as a settings row that copies its value answers one. */
+	onLongPress?: () => void;
 	/** Dims the row and stops it taking taps, for an action that can't run right now. */
 	disabled?: boolean;
 	/** Draws the headline in the error colour, for an action that removes something. */
@@ -66,6 +68,7 @@ export function GroupedRow({ headline, supporting, leading, trailing, onPress, d
 	position?: RowPosition;
 }) {
 	const t = useTheme();
+	const press = disabled ? [] : onLongPress ? [combinedClickable({ onClick: onPress, onLongClick: onLongPress })] : onPress ? [clickable(onPress)] : [];
 	return (
 		<ListItem
 			colors={{
@@ -79,7 +82,7 @@ export function GroupedRow({ headline, supporting, leading, trailing, onPress, d
 				fillMaxWidth(),
 				// Clipped before it is made clickable, so the ripple keeps the row's shape.
 				clip(Shapes.RoundedCorner(cornerRadii(position))),
-				...(onPress && !disabled ? [clickable(onPress)] : []),
+				...press,
 				...(disabled ? [alpha(stateOpacity.disabled)] : []),
 				...(testID ? [testTag(testID)] : []),
 			]}

@@ -1,7 +1,9 @@
 import { Host, Icon, LazyColumn, Text } from "@expo/ui/jetpack-compose";
 import { fillMaxSize, graphicsLayer } from "@expo/ui/jetpack-compose/modifiers";
+import * as Clipboard from "expo-clipboard";
 import { Stack } from "expo-router";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ComponentProps } from "react";
+import { Platform } from "react-native";
 import { GroupedRow, GroupedSection } from "./composeGroupedList.android";
 import {
 	endpointDisplayAddress,
@@ -13,15 +15,19 @@ import {
 import { formDrawables } from "./formDrawables.android";
 import { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
+import { ToastHost } from "./Toast";
+import { useToast } from "./useToast";
 
 export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 
 // Android: a machine's page as a Material 3 settings list: its status and
 // routes, the actions that change how the phone reaches it, and Forget at the
-// foot. Edit is a top app bar action.
+// foot. Edit is a top app bar action. A route row copies its address on a tap
+// or a long press, as a settings row showing a value does.
 export function MachineDetail({ host, activeConfig, isDefault, status, switching, forgetting, onMakeDefault, onReconnect, onForget, onEdit }: MachineDetailProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
+	const toast = useToast();
 	const [showOtherRoutes, setShowOtherRoutes] = useState(false);
 	const endpoints = environmentEndpointRows(host, activeConfig);
 	const primary = primaryEnvironmentEndpoint(endpoints);
@@ -32,6 +38,12 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 			<Stack.Toolbar.Button icon={formDrawables.edit} accessibilityLabel={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} />
 		</Stack.Toolbar>
 	), [forgetting, host.name, onEdit]);
+
+	function copyAddress(authority: string) {
+		void Clipboard.setStringAsync(authority);
+		// Android 13 and later confirm a copy themselves, and read it out.
+		if (Number(Platform.Version) < 33) toast.show("Address copied.");
+	}
 
 	return (
 		<>
@@ -44,10 +56,11 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 					</GroupedSection>
 					<GroupedSection title="Routes">
 						{primary ? (
-							<GroupedRow
+							<AddressRow
 								headline="Active route"
-								supporting={endpointDisplayAddress(primary.address).authority}
+								authority={endpointDisplayAddress(primary.address).authority}
 								trailing={primary.label}
+								onCopy={copyAddress}
 								testID={`environment-active-address-${host.id}`}
 							/>
 						) : <GroupedRow headline="No saved connection routes." />}
@@ -68,10 +81,11 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 							/>
 						) : null}
 						{showOtherRoutes ? others.map((endpoint) => (
-							<GroupedRow
+							<AddressRow
 								key={endpoint.key}
 								headline={endpoint.label}
-								supporting={endpointDisplayAddress(endpoint.address).authority}
+								authority={endpointDisplayAddress(endpoint.address).authority}
+								onCopy={copyAddress}
 								testID={`environment-other-route-${endpoint.key}`}
 							/>
 						)) : null}
@@ -98,6 +112,16 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 					</GroupedSection>
 				</LazyColumn>
 			</Host>
+			<ToastHost toast={toast} />
 		</>
 	);
+}
+
+/** A route's row, which copies its address. GroupedSection sets `position`. */
+function AddressRow({ authority, onCopy, ...row }: Omit<ComponentProps<typeof GroupedRow>, "supporting" | "onPress" | "onLongPress"> & {
+	authority: string;
+	onCopy: (authority: string) => void;
+}) {
+	const copy = () => onCopy(authority);
+	return <GroupedRow {...row} supporting={authority} onPress={copy} onLongPress={copy} />;
 }
