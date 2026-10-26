@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "agents": {
+    "my-agent": {
+      "binary": "my-agent",
+      "versionArgs": ["--version"],
+      "integration": {
+        "args": ["auth", "status"],
+        "expect": "Logged in"
+      },
+      "models": {
+        "args": ["models", "--json"],
+        "format": "json"
+      },
+      "surfaces": ["tui", "chat"],
+      "adapters": { "tui": "myagent", "chat": "myagentacp" },
+      "restoredReady": {
+        "patterns": ["<regex that matches only the empty input box after a restore>"]
+      }
+    }
+  }
+}
