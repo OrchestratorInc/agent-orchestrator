@@ -534,15 +534,24 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 		Sequence int64              `json:"sequence"`
 		Role     domain.MessageRole `json:"role"`
 		Text     string             `json:"text"`
+		plain    string
+		captures []ports.ChatContent
 	}
 	type replayEnvelope struct {
 		Kind      string          `json:"kind"`
 		Messages  []replayMessage `json:"messages"`
 		Truncated bool            `json:"truncated"`
+		Warning   string          `json:"warning,omitempty"`
 	}
+	omitted := false
 	encode := func(selected []replayMessage, truncated bool) ([]byte, error) {
+		warning := ""
+		if omitted {
+			warning = "Some captured file context was omitted because it was invalid or exceeded the replay limit. Use only the available context; do not infer the missing code."
+		}
 		return json.Marshal(replayEnvelope{
-			Kind: "approximate_conversation_context", Messages: selected, Truncated: truncated,
+			Warning: warning,
+			Kind:    "approximate_conversation_context", Messages: selected, Truncated: truncated,
 		})
 	}
 	messages := make([]replayMessage, 0, len(rows))
@@ -556,34 +565,21 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 			continue
 		}
 		text := strings.TrimSpace(message.Text)
+		var captures []ports.ChatContent
 		if message.Role == domain.MessageRoleUser && message.DeliveryContentJSON != "" {
-			var durable []ports.ChatContent
-			if err := json.Unmarshal([]byte(message.DeliveryContentJSON), &durable); err != nil {
-				return "", false, fmt.Errorf("decode stored replay content: %w", err)
-			}
-			var captures []ports.ChatContent
-			for _, block := range durable {
-				if block.Internal || block.Type != "file_reference" {
-					continue
-				}
-				if block.FileReference == nil {
-					return "", false, fmt.Errorf("stored replay file reference is missing")
-				}
-				if err := ValidateFileReference(*block.FileReference); err != nil {
-					return "", false, fmt.Errorf("invalid stored replay file reference: %w", err)
-				}
-				captures = append(captures, block)
-			}
-			text = excerptDeliveryMessage(ports.ChatUserMessage{Text: text, Content: captures}).Text
+			var incomplete bool
+			captures, incomplete = replayFileReferences(message.DeliveryContentJSON)
+			omitted = omitted || incomplete
 		}
+		text = excerptDeliveryMessage(ports.ChatUserMessage{Text: text, Content: captures}).Text
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		messages = append(messages, replayMessage{message.Sequence, message.Role, text})
+		messages = append(messages, replayMessage{Sequence: message.Sequence, Role: message.Role, Text: text, plain: strings.TrimSpace(message.Text), captures: captures})
 	}
 	sort.SliceStable(messages, func(i, j int) bool { return messages[i].Sequence < messages[j].Sequence })
 	selected := make([]replayMessage, 0, len(messages))
-	truncated := false
+	truncated := omitted
 	for index := len(messages) - 1; index >= 0; index-- {
 		candidate := make([]replayMessage, len(selected)+1)
 		candidate[0] = messages[index]
@@ -591,6 +587,15 @@ func buildApproximateReplayContext(rows []domain.ConversationMessage, floor, cut
 		encoded, marshalErr := encode(candidate, true)
 		if marshalErr != nil {
 			return "", false, fmt.Errorf("encode replay context: %w", marshalErr)
+		}
+		for len(encoded) > approximateReplayBudget && len(candidate[0].captures) > 0 {
+			omitted, truncated = true, true
+			candidate[0].captures = candidate[0].captures[:len(candidate[0].captures)-1]
+			candidate[0].Text = excerptDeliveryMessage(ports.ChatUserMessage{Text: candidate[0].plain, Content: candidate[0].captures}).Text
+			encoded, marshalErr = encode(candidate, true)
+			if marshalErr != nil {
+				return "", false, marshalErr
+			}
 		}
 		if len(encoded) > approximateReplayBudget {
 			truncated = true

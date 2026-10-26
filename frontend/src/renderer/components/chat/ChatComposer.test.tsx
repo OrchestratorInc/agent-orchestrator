@@ -21,6 +21,7 @@ import {
 	writeChatComposerText,
 	writeChatAttachments,
 	writeChatExcerptReferences,
+	writeChatFileReferences,
 } from "../../lib/chat-drafts";
 import {
 	getChatDraftBoundaries,
@@ -2988,9 +2989,32 @@ it("keeps cloud captures in shared drafts through reload and retries with the sa
 	await userEvent.click(screen.getByRole("button",{name:"Retry message safely"}));
 	await waitFor(()=>expect(onSend).toHaveBeenCalledTimes(2));
 	expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
-	expect(onSend.mock.calls[0][5]).toEqual([expect.objectContaining({id:ref.id})]);
+	expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
+	expect(onSend.mock.calls[0][0].match(/CLOUD_CAPTURE/g)).toHaveLength(1);
+	expect(onSend.mock.calls[0][5]).toBeUndefined();
 	await waitFor(()=>expect(readChatSessionDraft(sessionId).composer.fileReferences ?? []).toHaveLength(0));
 	view.unmount();
+});
+
+it("retries a legacy cloud receipt with its original filename format and identity", async () => {
+	const sessionId="legacy-cloud-file-retry";
+	const ref=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"LEGACY_CAPTURE"}]},sessionId);
+	writeChatComposerText(sessionId,"original question");writeChatFileReferences(sessionId,[ref]);
+	prepareChatComposerDelivery(sessionId,{kind:"send",composerText:"original question",requestText:"original question",attachments:[],fileReferences:[ref],clientMessageId:"legacy-receipt"});
+	// Model a receipt written by the previous app version, before the format marker.
+	for(let i=0;i<localStorage.length;i++){
+		const key=localStorage.key(i)!;const raw=localStorage.getItem(key)!;
+		if(raw.includes('"clientMessageId":"legacy-receipt"')){
+			const saved=JSON.parse(raw);delete saved.composer.delivery.fileReferenceFormat;localStorage.setItem(key,JSON.stringify(saved));
+		}
+	}
+	const onSend=vi.fn().mockResolvedValue(undefined);
+	render(<ChatComposer draftSessionId={sessionId} onSend={onSend} fileReferenceDelivery="text"/>);
+	await userEvent.click(await screen.findByRole("button",{name:"Retry message safely"}));
+	await waitFor(()=>expect(onSend).toHaveBeenCalledOnce());
+	expect(onSend.mock.calls[0][0]).toContain("cloud.ts#L1-L1");
+	expect(onSend.mock.calls[0][0]).not.toContain('"cloud.ts"#L1-L1');
+	expect(onSend.mock.calls[0][2]).toBe("legacy-receipt");
 });
 
 it("retains file annotations when the connected daemon lacks support", async () => {

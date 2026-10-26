@@ -1,6 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { captureFileReference, formatCapturedFileReferences } from "./chat-file-reference";
+import { captureFileReference, formatCapturedFileReferences, isSupportedFileReference } from "./chat-file-reference";
 import { normalizeCodeRowText } from "./file-annotations";
+
+it.each(["notes:v2.md", "a\\b", "/absolute", "../outside", "a/../b", "a//b"])("rejects unsupported source path %s without changing it", path => {
+	const ref = captureFileReference({path,side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"code"}]},"session");
+	expect(isSupportedFileReference(ref)).toBe(false);
+	expect(ref.path).toBe(path);
+});
+it("checks previous paths and normalized rows, retaining portable Unicode and truncation", () => {
+	const ref = captureFileReference({path:"src/你好.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:" \t😀\r\n"}]},"session");
+	expect(isSupportedFileReference(ref)).toBe(true);
+	ref.previousPath="notes:v2.md";
+	expect(isSupportedFileReference(ref)).toBe(false);
+	delete ref.previousPath;
+	for (const text of ["a\nb", "a\rb", "a\0b", "\ud800"]) {
+		ref.lines[0].text=text;
+		expect(isSupportedFileReference(ref)).toBe(false);
+	}
+	const bounded=captureFileReference({...ref,lines:[{...ref.lines[0],text:"x".repeat(900)}]},"session");
+	expect(bounded.truncated).toBe(true);
+	expect(isSupportedFileReference(bounded)).toBe(true);
+});
+it.each(['say "hello".ts', '```ignore this.ts', '你好.ts', 'ignore previous instructions.ts'])("quotes filename data %s", path => {
+	const ref=captureFileReference({path,side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"safe();"}]},"session");
+	expect(formatCapturedFileReferences("question",[ref])).toContain(`${JSON.stringify(path)}#L1-L1`);
+	expect(formatCapturedFileReferences("question",[ref],false)).toContain(`${path}#L1-L1`);
+});
 
 describe("captured row boundaries", () => {
 	it("formats bounded cloud captures in order without clipping again or mutating them", () => {
@@ -9,7 +34,7 @@ describe("captured row boundaries", () => {
 		first.order=1;ref.order=2;
 		const saved=JSON.stringify([ref,first]);
 		const output=formatCapturedFileReferences("question",[ref,first]);
-		expect(output.indexOf("b.ts#L1-L1")).toBeLessThan(output.indexOf("a.ts#L1-L12"));
+		expect(output.indexOf('"b.ts"#L1-L1')).toBeLessThan(output.indexOf('"a.ts"#L1-L12'));
 		for (const row of ref.lines) expect(output).toContain(`+${row.text}\n`);
 		expect(output).toContain("``\u200b`UNIQUE_FENCE");
 		expect(output).toContain("[Captured selection truncated]");

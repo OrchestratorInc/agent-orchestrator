@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { FileCodeReference } from "../../shared/file-annotations";
-import { captureFileReference, type ChatFileReference } from "../../shared/chat-file-reference";
+import { captureFileReference, isSupportedFileReference, type ChatFileReference } from "../../shared/chat-file-reference";
 import { sessionUiKey } from "./hosts";
 
 // Lets a file or diff view hand a code reference to the session's Chat
@@ -82,7 +82,10 @@ export function useAskInChat(sessionId: string, hostId?: string): ((reference: F
 	const key = sessionUiKey(sessionId, hostId);
 	const available = useHasChatComposer(key);
 	return useMemo(
-		() => (available ? (reference: FileCodeReference) => sendReferenceToChat(key, captureFileReference(reference, sessionId, hostId)) : undefined),
+		() => (available ? (reference: FileCodeReference) => {
+			const captured = captureFileReference(reference, sessionId, hostId);
+			return isSupportedFileReference(captured) && sendReferenceToChat(key, captured);
+		} : undefined),
 		[available, key, sessionId, hostId],
 	);
 }

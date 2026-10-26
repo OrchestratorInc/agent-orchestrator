@@ -17,6 +17,20 @@ const range: FileCodeReference = {
 };
 
 describe("useAskInChat", () => {
+	it("rejects unsupported captures before notifying or revealing the composer", () => {
+		const receive=vi.fn(), reveal=vi.fn();
+		const stop=subscribeChatComposerReferences("invalid-capture",receive);
+		const stopReveal=subscribeChatReveal("invalid-capture",reveal);
+		const view=renderHook(()=>useAskInChat("invalid-capture"));
+		for(const selection of [{...range,path:"notes:v2.md"},{...range,previousPath:"a\\b"},{...range,lines:[{...range.lines[0],text:"bad\0row"}]}]) {
+			const saved=JSON.stringify(selection);
+			expect(view.result.current?.(selection)).toBe(false);
+			expect(JSON.stringify(selection)).toBe(saved);
+		}
+		expect(receive).not.toHaveBeenCalled();
+		expect(reveal).not.toHaveBeenCalled();
+		view.unmount();stop();stopReveal();
+	});
 	it("does not acknowledge or reveal a refused reference", () => {
 		const reveal = vi.fn();
 		const unreveal = subscribeChatReveal("refused-session", reveal);

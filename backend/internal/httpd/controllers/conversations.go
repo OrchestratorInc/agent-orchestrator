@@ -946,16 +946,10 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	message, invalid := chatUserMessage(req)
+	message, invalid := chatUserMessage(req, chi.URLParam(r, "sessionId"))
 	if invalid != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", invalid.code, invalid.message, nil)
 		return
-	}
-	for _, ref := range req.FileReferences {
-		if ref.SessionID != chi.URLParam(r, "sessionId") {
-			envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_FILE_REFERENCE_INVALID", "file reference belongs to another session", nil)
-			return
-		}
 	}
 	turn, err := c.Svc.Send(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")), message)
 	if err != nil {
@@ -967,7 +961,12 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 
 // chatUserMessage validates a send request and turns it into the message the
 // agent receives.
-func chatUserMessage(req SendConversationMessageRequest) (ports.ChatUserMessage, *attachmentError) {
+func chatUserMessage(req SendConversationMessageRequest, sessionID string) (ports.ChatUserMessage, *attachmentError) {
+	for _, ref := range req.FileReferences {
+		if ref.SessionID != sessionID {
+			return ports.ChatUserMessage{}, &attachmentError{"CHAT_FILE_REFERENCE_INVALID", "file reference belongs to another session"}
+		}
+	}
 	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 && len(req.FileReferences) == 0 {
 		// There is no keystroke concept in Chat mode: an empty body is a client
 		// bug, not a way to nudge the agent.
@@ -1058,7 +1057,7 @@ func conversationContent(req SendConversationMessageRequest) ([]ports.ChatConten
 		if err := chatsvc.ValidateFileReference(ref); err != nil {
 			return nil, &attachmentError{"CHAT_FILE_REFERENCE_INVALID", err.Error()}
 		}
-		content = append(content, ports.ChatContent{Type: "file_reference", FileReference: &ref})
+		content = append(content, ports.ChatContent{Type: "file_reference", Text: chatsvc.FileReferenceQuotedPath, FileReference: &ref})
 	}
 	return content, nil
 }
@@ -1178,6 +1177,10 @@ func decodeConversationBodyLimit(w http.ResponseWriter, r *http.Request, into an
 // codes, so a client can tell a permanent answer from a retryable one.
 func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case errors.Is(err, chatsvc.ErrFileReferenceInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_FILE_REFERENCE_INVALID", err.Error(), nil)
+	case errors.Is(err, chatsvc.ErrAnnotationLimit):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_ANNOTATION_LIMIT", err.Error(), nil)
 	case errors.Is(err, ports.ErrSessionNotFound):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found",
 			"SESSION_NOT_FOUND", "session not found", nil)

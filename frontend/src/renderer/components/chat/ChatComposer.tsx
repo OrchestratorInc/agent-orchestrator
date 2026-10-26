@@ -54,7 +54,7 @@ import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } fro
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import type { ChatFileReference } from "../../../shared/chat-file-reference";
+import { formatCapturedFileReferences, type ChatFileReference } from "../../../shared/chat-file-reference";
 import { chatDraftAnnotations, writeChatFileReferences } from "../../lib/chat-drafts";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import { cn } from "../../lib/utils";
@@ -1536,7 +1536,11 @@ export const ChatComposer = memo(function ChatComposer({
 				const deliveryAttachments =
 					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined;
     if (delivery.fileReferences?.length) {
-     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
+     if (fileReferenceDelivery === "text") {
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+     } else {
+      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
+     }
     } else if (delivery.excerpts?.length) {
      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
     } else {

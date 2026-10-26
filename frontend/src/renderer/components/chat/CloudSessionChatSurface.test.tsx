@@ -59,7 +59,7 @@ describe("CloudSessionChatSurface", () => {
 		const calls=cloudMocks.sendSessionMessage.mock.calls;
 		expect(calls[1]).toEqual(calls[0]);
 		expect(calls[0][2].text.match(/CLOUD_PROVIDER_MARKER/g)).toHaveLength(1);
-		expect(calls[0][2].text).toContain("cloud.ts#L1-L1");
+		expect(calls[0][2].text).toContain('"cloud.ts"#L1-L1');
 		expect(calls[0][3]).toEqual({idempotencyKey:"capture-retry"});
 	});
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {

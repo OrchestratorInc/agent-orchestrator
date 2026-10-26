@@ -86,6 +86,8 @@ export interface ChatDraftRetainedAttachment {
 export type ChatDraftDeliveryState = "dispatching" | "accepted";
 
 export interface ChatComposerDelivery {
+	/** Absent on legacy frozen receipts, which must keep their original prompt. */
+	fileReferenceFormat?: "quoted-v1";
 	/** Original request mode, kept across capability changes during recovery. */
 	nativeImages?: boolean;
 	kind: "send" | "steer";
@@ -776,6 +778,7 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		typeof delivery.clientMessageId === "string" &&
 		delivery.clientMessageId.length > 0 &&
 		typeof delivery.requestText === "string" &&
+		(delivery.fileReferenceFormat === undefined || delivery.fileReferenceFormat === "quoted-v1") &&
 		(delivery.fileReferences === undefined || (Array.isArray(delivery.fileReferences) && delivery.fileReferences.every(isFileReference))) &&
 		(delivery.excerpts === undefined ||
 			(Array.isArray(delivery.excerpts) && delivery.excerpts.every(isExcerptReference))) &&
@@ -1045,6 +1048,7 @@ export function prepareChatComposerDelivery(
 	// shortcut: excerpt sends stay locked, enable optimism when refused references can be edited separately.
 	const optimistic = input.optimistic && input.kind === "send" && excerpts.length === 0 && fileReferences.length === 0;
 	const mutation: ChatComposerDelivery = {
+		fileReferenceFormat: "quoted-v1",
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
 		kind: input.kind,
 		state: "dispatching",

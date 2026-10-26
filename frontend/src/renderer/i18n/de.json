@@ -3493,7 +3493,7 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "Mehr anzeigen",
 	"chat.fileAnnotationShowLess": "Weniger anzeigen",
-	"files.addToChatRejected": "Auswahl nicht hinzugefügt. Warte, bis das Senden abgeschlossen ist, oder prüfe den Entwurf und versuche es erneut.",
+	"files.addToChatRejected": "Auswahl nicht hinzugefügt. Prüfe auf einen nicht unterstützten Dateinamen oder Steuerzeichen in der Auswahl oder warte, bis das aktuelle Senden abgeschlossen ist.",
 	"chat.fileAnnotationChanged": "Source changed.",
 	"chat.fileAnnotationUnavailable": "Source unavailable.",
 	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",

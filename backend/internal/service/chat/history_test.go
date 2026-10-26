@@ -3062,7 +3062,7 @@ func TestEditLaterTurnReplaysEarlierFileCapture(t *testing.T) {
 			replay += block.Text
 		}
 	}
-	if strings.Count(replay, "AO_CAPTURE_ORCHID_742") != 1 || !strings.Contains(replay, "deleted-demo.ts#L2-L2") {
+	if strings.Count(replay, "AO_CAPTURE_ORCHID_742") != 1 || !strings.Contains(replay, `deleted-demo.ts\"#L2-L2`) {
 		t.Fatalf("lost earlier durable capture: %s", replay)
 	}
 }

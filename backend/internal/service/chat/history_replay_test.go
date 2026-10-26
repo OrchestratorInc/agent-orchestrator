@@ -95,12 +95,40 @@ func TestReplayPreservesDurableFileCaptures(t *testing.T) {
 		})
 	}
 }
-func TestReplayRejectsInvalidStoredCaptures(t *testing.T) {
+func TestReplayRetainsTextWithInvalidStoredCaptures(t *testing.T) {
 	for _, raw := range []string{"{", `[{"type":"file_reference"}]`, `[{"type":"file_reference","fileReference":{"path":"../escape"}}]`} {
-		_, _, err := buildApproximateReplayContext([]domain.ConversationMessage{{Sequence: 1, Role: domain.MessageRoleUser, Text: "question", DeliveryContentJSON: raw}}, 0, 1)
-		if err == nil {
-			t.Fatalf("silently accepted invalid replay content: %s", raw)
+		seed, truncated, err := buildApproximateReplayContext([]domain.ConversationMessage{{Sequence: 1, Role: domain.MessageRoleUser, Text: "question", DeliveryContentJSON: raw}}, 0, 1)
+		if err != nil || !truncated || !strings.Contains(seed, "question") || !strings.Contains(seed, "omitted") {
+			t.Fatalf("invalid capture should retain useful text with warning: %s %v", seed, err)
 		}
+	}
+}
+
+func TestReplayKeepsValidCapturesBesideInvalidOnes(t *testing.T) {
+	ref := testFileReference()
+	valid, _ := json.Marshal(ref)
+	raw := `[{"type":"file_reference","fileReference":null},{"type":"file_reference","fileReference":` + string(valid) + `}]`
+	seed, truncated, err := buildApproximateReplayContext([]domain.ConversationMessage{{Sequence: 1, Role: domain.MessageRoleUser, Text: "keep this question", DeliveryContentJSON: raw}}, 0, 1)
+	if err != nil || !truncated || strings.Count(seed, "await retry();") != 1 || !strings.Contains(seed, "keep this question") || !strings.Contains(seed, "omitted") {
+		t.Fatalf("seed=%s truncated=%v err=%v", seed, truncated, err)
+	}
+}
+
+func TestReplayKeepsQuestionWhenItsCapturesExceedBudget(t *testing.T) {
+	var content []ports.ChatContent
+	for i := 0; i < 8; i++ {
+		ref := testFileReference()
+		ref.Order = int64(i)
+		ref.Lines = nil
+		for n := 1; n <= 10; n++ {
+			number := n
+			ref.Lines = append(ref.Lines, ports.ChatFileReferenceLine{Kind: "add", NewNo: &number, Text: strings.Repeat("x", 650)})
+		}
+		content = append(content, ports.ChatContent{Type: "file_reference", FileReference: &ref})
+	}
+	seed, truncated, err := buildApproximateReplayContext([]domain.ConversationMessage{{Sequence: 1, Role: domain.MessageRoleUser, Text: "important question", DeliveryContentJSON: string(mustFileContentJSON(t, content))}}, 0, 1)
+	if err != nil || !truncated || len(seed) > approximateReplayBudget || !strings.Contains(seed, "important question") || !strings.Contains(seed, "omitted") {
+		t.Fatalf("seed len=%d truncated=%v err=%v", len(seed), truncated, err)
 	}
 }
 func TestReplayBudgetsExpandedCaptures(t *testing.T) {

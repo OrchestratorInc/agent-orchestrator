@@ -3475,7 +3475,7 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "展开",
 	"chat.fileAnnotationShowLess": "收起",
-	"files.addToChatRejected": "未添加所选内容。请等待当前发送完成，或检查草稿后重试。",
+	"files.addToChatRejected": "未添加选区。请检查文件名或选区中的控制字符是否不受支持，或等待当前发送完成。",
 	"chat.fileAnnotationChanged": "Source changed.",
 	"chat.fileAnnotationUnavailable": "Source unavailable.",
 	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",

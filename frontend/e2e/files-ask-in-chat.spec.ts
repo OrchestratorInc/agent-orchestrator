@@ -56,12 +56,12 @@ function quietEventStream(route: Parameters<Parameters<Page["route"]>[1]>[0]) {
 }
 
 /** Serves one changed file for `id`, and records what the session's chat sends. */
-async function stubWorkspace(page: Page, id: string, fullText = after) {
+async function stubWorkspace(page: Page, id: string, fullText = after, selectedPath = filePath) {
 	const sentToChat: Array<{ text: string; fileReferences: ChatFileReference[] }> = [];
-	const file = { path: filePath, status: "modified", additions: 2, deletions: 1, size: after.length, binary: false, editable: true, fileFingerprint: "fp-1" };
+	const file = { path: selectedPath, status: "modified", additions: 2, deletions: 1, size: after.length, binary: false, editable: true, fileFingerprint: "fp-1" };
 	const detail = {
-		sessionId: id, path: filePath, status: "modified", additions: 2, deletions: 1, size: after.length, binary: false, deleted: false,
-		content: fullText, contentTruncated: false, diff: patch, diffTruncated: false, editable: true, fileFingerprint: "fp-1", workspaceVersion: "workspace-1",
+		sessionId: id, path: selectedPath, status: "modified", additions: 2, deletions: 1, size: after.length, binary: false, deleted: false,
+		content: fullText, contentTruncated: false, diff: patch.replaceAll(filePath, selectedPath), diffTruncated: false, editable: true, fileFingerprint: "fp-1", workspaceVersion: "workspace-1",
 	};
 	await page.route(`http://127.0.0.1:8080/api/v1/sessions/${id}/**`, async (route) => {
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
@@ -71,14 +71,14 @@ async function stubWorkspace(page: Page, id: string, fullText = after) {
 			return route.fulfill({ json: { sessionId: id, workspaceVersion: "workspace-1", files: [file], sections: { committed: [], staged: [], unstaged: [file], untracked: [] }, commits: [], summary: { additions: 2, deletions: 1, files: 1 }, truncated: false } });
 		}
 		if (endpoint === "/workspace/diffs") {
-			return route.fulfill({ json: { sessionId: id, workspaceVersion: "workspace-1", groups: [{ repository: "", patch, truncated: false, includedPaths: [filePath], deferred: [] }] } });
+			return route.fulfill({ json: { sessionId: id, workspaceVersion: "workspace-1", groups: [{ repository: "", patch: patch.replaceAll(filePath, selectedPath), truncated: false, includedPaths: [selectedPath], deferred: [] }] } });
 		}
 		if (endpoint === "/workspace/file") return route.fulfill({ json: detail });
 		if (endpoint === "/workspace/history") return route.fulfill({ json: { sessionId: id, commits: [] } });
 		if (endpoint === "/workspace/file/revision") {
 			const side = url.searchParams.get("side") === "before" ? "before" : "after";
 			const content = side === "before" ? before : fullText;
-			return route.fulfill({ json: { sessionId: id, path: filePath, side, binary: false, content, exists: true, size: content.length, truncated: false, workspaceVersion: "workspace-1", revision: side } });
+			return route.fulfill({ json: { sessionId: id, path: selectedPath, side, binary: false, content, exists: true, size: content.length, truncated: false, workspaceVersion: "workspace-1", revision: side } });
 		}
 		if (endpoint === "/conversation/messages" && route.request().method() === "POST") {
 			sentToChat.push(route.request().postDataJSON());
@@ -90,7 +90,7 @@ async function stubWorkspace(page: Page, id: string, fullText = after) {
 }
 
 /** A Chat-mode worker with one changed file, opened on its Files tab. */
-async function openChatSession(page: Page, fullText = after) {
+async function openChatSession(page: Page, fullText = after, selectedPath = filePath) {
 	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Add to chat", mode: "chat" }] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
@@ -108,18 +108,18 @@ async function openChatSession(page: Page, fullText = after) {
 		if (pathname === `/api/v1/sessions/${chatSession}/interface-transition`) return route.fulfill({ json: { supported: true, targetMode: "tui" } });
 		return route.fulfill({ json: { status: "ok" } });
 	});
-	const sentToChat = await stubWorkspace(page, chatSession, fullText);
-	const inspector = await openFilesTab(page, chatSession, projectId);
+	const sentToChat = await stubWorkspace(page, chatSession, fullText, selectedPath);
+	const inspector = await openFilesTab(page, chatSession, projectId, selectedPath);
 	const composer = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(composer).toBeVisible();
 	return { inspector, composer, sentToChat };
 }
 
-async function openFilesTab(page: Page, id: string, project: string) {
+async function openFilesTab(page: Page, id: string, project: string, selectedPath = filePath) {
 	await page.goto(`${origin}/#/projects/${project}/sessions/${id}`);
 	const inspector = await openInspector(page);
 	await inspector.getByRole("tab", { name: /Files?$/ }).click();
-	await expect(page.getByRole("button", { name: `Collapse ${filePath}` })).toBeVisible();
+	await expect(page.getByRole("button", { name: `Collapse ${selectedPath}` })).toBeVisible();
 	await expect(row(page, REVIEW, 4)).toBeVisible();
 	return inspector;
 }
@@ -177,6 +177,18 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Add to chat from highlighted code", () => {
+	test("unsupported filename is refused before changing the draft or selection", async ({ page }) => {
+		const {composer,sentToChat}=await openChatSession(page,after,"src/notes:v2.ts");
+		await composer.fill("keep my question");
+		await selectText(page,row(page,REVIEW,2),row(page,REVIEW,4));
+		await askButton(page).getByRole("button",{name:"Add to chat"}).click();
+		await expect(page.getByRole("alert")).toContainText("unsupported filename");
+		await expect(page.getByRole("button",{name:"1 annotation"})).toHaveCount(0);
+		await expect(composer).toHaveText("keep my question");
+		await expect(askButton(page)).toBeVisible();
+		expect(sentToChat).toHaveLength(0);
+	});
+
 	test("review list: the button follows a drag, asks about lines 2–4, and the chip sends their code", async ({ page }) => {
 		const { composer, sentToChat } = await openChatSession(page);
 		// The review header is slotted from the selected surface's light DOM,

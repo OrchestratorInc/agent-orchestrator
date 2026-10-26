@@ -3493,7 +3493,7 @@
 	"chat.draft.fileReferencesCompactUnsupported": "Remove file annotations before running /compact.",
 	"chat.fileAnnotationShowMore": "もっと見る",
 	"chat.fileAnnotationShowLess": "表示を減らす",
-	"files.addToChatRejected": "選択範囲を追加できませんでした。送信の完了を待つか下書きを確認して、もう一度お試しください。",
+	"files.addToChatRejected": "選択範囲を追加できませんでした。対応していないファイル名や制御文字がないか確認するか、現在の送信が完了するまで待ってください。",
 	"chat.fileAnnotationChanged": "Source changed.",
 	"chat.fileAnnotationUnavailable": "Source unavailable.",
 	"chat.fileAnnotationCapturedPreview": "Showing captured selection.",

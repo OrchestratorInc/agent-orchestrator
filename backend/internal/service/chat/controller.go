@@ -1975,7 +1975,7 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 			continue
 		}
 		if item.Type == "file_reference" && item.FileReference != nil {
-			fallback.WriteString("\n\n" + fileReferenceText(*item.FileReference))
+			fallback.WriteString("\n\n" + fileReferenceTextFormat(*item.FileReference, item.Text == FileReferenceQuotedPath))
 			continue
 		}
 		if item.Type != "excerpt" || item.Excerpt == nil {
