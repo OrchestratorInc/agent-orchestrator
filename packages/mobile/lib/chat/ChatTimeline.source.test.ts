@@ -191,8 +191,8 @@ describe("timeline rows", () => {
 		for (const row of ["activityRow", "runSummary", "subagentHeader", "planHeader", "fileRowTap", "originMore"]) expect(styles).toMatch(new RegExp(`\\n\\t+${row}: \\{[^}]*minHeight: touchTarget`));
 		expect(source.match(/usePressFeedback\("row"\)/g)?.length).toBeGreaterThanOrEqual(11);
 		expect(source).not.toContain("press.opacity");
-		// The status row keeps the startup header's height; slop makes up the target.
-		expect(source).toContain("hitSlop={foldable ? (touchTarget - STATUS_ROW_HEIGHT) / 2 : undefined}");
+		expect(styles).toMatch(/\n\t+statusRow: \{ minHeight: touchTarget,/);
+		expect(source).not.toContain("STATUS_ROW_HEIGHT");
 	});
 
 	it("show work in progress with the system spinner", () => {
@@ -206,11 +206,20 @@ describe("timeline rows", () => {
 		expect(attachment).not.toContain("refresh-cw");
 	});
 
-	// The status row matches the startup checklist header it hands off to.
-	it("set nothing below 13pt but the status row", () => {
+	it("set nothing below 13pt", () => {
 		expect(styles).not.toContain("type.caption2");
-		expect(styles.match(/type\.caption1/g)).toEqual(["type.caption1"]);
-		expect(styles).toMatch(/turnState: \{[^}]*type\.caption1\.fontSize/);
+		expect(styles).not.toContain("type.caption1");
+		expect(styles).toMatch(/turnState: \{[^}]*type\.footnote\.fontSize, lineHeight: type\.footnote\.lineHeight/);
+	});
+
+	// The status row takes the startup checklist header's place, so the two are
+	// one size and the handoff does not jump.
+	it("match the startup checklist header they hand off to", () => {
+		const startup = readFileSync(new URL("./SessionStartup.tsx", import.meta.url), "utf8");
+		expect(startup).toMatch(/\n\theader: \{ minHeight: touchTarget,/);
+		expect(startup).toMatch(/headerLabel: \{[^}]*type\.footnote\.fontSize, lineHeight: type\.footnote\.lineHeight/);
+		expect(styles).toMatch(/\n\t+statusRow: \{ minHeight: touchTarget,[^}]*paddingVertical: space\.xs, borderBottomWidth: rowDividerWidth/);
+		expect(startup).toMatch(/\n\theader: \{[^}]*paddingVertical: space\.xs, borderBottomWidth: rowDividerWidth/);
 	});
 
 	// The bullet's column is one line of the path at the user's text size, so the

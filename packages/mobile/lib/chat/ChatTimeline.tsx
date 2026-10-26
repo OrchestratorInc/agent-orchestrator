@@ -836,14 +836,12 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
 	// One element throughout, so the spinner can leave and the label slide into
 	// its place when the turn settles instead of the whole row remounting. The row
-	// keeps the startup checklist header's height, so the slop is what makes the
-	// settled toggle a full touch target.
+	// is a touch target tall, as is the startup checklist header it replaces.
 	return <Pressable
 		accessibilityRole={foldable ? "button" : undefined}
 		accessibilityState={foldable ? { expanded: open } : undefined}
 		disabled={!foldable}
 		onPress={onToggle}
-		hitSlop={foldable ? (touchTarget - STATUS_ROW_HEIGHT) / 2 : undefined}
 		android_ripple={feedback.android_ripple}
 		style={({ pressed }) => [styles.statusRow, pressed && feedback.pressed]}
 	>
@@ -1171,8 +1169,6 @@ function activityMeta(activity: ConversationActivity): { icon: keyof typeof Feat
 
 function elapsed(start?: string, end?: string): string | undefined { if (!start || !end) return undefined; const ms = Date.parse(end) - Date.parse(start); if (!Number.isFinite(ms) || ms < 0) return undefined; const seconds = Math.round(ms / 1000); return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
 function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
-/** The turn status row's height, the same as the startup checklist header it replaces. */
-const STATUS_ROW_HEIGHT = 34;
 /** The Review pill's drawn height; its hit slop makes up the rest of a touch target. */
 const REVIEW_PILL_HEIGHT = 32;
 
@@ -1256,8 +1252,8 @@ const makeStyles = (t: Theme) => {
 		turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
 		// Full width with a rule under it, matching the desktop's Working / Worked
 		// rows and the setup checklist header, so the line holds through the handoff.
-		statusRow: { minHeight: STATUS_ROW_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
-		turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
+		statusRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
+		turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "right" },
 		planCard: { ...card, backgroundColor: t.bgSurface, borderColor: t.borderDefault, overflow: "hidden" },
 		planHeader: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },

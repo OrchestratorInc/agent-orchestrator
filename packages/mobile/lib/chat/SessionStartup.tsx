@@ -8,7 +8,7 @@ import { LAYOUT_MS, ROW_ENTER_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
-import { iconSize, space, type } from "../tokens";
+import { iconSize, space, touchTarget, type } from "../tokens";
 import { Button, useBreathing } from "../ui";
 import { useNow } from "../useNow";
 import { useReducedMotion } from "../useReducedMotion";
@@ -128,8 +128,9 @@ function BranchNamingLabel() {
 const makeStyles = (t: Theme) => StyleSheet.create({
 	wrap: { paddingBottom: space.sm },
 	// Full width with a rule under it, like the desktop's live status header, so
-	// the checklist reads as its own block under the brief.
-	header: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault, marginBottom: space.xxs },
+	// the checklist reads as its own block under the brief. A touch target tall,
+	// as is the turn's status row that takes its place, so the handoff holds still.
+	header: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault, marginBottom: space.xxs },
 	headerLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 	row: { minHeight: 28, flexDirection: "row", alignItems: "center", gap: space.xs },
 	rowLabel: { flexShrink: 0, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
