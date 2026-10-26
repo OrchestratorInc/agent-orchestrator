@@ -80,6 +80,31 @@ func TestTurnCancellationBelongsToWhoeverDirectsTheTurn(t *testing.T) {
 	})
 }
 
+// A missing creator must not turn an authorization denial into a SQL NULL
+// scan error, or remove the author's and organization's control of the turn.
+func TestTurnCancellationWithoutSessionCreator(t *testing.T) {
+	ctx := context.Background()
+	for _, actor := range []string{"author", "org owner"} {
+		t.Run(actor, func(t *testing.T) {
+			c := openChatComposerFixture(t)
+			execOneRowAsOrg(t, c.admin, c.fixture.orgID, `UPDATE ao_sessions SET created_by_user_id = NULL WHERE org_id = $1 AND id = $2`, c.fixture.orgID, c.fixture.sessionID)
+			turn := chatTurnBy(t, c, c.alice)
+			for _, denied := range []domain.Principal{c.bob, c.viewer} {
+				if err := c.store.RequestTurnCancellation(ctx, denied, c.fixture.orgID, c.fixture.sessionID, turn); !errors.Is(err, ErrForbidden) {
+					t.Fatalf("%s stopping another participant's turn: %v, want ErrForbidden", denied.DisplayName, err)
+				}
+			}
+			allowed := c.alice
+			if actor == "org owner" {
+				allowed = c.owner
+			}
+			if err := c.store.RequestTurnCancellation(ctx, allowed, c.fixture.orgID, c.fixture.sessionID, turn); err != nil {
+				t.Fatalf("%s stopping the turn without a session creator: %v", actor, err)
+			}
+		})
+	}
+}
+
 func mustHolder(t *testing.T, c composerFixture, who domain.Principal) domain.ComposerLease {
 	t.Helper()
 	state, err := c.store.SessionLiveState(context.Background(), who, c.fixture.orgID, c.fixture.sessionID)

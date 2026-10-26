@@ -168,13 +168,14 @@ func TestSessionWithoutACreatorStillWorks(t *testing.T) {
 	ctx := context.Background()
 	execOneRowAsOrg(t, c.admin, c.fixture.orgID, `UPDATE ao_sessions SET created_by_user_id = NULL WHERE org_id = $1 AND id = $2`, c.fixture.orgID, c.fixture.sessionID)
 
-	for _, who := range []domain.Principal{c.owner, c.alice} {
+	for _, who := range []domain.Principal{c.owner, c.alice, c.viewer} {
 		state, err := c.store.SessionLiveState(ctx, who, c.fixture.orgID, c.fixture.sessionID)
 		if err != nil {
 			t.Fatalf("live state for %s: %v", who.UserID, err)
 		}
-		if who.UserID == c.alice.UserID && (state.CanTakeOver || state.CanConfigure) {
-			t.Fatalf("a guest manages a session without a creator: %+v", state)
+		wantManage := who.UserID == c.owner.UserID
+		if state.CanTakeOver != wantManage || state.CanConfigure != wantManage {
+			t.Fatalf("permissions for %s without a session creator: %+v, want manage=%t", who.DisplayName, state, wantManage)
 		}
 	}
 	if _, err := c.store.SendMessageWithLease(ctx, c.alice, c.fixture.orgID, c.fixture.sessionID, uuid.NewString(), "hi", domain.ChatTurnSettings{}, 0); err != nil {
