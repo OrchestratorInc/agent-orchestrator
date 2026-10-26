@@ -31,23 +31,6 @@ export const DIRECT_POLL_MS = 8_000;
  */
 export const TUNNEL_POLL_MS = 2_000;
 
-/**
- * Paired machines other than the selected one. Their rows are a background
- * view, refreshed at once after any action taken on them, so they do not need
- * the tunnel's live rate: a full board every two seconds per machine, which on
- * a slow link starves the machine the user is looking at. While a machine has
- * a working agent, or its board changed recently, it polls at the direct rate
- * on every path; a quiet one polls slowly.
- */
-export const FLEET_BUSY_POLL_MS = DIRECT_POLL_MS;
-export const FLEET_IDLE_POLL_MS = 30_000;
-/** How long after its board last changed a machine still counts as busy. */
-export const FLEET_RECENT_CHANGE_MS = 2 * 60_000;
-
-export function fleetPollMsFor(working: boolean, lastChangeAt: number, now = Date.now()): number {
-	return working || now - lastChangeAt < FLEET_RECENT_CHANGE_MS ? FLEET_BUSY_POLL_MS : FLEET_IDLE_POLL_MS;
-}
-
 export function pollIntervalFor(cfg: ServerConfig | null): number {
 	return cfg?.endpointKind === "tunnel" ? TUNNEL_POLL_MS : DIRECT_POLL_MS;
 }

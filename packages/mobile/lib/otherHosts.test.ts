@@ -3,7 +3,6 @@ import type { Host } from "./hosts";
 import type { ServerConfig } from "./config";
 import type { DashboardSession } from "./api";
 import type { HostSnapshot } from "./otherHosts";
-import { FLEET_BUSY_POLL_MS, FLEET_IDLE_POLL_MS, FLEET_RECENT_CHANGE_MS } from "./pollInterval";
 
 vi.mock("./api", () => ({
 	ApiError: class ApiError extends Error { constructor(public status: number) { super(String(status)); } },
@@ -12,14 +11,11 @@ vi.mock("./api", () => ({
 vi.mock("./connectRuntime", () => ({ connectToHost: vi.fn() }));
 vi.mock("./hosts", () => ({ findHost: vi.fn() }));
 vi.mock("./config", () => ({ isConfigured: (config: ServerConfig) => Boolean(config.host) }));
+vi.mock("./pollInterval", () => ({ pollIntervalFor: () => 8_000 }));
 
 const host: Host = {
 	id: "host-b", name: "Host B", platform: "linux", endpoints: [], token: "secret", lastConnected: 0,
 };
-const idleRow = {
-	id: "worker", projectId: "project", status: "working", activity: "idle", mode: "chat",
-	createdAt: "2026-10-09T00:00:00Z", lastActivityAt: "2026-10-09T00:00:00Z",
-} as DashboardSession;
 const config: ServerConfig = {
 	host: "host-b.test", hostId: host.id, httpPort: "3011", muxPort: "14801", password: "secret",
 };
@@ -46,72 +42,6 @@ describe("another paired host's live runner", () => {
 			expect(snapshot.connection).toBe("open");
 			expect(snapshot.sessions[0].id).toBe("same-session");
 			expect(snapshot.notificationsUnread).toBe(2);
-		} finally { runner.stop(); }
-	});
-
-	it("polls a quiet background host slowly, whatever path it is on", async () => {
-		vi.useFakeTimers();
-		const { connectToHost } = await import("./connectRuntime");
-		const { getSessions } = await import("./api");
-		const tunnelConfig = { ...config, endpointKind: "tunnel" as const };
-		vi.mocked(connectToHost).mockResolvedValue({ ok: true, hostId: host.id, endpoint: { kind: "tunnel", host: config.host, port: 443, secure: true }, config: tunnelConfig });
-		vi.mocked(getSessions).mockResolvedValue({ projects: [], sessions: [idleRow], orchestrators: [], orchestratorId: null, stats: {} });
-		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
-		let snapshot = emptyHostSnapshot(host);
-		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
-		try {
-			await runner.refresh();
-			await vi.advanceTimersByTimeAsync(FLEET_IDLE_POLL_MS - 1);
-			expect(getSessions).toHaveBeenCalledTimes(1);
-			await vi.advanceTimersByTimeAsync(1);
-			expect(getSessions).toHaveBeenCalledTimes(2);
-		} finally { runner.stop(); }
-	});
-
-	it("polls a background host at the direct rate while an agent works", async () => {
-		vi.useFakeTimers();
-		const { connectToHost } = await import("./connectRuntime");
-		const { getSessions } = await import("./api");
-		vi.mocked(connectToHost).mockResolvedValue({ ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config });
-		vi.mocked(getSessions).mockResolvedValue({ projects: [], sessions: [{ ...idleRow, activity: "active" }], orchestrators: [], orchestratorId: null, stats: {} });
-		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
-		let snapshot = emptyHostSnapshot(host);
-		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
-		try {
-			await runner.refresh();
-			await vi.advanceTimersByTimeAsync(FLEET_BUSY_POLL_MS * 3);
-			expect(getSessions).toHaveBeenCalledTimes(4);
-		} finally { runner.stop(); }
-	});
-
-	it("keeps the direct rate for a while after a quiet host's board changes", async () => {
-		vi.useFakeTimers();
-		const { connectToHost } = await import("./connectRuntime");
-		const { getSessions } = await import("./api");
-		vi.mocked(connectToHost).mockResolvedValue({ ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config });
-		const answer = (row: DashboardSession) => ({ projects: [], sessions: [row], orchestrators: [], orchestratorId: null, stats: {} });
-		vi.mocked(getSessions)
-			.mockResolvedValueOnce(answer(idleRow))
-			// A timestamp alone is not a change.
-			.mockResolvedValueOnce(answer({ ...idleRow, updatedAt: "2026-10-09T00:05:00Z" }))
-			.mockResolvedValueOnce(answer({ ...idleRow, status: "pr_open" }))
-			.mockResolvedValue(answer({ ...idleRow, status: "pr_open" }));
-		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
-		let snapshot = emptyHostSnapshot(host);
-		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
-		try {
-			await runner.refresh();
-			await vi.advanceTimersByTimeAsync(FLEET_IDLE_POLL_MS);
-			expect(getSessions).toHaveBeenCalledTimes(2);
-			await vi.advanceTimersByTimeAsync(FLEET_IDLE_POLL_MS);
-			expect(getSessions).toHaveBeenCalledTimes(3);
-			expect(snapshot.sessions[0].status).toBe("pr_open");
-			// Changed: back to the direct rate until the change is old.
-			await vi.advanceTimersByTimeAsync(FLEET_RECENT_CHANGE_MS);
-			expect(getSessions).toHaveBeenCalledTimes(3 + FLEET_RECENT_CHANGE_MS / FLEET_BUSY_POLL_MS);
-			const settled = vi.mocked(getSessions).mock.calls.length;
-			await vi.advanceTimersByTimeAsync(FLEET_IDLE_POLL_MS);
-			expect(getSessions).toHaveBeenCalledTimes(settled + 1);
 		} finally { runner.stop(); }
 	});
 

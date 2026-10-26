@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reconcileRows } from "./rowSharing";
-import { ApiError, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo, type SessionsResponse } from "./api";
+import { ApiError, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
 import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
@@ -8,7 +8,7 @@ import { shouldKeepPolling, userFacingError } from "./connectionError";
 import type { Endpoint } from "./endpoints";
 import { findHost, type Host } from "./hosts";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
-import { FLEET_IDLE_POLL_MS, fleetPollMsFor } from "./pollInterval";
+import { pollIntervalFor } from "./pollInterval";
 import { sameServerConfig } from "./sameConfig";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 
@@ -75,22 +75,6 @@ export function verifiedHostSnapshot(hostId: string, snapshot: HostSnapshot | un
 	return snapshot as VerifiedHostSnapshot;
 }
 
-function hasWorkingAgent(sessions: DashboardSession[], orchestrators: OrchestratorLink[]): boolean {
-	return sessions.some((s) => !s.isTerminated && (s.activity === "active" || s.provisionState === "provisioning"))
-		|| orchestrators.some((o) => !o.isTerminal && o.activity === "active");
-}
-
-// Timestamps move without anything on the row changing state (an idle daemon
-// touches rows), so they do not count as a change.
-const IGNORED_FOR_CHANGE = new Set(["updatedAt", "lastActivityAt", "lastEventAt"]);
-
-function boardFingerprint(answer: SessionsResponse): string {
-	return JSON.stringify(
-		[answer.sessions, answer.orchestrators, answer.notificationsUnread],
-		(key, value) => IGNORED_FOR_CHANGE.has(key) ? undefined : value,
-	);
-}
-
 /** One daemon's independent endpoint race and REST poll. */
 function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, publish: Publish, seed: RunnerSeed | null): Runner {
 	let stopped = false;
@@ -102,9 +86,6 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 	let lastProjects = previous?.projects ?? [];
 	let projectsKnown = previous?.projectsKnown ?? false;
 	let busy: Promise<void> | null = null;
-	// What the last answer looked like, and when it last differed from the one before.
-	let lastBoard: string | null = null;
-	let lastChangeAt = 0;
 	const runner: Runner = {
 		config: seed?.config ?? null,
 		refresh: () => {
@@ -206,10 +187,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				lastSyncAt: Date.now(),
 			});
 			connected = true;
-			const board = boardFingerprint(answer);
-			if (lastBoard !== null && board !== lastBoard) lastChangeAt = Date.now();
-			lastBoard = board;
-			schedule(fleetPollMsFor(hasWorkingAgent(answer.sessions, answer.orchestrators), lastChangeAt));
+			schedule(pollIntervalFor(c));
 		} catch (cause) {
 			if (stopped || runner.config !== c) return;
 			const status = cause instanceof ApiError ? cause.status : undefined;
@@ -224,7 +202,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				runner.config = null;
 				update({ config: null }); // An old address is no longer verified for actions.
 				schedule(2_000); // Race LAN/tunnel again after a network change.
-			} else schedule(FLEET_IDLE_POLL_MS);
+			} else schedule(pollIntervalFor(c));
 		}
 	};
 	return runner;
