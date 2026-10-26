@@ -5,88 +5,63 @@ import type { Host } from "./hosts";
 const fixtures = vi.hoisted(() => ({
 	loadHosts: vi.fn<() => Promise<Host[]>>(async () => []),
 	activeHost: vi.fn<() => Promise<Host | null>>(async () => null),
-	reloadConfig: vi.fn(),
-	replace: vi.fn(),
+	refreshAll: vi.fn(async () => {}),
 	push: vi.fn(),
-	setSheetOptions: vi.fn(),
-	platform: { OS: "ios" },
-	theme: new Proxy({}, { get: () => "#000000" }),
+	hostStates: [] as { hostId: string; connection: "closed" | "connecting" | "open"; loading: boolean; config: unknown }[],
+	theme: { accent: "accent", bgBase: "base", bgElevated: "card", red: "red" },
 }));
 
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	const router = { push: fixtures.push, replace: fixtures.replace };
-	const navigation = { getParent: () => ({ setOptions: fixtures.setSheetOptions }) };
+	const router = { push: fixtures.push };
 	return {
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
 		useFocusEffect: (effect: () => void) => React.useEffect(effect, [effect]),
-		useNavigation: () => navigation,
 		useRouter: () => router,
 	};
 });
 vi.mock("react-native", async () => {
 	const React = await import("react");
-	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) =>
-		React.createElement(name, props, children);
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		ActivityIndicator: host("ActivityIndicator"),
-		Alert: { alert: vi.fn() },
-		Platform: fixtures.platform,
-		Pressable: host("Pressable"),
 		RefreshControl: host("RefreshControl"),
 		ScrollView: host("ScrollView"),
-		StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
-		Text: host("Text"),
+		StyleSheet: { create: (styles: object) => styles },
 		View: host("View"),
 	};
 });
-vi.mock("react-native-keyboard-controller", () => ({
-	KeyboardAvoidingView: "KeyboardAvoidingView",
-	KeyboardAwareScrollView: "KeyboardAwareScrollView",
-}));
-vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 24 }) }));
-vi.mock("../lib/api", () => ({ ApiError: class ApiError extends Error {}, pingServer: vi.fn() }));
-vi.mock("../lib/connectionError", () => ({ classifyConnectionFailure: vi.fn(), describeConnectionFailure: vi.fn() }));
-vi.mock("../lib/connectRuntime", () => ({ probeEndpoint: vi.fn() }));
-vi.mock("../lib/disconnect", () => ({ forgetPairedHost: vi.fn(), forgetServer: vi.fn() }));
 vi.mock("../lib/EnvironmentMachineRow", async () => {
 	const React = await import("react");
-	return {
-		EnvironmentMachineRow: (props: object) => React.createElement("EnvironmentMachineRow", props),
-		EnvironmentEditorActions: (props: object) => React.createElement("EnvironmentEditorActions", props),
-	};
+	return { EnvironmentMachineList: (props: object) => React.createElement("EnvironmentMachineList", props) };
 });
-vi.mock("../lib/haptics", () => ({ haptics: { error: vi.fn(), success: vi.fn(), select: vi.fn(), tap: vi.fn() } }));
-vi.mock("../lib/hosts", () => ({
-	activeHost: fixtures.activeHost,
-	activeHostMetadata: fixtures.activeHost,
-	loadHosts: fixtures.loadHosts,
-	renameHost: vi.fn(),
-	saveHost: vi.fn(),
-	updateHostAppearance: vi.fn(),
-}));
-vi.mock("../lib/icons", async () => {
-	const React = await import("react");
-	return { Feather: (props: object) => React.createElement("Feather", props) };
-});
-vi.mock("../lib/manualConnect", () => ({ DifferentMachineError: class DifferentMachineError extends Error {}, persistManualHostEdit: vi.fn() }));
-vi.mock("../lib/race", () => ({ IncompatibleHostVersionError: class IncompatibleHostVersionError extends Error {} }));
+vi.mock("../lib/hosts", () => ({ activeHost: fixtures.activeHost, loadHosts: fixtures.loadHosts }));
 vi.mock("../lib/store", () => ({
-	useApp: () => ({
-		hostStates: [], configForHost: vi.fn(), switchHost: vi.fn(), refreshAll: vi.fn(),
-		reloadConfig: fixtures.reloadConfig, reloadHostMetadata: vi.fn(async () => {}),
-	}),
+	useApp: () => ({ hostStates: fixtures.hostStates, configForHost: () => null, refreshAll: fixtures.refreshAll }),
 }));
 vi.mock("../lib/ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
 	useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme),
 }));
+vi.mock("../lib/Toast", async () => {
+	const React = await import("react");
+	return { ToastHost: (props: object) => React.createElement("ToastHost", props) };
+});
+vi.mock("../lib/Spinner", () => ({ Spinner: "Spinner" }));
+vi.mock("../lib/ui", async () => {
+	const React = await import("react");
+	return {
+		Button: (props: object) => React.createElement("Button", props),
+		EmptyState: ({ action, ...props }: { action?: React.ReactNode }) => React.createElement("EmptyState", props, action),
+	};
+});
 vi.mock("../lib/RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import EnvironmentsScreen from "../app/settings/environments";
-import { forgetPairedHost, forgetServer } from "./disconnect";
-import { Alert } from "react-native";
+import { postEnvironmentNotice } from "./environmentNotice";
+
+const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [{ kind: "lan", host: "10.0.0.2", port: 3011, secure: false }], token: "token", lastConnected: 2 };
+const b: Host = { ...a, id: "b", name: "B", lastConnected: 1 };
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -94,14 +69,9 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.loadHosts.mockReset().mockResolvedValue([]);
 	fixtures.activeHost.mockReset().mockResolvedValue(null);
-	fixtures.reloadConfig.mockReset();
-	fixtures.replace.mockClear();
+	fixtures.refreshAll.mockClear();
 	fixtures.push.mockClear();
-	fixtures.setSheetOptions.mockClear();
-	vi.mocked(forgetServer).mockReset().mockResolvedValue(undefined);
-	vi.mocked(forgetPairedHost).mockReset().mockResolvedValue(undefined);
-	vi.mocked(Alert.alert).mockClear();
-	fixtures.platform.OS = "ios";
+	fixtures.hostStates = [];
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
 		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
@@ -116,50 +86,14 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
-describe("Environments editor keyboard handling", () => {
-	it.each(["ios", "android"])("keeps focused fields and the fixed actions above the %s keyboard", async (platform) => {
-		fixtures.platform.OS = platform;
-		await act(async () => {
-			renderer = create(<EnvironmentsScreen />);
-			await Promise.resolve();
-			await Promise.resolve();
-		});
-
-		const avoiding = renderer!.root.findByType("KeyboardAvoidingView" as never);
-		expect(avoiding.props.behavior).toBe("padding");
-		expect(avoiding.props.automaticOffset).toBe(true);
-		const scroll = renderer!.root.findByType("KeyboardAwareScrollView" as never);
-		expect(scroll.props.automaticallyAdjustKeyboardInsets).toBe(false);
-		expect(scroll.props.enabled).not.toBe(false);
-		expect(scroll.props.keyboardDismissMode).toBe("interactive");
-	});
-
-	it("places edit actions outside the scroll area and ignores an old editor closing", async () => {
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
-		fixtures.loadHosts.mockResolvedValue([a, { ...a, id: "b", name: "B" }]);
-		fixtures.activeHost.mockResolvedValue(a);
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		const [first, second] = renderer!.root.findAllByType("EnvironmentMachineRow" as never);
-		const editor = { hostId: "a", canSave: true, saving: false, onSave: vi.fn(), onCancel: vi.fn() };
-		act(() => first.props.onEditorStateChange(editor, "a"));
-		const scroll = renderer!.root.findByType("KeyboardAwareScrollView" as never);
-		expect(scroll.findAllByType("EnvironmentEditorActions" as never)).toHaveLength(0);
-		expect(renderer!.root.findByType("EnvironmentEditorActions" as never).props.editor.hostId).toBe("a");
-		act(() => {
-			second.props.onExpandedChange(true);
-			second.props.onEditorStateChange({ ...editor, hostId: "b" }, "b");
-			first.props.onEditorStateChange(null, "a");
-		});
-		expect(renderer!.root.findByType("EnvironmentEditorActions" as never).props.editor.hostId).toBe("b");
-		act(() => second.props.onEditorStateChange(null, "b"));
-		expect(renderer!.root.findAllByType("EnvironmentEditorActions" as never)).toHaveLength(0);
-	});
-});
+async function open() {
+	await act(async () => { renderer = create(<EnvironmentsScreen />); });
+}
 
 describe("Environments header", () => {
 	// The title is the native header's; Add machine is its trailing item.
 	it("adds a machine from the native header", async () => {
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
+		await open();
 		expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.children === "Environments")).toHaveLength(0);
 		expect(renderer!.root.findByType("StackToolbar" as never).props.placement).toBe("right");
 		const add = renderer!.root.findByType("StackToolbarButton" as never);
@@ -167,128 +101,64 @@ describe("Environments header", () => {
 		act(() => add.props.onPress());
 		expect(fixtures.push).toHaveBeenCalledWith("/pair");
 	});
+});
 
-	// A swipe on the Settings sheet would discard the edit, so the sheet holds
-	// still only while an editor is open.
-	it("holds the Settings sheet still while a machine editor is open", async () => {
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
-		fixtures.loadHosts.mockResolvedValue([a]);
-		fixtures.activeHost.mockResolvedValue(a);
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		expect(fixtures.setSheetOptions).not.toHaveBeenCalled();
-		const row = renderer!.root.findByType("EnvironmentMachineRow" as never);
-		const editor = { hostId: "a", canSave: true, saving: false, onSave: vi.fn(), onCancel: vi.fn() };
-		act(() => row.props.onEditorStateChange(editor, "a"));
-		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: false });
-		act(() => row.props.onEditorStateChange(null, "a"));
-		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
-		expect(fixtures.setSheetOptions).toHaveBeenCalledTimes(2);
+describe("Environments list", () => {
+	it("lists every paired machine with its default and connection, and opens its page", async () => {
+		fixtures.loadHosts.mockResolvedValue([a, b]);
+		fixtures.activeHost.mockResolvedValue(b);
+		fixtures.hostStates = [{ hostId: "a", connection: "open", loading: false, config: null }];
+		await open();
+		const list = renderer!.root.findByType("EnvironmentMachineList" as never);
+		expect(list.props.machines.map((machine: { host: Host; isDefault: boolean; status: { label: string } }) => [machine.host.id, machine.isDefault, machine.status.label]))
+			.toEqual([["a", false, "Connected"], ["b", true, "Offline"]]);
+		expect(list.props.footer).toBe("Machines available for new workers and reconnects.");
+		act(() => list.props.onOpen("b"));
+		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/settings/machine/[id]", params: { id: "b" } });
 	});
 
-	it("lets the Settings sheet swipe away again when the page closes mid-edit", async () => {
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
+	it("refreshes the fleet and the saved machines together", async () => {
 		fixtures.loadHosts.mockResolvedValue([a]);
-		fixtures.activeHost.mockResolvedValue(a);
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		const row = renderer!.root.findByType("EnvironmentMachineRow" as never);
-		act(() => row.props.onEditorStateChange({ hostId: "a", canSave: true, saving: false, onSave: vi.fn(), onCancel: vi.fn() }, "a"));
-		await act(async () => renderer?.unmount());
-		renderer = undefined;
-		expect(fixtures.setSheetOptions).toHaveBeenLastCalledWith({ gestureEnabled: true });
+		await open();
+		fixtures.loadHosts.mockResolvedValue([a, b]);
+		await act(async () => renderer!.root.findByType("EnvironmentMachineList" as never).props.onRefresh());
+		expect(fixtures.refreshAll).toHaveBeenCalledOnce();
+		expect(renderer!.root.findByType("EnvironmentMachineList" as never).props.machines).toHaveLength(2);
+	});
+
+	// A machine is forgotten from its own page, which closes; the list says so.
+	it("announces a machine forgotten on its page when the list comes back", async () => {
+		fixtures.loadHosts.mockResolvedValue([b]);
+		postEnvironmentNotice("A forgotten. B is now the default.");
+		await open();
+		expect(renderer!.root.findByType("ToastHost" as never).props.toast.current.text).toBe("A forgotten. B is now the default.");
+		expect(renderer!.root.findAllByProps({ testID: "environment-forgotten-notice" })).toHaveLength(0);
 	});
 });
 
-describe("forgetting environments", () => {
-	it.each([
-		["ios", false], ["ios", true], ["android", false], ["android", true],
-	] as const)("updates the cards before reconnecting the next default on %s (last machine: %s)", async (platform, lastMachine) => {
-		fixtures.platform.OS = platform;
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "a-token", lastConnected: 2 };
-		const b: Host = { ...a, id: "b", name: "B", token: "b-token", lastConnected: 1 };
-		fixtures.loadHosts.mockResolvedValue(lastMachine ? [a] : [a, b]);
-		fixtures.activeHost.mockResolvedValue(a);
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		fixtures.loadHosts.mockResolvedValue(lastMachine ? [] : [b]);
-		// A is still selected when Forget reads storage; B (or nothing) afterwards.
-		fixtures.activeHost.mockResolvedValueOnce(a).mockResolvedValue(lastMachine ? null : b);
-		let release!: () => void;
-		fixtures.reloadConfig.mockReturnValue(new Promise<void>((resolve) => { release = resolve; }));
-		vi.mocked(forgetServer).mockResolvedValue(undefined);
-		await act(async () => {
-			void renderer!.root.findAllByType("EnvironmentMachineRow" as never)[0].props.onForget();
-			await new Promise((resolve) => setTimeout(resolve, 0));
-		});
-		try {
-			expect(fixtures.replace).not.toHaveBeenCalled();
-			expect(renderer!.root.findByProps({ testID: "environment-forgotten-notice" }).props.children).toBe(lastMachine ? "A forgotten." : "A forgotten. B is now the default.");
-			if (lastMachine) {
-				expect(renderer!.root.findAllByType("EnvironmentMachineRow" as never)).toHaveLength(0);
-				act(() => renderer!.root.findByProps({ testID: "environment-add-machine" }).props.onPress());
-				expect(fixtures.push).toHaveBeenCalledWith("/pair");
-			} else {
-				const rows = renderer!.root.findAllByType("EnvironmentMachineRow" as never);
-				expect(rows.map((row) => row.props.host.id)).toEqual(["b"]);
-				expect(rows[0].props.isDefault).toBe(true);
-				expect(rows[0].props.expanded).toBe(false);
-			}
-		} finally {
-			await act(async () => { release(); });
-		}
+describe("Environments empty and failed states", () => {
+	it("offers to add a machine when none is saved, with a themed pull to refresh", async () => {
+		await open();
+		const empty = renderer!.root.findByType("EmptyState" as never);
+		expect(empty.props).toMatchObject({ icon: "devices", title: "No saved machines", message: "Connect a machine to view its workers." });
+		const add = empty.findByType("Button" as never);
+		expect(add.props.title).toBe("Add a machine");
+		act(() => add.props.onPress());
+		expect(fixtures.push).toHaveBeenCalledWith("/pair");
+		const refresh = renderer!.root.findByType("ScrollView" as never).props.refreshControl;
+		expect(refresh.props).toMatchObject({ tintColor: "accent", colors: ["accent"], progressBackgroundColor: "card" });
+		// The shared empty state, not a card of its own.
+		expect(renderer!.root.findAll((node) => node.props.style?.borderRadius === 24)).toHaveLength(0);
 	});
 
-	it("keeps a machine visible and reports failure if its saved connection remains", async () => {
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
+	it("says the machines couldn't load, as an alert with a retry", async () => {
+		fixtures.loadHosts.mockRejectedValue(new Error("storage"));
+		await open();
+		const alert = renderer!.root.findByProps({ accessibilityRole: "alert" });
+		const empty = alert.findByType("EmptyState" as never);
+		expect(empty.props).toMatchObject({ icon: "warning", iconColor: "red", message: "The saved environments couldn't be loaded." });
 		fixtures.loadHosts.mockResolvedValue([a]);
-		fixtures.activeHost.mockResolvedValue(a);
-		vi.mocked(forgetServer).mockRejectedValue(new Error("storage failed"));
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		await act(async () => { await renderer!.root.findByType("EnvironmentMachineRow" as never).props.onForget(); });
-		expect(renderer!.root.findByType("EnvironmentMachineRow" as never).props.host.id).toBe("a");
-		expect(Alert.alert).toHaveBeenCalledWith("Couldn't forget machine", expect.any(String));
-		expect(renderer!.root.findAllByProps({ testID: "environment-forgotten-notice" })).toHaveLength(0);
-	});
-
-	it("forgets a non-default without changing the default or reconnecting", async () => {
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
-		const b = { ...a, id: "b", name: "B" };
-		fixtures.loadHosts.mockResolvedValue([a, b]);
-		fixtures.activeHost.mockResolvedValue(a);
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		fixtures.loadHosts.mockResolvedValue([a]);
-		await act(async () => { await renderer!.root.findAllByType("EnvironmentMachineRow" as never)[1].props.onForget(); });
-		expect(forgetPairedHost).toHaveBeenCalledWith(b);
-		expect(forgetServer).not.toHaveBeenCalled();
-		expect(fixtures.reloadConfig).not.toHaveBeenCalled();
-		expect(renderer!.root.findByType("EnvironmentMachineRow" as never).props.isDefault).toBe(true);
-		expect(renderer!.root.findByProps({ testID: "environment-forgotten-notice" }).props.children).toBe("B forgotten.");
-	});
-
-	it("forgets the tapped machine even when the selection changed while the screen was open", async () => {
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 2 };
-		const b = { ...a, id: "b", name: "B", lastConnected: 1 };
-		fixtures.loadHosts.mockResolvedValue([a, b]);
-		fixtures.activeHost.mockResolvedValue(a);
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		// Account sync moved the default to B; this screen still shows A as default.
-		fixtures.activeHost.mockResolvedValue(b);
-		fixtures.loadHosts.mockResolvedValue([b]);
-		await act(async () => { await renderer!.root.findAllByType("EnvironmentMachineRow" as never)[0].props.onForget(); });
-		expect(forgetServer).not.toHaveBeenCalled();
-		expect(forgetPairedHost).toHaveBeenCalledWith(a);
-		expect(fixtures.reloadConfig).not.toHaveBeenCalled();
-		expect(renderer!.root.findByType("EnvironmentMachineRow" as never).props.isDefault).toBe(true);
-		expect(renderer!.root.findByProps({ testID: "environment-forgotten-notice" }).props.children).toBe("A forgotten.");
-	});
-
-	it("passes the tapped default to forgetServer instead of re-reading the selection", async () => {
-		const a: Host = { id: "a", name: "A", platform: "darwin", endpoints: [], token: "token", lastConnected: 1 };
-		fixtures.loadHosts.mockResolvedValue([a]);
-		fixtures.activeHost.mockResolvedValue(a);
-		await act(async () => { renderer = create(<EnvironmentsScreen />); });
-		fixtures.loadHosts.mockResolvedValue([]);
-		fixtures.reloadConfig.mockResolvedValue(undefined);
-		await act(async () => { await renderer!.root.findByType("EnvironmentMachineRow" as never).props.onForget(); });
-		expect(forgetServer).toHaveBeenCalledWith(a);
-		expect(forgetPairedHost).not.toHaveBeenCalled();
+		await act(async () => empty.findByType("Button" as never).props.onPress());
+		expect(renderer!.root.findByType("EnvironmentMachineList" as never).props.error).toBeUndefined();
 	});
 });

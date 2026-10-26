@@ -15,6 +15,9 @@ export default function SettingsLayout() {
 			<Stack.Screen name="index" options={{ title: "Settings" }} />
 			<Stack.Screen name="environments" options={{ title: "Environments", fullScreenGestureEnabled: true }} />
 			<Stack.Screen name="theme" options={{ title: "Theme", fullScreenGestureEnabled: true }} />
+			{/* A machine's page renames itself to the machine once it loads. */}
+			<Stack.Screen name="machine/[id]/index" options={{ title: "Machine", fullScreenGestureEnabled: true }} />
+			<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />
 		</Stack>
 	);
 }

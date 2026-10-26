@@ -3,6 +3,7 @@ import { Platform } from "react-native";
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { configForEndpoint } from "./connect";
+import { isValidPort, portError } from "./connectionFields";
 import { classifyConnectionFailure, describeConnectionFailure, isLocalNetworkHost } from "./connectionError";
 import { probeEndpoint, probeIdentity } from "./connectRuntime";
 import { normalizeServerHost } from "./endpoints";
@@ -31,12 +32,6 @@ export type ManualConnectFailure = {
 	field: "host" | "password";
 	showLocalNetworkHint: boolean;
 };
-
-export function isValidPort(port: string): boolean {
-	return /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
-}
-
-export const PORT_ERROR = "Enter a port from 1 to 65535.";
 
 /**
  * The manual connection form's state and its Connect (or Save) action. The
@@ -141,8 +136,7 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		setMachineName,
 		busy,
 		failure,
-		/** Said only once something is typed: an empty port just keeps Connect off. */
-		portError: cfg.httpPort.trim() && !validPort ? PORT_ERROR : undefined,
+		portError: portError(cfg.httpPort),
 		canConnect,
 		connect,
 		editing,

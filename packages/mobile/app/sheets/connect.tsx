@@ -1,14 +1,15 @@
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, Text, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 import { ManualConnectSheet } from "../../lib/ManualConnectSheet";
 import { activeHost, findHost, type Host } from "../../lib/hosts";
 import { loadAccount } from "../../lib/account";
 import { syncAccountHosts, unignoreAccountHost } from "../../lib/accountHosts";
 import { releaseSheetResult, takeSheetResult } from "../../lib/sheetResult";
 import { backOr } from "../../lib/backNavigation";
+import { Spinner } from "../../lib/Spinner";
 import { useApp } from "../../lib/store";
-import { useTheme } from "../../lib/ThemeProvider";
+import { EmptyState } from "../../lib/ui";
 
 // Manual pairing and editing use the same native connection form.
 export default function ConnectSheetRoute() {
@@ -16,7 +17,6 @@ export default function ConnectSheetRoute() {
 	const navigation = useNavigation();
 	const { resultKey, hostId } = useLocalSearchParams<{ resultKey?: string; hostId?: string }>();
 	const { config, currentHostId, reloadConfig } = useApp();
-	const theme = useTheme();
 	const [editingHost, setEditingHost] = useState<Host | null | undefined>(hostId === undefined ? null : undefined);
 	const [busy, setBusy] = useState(false);
 	// iOS: the sheet's native bar carries the title, known from the link before
@@ -45,8 +45,8 @@ export default function ConnectSheetRoute() {
 		return () => { current = false; };
 	}, [hostId]);
 
-	if (editingHost === undefined) return <>{header}<ActivityIndicator style={{ flex: 1 }} color={theme.accent} /></>;
-	if (hostId !== undefined && !editingHost) return <>{header}<View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}><Text style={{ color: theme.textPrimary }}>This machine is no longer paired.</Text></View></>;
+	if (editingHost === undefined) return <>{header}<View style={styles.center}><Spinner size="large" accessibilityLabel="Loading machine" /></View></>;
+	if (hostId !== undefined && !editingHost) return <>{header}<EmptyState icon="disconnected" title="Machine not found" message="This machine is no longer paired." /></>;
 	const activeEndpointIndex = editingHost && editingHost.id === currentHostId
 		? editingHost.endpoints.findIndex((endpoint) => endpoint.host === config?.host && endpoint.port === Number(config.httpPort) && endpoint.secure === !!config.secure)
 		: -1;
@@ -79,5 +79,9 @@ export default function ConnectSheetRoute() {
 		</>
 	);
 }
+
+const styles = StyleSheet.create({
+	center: { flex: 1, alignItems: "center", justifyContent: "center" },
+});
 
 export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

@@ -65,7 +65,7 @@ vi.mock("./ThemeProvider", () => ({
 
 import { ApiError } from "./api";
 import { ManualConnectSheet } from "./ManualConnectSheet";
-import { PORT_ERROR } from "./useManualConnect";
+import { PORT_ERROR } from "./connectionFields";
 
 const paired: Host = {
 	id: "host-1",

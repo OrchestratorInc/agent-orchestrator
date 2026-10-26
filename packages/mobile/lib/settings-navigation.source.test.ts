@@ -63,10 +63,15 @@ describe("Settings environment navigation", () => {
 		expect(environments).toContain('<Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Add machine" onPress={() => router.push("/pair")} />');
 	});
 
-	it("clips scrolling machine cards to the page below the native header", () => {
+	// Machines are a native list whose rows open each machine's page, pushed
+	// inside Settings' stack with its editor above it.
+	it("pushes a machine's page and its editor inside Settings' own stack", () => {
 		const environments = read("../app/settings/environments.tsx");
+		const settingsLayout = read("../app/settings/_layout.tsx");
 
-		expect(environments).toContain("<View style={styles.scrollViewport}>");
-		expect(environments).toMatch(/scrollViewport:\s*\{[^}]*overflow:\s*"hidden"/s);
+		expect(environments).toContain("<EnvironmentMachineList");
+		expect(environments).toContain('router.push({ pathname: "/settings/machine/[id]", params: { id } });');
+		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/index" options={{ title: "Machine", fullScreenGestureEnabled: true }} />');
+		expect(settingsLayout).toContain('<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />');
 	});
 });

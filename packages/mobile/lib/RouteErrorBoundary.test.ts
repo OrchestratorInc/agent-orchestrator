@@ -20,6 +20,8 @@ const screenRoutes = [
 	"files/[sessionId]/index.tsx",
 	"files/[sessionId]/folder.tsx",
 	"settings/environments.tsx",
+	"settings/machine/[id]/index.tsx",
+	"settings/machine/[id]/edit.tsx",
 	"browser/[id].tsx",
 	"settings/theme.tsx",
 	"notifications.tsx",
