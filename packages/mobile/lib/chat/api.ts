@@ -22,7 +22,7 @@ import type {
 	DecisionOption,
 	TurnSettings,
 } from "./types";
-import { parseSseFrame, readSseFrameSeq, takeSseFrames, type ConversationEvent } from "./sse";
+import { isSseHeartbeat, parseSseFrame, readSseFrameSeq, takeSseFrames, type ConversationEvent } from "./sse";
 import { mergeConversationPages, type ConversationPage } from "./snapshot";
 
 export { parseSseFrame } from "./sse";
@@ -126,6 +126,7 @@ export async function getConversationPage(
 	cfg: ServerConfig,
 	sessionId: string,
 	beforeSequence?: number,
+	init?: Pick<RequestInit, "signal">,
 ): Promise<ConversationPage> {
 	const limit = beforeSequence === undefined ? CHAT_INITIAL_PAGE_SIZE : CHAT_HISTORY_PAGE_SIZE;
 	const query = new URLSearchParams({ limit: String(limit) });
@@ -133,6 +134,7 @@ export async function getConversationPage(
 	const res = await apiRequest(
 		cfg,
 		`${API}/sessions/${encodeURIComponent(sessionId)}/conversation?${query.toString()}`,
+		init,
 	);
 	return toSnapshot((await res.json()) as WireSnapshot);
 }
@@ -141,11 +143,12 @@ export async function getReviewerConversationPage(
 	cfg: ServerConfig,
 	reviewId: string,
 	beforeSequence?: number,
+	init?: Pick<RequestInit, "signal">,
 ): Promise<ConversationPage> {
 	const limit = beforeSequence === undefined ? CHAT_INITIAL_PAGE_SIZE : CHAT_HISTORY_PAGE_SIZE;
 	const query = new URLSearchParams({ limit: String(limit) });
 	if (beforeSequence !== undefined) query.set("beforeSequence", String(beforeSequence));
-	const res = await apiRequest(cfg, `${reviewConversationPath(reviewId)}?${query.toString()}`);
+	const res = await apiRequest(cfg, `${reviewConversationPath(reviewId)}?${query.toString()}`, init);
 	const snapshot = toSnapshot((await res.json()) as WireSnapshot);
 	return {
 		...snapshot,
@@ -408,6 +411,10 @@ export type ConversationStreamOptions = {
 	wantsPayload?: () => boolean;
 	/** A frame that advanced the cursor without being parsed. */
 	onCursorAdvance?: (seq: number) => void;
+	/** The daemon accepted the stream; frames follow. */
+	onOpen?: () => void;
+	/** An idle heartbeat frame arrived, proving the path delivers small writes. */
+	onHeartbeat?: () => void;
 };
 
 /**
@@ -443,6 +450,7 @@ export async function streamGlobalConversationEvents(
 		? advertisedAfter
 		: after;
 	if (effectiveAfter !== after) onCursorReset?.(effectiveAfter);
+	options?.onOpen?.();
 
 	const decoder = new TextDecoder();
 	const reader = res.body.getReader();
@@ -459,7 +467,9 @@ export async function streamGlobalConversationEvents(
 			const split = takeSseFrames(buffer);
 			buffer = split.remainder;
 			for (const frame of split.frames) {
-				if (wantsPayload && !wantsPayload()) {
+				if (isSseHeartbeat(frame)) {
+					options?.onHeartbeat?.();
+				} else if (wantsPayload && !wantsPayload()) {
 					// Nothing is subscribed, so the payload has no reader. Take the
 					// sequence and skip the parse entirely.
 					const seq = readSseFrameSeq(frame);

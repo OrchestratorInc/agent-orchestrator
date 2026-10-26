@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import * as sse from "./sse";
 
 const { parseSseFrame, takeSseFrames, createConversationEventRegistry, LISTENER_GRACE_MS } = sse;
@@ -28,77 +28,11 @@ describe("mobile conversation SSE", () => {
 		expect(sse.readSseFrameSeq("id: 43\r\ndata: nonsense-that-is-never-parsed")).toBe(43);
 		expect(sse.readSseFrameSeq("data: {}")).toBeUndefined();
 	});
-});
 
-describe("conversation cursor persistence", () => {
-	afterEach(() => vi.useRealTimers());
-
-	it("persists only the newest cursor once per event burst", () => {
-		vi.useFakeTimers();
-		const persisted: number[] = [];
-		const createPersister = (
-			sse as unknown as {
-				createCursorPersister?: (persist: (cursor: number) => void) => {
-					update(cursor: number): void;
-				};
-			}
-		).createCursorPersister;
-		const persister = createPersister?.((cursor) => persisted.push(cursor));
-
-		persister?.update(1);
-		persister?.update(3);
-		persister?.update(2);
-		expect(persisted).toEqual([]);
-		vi.advanceTimersByTime(500);
-		expect(persisted).toEqual([3]);
-	});
-
-	it("flushes the newest pending cursor during cleanup", () => {
-		vi.useFakeTimers();
-		const persisted: number[] = [];
-		const createPersister = (
-			sse as unknown as {
-				createCursorPersister?: (persist: (cursor: number) => void) => {
-					update(cursor: number): void;
-					flush(): void;
-				};
-			}
-		).createCursorPersister;
-		const persister = createPersister?.((cursor) => persisted.push(cursor));
-
-		persister?.update(7);
-		persister?.flush();
-		vi.runAllTimers();
-		expect(persisted).toEqual([7]);
-	});
-
-	// A large cold-start replay saturates the JS thread, and the 500ms debounce is a
-	// macrotask — the very thing a saturated thread never gets to. Progress therefore
-	// has to commit on event count too, or a replay that is interrupted (or crashes the
-	// app) resumes from zero on the next launch and repeats forever.
-	it("persists progress by event count while timers are starved", () => {
-		vi.useFakeTimers();
-		const persisted: number[] = [];
-		const persister = sse.createCursorPersister((cursor) => { persisted.push(cursor); });
-
-		for (let seq = 1; seq <= sse.CURSOR_PERSIST_EVENTS; seq++) persister.update(seq);
-
-		// No timer has been advanced: the count alone must have committed.
-		expect(persisted).toEqual([sse.CURSOR_PERSIST_EVENTS]);
-	});
-
-	it("replaces a higher persisted cursor when the daemon reports a reset", () => {
-		vi.useFakeTimers();
-		const persisted: number[] = [];
-		const persister = sse.createCursorPersister((cursor) => { persisted.push(cursor); });
-
-		persister.update(100);
-		vi.advanceTimersByTime(500);
-		persister.replace(0);
-		persister.update(1);
-		vi.advanceTimersByTime(500);
-
-		expect(persisted).toEqual([100, 0, 1]);
+	it("recognises the daemon heartbeat, which carries no cursor", () => {
+		expect(sse.isSseHeartbeat("event: heartbeat\ndata: {}")).toBe(true);
+		expect(sse.isSseHeartbeat("event: heartbeat\r\ndata: {}")).toBe(true);
+		expect(sse.isSseHeartbeat('id: 5\nevent: cursor\ndata: {}')).toBe(false);
 	});
 });
 
@@ -113,6 +47,18 @@ describe("conversation event subscriptions", () => {
 		expect(received).toEqual(["a"]);
 		registry.publish("host-b", event("same-session", 2));
 		expect(received).toEqual(["a", "b"]);
+	});
+
+	it("asks every session on one host to reload on resync", () => {
+		const registry = createConversationEventRegistry();
+		const received: string[] = [];
+		registry.subscribe("host-a", "session-1", (e) => received.push(`1:${e.type}`));
+		registry.subscribe("host-a", "session-2", (e) => received.push(`2:${e.type}`));
+		registry.subscribe("host-b", "session-1", (e) => received.push(`b:${e.type}`));
+
+		registry.resync("host-a");
+
+		expect(received).toEqual([`1:${sse.STREAM_RESYNC_EVENT}`, `2:${sse.STREAM_RESYNC_EVENT}`]);
 	});
 
 	it("publishes an event only to listeners for its session", () => {

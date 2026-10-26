@@ -33,7 +33,8 @@ import {
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
-import { subscribeConversationEvents } from "./conversationEvents";
+import { conversationStreamHealthy, subscribeConversationEvents } from "./conversationEvents";
+import { STREAM_RESYNC_EVENT } from "./sse";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
@@ -149,14 +150,25 @@ export function useMobileConversation(
 	const hasConversation = Boolean(snapshot);
 	const hasProviderConfig = Boolean(snapshot?.capabilities?.includes("config_options"));
 
+	// The page load in flight, so a newer refresh can cancel its download.
+	const inFlight = useRef<AbortController | null>(null);
+	// Set when an event arrives while a load is in flight; see scheduleRefresh.
+	const refreshAgain = useRef(false);
+	const refreshRef = useRef<() => Promise<void>>(async () => {});
+
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
+		// A newer load makes the older one's answer worthless; on a slow link its
+		// remaining download would only compete with this one.
+		inFlight.current?.abort();
+		const controller = new AbortController();
+		inFlight.current = controller;
 		const request = refreshGate.begin();
 		setRefreshing(true);
 		try {
 			const live = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId)
-				: await getConversationPage(cfg, sessionId);
+				? await getReviewerConversationPage(cfg, options.reviewId, undefined, { signal: controller.signal })
+				: await getConversationPage(cfg, sessionId, undefined, { signal: controller.signal });
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
 			setPages((old) => {
 				const next = withLivePage(old, live);
@@ -175,12 +187,28 @@ export function useMobileConversation(
 				setLoading(false);
 				setRefreshing(false);
 			}
+			if (inFlight.current === controller) {
+				inFlight.current = null;
+				if (refreshAgain.current && mounted.current) {
+					refreshAgain.current = false;
+					void refreshRef.current();
+				}
+			}
 		}
 	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
+	refreshRef.current = refresh;
 
+	// Live events coalesce rather than cancel: while an agent streams, events
+	// arrive faster than a page downloads on a slow link, and cancelling on each
+	// one would never let a page finish. One load runs at a time; events during
+	// it queue exactly one more, which starts when it lands.
 	const scheduleRefresh = useCallback(() => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
+		refreshTimer.current = setTimeout(() => {
+			refreshTimer.current = null;
+			if (inFlight.current) refreshAgain.current = true;
+			else void refresh();
+		}, REFRESH_DEBOUNCE_MS);
 	}, [refresh]);
 
 	const loadOlder = useCallback(async () => {
@@ -210,6 +238,9 @@ export function useMobileConversation(
 		return () => {
 			mounted.current = false;
 			refreshGate.invalidate();
+			inFlight.current?.abort();
+			inFlight.current = null;
+			refreshAgain.current = false;
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		};
 	}, [cacheKey, refresh, refreshGate]);
@@ -262,19 +293,22 @@ export function useMobileConversation(
 		const eventSessionId = options?.eventSessionId ?? sessionId;
 		if (!cfg || unavailable || !eventSessionId) return;
 		return subscribeConversationEvents(cfg, eventSessionId, (event) => {
-			if (event.payload?.conversationId) scheduleRefresh();
+			if (event.payload?.conversationId || event.type === STREAM_RESYNC_EVENT) scheduleRefresh();
 		});
 	}, [cfg, options?.eventSessionId, sessionId, scheduleRefresh, unavailable]);
 
-	// Poll the conversation on paths where the event stream cannot deliver.
-	// Over a Cloudflare quick tunnel the subscription above never fires — the
-	// body is forwarded in ~128 KB chunks and a chat event is a few hundred
+	// Poll the conversation on paths where the event stream may not deliver.
+	// Over a Cloudflare quick tunnel the subscription above can stay silent —
+	// the body is forwarded in ~128 KB chunks and a chat event is a few hundred
 	// bytes — so without this the screen shows the agent working indefinitely
-	// while the reply has already landed.
+	// while the reply has already landed. Ticks are skipped while the stream's
+	// heartbeats arrive on time, since events then arrive on time too.
 	useEffect(() => {
 		const every = conversationPollIntervalFor(cfg);
-		if (every === null || unavailable) return;
-		const timer = setInterval(() => scheduleRefresh(), every);
+		if (!cfg || every === null || unavailable) return;
+		const timer = setInterval(() => {
+			if (!conversationStreamHealthy(cfg)) scheduleRefresh();
+		}, every);
 		return () => clearInterval(timer);
 	}, [cfg, unavailable, scheduleRefresh]);
 
