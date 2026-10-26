@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, apiRequest } from "./api";
 import { BrowserLiveClient } from "./browserLive";
-import { browserJPEGDataURI, browserLiveURL, browserWheelDeltaFromDrag, containBrowserFrame, decodeBrowserFrame } from "./browserLiveProtocol";
+import { browserJPEGDataURI, browserLiveURL, browserWheelDeltaFromDrag, containBrowserFrame, decodeBrowserFrame, normalizedFramePoint } from "./browserLiveProtocol";
 
 vi.mock("./config", () => ({
 	authHeaders: (config: { password: string }) => ({ Authorization: `Bearer ${config.password}` }),
@@ -181,6 +181,13 @@ describe("browser live transport", () => {
 			width: 390,
 			height: 219.375,
 		});
+	});
+
+	it("places a tap on the page as fractions of the fitted frame, ignoring the letterbox", () => {
+		const rect = { left: 0, top: 190, width: 390, height: 220 };
+		expect(normalizedFramePoint(rect, { x: 195, y: 245 })).toEqual({ x: 0.5, y: 0.25 });
+		expect(normalizedFramePoint(rect, { x: 195, y: 100 })).toBeNull();
+		expect(normalizedFramePoint({ left: 0, top: 0, width: 0, height: 0 }, { x: 0, y: 0 })).toBeNull();
 	});
 
 	it("preserves drag signs for Electron wheel input so content follows the finger", () => {

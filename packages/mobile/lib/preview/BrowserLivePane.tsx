@@ -1,24 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-	Image,
-	PanResponder,
-	StyleSheet,
-	View,
-} from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Image, StyleSheet, View, type LayoutChangeEvent } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 import { BrowserLiveClient } from "../browserLive";
-import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, type BrowserFrameRect } from "../browserLiveProtocol";
+import { browserJPEGDataURI, browserWheelDeltaFromDrag, containBrowserFrame, normalizedFramePoint, type BrowserFrameRect } from "../browserLiveProtocol";
 import { useApp } from "../store";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import type { Theme } from "../theme";
 import { ToastHost } from "../Toast";
+import { duration, radius, space } from "../tokens";
 import { Button, EmptyState } from "../ui";
+import { useReducedMotion } from "../useReducedMotion";
 import { useToast } from "../useToast";
+import { FRAME_ZOOM_SNAP, pinchZoom, unzoomed, unzoomPoint, type FramePoint, type FrameSize, type FrameZoom } from "./frameZoom";
 
 type BrowserStatus = "connecting" | "open" | "error";
+
+/** How far a finger may wander before a tap becomes a scroll. */
+const DRAG_SLOP = 7;
+/** A held finger still clicks when it lifts, as it always has here. */
+const TAP_MAX_MS = 10_000;
+/** The mark a tap leaves on the frame: about a fingertip. */
+const TOUCH_MARK = 36;
 
 export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; onDisabled?(): void }) {
 	const { config } = useApp();
 	const styles = useThemedStyles(makeStyles);
+	const reduceMotion = useReducedMotion();
 	const toast = useToast();
 	const showNotice = toast.show;
 	const client = useRef<BrowserLiveClient | null>(null);
@@ -92,50 +101,113 @@ export function BrowserLivePane({ sessionID, onDisabled }: { sessionID: string; 
 		};
 	}, [attempt, config, onDisabled, sessionID, showNotice]);
 
-	const normalizedPoint = (x: number, y: number) => {
-		const rect = frameRectRef.current;
-		if (rect.width <= 0 || rect.height <= 0) return null;
-		if (x < rect.left || x > rect.left + rect.width || y < rect.top || y > rect.top + rect.height) return null;
-		return { x: (x - rect.left) / rect.width, y: (y - rect.top) / rect.height };
-	};
-	const tap = (x: number, y: number) => {
-		const point = normalizedPoint(x, y);
+	// Gestures arrive in viewport points with any zoom already undone.
+	const tapAt = useCallback((x: number, y: number) => {
+		const point = normalizedFramePoint(frameRectRef.current, { x, y });
 		if (!point) return;
 		client.current?.send({ type: "input", payload: { kind: "pointer", phase: "down", ...point, button: "left" } });
 		client.current?.send({ type: "input", payload: { kind: "pointer", phase: "up", ...point, button: "left" } });
-	};
-	const drag = useRef({ x: 0, y: 0, lastDX: 0, lastDY: 0, moved: false });
-	const responder = useMemo(() => PanResponder.create({
-		onStartShouldSetPanResponder: () => status === "open",
-		onMoveShouldSetPanResponder: () => status === "open",
-		onPanResponderGrant: (event) => {
-			drag.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY, lastDX: 0, lastDY: 0, moved: false };
-		},
-		onPanResponderMove: (_event, gesture) => {
-			if (!drag.current.moved && Math.hypot(gesture.dx, gesture.dy) < 7) return;
-			drag.current.moved = true;
-			const deltaX = gesture.dx - drag.current.lastDX;
-			const deltaY = gesture.dy - drag.current.lastDY;
-			drag.current.lastDX = gesture.dx;
-			drag.current.lastDY = gesture.dy;
-			const scale = frameRectRef.current.width / (pageWidth.current > 1 ? pageWidth.current : frameWidth.current);
-			client.current?.send({ type: "input", payload: { kind: "wheel", ...browserWheelDeltaFromDrag(deltaX, deltaY, scale) } });
-		},
-		onPanResponderRelease: () => {
-			if (!drag.current.moved) tap(drag.current.x, drag.current.y);
-		},
-	}), [status]);
+	}, []);
+	const scrollBy = useCallback((deltaX: number, deltaY: number, zoom: number) => {
+		// A magnified frame shows fewer desktop pixels per point, so the drag is
+		// scaled by the zoom too and the page keeps pace with the finger.
+		const fitted = frameRectRef.current.width / (pageWidth.current > 1 ? pageWidth.current : frameWidth.current);
+		client.current?.send({ type: "input", payload: { kind: "wheel", ...browserWheelDeltaFromDrag(deltaX, deltaY, fitted * zoom) } });
+	}, []);
+
+	const viewport = useSharedValue<FrameSize>({ width: 1, height: 1 });
+	const zoomScale = useSharedValue(1);
+	const zoomX = useSharedValue(0);
+	const zoomY = useSharedValue(0);
+	const pinchFrom = useSharedValue<FrameZoom>(unzoomed);
+	const pinchFocal = useSharedValue<FramePoint>({ x: 0, y: 0 });
+	const markX = useSharedValue(0);
+	const markY = useSharedValue(0);
+	const markScale = useSharedValue(1);
+	const markOpacity = useSharedValue(0);
+	const interactive = status === "open" && Boolean(frameURI) && !blank;
+	// Another session's page starts at its fitted size.
+	useEffect(() => {
+		zoomScale.value = 1;
+		zoomX.value = 0;
+		zoomY.value = 0;
+	}, [sessionID, zoomScale, zoomX, zoomY]);
+
+	// One finger taps (a click on the page) or drags (scrolls it); two pinch to
+	// magnify the frame and pan across it. The pinch runs on the UI thread, and
+	// only the commands for the desktop cross to JS.
+	const gesture = useMemo(() => {
+		const tap = Gesture.Tap()
+			.enabled(interactive)
+			.maxDistance(DRAG_SLOP)
+			.maxDuration(TAP_MAX_MS)
+			.onBegin((event) => {
+				markX.value = event.x;
+				markY.value = event.y;
+				markScale.value = reduceMotion ? 1 : 0.6;
+				if (!reduceMotion) markScale.value = withTiming(1, { duration: duration.base });
+				markOpacity.value = withTiming(1, { duration: duration.fast });
+			})
+			.onEnd((event, success) => {
+				if (!success) return;
+				const point = unzoomPoint({ x: event.x, y: event.y }, { scale: zoomScale.value, x: zoomX.value, y: zoomY.value }, viewport.value);
+				scheduleOnRN(tapAt, point.x, point.y);
+			})
+			.onFinalize(() => {
+				markOpacity.value = withTiming(0, { duration: duration.slow });
+			});
+		const pan = Gesture.Pan()
+			.enabled(interactive)
+			.maxPointers(1)
+			.minDistance(DRAG_SLOP)
+			.onChange((event) => {
+				scheduleOnRN(scrollBy, event.changeX, event.changeY, zoomScale.value);
+			});
+		const pinch = Gesture.Pinch()
+			.enabled(interactive)
+			.onStart((event) => {
+				pinchFrom.value = { scale: zoomScale.value, x: zoomX.value, y: zoomY.value };
+				pinchFocal.value = { x: event.focalX, y: event.focalY };
+			})
+			.onUpdate((event) => {
+				const next = pinchZoom(pinchFrom.value, pinchFocal.value, { x: event.focalX, y: event.focalY }, event.scale, viewport.value);
+				zoomScale.value = next.scale;
+				zoomX.value = next.x;
+				zoomY.value = next.y;
+			})
+			.onEnd(() => {
+				if (zoomScale.value >= FRAME_ZOOM_SNAP) return;
+				zoomScale.value = reduceMotion ? 1 : withTiming(1, { duration: duration.base });
+				zoomX.value = reduceMotion ? 0 : withTiming(0, { duration: duration.base });
+				zoomY.value = reduceMotion ? 0 : withTiming(0, { duration: duration.base });
+			});
+		return Gesture.Race(pinch, pan, tap);
+	}, [interactive, markOpacity, markScale, markX, markY, pinchFocal, pinchFrom, reduceMotion, scrollBy, tapAt, viewport, zoomScale, zoomX, zoomY]);
+
+	const zoomStyle = useAnimatedStyle(() => ({
+		transform: [{ translateX: zoomX.value }, { translateY: zoomY.value }, { scale: zoomScale.value }],
+	}));
+	const markStyle = useAnimatedStyle(() => ({
+		opacity: markOpacity.value,
+		transform: [{ translateX: markX.value - TOUCH_MARK / 2 }, { translateY: markY.value - TOUCH_MARK / 2 }, { scale: markScale.value }],
+	}));
+	const onViewportLayout = useCallback((event: LayoutChangeEvent) => {
+		const { width, height } = event.nativeEvent.layout;
+		setViewportSize({ width, height });
+		viewport.value = { width, height };
+	}, [viewport]);
 
 	const retry = () => setAttempt((value) => value + 1);
 
 	return <View style={styles.root}>
-		<View
-			style={styles.viewport}
-			onLayout={(event) => setViewportSize(event.nativeEvent.layout)}
-			{...responder.panHandlers}
-		>
-			{frameURI && !blank ? <View pointerEvents="none" style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
-		</View>
+		<GestureDetector gesture={gesture}>
+			<View collapsable={false} style={styles.viewport} onLayout={onViewportLayout}>
+				<Animated.View pointerEvents="none" style={[styles.overlay, zoomStyle]}>
+					{frameURI && !blank ? <View style={[styles.frame, frameRect]}><Image source={{ uri: frameURI }} resizeMode="contain" style={styles.frameImage} /></View> : null}
+				</Animated.View>
+				<Animated.View pointerEvents="none" style={[styles.touchMark, markStyle]} />
+			</View>
+		</GestureDetector>
 		{status === "open" && blank ? <View pointerEvents="none" style={styles.overlay}><EmptyState icon="desktop" title="Nothing is open in the desktop browser yet" /></View> : null}
 		{status === "open" && !blank && !frameURI ? <View pointerEvents="none" style={styles.overlay}><EmptyState busy title="Waiting for the desktop browser…" /></View> : null}
 		{status !== "open" ? <BrowserState status={status} error={error} retry={retry} /> : null}
@@ -169,4 +241,15 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	frameImage: { width: "100%", height: "100%" },
 	overlay: { ...StyleSheet.absoluteFill },
 	opaque: { backgroundColor: t.bgBase },
+	touchMark: {
+		position: "absolute",
+		top: 0,
+		left: 0,
+		width: TOUCH_MARK,
+		height: TOUCH_MARK,
+		borderRadius: radius.pill,
+		borderWidth: space.hair,
+		borderColor: t.accent,
+		backgroundColor: t.accentPressed,
+	},
 });
