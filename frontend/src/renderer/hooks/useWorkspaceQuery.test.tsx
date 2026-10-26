@@ -90,7 +90,7 @@ describe("useWorkspaceQuery", () => {
 		getMock.mockImplementation(async (url, options) => url === "/api/v1/projects"
 			? { data: { projects: [] } }
 			: options ? { data: { sessions: [], archived: { total: 1, byProject: { "": 1 } } } }
-			: { data: { sessions: [{ id: "ended", isTerminated: true, status: "terminated", harness: "codex", updatedAt: "2026-01-01" }] } });
+			: { data: { sessions: [{ id: "ended", isTerminated: true, status: "terminated", harness: "codex", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01" }] } });
 		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions");

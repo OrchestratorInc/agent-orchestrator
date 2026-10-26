@@ -1,6 +1,9 @@
 import { expect, it, vi } from "vitest";
 const { load, options } = vi.hoisted(() => ({ load: vi.fn(), options: vi.fn((id: string) => ({ queryKey: ["conversation", id] })) }));
-vi.mock("@tanstack/react-router", () => ({ createFileRoute: () => (config: unknown) => config }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+	...await importOriginal<typeof import("@tanstack/react-router")>(),
+	createFileRoute: () => (config: unknown) => config,
+}));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ workspaceQueryKey: ["workspaces"], cloudProjectsQueryKey: ["cloud-projects"] }));
 vi.mock("./session-view-chunk", () => ({ loadSessionView: load }));
 vi.mock("../hooks/useConversation", () => ({ conversationQueryOptions: options }));
