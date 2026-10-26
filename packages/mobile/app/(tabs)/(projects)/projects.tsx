@@ -2,7 +2,6 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
-import { haptics } from "../../../lib/haptics";
 import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
@@ -49,8 +48,9 @@ export default function ProjectsScreen() {
 	);
 	const failure = useBoardFailure();
 
+	// No haptic of its own: each platform's refresh control gives the feedback
+	// it gives everywhere, and the Retry buttons that also call this buzz once.
 	const onRefresh = async () => {
-		haptics.tap();
 		setRefreshing(true);
 		try {
 			await refreshAll();

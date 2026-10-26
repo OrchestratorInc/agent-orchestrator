@@ -3,7 +3,6 @@ import { Platform, RefreshControl, SectionList, StyleSheet, View } from "react-n
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import type { Theme } from "../../../lib/theme";
-import { haptics } from "../../../lib/haptics";
 import { PRCard } from "../../../lib/PRCard";
 import { PRFilterControl } from "../../../lib/pr-filter-control";
 import { ProjectSwitcher } from "../../../lib/ProjectSwitcher";
@@ -96,8 +95,9 @@ export default function PRsScreen() {
 	}, [visited, summaries.reload]));
 	const failure = useBoardFailure();
 
+	// No haptic of its own: each platform's refresh control gives the feedback
+	// it gives everywhere, and the Retry buttons that also call this buzz once.
 	const onRefresh = async () => {
-		haptics.tap();
 		setRefreshing(true);
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();

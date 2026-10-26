@@ -2,7 +2,6 @@ import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-rout
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
@@ -69,8 +68,9 @@ function ProjectScreenContent() {
 		[hostMatches, id, archive, currentHostId],
 	);
 
+	// No haptic of its own: each platform's refresh control gives the feedback
+	// it gives everywhere, and the Retry banner that also calls this buzzes once.
 	const onRefresh = useCallback(async () => {
-		haptics.tap();
 		setRefreshing(true);
 		try {
 			await refresh();

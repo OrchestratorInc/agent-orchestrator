@@ -182,6 +182,18 @@ it("heads the list with the Open / Merged / All filter and its counts", () => {
 	expect(renderer!.root.findAllByType("PRFilterDock" as never)).toHaveLength(0);
 });
 
+// The refresh control gives each platform's own feedback, and the Retry
+// buttons that share this handler buzz once rather than twice.
+it("refreshes without a haptic of its own", async () => {
+	const { haptics } = await import("./haptics");
+	vi.mocked(haptics.tap).mockClear();
+	act(() => { renderer = create(<PRsScreen />); });
+	const refresh = renderer!.root.findByType("SectionList" as never).props.refreshControl;
+	await act(async () => { await refresh.props.onRefresh(); });
+	expect(fixture.reload).toHaveBeenCalledTimes(1);
+	expect(haptics.tap).not.toHaveBeenCalled();
+});
+
 // iOS has no system confirmation for a copy; the page shows one.
 it("confirms a copied pull-request link without redrawing the cards", () => {
 	act(() => { renderer = create(<PRsScreen />); });

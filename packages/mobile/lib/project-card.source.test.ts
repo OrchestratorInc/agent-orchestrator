@@ -56,6 +56,13 @@ describe("project row", () => {
 	it("opens a project without a haptic", () => {
 		expect(projects).not.toContain("haptics.select()");
 	});
+
+	// The refresh control gives each platform's own feedback, and the Retry
+	// actions that share the handler buzz once rather than twice.
+	it("refreshes the board and a project page without a haptic of their own", () => {
+		expect(projects).not.toContain("haptics.");
+		expect(page).not.toContain("haptics.");
+	});
 });
 
 describe("project page", () => {
