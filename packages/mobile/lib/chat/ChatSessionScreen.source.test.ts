@@ -97,6 +97,18 @@ describe("active turn controls", () => {
 	});
 });
 
+describe("whole-screen states", () => {
+	// The app's one empty state, with its shared buttons, rather than a copy of
+	// it drawn here with a custom pill.
+	it("draws loading and failures with the shared EmptyState", () => {
+		expect(screenSource).not.toContain("function Centered");
+		expect(screenSource).toContain('<EmptyState busy title="Loading conversation…" />');
+		expect(screenSource).toContain('action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />}');
+		expect(screenSource).toContain('<Button title="Open worktree shell" icon="terminal" loading={openingShell}');
+		expect(screenSource).toContain('<View accessibilityRole="alert" style={styles.center}>{children}</View>');
+	});
+});
+
 describe("stopped agents", () => {
 	it("resumes an exited agent once when its session is opened", () => {
 		expect(screenSource).toContain("const autoResumeTried = useRef<string | undefined>(undefined);");

@@ -1,17 +1,9 @@
 import { Feather } from "../icons";
 import { useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
-import {
-	ActivityIndicator,
-	Alert,
-	Keyboard,
-	Pressable,
-	StyleSheet,
-	Text,
-	View,
-} from "react-native";
+import { Alert, Keyboard, Pressable, StyleSheet, View } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
 import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
@@ -57,7 +49,8 @@ import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
-import { iconSize, type, space } from "../tokens";
+import { iconSize, space } from "../tokens";
+import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
@@ -597,17 +590,32 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		onSecondary: recheckingTransition ? undefined : () => void retryInterfaceCheck(),
 	};
 
-	if (failedStart && !conversation.snapshot) return <Centered icon="alert-triangle" title="Session failed to start" message={failedStart} action={resuming ? "Retrying…" : "Retry"} onAction={() => void resume()} />;
+	if (failedStart && !conversation.snapshot) {
+		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Session failed to start" message={failedStart} action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />} /></Failure>;
+	}
 	// A session that is still starting shows its checklist straight away rather than a bare spinner.
 	if (conversation.loading && !conversation.snapshot && startupView && !startupView.failed) {
 		return <View style={styles.startupLoading}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (conversation.loading && !conversation.snapshot) return <Centered icon="message-square" title="Loading conversation…" spinning />;
-	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
+	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><EmptyState busy title="Loading conversation…" /></View>;
+	if (conversation.unavailable) {
+		return <Failure>
+			<EmptyState
+				icon="warning"
+				title="Conversation unavailable"
+				message={`${conversation.unavailable.message}\n\nThe worktree is untouched. You can still open a plain shell in it.`}
+				action={<Button title="Open worktree shell" icon="terminal" loading={openingShell} onPress={() => void openShell()} />}
+			/>
+		</Failure>;
+	}
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
-	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
-	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "The machine didn't return this conversation. Try again."} action="Retry" onAction={() => void conversation.refresh()} />;
+	if (!conversation.snapshot && unreachable) {
+		return <Failure><EmptyState icon="offline" title="This machine is offline" message="This conversation loads once the app reconnects." action={<Button title="Retry" icon="refresh" onPress={() => void conversation.refresh()} />} /></Failure>;
+	}
+	if (!conversation.snapshot) {
+		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Couldn't load the conversation" message={conversation.error || "The machine didn't return this conversation. Try again."} action={<Button title="Retry" icon="refresh" onPress={() => void conversation.refresh()} />} /></Failure>;
+	}
 
 	const snapshot = conversation.snapshot;
 	const active = snapshot.turns.some((turn) => turn.state === "running" || turn.state === "queued");
@@ -776,8 +784,11 @@ function DismissibleBanner({ copy, dismissed, onDismiss, ...props }: Omit<Inline
 	return <InlineBanner {...props} title={copy.title} body={copy.body} onDismiss={() => onDismiss(copy.key)} />;
 }
 
-function Unavailable({ message, onShell, openingShell }: { message: string; onShell(): void; openingShell: boolean }) { return <Centered icon="alert-triangle" title="Conversation unavailable" message={`${message}\n\nThe worktree is untouched. You can still open a plain shell in it.`} action={openingShell ? "Opening…" : "Open worktree shell"} onAction={onShell} />; }
-function Centered({ icon, title, message, spinning, action, onAction }: { icon: keyof typeof Feather.glyphMap; title: string; message?: string; spinning?: boolean; action?: string; onAction?(): void }) { const t = useTheme(); const styles = useThemedStyles(makeStyles); return <View style={styles.center}>{spinning ? <ActivityIndicator color={t.accent} /> : <Feather name={icon} size={20} color={t.amber} />}<Text style={styles.centerTitle}>{title}</Text>{message ? <Text style={styles.centerCopy}>{message}</Text> : null}{action ? <Pressable onPress={() => { haptics.tap(); onAction?.(); }} style={styles.centerAction}><Text style={styles.centerActionText}>{action}</Text></Pressable> : null}</View>; }
+/** A screen-filling state the conversation cannot get past, announced as it appears. */
+function Failure({ children }: { children: ReactNode }) {
+	const styles = useThemedStyles(makeStyles);
+	return <View accessibilityRole="alert" style={styles.center}>{children}</View>;
+}
 
 function sessionTitle(session: MobileChatSession): string { return "displayName" in session ? session.displayName || session.issueTitle || session.issueLabel || session.id : session.projectName || session.id; }
 function interfacePhaseLabel(phase?: string): string {
@@ -796,11 +807,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	reviewHeaderPRButton: { width: 44, height: 44, borderRadius: 22, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderStrong, alignItems: "center", justifyContent: "center", overflow: "hidden" },
-	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, paddingHorizontal: space.huge, backgroundColor: t.bgBase },
+	center: { flex: 1, backgroundColor: t.bgBase },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.
 	startupLoading: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.xl, paddingTop: space.md },
-	centerTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600", textAlign: "center" },
-	centerCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
-	centerAction: { minHeight: 42, justifyContent: "center", backgroundColor: t.accent, borderRadius: 12, paddingHorizontal: space.lg, marginTop: space.xxs },
-	centerActionText: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 });
