@@ -506,8 +506,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				: undefined;
 			if (route) openPage(route);
 			// The board is already under this page: going back to it, rather than
-			// pushing a second board on top. Unfiltered, because params written to
-			// the board's own tab stay on it and nothing there clears them.
+			// pushing a second board on top. Unfiltered, because a scope written to
+			// the board's own tab hides its project switcher for the rest of the
+			// visit, with nothing on the page to clear it.
 			else router.dismissTo("/prs");
 		},
 		map: () => {

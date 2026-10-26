@@ -61,8 +61,8 @@ describe("session header controls", () => {
 	});
 
 	// From a pushed page, navigating to a tab pushed a second board on top. A
-	// host/project filter written to the board's own tab would stick to it and
-	// hide its project switcher, so the tab is reached unfiltered.
+	// host/project filter written to the board's own tab would hide its project
+	// switcher until another tab is chosen, so the tab is reached unfiltered.
 	it("returns to the board's PR tab instead of stacking another board", () => {
 		expect(session).toContain('else router.dismissTo("/prs");');
 		expect(session).not.toContain("/(tabs)/prs");
