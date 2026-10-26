@@ -15,6 +15,7 @@ vi.mock("../ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedSt
 vi.mock("../textSelection", () => ({ textSelectionColors: () => ({}) }));
 vi.mock("./useConversation", () => ({ clientMessageId: () => `id-${++fixtures.ids}` }));
 
+import { haptics } from "../haptics";
 import { InlineMessageEditor, messageEditDraft, type MessageEditDraft } from "./InlineMessageEditor";
 import { withAttachmentReferences } from "./messageAttachments";
 
@@ -92,4 +93,17 @@ it("explains a blocked Send on tap instead of sending, and leaves on Cancel", as
 	expect(alert()).toHaveLength(0);
 	act(() => button("Cancel edit").props.onPress());
 	expect(onCancel).toHaveBeenCalledTimes(1);
+});
+
+// One haptic per send, for its outcome; leaving the editor is not a haptic moment.
+it("answers a send once, with its outcome, and cancels quietly", async () => {
+	for (const fn of [haptics.tap, haptics.success, haptics.error]) vi.mocked(fn).mockClear();
+	const value = draft();
+	const onCancel = open(value, vi.fn(async () => {}));
+	act(() => input().props.onChangeText("Fix the other bug"));
+	await send();
+	expect(haptics.success).toHaveBeenCalledOnce();
+	act(() => button("Cancel edit").props.onPress());
+	expect(onCancel).toHaveBeenCalledOnce();
+	expect(haptics.tap).not.toHaveBeenCalled();
 });

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { AppSymbol } from "../AppSymbol";
 import { haptics } from "../haptics";
-import { Feather } from "../icons";
+import { usePressFeedback } from "../pressFeedback";
+import { Spinner } from "../Spinner";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
-import { space, type } from "../tokens";
+import { iconSize, space, stateOpacity, type } from "../tokens";
 import { ComposerGlass } from "./composer-glass";
 import { COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import { withEditedBody } from "./messageAttachments";
@@ -63,6 +65,9 @@ export function InlineMessageEditor({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const cancelFeedback = usePressFeedback("button");
+	// Send is filled with the accent, so its ripple is drawn in the fill's ink, over it.
+	const sendFeedback = usePressFeedback("button", { tone: "onAccent", foreground: true });
 	const [text, setText] = useState(draft.text);
 	const [sending, setSending] = useState(false);
 	const [error, setError] = useState<string>();
@@ -87,7 +92,7 @@ export function InlineMessageEditor({
 			return;
 		}
 		if (sendDisabled) return;
-		haptics.tap();
+		// The outcome answers with its own haptic, so the press itself stays quiet.
 		setSending(true);
 		setError(undefined);
 		try {
@@ -125,17 +130,19 @@ export function InlineMessageEditor({
 				accessibilityLabel={pending ? "Abandon edit recovery" : "Cancel edit"}
 				accessibilityState={{ disabled: sending }}
 				disabled={sending}
-				onPress={() => { haptics.tap(); onCancel(); }}
-				style={({ pressed }) => [styles.stop, pressed && { opacity: 0.8 }, sending && { opacity: 0.35 }]}
-			><Feather name="x" size={15} color={t.textPrimary} /></Pressable>
+				onPress={onCancel}
+				android_ripple={cancelFeedback.android_ripple}
+				style={({ pressed }) => [styles.stop, pressed && cancelFeedback.pressed, sending && { opacity: stateOpacity.disabled }]}
+			><AppSymbol name="close" size={iconSize.sm} color={t.textPrimary} /></Pressable>
 			<Pressable
 				accessibilityRole="button"
 				accessibilityLabel={pending ? "Retry edit safely" : "Send edited message"}
 				accessibilityState={{ disabled: sendDisabled, busy: sending }}
 				disabled={sendInert}
 				onPress={() => void send()}
-				style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }, sendDisabled && !sending && { opacity: 0.35 }]}
-			>{sending ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}</Pressable>
+				android_ripple={sendFeedback.android_ripple}
+				style={({ pressed }) => [styles.send, pressed && sendFeedback.pressed, sendDisabled && !sending && { opacity: stateOpacity.disabled }]}
+			>{sending ? <Spinner size={iconSize.md} color={t.bgBase} /> : <AppSymbol name="send" size={iconSize.md} color={t.bgBase} />}</Pressable>
 		</View>
 	</View>;
 }
@@ -148,8 +155,9 @@ const makeStyles = (t: Theme) => {
 		input: composer.input,
 		// No attach control on the left, so the text takes the pill's own inset.
 		field: { paddingLeft: space.md },
-		stop: composer.stop,
-		send: composer.send,
-		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingHorizontal: space.md, paddingTop: space.sm },
+		// Clipped so an Android ripple keeps to the round control.
+		stop: { ...composer.stop, overflow: "hidden" },
+		send: { ...composer.send, overflow: "hidden" },
+		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.md, paddingTop: space.sm },
 	});
 };
