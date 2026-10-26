@@ -62,4 +62,11 @@ describe("session header controls", () => {
 		expect(session).toContain('router.dismissTo({ pathname: "/prs", params: { hostId: currentHostId, projectId: session.projectId } })');
 		expect(session).not.toContain("/(tabs)/prs");
 	});
+
+	it("goes back down to the board from the session route's empty states", () => {
+		const route = source("../../app/session/[id].tsx");
+		expect(route).toContain('const openBoard = useCallback(() => router.dismissTo("/"), [router]);');
+		expect(route).not.toContain('router.navigate("/")');
+		expect(route).toContain('<Button title="Scan pairing code" icon="qrScanner"');
+	});
 });
