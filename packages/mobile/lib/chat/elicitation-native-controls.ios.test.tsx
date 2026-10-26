@@ -13,15 +13,16 @@ vi.mock("@expo/ui/swift-ui", () => ({
 	Text: "Text", TextField: "TextField", VStack: "VStack", useNativeState: () => native,
 }));
 vi.mock("@expo/ui/swift-ui/modifiers", () => Object.fromEntries([
-	"buttonStyle", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
+	"accessibilityAddTraits", "accessibilityHidden", "buttonStyle", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
 	"multilineTextAlignment", "padding", "textFieldStyle", "tint",
 ].map((name) => [name, () => ({})])));
 vi.mock("../glass", () => ({ glassPanel: () => ({}) }));
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemeState: () => ({ scheme: "light" }) }));
 
-import { TextField } from "@expo/ui/swift-ui";
-import { ElicitationTextField } from "./elicitation-native-controls.ios";
+import { Host } from "@expo/ui";
+import { Button, TextField } from "@expo/ui/swift-ui";
+import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls.ios";
 
 let renderer: ReactTestRenderer | undefined;
 let resetValue: (value: string | number) => void;
@@ -102,4 +103,16 @@ it.each([false, true])("handles repeated native values followed by an external r
 	expect(native.set).not.toHaveBeenCalled();
 	act(() => resetValue(numeric ? 12 : "AB"));
 	expect(native.value).toBe(numeric ? "12" : "AB");
+});
+
+it("lets an action take its label's width instead of a guessed one", () => {
+	const onPress = vi.fn();
+	act(() => { renderer = create(<ElicitationAction label="Allow for this session and every later one" primary onPress={onPress} />); });
+	const host = renderer!.root.findByType(Host);
+	expect(host.props.matchContents).toBe(true);
+	expect(host.props.style).toBeUndefined();
+	const button = renderer!.root.findByType(Button);
+	expect(button.props.label).toBe("Allow for this session and every later one");
+	act(() => button.props.onPress());
+	expect(onPress).toHaveBeenCalledOnce();
 });
