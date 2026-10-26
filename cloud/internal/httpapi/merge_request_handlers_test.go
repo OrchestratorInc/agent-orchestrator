@@ -83,7 +83,7 @@ func mergeRoute(t *testing.T, store Store, method, path, body string) *httptest.
 // and an approval that cannot merge records nothing.
 func TestMergeRequestRoutes(t *testing.T) {
 	t.Parallel()
-	org, session := "/orgs/" + composerTestOrg, "/sessions/" + composerTestSession
+	org, session := "/orgs/"+composerTestOrg, "/sessions/"+composerTestSession
 
 	refused := mergeRoute(t, &mergeRequestTestStore{mergeErr: postgres.ErrMergeNeedsApproval}, http.MethodPost,
 		org+session+"/pull-requests/412/merge", `{"prUrl":"https://github.com/owner/repo/pull/412","expectedHeadSha":"current"}`)
