@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { ApiError, apiRequest, getSessions, RESPONSE_BODY_STALL_MS, RESPONSE_BODY_TIMEOUT_MS } from "./api";
+import { ApiError, apiRequest, getSessions, RESPONSE_BODY_STALL_MS } from "./api";
 import { UnreachableError } from "./connectionError";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
@@ -25,7 +25,18 @@ function streamingResponse() {
 	return { res, push: (chunk: string) => push(chunk), close: () => close() };
 }
 
-it("fails a successful response once its body stops arriving", async () => {
+it("fails a stalled successful body no sooner than the request timeout", async () => {
+	vi.mocked(fetch).mockResolvedValue(stalledResponse());
+	let failure: unknown;
+	void apiRequest(config, "/api/v1/sessions").catch((error) => { failure = error; });
+	await vi.advanceTimersByTimeAsync(11_999);
+	expect(failure).toBeUndefined();
+	await vi.advanceTimersByTimeAsync(1);
+	expect(failure).toBeInstanceOf(UnreachableError);
+	expect(failure).toMatchObject({ reason: "timeout" });
+});
+
+it("fails a successful body once its bytes stop arriving after the request timeout", async () => {
 	const body = streamingResponse();
 	vi.mocked(fetch).mockResolvedValue(body.res);
 	let failure: unknown;
@@ -39,21 +50,24 @@ it("fails a successful response once its body stops arriving", async () => {
 	expect(failure).toMatchObject({ reason: "timeout" });
 });
 
-it("lets a trickling body run until the overall cap", async () => {
+it("never fails a body that keeps arriving", async () => {
 	const body = streamingResponse();
 	vi.mocked(fetch).mockResolvedValue(body.res);
+	let result: Response | undefined;
 	let failure: unknown;
-	void apiRequest(config, "/api/v1/sessions", undefined, 100).catch((error) => { failure = error; });
-	const step = RESPONSE_BODY_STALL_MS - 1_000;
-	let elapsed = 0;
-	while (elapsed + step < RESPONSE_BODY_TIMEOUT_MS) {
-		await vi.advanceTimersByTimeAsync(step);
-		elapsed += step;
+	void apiRequest(config, "/api/v1/sessions").then((res) => { result = res; }, (error) => { failure = error; });
+	await vi.advanceTimersByTimeAsync(1);
+	body.push("[");
+	for (let minute = 0; minute < 10 * 60_000; minute += RESPONSE_BODY_STALL_MS - 1) {
+		await vi.advanceTimersByTimeAsync(RESPONSE_BODY_STALL_MS - 1);
 		body.push(" ");
-		expect(failure).toBeUndefined();
 	}
-	await vi.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS - elapsed);
-	expect(failure).toMatchObject({ reason: "timeout" });
+	body.push("]");
+	body.close();
+	await vi.advanceTimersByTimeAsync(1);
+	expect(failure).toBeUndefined();
+	expect(await result?.json()).toEqual([]);
+	expect(vi.getTimerCount()).toBe(0);
 });
 
 it("times out a request whose headers never arrive", async () => {

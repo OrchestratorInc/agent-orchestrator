@@ -403,20 +403,19 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
-// `timeoutMs` bounds the wait for response headers. A reachable daemon answers
-// headers within a round trip or two even on 3G; not getting them means the
-// path is gone, and the caller should race other endpoints.
+// A request fails `timeoutMs` after it starts, as it always has, unless a
+// successful body is still arriving then. A 70 KB board poll needs ~1.5 s at
+// 50 KB/s and much longer on a congested link; failing it while bytes flow
+// turned a slow body into "unreachable", which re-raced the endpoints and
+// reloaded everything.
 const REQUEST_TIMEOUT_MS = 12000;
-// Once a successful response's headers arrive, the body is timed by progress,
-// not by size. A 70 KB board poll needs ~1.5 s at 50 KB/s and much longer on a
-// congested link; charging the download against the header timeout turned a
-// slow body into "unreachable", which re-raced the endpoints and reloaded
-// everything. A path that dies mid-body stops delivering bytes, so the body
-// fails once no bytes arrive for this long.
-export const RESPONSE_BODY_STALL_MS = 15_000;
-// The cap on a whole body that keeps trickling. Only a pathological link gets
-// near it; a dead one is caught by the stall timeout.
-export const RESPONSE_BODY_TIMEOUT_MS = 120_000;
+// A successful body may outlive `timeoutMs` while its bytes keep coming: it
+// fails once none have arrived for this long. TCP recovers a lost segment by
+// retransmitting after a timeout that starts near 1 s on a phone and doubles
+// on every further loss, so two or three losses in a row on a weak cell link
+// stall the body for 3-7 s. 8 s outlasts that, and a path silent for longer
+// is effectively gone.
+export const RESPONSE_BODY_STALL_MS = 8_000;
 const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
 // A cold agent resume spawns the chat host and reloads the transcript; the
@@ -463,8 +462,17 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		rejectAbort = () => reject(abortError());
 		controller.signal.addEventListener("abort", rejectAbort);
 	});
-	let timer = setTimeout(cancel, timeoutMs);
-	let stallTimer: ReturnType<typeof setTimeout> | undefined;
+	const startedAt = Date.now();
+	// Set once a successful body is being read; see RESPONSE_BODY_STALL_MS.
+	let lastByteAt: number | undefined;
+	const deadline = () => Math.max(startedAt + timeoutMs, lastByteAt === undefined ? 0 : lastByteAt + RESPONSE_BODY_STALL_MS);
+	let timer: ReturnType<typeof setTimeout>;
+	const watch = () => {
+		const remaining = deadline() - Date.now();
+		if (remaining <= 0) cancel();
+		else timer = setTimeout(watch, remaining);
+	};
+	timer = setTimeout(watch, timeoutMs);
 	let received: Response | undefined;
 	let bodyText = "";
 	try {
@@ -483,30 +491,22 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
-			// An error envelope is tiny, so it stays under the header timeout.
-			if (!received.ok) {
-				bodyText = await received.text();
-				return;
-			}
-			clearTimeout(timer);
-			timer = setTimeout(cancel, Math.max(timeoutMs, RESPONSE_BODY_TIMEOUT_MS));
-			const stallMs = Math.max(timeoutMs, RESPONSE_BODY_STALL_MS);
-			stallTimer = setTimeout(cancel, stallMs);
+			// An error envelope is tiny, so it keeps the plain timeout.
 			// On iOS and Android the global fetch is expo/fetch (Expo's runtime
 			// installs it), whose body streams, as the event stream relies on. A
-			// fetch without a readable body is bounded by the overall cap alone.
-			if (!received.body) {
+			// fetch without a readable body keeps the plain timeout too.
+			if (!received.ok || !received.body) {
 				bodyText = await received.text();
 				return;
 			}
+			lastByteAt = Date.now();
 			const reader = received.body.getReader();
 			const decoder = new TextDecoder();
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (done) break;
+				lastByteAt = Date.now();
 				bodyText += decoder.decode(value, { stream: true });
-				clearTimeout(stallTimer);
-				stallTimer = setTimeout(cancel, stallMs);
 			}
 			bodyText += decoder.decode();
 		})()]);
@@ -527,7 +527,6 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		}
 	} finally {
 		clearTimeout(timer);
-		clearTimeout(stallTimer);
 		init?.signal?.removeEventListener("abort", cancel);
 		controller.signal.removeEventListener("abort", rejectAbort);
 	}
