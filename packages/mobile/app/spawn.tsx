@@ -384,8 +384,13 @@ function SpawnModalContent() {
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
 			// Left while the request ran (a notification or link can still
 			// navigate away): the worker shows up on the board, and closing the
-			// sheet again would pop the page that was under it.
-			if (!navigation.isFocused()) return;
+			// sheet again would pop the page that was under it. The sheet lets go
+			// again, or coming back to it would find it locked for good; a second
+			// Start reuses the request id, so it can't spawn a second worker.
+			if (!navigation.isFocused()) {
+				setBusy(false);
+				return;
+			}
 			haptics.success();
 			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
 			// once the dismiss transition has settled. Firing both navigations in the

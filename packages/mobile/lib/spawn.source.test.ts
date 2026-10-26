@@ -33,8 +33,11 @@ describe("spawn sheet header", () => {
 		// Android's Material sheet: no drag, back press or outside tap mid-request.
 		expect(spawn).toContain("enablePanDownToClose={!busy}");
 		const success = spawn.slice(spawn.indexOf("const session = await spawn("), spawn.indexOf("} catch (e) {", spawn.indexOf("const session = await spawn(")));
-		expect(success.indexOf("if (!navigation.isFocused()) return;")).toBeGreaterThan(0);
-		expect(success.indexOf("if (!navigation.isFocused()) return;")).toBeLessThan(success.indexOf("backOr(router);"));
+		// Left mid-request, the sheet still lets go once the request settles:
+		// otherwise coming back finds it locked, with Start stuck on Starting.
+		const leftEarly = "if (!navigation.isFocused()) {\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}";
+		expect(success.indexOf(leftEarly)).toBeGreaterThan(0);
+		expect(success.indexOf(leftEarly)).toBeLessThan(success.indexOf("backOr(router);"));
 		expect(success.indexOf("backOr(router);")).toBeLessThan(success.indexOf('pathname: "/session/[id]"'));
 	});
 });
