@@ -2792,7 +2792,7 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 	var patterns []string
 	switch harness {
 	case domain.HarnessClaudeCode:
-		patterns = []string{filepath.Join(c.roots.ClaudeProjects, "*", nativeID+".jsonl")}
+		return c.discoverClaudePath(ctx, nativeID)
 	case domain.HarnessCodex:
 		return c.discoverCodexPath(ctx, nativeID, "")
 	case domain.HarnessKimi:
@@ -2847,6 +2847,40 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return "", nil
 	}
 	return matches[0].path, nil
+}
+
+// discoverClaudePath finds <projects>/*/<nativeID>.jsonl, newest first. It
+// lists the projects root once and stats one name per project instead of
+// filepath.Glob, which opens and reads every project directory: with ~1,800
+// projects that cost ~25 ms per live session on every reconcile pass.
+func (c *Collector) discoverClaudePath(ctx context.Context, nativeID string) (string, error) {
+	projects, err := os.ReadDir(c.roots.ClaudeProjects)
+	if err != nil {
+		// A missing or unreadable root has no transcript, as with filepath.Glob.
+		return "", nil //nolint:nilerr // not found is reported as an empty path
+	}
+	name := nativeID + ".jsonl"
+	var best string
+	var bestMod time.Time
+	found := 0
+	for _, project := range projects {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		path := filepath.Join(c.roots.ClaudeProjects, project.Name(), name)
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if best == "" || info.ModTime().After(bestMod) {
+			best, bestMod = path, info.ModTime()
+		}
+		found++
+		if found == 128 {
+			break
+		}
+	}
+	return best, nil
 }
 
 func qwenUsageFilename(name string) bool {
