@@ -382,6 +382,58 @@ describe("AssistantMessage streaming", () => {
 });
 
 describe("ActivityRow", () => {
+	const png = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR4nO3OMQ0AMAwDwcApxGIKpnBJGcRDFXn5wePLF1nd086tcb99AAAAwA7YPlA9AAAA/IDtA9UDAADAD9g+UD0AAADsgAePf/6mCWRFdQAAAABJRU5ErkJggg==";
+	function tool(content: unknown) {
+		return <ActivityRow activity={{
+			kind: "activity", id: "read-image", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool",
+			status: "completed", summary: "Read", detail: { toolName: "Read", content },
+		}} />;
+	}
+
+	it("expands a direct MCP image without a base64 pre block", () => {
+		const { container } = render(tool({ type: "image", data: png, mimeType: "image/png" }));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toBeInTheDocument();
+		expect(container.querySelector("pre")).toBeNull();
+		expect(container.textContent).not.toContain("iVBOR");
+	});
+
+	it("expands mixed MCP content as a chat image and text without binary DOM text", () => {
+		const { container } = render(tool({ text: "Synthetic PNG", content: { type: "image", data: png, mimeType: "image/png" } }));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toHaveAttribute("src", `data:image/png;base64,${png}`);
+		expect(screen.getByText("Synthetic PNG")).toBeInTheDocument();
+		expect(container.textContent).not.toContain("iVBOR");
+		expect(container.querySelector("pre")?.textContent).toBe("Synthetic PNG");
+	});
+
+	it("renders a Codex MCP result image without sending its data to JSON text", () => {
+		const { container } = render(<ActivityRow activity={{
+			kind: "activity", id: "codex-result", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
+			summary: "Read", detail: { toolName: "Read", result: { content: [{ type: "image", data: png, mimeType: "image/png" }, { type: "text", text: "Codex caption" }] } },
+		}} />);
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.getByRole("img")).toBeInTheDocument();
+		expect(screen.getByText("Codex caption")).toBeInTheDocument();
+		expect(container.textContent).not.toContain("iVBOR");
+	});
+
+	it("keeps text-only MCP output in its existing code block", () => {
+		const { container } = render(tool({ type: "text", text: "plain result" }));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(container.querySelector("pre code")).toHaveTextContent("plain result");
+		expect(screen.queryByRole("img")).toBeNull();
+	});
+
+	it("retains unified diff rows alongside images", () => {
+		const { container } = render(tool([{ type: "text", text: "-old\n+new" }, { type: "image", data: png, mimeType: "image/png" }]));
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(container.querySelectorAll("[data-tool-diff-row]")).toHaveLength(2);
+		expect(screen.getByRole("img")).toBeInTheDocument();
+	});
+
 	it("renders inline code in provider activity titles without literal backticks", () => {
 		const path = "/Users/sachin/.ao/worktrees/murdock/docs/system-design.html";
 		const { container } = render(
