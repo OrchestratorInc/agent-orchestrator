@@ -345,7 +345,8 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 	}
 	projectID := modelCatalogScope(scope)
 	if !refresh {
-		if _, ok := s.agent(agentID); !ok {
+		item, ok := s.agent(agentID)
+		if !ok {
 			return ports.AgentModelCatalog{}, apierr.NotFound("AGENT_NOT_FOUND", "Unknown agent adapter")
 		}
 		cached, ok, err := s.cachedCatalog(ctx, agentID, projectID)
@@ -376,7 +377,7 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 				cached.Catalog.RefreshState = "refreshing"
 			}
 			if !s.readyForModelUpdate(agentID) {
-				cached.Catalog = missingAgentModelCatalog(cached.Catalog, agentID)
+				cached.Catalog = missingAgentModelCatalog(cached.Catalog, item.Manifest.Name)
 			}
 			return cached.Catalog, nil
 		}
