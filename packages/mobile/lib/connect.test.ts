@@ -75,7 +75,7 @@ describe("connectHost", () => {
 		const d = deps();
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, tunnel]);
+		await vi.waitFor(() => expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, tunnel]));
 	});
 
 	it("keeps a working NAT endpoint when the daemon advertises an unreachable address of the same kind", async () => {
@@ -88,7 +88,7 @@ describe("connectHost", () => {
 
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, manual]);
+		await vi.waitFor(() => expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, manual]));
 	});
 
 	// A quick tunnel takes ~34s to restart and settle, and the daemon advertises
@@ -100,7 +100,7 @@ describe("connectHost", () => {
 
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, tunnel]);
+		await vi.waitFor(() => expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, tunnel]));
 	});
 
 	it("still adopts a rotated tunnel hostname over the stored one", async () => {
@@ -109,7 +109,7 @@ describe("connectHost", () => {
 
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, rotated]);
+		await vi.waitFor(() => expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, rotated]));
 	});
 
 	// A machine migrated from the single-server config has no id until it
@@ -150,6 +150,15 @@ describe("connectHost", () => {
 
 	// A refresh that fails must not lose a working connection: the endpoints we
 	// already have are still good enough to keep using.
+	it("returns without waiting for the endpoint refresh", async () => {
+		const d = deps({ refreshEndpoints: vi.fn(() => new Promise<never>(() => {})) });
+		const got = await connectHost("h_paired", d);
+
+		expect(got.ok).toBe(true);
+		expect(d.touch).toHaveBeenCalledWith("h_paired");
+		expect(d.saveEndpoints).not.toHaveBeenCalled();
+	});
+
 	it("stays connected when the endpoint refresh fails", async () => {
 		const d = deps({
 			refreshEndpoints: vi.fn(async () => {

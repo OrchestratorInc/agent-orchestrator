@@ -44,7 +44,7 @@ export type ConnectDeps = {
 
 /**
  * Connects to a paired machine: race its endpoints, then refresh what we know
- * about it from whichever one won.
+ * about it from whichever one won, in the background.
  *
  * The refresh is what makes the pairing self-healing. A tunnel hostname that
  * rotated, a LAN address that changed with the lease, a machine that gained
@@ -69,7 +69,10 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
-	try {
+	// Not awaited: the endpoints that just won are enough to start loading the
+	// board, so the refresh overlaps that load instead of adding a round trip
+	// to every connect and resume. What it learns is for the next race.
+	void (async () => {
 		const advertised = await deps.refreshEndpoints(config);
 		// The daemon cannot advertise a client-side NAT or proxy address that just worked.
 		const refreshed = advertised.some((e) => e.kind === outcome.endpoint.kind) &&
@@ -81,10 +84,10 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 			hostKey,
 			mergeEndpoints(host.endpoints, refreshed),
 		);
-	} catch {
+	})().catch(() => {
 		// A failed refresh must not cost us a working connection: the endpoints
 		// already stored are what got us here and remain good enough.
-	}
+	});
 	await deps.touch(hostKey);
 
 	return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };
