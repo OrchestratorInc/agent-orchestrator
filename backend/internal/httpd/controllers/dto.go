@@ -3217,6 +3217,13 @@ type ConversationActivityResponse struct {
 	// ProviderItemID is the stable parent key used by nested ACP transcripts.
 	ProviderItemID string `json:"providerItemId,omitempty"`
 	CreatedAt      string `json:"createdAt"`
+	// DetailOmitted is set only on a page read with activityDetail=preview: this
+	// settled row's summary or large detail fields were cut short or left out.
+	// GET /sessions/{sessionId}/conversation/activities/{activityId} returns the
+	// full row.
+	DetailOmitted bool `json:"detailOmitted,omitempty"`
+	// DetailBytes is the size of the full detail JSON when DetailOmitted is set.
+	DetailBytes int `json:"detailBytes,omitempty"`
 }
 
 // ConversationSnapshotResponse is the durable read model a client bootstraps from.
@@ -3421,6 +3428,11 @@ type ConversationRequestIDParam struct {
 // ConversationConfigIDParam names one provider-advertised session option.
 type ConversationConfigIDParam struct {
 	ConfigID string `path:"configId" description:"Provider session configuration option identifier."`
+}
+
+// ConversationActivityIDParam names one activity in a session's conversation.
+type ConversationActivityIDParam struct {
+	ActivityID string `path:"activityId" description:"AO conversation activity identifier, from the snapshot's activities array."`
 }
 
 // ConversationTurnIDParam names one turn in a session's conversation.

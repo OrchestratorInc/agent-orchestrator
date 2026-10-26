@@ -655,6 +655,13 @@ export interface ConversationActivity {
 	/** Provider correlation key used to attach nested agent activity to its parent. */
 	providerItemId?: string;
 	/**
+	 * The page carried a preview: the summary or large detail fields were cut
+	 * short. The full row comes from the activity endpoint when the row opens.
+	 */
+	detailOmitted?: boolean;
+	/** Size of the full detail JSON when `detailOmitted` is set. */
+	detailBytes?: number;
+	/**
 	 * Authoritative for an approval. The provider varies what it offers per
 	 * request and does not always include a decline, so buttons are rendered
 	 * from this list and never from a fixed set.

@@ -2877,6 +2877,21 @@ func (s *Store) SettleAssistantMessage(
 	return nil
 }
 
+// ConversationActivity reads one activity of a conversation with its full detail.
+func (s *Store) ConversationActivity(ctx context.Context, conversationID, activityID string) (domain.ConversationActivity, error) {
+	row, err := s.qr.SelectConversationActivityByID(ctx, gen.SelectConversationActivityByIDParams{
+		ConversationID: conversationID,
+		ID:             activityID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationActivity{}, domain.ErrNoConversationActivity
+	}
+	if err != nil {
+		return domain.ConversationActivity{}, fmt.Errorf("select activity %s: %w", activityID, err)
+	}
+	return activityToDomain(row), nil
+}
+
 // ActivityStatusByProviderItem reports the status of one provider item.
 // Missing rows return ok=false.
 func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {

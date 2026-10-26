@@ -967,8 +967,9 @@ type renderSourceQuery struct {
 }
 
 type conversationSnapshotQuery struct {
-	BeforeSequence *int64 `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
-	Limit          *int64 `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
+	BeforeSequence *int64  `query:"beforeSequence,omitempty" minimum:"1" description:"Read items older than this conversation sequence. Omit for the newest page."`
+	Limit          *int64  `query:"limit,omitempty" minimum:"1" maximum:"500" description:"Maximum messages to return; tool activity between them comes along without counting. Defaults to 200."`
+	ActivityDetail *string `query:"activityDetail,omitempty" enum:"full,preview" description:"preview drops copies of detail.command from every activity (a rawCommand equal to it; a summary equal to it is sent empty), and cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities, marking them detailOmitted. Read the full row from the activity endpoint. Defaults to full."`
 }
 
 func usageOperations() []operation {
@@ -1108,6 +1109,19 @@ func shellTerminalOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}, conversationSnapshotQuery{}},
 			resps: []respUnit{
 				{http.StatusOK, controllers.ConversationSnapshotResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/conversation/activities/{activityId}", id: "getSessionConversationActivity", tag: "conversations",
+			summary:    "Read one conversation activity with its full detail",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.ConversationActivityIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ConversationActivityResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},

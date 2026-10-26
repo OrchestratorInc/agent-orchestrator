@@ -761,6 +761,10 @@ var ErrConversationRebound = errors.New("conversation is no longer bound to the 
 // an HTTP handler can both recognize it without importing SQLite.
 var ErrNoConversationTurn = errors.New("conversation turn not found")
 
+// ErrNoConversationActivity reports an activity id that is not in the conversation
+// it was named against.
+var ErrNoConversationActivity = errors.New("conversation activity not found")
+
 // ErrClientMessageConflict refuses reuse of a delivery ID for different content.
 var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
 

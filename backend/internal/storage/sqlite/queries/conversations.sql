@@ -1526,6 +1526,10 @@ SELECT * FROM conversation_activities
 WHERE conversation_id = ? AND provider_item_id = ?
 LIMIT 1;
 
+-- name: SelectConversationActivityByID :one
+SELECT * FROM conversation_activities
+WHERE conversation_id = ? AND id = ?;
+
 -- name: SelectConversationContextResetSequence :one
 SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) AS sequence
 FROM conversation_activities
