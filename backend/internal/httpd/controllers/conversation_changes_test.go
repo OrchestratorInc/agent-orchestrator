@@ -114,3 +114,32 @@ func TestConversationChangedSinceRejectsInvalidCursors(t *testing.T) {
 		}
 	}
 }
+
+func TestConversationChangedSincePreviewsOnlyTheChangedRows(t *testing.T) {
+	old := time.Now().Add(-time.Minute)
+	snapshot := previewFixture(t)
+	snapshot.Conversation = domain.ConversationRecord{ID: "conv-1", ActiveBranchID: "branch-1", LatestSequence: int64(len(snapshot.Activities))}
+	for i := range snapshot.Activities {
+		snapshot.Activities[i].Sequence, snapshot.Activities[i].Revision, snapshot.Activities[i].UpdatedAt = int64(i+1), 1, old
+	}
+	service := &fakeConversationService{snapshot: snapshot}
+	_, first := getConversationJSON(t, service, "/api/v1/sessions/p1-1/conversation?activityDetail=preview")
+	cursor, _ := first["changeCursor"].(string)
+	if cursor == "" {
+		t.Fatalf("preview page has no changeCursor: %v", first)
+	}
+
+	// Only the settled command is rewritten after the first read.
+	service.snapshot.Activities[0].Revision, service.snapshot.Activities[0].UpdatedAt = 2, time.Now()
+	status, delta := getConversationJSON(t, service, "/api/v1/sessions/p1-1/conversation?activityDetail=preview&changedSince="+url.QueryEscape(cursor))
+	if status != http.StatusOK || delta["changesOnly"] != true {
+		t.Fatalf("changedSince read = %d %v", status, delta)
+	}
+	activities := activitiesByID(t, delta)
+	if len(activities) != 1 || activities["settled"] == nil {
+		t.Fatalf("activities = %v, want only the rewritten settled command", activities)
+	}
+	if activities["settled"]["detailOmitted"] != true {
+		t.Fatalf("settled = %v, want a preview", activities["settled"])
+	}
+}

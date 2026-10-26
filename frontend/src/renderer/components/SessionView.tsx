@@ -55,7 +55,7 @@ import {
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
+import { conversationQueryKey, conversationSettled, refreshLiveConversation } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
@@ -1450,7 +1450,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				if (active && !left && !refreshed && !hostId && (data?.woke ?? true)) {
 					refreshed = true;
 					if (!conversationSettled(queryClient, sessionId)) {
-						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+						// Only the newest page can have changed; older history stays loaded.
+						void refreshLiveConversation(queryClient, sessionId).catch(() => {});
 					}
 					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				}
