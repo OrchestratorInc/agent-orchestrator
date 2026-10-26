@@ -417,7 +417,8 @@ describe("OpenCode single-read catalogs", () => {
 			finish({ data: before });
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			expect(observer.getCurrentResult().data).toEqual(after);
-			expect(readCachedAgentModels("opencode", "")).toEqual(after);
+			expect(readCachedAgentModels("opencode", "")?.models).toEqual(after.models);
+			expect(readCachedAgentModels("opencode", "")?.warning).toBeUndefined();
 			expect(apiClient.GET).toHaveBeenCalledTimes(2);
 		} finally { finish({ data: before }); unsubscribe(); client.clear(); }
 	});
@@ -435,7 +436,7 @@ describe("OpenCode single-read catalogs", () => {
 			client.setQueryData(options.queryKey, fresh);
 			finish({ data: old });
 			expect(await pending).toEqual(fresh);
-			expect(readCachedAgentModels("opencode", "")).toEqual(fresh);
+			expect(readCachedAgentModels("opencode", "")?.models).toEqual(fresh.models);
 		} finally { finish({ data: old }); client.clear(); }
 	});
 
@@ -453,7 +454,7 @@ describe("OpenCode single-read catalogs", () => {
 			await client.fetchQuery(agentModelsQueryOptions(agentId, "project-c"));
 			expect(apiClient.GET).toHaveBeenCalledTimes(1);
 			expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", { params: { path: { agent: agentId }, query: { projectId: undefined } } });
-			expect(readCachedAgentModels(agentId, "")).toEqual(catalog);
+			expect(readCachedAgentModels(agentId, "")?.models).toEqual(catalog.models);
 			// Settings still explicitly requests every provider's browsing metadata.
 			await client.fetchQuery(agentModelsQueryOptions(agentId, "", undefined, true));
 			expect(apiClient.GET).toHaveBeenCalledTimes(2);
