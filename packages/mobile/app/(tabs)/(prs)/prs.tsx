@@ -8,6 +8,7 @@ import { PRCard } from "../../../lib/PRCard";
 import { PRFilterDock } from "../../../lib/pr-filter-dock";
 import { ProjectSwitcher } from "../../../lib/ProjectSwitcher";
 import { collectPRs, prLifecycle, prListSections, type PRListFilter } from "../../../lib/prView";
+import { refreshControlColors } from "../../../lib/refreshControlColors";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
@@ -149,7 +150,7 @@ export default function PRsScreen() {
 					contentContainerStyle={{ flexGrow: 1, paddingBottom: dockBottom - tabBarInset + DOCK_HEIGHT + space.xxl }}
 					stickySectionHeadersEnabled={false}
 					ListHeaderComponent={listHeader}
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
 					renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}
 					renderItem={({ item: { pr, session } }) => {
 						const config = configForHost(session.hostId);

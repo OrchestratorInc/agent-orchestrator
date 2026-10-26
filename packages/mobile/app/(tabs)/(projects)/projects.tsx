@@ -6,6 +6,7 @@ import { haptics } from "../../../lib/haptics";
 import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
+import { refreshControlColors } from "../../../lib/refreshControlColors";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
@@ -95,7 +96,7 @@ export default function ProjectsScreen() {
 					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
 					stickySectionHeadersEnabled={false}
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={t.accent} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
 					ListHeaderComponent={staleBanner}
 					renderSectionHeader={({ section }) => (
 						<ListSectionHeader label={section.title} count={section.data.length} />
