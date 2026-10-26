@@ -64,11 +64,13 @@ describe("project page", () => {
 		expect(page).toContain("projectDetailSessions(");
 	});
 
-	// The Workers dock's bottom-right spawn button, scoped to this project.
-	it("floats a spawn button that starts a task in this project", () => {
-		expect(page).toContain('<SpawnFab onPress={startTask} testID="project-spawn-worker" />');
+	// Each platform's own create action, scoped to this project: a header "+" on
+	// iOS, which has no floating button, and Material's FAB on Android, clear of
+	// the gesture bar with the list scrolling out from under it.
+	it("starts a task in this project from a header + on iOS and a FAB on Android", () => {
+		expect(page).toContain('{Platform.OS === "ios" && canStartTask ? <HeaderIconButton icon="add" label="Spawn worker" onPress={startTask} /> : null}');
+		expect(page).toContain('<AddFab label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" />');
 		expect(page).toContain('params: { projectId: id, hostId: routeHostId }');
-		expect(page).toContain("workerDockRestingBottom(insets.bottom)");
-		expect(page).toContain("contentBottomInset={workerListBottomInset(fabBottom)}");
+		expect(page).toContain("contentBottomInset={insets.bottom + addFabClearance + space.xxl}");
 	});
 });

@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -15,8 +15,8 @@ import { Button, EmptyState, HeaderIconButton, ListSectionHeader, ScreenHeader }
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
 import { hostedRowKey } from "../../lib/hostedRows";
-import { SpawnFab } from "../../lib/spawn-fab";
-import { workerDockRestingBottom, workerListBottomInset } from "../../lib/worker-dock-layout";
+import { AddFab, addFabClearance } from "../../lib/AddFab";
+import { space } from "../../lib/tokens";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -75,12 +75,9 @@ function ProjectScreenContent() {
 
 	const startTask = () => {
 		if (!hostMatches) return;
-		haptics.tap();
 		router.push({ pathname: "/spawn", params: { projectId: id, hostId: routeHostId } });
 	};
-	// Same corner and height as the Workers dock, so the spawn button does not
-	// move between the two screens.
-	const fabBottom = workerDockRestingBottom(insets.bottom);
+	const canStartTask = hostMatches && !!row;
 
 	return (
 		<View style={styles.screen}>
@@ -98,7 +95,14 @@ function ProjectScreenContent() {
 						onPress={() => router.dismissTo("/projects")}
 					/>
 				}
-				right={<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />}
+				right={
+					<>
+						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />
+						{/* iOS has no floating action button; its create action is a header "+".
+						    Android floats Material's FAB below instead. */}
+						{Platform.OS === "ios" && canStartTask ? <HeaderIconButton icon="add" label="Spawn worker" onPress={startTask} /> : null}
+					</>
+				}
 			/>
 			{hostMatches ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
 
@@ -130,7 +134,7 @@ function ProjectScreenContent() {
 					sessions={projectSessions}
 					archiveSources={archiveSources}
 					showProject={false}
-					contentBottomInset={workerListBottomInset(fabBottom)}
+					contentBottomInset={insets.bottom + addFabClearance + space.xxl}
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
@@ -154,11 +158,7 @@ function ProjectScreenContent() {
 					}
 				/>
 			)}
-			{hostMatches && row ? (
-				<View style={[styles.fab, { bottom: fabBottom }]}>
-					<SpawnFab onPress={startTask} testID="project-spawn-worker" />
-				</View>
-			) : null}
+			{canStartTask ? <AddFab label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
 		</View>
 	);
 }
@@ -167,5 +167,4 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-		fab: { position: "absolute", right: 16 },
 	});
