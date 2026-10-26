@@ -376,6 +376,10 @@ type blockedAuthTerminal struct {
 	release chan struct{}
 }
 
+func (*blockedAuthTerminal) IsShellTerminalChildAlive(context.Context, string) (bool, error) {
+	return false, nil
+}
+
 func (b *blockedAuthTerminal) OpenCommandTerminal(ctx context.Context, _ shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
 	close(b.entered)
 	select {
@@ -421,5 +425,34 @@ func TestTerminalStartupDoesNotBlockLoginPolling(t *testing.T) {
 	}
 	if _, err := svc.StartLogin(t.Context(), "claude-code", "browser", ""); err == nil {
 		t.Fatal("allowed a background login during the same harness's terminal startup")
+	}
+}
+
+func TestTerminalLoginExcludesBackgroundUntilConfirmedExit(t *testing.T) {
+	svc := loginTestService(t, "wait")
+	opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "retained-terminal"}, alive: true}
+	svc.terminals = opener
+	if _, err := svc.Start(t.Context(), "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err == nil {
+		t.Fatal("background login overlapped a live terminal command")
+	}
+	if _, err := svc.Logout(t.Context(), "codex"); err == nil || opener.calls != 1 {
+		t.Fatalf("logout overlapped terminal login: calls=%d err=%v", opener.calls, err)
+	}
+	opener.alive, opener.probeErr = false, errors.New("runtime probe unavailable")
+	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err == nil {
+		t.Fatal("an inconclusive probe released terminal exclusion")
+	}
+	opener.alive, opener.probeErr = true, nil
+	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err == nil {
+		t.Fatal("failed probe forgot the still-live terminal")
+	}
+	// A retained terminal/scrollback handle does not block a new login after
+	// the runtime confirms that its child, rather than its host, has exited.
+	opener.alive = false
+	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err != nil {
+		t.Fatalf("confirmed terminal child exit did not release exclusion: %v", err)
 	}
 }
