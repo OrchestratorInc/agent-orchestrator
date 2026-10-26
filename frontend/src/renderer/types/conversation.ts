@@ -620,6 +620,7 @@ export function activityPlan(activity: ConversationActivity): ConversationPlan |
 }
 
 export interface ConversationActivity {
+	detailOmitted?: boolean;
 	kind: "activity";
 	id: string;
 	turnId?: string;

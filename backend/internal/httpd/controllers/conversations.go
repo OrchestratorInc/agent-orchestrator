@@ -126,6 +126,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/side-chats/launch/retire", c.retireSideLaunch)
 	r.Post("/sessions/{sessionId}/chat-view", c.setChatView)
 	r.Get("/sessions/{sessionId}/conversation", c.snapshot)
+	r.Get("/sessions/{sessionId}/conversation/activities/{activityId}", c.activity)
 	r.Post("/sessions/{sessionId}/conversation/messages", c.send)
 	r.Post("/sessions/{sessionId}/conversation/prompt-suggestion", c.promptSuggestion)
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
@@ -919,6 +920,7 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	response := conversationSnapshotResponse(snapshot)
+	compactConversationDetails(&response, r.URL.Query().Get("compactDetails") == "1", r.URL.Query().Get("dedupeBodies") == "1")
 	// Excerpt verification is owned by AO, independently of provider capabilities.
 	// Older daemons ignore this request field, so clients must negotiate support.
 	response.SupportsExcerpts = true

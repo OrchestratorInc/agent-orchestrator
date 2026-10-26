@@ -56,6 +56,7 @@ type Service struct {
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
+	activityReader         ActivityReader
 	sessions               SessionReader
 	drivers                ports.ChatDriverRegistry
 	activity               ActivityRecorder
@@ -157,12 +158,13 @@ func (g controllerGate) unlock() { <-g }
 // Options configures a Service. The id factory and clock are injected so tests
 // are deterministic.
 type Options struct {
-	AppRunID   string
-	Store      Store
-	Reader     SnapshotReader
-	PageReader SnapshotPageReader
-	Sessions   SessionReader
-	Drivers    ports.ChatDriverRegistry
+	AppRunID       string
+	Store          Store
+	Reader         SnapshotReader
+	PageReader     SnapshotPageReader
+	ActivityReader ActivityReader
+	Sessions       SessionReader
+	Drivers        ports.ChatDriverRegistry
 	// Activity feeds derived session status from turn events. Nil leaves a chat
 	// session reading as idle while it works, so production always wires it.
 	Activity ActivityRecorder
@@ -212,6 +214,7 @@ func New(opts Options) *Service {
 		store:                  opts.Store,
 		reader:                 opts.Reader,
 		pageReader:             opts.PageReader,
+		activityReader:         opts.ActivityReader,
 		sessions:               opts.Sessions,
 		drivers:                opts.Drivers,
 		activity:               opts.Activity,
