@@ -1855,29 +1855,96 @@ function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * The conversation every per-conversation chat preference keys on.
+ *
+ * Provided once per timeline (ChatWorkspace wraps each turn group), read by the
+ * row components that remember a user choice. Undefined outside a conversation —
+ * tests, reviewer surfaces — and those rows then fall back to in-memory state.
+ */
+const ConversationScopeContext = createContext<string | undefined>(undefined);
+
+export function ConversationScope({
+	conversationId,
+	children,
+}: {
+	conversationId: string | undefined;
+	children: ReactNode;
+}) {
+	return (
+		<ConversationScopeContext.Provider value={conversationId}>
+			{children}
+		</ConversationScopeContext.Provider>
+	);
+}
+
+const reasoningCollapsedKey = (conversationId: string) =>
+	`ao.chat.reasoning-collapsed.${conversationId}`;
+
+function readReasoningCollapsed(conversationId: string | undefined): boolean {
+	if (!conversationId || typeof window === "undefined" || !window.localStorage) return false;
+	try {
+		return window.localStorage.getItem(reasoningCollapsedKey(conversationId)) === "1";
+	} catch {
+		return false;
+	}
+}
+
+function writeReasoningCollapsed(conversationId: string | undefined, collapsed: boolean) {
+	if (!conversationId || typeof window === "undefined" || !window.localStorage) return;
+	try {
+		if (collapsed) window.localStorage.setItem(reasoningCollapsedKey(conversationId), "1");
+		else window.localStorage.removeItem(reasoningCollapsedKey(conversationId));
+	} catch {
+		// A storage failure only costs the preference, never the transcript.
+	}
+}
+
+/**
  * The model's own account of what it is doing.
  *
- * Rendered as prose on a rail rather than as a collapsed row, because a reader only
- * ever sees this after deliberately turning reasoning on — hiding it again behind a
- * second click would make the toggle do nothing. It is markdown: the provider writes
- * bolded section headers into its summaries, and showing those as literal asterisks
- * was the visible half of this being unread.
+ * Rendered as prose on a rail rather than as an opaque card, because a reader only
+ * ever sees this after deliberately turning reasoning on. It is markdown: the
+ * provider writes bolded section headers into its summaries, and showing those as
+ * literal asterisks was the visible half of this being unread.
  *
  * The text streams. Earlier builds read a field the payload does not have, so these
  * rows arrived blank even when the provider was sending; it now lands in `text`
  * while the model works and is replaced by the provider's settled summary when the
  * item completes, so one field is read either way.
+ *
+ * The block is collapsible, default expanded (live transparency is default-on and
+ * hiding is the user's opt-out). A collapse is remembered per conversation, so
+ * hiding one thinking block also keeps the later ones in that conversation out of
+ * the way until the user asks for them back.
  */
 function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
+	const conversationId = useContext(ConversationScopeContext);
+	const [collapsed, setCollapsed] = useState(() => readReasoningCollapsed(conversationId));
+
 	const text = activity.detail?.text ?? activity.detail?.reason ?? "";
 	if (!text) return null;
 	const streaming = activity.status === "running";
+
+	const toggle = (next: boolean) => {
+		setCollapsed(next);
+		writeReasoningCollapsed(conversationId, next);
+	};
 
 	return (
 		<div className="flex gap-2.5 border-l-2 border-border-strong py-0.5 pl-3">
 			<Brain aria-hidden="true" className="mt-[3px] size-3.5 shrink-0 text-muted-foreground/70" />
 			<div className="min-w-0 flex-1">
-				<div className="flex items-center gap-2">
+				<button
+					type="button"
+					onClick={() => toggle(!collapsed)}
+					aria-expanded={!collapsed}
+					className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle")}
+				>
+					{collapsed ? (
+						<ChevronRight aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/50" />
+					) : (
+						<ChevronDown aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/50" />
+					)}
 					<span className="text-caption text-muted-foreground/70">
 						{streaming ? "Thinking" : "Thought"}
 					</span>
@@ -1887,13 +1954,17 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
 							className="size-3 animate-spin text-muted-foreground/50"
 						/>
 					) : null}
-				</div>
-				<ChatMarkdown text={text} streaming={streaming} muted />
-				{activity.detail?.textTruncated ? (
-					<p className="mt-1 text-micro text-muted-foreground/70">
-						This summary is longer than AO stores, so it stops early.
-					</p>
-				) : null}
+				</button>
+				{collapsed ? null : (
+					<>
+						<ChatMarkdown text={text} streaming={streaming} muted />
+						{activity.detail?.textTruncated ? (
+							<p className="mt-1 text-micro text-muted-foreground/70">
+								This summary is longer than AO stores, so it stops early.
+							</p>
+						) : null}
+					</>
+				)}
 			</div>
 		</div>
 	);

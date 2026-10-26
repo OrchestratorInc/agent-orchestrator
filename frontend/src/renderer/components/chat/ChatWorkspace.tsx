@@ -115,6 +115,7 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ConversationScope,
 	ProviderSwitchMarker,
 	ContinuedMarker,
 	HumanMessage,
@@ -2116,8 +2117,6 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     recorded by an older build whose usage rows are still on disk. Rendering one
  *     row per report is what buried the actual conversation; it lives in the
  *     header meter instead.
- *   - reasoning. Providers can emit one per tool call and they usually carry no
- *     readable body, so they are internal signal rather than conversation chrome.
  *
  *   - a plan row whose turn already carries the plan. The daemon writes both, from
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
@@ -2126,6 +2125,9 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
+ * Reasoning is kept too: the daemon streams it live and the block collapses per
+ * conversation, so hiding it is the reader's opt-out rather than a default here.
+ * Rows with no readable body render nothing on their own.
  */
 function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 	const plannedTurns = new Set(
@@ -2140,7 +2142,6 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
-		if (item.activityKind === "reasoning") return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
 		if (
@@ -4049,53 +4050,55 @@ export function Timeline({
 								data-chat-scroll-anchor={groupHasHumanPrompt(group) ? "" : undefined}
 							>
 								<WorkerUpdateIndexContext.Provider value={workerUpdateIndex}>
-								<TurnGroup
-									group={group}
-									workerUpdates={workerUpdates}
-									// Consecutive quiet worker turns read as one list of rows, not separate turns.
-									tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
-									startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
-									onSelectAnnotation={selectAnnotation}
-									activityDisclosureOverrides={activityDisclosureOverrides}
-									onActivityDisclosureChange={onActivityDisclosureChange}
-									sessionId={snapshot.sessionId}
-									apiBaseUrl={apiBaseUrl}
-									onDecide={decide}
-									onRollback={rollback}
-									onOpenFiles={onOpenFiles ? openFiles : undefined}
-									onOpenFile={onOpenFile ? openFile : undefined}
-									retry={retry}
-									onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
-									messageEdit={messageEdit}
-									onStartMessageEdit={stableStartMessageEdit}
-									onUpdateMessageEdit={updateMessageEdit}
-									onCancelMessageEdit={cancelMessageEdit}
-									onAbandonEditRecovery={
-										canAbandonInlineEditRecovery ? abandonUncertainInlineEdit : undefined
-									}
-									onSubmitMessageEdit={stableSubmitMessageEdit}
-									editPending={inlineEditPending}
-									editSendBlocked={inlineEditSendBlocked}
-									editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
-									editBusy={Boolean(editBusy || newWorkDisabled)}
-									editError={translateDraft(editError ??
-										draftPersistenceError ??
-										inlineEditRecoveryNotice ??
-										inlineEditOutcomeNotice)}
-									branchPoints={branchPoints}
-									editableTurns={editableTurns}
-									newHumanMessageIds={newHumanMessageIds}
-									onActivateBranch={canActivateBranch ? activateBranch : undefined}
-									activateBranchPending={activateBranchPending}
-									activateBranchError={activateBranchError}
-									// Only a turn the provider actually accepted can be undone: a turn it
-									// never saw holds no history to discard, and the daemon refuses it
-									// rather than hiding rows the agent still remembers.
-									canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
-									rollbackDisabled={rollbackDisabled}
-									busy={busy}
-									queued={Boolean(group.turnId && queued.has(group.turnId))}
-								/>
+								<ConversationScope conversationId={snapshot.conversationId}>
+									<TurnGroup
+										group={group}
+										workerUpdates={workerUpdates}
+										// Consecutive quiet worker turns read as one list of rows, not separate turns.
+										tight={workerUpdates && isQuietWorkerGroup(group) && isQuietWorkerGroup(groups[index - 1])}
+										startup={showStartup && group.turnId === openingTurnId ? startup : undefined}
+										onSelectAnnotation={selectAnnotation}
+										activityDisclosureOverrides={activityDisclosureOverrides}
+										onActivityDisclosureChange={onActivityDisclosureChange}
+										sessionId={snapshot.sessionId}
+										apiBaseUrl={apiBaseUrl}
+										onDecide={decide}
+										onRollback={rollback}
+										onOpenFiles={onOpenFiles ? openFiles : undefined}
+										onOpenFile={onOpenFile ? openFile : undefined}
+										retry={retry}
+										onEditHumanMessage={canEditHumanMessage ? editHumanMessage : undefined}
+										messageEdit={messageEdit}
+										onStartMessageEdit={stableStartMessageEdit}
+										onUpdateMessageEdit={updateMessageEdit}
+										onCancelMessageEdit={cancelMessageEdit}
+										onAbandonEditRecovery={
+											canAbandonInlineEditRecovery ? abandonUncertainInlineEdit : undefined
+										}
+										onSubmitMessageEdit={stableSubmitMessageEdit}
+										editPending={inlineEditPending}
+										editSendBlocked={inlineEditSendBlocked}
+										editRecoveryLabel={translateDraft(inlineEditRecoveryLabel)}
+										editBusy={Boolean(editBusy || newWorkDisabled)}
+										editError={translateDraft(editError ??
+											draftPersistenceError ??
+											inlineEditRecoveryNotice ??
+											inlineEditOutcomeNotice)}
+										branchPoints={branchPoints}
+										editableTurns={editableTurns}
+										newHumanMessageIds={newHumanMessageIds}
+										onActivateBranch={canActivateBranch ? activateBranch : undefined}
+										activateBranchPending={activateBranchPending}
+										activateBranchError={activateBranchError}
+										// Only a turn the provider actually accepted can be undone: a turn it
+										// never saw holds no history to discard, and the daemon refuses it
+										// rather than hiding rows the agent still remembers.
+										canRollback={Boolean(onRollback && group.turnId && group.rollbackable)}
+										rollbackDisabled={rollbackDisabled}
+										busy={busy}
+										queued={Boolean(group.turnId && queued.has(group.turnId))}
+									/>
+								</ConversationScope>
 								</WorkerUpdateIndexContext.Provider>
 							</div>
 						);
