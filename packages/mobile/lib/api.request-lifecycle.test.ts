@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { ApiError, apiRequest, getSessions } from "./api";
+import { ApiError, apiRequest, getSessions, RESPONSE_BODY_TIMEOUT_MS } from "./api";
 import { UnreachableError } from "./connectionError";
 
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
@@ -17,9 +17,44 @@ it("bounds a successful response whose headers arrive but body stalls", async ()
 	vi.mocked(fetch).mockResolvedValue(stalledResponse());
 	let failure: unknown;
 	void apiRequest(config, "/api/v1/sessions", undefined, 100).catch((error) => { failure = error; });
-	await vi.advanceTimersByTimeAsync(100);
+	await vi.advanceTimersByTimeAsync(RESPONSE_BODY_TIMEOUT_MS);
 	expect(failure).toBeInstanceOf(UnreachableError);
 	expect(failure).toMatchObject({ reason: "timeout" });
+});
+
+it("times out a request whose headers never arrive", async () => {
+	vi.mocked(fetch).mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+		init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+	}));
+	let failure: unknown;
+	void apiRequest(config, "/api/v1/sessions", undefined, 100).catch((error) => { failure = error; });
+	await vi.advanceTimersByTimeAsync(100);
+	expect(failure).toMatchObject({ reason: "timeout" });
+});
+
+// On 3G a large body outlasts the header timeout. That is a slow link, not a
+// dead one, and must not be reported as unreachable (which re-races and reloads).
+it("lets a slow body finish after the header timeout has passed", async () => {
+	let push!: (chunk: string) => void;
+	let close!: () => void;
+	vi.mocked(fetch).mockResolvedValue(new Response(new ReadableStream({
+		start(controller) {
+			push = (chunk) => controller.enqueue(new TextEncoder().encode(chunk));
+			close = () => controller.close();
+		},
+	})));
+	let result: Response | undefined;
+	let failure: unknown;
+	void apiRequest(config, "/api/v1/sessions", undefined, 100).then((res) => { result = res; }, (error) => { failure = error; });
+	await vi.advanceTimersByTimeAsync(1);
+	push('{"sessions":');
+	await vi.advanceTimersByTimeAsync(5_000);
+	push("[]}");
+	close();
+	await vi.advanceTimersByTimeAsync(1);
+	expect(failure).toBeUndefined();
+	expect(await result?.json()).toEqual({ sessions: [] });
+	expect(vi.getTimerCount()).toBe(0);
 });
 
 it("retains a known auth status even when its error body stalls", async () => {

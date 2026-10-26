@@ -188,6 +188,11 @@ export type SessionsResponse = {
 	 * the archive.
 	 */
 	archive?: ArchiveSummary | null;
+	/**
+	 * Unread notifications, when asked for with `unread`. Null when that request
+	 * failed (an older daemon without /notifications, or a blip).
+	 */
+	notificationsUnread?: number | null;
 };
 
 
@@ -205,9 +210,17 @@ export const ARCHIVE_PAGE_SIZE = 50;
 const legacyArchiveHosts = new Map<string, number>();
 const LEGACY_ARCHIVE_RECHECK_MS = 15 * 60_000;
 
-/** Forget which machines answered like an older daemon. For tests. */
+// Credentials a daemon has accepted on /sessions in this process; see getSessions.
+const acceptedCredentials = new Set<string>();
+
+function credentialKey(cfg: ServerConfig): string {
+	return `${cfg.hostId ?? ""}|${httpBase(cfg)}|${cfg.password ?? ""}`;
+}
+
+/** Forget which machines answered like an older daemon, and which credentials were accepted. For tests. */
 export function resetArchivePagingProbes(): void {
 	legacyArchiveHosts.clear();
+	acceptedCredentials.clear();
 }
 
 function archiveHostKey(cfg: ServerConfig): string {
@@ -396,7 +409,15 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
+// `timeoutMs` bounds the wait for response headers. A reachable daemon answers
+// headers within a round trip or two even on 3G; not getting them means the
+// path is gone, and the caller should race other endpoints.
 const REQUEST_TIMEOUT_MS = 12000;
+// Once a successful response's headers arrive, the body gets at least this long.
+// A 70 KB board poll needs ~1.5 s at 50 KB/s and much longer on a congested
+// link. Charging the download against the header timeout turned a slow body
+// into "unreachable", which re-raced the endpoints and reloaded everything.
+export const RESPONSE_BODY_TIMEOUT_MS = 60_000;
 const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
 // A cold agent resume spawns the chat host and reloads the transcript; the
@@ -443,7 +464,7 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		rejectAbort = () => reject(abortError());
 		controller.signal.addEventListener("abort", rejectAbort);
 	});
-	const timer = setTimeout(cancel, timeoutMs);
+	let timer = setTimeout(cancel, timeoutMs);
 	let received: Response | undefined;
 	let bodyText = "";
 	try {
@@ -459,6 +480,11 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...(init?.headers ?? {}),
 				},
 			});
+			// An error envelope is tiny, so only a successful body earns more time.
+			if (received.ok) {
+				clearTimeout(timer);
+				timer = setTimeout(cancel, Math.max(timeoutMs, RESPONSE_BODY_TIMEOUT_MS));
+			}
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
 			// timer, and /sessions cannot fan out while its body is still stalled.
@@ -541,17 +567,24 @@ export async function getProject(cfg: ServerConfig, id: string): Promise<Project
 	return (data?.project ?? data) as ProjectDetail;
 }
 
-export async function getSessions(cfg: ServerConfig, _projectId?: string, init?: Pick<RequestInit, "signal">): Promise<SessionsResponse> {
+export async function getSessions(
+	cfg: ServerConfig,
+	_projectId?: string,
+	init?: Pick<RequestInit, "signal">,
+	opts: { unread?: boolean } = {},
+): Promise<SessionsResponse> {
 	// The daemon exposes sessions and orchestrators as two lists. Fetch both,
 	// keep worker sessions for the board, and map orchestrators for their screen.
 	//
-	// /sessions is probed FIRST, alone, rather than fanning out in one Promise.all.
-	// The daemon locks a device out for a minute after 5 failed auths, so a stale
-	// password used to cost 4 failures per poll tick (this call's three requests
-	// plus the caller's own /projects) — enough to arm the lockout in one or two
-	// ticks and make the user's next action, typically scanning a fresh pairing
-	// code, fail with 429 before the new password was ever checked. Probing first
-	// caps a bad-credential tick at a single failed attempt.
+	// Until this credential has been accepted once, /sessions is probed FIRST,
+	// alone. The daemon locks a device out for a minute after 5 failed auths, so
+	// a stale password used to cost 4 failures per poll tick — enough to arm the
+	// lockout in one or two ticks and make the user's next action, typically
+	// scanning a fresh pairing code, fail with 429 before the new password was
+	// ever checked. Probing first caps a bad-credential tick at one failed
+	// attempt. Once accepted, every request goes out in one batch: a password
+	// the daemon has since rotated counts as retired, not as a failed attempt,
+	// so the batch cannot arm the lockout, and it saves two round trips a tick.
 	//
 	// The poll asks for live workers only, with the archive's size: the archive is
 	// most of a long-running machine's sessions, and over a tunnel the poll runs
@@ -560,35 +593,48 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 	const hostKey = archiveHostKey(cfg);
 	const legacySince = legacyArchiveHosts.get(hostKey);
 	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
-	let sessRes = await req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init);
-	let sessData = await sessRes.json();
-	let archive = tryPaged ? wireArchiveSummary(sessData?.archived) : null;
-	if (tryPaged) {
-		if (archive) legacyArchiveHosts.delete(hostKey);
-		else {
+	const credential = credentialKey(cfg);
+	const sessionsRead = req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init)
+		.then((res) => res.json())
+		.then(async (data) => {
+			acceptedCredentials.add(credential);
+			const archive = tryPaged ? wireArchiveSummary(data?.archived) : null;
+			if (!tryPaged) return { data, archive };
+			if (archive) {
+				legacyArchiveHosts.delete(hostKey);
+				return { data, archive };
+			}
 			legacyArchiveHosts.set(hostKey, Date.now());
 			// A daemon older still ignores `active` and has already sent everything,
 			// archived rows included; only one that filtered must be asked again.
-			const ignoredFilter = Array.isArray(sessData?.sessions) && sessData.sessions.some((s: WireSession) => s.isTerminated);
-			if (!ignoredFilter) {
-				sessRes = await req(cfg, `${API}/sessions`, init);
-				sessData = await sessRes.json();
-			}
-		}
-	}
+			const ignoredFilter = Array.isArray(data?.sessions) && data.sessions.some((s: WireSession) => s.isTerminated);
+			return { data: ignoredFilter ? data : await (await req(cfg, `${API}/sessions`, init)).json(), archive };
+		})
+		.catch((error: unknown) => {
+			if (error instanceof ApiError && (error.status === 401 || error.status === 429)) acceptedCredentials.delete(credential);
+			throw error;
+		});
+	if (!acceptedCredentials.has(credential)) await sessionsRead;
 	// A failed /projects is reported as null rather than [] so a caller can tell
-	// "this daemon has no projects" from "we could not ask". It stays caught: an
-	// older daemon, or one blip on that one route, must not knock the board
-	// offline when /sessions answered fine.
-	const [orchRes, projects] = await Promise.all([
-		req(cfg, `${API}/orchestrators`, init),
+	// "this daemon has no projects" from "we could not ask". It and the unread
+	// count stay caught: an older daemon, or one blip on that one route, must not
+	// knock the board offline when /sessions answered fine. The unfiltered list
+	// of an older daemon already carries its orchestrators.
+	const [{ data: sessData, archive }, orchData, projects, notificationsUnread] = await Promise.all([
+		sessionsRead,
+		tryPaged ? req(cfg, `${API}/orchestrators`, init).then((res) => res.json()) : null,
 		getProjects(cfg, init).catch(() => null),
+		opts.unread
+			? getNotifications(cfg, { status: "unread", limit: 1 }, init).then((page) => page.unreadCount, () => null)
+			: undefined,
 	]);
-	const orchData = await orchRes.json();
 	const nameOf = new Map((projects ?? []).map((p) => [p.id, p.name]));
 
 	const rawSessions: WireSession[] = Array.isArray(sessData?.sessions) ? sessData.sessions : [];
-	const rawOrchestrators: WireSession[] = Array.isArray(orchData?.sessions) ? orchData.sessions : [];
+	// Both lists come from one daemon query, oldest to newest.
+	const rawOrchestrators: WireSession[] = orchData
+		? (Array.isArray(orchData.sessions) ? orchData.sessions : [])
+		: rawSessions.filter((s) => s.kind === "orchestrator");
 
 	const sessions = rawSessions.filter((s) => s.kind !== "orchestrator").map(mapSession);
 
@@ -611,7 +657,10 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);
 
-	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive };
+	return {
+		sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive,
+		...(notificationsUnread !== undefined ? { notificationsUnread } : {}),
+	};
 }
 
 /**

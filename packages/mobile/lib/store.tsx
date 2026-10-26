@@ -8,7 +8,6 @@ import { shouldPoll } from "./appStatePoll";
 import {
 	ApiError,
 	delegateTask,
-	getNotifications,
 	getSessions,
 	killSession,
 	launchOrchestrator as apiLaunchOrchestrator,
@@ -620,7 +619,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		try {
 			// getSessions returns projects, so don't fetch /projects again alongside
 			// it — that duplicate doubled the auth attempts spent per failing tick.
-			const sess = await getSessions(c, "all", { signal: controller.signal });
+			const sess = await getSessions(c, "all", { signal: controller.signal }, { unread: true });
 			// A poll that started against the previous pairing must not publish any
 			// of its board state after the user has moved to another machine.
 			if (!isCurrent()) return false;
@@ -646,21 +645,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				everConnectedRef.current = true;
 				mobileTelemetry()?.capture(MOBILE_EVENTS.connected, { trigger });
 			}
-			// Badge count for the board's bell. Deliberately after the session fetch
-			// and separately caught: an older daemon without /notifications must not
-			// knock the board offline. limit:1 because we only read unreadCount.
-			// The app may have gone to the background while the sessions request was
-			// in flight. Stop here rather than spending another request that would
-			// re-mark this device live after the user left.
-			if (!isCurrent()) return false;
-			try {
-				const page = await getNotifications(c, { status: "unread", limit: 1 }, { signal: controller.signal });
-				if (!isCurrent()) return false;
-				setNotificationsUnread(page.unreadCount);
-			} catch {
-				if (!isCurrent()) return false;
-				setNotificationsUnread(0);
-			}
+			// Badge count for the board's bell, fetched in the same batch. A failure
+			// (an older daemon without /notifications) reads as no unread.
+			setNotificationsUnread(sess.notificationsUnread ?? 0);
 			return true;
 		} catch (e) {
 			if (!isCurrent()) return false;

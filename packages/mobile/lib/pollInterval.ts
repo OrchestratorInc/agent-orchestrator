@@ -31,6 +31,14 @@ export const DIRECT_POLL_MS = 8_000;
  */
 export const TUNNEL_POLL_MS = 2_000;
 
+/**
+ * Paired machines other than the selected one. Their rows are a background
+ * view, refreshed at once after any action taken on them, so they do not need
+ * the live rate. Over a tunnel that rate is a full board every two seconds per
+ * machine, which on a slow link starves the machine the user is looking at.
+ */
+export const FLEET_POLL_MS = 30_000;
+
 export function pollIntervalFor(cfg: ServerConfig | null): number {
 	return cfg?.endpointKind === "tunnel" ? TUNNEL_POLL_MS : DIRECT_POLL_MS;
 }

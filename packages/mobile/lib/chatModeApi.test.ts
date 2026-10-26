@@ -145,13 +145,59 @@ describe("mobile Chat API boundaries", () => {
 		expect(first.archive).toBeNull();
 		expect(first.sessions.map((s) => s.id)).toEqual(["w-1", "w-0"]);
 
+		// The full list already carries the orchestrators, so /orchestrators is skipped.
+		const orchestrator = { id: "o-1", projectId: "p-1", mode: "chat", kind: "orchestrator" };
 		vi.mocked(fetch).mockClear()
-			.mockResolvedValueOnce(response({ sessions: [archived] }))
+			.mockResolvedValueOnce(response({ sessions: [archived, orchestrator] }))
+			.mockResolvedValueOnce(response({ projects: [{ id: "p-1", name: "One" }] }));
+		const second = await getSessions(cfg);
+		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+			"http://ao.test:3011/api/v1/sessions",
+			"http://ao.test:3011/api/v1/projects",
+		]);
+		expect(second.sessions.map((s) => s.id)).toEqual(["w-0"]);
+		expect(second.orchestrators).toMatchObject([{ id: "o-1", projectName: "One" }]);
+	});
+
+	it("probes /sessions alone until the credential is accepted, then loads the board in one batch", async () => {
+		const pending: Array<(value: Response) => void> = [];
+		vi.mocked(fetch).mockImplementation(() => new Promise<Response>((resolve) => { pending.push(resolve); }));
+		const urls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url).replace("http://ao.test:3011/api/v1", ""));
+
+		const first = getSessions(cfg, "all", undefined, { unread: true });
+		await vi.waitFor(() => expect(urls()).toEqual(["/sessions?active=true&kind=worker"]));
+		pending.shift()!(response({ archived: NO_ARCHIVE, sessions: [] }));
+		await vi.waitFor(() => expect(urls()).toHaveLength(4));
+		for (const body of [{ sessions: [] }, { projects: [] }, { notifications: [], unreadCount: 4 }]) pending.shift()!(response(body));
+		expect((await first).notificationsUnread).toBe(4);
+
+		vi.mocked(fetch).mockClear();
+		const second = getSessions(cfg, "all", undefined, { unread: true });
+		await vi.waitFor(() => expect(urls()).toEqual([
+			"/sessions?active=true&kind=worker",
+			"/orchestrators",
+			"/projects",
+			"/notifications?status=unread&limit=1",
+		]));
+		pending.shift()!(response({ archived: NO_ARCHIVE, sessions: [] }));
+		pending.shift()!(response({ sessions: [] }));
+		pending.shift()!(response({ projects: [] }));
+		pending.shift()!(response({ error: "not found" }, 404));
+		// An older daemon without /notifications still loads the board.
+		expect((await second).notificationsUnread).toBeNull();
+	});
+
+	it("goes back to probing alone after the daemon rejects the credential", async () => {
+		vi.mocked(fetch)
+			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [] }))
 			.mockResolvedValueOnce(response({ sessions: [] }))
 			.mockResolvedValueOnce(response({ projects: [] }));
 		await getSessions(cfg);
-		expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://ao.test:3011/api/v1/sessions");
-		expect(vi.mocked(fetch).mock.calls).toHaveLength(3);
+		vi.mocked(fetch).mockReset().mockImplementation(async () => response({ message: "bad password" }, 401));
+		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
+		vi.mocked(fetch).mockClear();
+		await expect(getSessions(cfg)).rejects.toMatchObject({ status: 401 });
+		expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
 	});
 
 	it("uses the first answer from a daemon too old to filter by state", async () => {

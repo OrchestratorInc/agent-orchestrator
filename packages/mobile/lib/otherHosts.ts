@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reconcileRows } from "./rowSharing";
-import { ApiError, getNotifications, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
+import { ApiError, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
 import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
@@ -8,7 +8,7 @@ import { shouldKeepPolling, userFacingError } from "./connectionError";
 import type { Endpoint } from "./endpoints";
 import { findHost, type Host } from "./hosts";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
-import { pollIntervalFor } from "./pollInterval";
+import { FLEET_POLL_MS } from "./pollInterval";
 import { sameServerConfig } from "./sameConfig";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 
@@ -163,7 +163,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 		const c = runner.config;
 		if (!c || !isConfigured(c) || stopped) return;
 		try {
-			const answer = await getSessions(c, "all");
+			const answer = await getSessions(c, "all", undefined, { unread: true });
 			if (stopped || runner.config !== c) return;
 			if (answer.projects !== null) {
 				lastProjects = answer.projects;
@@ -182,17 +182,12 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				orchestrators: answer.orchestrators,
 				orchestratorId: answer.orchestratorId,
 				stats: answer.stats,
+				// Older daemons may not serve notifications; the last count stands.
+				...(typeof answer.notificationsUnread === "number" ? { notificationsUnread: answer.notificationsUnread } : {}),
 				lastSyncAt: Date.now(),
 			});
 			connected = true;
-			if (stopped || runner.config !== c) return;
-			try {
-				const page = await getNotifications(c, { status: "unread", limit: 1 });
-				if (!stopped && runner.config === c) update({ notificationsUnread: page.unreadCount });
-			} catch {
-				// Older daemons may not serve notifications; the board remains usable.
-			}
-			if (!stopped && runner.config === c) schedule(pollIntervalFor(c));
+			schedule(FLEET_POLL_MS);
 		} catch (cause) {
 			if (stopped || runner.config !== c) return;
 			const status = cause instanceof ApiError ? cause.status : undefined;
@@ -207,7 +202,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				runner.config = null;
 				update({ config: null }); // An old address is no longer verified for actions.
 				schedule(2_000); // Race LAN/tunnel again after a network change.
-			} else schedule(pollIntervalFor(c));
+			} else schedule(FLEET_POLL_MS);
 		}
 	};
 	return runner;
