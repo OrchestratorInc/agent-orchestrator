@@ -17,6 +17,7 @@ test("@P0 tool images decode, zoom, and keep binary data out of expanded text", 
 	await expect(page.locator("[data-tool-diff-row]")).toHaveCount(2);
 	await expect(page.locator('[data-sample="6"] pre')).toContainText('"answer": 42');
 	await expect(page.locator('[data-sample="6"] pre')).toContainText("resource body");
+	await expect(page.locator('[data-sample="6"] pre')).toContainText("CSV source text");
 	await page.getByRole("button", { name: /Open image/ }).first().click();
 	await expect(page.getByRole("dialog")).toBeVisible();
 	await expect(page.getByRole("dialog").getByRole("img")).toBeVisible();
