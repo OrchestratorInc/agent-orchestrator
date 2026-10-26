@@ -190,7 +190,7 @@ describe("live browser controls", () => {
 		expect(toolbarButton("Back").props).toMatchObject({ icon: "chevron.backward", disabled: false });
 		expect(toolbarButton("Forward").props).toMatchObject({ icon: "chevron.forward", disabled: true });
 		expect(toolbarButton("Reload").props).toMatchObject({ icon: "arrow.clockwise", disabled: false });
-		expect(tabsMenu().props).toMatchObject({ icon: "square.on.square", accessibilityLabel: "Tabs, 2 open" });
+		expect(tabsMenu().props).toMatchObject({ icon: "square.on.square", accessibilityLabel: "Tabs, 2 open, showing Todo app" });
 		await act(async () => toolbarButton("Back").props.onPress());
 		await act(async () => toolbarButton("Reload").props.onPress());
 		expect(sent()).toEqual([
@@ -226,6 +226,14 @@ describe("live browser controls", () => {
 			{ type: "tab", payload: { action: "new" } },
 			{ type: "tab", payload: { action: "close", tabId: "t1" } },
 		]);
+	});
+
+	it("names the showing tab in the menu's label, which TalkBack reads in place of the check", async () => {
+		await render();
+		await open({ ...page, activeTabId: "t2", tabs: page.tabs.map((tab) => ({ ...tab, active: tab.id === "t2" })) });
+		expect(tabsMenu().props.accessibilityLabel).toBe("Tabs, 2 open, showing http://localhost:6006/");
+		await open({ ...page, tabs: [] });
+		expect(tabsMenu().props.accessibilityLabel).toBe("Tabs, 0 open");
 	});
 
 	it("opens an address typed into the system prompt", async () => {

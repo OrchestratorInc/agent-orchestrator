@@ -59,6 +59,17 @@ export function browserTabLabel(tab: BrowserTab): string {
 }
 
 /**
+ * The tab menu's own name, with the tab that is showing: Android's menu marks
+ * it only with an unlabelled check and drops the list's title, so TalkBack
+ * hears it here.
+ */
+function tabsMenuLabel(tabs: readonly BrowserTab[]): string {
+	const open = tabs.length === 1 ? "Tabs, 1 open" : `Tabs, ${tabs.length} open`;
+	const active = tabs.find((tab) => tab.active);
+	return active ? `${open}, showing ${browserTabLabel(active)}` : open;
+}
+
+/**
  * The live browser's controls as the screen's bottom toolbar: Back, Forward,
  * Reload (Stop while a page loads) and the tab menu, in Material 3's floating
  * toolbar.
@@ -88,7 +99,7 @@ export function browserToolbar(controls: BrowserControls): ReactElement {
 			<Stack.Toolbar.Spacer />
 			<Stack.Toolbar.Menu
 				icon={toolbarIcon(tabsSymbol)}
-				accessibilityLabel={controls.tabs.length === 1 ? "Tabs, 1 open" : `Tabs, ${controls.tabs.length} open`}
+				accessibilityLabel={tabsMenuLabel(controls.tabs)}
 				tintColor={tint(!enabled)}
 				disabled={!enabled}
 			>
