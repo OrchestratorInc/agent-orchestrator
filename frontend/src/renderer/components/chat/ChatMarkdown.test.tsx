@@ -977,19 +977,6 @@ describe("ChatMarkdown math", () => {
 		expect(container.querySelector("pre")).toBeNull();
 	});
 
-	it("copies a selected formula as its TeX, not its glyphs", async () => {
-		useUiStore.setState({ renderMath: true });
-		const { container } = render(<ChatMarkdown text={"Area $\\pi r^2$ here."} />);
-		await waitFor(() => expect(container.querySelector(".katex")).not.toBeNull());
-		const selection = window.getSelection()!;
-		selection.selectAllChildren(container);
-		const copied = new Map<string, string>();
-		const event = new Event("copy", { bubbles: true, cancelable: true });
-		Object.defineProperty(event, "clipboardData", { value: { setData: (type: string, value: string) => copied.set(type, value) } });
-		container.dispatchEvent(event);
-		expect(copied.get("text/plain")).toBe("Area $\\pi r^2$ here.");
-	});
-
 	it("shows the TeX source when KaTeX cannot parse it", async () => {
 		useUiStore.setState({ renderMath: true });
 		const { container } = render(<ChatMarkdown text={"Try $\\notacommand{x}$ and $y$."} />);

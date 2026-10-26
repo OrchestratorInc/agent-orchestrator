@@ -10,8 +10,9 @@
  * anything active, and KaTeX escapes the TeX it renders. That is what makes
  * the one `dangerouslySetInnerHTML` here safe for agent-authored input.
  *
- * Copying a selection that touches a formula copies its TeX (`copy-tex`), not
- * the glyphs twice over from KaTeX's visual and MathML halves.
+ * Copying a selection that touches a formula copies its TeX from `data-tex`
+ * (see `lib/katex.ts`), not the glyphs twice over from KaTeX's visual and
+ * MathML halves.
  */
 
 import { memo, useEffect, useMemo, useState } from "react";
@@ -69,10 +70,12 @@ export const MathFormula = memo(function MathFormula({ tex, display = false }: {
 	// scrollbar. Inline formulas stay inline: KaTeX breaks them at operators,
 	// and a scroll box would shift the baseline and add a scrollbar per formula.
 	return display ? (
-		<div className="my-2.5 overflow-x-auto overflow-y-hidden py-1 [&_.katex-display]:m-0" data-math="display">
+		<div className="my-2.5 overflow-x-auto overflow-y-hidden py-1 [&_.katex-display]:m-0" data-math="display" data-tex={source}>
 			{content}
 		</div>
 	) : (
-		<span data-math="inline">{content}</span>
+		<span data-math="inline" data-tex={source}>
+			{content}
+		</span>
 	);
 });
