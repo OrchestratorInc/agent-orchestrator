@@ -2,7 +2,6 @@ import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEven
 import { useRef } from "react";
 import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
-import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { iconSize, stateOpacity, touchTarget } from "../tokens";
@@ -38,8 +37,8 @@ export function ChatAttachmentMenu({
 
 	if (disabled) return <View accessible {...button} style={[styles.trigger, styles.disabled]}>{glyph}</View>;
 
+	// No haptic: choosing opens the system picker, a move to another screen.
 	const choose = (event: NativeActionEvent) => {
-		haptics.tap();
 		if (event.nativeEvent.event === "photo") onChoosePhoto();
 		if (event.nativeEvent.event === "file") onChooseFile();
 	};

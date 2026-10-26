@@ -39,7 +39,7 @@ export function ModelPickerSheet({ catalog, selected, loading, refreshing, error
 		<NativePickerList
 			header={<>
 				<SheetHeader title="Model" subtitle="Choose how this agent runs the task." />
-				{notice ? <Text style={styles.notice}>{notice}</Text> : null}
+				{notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
 				{loading ? <Spinner size="large" accessibilityLabel="Loading models" style={styles.loading} /> : null}
 			</>}
 			options={options}

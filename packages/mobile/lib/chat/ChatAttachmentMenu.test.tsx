@@ -75,7 +75,8 @@ describe("ChatAttachmentMenu", () => {
 		act(() => menu().props.onPressAction({ nativeEvent: { event: "file" } }));
 		expect(onChooseFile).toHaveBeenCalledOnce();
 		expect(onChoosePhoto).not.toHaveBeenCalled();
-		expect(fixtures.tap).toHaveBeenCalledOnce();
+		// Opening a picker is navigation, not a moment for a haptic.
+		expect(fixtures.tap).not.toHaveBeenCalled();
 	});
 
 	it("leaves the tap to SwiftUI's menu label on iOS", () => {
