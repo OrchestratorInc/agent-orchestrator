@@ -1,4 +1,4 @@
-import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
+import { focusManager, type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
@@ -456,7 +456,38 @@ export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>
  * re-renders its host (notifyOnChangeProps: []), it only keeps the timer.
  */
 export function useWorkspacePolling(enabled = true) {
-	useQuery({ ...workspaceQueryOptions, refetchInterval: workspaceRefetchInterval, notifyOnChangeProps: [], enabled });
+	const queryClient = useQueryClient();
+	useQuery({ ...workspaceQueryOptions, notifyOnChangeProps: [], enabled });
+	useEffect(() => {
+		if (!enabled) return;
+		const cache = queryClient.getQueryCache();
+		const currentInterval = () => {
+			const query = cache.find<WorkspaceSummary[]>({ queryKey: workspaceQueryKey, exact: true });
+			return query ? workspaceRefetchInterval(query) : 15_000;
+		};
+		let interval = currentInterval();
+		let lastTickAt = Date.now();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const schedule = () => {
+			clearTimeout(timer);
+			timer = setTimeout(() => {
+				lastTickAt = Date.now();
+				schedule();
+				if (focusManager.isFocused()) {
+					void queryClient.refetchQueries({ queryKey: workspaceQueryKey, exact: true, type: "active" }, { cancelRefetch: false });
+				}
+			}, Math.max(0, lastTickAt + interval - Date.now()));
+		};
+		const unsubscribe = cache.subscribe((event) => {
+			if (event.query.queryKey[0] !== workspaceQueryKey[0]) return;
+			const next = currentInterval();
+			// Cache patches must not postpone the independent full-list poll.
+			// Only readiness changes switch between the fast and normal cadence.
+			if (next !== interval) { interval = next; schedule(); }
+		});
+		schedule();
+		return () => { clearTimeout(timer); unsubscribe(); };
+	}, [enabled, queryClient]);
 }
 
 // Cloud projects are a separate query so a control-plane failure can never

@@ -136,6 +136,14 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				// A fetch from polling/mounting may already predate this event. Wait
 				// for it, then refresh once so joining its promise cannot lose the event.
 				const state = { dirty: queryClient.isFetching({ queryKey, type: "active" }) > 0 };
+				const workspace = queryKey[0] === workspaceQueryKey[0];
+				// The router's initial read has no observer yet. React Query skips
+				// refetching that first inactive query, so explicitly join its promise
+				// before issuing the queued catch-up after a CDC event.
+				const initialWorkspaceRead = workspace && queryClient.isFetching({ queryKey, type: "inactive" }) > 0
+					? queryClient.getQueryCache().find({ queryKey, exact: true })?.promise
+					: undefined;
+				if (initialWorkspaceRead) state.dirty = true;
 				// An inactive Chat hover prefetch cannot refresh itself after this event.
 				// Cancel it without interrupting unrelated imperative queries.
 				if (queryKey[0] === conversationQueryRoot[0] && queryClient.isFetching({ queryKey, type: "inactive" }) > 0) {
@@ -146,7 +154,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					refreshes.delete(key);
 					if (state.dirty && !disposed) invalidate(queryKey);
 				};
-				void queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false }).then(settled, settled);
+				const refresh = queryClient.invalidateQueries(
+					workspace ? { queryKey, refetchType: "all" } : { queryKey },
+					{ cancelRefetch: false },
+				);
+				const completion = initialWorkspaceRead ? Promise.allSettled([initialWorkspaceRead, refresh]) : refresh;
+				void completion.then(settled, settled);
 			};
 			const sessionRowRefreshes = new Map<string, { dirty: boolean }>();
 			const refreshSessionRow = (sessionId: string) => {
@@ -474,6 +487,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							// Archive views share these durable session facts even when
 							// the live workspace can refresh without a whole-list read.
 							invalidate(["archived-sessions"]);
+							// Usage and reported PR facts have their own caches and do
+							// not poll locally; a row GET cannot refresh those observers.
+							invalidate(sessionScmSummaryQueryKey());
+							invalidate(sessionUsageQueryRoot);
 							for (const id of ids) refreshSessionRow(id);
 						}
 					}, INVALIDATE_WINDOW_MS);

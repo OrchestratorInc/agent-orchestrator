@@ -793,6 +793,57 @@ describe("useWorkspacePolling", () => {
 			vi.useRealTimers();
 		}
 	});
+	it("keeps a 15-second full-list cadence under five minutes of row patches", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		let projectName = "Original";
+		const row = { id: "s", projectId: "p", status: "working", activity: { state: "active" }, isTerminated: false } as unknown as import("../../api/schema").components["schemas"]["ControllersSessionView"];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/projects"
+			? { data: { projects: [{ id: "p", name: projectName, path: "/generated" }] } }
+			: { data: { sessions: [row] } });
+		const shared = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const view = renderHook(() => useWorkspacePolling(), { wrapper: shared });
+		const reads = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions").length;
+		try {
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			expect(reads()).toBe(1);
+			for (let elapsed = 0; elapsed < 300_000; elapsed += 1_000) {
+				if (elapsed === 120_000) projectName = "Renamed without CDC";
+				await act(async () => {
+					patchWorkspaceSession(client, { ...row, displayName: `Update ${elapsed}` });
+					await vi.advanceTimersByTimeAsync(1_000);
+				});
+				if (elapsed === 134_000) expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].name).toBe("Renamed without CDC");
+			}
+			expect(reads()).toBe(21); // Initial snapshot plus twenty independent polls.
+		} finally { view.unmount(); client.clear(); vi.useRealTimers(); }
+	});
+
+	it("keeps the fast checking cadence and stops the timer when disabled", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient();
+		let readiness = "checking";
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/projects"
+			? { data: { projects: [{ id: "p", name: "Project", path: "/generated" }] } }
+			: { data: { sessions: [{ id: "s", projectId: "p", statusReadiness: readiness, status: "idle", activity: { state: "idle" } }] } });
+		const shared = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const view = renderHook(({ enabled }) => useWorkspacePolling(enabled), { initialProps: { enabled: true }, wrapper: shared });
+		const reads = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions").length;
+		try {
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+			expect(reads()).toBe(2);
+			readiness = "ready";
+			await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+			expect(reads()).toBe(3);
+			await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+			expect(reads()).toBe(3);
+			view.rerender({ enabled: false });
+			await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+			expect(reads()).toBe(3);
+		} finally { view.unmount(); client.clear(); vi.useRealTimers(); }
+	});
+
 });
 
 describe("cloud projects made elsewhere", () => {
