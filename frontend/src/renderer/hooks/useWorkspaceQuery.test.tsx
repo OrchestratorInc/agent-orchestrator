@@ -39,7 +39,7 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { patchWorkspaceSession, toWorkspaceSession, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -971,5 +971,57 @@ describe("cloud projects made elsewhere", () => {
 		});
 		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2));
 		focusManager.setFocused(undefined);
+	});
+});
+
+
+describe("patchWorkspaceSession", () => {
+	const row = { id: "row", projectId: "p", harness: "codex", status: "working", activity: { state: "active" }, prs: [] } as unknown as import("../../api/schema").components["schemas"]["ControllersSessionView"];
+	it("replaces by project and id, adds missing rows, and retains other row references", () => {
+		const client = new QueryClient();
+		const other = toWorkspaceSession({ ...row, id: "other" }, { id: "p", name: "Project" });
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [other] }]);
+		expect(patchWorkspaceSession(client, row)).toBe(true);
+		expect(patchWorkspaceSession(client, { ...row, displayName: "Updated" })).toBe(true);
+		const result = client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)!;
+		expect(result[0].sessions).toHaveLength(2);
+		expect(result[0].sessions[0]).toBe(other);
+		expect(result[0].sessions[1]).toMatchObject({ id: "row", title: "Updated", workspaceName: "Project" });
+		client.clear();
+	});
+	it("does not fabricate a missing project or an unloaded cache", () => {
+		const client = new QueryClient();
+		expect(patchWorkspaceSession(client, row)).toBe(false);
+		expect(client.getQueryData(workspaceQueryKey)).toBeUndefined();
+		client.setQueryData(workspaceQueryKey, []);
+		expect(patchWorkspaceSession(client, row)).toBe(false);
+		client.clear();
+	});
+	it("removes ended rows from active-only caches and refreshes archive counts/pages", () => {
+		const client = new QueryClient();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 0, sessions: [toWorkspaceSession(row, { id: "p", name: "Project" })] }]);
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: true })).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toEqual([]);
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["archived-sessions"] }, { cancelRefetch: false });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
+		invalidate.mockClear();
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: false })).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toHaveLength(1);
+		expect(invalidate).toHaveBeenCalledTimes(2);
+		invalidate.mockClear();
+		patchWorkspaceSession(client, { ...row, isTerminated: false });
+		expect(invalidate).not.toHaveBeenCalled();
+		client.clear();
+	});
+	it("creates the standalone workspace and preserves pending optimistic kills", async () => {
+		const { trackOptimisticSessionKill, clearOptimisticSessionKill } = await import("./optimistic-session-kills");
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, []);
+		trackOptimisticSessionKill(row.id);
+		try {
+			expect(patchWorkspaceSession(client, { ...row, projectId: "" })).toBe(true);
+			expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0]).toMatchObject({ id: row.id, isTerminated: true, status: "terminated" });
+		} finally { clearOptimisticSessionKill(row.id); client.clear(); }
 	});
 });

@@ -146,6 +146,50 @@ export function toWorkspaceSession(
 export const workspaceQueryKey = ["workspaces"] as const;
 export const remoteWorkspaceQueryKey = (hostId: string) => ["remote-workspaces", hostId] as const;
 export const workspaceQueryKeyForHost = (hostId?: string) => hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+/** Patch a daemon row into its local project without losing pending optimistic kills.
+ * Returns false when the workspace snapshot/project must first be loaded.
+ */
+export function patchWorkspaceSession(
+	queryClient: QueryClient,
+	session: components["schemas"]["ControllersSessionView"],
+): boolean {
+	let patched = false;
+	let archiveMembershipChanged = false;
+	queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current) => {
+		if (!current) return current;
+		const projectId = session.projectId || STANDALONE_WORKSPACE_ID;
+		let project = current.find((workspace) => workspace.id === projectId);
+		if (!project && session.projectId) return current;
+		project ??= { id: STANDALONE_WORKSPACE_ID, name: standaloneWorkspaceName(), kind: STANDALONE_PROJECT_KIND, path: "Not attached to a project", sessions: [] };
+		// Active-only caches carry archive counts; legacy daemon snapshots may
+		// still contain terminated rows and keep their previous semantics.
+		const activeOnly = "archivedCount" in project && project.archivedCount !== undefined;
+		const previous = project.sessions.find((candidate) => candidate.id === session.id);
+		archiveMembershipChanged = activeOnly && (session.isTerminated === true ? previous !== undefined : previous === undefined);
+		const row = session.projectId ? toWorkspaceSession(session, project) : toLocalWorkspaceSession(session, project.id, project.name);
+		const next = current.map((workspace) => {
+			if (workspace.id !== projectId) {
+				return workspace.sessions.some((candidate) => candidate.id === session.id)
+					? { ...workspace, sessions: workspace.sessions.filter((candidate) => candidate.id !== session.id) }
+					: workspace;
+			}
+			if (activeOnly && session.isTerminated === true) {
+				return { ...workspace, sessions: workspace.sessions.filter((candidate) => candidate.id !== session.id) };
+			}
+			const exists = workspace.sessions.some((candidate) => candidate.id === session.id);
+			return { ...workspace, sessions: exists ? workspace.sessions.map((candidate) => candidate.id === session.id ? row : candidate) : [...workspace.sessions, row] };
+		});
+		if (!current.includes(project) && !(activeOnly && session.isTerminated === true)) next.push({ ...project, sessions: [row] });
+		patched = true;
+		return applyOptimisticSessionKills(next) ?? next;
+	});
+	if (archiveMembershipChanged) {
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
+		void queryClient.invalidateQueries({ queryKey: ["archived-sessions"] }, { cancelRefetch: false });
+	}
+	return patched;
+}
+
 const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "projects"] as const;
 const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
