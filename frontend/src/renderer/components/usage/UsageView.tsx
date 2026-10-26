@@ -1,0 +1,156 @@
+import { Gauge, RefreshCw } from "lucide-react";
+import { ScrollArea } from "radix-ui";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useAgentAccountActions, useAgentAccounts } from "../../hooks/useAgentAccounts";
+import { useUsageReport } from "../../hooks/useUsageReport";
+import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
+import { hidesShellTopbar } from "../../lib/platform";
+import { cn } from "../../lib/utils";
+import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
+import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
+import { topbarProjectLabelClass } from "../TopbarButton";
+import { Button } from "../ui/button";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { UsageLimits } from "./UsageLimits";
+import { UsageSpend } from "./UsageSpend";
+
+type UsageTab = "cost" | "tokens" | "limits";
+const ALL_PROJECTS = "all";
+const PERIODS = [
+	{ days: 1, label: "usage.period.day" },
+	{ days: 7, label: "usage.period.week" },
+	{ days: 30, label: "usage.period.month" },
+	{ days: 90, label: "usage.period.quarter" },
+] as const;
+
+/** Re-renders on an interval so reset countdowns stay current. */
+function useNow(intervalMs: number): Date {
+	const [now, setNow] = useState(() => new Date());
+	useEffect(() => {
+		const id = window.setInterval(() => setNow(new Date()), intervalMs);
+		return () => window.clearInterval(id);
+	}, [intervalMs]);
+	return now;
+}
+
+/** Estimated cost, token use and subscription limits for AO's agent sessions. */
+export function UsageView() {
+	const { t } = useTranslation();
+	const showPageTitle = hidesShellTopbar();
+	const [tab, setTab] = useState<UsageTab>("cost");
+	const [days, setDays] = useState(7);
+	const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
+	const [refreshingLimits, setRefreshingLimits] = useState(false);
+	const now = useNow(30_000);
+
+	const workspaces = useWorkspaceQuery({ includeCloud: false }).data;
+	const projects = useMemo(
+		() => (workspaces ?? []).filter((workspace) => !workspace.hostId && workspace.kind !== CLOUD_PROJECT_KIND),
+		[workspaces],
+	);
+	const projectNames = useMemo(
+		() => new Map(projects.map((project) => [project.id, project.id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : project.name])),
+		[projects, t],
+	);
+	const report = useUsageReport(days, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
+	const accounts = useAgentAccounts(tab === "limits");
+	const accountActions = useAgentAccountActions();
+	const isLimits = tab === "limits";
+
+	const refresh = async () => {
+		if (!isLimits) {
+			await report.refetch();
+			return;
+		}
+		setRefreshingLimits(true);
+		try {
+			await accountActions.refresh();
+		} finally {
+			setRefreshingLimits(false);
+		}
+	};
+	const refreshing = isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
+
+	return (
+		<div className="flex min-h-0 flex-1 flex-col bg-background">
+			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-[calc((var(--size-toolbar)-var(--size-topbar-control))/2)]">
+				<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>
+					{showPageTitle ? <Gauge className="size-icon-md" aria-hidden="true" /> : null}
+					{t("usage.title")}
+				</h1>
+				<div className="workspace-topbar-actions flex min-w-0 shrink-0 items-center gap-2">
+					{!isLimits && projects.length > 0 ? (
+						<SettingsOptionMenu
+							aria-label={t("usage.projectFilter")}
+							value={projectFilter}
+							options={[{ value: ALL_PROJECTS, label: t("usage.allProjects") }, ...projects.map((project) => ({ value: project.id, label: projectNames.get(project.id) ?? project.name }))]}
+							onChange={setProjectFilter}
+							menuAlign="end"
+							menuClassName="max-h-72"
+							triggerClassName="h-(--size-control-md)! text-xs!"
+						/>
+					) : null}
+					<Tabs value={tab} onValueChange={(value) => setTab(value as UsageTab)}>
+						<TabsList aria-label={t("usage.views")} className="h-8">
+							<TabsTrigger value="cost" className="px-2.5 text-xs">{t("usage.view.cost")}</TabsTrigger>
+							<TabsTrigger value="tokens" className="px-2.5 text-xs">{t("usage.view.tokens")}</TabsTrigger>
+							<TabsTrigger value="limits" className="px-2.5 text-xs">{t("usage.view.limits")}</TabsTrigger>
+						</TabsList>
+					</Tabs>
+					{!isLimits ? (
+						<Tabs value={String(days)} onValueChange={(value) => setDays(Number(value))}>
+							<TabsList aria-label={t("usage.period")} className="h-8">
+								{PERIODS.map((period) => (
+									<TabsTrigger key={period.days} value={String(period.days)} className="px-2.5 text-xs">{t(period.label)}</TabsTrigger>
+								))}
+							</TabsList>
+						</Tabs>
+					) : null}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button variant="ghost" size="icon" aria-label={t("usage.refresh")} disabled={refreshing} onClick={() => void refresh()} className="size-8">
+								<RefreshCw aria-hidden="true" className={cn("size-icon-sm", refreshing && "animate-spin")} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>{t("usage.refresh")}</TooltipContent>
+					</Tooltip>
+				</div>
+			</header>
+			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
+				<main className="relative min-h-0 flex-1 overflow-hidden">
+					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
+						<div className="mx-auto w-full max-w-6xl px-6 py-6">
+							{isLimits ? (
+								accounts.isLoading ? (
+									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
+								) : accounts.error ? (
+									<p role="alert" className="py-16 text-center text-sm text-destructive">{accounts.error.message}</p>
+								) : (
+									<UsageLimits accounts={accounts.data ?? []} now={now} />
+								)
+							) : report.isLoading ? (
+								<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
+							) : report.error ? (
+								<p role="alert" className="py-16 text-center text-sm text-destructive">{report.error.message}</p>
+							) : !report.data || report.data.rows.length === 0 ? (
+								<div className="flex flex-col items-center gap-1 py-16 text-center">
+									<p className="text-control font-medium text-foreground">{t("usage.empty.title")}</p>
+									<p className="max-w-sm text-xs text-muted-foreground">{t("usage.empty.body")}</p>
+								</div>
+							) : (
+								<div className={cn("transition-opacity", report.isPlaceholderData && "opacity-60")}>
+									<UsageSpend report={report.data} unit={tab === "tokens" ? "tokens" : "cost"} projectNames={projectNames} />
+								</div>
+							)}
+						</div>
+					</ScrollArea.Viewport>
+					<ScrollArea.Scrollbar orientation="vertical" className="z-10 flex w-2 touch-none select-none p-0.5">
+						<ScrollArea.Thumb className="relative flex-1 rounded-full bg-[color-mix(in_srgb,var(--color-scrollbar)_42%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-scrollbar)_56%,transparent)]" />
+					</ScrollArea.Scrollbar>
+				</main>
+			</ScrollArea.Root>
+		</div>
+	);
+}

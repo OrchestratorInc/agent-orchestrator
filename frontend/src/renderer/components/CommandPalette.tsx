@@ -456,6 +456,7 @@ export function CommandPalette() {
 		(target: NavigateTarget) => {
 			switch (target.to) {
 				case "/":
+				case "/usage":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":

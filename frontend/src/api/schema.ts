@@ -5283,78 +5283,6 @@ export interface components {
         ControllersUpdateCloudOfferingRequest: {
             enabled: null | boolean;
         };
-        ControllersUsageReportResponse: {
-            days: number;
-            /** @description Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour. */
-            periods: string[];
-            /** @enum {string} */
-            resolution: "day" | "hour";
-            rows: components["schemas"]["ControllersUsageReportRowResponse"][];
-            sessions: components["schemas"]["ControllersUsageReportSessionResponse"][];
-            /** Format: date-time */
-            since: string;
-            timeZone: string;
-            /** Format: date-time */
-            until: string;
-        };
-        ControllersUsageReportRowResponse: {
-            /** Format: int64 */
-            cacheReadCostNanos: number;
-            /** Format: int64 */
-            cacheReadTokens: number;
-            /**
-             * Format: int64
-             * @description What cache reads saved against paying input rates for those tokens.
-             */
-            cacheSavingsNanos: number;
-            /** Format: int64 */
-            cacheWriteCostNanos: number;
-            /** Format: int64 */
-            cacheWriteTokens: number;
-            /** Format: int64 */
-            costNanos: number;
-            /** Format: int64 */
-            events: number;
-            harness: string;
-            /** Format: int64 */
-            inputCostNanos: number;
-            /**
-             * Format: int64
-             * @description Uncached input that was not written to the cache.
-             */
-            inputTokens: number;
-            model: string;
-            /** Format: int64 */
-            outputCostNanos: number;
-            /** Format: int64 */
-            outputTokens: number;
-            period: string;
-            /**
-             * Format: int64
-             * @description Part of costNanos above standard rates, from priority, fast or ultrafast processing.
-             */
-            premiumNanos: number;
-            /** Format: int64 */
-            pricedEvents: number;
-            /** @description standard, priority, fast, flex, ultrafast, or unknown. */
-            speed: string;
-        };
-        ControllersUsageReportSessionResponse: {
-            /** Format: int64 */
-            costNanos: number;
-            /** Format: int64 */
-            events: number;
-            harness: string;
-            /** Format: date-time */
-            lastUsedAt: string;
-            /** Format: int64 */
-            pricedEvents: number;
-            projectId?: string;
-            sessionId: string;
-            title: string;
-            /** Format: int64 */
-            tokens: number;
-        };
         ConversationAccountPayload: {
             authFailureId?: string;
             authMode?: string;
@@ -7602,6 +7530,78 @@ export interface components {
         UsageModelResponse: {
             modelId: string;
             totals: components["schemas"]["UsageTotalsResponse"];
+        };
+        UsageReportResponse: {
+            days: number;
+            /** @description Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour. */
+            periods: string[];
+            /** @enum {string} */
+            resolution: "day" | "hour";
+            rows: components["schemas"]["UsageReportRowResponse"][];
+            sessions: components["schemas"]["UsageReportSessionResponse"][];
+            /** Format: date-time */
+            since: string;
+            timeZone: string;
+            /** Format: date-time */
+            until: string;
+        };
+        UsageReportRowResponse: {
+            /** Format: int64 */
+            cacheReadCostNanos: number;
+            /** Format: int64 */
+            cacheReadTokens: number;
+            /**
+             * Format: int64
+             * @description What cache reads saved against paying input rates for those tokens.
+             */
+            cacheSavingsNanos: number;
+            /** Format: int64 */
+            cacheWriteCostNanos: number;
+            /** Format: int64 */
+            cacheWriteTokens: number;
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: int64 */
+            inputCostNanos: number;
+            /**
+             * Format: int64
+             * @description Uncached input that was not written to the cache.
+             */
+            inputTokens: number;
+            model: string;
+            /** Format: int64 */
+            outputCostNanos: number;
+            /** Format: int64 */
+            outputTokens: number;
+            period: string;
+            /**
+             * Format: int64
+             * @description Part of costNanos above standard rates, from priority, fast or ultrafast processing.
+             */
+            premiumNanos: number;
+            /** Format: int64 */
+            pricedEvents: number;
+            /** @description standard, priority, fast, flex, ultrafast, or unknown. */
+            speed: string;
+        };
+        UsageReportSessionResponse: {
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: date-time */
+            lastUsedAt: string;
+            /** Format: int64 */
+            pricedEvents: number;
+            projectId?: string;
+            sessionId: string;
+            title: string;
+            /** Format: int64 */
+            tokens: number;
         };
         UsageTotalsResponse: {
             /** @description Deprecated compatibility alias for cachedInputTokens. */
@@ -23364,7 +23364,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControllersUsageReportResponse"];
+                    "application/json": components["schemas"]["UsageReportResponse"];
                 };
             };
             /** @description Bad Request */

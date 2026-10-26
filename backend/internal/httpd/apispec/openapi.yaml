@@ -12651,7 +12651,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ControllersUsageReportResponse'
+                $ref: '#/components/schemas/UsageReportResponse'
           description: OK
         "400":
           content:
@@ -15424,156 +15424,6 @@ components:
           - boolean
       required:
       - enabled
-      type: object
-    ControllersUsageReportResponse:
-      properties:
-        days:
-          type: integer
-        periods:
-          description: 'Every bucket in the window, oldest first: 2006-01-02 by day,
-            2006-01-02T15:00 by hour.'
-          items:
-            type: string
-          type: array
-        resolution:
-          enum:
-          - day
-          - hour
-          type: string
-        rows:
-          items:
-            $ref: '#/components/schemas/ControllersUsageReportRowResponse'
-          type: array
-        sessions:
-          items:
-            $ref: '#/components/schemas/ControllersUsageReportSessionResponse'
-          type: array
-        since:
-          format: date-time
-          type: string
-        timeZone:
-          type: string
-        until:
-          format: date-time
-          type: string
-      required:
-      - days
-      - timeZone
-      - resolution
-      - since
-      - until
-      - periods
-      - rows
-      - sessions
-      type: object
-    ControllersUsageReportRowResponse:
-      properties:
-        cacheReadCostNanos:
-          format: int64
-          type: integer
-        cacheReadTokens:
-          format: int64
-          type: integer
-        cacheSavingsNanos:
-          description: What cache reads saved against paying input rates for those
-            tokens.
-          format: int64
-          type: integer
-        cacheWriteCostNanos:
-          format: int64
-          type: integer
-        cacheWriteTokens:
-          format: int64
-          type: integer
-        costNanos:
-          format: int64
-          type: integer
-        events:
-          format: int64
-          type: integer
-        harness:
-          type: string
-        inputCostNanos:
-          format: int64
-          type: integer
-        inputTokens:
-          description: Uncached input that was not written to the cache.
-          format: int64
-          type: integer
-        model:
-          type: string
-        outputCostNanos:
-          format: int64
-          type: integer
-        outputTokens:
-          format: int64
-          type: integer
-        period:
-          type: string
-        premiumNanos:
-          description: Part of costNanos above standard rates, from priority, fast
-            or ultrafast processing.
-          format: int64
-          type: integer
-        pricedEvents:
-          format: int64
-          type: integer
-        speed:
-          description: standard, priority, fast, flex, ultrafast, or unknown.
-          type: string
-      required:
-      - period
-      - harness
-      - model
-      - speed
-      - events
-      - pricedEvents
-      - inputTokens
-      - cacheReadTokens
-      - cacheWriteTokens
-      - outputTokens
-      - inputCostNanos
-      - cacheReadCostNanos
-      - cacheWriteCostNanos
-      - outputCostNanos
-      - costNanos
-      - premiumNanos
-      - cacheSavingsNanos
-      type: object
-    ControllersUsageReportSessionResponse:
-      properties:
-        costNanos:
-          format: int64
-          type: integer
-        events:
-          format: int64
-          type: integer
-        harness:
-          type: string
-        lastUsedAt:
-          format: date-time
-          type: string
-        pricedEvents:
-          format: int64
-          type: integer
-        projectId:
-          type: string
-        sessionId:
-          type: string
-        title:
-          type: string
-        tokens:
-          format: int64
-          type: integer
-      required:
-      - sessionId
-      - harness
-      - title
-      - events
-      - pricedEvents
-      - tokens
-      - costNanos
-      - lastUsedAt
       type: object
     ConversationAccountPayload:
       properties:
@@ -21380,6 +21230,156 @@ components:
       required:
       - modelId
       - totals
+      type: object
+    UsageReportResponse:
+      properties:
+        days:
+          type: integer
+        periods:
+          description: 'Every bucket in the window, oldest first: 2006-01-02 by day,
+            2006-01-02T15:00 by hour.'
+          items:
+            type: string
+          type: array
+        resolution:
+          enum:
+          - day
+          - hour
+          type: string
+        rows:
+          items:
+            $ref: '#/components/schemas/UsageReportRowResponse'
+          type: array
+        sessions:
+          items:
+            $ref: '#/components/schemas/UsageReportSessionResponse'
+          type: array
+        since:
+          format: date-time
+          type: string
+        timeZone:
+          type: string
+        until:
+          format: date-time
+          type: string
+      required:
+      - days
+      - timeZone
+      - resolution
+      - since
+      - until
+      - periods
+      - rows
+      - sessions
+      type: object
+    UsageReportRowResponse:
+      properties:
+        cacheReadCostNanos:
+          format: int64
+          type: integer
+        cacheReadTokens:
+          format: int64
+          type: integer
+        cacheSavingsNanos:
+          description: What cache reads saved against paying input rates for those
+            tokens.
+          format: int64
+          type: integer
+        cacheWriteCostNanos:
+          format: int64
+          type: integer
+        cacheWriteTokens:
+          format: int64
+          type: integer
+        costNanos:
+          format: int64
+          type: integer
+        events:
+          format: int64
+          type: integer
+        harness:
+          type: string
+        inputCostNanos:
+          format: int64
+          type: integer
+        inputTokens:
+          description: Uncached input that was not written to the cache.
+          format: int64
+          type: integer
+        model:
+          type: string
+        outputCostNanos:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+        period:
+          type: string
+        premiumNanos:
+          description: Part of costNanos above standard rates, from priority, fast
+            or ultrafast processing.
+          format: int64
+          type: integer
+        pricedEvents:
+          format: int64
+          type: integer
+        speed:
+          description: standard, priority, fast, flex, ultrafast, or unknown.
+          type: string
+      required:
+      - period
+      - harness
+      - model
+      - speed
+      - events
+      - pricedEvents
+      - inputTokens
+      - cacheReadTokens
+      - cacheWriteTokens
+      - outputTokens
+      - inputCostNanos
+      - cacheReadCostNanos
+      - cacheWriteCostNanos
+      - outputCostNanos
+      - costNanos
+      - premiumNanos
+      - cacheSavingsNanos
+      type: object
+    UsageReportSessionResponse:
+      properties:
+        costNanos:
+          format: int64
+          type: integer
+        events:
+          format: int64
+          type: integer
+        harness:
+          type: string
+        lastUsedAt:
+          format: date-time
+          type: string
+        pricedEvents:
+          format: int64
+          type: integer
+        projectId:
+          type: string
+        sessionId:
+          type: string
+        title:
+          type: string
+        tokens:
+          format: int64
+          type: integer
+      required:
+      - sessionId
+      - harness
+      - title
+      - events
+      - pricedEvents
+      - tokens
+      - costNanos
+      - lastUsedAt
       type: object
     UsageTotalsResponse:
       properties:
