@@ -25,6 +25,7 @@ import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { isRestoredQueryData } from "../lib/restored-query";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { useEventStreamHealthy } from "./useEventsConnection";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -376,6 +377,8 @@ export interface ConversationQueryResult {
 	unavailable?: { code: string; message: string };
 	error?: string;
 	refreshError?: string;
+	/** The snapshot came from the cache of an earlier launch and is being refetched; never act on it. */
+	restored?: boolean;
 	hasOlder: boolean;
 	isLoadingOlder: boolean;
 	loadOlder: () => void;
@@ -621,6 +624,7 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 	return {
 		snapshot: query.data,
 		refreshError: hostId && (refreshError || query.error) ? "Could not load this remote conversation." : undefined,
+		restored: isRestoredQueryData(query),
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
