@@ -1940,9 +1940,11 @@ textarea,
 }
 
 /* Streamed prose: each newly revealed character fades in once, on mount (see
-   lib/rehype-stream-fade.ts). */
+   lib/rehype-stream-fade.ts). No fill mode: with no delay it looks the same,
+   and a filling animation never ends, so a long reply kept a thousand finished
+   animations alive and re-layerized them on every frame. */
 .stream-char {
-	animation: stream-char-in 300ms ease both;
+	animation: stream-char-in 300ms ease;
 }
 
 @keyframes stream-char-in {
