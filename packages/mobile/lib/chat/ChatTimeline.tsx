@@ -31,7 +31,7 @@ import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { userMessageSurfaceStyle } from "./chatChrome";
-import { actionControlWidth, requestPresentation } from "./chatPresentation";
+import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
 import { ElicitationAction } from "./elicitation-native-controls";
@@ -1000,10 +1000,17 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 		{activity.detail?.cwd ? <LabelValue label="cwd" value={activity.detail.cwd} /> : null}
 		{activity.decisions?.length ? <View style={styles.approvalActions}>{activity.decisions.map((decision, index) => {
 			const label = submitting === decision.id ? "Sending…" : decision.label;
-			return <ElicitationAction key={decision.id} label={label} width={actionControlWidth(label, index === 0)} primary={index === 0} disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
+			// One haptic per decision, when it lands: the press itself only starts the work.
+			return <ElicitationAction key={decision.id} label={label} primary={index === 0} reportsOutcome disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
 				setSubmitting(decision.id);
 				setSubmitError(undefined);
-				void onDecide(activity.requestId ?? "", decision.id).catch((cause) => setSubmitError(userFacingError(cause))).finally(() => setSubmitting(undefined));
+				void onDecide(activity.requestId ?? "", decision.id)
+					.then(() => haptics.success())
+					.catch((cause) => {
+						setSubmitError(userFacingError(cause));
+						haptics.error();
+					})
+					.finally(() => setSubmitting(undefined));
 			}} />;
 		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
@@ -1033,17 +1040,22 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 		if (submitting || !activity.requestId) return;
 		setSubmitting(true);
 		setSubmitError(undefined);
-		try { await onResolve(activity.requestId, action, content); }
-		catch (cause) { setSubmitError(userFacingError(cause)); }
-		finally { setSubmitting(false); }
+		// One haptic per answer, when it lands: the press itself only starts the work.
+		try {
+			await onResolve(activity.requestId, action, content);
+			haptics.success();
+		} catch (cause) {
+			setSubmitError(userFacingError(cause));
+			haptics.error();
+		} finally { setSubmitting(false); }
 	};
 	const submit = () => {
 		const visibleRequired = visibleProperties.flatMap(([name]) => schema?.required?.includes(name) ? [name] : []);
 		const missing = missingRequiredInputs(visibleRequired, values);
-		if (missing.length) { setValidationError(`Complete ${missing.join(", ")} before continuing.`); return; }
+		if (missing.length) { setValidationError(`Complete ${missing.join(", ")} before continuing.`); haptics.error(); return; }
 		for (const [name, property] of visibleProperties) {
 			const problem = validateInput(property, values[name]);
-			if (problem) { setValidationError(`${property.title || humanizeInputName(name)} ${problem}.`); return; }
+			if (problem) { setValidationError(`${property.title || humanizeInputName(name)} ${problem}.`); haptics.error(); return; }
 		}
 		setValidationError(undefined);
 		if (hasNextQuestion) {
@@ -1062,16 +1074,19 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 		{validationError ? <Text accessibilityRole="alert" style={styles.validation}>{validationError}</Text> : null}
 		{submitError ? <Text accessibilityRole="alert" style={styles.validation}>{submitError}</Text> : null}
 		{pending && activity.requestId ? <View style={styles.inputActions}>
-			<ElicitationAction label="Cancel" disabled={busy || submitting} onPress={() => void resolve("cancel")} />
-			<ElicitationAction label={activity.detail?.inputMode === "url" ? "Decline" : "Skip"} disabled={busy || submitting} onPress={() => void resolve("decline")} />
+			<ElicitationAction label="Cancel" reportsOutcome disabled={busy || submitting} onPress={() => void resolve("cancel")} />
+			<ElicitationAction label={activity.detail?.inputMode === "url" ? "Decline" : "Skip"} reportsOutcome disabled={busy || submitting} onPress={() => void resolve("decline")} />
 			<View style={{ flex: 1 }} />
 			{activity.detail?.inputMode !== "url" && hasPreviousQuestion ? <ElicitationAction label="Back" disabled={busy || submitting} onPress={() => { setValidationError(undefined); setActiveQuestion((current) => Math.max(0, current - 1)); }} /> : null}
-			{activity.detail?.inputMode === "url" ? <ElicitationAction label={submitting ? "Opening…" : "Open link"} primary disabled={busy || submitting || !url} onPress={() => {
+			{activity.detail?.inputMode === "url" ? <ElicitationAction label={submitting ? "Opening…" : "Open link"} primary reportsOutcome disabled={busy || submitting || !url} onPress={() => {
 				if (!url) return;
 				void Linking.openURL(url.href)
 					.then(() => resolve("accept"))
-					.catch(() => setValidationError("This link could not be opened on this device."));
-			}} /> : <ElicitationAction label={submitting ? "Sending…" : step.primaryLabel} primary disabled={busy || submitting} onPress={submit} />}
+					.catch(() => {
+						setValidationError("This link could not be opened on this device.");
+						haptics.error();
+					});
+			}} /> : <ElicitationAction label={submitting ? "Sending…" : step.primaryLabel} primary reportsOutcome disabled={busy || submitting} onPress={submit} />}
 		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so Orchestrator cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
 	</View>;
 }

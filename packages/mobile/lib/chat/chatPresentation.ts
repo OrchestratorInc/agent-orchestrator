@@ -26,7 +26,3 @@ export function requestPresentation(kind: "approval" | "input", pending: boolean
 		? { icon: "shield", title: "Approval needed", badge: "Needs approval", tone: "attention" }
 		: { icon: "message-circle", title: "Agent needs input", badge: "Needs input", tone: "accent" };
 }
-
-export function actionControlWidth(label: string, primary = false): number {
-	return Math.min(148, Math.max(primary ? 76 : 58, label.length * 7 + 24));
-}

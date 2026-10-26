@@ -89,7 +89,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 // Spans the row behind the actions, unseen and untouchable: it only measures.
 const measureStyle = { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0 } as const;
 
-export function ElicitationAction({ label, primary, disabled, width, reportsOutcome, onPress }: ElicitationActionProps) {
+export function ElicitationAction({ label, primary, disabled, reportsOutcome, onPress }: ElicitationActionProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const fit = useActionFit(label);
@@ -100,7 +100,7 @@ export function ElicitationAction({ label, primary, disabled, width, reportsOutc
 			// The large prominent button is at least the 44pt target. A plain one is
 			// only as tappable as its label, so the label carries the target.
 			controlSize(primary ? "large" : "regular"),
-			...(cap !== undefined ? [frame({ width: cap })] : width ? [frame({ minWidth: width })] : []),
+			...(cap !== undefined ? [frame({ width: cap })] : []),
 			multilineTextAlignment("center"),
 			tint(primary ? t.accent : t.textSecondary),
 			disabledModifier(disabled),
@@ -110,8 +110,7 @@ export function ElicitationAction({ label, primary, disabled, width, reportsOutc
 		<Text modifiers={primary ? [] : [frame({ minWidth: touchTarget, minHeight: touchTarget }), contentShape(shapes.rectangle())]}>{label}</Text>
 	</Button>;
 	// The button takes its label's own width, so a long decision is never cut
-	// short, and wraps only when that is wider than the row. `width` reserves a
-	// slot the button may outgrow.
+	// short, and wraps only when that is wider than the row.
 	return <>
 		<Host
 			pointerEvents="none"

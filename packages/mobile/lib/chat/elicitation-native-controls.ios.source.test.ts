@@ -33,11 +33,11 @@ describe("iOS elicitation controls", () => {
 	});
 
 	// A width guessed from the label's length cut long decisions short. The
-	// button sizes itself, is held to the row only when its label is wider, and
-	// a caller's width only reserves a slot.
+	// button sizes itself, and is held to the row only when its label is wider.
 	it("sizes each action to its label, within its row", () => {
 		expect(source).toContain('<Host matchContents style={{ maxWidth: "100%" }} colorScheme={scheme}>');
-		expect(source).toContain("...(cap !== undefined ? [frame({ width: cap })] : width ? [frame({ minWidth: width })] : [])");
+		expect(source).toContain("...(cap !== undefined ? [frame({ width: cap })] : [])");
+		expect(source).not.toContain("minWidth: width");
 		expect(source).toContain("{button(undefined, [fixedSize(), accessibilityHidden(true)])}");
 		expect(source).not.toContain("resolvedWidth");
 		expect(source).not.toContain("label.length");

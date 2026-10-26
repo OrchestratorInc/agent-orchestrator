@@ -121,6 +121,31 @@ describe("elicitation boolean input", () => {
 	});
 });
 
+describe("request cards in the timeline", () => {
+	const approval = source.slice(source.indexOf("function ApprovalCard"), source.indexOf("function UserInputCard"));
+	const input = source.slice(source.indexOf("function UserInputCard"), source.indexOf("function CompactionMarker"));
+
+	// As in the composer's RequestCard: the press tapped and nothing said whether
+	// the answer landed. Now the outcome is the one haptic.
+	it("buzz once, when an answer lands or fails", () => {
+		expect(approval).toMatch(/onDecide\(activity\.requestId \?\? "", decision\.id\)\s*\.then\(\(\) => haptics\.success\(\)\)/);
+		expect(approval).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
+		expect(approval).toContain("primary={index === 0} reportsOutcome");
+		expect(input).toMatch(/await onResolve\(activity\.requestId, action, content\);\s*haptics\.success\(\);/);
+		expect(input).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
+		for (const label of ['label="Cancel" reportsOutcome', '"Decline" : "Skip"} reportsOutcome', '"Open link"} primary reportsOutcome', "step.primaryLabel} primary reportsOutcome"]) {
+			expect(input).toContain(label);
+		}
+	});
+
+	// The button sizes itself to its label; a width guessed from the label's
+	// length only cut long decisions short.
+	it("let each decision size itself", () => {
+		expect(approval).not.toContain("width=");
+		expect(source).not.toContain("actionControlWidth");
+	});
+});
+
 describe("disclosure rows", () => {
 	// Opening a fold or a page is not a haptic moment on either platform.
 	it("toggle and navigate without a haptic", () => {

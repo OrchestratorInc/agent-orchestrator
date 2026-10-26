@@ -130,12 +130,12 @@ function measure(row: number, label: number) {
 
 it("lets an action take its label's width instead of a guessed one", () => {
 	const onPress = vi.fn();
-	act(() => { renderer = create(<ElicitationAction label="Allow once" primary width={82} onPress={onPress} />); });
+	act(() => { renderer = create(<ElicitationAction label="Allow once" primary onPress={onPress} />); });
 	const { measure: copy, visible, probe, button, label } = actionParts();
 	expect(visible.props.matchContents).toBe(true);
 	expect(visible.props.style).toEqual({ maxWidth: "100%" });
 	expect(label.props.children).toBe("Allow once");
-	expect(modifier(button, "frame")).toEqual([{ minWidth: 82 }]);
+	expect(modifier(button, "frame")).toBeUndefined();
 	// The copy spans the row at its natural width, out of reach of touch and screen readers.
 	expect(copy.props.matchContents).toBeUndefined();
 	expect(copy.props.pointerEvents).toBe("none");
@@ -145,7 +145,7 @@ it("lets an action take its label's width instead of a guessed one", () => {
 	expect(modifier(probe, "accessibilityHidden")).toEqual([true]);
 	expect(probe.props.onPress).toBeUndefined();
 	measure(320, 140);
-	expect(modifier(actionParts().button, "frame")).toEqual([{ minWidth: 82 }]);
+	expect(modifier(actionParts().button, "frame")).toBeUndefined();
 	act(() => actionParts().button.props.onPress());
 	expect(onPress).toHaveBeenCalledOnce();
 });

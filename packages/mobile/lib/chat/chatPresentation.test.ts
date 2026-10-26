@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { actionControlWidth, conversationMarkerPresentation, requestPresentation } from "./chatPresentation";
+import { conversationMarkerPresentation, requestPresentation } from "./chatPresentation";
 
 describe("chat presentation", () => {
 	it("gives conversation-map states concise user-facing labels and semantic tones", () => {
@@ -20,11 +20,5 @@ describe("chat presentation", () => {
 		expect(requestPresentation("input", true)).toEqual({ icon: "message-circle", title: "Agent needs input", badge: "Needs input", tone: "accent" });
 		expect(requestPresentation("approval", false)).toEqual({ icon: "check-circle", title: "Approval resolved", badge: "Resolved", tone: "muted" });
 		expect(requestPresentation("input", false)).toEqual({ icon: "check-circle", title: "Input resolved", badge: "Resolved", tone: "muted" });
-	});
-
-	it("gives longer native approval actions room without letting them dominate the row", () => {
-		expect(actionControlWidth("Allow once")).toBeGreaterThan(actionControlWidth("Skip"));
-		expect(actionControlWidth("Next", true)).toBeGreaterThanOrEqual(76);
-		expect(actionControlWidth("A very long provider-owned permission decision")).toBeLessThanOrEqual(148);
 	});
 });

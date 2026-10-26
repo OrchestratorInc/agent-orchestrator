@@ -1,5 +1,5 @@
 import { Button, Checkbox, Column, Host, ListItem, OutlinedTextField, RadioButton, Text, TextButton, useNativeState } from "@expo/ui/jetpack-compose";
-import { defaultMinSize, fillMaxWidth, selectable, selectableGroup, testID, toggleable, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
+import { fillMaxWidth, selectable, selectableGroup, testID, toggleable, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
 import { StyleSheet, View } from "react-native";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
@@ -30,8 +30,6 @@ export type ElicitationActionProps = {
 	label: string;
 	primary?: boolean;
 	disabled?: boolean;
-	/** The least room the button keeps, so a label that changes (Save, Saving…) does not move its neighbours. It still grows to fit its label. */
-	width?: number;
 	/** The caller buzzes when the work lands (success or error), so the press itself stays silent and the action gives one haptic. */
 	reportsOutcome?: boolean;
 	onPress(): void;
@@ -111,12 +109,12 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 	);
 }
 
-export function ElicitationAction({ label, primary, disabled, width, reportsOutcome, onPress }: ElicitationActionProps) {
+export function ElicitationAction({ label, primary, disabled, reportsOutcome, onPress }: ElicitationActionProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const fit = useActionFit(label);
 	const button = (cap: number | undefined, press?: () => void) => {
-		const modifiers = cap !== undefined ? [fixedWidth(cap)] : width ? [defaultMinSize({ minWidth: width })] : undefined;
+		const modifiers = cap !== undefined ? [fixedWidth(cap)] : undefined;
 		const title = <Text style={{ typography: "labelLarge", fontFamily: font.semibold, textAlign: "center" }}>{label}</Text>;
 		return primary ? (
 			<Button onClick={press} enabled={!disabled} colors={{ containerColor: t.accent, contentColor: t.onAccent }} modifiers={modifiers}>

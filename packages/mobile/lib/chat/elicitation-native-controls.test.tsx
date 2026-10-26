@@ -9,7 +9,7 @@ vi.mock("@expo/ui/jetpack-compose", () => ({
 }));
 // Each modifier records its name and arguments, so a test can read what a control was given.
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => Object.fromEntries([
-	"defaultMinSize", "fillMaxWidth", "selectable", "selectableGroup", "testID", "toggleable", "width",
+	"fillMaxWidth", "selectable", "selectableGroup", "testID", "toggleable", "width",
 ].map((name) => [name, (...args: unknown[]) => ({ [name]: args })])));
 vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({ accent: "#0a84ff", onAccent: "#ffffff" }), useThemeState: () => ({ scheme: "light" }) }));
@@ -37,7 +37,7 @@ function measure(row: number, label: number) {
 const modifiers = (node: ReactTestInstance) => node.props.modifiers as Record<string, unknown>[] | undefined;
 
 it("sizes a Material action to its label while that fits the row", () => {
-	act(() => { renderer = create(<ElicitationAction label="Save" primary width={82} onPress={vi.fn()} />); });
+	act(() => { renderer = create(<ElicitationAction label="Save" primary onPress={vi.fn()} />); });
 	const { ruler, copyHost, visible, copy, button, title } = actionParts();
 	expect(button.type).toBe("Button");
 	expect(button.props.colors).toEqual({ containerColor: "#0a84ff", contentColor: "#ffffff" });
@@ -52,8 +52,9 @@ it("sizes a Material action to its label while that fits the row", () => {
 	// The title wraps rather than ending in an ellipsis.
 	expect(title.props.maxLines).toBeUndefined();
 	expect(title.props.style).toMatchObject({ textAlign: "center" });
+	expect(modifiers(button)).toBeUndefined();
 	measure(360, 96);
-	expect(modifiers(actionParts().button)).toEqual([{ defaultMinSize: [{ minWidth: 82 }] }]);
+	expect(modifiers(actionParts().button)).toBeUndefined();
 });
 
 it("holds a decision wider than its row to the row, so its label wraps", () => {
