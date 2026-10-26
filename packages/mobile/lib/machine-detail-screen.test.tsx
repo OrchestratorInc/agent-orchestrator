@@ -56,7 +56,7 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", async () => ({
 	alpha: (value: number) => ({ $type: "alpha", args: [value] }),
 	graphicsLayer: (value: unknown) => ({ $type: "graphicsLayer", args: [value] }),
 }));
-vi.mock("./formDrawables.android", () => ({ formDrawables: { edit: "edit.xml", expandMore: "expand_more.xml" } }));
+vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `${name}.xml` }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: fixtures.copy }));
 vi.mock("./Toast", () => ({ ToastHost: "ToastHost" }));
 vi.mock("./environmentActions", () => ({ forgetEnvironmentMachine: fixtures.forget }));

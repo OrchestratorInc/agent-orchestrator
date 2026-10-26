@@ -12,11 +12,11 @@ import {
 	environmentStatusColor,
 	primaryEnvironmentEndpoint,
 } from "./environmentView";
-import { formDrawables } from "./formDrawables.android";
 import { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { ToastHost } from "./Toast";
 import { space } from "./tokens";
+import { materialDrawable } from "./toolbarIcon.android";
 import { useToast } from "./useToast";
 
 export { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
@@ -36,7 +36,7 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 	const busy = switching || forgetting;
 	const headerItems = useMemo(() => (
 		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={formDrawables.edit} accessibilityLabel={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} />
+			<Stack.Toolbar.Button icon={materialDrawable("edit")} accessibilityLabel={`Edit ${host.name}`} disabled={forgetting} onPress={onEdit} />
 		</Stack.Toolbar>
 	), [forgetting, host.name, onEdit]);
 
@@ -71,7 +71,7 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 								supporting={`${others.length} available`}
 								trailing={
 									<Icon
-										source={formDrawables.expandMore}
+										source={materialDrawable("expand_more")}
 										tint={t.textSecondary}
 										contentDescription={showOtherRoutes ? "Hide other routes" : "Show other routes"}
 										modifiers={[graphicsLayer({ rotationZ: showOtherRoutes ? 180 : 0 })]}

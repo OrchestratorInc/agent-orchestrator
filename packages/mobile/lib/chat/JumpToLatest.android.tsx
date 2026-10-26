@@ -3,8 +3,8 @@ import { paddingAll } from "@expo/ui/jetpack-compose/modifiers";
 import { StyleSheet } from "react-native";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { iconSize, space } from "../tokens";
+import { materialDrawable } from "../toolbarIcon.android";
 import { jumpToLatestColors } from "./chatChrome";
-import { arrowDownwardDrawable } from "./jumpToLatestDrawable";
 import { JUMP_TO_LATEST_LABEL, type JumpToLatestProps } from "./JumpToLatest.types";
 
 export type { JumpToLatestProps } from "./JumpToLatest.types";
@@ -28,7 +28,7 @@ export function JumpToLatest({ onPress }: JumpToLatestProps) {
 		<Host matchContents colorScheme={scheme} style={styles.anchor}>
 			<SmallFloatingActionButton containerColor={colors.backgroundColor} onClick={onPress} modifiers={[paddingAll(SHADOW_ROOM)]}>
 				<SmallFloatingActionButton.Icon>
-					<Icon source={arrowDownwardDrawable} size={iconSize.xl} tint={colors.foregroundColor} contentDescription={JUMP_TO_LATEST_LABEL} />
+					<Icon source={materialDrawable("arrow_downward")} size={iconSize.xl} tint={colors.foregroundColor} contentDescription={JUMP_TO_LATEST_LABEL} />
 				</SmallFloatingActionButton.Icon>
 			</SmallFloatingActionButton>
 		</Host>

@@ -14,9 +14,6 @@ vi.mock("./ThemeProvider", () => ({
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: (harness?: string) => (harness === "codex" || harness === "opencode" ? `logo:${harness}` : null) }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
-vi.mock("./spawn-composer-drawables.android", () => ({
-	spawnDrawables: new Proxy({}, { get: (_target, key) => `drawable:${String(key)}` }),
-}));
 vi.mock("./voice/MicKey", async () => {
 	const React = await import("react");
 	return { MicKey: (props: object) => React.createElement("MicKey", props) };
@@ -181,7 +178,7 @@ describe("Android spawn selectors", () => {
 		expect(rows.map((node) => hostType(node) === "HorizontalDivider" ? "divider" : text(node))).toEqual(["Project", "divider", "Standalone agent"]);
 		const glyph = (node: ReactTestInstance) => node.findByType("DropdownMenuItemLeadingIcon" as never).findByType("Icon" as never).props.source;
 		expect(glyph(item(menu, "Project"))).toBe("drawable:folder");
-		expect(glyph(item(menu, "Standalone agent"))).toBe("drawable:standalone");
+		expect(glyph(item(menu, "Standalone agent"))).toBe("drawable:add_comment");
 	});
 
 	it("draws harness marks in their own colours, on a chip only where one is needed", async () => {
@@ -191,7 +188,7 @@ describe("Android spawn selectors", () => {
 		expect(mark("Codex").findByType("Icon" as never).props).toMatchObject({ source: "logo:codex", tint: null });
 		expect(mark("OpenCode").findAllByType("Box" as never)).toHaveLength(1);
 		expect(mark("OpenCode").findByType("Icon" as never).props).toMatchObject({ source: "logo:opencode", tint: null });
-		expect(mark("Aider").findByType("Icon" as never).props.source).toBe("drawable:agent");
+		expect(mark("Aider").findByType("Icon" as never).props.source).toBe("drawable:terminal");
 	});
 
 	it("offers both a photo and a file from the attach button", async () => {

@@ -3,9 +3,9 @@ import { materialDrawable } from "./toolbarIcon.android";
 
 export type { PRCardMenuIcons } from "./pr-card-menu-icons.types";
 
-// Bundled rather than resolved by name: a Compose menu item draws only an image
-// source, and a `require` of a missing file fails at bundle time.
+// A Compose menu item draws only an image source, so each glyph is the shared
+// registry's drawable for the Material Symbol of the registry entry iOS names.
 export const prCardMenuIcons: PRCardMenuIcons = {
 	openInGitHub: materialDrawable("open_in_new"),
-	copyLink: require("../assets/icons/content_copy.xml"),
+	copyLink: materialDrawable("content_copy"),
 };

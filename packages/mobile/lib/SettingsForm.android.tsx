@@ -32,8 +32,8 @@ import {
 import { Children, createContext, Fragment, isValidElement, useContext, useState, type ReactNode } from "react";
 import { StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { pickerDrawables, settingsDrawable } from "./settingsDrawables.android";
 import {
+	settingsIcons,
 	settingsToneColor,
 	type SettingsButtonRowProps,
 	type SettingsChoiceSectionProps,
@@ -46,6 +46,7 @@ import {
 	type SettingsValueRowProps,
 } from "./SettingsForm.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
 import { font as typeface, gutter, iconSize, radius, space, stateOpacity } from "./tokens";
 
 export { settingsIcons, type SettingsIconName, type SettingsOption, type SettingsTone } from "./SettingsForm.types";
@@ -154,7 +155,7 @@ function SectionFooter({ children }: { children: string }) {
 }
 
 function RowIcon({ icon, color }: { icon: SettingsIconName; color: string }) {
-	return <Icon source={settingsDrawable(icon)} size={iconSize.xl} tint={color} />;
+	return <Icon source={materialDrawable(settingsIcons[icon].android)} size={iconSize.xl} tint={color} />;
 }
 
 function Headline({ children, color }: { children: string; color: string }) {
@@ -304,7 +305,7 @@ function MenuPickerRow<T extends string>({ icon, label, options, selectedValue, 
 					icon={icon}
 					label={label}
 					supporting={selected ? <Supporting color={t.textSecondary}>{selected.label}</Supporting> : undefined}
-					trailing={<Icon source={pickerDrawables.dropDown} size={iconSize.xl} tint={t.textSecondary} />}
+					trailing={<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textSecondary} />}
 					press={clickable(() => setExpanded(true))}
 					disabled={disabled}
 					testID={testID}
@@ -328,7 +329,7 @@ function MenuPickerRow<T extends string>({ icon, label, options, selectedValue, 
 							</DropdownMenuItem.Text>
 							{chosen ? (
 								<DropdownMenuItem.TrailingIcon>
-									<Icon source={pickerDrawables.check} size={iconSize.xl} contentDescription="Selected" />
+									<Icon source={materialDrawable("check")} size={iconSize.xl} contentDescription="Selected" />
 								</DropdownMenuItem.TrailingIcon>
 							) : null}
 						</DropdownMenuItem>

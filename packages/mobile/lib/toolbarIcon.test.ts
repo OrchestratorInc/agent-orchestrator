@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { symbols } from "./symbols";
@@ -7,6 +8,15 @@ import { materialDrawableNames } from "./toolbarIcon.types";
 
 const source = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const drawable = (name: string) => fileURLToPath(new URL(`../assets/icons/${name}.xml`, import.meta.url));
+const root = fileURLToPath(new URL("..", import.meta.url));
+
+function sources(dir: string): string[] {
+	return readdirSync(join(root, dir)).flatMap((name) => {
+		const path = join(dir, name);
+		if (statSync(join(root, path)).isDirectory()) return sources(path);
+		return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
+	});
+}
 
 describe("toolbarIcon", () => {
 	it("names the SF Symbol on iOS, which UIKit draws in the bar's tint", () => {
@@ -30,5 +40,19 @@ describe("toolbarIcon", () => {
 		expect(xml).toContain('android:viewportWidth="960"');
 		expect(xml).toMatch(/android:pathData="M[^"]+Z"/);
 		expect(source("./toolbarIcon.android.ts")).toContain(`${name}: require("../assets/icons/${name}.xml")`);
+	});
+
+	// One registry: every Android surface asks `materialDrawable`, so each
+	// drawable is required once, and every file in assets/icons is registered.
+	it("is the only module that bundles a drawable", () => {
+		const elsewhere = [...sources("app"), ...sources("lib")]
+			.filter((path) => path !== join("lib", "toolbarIcon.android.ts"))
+			.filter((path) => /require\([^)]*\.xml["']\)/.test(readFileSync(join(root, path), "utf8")));
+		expect(elsewhere).toEqual([]);
+	});
+
+	it("bundles every drawable in assets/icons", () => {
+		const files = readdirSync(join(root, "assets", "icons")).filter((name) => name.endsWith(".xml")).map((name) => name.slice(0, -".xml".length));
+		expect(files.sort()).toEqual([...materialDrawableNames].sort());
 	});
 });

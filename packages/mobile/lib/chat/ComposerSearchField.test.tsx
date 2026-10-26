@@ -67,7 +67,7 @@ describe("Android composer search", () => {
 	it("is Material's search field, seeded with the composer's query", () => {
 		expect(android).toContain("const text = useNativeState(initialQuery);");
 		expect(android).toContain("shape={Shape.Pill({})}");
-		expect(android).toContain("<TextField.LeadingIcon><Icon source={SEARCH} /></TextField.LeadingIcon>");
+		expect(android).toContain('<TextField.LeadingIcon><Icon source={materialDrawable("search")} /></TextField.LeadingIcon>');
 		expect(android).toContain('<Icon source={materialDrawable("close")} contentDescription="Clear search" />');
 	});
 });

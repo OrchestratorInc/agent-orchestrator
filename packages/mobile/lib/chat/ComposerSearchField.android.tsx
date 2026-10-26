@@ -10,8 +10,6 @@ import type { ComposerSearchFieldProps } from "./ComposerSearchField.types";
 
 export type { ComposerSearchFieldProps } from "./ComposerSearchField.types";
 
-const SEARCH = require("../../assets/icons/search.xml");
-
 /**
  * The picker's search, docked at the top of the sheet: Material's search-bar
  * input field, a pill-shaped field led by a search glyph, with a clear button
@@ -41,7 +39,7 @@ export function ComposerSearchField({ initialQuery, placeholder, onQuery }: Comp
 				modifiers={[fillMaxWidth()]}
 			>
 				<TextField.Placeholder><ComposeText>{placeholder}</ComposeText></TextField.Placeholder>
-				<TextField.LeadingIcon><Icon source={SEARCH} /></TextField.LeadingIcon>
+				<TextField.LeadingIcon><Icon source={materialDrawable("search")} /></TextField.LeadingIcon>
 				{query ? (
 					<TextField.TrailingIcon>
 						<IconButton onClick={() => { text.value = ""; change(""); }}>

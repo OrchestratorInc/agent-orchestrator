@@ -36,7 +36,7 @@ vi.mock("./item-actions-menu", () => ({ ItemActionsMenu: "ItemActionsMenu" }));
 vi.mock("./item-actions-menu.ios", () => ({ ItemActionsPullDown: "ItemActionsPullDown" }));
 vi.mock("./reviewer-picker", () => ({ ReviewerPicker: "ReviewerPicker" }));
 vi.mock("./reviewer-picker.ios", () => ({ ReviewerPicker: "ReviewerPicker" }));
-vi.mock("./review-drawables", () => ({ reviewDrawable: (name: string) => `drawable:${name}` }));
+vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
 	return { Host: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Host", props, children) };

@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createElement, type ReactNode } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
@@ -11,10 +11,7 @@ const fixtures = vi.hoisted(() => ({
 vi.mock("react-native", () => ({ StyleSheet: { create: (styles: object) => styles } }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 24, left: 0, right: 0 }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
-vi.mock("./settingsDrawables.android", () => ({
-	settingsDrawable: (name: string) => `drawable:${name}`,
-	pickerDrawables: { dropDown: "drawable:arrow_drop_down", check: "drawable:check" },
-}));
+vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("@expo/ui/jetpack-compose", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -127,7 +124,7 @@ describe("the Android settings form", () => {
 		expect(onPress).toHaveBeenCalledOnce();
 		expect(text(slot(item, "HeadlineContent"))).toEqual(["Theme"]);
 		expect(text(slot(item, "SupportingContent"))).toEqual(["Nord"]);
-		expect(slot(item, "LeadingContent").findByType("Icon" as never).props.source).toBe("drawable:theme");
+		expect(slot(item, "LeadingContent").findByType("Icon" as never).props.source).toBe("drawable:palette");
 		expect(slot(item, "TrailingContent")).toBeUndefined();
 		expect(item.props.colors.containerColor).toBe("#elevated");
 	});
@@ -221,13 +218,16 @@ describe("the Android settings form", () => {
 });
 
 describe("settings glyphs on Android", () => {
-	const drawables = readFileSync(fileURLToPath(new URL("./settingsDrawables.android.ts", import.meta.url)), "utf8");
+	const form = readFileSync(fileURLToPath(new URL("./SettingsForm.android.tsx", import.meta.url)), "utf8");
 
-	// Compose draws a bundled vector for each glyph; a missing file would fail the
-	// bundle. One the shared drawables already bundle is taken from them.
-	it.each(Object.entries(settingsIcons))("bundles the Material Symbol for %s", (name, symbol) => {
-		const shared = (materialDrawableNames as readonly string[]).includes(symbol.android);
-		expect(drawables).toContain(shared ? `${name}: materialDrawable("${symbol.android}"),` : `${name}: require("../assets/icons/${symbol.android}.xml"),`);
-		expect(existsSync(fileURLToPath(new URL(`../assets/icons/${symbol.android}.xml`, import.meta.url)))).toBe(true);
+	// Compose draws a bundled vector for each glyph, and the shared registry is
+	// the one place a drawable is bundled (lib/toolbarIcon.test.ts checks its files).
+	it.each(Object.entries(settingsIcons))("draws %s from the shared drawable registry", (_name, symbol) => {
+		expect(materialDrawableNames).toContain(symbol.android);
+	});
+
+	it("resolves every row glyph through materialDrawable", () => {
+		expect(form).toContain("materialDrawable(settingsIcons[icon].android)");
+		expect(form).not.toContain("require(");
 	});
 });

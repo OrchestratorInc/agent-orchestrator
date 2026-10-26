@@ -64,7 +64,7 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).not.toContain("Pressable");
 		expect(android).not.toContain("Feather");
 		expect(android).toContain("option.sectionBreakBefore ? <HorizontalDivider");
-		expect(android).toContain('project?.icon === "message-square-plus" ? spawnDrawables.standalone : materialDrawable("folder")');
+		expect(android).toContain('project?.icon === "message-square-plus" ? materialDrawable("add_comment") : materialDrawable("folder")');
 		expect(android).toContain("chipColorFor(harness)");
 		expect(icons).toContain('import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";');
 		expect(icons).toContain('"message-square-plus": MessageSquarePlus');

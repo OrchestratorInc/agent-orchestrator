@@ -49,6 +49,7 @@ vi.mock("./ThemeProvider", () => {
 });
 
 import { PRCard } from "./PRCard";
+import { symbols } from "./symbols";
 
 const pr: DashboardPR = { number: 42, url: "https://github.com/ao/app/pull/42", state: "open" };
 const session = {
@@ -138,14 +139,13 @@ describe("PRCard", () => {
 		expect(onLinkCopied).toHaveBeenCalledTimes(1);
 	});
 
-	// Compose draws a menu item's glyph only from a bundled image source, and a
-	// missing file fails the Android bundle.
-	it("bundles a Material Symbol for each Android menu glyph", () => {
+	// Compose draws a menu item's glyph only from a bundled image source, which
+	// the shared registry provides under the same Material Symbol iOS's entry names.
+	it("draws each Android menu glyph from the shared drawable registry", () => {
 		const android = readFileSync(fileURLToPath(new URL("./pr-card-menu-icons.android.ts", import.meta.url)), "utf8");
-		expect(android).toContain('openInGitHub: materialDrawable("open_in_new")');
-		expect(android).toContain('copyLink: require("../assets/icons/content_copy.xml")');
-		const xml = readFileSync(fileURLToPath(new URL("../assets/icons/content_copy.xml", import.meta.url)), "utf8");
-		expect(xml).toContain('android:viewportWidth="960"');
+		expect(android).toContain(`openInGitHub: materialDrawable("${symbols.openExternal.android}")`);
+		expect(android).toContain(`copyLink: materialDrawable("${symbols.copy.android}")`);
+		expect(android).not.toContain("require(");
 	});
 
 	// The eyebrow, details and blockers are quiet through colour and weight,

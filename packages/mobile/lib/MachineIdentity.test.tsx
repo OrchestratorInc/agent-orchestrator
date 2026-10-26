@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 import { machineAppearancePalette, machineSymbolNames } from "./machineAppearance";
 import { machineMenuImage } from "./machine-menu-image";
 import { symbols } from "./symbols";
+import { materialDrawableNames } from "./toolbarIcon.types";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
@@ -74,15 +75,12 @@ describe("machine menu images", () => {
 	});
 
 	// Android menus and Compose icons take bundled drawables, one per shape,
-	// named for the same Material Symbol the glyph draws.
-	it("bundles each machine's Material Symbol for Android", () => {
-		const android = readFileSync(fileURLToPath(new URL("./machine-menu-image.android.ts", import.meta.url)), "utf8");
+	// from the shared registry under the same Material Symbol the glyph draws.
+	it("draws each machine's Material Symbol from the shared drawable registry on Android", () => {
 		for (const shape of machineAppearancePalette.symbols) {
-			const name = symbols[machineSymbolNames[shape]].android;
-			expect(android).toContain(`${JSON.stringify(shape).replace(/^"([a-z]+)"$/, "$1")}: require("../assets/icons/${name}.xml")`);
-			const file = fileURLToPath(new URL(`../assets/icons/${name}.xml`, import.meta.url));
-			expect(existsSync(file)).toBe(true);
-			expect(readFileSync(file, "utf8")).toContain('android:viewportWidth="960"');
+			expect(materialDrawableNames).toContain(symbols[machineSymbolNames[shape]].android);
 		}
+		const android = readFileSync(fileURLToPath(new URL("./machine-menu-image.android.ts", import.meta.url)), "utf8");
+		expect(android).toContain("materialDrawable(symbols[machineSymbolNames[symbol]].android)");
 	});
 });

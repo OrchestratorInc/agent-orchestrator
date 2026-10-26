@@ -19,7 +19,6 @@ import { rowDividerWidth } from "./divider";
 import { chipColorFor } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
 import { haptics } from "./haptics";
-import { spawnDrawables } from "./spawn-composer-drawables.android";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import type { Theme } from "./theme";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
@@ -83,7 +82,7 @@ export function SpawnComposerControls({
 					<SelectorMenu
 						{...menu("host")}
 						label={`Run on ${hostLabel}`}
-						leading={<Icon source={spawnDrawables.machine} size={iconSize.lg} tint={t.textSecondary} />}
+						leading={<Icon source={materialDrawable("desktop_windows")} size={iconSize.lg} tint={t.textSecondary} />}
 						options={hosts}
 						selectedId={hostId}
 						onSelect={choose(hostId, onSelectHost)}
@@ -107,12 +106,12 @@ export function SpawnComposerControls({
 						<DropdownMenu expanded={openMenu === "attach"} onDismissRequest={close} color={t.bgElevated}>
 							<DropdownMenu.Trigger>
 								<IconButton onClick={() => setOpenMenu("attach")} modifiers={[testID("spawn-attachment")]}>
-									<Icon source={spawnDrawables.attach} size={iconSize.xl} tint={t.textSecondary} contentDescription="Attach" />
+									<Icon source={materialDrawable("attach_file")} size={iconSize.xl} tint={t.textSecondary} contentDescription="Attach" />
 								</IconButton>
 							</DropdownMenu.Trigger>
 							<DropdownMenu.Items>
-								<MenuRow label="Choose photo" leading={<Icon source={spawnDrawables.photo} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChoosePhoto(); }} />
-								<MenuRow label="Choose file" leading={<Icon source={spawnDrawables.file} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChooseFile(); }} />
+								<MenuRow label="Choose photo" leading={<Icon source={materialDrawable("photo")} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChoosePhoto(); }} />
+								<MenuRow label="Choose file" leading={<Icon source={materialDrawable("draft")} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChooseFile(); }} />
 							</DropdownMenu.Items>
 						</DropdownMenu>
 						<SelectorMenu
@@ -200,7 +199,7 @@ function SelectorMenu({ label, leading, options, selectedId, expanded, onExpand,
 					>
 						{label}
 					</Text>
-					<Icon source={spawnDrawables.dropDown} size={iconSize.xl} tint={t.textTertiary} />
+					<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textTertiary} />
 				</TextButton>
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Items>
@@ -234,7 +233,7 @@ function MenuRow({ label, leading, selected = false, onClick }: { label: string;
 
 function ProjectGlyph({ project }: { project?: SpawnComposerOption }) {
 	const t = useTheme();
-	const source = project?.icon === "message-square-plus" ? spawnDrawables.standalone : materialDrawable("folder");
+	const source = project?.icon === "message-square-plus" ? materialDrawable("add_comment") : materialDrawable("folder");
 	return <Icon source={source} size={iconSize.lg} tint={t.textSecondary} />;
 }
 
@@ -248,7 +247,7 @@ const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
 function HarnessMark({ harness }: { harness: string }) {
 	const t = useTheme();
 	const source = logoFor(harness);
-	if (!source) return <Icon source={spawnDrawables.agent} size={MARK_SIZE} tint={t.textSecondary} />;
+	if (!source) return <Icon source={materialDrawable("terminal")} size={MARK_SIZE} tint={t.textSecondary} />;
 	// White marks (opencode, cursor) vanish on a light menu; `chipColorFor`
 	// says which need a backdrop, as it does for every other surface.
 	const chip = chipColorFor(harness);

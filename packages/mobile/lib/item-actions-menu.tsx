@@ -3,9 +3,9 @@ import { testID } from "@expo/ui/jetpack-compose/modifiers";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { itemActionIcons, type ItemActionsMenuProps } from "./item-actions-menu.types";
-import { reviewDrawable } from "./review-drawables";
 import { Spinner } from "./Spinner";
 import { useTheme, useThemeState } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
 import { iconSize, touchTarget } from "./tokens";
 
 /**
@@ -28,7 +28,7 @@ export function ItemActionsMenu({ actions, accessibilityLabel, disabled = false,
 			<DropdownMenu expanded={expanded && !disabled} onDismissRequest={() => setExpanded(false)} color={t.bgElevated}>
 				<DropdownMenu.Trigger>
 					<IconButton enabled={!disabled} onClick={() => setExpanded(true)} modifiers={[testID("item-actions-menu")]}>
-						<Icon source={reviewDrawable("more_horiz")} size={iconSize.xl} tint={t.textSecondary} contentDescription={accessibilityLabel} />
+						<Icon source={materialDrawable("more_horiz")} size={iconSize.xl} tint={t.textSecondary} contentDescription={accessibilityLabel} />
 					</IconButton>
 				</DropdownMenu.Trigger>
 				<DropdownMenu.Items>
@@ -46,7 +46,7 @@ export function ItemActionsMenu({ actions, accessibilityLabel, disabled = false,
 							<DropdownMenuItem.Text><Text>{action.label}</Text></DropdownMenuItem.Text>
 							{action.icon ? (
 								<DropdownMenuItem.LeadingIcon>
-									<Icon source={reviewDrawable(itemActionIcons[action.icon].android)} size={iconSize.xl} />
+									<Icon source={materialDrawable(itemActionIcons[action.icon].android)} size={iconSize.xl} />
 								</DropdownMenuItem.LeadingIcon>
 							) : null}
 						</DropdownMenuItem>

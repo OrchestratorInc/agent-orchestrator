@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { materialDrawableNames } from "./toolbarIcon.types";
 
 import {
 	ARCHIVE_SESSION_HINT,
@@ -134,14 +133,9 @@ describe("workerActionSymbol", () => {
 
 	// Android's menu takes a bundled drawable, and a missing file is a
 	// bundle-time failure rather than a blank icon, so every action's Material
-	// Symbol needs its file, written from the font by the generator, and its
-	// require in the map the menus draw from.
-	it.each(ALL_ACTIONS)("bundles %s's Material Symbol as a drawable", (id) => {
-		const name = workerActionSymbols[id].android;
-		const path = fileURLToPath(new URL(`../assets/icons/${name}.xml`, import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		expect(readFileSync(path, "utf8")).toContain('android:viewportWidth="960"');
-		expect(readFileSync(fileURLToPath(new URL("./worker-action-drawables.ts", import.meta.url)), "utf8"))
-			.toContain(`${name}: require("../assets/icons/${name}.xml")`);
+	// Symbol has to be one the shared registry bundles (lib/toolbarIcon.test.ts
+	// checks its files).
+	it.each(ALL_ACTIONS)("draws %s's Material Symbol from the shared drawable registry", (id) => {
+		expect(materialDrawableNames).toContain(workerActionSymbols[id].android);
 	});
 });

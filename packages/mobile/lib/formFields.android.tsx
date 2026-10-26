@@ -1,9 +1,9 @@
 import { Icon, IconButton, ListItem, OutlinedTextField, Switch, Text, useNativeState, type TextFieldKeyboardOptions } from "@expo/ui/jetpack-compose";
 import { fillMaxWidth, semantics, testID as testTag, toggleable, type ModifierConfig } from "@expo/ui/jetpack-compose/modifiers";
 import { useState } from "react";
-import { formDrawables } from "./formDrawables.android";
 import type { FormPasswordFieldProps, FormTextFieldProps, FormToggleProps } from "./formFields.types";
 import { useTheme } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
 import { useNativeTextInput } from "./useNativeTextInput";
 
 export type { FormPasswordFieldProps, FormTextFieldProps, FormToggleProps } from "./formFields.types";
@@ -75,7 +75,7 @@ export function FormPasswordField(props: FormPasswordFieldProps) {
 			{props.placeholder ? <OutlinedTextField.Placeholder><Text>{props.placeholder}</Text></OutlinedTextField.Placeholder> : null}
 			<OutlinedTextField.TrailingIcon>
 				<IconButton onClick={() => setVisible((shown) => !shown)} enabled={props.editable !== false}>
-					<Icon source={visible ? formDrawables.visibilityOff : formDrawables.visibility} contentDescription={visible ? "Hide password" : "Show password"} />
+					<Icon source={materialDrawable(visible ? "visibility_off" : "visibility")} contentDescription={visible ? "Hide password" : "Show password"} />
 				</IconButton>
 			</OutlinedTextField.TrailingIcon>
 			{props.error ? <OutlinedTextField.SupportingText><Text>{props.error}</Text></OutlinedTextField.SupportingText> : null}

@@ -3,9 +3,9 @@ import { alpha, background, clickable, clip, fillMaxWidth, Shapes, size, testID 
 import { useState, type ReactNode } from "react";
 import { chipColorFor } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
-import { reviewDrawable } from "./review-drawables";
 import { projectDefaultLabel, reviewerLabel, withCurrentOption, type ReviewerPickerProps } from "./reviewer-picker.types";
 import { useTheme } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
 import { font, iconSize, radius, stateOpacity } from "./tokens";
 
 type Menu = "reviewer" | "model";
@@ -30,7 +30,7 @@ export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer,
 	return (
 		<>
 			<PickerRow title="Reviewer" value={reviewerText} leading={<HarnessMark harness={reviewer} />} open={open === "reviewer"} busy={busy} tag="review-reviewer" onOpen={() => setOpen("reviewer")} onDismiss={() => setOpen(null)}>
-				<Choice label={projectDefaultLabel(reviewers, effectiveReviewer)} leading={<Icon source={reviewDrawable("group")} size={iconSize.xl} />} selected={!selectedReviewer} onPress={() => choose("reviewer", "")} />
+				<Choice label={projectDefaultLabel(reviewers, effectiveReviewer)} leading={<Icon source={materialDrawable("group")} size={iconSize.xl} />} selected={!selectedReviewer} onPress={() => choose("reviewer", "")} />
 				{withCurrentOption(reviewers, selectedReviewer).map((agent) => (
 					<Choice key={agent.id} label={agent.label} leading={<HarnessMark harness={agent.id} />} selected={agent.id === selectedReviewer} onPress={() => choose("reviewer", agent.id)} />
 				))}
@@ -59,7 +59,7 @@ function PickerRow({ title, value, leading, open, busy, tag, onOpen, onDismiss, 
 					<ListItem.HeadlineContent><Text style={{ typography: "bodyLarge", fontFamily: font.regular }}>{title}</Text></ListItem.HeadlineContent>
 					<ListItem.SupportingContent><Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyMedium", fontFamily: font.regular }}>{value}</Text></ListItem.SupportingContent>
 					{leading ? <ListItem.LeadingContent>{leading}</ListItem.LeadingContent> : null}
-					<ListItem.TrailingContent><Icon source={reviewDrawable("expand_more")} size={iconSize.xl} /></ListItem.TrailingContent>
+					<ListItem.TrailingContent><Icon source={materialDrawable("expand_more")} size={iconSize.xl} /></ListItem.TrailingContent>
 				</ListItem>
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Items>{children}</DropdownMenu.Items>
@@ -75,7 +75,7 @@ function Choice({ label, leading, selected, onPress }: { label: string; leading?
 			{leading ? <DropdownMenuItem.LeadingIcon>{leading}</DropdownMenuItem.LeadingIcon> : null}
 			{selected ? (
 				<DropdownMenuItem.TrailingIcon>
-					<Icon source={reviewDrawable("check")} size={iconSize.xl} contentDescription="Selected" />
+					<Icon source={materialDrawable("check")} size={iconSize.xl} contentDescription="Selected" />
 				</DropdownMenuItem.TrailingIcon>
 			) : null}
 		</DropdownMenuItem>
@@ -85,7 +85,7 @@ function Choice({ label, leading, selected, onPress }: { label: string; leading?
 /** A harness's brand mark in its own colours, on a chip only where the mark needs one to show. */
 function HarnessMark({ harness }: { harness: string }) {
 	const source = logoFor(harness);
-	if (!source) return <Icon source={reviewDrawable("terminal")} size={iconSize.xl} />;
+	if (!source) return <Icon source={materialDrawable("terminal")} size={iconSize.xl} />;
 	const chip = chipColorFor(harness);
 	if (!chip) return <Icon source={source} tint={null} size={iconSize.xl} />;
 	return (

@@ -1,8 +1,8 @@
 import { CircularProgressIndicator, FilledTonalButton, Host, Icon, OutlinedButton, Spacer, Text } from "@expo/ui/jetpack-compose";
 import { size, width } from "@expo/ui/jetpack-compose/modifiers";
 import type { ReviewActionButtonProps } from "./review-action-button.types";
-import { reviewDrawable } from "./review-drawables";
 import { useTheme, useThemeState } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
 import { font, space } from "./tokens";
 
 // Material's 18dp icon inside a button, and its padding for a button that leads with one.
@@ -29,7 +29,7 @@ export function ReviewActionButton({ label, icon, tone, busy = false, disabled =
 			>
 				{busy
 					? <CircularProgressIndicator color={ink} strokeWidth={2} modifiers={[size(BUTTON_ICON, BUTTON_ICON)]} />
-					: <Icon source={reviewDrawable(icon.android)} size={BUTTON_ICON} />}
+					: <Icon source={materialDrawable(icon.android)} size={BUTTON_ICON} />}
 				<Spacer modifiers={[width(space.sm)]} />
 				{/* A style replaces the button's own text style, so it names the label step. */}
 				<Text style={{ typography: "labelLarge", fontFamily: font.semibold }}>{label}</Text>

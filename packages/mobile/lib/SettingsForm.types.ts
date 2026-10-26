@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
-import { symbols, type PlatformSymbol } from "./symbols";
+import { symbols, type IOSSymbol } from "./symbols";
 import type { Theme } from "./theme";
+import type { MaterialDrawableName } from "./toolbarIcon.types";
 
 /**
  * The glyph at the start of each settings row, as SF Symbol and Material
- * Symbol. Android draws a bundled drawable for each (settingsDrawables), so a
- * row can only name a glyph listed here.
+ * Symbol. Android draws each from the shared drawable registry
+ * (materialDrawable), so a row can only name a glyph listed here, and typecheck
+ * holds every Material name to one the registry bundles.
  */
 export const settingsIcons = {
 	defaultMachine: symbols.desktop,
@@ -24,7 +26,7 @@ export const settingsIcons = {
 	update: symbols.update,
 	report: { ios: "ladybug", android: "bug_report" },
 	feature: { ios: "lightbulb", android: "lightbulb" },
-} as const satisfies Record<string, PlatformSymbol>;
+} as const satisfies Record<string, { ios: IOSSymbol; android: MaterialDrawableName }>;
 
 export type SettingsIconName = keyof typeof settingsIcons;
 

@@ -33,7 +33,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", async () => {
 vi.mock("@expo/ui/jetpack-compose", async () => (await import("./nativeFormTestDoubles")).composeDouble());
 vi.mock("@expo/ui/jetpack-compose/modifiers", async () => (await import("./nativeFormTestDoubles")).composeModifierDouble());
 vi.mock("@expo/ui/community/bottom-sheet", () => ({ default: "BottomSheet", BottomSheetView: "BottomSheetView" }));
-vi.mock("./formDrawables.android", () => ({ formDrawables: {} }));
+vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `${name}.xml` }));
 vi.mock("expo-haptics", () => ({
 	impactAsync: fixtures.impact, ImpactFeedbackStyle: { Light: "light" },
 	selectionAsync: vi.fn(async () => {}), notificationAsync: vi.fn(async () => {}), NotificationFeedbackType: {},

@@ -6,10 +6,10 @@ import { AppSymbol } from "./AppSymbol";
 import { rowDividerWidth } from "./divider";
 import { ItemActionsMenu } from "./item-actions-menu";
 import type { ExternalReviewerRow, ReviewActionsSheetProps, ReviewFeedbackItem, ReviewPolicyRow } from "./review-actions-sheet.types";
-import { reviewDrawable } from "./review-drawables";
 import { ReviewerPicker } from "./reviewer-picker";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
+import { materialDrawable } from "./toolbarIcon.android";
 import { font, iconSize, radius, space, stateOpacity, type } from "./tokens";
 import { SHEET_SCROLL_CONTENT, SheetHeader } from "./ui";
 
@@ -116,7 +116,7 @@ function RerequestItem({ item, locked, onPress }: { item: ExternalReviewerRow; l
 		<ListItem colors={listColors(t)} modifiers={modifiers}>
 			<ListItem.HeadlineContent><ComposeText style={headline}>{item.id}</ComposeText></ListItem.HeadlineContent>
 			<ListItem.SupportingContent><ComposeText style={supporting}>{item.detail}</ComposeText></ListItem.SupportingContent>
-			<ListItem.LeadingContent><Icon source={reviewDrawable("refresh")} size={iconSize.xl} contentDescription="Request another review" /></ListItem.LeadingContent>
+			<ListItem.LeadingContent><Icon source={materialDrawable("refresh")} size={iconSize.xl} contentDescription="Request another review" /></ListItem.LeadingContent>
 			{item.busy ? (
 				<ListItem.TrailingContent>
 					<CircularProgressIndicator color={t.accent} strokeWidth={3} modifiers={[size(iconSize.xl, iconSize.xl)]} />

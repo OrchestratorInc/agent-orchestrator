@@ -20,7 +20,7 @@ vi.mock("react-native", () => ({
 vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: "KeyboardAvoidingView" }));
 vi.mock("@expo/ui/jetpack-compose", async () => (await import("./nativeFormTestDoubles")).composeDouble());
 vi.mock("@expo/ui/jetpack-compose/modifiers", async () => (await import("./nativeFormTestDoubles")).composeModifierDouble());
-vi.mock("./formDrawables.android", () => ({ formDrawables: { visibility: "visibility.xml", visibilityOff: "visibility_off.xml" } }));
+vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `${name}.xml` }));
 vi.mock("./formFields", async () => await import("./formFields.android"));
 vi.mock("./haptics", () => ({ haptics: { select: vi.fn() } }));
 vi.mock("./ThemeProvider", () => ({

@@ -58,7 +58,7 @@ vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null }));
 vi.mock("./haptics", () => ({ haptics: fixtures.haptics }));
 vi.mock("./Spinner", () => ({ Spinner: "Spinner" }));
 vi.mock("./ui", () => ({ Button: "RNButton", SHEET_SCROLL_CONTENT: {}, SheetHeader: "SheetHeader" }));
-vi.mock("./formDrawables.android", () => ({ formDrawables: { visibility: "visibility.xml", visibilityOff: "visibility_off.xml", edit: "edit.xml", expandMore: "expand_more.xml" } }));
+vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `${name}.xml` }));
 vi.mock("./ThemeProvider", () => ({
 	useTheme: () => fixtures.theme,
 	useThemeState: () => ({ scheme: "dark", theme: fixtures.theme }),

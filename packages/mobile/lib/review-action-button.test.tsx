@@ -5,7 +5,7 @@ vi.mock("./ThemeProvider", () => ({
 	useTheme: () => ({ accent: "#accent", accentTint: "#accentTint", onAccent: "#onAccent", red: "#red", textPrimary: "#primary", textSecondary: "#secondary" }),
 	useThemeState: () => ({ scheme: "dark" }),
 }));
-vi.mock("./review-drawables", () => ({ reviewDrawable: (name: string) => `drawable:${name}` }));
+vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
 	return { Host: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("Host", props, children) };

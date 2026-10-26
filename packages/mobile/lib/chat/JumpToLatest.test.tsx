@@ -8,7 +8,7 @@ vi.mock("../ThemeProvider", () => ({
 	useTheme: () => ({ bgElevated: "#elevated", textPrimary: "#ink" }),
 	useThemeState: () => ({ scheme: "dark" }),
 }));
-vi.mock("./jumpToLatestDrawable", () => ({ arrowDownwardDrawable: "drawable:arrow_downward" }));
+vi.mock("../toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
 	return { Host: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("SwiftHost", props, children) };

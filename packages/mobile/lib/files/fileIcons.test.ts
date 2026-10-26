@@ -1,6 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { materialDrawableNames } from "../toolbarIcon.types";
 import { fileIcon } from "./fileIcons";
 import { fileIconSymbols, type FileIconName } from "./fileIcons.types";
 
@@ -14,12 +15,14 @@ describe("Files glyphs", () => {
 	});
 
 	// Android's native items draw only an image source, so each glyph needs the
-	// Material Symbol's drawable under its own name, required by that name.
-	it.each(names)("bundles %s as its Material Symbol drawable", (name) => {
-		const android = fileIconSymbols[name].android;
-		const file = fileURLToPath(new URL(`../../assets/icons/${android}.xml`, import.meta.url));
-		expect(existsSync(file)).toBe(true);
-		expect(readFileSync(file, "utf8")).toContain('android:viewportWidth="960"');
-		expect(source).toContain(`${name}: require("../../assets/icons/${android}.xml")`);
+	// Material Symbol's drawable in the shared registry (lib/toolbarIcon.test.ts
+	// checks its files).
+	it.each(names)("draws %s from the shared drawable registry on Android", (name) => {
+		expect(materialDrawableNames).toContain(fileIconSymbols[name].android);
+	});
+
+	it("resolves every Android glyph through materialDrawable", () => {
+		expect(source).toContain("materialDrawable(fileIconSymbols[name].android)");
+		expect(source).not.toContain("require(");
 	});
 });

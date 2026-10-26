@@ -82,8 +82,8 @@ export const ARCHIVE_SESSION_HINT = "Stops the agent and moves it to Archive. De
 
 /**
  * Each action's glyph as each platform's own symbol: the SF Symbol iOS's menu
- * resolves by name, and the Material Symbol Android's menu draws from a bundled
- * drawable named after it (assets/icons/<android name>.xml).
+ * resolves by name, and the Material Symbol Android's menu draws from the shared
+ * drawable registry (materialDrawable).
  *
  * Typed against the symbol registry's types, so a name iOS 16.4 cannot draw or
  * a Material name that does not exist is a compile error rather than a blank
@@ -100,9 +100,6 @@ export const workerActionSymbols = {
 	openPr: { ios: "arrow.up.forward.square", android: "open_in_new" },
 	delete: symbols.archive,
 } as const satisfies Record<WorkerActionId, PlatformSymbol>;
-
-/** The Material Symbols Android's menu bundles a drawable for, one per action. */
-export type WorkerActionDrawable = (typeof workerActionSymbols)[WorkerActionId]["android"];
 
 /**
  * The action's glyph wherever it is drawn: the long-press menu on both
