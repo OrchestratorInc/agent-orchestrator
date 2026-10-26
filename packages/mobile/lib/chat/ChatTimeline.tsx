@@ -1075,7 +1075,8 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 			<ElicitationAction label="Cancel" reportsOutcome disabled={busy || submitting} onPress={() => void resolve("cancel")} />
 			<ElicitationAction label={activity.detail?.inputMode === "url" ? "Decline" : "Skip"} reportsOutcome disabled={busy || submitting} onPress={() => void resolve("decline")} />
 			<View style={{ flex: 1 }} />
-			{activity.detail?.inputMode !== "url" && hasPreviousQuestion ? <ElicitationAction label="Back" disabled={busy || submitting} onPress={() => { setValidationError(undefined); setActiveQuestion((current) => Math.max(0, current - 1)); }} /> : null}
+			{/* Stepping between questions is navigation, silent both ways. */}
+			{activity.detail?.inputMode !== "url" && hasPreviousQuestion ? <ElicitationAction label="Back" reportsOutcome disabled={busy || submitting} onPress={() => { setValidationError(undefined); setActiveQuestion((current) => Math.max(0, current - 1)); }} /> : null}
 			{activity.detail?.inputMode === "url" ? <ElicitationAction label={submitting ? "Opening…" : "Open link"} primary reportsOutcome disabled={busy || submitting || !url} onPress={() => {
 				if (!url) return;
 				void Linking.openURL(url.href)

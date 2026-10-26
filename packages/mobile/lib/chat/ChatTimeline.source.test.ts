@@ -138,6 +138,12 @@ describe("request cards in the timeline", () => {
 		}
 	});
 
+	// Advancing to the next question is silent, so going back must be too.
+	it("step between questions without a haptic either way", () => {
+		expect(input).toContain('label="Back" reportsOutcome');
+		expect(input).toMatch(/if \(hasNextQuestion\) \{\s*setActiveQuestion\(\(current\) => current \+ 1\);\s*return;\s*\}/);
+	});
+
 	// The button sizes itself to its label; a width guessed from the label's
 	// length only cut long decisions short.
 	it("let each decision size itself", () => {

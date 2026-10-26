@@ -30,7 +30,7 @@ export type ElicitationActionProps = {
 	label: string;
 	primary?: boolean;
 	disabled?: boolean;
-	/** The caller buzzes when the work lands (success or error), so the press itself stays silent and the action gives one haptic. */
+	/** The caller owns the press's haptic: one when the work lands (success or error), or none for a step between questions. The press itself stays silent. */
 	reportsOutcome?: boolean;
 	onPress(): void;
 };
