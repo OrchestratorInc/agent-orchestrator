@@ -6,6 +6,9 @@ const fixtures = vi.hoisted(() => ({
 	config: { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test", hostId: "host-1" },
 	navigation: { setOptions: vi.fn() },
 	getPreview: vi.fn(),
+	platform: { OS: "ios" },
+	backHandlers: [] as Array<() => boolean>,
+	web: { reload: vi.fn(), goBack: vi.fn() },
 }));
 
 vi.mock("react-native", async () => {
@@ -13,10 +16,17 @@ vi.mock("react-native", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
 		ActivityIndicator: host("ActivityIndicator"), Pressable: host("Pressable"), Text: host("Text"), View: host("View"),
-		Platform: { OS: "ios" },
+		Platform: fixtures.platform,
 		StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
+		BackHandler: {
+			addEventListener: (_event: string, handler: () => boolean) => {
+				fixtures.backHandlers.push(handler);
+				return { remove: () => { fixtures.backHandlers.splice(fixtures.backHandlers.indexOf(handler), 1); } };
+			},
+		},
 	};
 });
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }) }));
 vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
@@ -28,6 +38,7 @@ vi.mock("expo-router", async () => {
 				MenuAction: host("StackToolbarMenuAction"),
 			}),
 		},
+		useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
 		useLocalSearchParams: () => fixtures.params,
 		useNavigation: () => fixtures.navigation,
 		useRouter: () => ({ navigate: vi.fn() }),
@@ -48,7 +59,11 @@ vi.mock("./store", () => ({
 }));
 vi.mock("./ThemeProvider", () => {
 	const theme = new Proxy({}, { get: () => "#888" });
-	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
+	return {
+		useTheme: () => theme,
+		useThemeState: () => ({ theme, scheme: "dark" }),
+		useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme),
+	};
 });
 vi.mock("./icons", async () => {
 	const React = await import("react");
@@ -62,12 +77,23 @@ vi.mock("./preview/BrowserLivePane", async () => {
 	const React = await import("react");
 	return { BrowserLivePane: (props: object) => React.createElement("BrowserLivePane", props) };
 });
+vi.mock("./preview/LoadingBar", async () => {
+	const React = await import("react");
+	return { LoadingBar: (props: object) => React.createElement("LoadingBar", props) };
+});
 
 import SessionPreviewScreen from "../app/preview/[id]";
 
 const appPreview = { entry: "index.html", url: "http://desktop.local:3011/preview/artifacts/index.html", authenticated: true };
 let screen: ReactTestRenderer;
 const nodes = (name: string) => screen.root.findAll((node) => (node.type as unknown) === name);
+const lastTitle = () => fixtures.navigation.setOptions.mock.lastCall?.[0].title;
+const webView = () => nodes("WebView")[0];
+const loadingBar = () => nodes("LoadingBar")[0].props;
+
+function headerButton(label: string) {
+	return nodes("StackToolbarButton").find((node) => node.props.accessibilityLabel === label);
+}
 
 /** The header's view menu: Desktop browser or Mobile view, with the system's check on the one showing. */
 function modeMenu() {
@@ -86,7 +112,8 @@ function mobileView() {
 }
 
 async function openPreview() {
-	await act(async () => { screen = create(<SessionPreviewScreen />); });
+	// The WebView's handle, for the page's reload and history calls.
+	await act(async () => { screen = create(<SessionPreviewScreen />, { createNodeMock: (element) => element.type === "WebView" ? fixtures.web : null }); });
 }
 
 async function setMobile(enabled: boolean) {
@@ -102,6 +129,10 @@ beforeEach(() => {
 	fixtures.config = { host: "desktop.local", httpPort: "3011", muxPort: "3011", password: "test", hostId: "host-1" };
 	fixtures.navigation.setOptions.mockClear();
 	fixtures.getPreview.mockReset().mockResolvedValue(appPreview);
+	fixtures.platform.OS = "ios";
+	fixtures.backHandlers.length = 0;
+	fixtures.web.reload.mockClear();
+	fixtures.web.goBack.mockClear();
 });
 
 afterEach(() => {
@@ -254,5 +285,82 @@ describe("session preview mode", () => {
 		await act(async () => { screen.update(<SessionPreviewScreen />); });
 		expect(nodes("BrowserLivePane")[0].props.sessionID).toBe("session-2");
 		expect(mobileView().checked).toBe(false);
+	});
+});
+
+describe("app preview controls", () => {
+	it("reloads from a native header button only while the app preview shows", async () => {
+		await openPreview();
+		expect(headerButton("Reload app preview")).toBeUndefined();
+		await setMobile(true);
+		const reload = headerButton("Reload app preview");
+		expect(reload?.props.icon).toBe("arrow.clockwise");
+		await act(async () => reload?.props.onPress());
+		expect(fixtures.web.reload).toHaveBeenCalledTimes(1);
+		expect(nodes("Pressable")).toHaveLength(0);
+	});
+
+	it("shows the page's own load progress in a native bar", async () => {
+		await openPreview();
+		await setMobile(true);
+		expect(loadingBar()).toMatchObject({ loading: false, accessibilityLabel: "Loading app preview" });
+		await act(async () => webView().props.onLoadStart());
+		expect(loadingBar()).toMatchObject({ loading: true, progress: 0 });
+		await act(async () => webView().props.onLoadProgress({ nativeEvent: { progress: 0.4 } }));
+		expect(loadingBar()).toMatchObject({ loading: true, progress: 0.4 });
+		await act(async () => webView().props.onLoadEnd());
+		expect(loadingBar().loading).toBe(false);
+	});
+
+	it("lets iOS swipe through the page's history and pull to reload it", async () => {
+		await openPreview();
+		await setMobile(true);
+		expect(webView().props).toMatchObject({ allowsBackForwardNavigationGestures: true, pullToRefreshEnabled: true, refreshControlLightMode: true });
+		expect(webView().props.startInLoadingState).toBeUndefined();
+	});
+
+	it("titles the bar with the page on show", async () => {
+		await openPreview();
+		expect(lastTitle()).toBe("Preview");
+		await setMobile(true);
+		expect(lastTitle()).toBe("index.html");
+		await act(async () => webView().props.onNavigationStateChange({ url: appPreview.url, title: "Todo app", canGoBack: false }));
+		expect(lastTitle()).toBe("Todo app");
+		// Android names a page by its address until the page names itself.
+		await act(async () => webView().props.onNavigationStateChange({ url: appPreview.url, title: appPreview.url, canGoBack: false }));
+		expect(lastTitle()).toBe("index.html");
+		await setMobile(false);
+		expect(lastTitle()).toBe("Preview");
+	});
+
+	it("walks the page's history with Android's back before leaving Preview", async () => {
+		fixtures.platform.OS = "android";
+		await openPreview();
+		expect(fixtures.backHandlers).toHaveLength(0);
+		await setMobile(true);
+		expect(fixtures.backHandlers).toHaveLength(1);
+		expect(fixtures.backHandlers[0]()).toBe(false);
+		await act(async () => webView().props.onNavigationStateChange({ url: appPreview.url + "#done", title: "", canGoBack: true }));
+		expect(fixtures.backHandlers[0]()).toBe(true);
+		expect(fixtures.web.goBack).toHaveBeenCalledTimes(1);
+		await setMobile(false);
+		expect(fixtures.backHandlers).toHaveLength(0);
+	});
+
+	it("leaves iOS's back to the navigation stack", async () => {
+		await openPreview();
+		await setMobile(true);
+		expect(fixtures.backHandlers).toHaveLength(0);
+	});
+
+	it("announces a failed load with a retry that reloads the page", async () => {
+		await openPreview();
+		await setMobile(true);
+		await act(async () => webView().props.onHttpError({ nativeEvent: { statusCode: 404 } }));
+		const banner = screen.root.find((node) => node.props.accessibilityRole === "alert");
+		expect(banner.findByType("Text" as never).props.children).toBe("This page wasn't found. The agent may have moved or removed it.");
+		await act(async () => banner.findByType("Button" as never).props.onPress());
+		expect(fixtures.web.reload).toHaveBeenCalledTimes(1);
+		expect(screen.root.findAll((node) => node.props.accessibilityRole === "alert")).toHaveLength(0);
 	});
 });
