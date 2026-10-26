@@ -40,7 +40,6 @@ vi.mock("./native-header-button", async () => {
 	const React = await import("react");
 	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
 });
-vi.mock("./sidebar-navigation-context", () => ({ useOptionalSidebarNavigation: () => null }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
 vi.mock("./ThemeProvider", () => {

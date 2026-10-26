@@ -31,16 +31,6 @@ import { duration, press, spring } from "./tokens";
 export const BREATHE_MS = 1200;
 
 /**
- * The sidebar drawer's spring.
- *
- * Note for a future Reanimated port: these are `Animated.spring` parameters. The
- * companion flick threshold in sidebar-gesture.ts is expressed in PanResponder's
- * px/ms, while Reanimated reports px/s — that constant must be converted, not
- * copied.
- */
-export const DRAWER_SPRING = { damping: 24, stiffness: 240, mass: 0.8 } as const;
-
-/**
  * One sweep of a loading skeleton's shimmer, then a rest before the next.
  *
  * Slow and linear: the sweep says "still loading", and a quick or eased one

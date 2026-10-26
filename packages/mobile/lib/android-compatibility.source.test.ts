@@ -7,52 +7,6 @@ function source(relativePath: string): string {
 }
 
 describe("Android native compatibility boundaries", () => {
-	it("renders the Android drawer as one React Native tree", () => {
-		const path = fileURLToPath(new URL("./sidebar-navigation-shell.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./sidebar-navigation-shell.android.tsx") : "";
-		expect(android).toContain("PanResponder");
-		// The closed drawer's swipe responder starts below the safe-area-adjusted
-		// header. A fixed top offset overlaps the menu button on tall cutouts.
-		expect(android).toContain("edgeGestureTarget");
-		expect(android).toContain("top: insets.top + 64");
-		// Keep the smooth native animation, but commit the closed state only after
-		// it settles so Fabric measures the header button at its final position.
-		// The visible scrim must disappear as soon as closing starts, independently
-		// of that delayed interaction state, or it flashes over the settled screen.
-		expect(android).toContain("useNativeDriver: true");
-		expect(android).toContain("const [scrimVisible, setScrimVisible] = useState(retainedDrawerOpen);");
-		expect(android).toMatch(/setScrimVisible\(nextOpen\);[\s\S]*if \(nextOpen\) setOpen\(true\);[\s\S]*if \(!finished\) return;[\s\S]*if \(!nextOpen\) setOpen\(false\);/);
-		expect(android).toMatch(/open \? \([\s\S]*scrimVisible \? \([\s\S]*styles\.dismissLayer[\s\S]*styles\.dismissBlocker/);
-		expect(android).toContain("(open ? panResponder.panHandlers : {})");
-		// A gesture can reverse an in-flight spring, but it must continue from the
-		// drawer's live position rather than snapping to an open/closed endpoint.
-		expect(android).toContain("settling: drawerSettling.current");
-		expect(android).toContain("progress.stopAnimation((value) => {");
-		expect(android).toContain("gestureStartProgress.current = value");
-		expect(android).toContain("startProgress: gestureStartProgress.current");
-		expect(android).toContain("retainedDrawerOpen");
-		expect(android).not.toContain("DrawerLayoutAndroid");
-		expect(android).not.toContain("@expo/ui");
-		expect(android).not.toContain("RNHostView");
-		expect(android).toContain('pointerEvents={open ? "auto" : "none"}');
-		expect(android).toContain('importantForAccessibility={open ? "yes" : "no-hide-descendants"}');
-	});
-
-	it("uses Android-native pressable icon controls rather than Unicode Expo buttons", () => {
-		for (const file of [
-			"./sidebar-settings-button.android.tsx",
-			"./sidebar-spawn-button.android.tsx",
-		]) {
-			const path = fileURLToPath(new URL(file, import.meta.url));
-			expect(existsSync(path)).toBe(true);
-			const android = existsSync(path) ? source(file) : "";
-			expect(android).toContain("Pressable");
-			expect(android).toContain("Feather");
-			expect(android).not.toContain("@expo/ui");
-		}
-	});
-
 	// Material's own icon button: the 48dp target, the ripple and the click all
 	// come from Compose, so no touch is recognised by hand in JavaScript.
 	it("draws the header button as a Compose icon button with a Material Symbol", () => {
@@ -234,7 +188,7 @@ describe("Android native compatibility boundaries", () => {
 		expect(source("./push.ts")).not.toContain('sound: "default"');
 	});
 
-	it("presents Settings from the root stack above the preserved drawer", () => {
+	it("presents Settings from the root stack over the board", () => {
 		const rootSettingsPath = fileURLToPath(new URL("../app/settings/index.tsx", import.meta.url));
 		const nestedSettingsPath = fileURLToPath(new URL("../app/(tabs)/settings.tsx", import.meta.url));
 		expect(existsSync(rootSettingsPath)).toBe(true);

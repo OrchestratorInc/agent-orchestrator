@@ -1,7 +1,7 @@
 import { symbols, type IOSSymbol } from "./symbols";
 import type { MaterialDrawableName } from "./toolbarIcon.types";
 
-export type NativeHeaderButtonIcon = "menu" | "bell" | "close" | "check" | "back" | "more" | "add" | "trash";
+export type NativeHeaderButtonIcon = "bell" | "close" | "check" | "back" | "more" | "add" | "trash";
 
 export type NativeHeaderButtonProps = {
 	icon: NativeHeaderButtonIcon;
@@ -17,8 +17,6 @@ export type NativeHeaderButtonProps = {
  * so every Android name here must be one.
  */
 export const nativeHeaderGlyphs: Record<NativeHeaderButtonIcon, { ios: IOSSymbol; android: MaterialDrawableName }> = {
-	// The drawer opener is the only header glyph the registry does not carry.
-	menu: { ios: "line.3.horizontal", android: "menu" },
 	bell: symbols.notifications,
 	close: symbols.close,
 	check: symbols.checkmark,

@@ -30,7 +30,6 @@ afterEach(async () => {
 
 describe("NativeHeaderButton fallback", () => {
 	const expected: Record<NativeHeaderButtonIcon, { ios: string; android: string }> = {
-		menu: { ios: "line.3.horizontal", android: "menu" },
 		bell: symbols.notifications,
 		close: symbols.close,
 		check: symbols.checkmark,

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
 	BREATHE_MS,
-	DRAWER_SPRING,
 	motionDurations,
 	shouldAnimateLayout,
 	shouldBreathe,
@@ -47,12 +46,5 @@ describe("reduce-motion decisions", () => {
 		expect(shouldBreathe(true, true)).toBe(false);
 		expect(shouldBreathe(false, false)).toBe(false);
 		expect(shouldBreathe(true, false)).toBe(false);
-	});
-});
-
-describe("drawer spring", () => {
-	// Lifted from the existing shell; a change here changes how the drawer feels.
-	it("matches the shell's existing spring", () => {
-		expect(DRAWER_SPRING).toEqual({ damping: 24, stiffness: 240, mass: 0.8 });
 	});
 });

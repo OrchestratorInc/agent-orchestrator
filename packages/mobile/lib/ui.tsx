@@ -19,7 +19,6 @@ import { BREATHE_MS, shouldBreathe } from "./motion";
 import { useEnterTransition } from "./motionHooks";
 import { NativeHeaderButton, type NativeHeaderButtonIcon } from "./native-header-button";
 import { usePressFeedback, type PressTone } from "./pressFeedback";
-import { useOptionalSidebarNavigation } from "./sidebar-navigation-context";
 import { Spinner } from "./Spinner";
 import { useReducedMotion } from "./useReducedMotion";
 import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "./tokens";
@@ -253,15 +252,13 @@ export function ScreenHeader({
 	right,
 }: {
 	title: string;
-	/** Detail routes can supply a back action instead of the sidebar button. */
 	left?: ReactNode;
 	right?: ReactNode;
 }) {
 	const s = useThemedStyles(makeStyles);
-	const sidebar = useOptionalSidebarNavigation();
 	return (
 		<View style={s.screenHeader}>
-			{left ?? (sidebar ? <HeaderIconButton icon="menu" label="Open navigation" onPress={sidebar.openSidebar} /> : null)}
+			{left}
 			<View style={{ flex: 1, minWidth: 0 }}>
 				<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} numberOfLines={1} ellipsizeMode="tail" style={s.screenTitle}>
 					{title}

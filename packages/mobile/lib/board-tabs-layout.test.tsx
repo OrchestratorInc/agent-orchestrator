@@ -68,6 +68,15 @@ describe("board tabs", () => {
 		expect(String(prs.src)).toContain("tab-pull-request");
 	});
 
+	// Tapping the current tab again scrolls its list to the top, natively.
+	it("leaves re-tap to scroll to top on", () => {
+		render();
+		for (const trigger of triggers()) {
+			expect(trigger.props.disableScrollToTop).toBeUndefined();
+			expect(trigger.props.disablePopToTop).toBeUndefined();
+		}
+	});
+
 	it("adapts to the iPad sidebar and gives way on scroll", () => {
 		render();
 		expect(renderer!.root.findByType("NativeTabs" as never).props).toMatchObject({ sidebarAdaptable: true, minimizeBehavior: "onScrollDown" });
@@ -90,7 +99,7 @@ describe("board tabs", () => {
 		});
 	});
 
-	// The count the drawer used to show beside Workers: workers waiting on a person.
+	// Workers waiting on a person: the one count worth lighting a tab for.
 	it("badges Workers with the workers that need you, and nothing else", () => {
 		fixtures.sessions = [session("a", "needs_input"), session("b", "stuck"), session("c", "working")];
 		render();

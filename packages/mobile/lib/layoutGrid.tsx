@@ -15,7 +15,7 @@ import { space } from "./tokens";
  */
 
 const MINOR = space.xxs; // 4
-const MAJOR = 44; // control size: header, dock and drawer circles
+const MAJOR = 44; // control size: header and dock circles
 
 // Defaults ON in a dev build while the four corner controls are being measured —
 // no hunting for the toggle. Flip back to `false` once the review is done.

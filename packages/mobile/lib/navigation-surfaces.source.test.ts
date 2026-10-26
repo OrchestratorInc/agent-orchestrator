@@ -27,6 +27,16 @@ describe("navigation surfaces", () => {
 		expect(source("./stackScreenOptions.ts")).not.toMatch(/animation:/);
 	});
 
+	// The board's destinations are the platform's tab bar. The push drawer it
+	// replaced ran its drag on the JS thread and left the page behind it reachable
+	// by screen readers.
+	it("navigates the board with native tabs, not a drawer", () => {
+		const tabs = source("../app/(tabs)/_layout.tsx");
+		expect(tabs).toContain('import { NativeTabs } from "expo-router/unstable-native-tabs";');
+		expect(tabs).not.toContain("tabBar={() => null}");
+		expect(tabs).not.toMatch(/Sidebar|Drawer|PanResponder/);
+	});
+
 	// Each board tab is a route group with a stack of its own: the stack gives the
 	// tab's page a native header, the group keeps the page's URL.
 	it("gives each board tab a native large-title header", () => {

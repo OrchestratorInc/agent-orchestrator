@@ -13,7 +13,6 @@ const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	check: require("../assets/icons/check.xml"),
 	close: require("../assets/icons/close.xml"),
 	delete: require("../assets/icons/delete.xml"),
-	menu: require("../assets/icons/menu.xml"),
 	more_vert: require("../assets/icons/more_vert.xml"),
 	notifications: require("../assets/icons/notifications.xml"),
 	open_in_new: require("../assets/icons/open_in_new.xml"),

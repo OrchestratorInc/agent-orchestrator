@@ -17,7 +17,6 @@ export const materialDrawableNames = [
 	"check",
 	"close",
 	"delete",
-	"menu",
 	"more_vert",
 	"notifications",
 	"open_in_new",
