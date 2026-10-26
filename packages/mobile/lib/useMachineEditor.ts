@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AccessibilityInfo } from "react-native";
 import type { ServerConfig } from "./config";
 import { portError } from "./connectionFields";
 import { canSaveDraft, isDraftDirty, MachineSaveError, machineEditDraft, type EnvironmentMachineDraft } from "./environmentEditor";
@@ -42,10 +43,14 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 			haptics.success();
 			return true;
 		} catch (cause) {
-			setFailure(cause instanceof MachineSaveError
+			const failed: MachineEditorFailure = cause instanceof MachineSaveError
 				? { message: cause.message, field: cause.field }
-				: { message: cause instanceof Error ? cause.message : "The machine could not be updated. Try again.", field: "host" });
+				: { message: cause instanceof Error ? cause.message : "The machine could not be updated. Try again.", field: "host" };
+			setFailure(failed);
 			haptics.warning();
+			// The message lands in a footer or under a field, which a screen reader
+			// doesn't read out by itself; queued so it follows Save coming back.
+			AccessibilityInfo.announceForAccessibilityWithOptions(failed.message, { queue: true });
 			return false;
 		} finally {
 			setSaving(false);

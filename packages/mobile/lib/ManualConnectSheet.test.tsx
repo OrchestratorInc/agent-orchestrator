@@ -14,11 +14,13 @@ const fixtures = vi.hoisted(() => ({
 	setActiveHost: vi.fn(async () => {}),
 	renameHost: vi.fn(async () => {}),
 	openSettings: vi.fn(async () => {}),
+	announce: vi.fn(),
 	haptics: { success: vi.fn(), warning: vi.fn(), tap: vi.fn(), select: vi.fn() },
 	theme: { accent: "accent", bgBase: "base", bgElevated: "card", bgSurface: "surface", green: "green", highlight: "caret", red: "red", textPrimary: "ink", textSecondary: "gray", textTertiary: "dim" },
 }));
 
 vi.mock("react-native", () => ({
+	AccessibilityInfo: { announceForAccessibilityWithOptions: fixtures.announce },
 	Linking: { openSettings: fixtures.openSettings },
 	Platform: fixtures.platform,
 	ScrollView: "ScrollView",
@@ -80,7 +82,7 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	fixtures.platform.OS = "ios";
-	for (const mock of [fixtures.ping, fixtures.probeIdentity, fixtures.probeEndpoint, fixtures.saveConfig, fixtures.saveHost, fixtures.setActiveHost, fixtures.renameHost]) mock.mockClear();
+	for (const mock of [fixtures.ping, fixtures.probeIdentity, fixtures.probeEndpoint, fixtures.saveConfig, fixtures.saveHost, fixtures.setActiveHost, fixtures.renameHost, fixtures.announce]) mock.mockClear();
 	fixtures.ping.mockImplementation(async () => ({}));
 	fixtures.probeEndpoint.mockImplementation(async () => ({ hostId: "host-1" }));
 });
@@ -159,6 +161,8 @@ describe("ManualConnectSheet on iOS", () => {
 		const connection = renderer!.root.findAllByType("Section" as never)[1];
 		expect(connection.props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
 		expect(renderer!.root.findAll((node) => node.props.style?.backgroundColor === "red-tint")).toHaveLength(0);
+		// A footer isn't read out as it appears, so VoiceOver is told.
+		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 		await type("manual-connect-password", "right");
 		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
 	});
@@ -227,5 +231,7 @@ describe("ManualConnectSheet on Android", () => {
 		expect(password.props.isError).toBe(true);
 		expect(password.findByType("OutlinedTextField.SupportingText" as never).findByType("Text" as never).props.children).toBe("That password was rejected. Check it and try again.");
 		expect(field("manual-connect-host").props.isError).toBe(false);
+		// Supporting text is read only with its field focused, so TalkBack is told.
+		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 	});
 });

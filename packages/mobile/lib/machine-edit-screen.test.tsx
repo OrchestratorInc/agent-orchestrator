@@ -14,6 +14,7 @@ const fixtures = vi.hoisted(() => ({
 	back: vi.fn(),
 	setSheetOptions: vi.fn(),
 	dispatch: vi.fn(),
+	announce: vi.fn(),
 	preventRemove: { prevent: false, callback: undefined as undefined | ((event: { data: { action: unknown } }) => void) },
 	hostStates: [] as { hostId: string; connection: "closed" | "connecting" | "open"; loading: boolean; config: ServerConfig | null }[],
 	haptics: { success: vi.fn(), warning: vi.fn(), select: vi.fn() },
@@ -39,6 +40,7 @@ vi.mock("expo-router/build/react-navigation/core", () => ({
 	},
 }));
 vi.mock("react-native", () => ({
+	AccessibilityInfo: { announceForAccessibilityWithOptions: fixtures.announce },
 	Alert: { alert: fixtures.alert },
 	Platform: fixtures.platform,
 	StyleSheet: { create: (styles: object) => styles },
@@ -91,7 +93,7 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.platform.OS = "ios";
-	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.dispatch]) mock.mockReset();
+	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
 	fixtures.findHost.mockResolvedValue(a);
 	fixtures.activeHost.mockResolvedValue(a);
 	fixtures.save.mockResolvedValue({ routeChanged: false });
@@ -180,6 +182,8 @@ describe("editing a machine", () => {
 		expect(fixtures.back).not.toHaveBeenCalled();
 		expect(fixtures.haptics.warning).toHaveBeenCalledOnce();
 		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
+		// A footer isn't read out as it appears, so the screen reader is told.
+		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
 		await type("environment-password-a", "right");
 		expect(connectionSection().props.footer).toBeUndefined();
 	});

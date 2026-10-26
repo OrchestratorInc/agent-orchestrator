@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Platform } from "react-native";
+import { AccessibilityInfo, Platform } from "react-native";
 import { ApiError, pingServer } from "./api";
 import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { configForEndpoint } from "./connect";
@@ -104,22 +104,11 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 			onConnected();
 		} catch (e) {
 			haptics.warning();
-			if (e instanceof DifferentMachineError || e instanceof AccountManagedHostError) {
-				setFailure({ message: e.message, field: "host", showLocalNetworkHint: false });
-				return;
-			}
-			const status = e instanceof IncompatibleHostVersionError ? 426 : e instanceof ApiError ? e.status : undefined;
-			const kind = classifyConnectionFailure(status);
-			const copy = describeConnectionFailure(kind, {
-				host: target.host,
-				port: target.httpPort,
-				platform: Platform.OS,
-			});
-			setFailure({
-				message: editingHost && kind === "auth" ? "That password was rejected. Check it and try again." : copy.message,
-				field: kind === "auth" ? "password" : "host",
-				showLocalNetworkHint: copy.showLocalNetworkHint,
-			});
+			const failed = connectFailure(e, target, Boolean(editingHost));
+			setFailure(failed);
+			// The message lands in a footer or under a field, which a screen reader
+			// doesn't read out by itself; queued so it follows the button coming back.
+			AccessibilityInfo.announceForAccessibilityWithOptions(failed.message, { queue: true });
 		} finally {
 			setBusy(false);
 		}
@@ -144,5 +133,24 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		subtitle: editing
 			? "Update this machine's name, address, port, password, or TLS setting."
 			: "Name this machine, then enter the address and password from Connect Mobile or ao remote-host enable.",
+	};
+}
+
+/** Why a connect or save failed, in words, against the field it is about. */
+function connectFailure(error: unknown, target: ServerConfig, editing: boolean): ManualConnectFailure {
+	if (error instanceof DifferentMachineError || error instanceof AccountManagedHostError) {
+		return { message: error.message, field: "host", showLocalNetworkHint: false };
+	}
+	const status = error instanceof IncompatibleHostVersionError ? 426 : error instanceof ApiError ? error.status : undefined;
+	const kind = classifyConnectionFailure(status);
+	const copy = describeConnectionFailure(kind, {
+		host: target.host,
+		port: target.httpPort,
+		platform: Platform.OS,
+	});
+	return {
+		message: editing && kind === "auth" ? "That password was rejected. Check it and try again." : copy.message,
+		field: kind === "auth" ? "password" : "host",
+		showLocalNetworkHint: copy.showLocalNetworkHint,
 	};
 }
