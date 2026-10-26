@@ -492,16 +492,30 @@ const TERMINAL_ENHANCE_JS = `
       update();
     };
 
+    // A scroll of the viewport element itself never reaches xterm's onScroll:
+    // xterm syncs its buffer from that element with the event suppressed. That
+    // covers iOS momentum after the finger lifts and the drag handler's own
+    // scrollTop writes, so read the element's scroll events too, once a frame,
+    // after xterm has caught its buffer up. Scroll events do not bubble; the
+    // capture phase still sees them, and outlives xterm recreating the element.
+    var queued = 0;
+    function updateNextFrame() {
+      if (queued) return;
+      queued = requestAnimationFrame(function () { queued = 0; update(); });
+    }
     // Re-evaluate on xterm scroll and buffer switches, after each write (an app
     // turning mouse tracking on or off changes the answer without scrolling),
-    // and when a finger lifts, since the drag handler moves the viewport itself.
+    // and on every scroll of the viewport element.
     (function wire() {
       var T = term();
       if (T && T.onScroll) {
         T.onScroll(update);
         try { if (T.buffer && T.buffer.onBufferChange) T.buffer.onBufferChange(update); } catch (_) {}
         try { if (T.onWriteParsed) T.onWriteParsed(update); } catch (_) {}
-        document.addEventListener('touchend', update, { passive: true });
+        document.addEventListener('scroll', function (e) {
+          var el = e.target;
+          if (el && el.classList && el.classList.contains('xterm-viewport')) updateNextFrame();
+        }, { capture: true, passive: true });
         update();
       } else { setTimeout(wire, 200); }
     })();

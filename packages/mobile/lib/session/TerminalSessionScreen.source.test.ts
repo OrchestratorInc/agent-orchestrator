@@ -76,6 +76,15 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).not.toContain("no inject hook");
 	});
 
+	it("rechecks the button once a viewport scroll settles, momentum included", () => {
+		// xterm suppresses its own onScroll for scrolls of the viewport element, so
+		// the element's scroll events are read directly, a frame later.
+		expect(screen).toContain("document.addEventListener('scroll', function (e) {");
+		expect(screen).toContain("el.classList.contains('xterm-viewport')) updateNextFrame();");
+		expect(screen).toContain("}, { capture: true, passive: true });");
+		expect(screen).toContain("queued = requestAnimationFrame(function () { queued = 0; update(); });");
+	});
+
 	it("keeps pinch and double-tap zoom, and adds a fit-to-width step", () => {
 		expect(screen).toContain("window.__aoAdjustTerminalZoom = function (direction)");
 		expect(screen).toContain("window.__aoFitTerminalWidth = function ()");
