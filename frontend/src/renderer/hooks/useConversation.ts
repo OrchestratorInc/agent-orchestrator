@@ -26,6 +26,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { useEventStreamHealthy } from "./useEventsConnection";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
@@ -352,6 +353,7 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 const CONVERSATION_PAGE_SIZE = 200;
 const remoteConversationRefreshErrorKey = (sessionId: string, hostId: string) => ["remote-conversation-refresh-error", hostId, sessionId] as const;
 const CONFIG_OPTIONS_POLL_INTERVAL_MS = 5_000;
+const CONFIG_OPTIONS_HEALTHY_POLL_INTERVAL_MS = 30_000;
 const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
 
@@ -583,13 +585,15 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		enabled: Boolean(sessionId),
 		select: selectConversationPages,
 	});
+	// The host's event stream refreshes the live page; poll only while it cannot.
+	const streamHealthy = useEventStreamHealthy(hostId);
 	useEffect(() => {
-		if (!hostId || !sessionId) return;
+		if (!hostId || !sessionId || streamHealthy) return;
 		const timer = window.setInterval(() => {
 			void refreshLiveConversation(queryClient, sessionId, hostId).catch(() => {});
 		}, 2_000);
 		return () => window.clearInterval(timer);
-	}, [hostId, queryClient, sessionId]);
+	}, [hostId, queryClient, sessionId, streamHealthy]);
 
 	if (query.error && (!hostId || !query.data)) {
 		const code = apiErrorCode(query.error);
@@ -1587,14 +1591,16 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 	// start a fresh read mid-write whose pre-change catalog lands after the
 	// mutation's own result and reverts the picker the user just used.
 	const [writing, setWriting] = useState(false);
+	const streamHealthy = useEventStreamHealthy(hostId);
 	const query = useQuery({
 		queryKey,
 		enabled: Boolean(sessionId) && enabled,
 		retry: false,
-		// ACP can push a replacement catalog when one option changes. Until the
-		// renderer consumes daemon change events, a light poll keeps those updates
-		// visible without coupling them to conversation history polling.
-		refetchInterval: writing ? false : CONFIG_OPTIONS_POLL_INTERVAL_MS,
+		// ACP can push a replacement catalog when one option changes, and no daemon
+		// event reports it. A light poll keeps those updates visible; it slows down
+		// while the event stream is healthy, since the visible conversation state
+		// then arrives without it.
+		refetchInterval: writing ? false : streamHealthy ? CONFIG_OPTIONS_HEALTHY_POLL_INTERVAL_MS : CONFIG_OPTIONS_POLL_INTERVAL_MS,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/config-options",
