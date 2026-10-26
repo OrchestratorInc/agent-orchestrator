@@ -31,15 +31,20 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		Column: "ComposeColumn",
 		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: host("DropdownMenuTrigger"), Items: host("DropdownMenuItems") }),
 		DropdownMenuItem: Object.assign(host("DropdownMenuItem"), { LeadingIcon: host("DropdownMenuItemLeadingIcon"), Text: host("DropdownMenuItemText") }),
+		ListItem: Object.assign(host("ListItem"), { HeadlineContent: host("HeadlineContent"), SupportingContent: host("SupportingContent") }),
 		RadioButton: "RadioButton",
 		Row: "ComposeRow",
+		Surface: host("Surface"),
 		Text: "ComposeText",
+		useMaterialColors: () => ({ surfaceContainer: "container", onSurfaceVariant: "variant" }),
 	};
 });
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
 	alpha: (value: number) => ({ alpha: value }),
-	clickable: (handler: () => void) => ({ clickable: handler }),
+	clip: (shape: unknown) => ({ clip: shape }),
 	fillMaxWidth: () => ({ fillMaxWidth: true }),
+	padding: (...edges: number[]) => ({ padding: edges }),
+	Shapes: { RoundedCorner: (radius: number) => ({ roundedCorner: radius }) },
 	testID: (id: string) => ({ testID: id }),
 }));
 vi.mock("@expo/ui/swift-ui", () => ({ Picker: "SwiftUIPicker", Text: "SwiftUIText", VStack: "VStack" }));
@@ -412,8 +417,11 @@ function sheet(over: Partial<Parameters<typeof ChatSettingsSheet>[0]> = {}) {
 	});
 	return { renderer, ...handlers };
 }
-const sectionTitles = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSection").map((node) => node.props.title);
-const footers = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSectionFooter").map((node) => node.findByType("ComposeText" as never).props.children);
+/** A component of the sheet's own, by name. */
+const named = (name: string) => (node: { type: unknown }) => (node.type as { name?: string }).name === name;
+// Android draws a choice's section itself, around a row FieldGroup.Section cannot hold.
+const sectionTitles = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSection" || named("ChoiceMenuSection")(node)).map((node) => node.props.title);
+const footers = (renderer: ReactTestRenderer) => renderer.root.findAll(named("Hint")).map((node) => node.props.children);
 
 describe("turn settings sheet on Android", () => {
 	afterEach(() => {
@@ -438,8 +446,9 @@ describe("turn settings sheet on Android", () => {
 	it("footers a provider setting with its description and the current choice's", () => {
 		const model: ChatConfigOption = { id: "model", name: "Model", description: "AI model to use", category: "model", type: "select", currentValue: "gpt", choices: [{ value: "gpt", name: "GPT", description: "Balanced" }, { value: "o3", name: "o3" }] };
 		const { renderer } = sheet({ snapshot: snapshot({ capabilities: ["config_options"] }), options: [model] });
-		const footer = renderer.root.findAll((node) => (node.type as unknown) === "FieldGroupSectionFooter")[0];
-		expect(footer.findAllByType("ComposeText" as never).map((node) => node.props.children)).toEqual(["AI model to use", "Balanced"]);
+		const section = renderer.root.findAll(named("ChoiceMenuSection"))[0];
+		expect(section.props.title).toBe("Model");
+		expect(section.findAll(named("Hint")).map((node) => node.findByType("ComposeText" as never).props.children)).toEqual(["AI model to use", "Balanced"]);
 		act(() => renderer.unmount());
 	});
 
@@ -448,13 +457,24 @@ describe("turn settings sheet on Android", () => {
 		const model = renderer.root.findAll((node) => (node.type as unknown) === "DropdownMenu")[0];
 		expect(model.findAll((node) => (node.type as unknown) === "ComposeText").slice(0, 2).map((node) => node.props.children)).toEqual(["Model", "Opus"]);
 		expect(model.findAll((node) => (node.type as unknown) === "RadioButton").map((node) => node.props.selected)).toEqual([true, false]);
-		const trigger = model.find((node) => (node.type as unknown) === "ComposeColumn");
-		const open = trigger.props.modifiers.find((modifier: { clickable?: () => void }) => modifier.clickable).clickable;
-		act(() => open());
+		// The whole rounded row is the target, not the text inside it.
+		const trigger = model.find((node) => (node.type as unknown) === "Surface");
+		expect(trigger.props.enabled).toBe(true);
+		expect(trigger.props.modifiers).toEqual([{ fillMaxWidth: true }, { clip: { roundedCorner: 20 } }]);
+		act(() => trigger.props.onClick());
 		expect(model.props.expanded).toBe(true);
 		act(() => model.findAll((node) => (node.type as unknown) === "DropdownMenuItem")[1].props.onClick());
 		expect(onSettings).toHaveBeenCalledExactlyOnceWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
 		expect(haptics.select).toHaveBeenCalledOnce();
+		act(() => renderer.unmount());
+	});
+
+	it("keeps a disabled choice row in place, dimmed and announced as disabled", () => {
+		const { renderer, onSettings } = sheet({ disabled: true });
+		const model = renderer.root.findAll((node) => (node.type as unknown) === "DropdownMenu")[0];
+		expect(model.find((node) => (node.type as unknown) === "Surface").props.enabled).toBe(false);
+		expect(model.find((node) => (node.type as unknown) === "ListItem").props.modifiers).toEqual([{ alpha: 0.4 }]);
+		expect(onSettings).not.toHaveBeenCalled();
 		act(() => renderer.unmount());
 	});
 

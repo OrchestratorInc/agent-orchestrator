@@ -40,4 +40,11 @@ describe("turn settings sheet", () => {
 		}
 		expect(sheet).not.toMatch(/import \{[^}]*\bSwitch\b[^}]*\} from "react-native"/);
 	});
+
+	// A clickable inside FieldGroup.Section's row covered the text only; the
+	// Surface is the whole row and carries the disabled state to TalkBack.
+	it("makes each Android choice row one tap target", () => {
+		expect(sheet).toContain("<Surface onClick={() => setExpanded(true)} enabled={!disabled}");
+		expect(sheet).not.toContain("clickable(");
+	});
 });

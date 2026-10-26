@@ -1,9 +1,9 @@
 import { Column, FieldGroup, Host, Slider, Switch } from "@expo/ui";
-import { Column as ComposeColumn, DropdownMenu, DropdownMenuItem, RadioButton, Row as ComposeRow, Text as ComposeText } from "@expo/ui/jetpack-compose";
-import { alpha, clickable, fillMaxWidth, testID } from "@expo/ui/jetpack-compose/modifiers";
+import { Column as ComposeColumn, DropdownMenu, DropdownMenuItem, ListItem, RadioButton, Row as ComposeRow, Surface, Text as ComposeText, useMaterialColors } from "@expo/ui/jetpack-compose";
+import { alpha, clip, fillMaxWidth, padding, Shapes, testID } from "@expo/ui/jetpack-compose/modifiers";
 import { Picker as SwiftUIPicker, Text as SwiftUIText, VStack } from "@expo/ui/swift-ui";
 import { disabled as disabledModifier, font, foregroundStyle, labelsHidden, pickerStyle, refreshable, scrollContentBackground, tag } from "@expo/ui/swift-ui/modifiers";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Platform, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { haptics } from "../haptics";
@@ -165,11 +165,6 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 	</View>;
 }
 
-/**
- * One choice among several. iOS lists them inline in the form, each with its
- * description, and ticks the current one; Android shows the current value in
- * the row and the choices in a menu, the current one's radio filled.
- */
 type ChoicePickerProps = {
 	label: string;
 	/** The current value by name, for the Android row, including one no choice matches. */
@@ -180,43 +175,58 @@ type ChoicePickerProps = {
 	onChange(value: string): void;
 };
 
-function ChoicePicker({ label, value, choices, selected, disabled, onChange }: ChoicePickerProps) {
-	const t = useTheme();
-	const [expanded, setExpanded] = useState(false);
-	const choose = (next: string) => {
-		setExpanded(false);
+/** Saves a choice the user moved to; the current one again changes nothing. */
+function chooser(selected: string, onChange: (value: string) => void) {
+	return (next: string) => {
 		if (next === selected) return;
 		haptics.select();
 		onChange(next);
 	};
-	if (Platform.OS === "ios") {
-		return (
-			<SwiftUIPicker
-				label={label}
-				selection={selected || null}
-				onSelectionChange={(next: string | null) => { if (next !== null) choose(next); }}
-				modifiers={[pickerStyle("inline"), labelsHidden(), disabledModifier(Boolean(disabled))]}
-			>
-				{choices.map((choice) => (
-					<VStack key={choice.value} alignment="leading" spacing={space.hair} modifiers={[tag(choice.value)]}>
-						<SwiftUIText>{choice.label}</SwiftUIText>
-						{choice.description ? <SwiftUIText modifiers={[font({ textStyle: "footnote" }), foregroundStyle({ type: "hierarchical", style: "secondary" })]}>{choice.description}</SwiftUIText> : null}
-					</VStack>
-				))}
-			</SwiftUIPicker>
-		);
-	}
+}
+
+/** iOS's choice: the choices inline in the form, each with its description, the current one ticked. */
+function ChoicePicker({ label, choices, selected, disabled, onChange }: ChoicePickerProps) {
+	const choose = chooser(selected, onChange);
+	return (
+		<SwiftUIPicker
+			label={label}
+			selection={selected || null}
+			onSelectionChange={(next: string | null) => { if (next !== null) choose(next); }}
+			modifiers={[pickerStyle("inline"), labelsHidden(), disabledModifier(Boolean(disabled))]}
+		>
+			{choices.map((choice) => (
+				<VStack key={choice.value} alignment="leading" spacing={space.hair} modifiers={[tag(choice.value)]}>
+					<SwiftUIText>{choice.label}</SwiftUIText>
+					{choice.description ? <SwiftUIText modifiers={[font({ textStyle: "footnote" }), foregroundStyle({ type: "hierarchical", style: "secondary" })]}>{choice.description}</SwiftUIText> : null}
+				</VStack>
+			))}
+		</SwiftUIPicker>
+	);
+}
+
+/**
+ * Android's choice: a list row naming the current value, which opens Material's
+ * menu of the choices with the current one's radio filled.
+ */
+function ChoiceMenu({ label, value, choices, selected, disabled, onChange }: ChoicePickerProps) {
+	const colors = useMaterialColors();
+	const [expanded, setExpanded] = useState(false);
+	const choose = chooser(selected, onChange);
 	return (
 		<DropdownMenu expanded={expanded} onDismissRequest={() => setExpanded(false)}>
 			<DropdownMenu.Trigger>
-				<ComposeColumn modifiers={[fillMaxWidth(), ...(disabled ? [alpha(stateOpacity.disabled)] : [clickable(() => setExpanded(true))])]}>
-					<ComposeText style={{ typography: "bodyLarge" }}>{label}</ComposeText>
-					<ComposeText color={t.textSecondary} style={{ typography: "bodyMedium" }}>{value}</ComposeText>
-				</ComposeColumn>
+				{/* A clickable Surface, so the whole row takes the tap and ripples, and
+				    TalkBack reads it as one control that says when it is disabled. */}
+				<Surface onClick={() => setExpanded(true)} enabled={!disabled} color={colors.surfaceContainer} modifiers={[fillMaxWidth(), clip(Shapes.RoundedCorner(radius.xl))]}>
+					<ListItem colors={{ containerColor: "transparent" }} modifiers={disabled ? [alpha(stateOpacity.disabled)] : []}>
+						<ListItem.HeadlineContent><ComposeText>{label}</ComposeText></ListItem.HeadlineContent>
+						<ListItem.SupportingContent><ComposeText>{value}</ComposeText></ListItem.SupportingContent>
+					</ListItem>
+				</Surface>
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Items>
 				{choices.map((choice) => (
-					<DropdownMenuItem key={choice.value} onClick={() => choose(choice.value)}>
+					<DropdownMenuItem key={choice.value} onClick={() => { setExpanded(false); choose(choice.value); }}>
 						<DropdownMenuItem.LeadingIcon><RadioButton selected={choice.value === selected} /></DropdownMenuItem.LeadingIcon>
 						<DropdownMenuItem.Text><ComposeText>{choice.label}</ComposeText></DropdownMenuItem.Text>
 					</DropdownMenuItem>
@@ -232,13 +242,34 @@ function ChoicePicker({ label, value, choices, selected, disabled, onChange }: C
  * current choice's, or `defaultHint` when neither says anything.
  */
 function ChoiceSection({ title, description, defaultHint, ...picker }: { title: string; description?: string; defaultHint?: string } & ChoicePickerProps) {
-	const ios = Platform.OS === "ios";
-	const lines = (ios ? [description] : [description, hintFor(picker.choices, picker.selected)]).filter((hint): hint is string => Boolean(hint));
-	if (!lines.length && defaultHint && !ios) lines.push(defaultHint);
-	return <FieldGroup.Section title={title}>
-		<ChoicePicker {...picker} />
-		{lines.length ? <FieldGroup.SectionFooter>{lines.map((line) => <Hint key={line}>{line}</Hint>)}</FieldGroup.SectionFooter> : null}
-	</FieldGroup.Section>;
+	if (Platform.OS === "ios") {
+		return <FieldGroup.Section title={title}>
+			<ChoicePicker {...picker} />
+			{description ? <FieldGroup.SectionFooter><Hint>{description}</Hint></FieldGroup.SectionFooter> : null}
+		</FieldGroup.Section>;
+	}
+	const hints = [description, hintFor(picker.choices, picker.selected)].filter((hint): hint is string => Boolean(hint));
+	return <ChoiceMenuSection title={title} hints={hints.length || !defaultHint ? hints : [defaultHint]}>
+		<ChoiceMenu {...picker} />
+	</ChoiceMenuSection>;
+}
+
+/**
+ * FieldGroup.Section's Android layout around a row it cannot hold: the section
+ * wraps each row in a list item whose padding would not take a tap, and this
+ * row has to be the target edge to edge.
+ */
+function ChoiceMenuSection({ title, hints, children }: { title: string; hints: string[]; children: ReactNode }) {
+	const colors = useMaterialColors();
+	return <ComposeColumn verticalArrangement={{ spacedBy: space.xxs }} modifiers={[fillMaxWidth()]}>
+		<ComposeColumn modifiers={[padding(space.lg, 0, space.lg, space.sm)]}>
+			<ComposeText color={colors.onSurfaceVariant} style={{ typography: "titleMedium" }}>{title}</ComposeText>
+		</ComposeColumn>
+		{children}
+		{hints.length ? <ComposeColumn modifiers={[padding(space.lg, space.xxs, space.lg, 0)]}>
+			{hints.map((hint) => <Hint key={hint}>{hint}</Hint>)}
+		</ComposeColumn> : null}
+	</ComposeColumn>;
 }
 
 /** A provider option without a fixed section, under its own name: a switch, or a choice among its values. */
