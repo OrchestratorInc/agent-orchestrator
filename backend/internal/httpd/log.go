@@ -64,6 +64,13 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					if capErr != nil {
 						errorKind, errorCode = telemetrymeta.ErrorKindAndCode(capErr)
 					}
+					// Codex account management is absent for this process. The
+					// renderer holds one quiet stream instead of treating that
+					// expected condition as a fault. Other 5xx still go to
+					// PostHog and, when ShouldCaptureStatus allows, to Sentry once.
+					if errorCode == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" {
+						return
+					}
 					// Same grouping key for PostHog and Sentry so an issue lines up
 					// across both.
 					fingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, strconv.Itoa(ww.Status()), errorKind, errorCode)

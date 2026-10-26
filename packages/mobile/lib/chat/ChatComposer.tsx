@@ -40,10 +40,8 @@ import type { DashboardPR, SessionPRSummary } from "../api";
 import { PRReviewPrompt } from "./PRReviewPrompt";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
-
-type Attachment =
-	| { id: string; kind: "image"; name: string; bytes: number; image: ChatImage }
-	| { id: string; kind: "resource"; name: string; bytes: number; resource: ChatResource };
+import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
+import { sniffImageMimeType } from "../imageMime";
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
 
@@ -238,7 +236,12 @@ export function ChatComposer({
 	const [draftLoaded, setDraftLoaded] = useState(false);
 	const [cursor, setCursor] = useState(0);
 	const [fieldHeight, setFieldHeight] = useState(COMPOSER_FIELD_HEIGHT);
-	const [attachments, setAttachments] = useState<Attachment[]>([]);
+	// Not component state: an Android pick can resolve after this composer has
+	// unmounted (see composerAttachments.ts).
+	const attachmentKey = config ? `${machineIdentity(config)}.${sessionId}` : sessionId;
+	const { items: attachments, notice: attachmentNotice } = useComposerAttachments(attachmentKey);
+	const clearAttachments = useCallback(() => updateComposerAttachments(attachmentKey, () => ({ items: [] })), [attachmentKey]);
+	const dismissAttachmentNotice = useCallback(() => updateComposerAttachments(attachmentKey, (current) => current.notice ? { items: current.items } : current), [attachmentKey]);
 	const [localError, setLocalError] = useState<string>();
 	const [submitting, setSubmitting] = useState(false);
 	const [promotingQueuedTurnId, setPromotingQueuedTurnId] = useState<string>();
@@ -329,7 +332,7 @@ export function ChatComposer({
 			setText("");
 			latestQuotes.current = [];
 			setQuotes([]);
-			setAttachments([]);
+			clearAttachments();
 		}
 		void (async () => {
 			if (draftKey) {
@@ -337,7 +340,7 @@ export function ChatComposer({
 			}
 			await onAcknowledgeSend(completedRetry.id);
 		})().catch((cause) => setLocalError(userFacingError(cause)));
-	}, [completedRetry, draftKey, onAcknowledgeSend]);
+	}, [completedRetry, draftKey, onAcknowledgeSend, clearAttachments]);
 
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
 
@@ -345,11 +348,16 @@ export function ChatComposer({
 		if (submitting || pending || disabled || (draftKey && !draftLoaded)) return;
 		const trimmed = responseReplyText(text, quotes);
 		if (!trimmed && attachments.length === 0) return;
+		// This send owns these attachments and no others: it can finish after the
+		// conversation was left and reopened, and the new composer may have added more.
+		const sentKey = attachmentKey;
+		const sent = new Set(attachments.map((item) => item.id));
 		// Dismissed on the tap, not after the send lands. Waiting for the request
 		// tied the keyboard's exit to the network, so it dropped whenever the
 		// answer arrived — which read as the keyboard being taken away mid-sentence.
 		Keyboard.dismiss();
 		setLocalError(undefined);
+		dismissAttachmentNotice();
 		setSubmitting(true);
 		if (draftTimer.current) clearTimeout(draftTimer.current);
 		try {
@@ -377,30 +385,37 @@ export function ChatComposer({
 				setFieldHeight(COMPOSER_FIELD_HEIGHT);
 				latestQuotes.current = [];
 				setQuotes([]);
-				setAttachments([]);
 			}
+			forgetComposerAttachments(sentKey, sent);
 			haptics.success();
 		} catch (cause) {
 			setLocalError(userFacingError(cause));
 			haptics.error();
 		} finally { setSubmitting(false); }
-	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled]);
+	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
 
 	const addImage = async () => {
+		// Captured now: the pick can outlive this composer, and the stored list may
+		// have changed while the picker was open.
+		const key = attachmentKey;
 		setLocalError(undefined);
+		dismissAttachmentNotice();
 		try {
 			const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.82, allowsMultipleSelection: true, selectionLimit: 4 });
 			if (result.canceled) return;
 			const errors = new Set<string>();
 			const next = result.assets.flatMap((asset): Attachment[] => {
 				if (!asset.base64) { errors.add("Some images couldn't be read and were skipped."); return []; }
-				const mimeType = (asset.mimeType || "image/jpeg").toLowerCase();
+				// The picker reports the original file's type, but the base64 is
+				// re-encoded (JPEG on both platforms at quality < 1). Agents reject an
+				// image whose bytes don't match its declared type.
+				const mimeType = (sniffImageMimeType(asset.base64) ?? (asset.mimeType || "image/jpeg")).toLowerCase();
 				if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) { errors.add("Only PNG, JPEG, GIF, WebP, and BMP images are supported."); return []; }
 				const bytes = asset.fileSize ?? Math.floor(asset.base64.length * 0.75);
 				if (bytes > MAX_IMAGE_BYTES) { errors.add("Each image must be under 10 MB."); return []; }
 				return [{ id: `${asset.assetId ?? asset.uri}-${Date.now()}`, kind: "image", name: asset.fileName || "Image", bytes, image: { mimeType, data: asset.base64 } }];
 			});
-			const accepted = [...attachments];
+			const accepted = [...readComposerAttachments(key).items];
 			let imageBytes = accepted.filter((item) => item.kind === "image").reduce((sum, item) => sum + item.bytes, 0);
 			for (const item of next) {
 				if (accepted.length >= MAX_ATTACHMENTS) { errors.add(`You can attach up to ${MAX_ATTACHMENTS} items.`); break; }
@@ -408,28 +423,34 @@ export function ChatComposer({
 				accepted.push(item);
 				imageBytes += item.bytes;
 			}
-			setAttachments(accepted);
-			setLocalError(errors.size ? [...errors].join(" ") : undefined);
+			updateComposerAttachments(key, () => ({ items: accepted, notice: errors.size ? [...errors].join(" ") : undefined }));
 		} catch (cause) {
-			setLocalError(userFacingError(cause, "Couldn't open your photo library."));
+			const notice = userFacingError(cause, "Couldn't open your photo library.");
+			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
 		}
 	};
 	const addFile = async () => {
+		const key = attachmentKey;
 		setLocalError(undefined);
+		dismissAttachmentNotice();
 		const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true, type: ["text/*", "application/json", "application/xml", "application/yaml"] });
 		if (result.canceled) return;
 		try {
+			const existing = readComposerAttachments(key).items.length;
 			const added: Attachment[] = [];
 			for (const asset of result.assets) {
-				if (attachments.length + added.length >= MAX_ATTACHMENTS) throw new Error(`You can attach up to ${MAX_ATTACHMENTS} items.`);
+				if (existing + added.length >= MAX_ATTACHMENTS) throw new Error(`You can attach up to ${MAX_ATTACHMENTS} items.`);
 				if ((asset.size ?? 0) > MAX_EMBEDDED_FILE_BYTES) throw new Error(`${asset.name} is larger than 500 KB. Reference a worktree file with @ instead.`);
 				const body = await fetch(asset.uri).then((response) => response.text());
 				const bytes = new TextEncoder().encode(body).byteLength;
 				if (bytes > MAX_EMBEDDED_FILE_BYTES) throw new Error(`${asset.name} is too large to embed. Reference a worktree file with @ instead.`);
 				added.push({ id: `${asset.uri}-${Date.now()}`, kind: "resource", name: asset.name, bytes, resource: { uri: `mobile-attachment://${encodeURIComponent(asset.name)}`, name: asset.name, mimeType: asset.mimeType || "text/plain", text: body } });
 			}
-			setAttachments((old) => [...old, ...added]);
-		} catch (cause) { setLocalError(userFacingError(cause)); }
+			updateComposerAttachments(key, (current) => ({ items: [...current.items, ...added], notice: current.notice }));
+		} catch (cause) {
+			const notice = userFacingError(cause);
+			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
+		}
 	};
 
 	const openPicker = useCallback(async (kind: "skills" | "files", activeTrigger?: ComposerSuggestion) => {
@@ -473,10 +494,10 @@ export function ChatComposer({
 					<View style={styles.reviewDivider} />
 				</Animated.View> : null}
 			{voice.state === "starting" || voice.state === "recording" ? <View style={styles.voice}><Feather name="mic" size={12} color={t.red} /><Text style={styles.voiceText}>{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}</Text></View> : null}
-			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); setAttachments((old) => old.filter((candidate) => candidate.id !== item.id)); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
+			{attachments.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>{attachments.map((item) => <View key={item.id} style={styles.attachment}>{item.kind === "image" ? <Image accessibilityIgnoresInvertColors source={{ uri: `data:${item.image.mimeType};base64,${item.image.data}` }} style={styles.attachmentImage} /> : <Feather name="file-text" size={12} color={t.accent} />}<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable hitSlop={7} accessibilityLabel={`Remove ${item.name}`} onPress={() => { haptics.tap(); updateComposerAttachments(attachmentKey, (current) => ({ items: current.items.filter((candidate) => candidate.id !== item.id), notice: current.notice })); }}><Feather name="x" size={12} color={t.textTertiary} /></Pressable></View>)}</ScrollView> : null}
 			{/* Composer-local only. Conversation and action failures are banners above
 			    the timeline; echoing them here showed one failure twice. */}
-			{localError || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || voice.error}</Text> : null}
+			{localError || attachmentNotice || voice.error ? <Text accessibilityRole="alert" style={styles.error}>{localError || attachmentNotice || voice.error}</Text> : null}
 			<View style={styles.metaRow}>
 				<View style={styles.settingsSlot}>
 				<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} onOpenFallback={onOpenSettings} />

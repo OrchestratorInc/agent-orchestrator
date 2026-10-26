@@ -218,6 +218,8 @@ type offeringResponse struct {
 	// holds the coder capability), or still has a connection its sessions run
 	// on; the desktop shows the Coder settings page.
 	CustomCoder bool `json:"customCoder"`
+	// Artifacts reports whether cloud sessions keep artifact files.
+	Artifacts bool `json:"artifacts"`
 	// CoderWorkerWorkingFolder: a Coder session whose worker runs as the
 	// dedicated ao-worker user checks out in the project's working folder
 	// (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). Off, a working folder applies
@@ -241,6 +243,7 @@ func (s *Server) offeringForOrg(ctx context.Context, principal domain.Principal,
 		Features: []string{},
 		CustomCoder: s.orgHasCustomCoder(principal, orgID) ||
 			(slices.Contains(providers, sandbox.ProviderCoder) && s.orgHasCoderConnection(ctx, principal, orgID)),
+		Artifacts:                s.artifactsEnabled(),
 		CoderWorkerWorkingFolder: s.provisioning.Coder.WorkerWorkingFolder,
 	}, nil
 }

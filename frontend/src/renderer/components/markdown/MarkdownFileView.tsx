@@ -14,10 +14,9 @@ import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
  *     is no schema to get wrong — except ```mermaid fences, which render as
  *     diagrams through the shared `MermaidBlock` (strict mode plus DOMPurify,
  *     active-content tags forbidden), matching the chat surface.
- *   - Fenced code reuses the app's existing lowlight/highlight.js engine
- *     (`lib/code-highlight.ts`) rather than Shiki: the renderer's CSP
- *     (`script-src 'self'`, no `wasm-unsafe-eval`) blocks Shiki's default WASM
- *     engine.
+ *   - Fenced code reuses the app's Shiki engine (`lib/code-highlight.ts`).
+ *     Its JavaScript regex engine needs no WASM or CSP exception, and its
+ *     syntax classes use AO's existing palette in both themes.
  *
  * No explicit light/dark plumbing is needed for `github-markdown-css`: its
  * combined stylesheet follows `prefers-color-scheme`, and `main.ts` already

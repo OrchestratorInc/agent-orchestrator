@@ -15,14 +15,23 @@ const mocks = vi.hoisted(() => ({
 	post: vi.fn(),
 	get: vi.fn(),
 	capture: vi.fn(),
+	deleteCloudArtifact: vi.fn(),
 	hideShellTopbar: true,
 }));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
+	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryKeyForHost: () => ["workspaces"],
 	useWorkspaceQuery: () => ({ data: mocks.workspaces, isLoading: false, error: null }),
+}));
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: { deleteSessionArtifact: mocks.deleteCloudArtifact } }),
+}));
+vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useCloudArtifacts")>(),
+	useCloudArtifactAccess: (session: Pick<WorkspaceSession, "cloud">) => ({ data: session.cloud ? "https://cp.test/artifact-files/token/" : undefined }),
 }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: mocks.agents } }) }));
 vi.mock("../lib/api-client", async (importOriginal) => ({
@@ -129,6 +138,7 @@ describe("ArtifactsView", () => {
 		mocks.post.mockReset();
 		mocks.get.mockReset();
 		mocks.capture.mockReset();
+		mocks.deleteCloudArtifact.mockReset().mockResolvedValue(undefined);
 		useUiStore.setState({ settingsModal: null });
 		useUiStore.getState().clearGlobalToast();
 	});
@@ -219,6 +229,22 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("button", { name: "agent-orchestrator" })).not.toBeInTheDocument();
 	});
 
+	it("keeps gallery cloud actions on the cloud session instead of local file actions", async () => {
+		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		cloud.cloud = { orgId: "org-1" };
+		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
+		renderView();
+		await userEvent.click(screen.getByRole("button", { name: "More actions: notes.md" }));
+		expect(screen.queryByRole("menuitem", { name: /^Show in / })).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "Download" })).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("menuitem", { name: "Delete artifact" }));
+		const dialog = screen.getByRole("dialog");
+		expect(dialog).toHaveTextContent("from the session's cloud storage and from its sandbox");
+		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
+		await waitFor(() => expect(mocks.deleteCloudArtifact).toHaveBeenCalledWith("org-1", "cloud-1", "notes.md"));
+	});
+
+
 	it("pins and unpins an artifact across sections and remembers the pin on return", async () => {
 		const user = userEvent.setup();
 		const { unmount } = renderView();
@@ -252,12 +278,19 @@ describe("ArtifactsView", () => {
 		expect(within(project.getByRole("button", { name: /^pricing\.md/ })).getByTitle("No preview available")).toBeInTheDocument();
 	});
 
-	it("frames an HTML preview only on its dedicated inline origin", () => {
+	it("checks HTML availability before framing only its dedicated inline origin", async () => {
 		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
 		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		html.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		let respond!: (response: Response) => void;
+		const fetch = vi.fn(() => new Promise<Response>((resolve) => { respond = resolve; }));
+		vi.stubGlobal("fetch", fetch);
 		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
 		const { container, unmount } = renderView();
-		expect(container.querySelector("iframe")).toHaveAttribute("src", html.artifactFiles![0].inlineUrl);
+		expect(container.querySelector("iframe")).toBeNull();
+		expect(fetch).toHaveBeenCalledWith(html.artifactFiles![0].rawUrl, { signal: expect.any(AbortSignal), cache: "no-store" });
+		respond(new Response("<h1>Design review</h1>"));
+		await waitFor(() => expect(container.querySelector("iframe")).toHaveAttribute("src", html.artifactFiles![0].inlineUrl));
 		expect(container.querySelector("iframe")).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
 		expect(container.querySelector("iframe")).toHaveAttribute("tabindex", "-1");
 		unmount();
@@ -265,6 +298,24 @@ describe("ArtifactsView", () => {
 		const unsafe = renderView();
 		expect(unsafe.container.querySelector("iframe")).toBeNull();
 		expect(within(screen.getByRole("region", { name: "AO" })).getByTitle("No preview available")).toBeInTheDocument();
+	});
+
+	it.each(["missing", "network failure"])("shows an unavailable HTML preview for %s files after reopening", async (failure) => {
+		const html = session("ao-html", "Design review", [{ name: "page.html", kind: "html", updatedAt: "2026-10-11T10:00:00Z" }]);
+		html.artifactFiles![0].inlineUrl = "http://ao-inline-artifact.ao-html.localhost:3002/page.html";
+		html.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/page.html?raw=true";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [html] }];
+		const fetch = vi.fn().mockResolvedValueOnce(new Response("<h1>Design review</h1>"));
+		vi.stubGlobal("fetch", fetch);
+		const { container, unmount } = renderView();
+		await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+		unmount();
+		if (failure === "missing") fetch.mockResolvedValueOnce(new Response('{"code":"ARTIFACT_FILE_NOT_FOUND"}', { status: 404 }));
+		else fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const reopened = renderView();
+		await waitFor(() => expect(within(screen.getByRole("region", { name: "AO" })).getByTitle("No preview available")).toBeInTheDocument());
+		expect(reopened.container.querySelector("iframe")).toBeNull();
+		expect(fetch).toHaveBeenCalledTimes(2);
 	});
 
 	it("shows image previews and falls back to a placeholder when the image fails", () => {
@@ -437,7 +488,7 @@ describe("ArtifactsView", () => {
 		expect(mocks.post).toHaveBeenCalledWith("/api/v1/sessions", {
 			body: { kind: "worker", requestedOutput: "artifact", displayName: "New artifact", harness: "codex" },
 		});
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_requested", { scope: "standalone" });
+		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.artifact_create_requested", expect.anything());
 		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_succeeded", { scope: "standalone" });
 	});
 

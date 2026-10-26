@@ -1,7 +1,9 @@
-import { ChevronDown, Clock, File, FileText, Folder, Globe, LayoutGrid, List, Loader2, Pin, Plus, Search } from "lucide-react";
+import { BrowserIcon } from "./icons";
+import { ChevronDown, Clock, Cloud, File, FileText, Folder, LayoutGrid, List, Loader2, Pin, Plus, Search } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import {
@@ -27,6 +29,7 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuLabel,
 	DropdownMenuRadioGroup,
 	DropdownMenuRadioItem,
 	DropdownMenuSeparator,
@@ -37,11 +40,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const ARTIFACT_GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-4";
 
-/** Every artifact agents have written on this machine. */
+/**
+ * Every artifact agents have written, grouped by project: on this machine, and
+ * in cloud sessions when the control plane keeps artifacts.
+ */
 export function ArtifactsView() {
 	const { t } = useTranslation();
 	const showPageTitle = hidesShellTopbar();
-	const workspaceQuery = useWorkspaceQuery({ includeCloud: false });
+	const cloudArtifacts = useCloudOffering().artifacts;
+	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
 	const groups = useMemo(() => groupArtifactsByProject(workspaces ?? []), [workspaces]);
 	const [query, setQuery] = useState("");
@@ -149,7 +156,7 @@ export function ArtifactsView() {
 						pending={createArtifact.pending}
 						label="new"
 						align="end"
-						disabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
+						localDisabledReason={createArtifact.agentReady ? undefined : t("artifacts.noAgent.description")}
 					/>
 				</div>
 			</header>
@@ -189,7 +196,7 @@ export function ArtifactsView() {
 												key={group.id}
 												sectionId={`project:${group.id}`}
 												name={projectName}
-												icon={group.isScratchpad ? File : Folder}
+												icon={group.isScratchpad ? File : group.cloud ? Cloud : Folder}
 												view={view}
 												collapsible={showProjectSections}
 												updatedAt={groups.find((project) => project.id === group.id)?.rows[0]?.updatedAt}
@@ -269,7 +276,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
-	const KindIcon = row.kind === "html" ? Globe : row.kind === "markdown" ? FileText : File;
+	const KindIcon = row.kind === "html" ? BrowserIcon : row.kind === "markdown" ? FileText : File;
 
 	const open = () => {
 		onPreview(row, projectName);
@@ -300,7 +307,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
 						<ArtifactActionsMenu
 							artifact={row}
-							session={{ id: row.sessionId }}
+							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
 							onOpenInSession={openInSession}
 							pinned={pinned}
@@ -344,7 +351,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, onPrevi
 			<div className="absolute right-2 top-2 flex items-center gap-1">
 				<ArtifactActionsMenu
 					artifact={row}
-					session={{ id: row.sessionId }}
+					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly
 					onOpenInSession={openInSession}
 					pinned={pinned}
@@ -362,8 +369,10 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 	// Developer mode moves account management to the Harness page.
 	const agentsSection = useUiStore((state) => state.developerMode) ? "harness" : "agents";
 	const { agentReady, create, pending } = useCreateArtifactSession();
+	const hasCloudProject = workspaces.some((workspace) => workspace.kind === CLOUD_PROJECT_KIND && Boolean(workspace.cloudOrgId));
 
-	if (!agentReady) {
+	// Without a local agent a cloud project, which runs its own, can still start one.
+	if (!agentReady && !hasCloudProject) {
 		return (
 			<div className="flex flex-col items-center gap-1 py-24 text-center">
 				<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.noAgent.title")}</h2>
@@ -378,7 +387,14 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 		<div className="flex flex-col items-center gap-1 py-24 text-center">
 			<h2 className="text-heading-sm font-semibold text-foreground">{t("artifacts.empty.title")}</h2>
 			<p className="max-w-72 text-xs text-muted-foreground">{t("artifacts.empty.description")}</p>
-			<CreateArtifactMenu workspaces={workspaces} create={create} pending={pending} className="mt-3" align="center" />
+			<CreateArtifactMenu
+				workspaces={workspaces}
+				create={create}
+				pending={pending}
+				className="mt-3"
+				align="center"
+				localDisabledReason={agentReady ? undefined : t("artifacts.noAgent.description")}
+			/>
 		</div>
 	);
 }
@@ -394,20 +410,28 @@ function CreateArtifactMenu({
 	label = "create",
 	align,
 	className,
-	disabledReason,
+	localDisabledReason,
 }: {
 	workspaces: readonly WorkspaceSummary[];
-	create: (projectId?: string) => Promise<void>;
+	create: (projectId?: string, cloudOrgId?: string) => Promise<void>;
 	pending: boolean;
 	label?: "create" | "new";
 	align: "center" | "end";
 	className?: string;
-	disabledReason?: string;
+	/** Why Scratchpad and local projects cannot start a session; cloud projects run their own agent. */
+	localDisabledReason?: string;
 }) {
 	const { t } = useTranslation();
+	// Cloud workspaces are listed only when the control plane keeps artifacts.
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== CLOUD_PROJECT_KIND && !workspace.hostId,
+		(workspace) =>
+			workspace.id !== STANDALONE_WORKSPACE_ID &&
+			!workspace.hostId &&
+			(workspace.kind !== CLOUD_PROJECT_KIND || Boolean(workspace.cloudOrgId)),
 	);
+	const localBlocked = Boolean(localDisabledReason);
+	const hasCloudProject = projects.some((project) => project.kind === CLOUD_PROJECT_KIND);
+	const disabledReason = localBlocked && !hasCloudProject ? localDisabledReason : undefined;
 	const disabled = pending || Boolean(disabledReason);
 	const trigger =
 		label === "new" ? (
@@ -448,14 +472,24 @@ function CreateArtifactMenu({
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
 			<DropdownMenuContent align={align} className="min-w-56">
-				<DropdownMenuItem onSelect={() => void create()}>
+				{/* Says why Scratchpad and local projects are disabled while cloud ones are not. */}
+				{localBlocked ? <DropdownMenuLabel className="max-w-64 text-xs font-normal text-muted-foreground">{localDisabledReason}</DropdownMenuLabel> : null}
+				<DropdownMenuItem disabled={localBlocked} onSelect={() => void create()}>
 					<File aria-hidden="true" className="size-icon-sm" />
 					{t("standalone.workspaceName")}
 				</DropdownMenuItem>
 				{projects.length > 0 ? <DropdownMenuSeparator /> : null}
 				{projects.map((project) => (
-					<DropdownMenuItem key={project.id} onSelect={() => void create(project.id)}>
-						<Folder aria-hidden="true" className="size-icon-sm" />
+					<DropdownMenuItem
+						key={project.id}
+						disabled={localBlocked && project.kind !== CLOUD_PROJECT_KIND}
+						onSelect={() => void create(project.id, project.kind === CLOUD_PROJECT_KIND ? project.cloudOrgId : undefined)}
+					>
+						{project.kind === CLOUD_PROJECT_KIND ? (
+							<Cloud aria-hidden="true" className="size-icon-sm" />
+						) : (
+							<Folder aria-hidden="true" className="size-icon-sm" />
+						)}
 						<span className="truncate">{project.name}</span>
 					</DropdownMenuItem>
 				))}
