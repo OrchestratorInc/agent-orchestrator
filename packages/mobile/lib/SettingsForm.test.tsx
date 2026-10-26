@@ -208,7 +208,9 @@ describe("the iOS settings form", () => {
 		expect(has(picker, "pickerStyle", "inline")).toBe(true);
 		expect(has(picker, "labelsHidden")).toBe(true);
 		const options = picker.findAllByType("HStack" as never);
-		expect(options.map((option) => (option.props.modifiers as Modifier[])[0])).toEqual([{ $type: "tag", args: ["nord"] }, { $type: "tag", args: ["ayu"] }]);		expect(options[0].findAllByType("Swatch" as never)).toHaveLength(1);
+		expect(options.map((option) => (option.props.modifiers as Modifier[])[0])).toEqual([{ $type: "tag", args: ["nord"] }, { $type: "tag", args: ["ayu"] }]);
+		// Each option is its own row, on the row background like the rest.
+		expect(options.every((option) => has(option, "listRowBackground", "#elevated"))).toBe(true);		expect(options[0].findAllByType("Swatch" as never)).toHaveLength(1);
 		picker.props.onSelectionChange("ayu");
 		expect(onValueChange).toHaveBeenCalledWith("ayu");
 	});

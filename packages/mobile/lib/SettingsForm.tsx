@@ -227,7 +227,9 @@ export function SettingsChoiceSection<T extends string>({ label, options, select
 				modifiers={[pickerStyle("inline"), labelsHidden(), tint(t.accent), listRowBackground(t.bgElevated)]}
 			>
 				{options.map((option) => (
-					<HStack key={option.value} spacing={space.md} testID={testID ? `${testID}-${option.value}` : undefined} modifiers={[tag(option.value)]}>
+					// Each option is a row of its own, so it takes the row background
+					// too rather than relying on the Picker's reaching it.
+					<HStack key={option.value} spacing={space.md} testID={testID ? `${testID}-${option.value}` : undefined} modifiers={[tag(option.value), listRowBackground(t.bgElevated)]}>
 						{option.accessory ?? null}
 						<Text modifiers={[foregroundStyle(t.textPrimary)]}>{option.label}</Text>
 					</HStack>
