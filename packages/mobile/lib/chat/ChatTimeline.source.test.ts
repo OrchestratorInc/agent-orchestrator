@@ -43,7 +43,7 @@ describe("streaming response layout", () => {
 
 describe("empty conversation", () => {
 	it("uses the AO mascot instead of a generic chat icon", () => {
-		const emptyConversation = source.slice(source.indexOf("function EmptyConversation"), source.indexOf("function Action"));
+		const emptyConversation = source.slice(source.indexOf("function EmptyConversation"), source.indexOf("function LabelValue"));
 		expect(emptyConversation).toContain("<MascotLamp size={48} />");
 		expect(emptyConversation).not.toContain('name="message-circle"');
 	});
@@ -72,6 +72,27 @@ describe("sent human message actions", () => {
 	it("keeps the bubble text unselectable so the long-press opens the menu", () => {
 		expect(human).toContain("<Text style={styles.userText}>{body}</Text>");
 		expect(human).not.toContain("<Text selectable");
+	});
+});
+
+describe("turn rollback", () => {
+	const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function TurnPlan"));
+
+	// Forgetting a turn cannot be undone, so it asks through the system's own
+	// destructive confirmation rather than a card drawn into the timeline.
+	it("confirms with a native destructive alert", () => {
+		expect(summary).toContain("Alert.alert(");
+		expect(summary).toContain('{ text: "Cancel", style: "cancel" }');
+		expect(summary).toContain('{ text: "Roll back", style: "destructive", onPress: () => {');
+		expect(summary).not.toContain("rollbackConfirm");
+		expect(summary).not.toContain("setConfirming");
+	});
+
+	it("is a labelled button the size of a touch target", () => {
+		expect(summary).toContain('accessibilityRole="button"');
+		expect(summary).toContain('accessibilityLabel="Roll back to before this turn"');
+		expect(source).toMatch(/rollback: \{ width: touchTarget, height: touchTarget/);
+		expect(summary).not.toContain("hitSlop");
 	});
 });
 

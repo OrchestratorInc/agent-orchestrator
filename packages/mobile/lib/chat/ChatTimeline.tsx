@@ -4,6 +4,7 @@ import * as Linking from "expo-linking";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	ActivityIndicator,
+	Alert,
 	FlatList,
 	Image,
 	Keyboard,
@@ -802,42 +803,54 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 	</Pressable>;
 }
 
+// "Roll back", in each platform's own glyph for undoing back to an earlier point.
+const ROLLBACK_SYMBOL = { ios: "arrow.uturn.backward", android: "undo" } as const;
+
 function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const [confirming, setConfirming] = useState(false);
+	const rollbackFeedback = usePressFeedback("icon");
 	const [rollingBack, setRollingBack] = useState(false);
-	const [rollbackError, setRollbackError] = useState<string>();
 	const settled = turn.state !== "running" && turn.state !== "queued";
 	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
+	// It cannot be undone, so the system's destructive confirmation asks first,
+	// the way Archive does.
+	const confirmRollback = () => {
+		if (!onRollback || rollingBack) return;
+		haptics.warning();
+		Alert.alert(
+			"Make the agent forget this turn and everything after it?",
+			"Files stay changed. Only conversation memory is rolled back, and this cannot be undone.",
+			[
+				{ text: "Cancel", style: "cancel" },
+				{ text: "Roll back", style: "destructive", onPress: () => {
+					setRollingBack(true);
+					void onRollback(turn.id)
+						.catch((cause) => Alert.alert("Couldn't roll back", userFacingError(cause)))
+						.finally(() => setRollingBack(false));
+				} },
+			],
+			{ cancelable: true },
+		);
+	};
 	return (
 		<View style={styles.turnWrap}>
 			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
 			{canRollBack ? <View style={styles.turnLine}>
-				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
-					<Feather name="rotate-ccw" size={12} color={t.textTertiary} />
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel="Roll back to before this turn"
+					accessibilityState={{ disabled: rollingBack, busy: rollingBack }}
+					disabled={rollingBack}
+					onPress={confirmRollback}
+					android_ripple={rollbackFeedback.android_ripple}
+					style={({ pressed }) => [styles.rollback, pressed && rollbackFeedback.pressed]}
+				>
+					{rollingBack ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name={ROLLBACK_SYMBOL} size={iconSize.md} color={t.textTertiary} />}
 				</Pressable>
 			</View> : null}
 			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
-			{confirming ? (
-				<View style={styles.rollbackConfirm}>
-					<Text style={styles.rollbackTitle}>Make the agent forget this turn and everything after it?</Text>
-					<Text style={styles.rollbackCopy}>Files stay changed. Only conversation memory is rolled back, and this cannot be undone.</Text>
-					<View style={styles.actions}>
-						<Action label="Cancel" disabled={rollingBack} onPress={() => { setRollbackError(undefined); setConfirming(false); }} />
-						<Action label={rollingBack ? "Rolling back…" : "Roll back"} disabled={rollingBack} tone="danger" onPress={() => {
-							if (!onRollback || rollingBack) return;
-							setRollingBack(true);
-							setRollbackError(undefined);
-							void onRollback(turn.id).then(() => setConfirming(false)).catch((cause) => {
-								setRollbackError(userFacingError(cause));
-							}).finally(() => setRollingBack(false));
-						}} />
-					</View>
-					{rollbackError ? <Text style={styles.validation}>{rollbackError}</Text> : null}
-				</View>
-			) : null}
 		</View>
 	);
 }
@@ -1089,14 +1102,6 @@ function EmptyConversation({ controller }: { controller: string }) {
 	return <View style={styles.empty}><View style={styles.emptyMascot}><MascotLamp size={48} /></View><Text style={styles.emptyTitle}>{controller === "connecting" ? "Connecting to the agent…" : "Start with a task"}</Text></View>;
 }
 
-function Action({ label, hint, onPress, primary, tone, disabled }: { label: string; hint?: string; onPress(): void; primary?: boolean; tone?: "danger"; disabled?: boolean }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const fill = tone === "danger" ? t.tintRed : primary ? t.accent : t.bgElevated;
-	const ink = tone === "danger" ? t.red : primary ? t.onAccent : t.textPrimary;
-	return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={() => { if (tone === "danger") haptics.warning(); else haptics.tap(); onPress(); }} style={({ pressed }) => [styles.action, { backgroundColor: fill }, pressed && { opacity: 0.75 }, disabled && { opacity: 0.45 }]}><Text style={[styles.actionLabel, { color: ink }]}>{label}</Text>{hint ? <Text style={styles.actionHint}>{hint}</Text> : null}</Pressable>;
-}
-
 function LabelValue({ label, value }: { label: string; value: string }) { const styles = useThemedStyles(makeStyles); return <View style={styles.labelValue}><Text style={styles.detailLabel}>{label}</Text><Text selectable style={styles.detailValue}>{value}</Text></View>; }
 function CodeOutput({ value }: { value: string }) { const styles = useThemedStyles(makeStyles); return <Pressable onLongPress={() => { void Clipboard.setStringAsync(value); haptics.success(); }}><Text selectable style={styles.output}>{value}</Text></Pressable>; }
 function FileList({ files }: { files: unknown[] }) { const styles = useThemedStyles(makeStyles); return <View style={styles.fileBody}>{files.map((file, index) => <Text key={index} selectable style={styles.filePath}>• {typeof file === "string" ? file : printable(file)}</Text>)}</View>; }
@@ -1226,9 +1231,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
-	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
-	rollbackTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600", fontSize: type.footnote.fontSize },
-	rollbackCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+	// The glyph lines up with the reply's right edge; the target reaches past it.
+	rollback: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginRight: -(touchTarget - iconSize.md) / 2 },
 	planCard: { backgroundColor: t.bgSurface, borderRadius: 12, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, overflow: "hidden" },
 	planHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
 	changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
@@ -1273,10 +1277,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	inputRequestStatusText: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	inputActions: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.hair, paddingTop: space.hair },
 	requestCommand: { flex: 1, color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	actions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm, flexWrap: "wrap", paddingTop: space.hair },
-	action: { minHeight: 44, justifyContent: "center", borderRadius: 12, borderCurve: "continuous", paddingHorizontal: space.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	actionLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.caption1.fontSize, fontWeight: "600" },
-	actionHint: { fontFamily: "Geist_400Regular", maxWidth: 180, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: space.hair },
 	form: { gap: space.sm },
 	field: { gap: space.xs },
 	inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase" },
