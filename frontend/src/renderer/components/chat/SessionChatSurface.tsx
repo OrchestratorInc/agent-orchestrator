@@ -210,6 +210,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		unavailable,
 		error,
 		refreshError,
+		restored,
 		hasOlder,
 		isLoadingOlder,
 		loadOlder,
@@ -246,7 +247,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		localEchos = [],
 		pendingAcceptedTurnId,
 	} = commands;
-	const conversationWorkKnown = Boolean(snapshot);
+	// A snapshot restored from the last launch shows the transcript while it is
+	// refetched, but says nothing reliable about current work.
+	const conversationWorkKnown = Boolean(snapshot) && !restored;
+	const newWorkFenced = Boolean(newWorkDisabled || restored);
 	const [sideWork, setSideWork] = useState(false);
 	const acceptedLocalTurnObserved = Boolean(
 		pendingAcceptedTurnId && snapshot?.turns.some((turn) => turn.id === pendingAcceptedTurnId),
@@ -346,10 +350,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const permissionModes = useChatPermissionModes(hostId, pendingSwitch?.harness);
 	const pendingPermissionModes = pendingSwitch ? permissionModes?.get(pendingSwitch.harness) : undefined;
 	const agentSwitch = useMemo(
-		() => currentHarness && !session.cloud && !newWorkDisabled
+		() => currentHarness && !session.cloud && !newWorkFenced
 			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact }
 			: undefined,
-		[autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
+		[autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkFenced, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
 	useEffect(() => {
 		if (acceptedLocalTurnObserved && pendingAcceptedTurnId) {
@@ -468,7 +472,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
-		if (!snapshot || isLoading) return;
+		if (!snapshot || isLoading || restored) return;
 		const previous = conversationLinkBaselines.current.get(uiSessionId);
 		const isInitialSnapshot = !previous;
 		const latestUserMessage = snapshot.items
@@ -521,13 +525,13 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				break;
 			}
 		}
-	}, [autoOpenLinkInBrowser, isLoading, paths, snapshot, uiSessionId]);
+	}, [autoOpenLinkInBrowser, isLoading, paths, restored, snapshot, uiSessionId]);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		targetChatControllerReady && !controllerBusy && !localEchos.length &&
 		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
 		!isLoading && !error && !refreshError && !unavailable &&
-		!controllerTransitioning && !agentResuming && !newWorkDisabled && !arriving &&
+		!controllerTransitioning && !agentResuming && !newWorkFenced && !arriving &&
 		chatInFront,
 	), hostId);
 	const renderShellFallback = Boolean(shellTarget && session);
@@ -649,7 +653,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
-				newWorkDisabled={newWorkDisabled}
+				newWorkDisabled={newWorkFenced}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
