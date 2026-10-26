@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
 import { ActivityDetailProvider } from "../../hooks/useActivityDetail";
@@ -43,4 +43,42 @@ it.each(cases)("%s expands to identical text with compact and legacy pages", asy
 	expect(compact.container.textContent).not.toContain("preview");
 	await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
 	await waitFor(() => expect(compact.container.textContent).toBe(expected));
+});
+
+it("gates compact MCP image content and results until the matching full row arrives", async () => {
+	const data = btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><title>${"full image ".repeat(20)}</title><rect width="1" height="1" /></svg>`);
+	const image = { type: "image", mimeType: "image/svg+xml", data };
+	const full: ConversationActivity = {
+		kind: "activity", id: "image-row", sequence: 2, revision: 3,
+		activityKind: "mcp_tool", status: "completed", summary: "Read image",
+		detail: { toolName: "read", content: [image], result: { content: [image] } },
+		createdAt: "2026-10-26T00:00:00Z",
+	};
+	function mount(activity: ConversationActivity) {
+		return render(<TooltipProvider><ActivityDetailProvider sessionId="image-session"><ActivityRow activity={activity} /></ActivityDetailProvider></TooltipProvider>);
+	}
+	function body(container: HTMLElement) {
+		return { text: container.textContent, images: Array.from(container.querySelectorAll("img"), (img) => img.getAttribute("src")) };
+	}
+	get.mockReset();
+	const legacy = mount(full);
+	fireEvent.click(legacy.container.querySelector("[aria-expanded='false']")!);
+	const expected = body(legacy.container);
+	legacy.unmount();
+	const prefix = data.slice(0, 128);
+	expect(data.length).toBeGreaterThan(128);
+	let resolve!: (value: { data: ConversationActivity }) => void;
+	get.mockReturnValue(new Promise<{ data: ConversationActivity }>((done) => { resolve = done; }));
+	const compact = mount({
+		...full, detailOmitted: true,
+		detail: { toolName: "read", content: [{ ...image, data: prefix }], result: { content: [{ ...image, data: prefix }] } },
+	});
+	expect(get).not.toHaveBeenCalled();
+	fireEvent.click(compact.container.querySelector("[aria-expanded='false']")!);
+	await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+	expect(compact.container.textContent).not.toContain(prefix);
+	expect(compact.container.querySelector("img")).toBeNull();
+	expect(compact.container.querySelector("pre")).toBeNull();
+	await act(async () => { resolve({ data: full }); });
+	await waitFor(() => expect(body(compact.container)).toEqual(expected));
 });
