@@ -367,7 +367,8 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			? <SessionLabelLink href={pr.url} className="font-medium text-foreground decoration-foreground/40 underline-offset-2 hover:underline">{null}</SessionLabelLink>
 			: <span className="font-medium text-foreground" />,
 	};
-	const lead = (key: MessageKey, author?: string) => (
+	// A narrow key keeps Trans's typing tractable; the full MessageKey union is too complex for it (TS2590).
+	const lead = (key: `chat.automation.${"ciFailing" | "reviewComment" | "changesRequested" | "mergeConflict"}`, author?: string) => (
 		<Trans t={t} i18nKey={key} values={{ number: pr.number, author }} components={components} />
 	);
 	let tone = "text-status-in-review";
