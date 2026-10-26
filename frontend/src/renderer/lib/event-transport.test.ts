@@ -995,6 +995,7 @@ describe("id-only session updates", () => {
 		await vi.advanceTimersByTimeAsync(150);
 		expect(rowGetMock).toHaveBeenCalledTimes(count);
 		expect(workspaceRefreshes(client)).toBe(0);
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["archived-sessions"] }, { cancelRefetch: false });
 		disconnect();
 	});
 

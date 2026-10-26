@@ -471,6 +471,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							queueIdOnlyWorkspaceRefresh();
 							scheduleFlush();
 						} else {
+							// Archive views share these durable session facts even when
+							// the live workspace can refresh without a whole-list read.
+							invalidate(["archived-sessions"]);
 							for (const id of ids) refreshSessionRow(id);
 						}
 					}, INVALIDATE_WINDOW_MS);
