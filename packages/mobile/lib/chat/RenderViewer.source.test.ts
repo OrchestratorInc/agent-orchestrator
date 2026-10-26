@@ -21,6 +21,14 @@ describe("render viewer", () => {
 		expect(frame).not.toContain("useSafeAreaInsets");
 	});
 
+	// The frame is one large button over the page: a chip highlight alone gave
+	// Android no ripple.
+	it("expands with each platform's press feedback", () => {
+		expect(frame).toContain('const expandFeedback = usePressFeedback("row", { foreground: true });');
+		expect(frame).toContain("android_ripple={expandFeedback.android_ripple}");
+		expect(frame).toContain("pressed && expandFeedback.pressed");
+	});
+
 	// iOS closes a modal from its bar; Android's top app bar has the system back.
 	it("closes from an iOS bar item", () => {
 		expect(route).toMatch(/Platform\.OS === "ios" \? \(\s*<Stack\.Toolbar placement="right">\s*<Stack\.Toolbar\.Button icon=\{toolbarIcon\("close"\)\} accessibilityLabel="Close" onPress=\{\(\) => backOr\(router\)\} \/>/);

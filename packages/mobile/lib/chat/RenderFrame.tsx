@@ -166,6 +166,9 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const retryFeedback = usePressFeedback("button");
+	// The whole frame is the button: Android ripples across it, over the page;
+	// iOS highlights the chip that marks it.
+	const expandFeedback = usePressFeedback("row", { foreground: true });
 	const { config, currentHostId } = useApp();
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
@@ -252,11 +255,12 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={`Expand ${render.title}`}
+			android_ripple={expandFeedback.android_ripple}
 			onPress={() => router.push({ pathname: "/render", params: { path: render.path, title: render.title, hostId: currentHostId ?? undefined } })}
 			style={StyleSheet.absoluteFill}
 		>
 			{({ pressed }) => (
-				<View style={[styles.expandChip, pressed && styles.expandChipPressed]}>
+				<View style={[styles.expandChip, pressed && expandFeedback.pressed]}>
 					<AppSymbol name={{ ios: "arrow.up.left.and.arrow.down.right", android: "open_in_full" }} size={iconSize.sm} color={t.textSecondary} />
 				</View>
 			)}
@@ -275,7 +279,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	web: { flex: 1, backgroundColor: t.bgBase },
 	// A sign that the frame opens larger; the whole frame is the button.
 	expandChip: { position: "absolute", top: space.xs, right: space.xs, width: iconSize.xxl, height: iconSize.xxl, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderSubtle },
-	expandChipPressed: { backgroundColor: t.bgElevatedHover },
 	fallback: { alignSelf: "flex-start", minHeight: touchTarget, marginVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.md, overflow: "hidden" },
 	fallbackTitle: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	fallbackAction: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
