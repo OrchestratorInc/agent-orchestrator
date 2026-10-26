@@ -5,10 +5,19 @@ import { useCloudSession } from "../lib/cloud-session";
 import { listAccountRemoteHosts } from "../lib/account-remote-hosts";
 import { useSettings } from "./useSettings";
 import { useUiStore } from "../stores/ui-store";
+import { captureRendererException } from "../lib/telemetry";
 
 const HOSTS_CHANGED_EVENT = "ao:remote-hosts-changed";
 const OFFLINE_RETRY_MS = 15_000;
 const ACCOUNT_SYNC_MS = 30_000;
+const reportedListFailures = new Set<string>();
+
+function reportListFailure(error: unknown): void {
+	const operation = error instanceof Error && error.message.includes("Sign in") ? "list_saved_hosts_signed_out" : "list_saved_hosts";
+	if (reportedListFailures.has(operation)) return;
+	reportedListFailures.add(operation);
+	void captureRendererException(error, { source: "remote-hosts", operation });
+}
 const NO_HOSTS: RemoteHost[] = [];
 
 function isOfflineError(error: unknown): boolean {
@@ -50,7 +59,8 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 		if (!enabledRef.current) return;
 		const generation = ++refreshGeneration.current;
 		const current = () => enabledRef.current && accountRef.current === accountId && refreshGeneration.current === generation;
-		let saved = await aoBridge.remotes.list();
+		let saved: Awaited<ReturnType<typeof aoBridge.remotes.list>>;
+		try { saved = await aoBridge.remotes.list(); } catch (error) { reportListFailure(error); return; } // Signed out in main, or remotes.json unreadable: keep current state; the next poll retries.
 		if (cloudBaseUrl) {
 			try {
 				const accountHosts = await listAccountRemoteHosts(cloudBaseUrl);
@@ -61,7 +71,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; refresh: () => Promise<
 			} catch { /* Cloud outage must not hide locally paired machines. */ }
 		}
 		if (!current()) return;
-		await Promise.all(connectedHosts().filter((hostId) => !saved.some((host) => host.hostId === hostId)).map(disconnectHost));
+		await Promise.all(connectedHosts().filter((hostId) => !saved.some((host) => host.hostId === hostId)).map((hostId) => disconnectHost(hostId).catch(() => {})));
 		if (!current()) return;
 		savedHostUrls.current = new Map(saved.map((host) => [host.hostId, host.url]));
 		setHosts((previous) => saved.map((host) => ({
