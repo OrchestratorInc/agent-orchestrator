@@ -1,7 +1,6 @@
-import { Feather } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Alert, StyleSheet, View } from "react-native";
 import {
 	getAgents,
 	getAgentModels,
@@ -19,33 +18,39 @@ import {
 	type AgentModelCatalog,
 	type ReviewerAgentConfig,
 	type PRReviewCommentLink,
+	type PRReviewEntry,
 	type PRUnresolvedReviewer,
 	type SessionPRSummary,
 	type SessionReviews,
 } from "../../lib/api";
-import { AgentLogo } from "../../lib/AgentLogo";
 import { userFacingError } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { openGitHub } from "../../lib/openGitHub";
 import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from "../../lib/reviewFeedback";
-import { ItemActionsMenu } from "../../lib/item-actions-menu";
 import type { ItemAction } from "../../lib/item-actions-menu.types";
-import { ReviewerPicker } from "../../lib/reviewer-picker";
+import { ReviewActionsSheet } from "../../lib/review-actions-sheet";
+import type { ReviewFeedbackItem, ReviewFeedbackSection, ReviewPolicyKey, ReviewPolicyRow } from "../../lib/review-actions-sheet.types";
 import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
 import { pullRequestSummaryForURL } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useThemedStyles } from "../../lib/ThemeProvider";
 import { SHEET_SCROLL_CONTENT, SheetHeader } from "../../lib/ui";
 
 export { SheetErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
-type PolicyKey = "autoReviewEnabled" | "autoInjectReview" | "autoInjectCI";
-type ReviewPolicies = Record<PolicyKey, boolean>;
-type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: string } | { kind: "policy"; id: PolicyKey };
+type ReviewPolicies = Record<ReviewPolicyKey, boolean>;
+type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: string } | { kind: "policy"; id: ReviewPolicyKey };
 
-export default function ReviewActionsSheet() {
+// The desktop inspector's wording, and what each switch reads before the session loads.
+const POLICIES: readonly { key: ReviewPolicyKey; title: string; description: string; fallback: boolean }[] = [
+	{ key: "autoReviewEnabled", title: "Auto review", description: "When enabled, PRs will get auto-reviewed. When disabled, you can manually trigger the reviews.", fallback: false },
+	{ key: "autoInjectReview", title: "Automatically fix review comments", description: "Sends review comments to the worker.", fallback: true },
+	{ key: "autoInjectCI", title: "Automatically fix CI failures", description: "Sends CI failures to the worker for this session's PRs.", fallback: true },
+];
+
+export default function ReviewActionsRoute() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
 	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewActionsContent /></HostScope> : <ReviewActionsContent />;
 }
@@ -118,9 +123,10 @@ function ReviewActionsContent() {
 	const resolvedComments = useMemo(() => reviewComments(pr, true), [pr]);
 	const externalReviews = useMemo(() => (pr?.review.reviews ?? []).filter((item) => item.reviewerId !== pr?.author && ![...aoReviewIds].some((id) => item.reviewUrl?.includes(`pullrequestreview-${id}`))), [aoReviewIds, pr]);
 
+	// The switch, the picker and the request each show their own progress, so
+	// none of them adds a haptic of its own; success is the moment worth feeling.
 	async function saveReviewer(id: string, agentConfig: ReviewerAgentConfig) {
 		if (!config) return;
-		haptics.select();
 		setBusy({ kind: "reviewer", id });
 		setError("");
 		try {
@@ -166,10 +172,9 @@ function ReviewActionsContent() {
 		void confirmReviewerChange(reviewerOverride, { ...reviewerConfig, [key]: value });
 	}
 
-	async function updatePolicy(key: PolicyKey, value: boolean) {
+	async function updatePolicy(key: ReviewPolicyKey, value: boolean) {
 		if (!config || !policies || busy) return;
 		const previous = policies;
-		haptics.select();
 		setPolicies({ ...policies, [key]: value });
 		setBusy({ kind: "policy", id: key });
 		setError("");
@@ -240,85 +245,96 @@ function ReviewActionsContent() {
 		}
 	}
 
-	if (!hostMatches) return <View style={styles.screen}><SheetHeader title="Review actions" subtitle="Review belongs to another machine" /></View>;
-	return <ScrollView style={styles.screen} contentContainerStyle={SHEET_SCROLL_CONTENT} nestedScrollEnabled keyboardShouldPersistTaps="handled">
-		<SheetHeader title="Review actions" subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and GitHub feedback"} />
-		{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-		{prMissing ? <Text accessibilityRole="alert" style={styles.error}>Pull request not found. Its URL may have changed; reopen review details from the current pull request.</Text> : null}
-		<Section title="AUTOMATION" subtitle="The same settings as this session's inspector on desktop.">
-			<PolicyRow
-				title="Auto review"
-				description="When enabled, PRs will get auto-reviewed. When disabled, you can manually trigger the reviews."
-				value={policies?.autoReviewEnabled ?? false}
-				loading={!policies || busy?.kind === "policy" && busy.id === "autoReviewEnabled"}
-				disabled={!policies || Boolean(busy)}
-				onChange={(value) => void updatePolicy("autoReviewEnabled", value)}
-			/>
-			<PolicyRow
-				title="Automatically fix review comments"
-				description="Sends review comments to the worker."
-				value={policies?.autoInjectReview ?? true}
-				loading={!policies || busy?.kind === "policy" && busy.id === "autoInjectReview"}
-				disabled={!policies || Boolean(busy)}
-				onChange={(value) => void updatePolicy("autoInjectReview", value)}
-			/>
-			<PolicyRow
-				title="Automatically fix CI failures"
-				description="Sends CI failures to the worker for this session's PRs."
-				value={policies?.autoInjectCI ?? true}
-				loading={!policies || busy?.kind === "policy" && busy.id === "autoInjectCI"}
-				disabled={!policies || Boolean(busy)}
-				onChange={(value) => void updatePolicy("autoInjectCI", value)}
-			/>
-		</Section>
-		<Section title="ORCHESTRATOR REVIEWER" subtitle="Choose who runs the next Orchestrator review and which model it uses.">
-			{availableReviewers.length || reviewerOverride ? <ReviewerPicker
-				reviewers={availableReviewers}
-				selectedReviewer={reviewerOverride}
-				effectiveReviewer={effectiveReviewer}
-				onSelectReviewer={chooseReviewer}
-				models={effectiveReviewer ? (models?.models ?? []).map((model) => ({ id: model.id, label: model.label || model.id })) : []}
-				modelTitle={models?.selectionMode === "mode" ? "Mode" : "Model"}
-				selectedModel={(models?.selectionMode === "mode" ? reviewerConfig.mode : reviewerConfig.model) ?? ""}
-				onSelectModel={chooseModel}
-				busy={Boolean(busy)}
-			/> : <Text style={styles.empty}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}
-		</Section>
-		{externalReviewers.length ? <Section title="EXTERNAL REVIEWERS" subtitle="Ask a GitHub reviewer to look at the latest changes again.">
-			{externalReviewers.map((item) => <ActionRow key={item.reviewerId} icon="refresh-cw" title={item.reviewerId} subtitle={`${item.count} ${item.count === 1 ? "comment" : "comments"}`} loading={busy?.kind === "rerequest" && busy.id === item.reviewerId} disabled={Boolean(busy)} onPress={() => void rerequest(item)} />)}
-		</Section> : null}
-		{externalReviews.length > 0 && pr ? <Section title="GITHUB REVIEWS" subtitle="Complete review summaries submitted on GitHub.">
-			{externalReviews.map((item) => {
-				const id = item.reviewUrl || item.reviewerId;
-				const actions: ItemAction[] = [
-					...(item.reviewUrl ? [{ id: "open", label: "Open review", icon: "openExternal" as const, onPress: () => void openGitHub(item.reviewUrl!, { fromSheet: true }) }] : []),
-					...(item.body && !sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatExternalReviewMessage(item, pr.url)) }] : []),
-				];
-				return <View key={item.reviewUrl || `${item.reviewerId}:${item.submittedAt}`} style={styles.feedbackCard}>
-					<View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{item.reviewerId}</Text><Text style={styles.feedbackVerdict}>{item.verdict.replaceAll("_", " ")}</Text><ItemActionsMenu accessibilityLabel={`Actions for ${item.reviewerId}'s review`} actions={actions} disabled={Boolean(busy)} loading={busy?.kind === "send" && busy.id === id} /></View>
-					{item.autoInjectReview === false ? <Text style={styles.notInjected}>Not automatically sent to the worker</Text> : null}
-					{item.body ? <Text style={styles.feedbackBody}>{item.body}</Text> : <Text style={styles.feedbackMuted}>No written summary.</Text>}
-					{sent.has(id) ? <SentNote /> : null}
-				</View>;
-			})}
-		</Section> : null}
-		{comments.length ? <Section title="UNRESOLVED COMMENTS" subtitle="Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.">
-			{comments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => confirmResolve(item.comment)} />)}
-		</Section> : null}
-		{resolvedComments.length ? <Section title="RESOLVED COMMENTS" subtitle="Previously addressed Orchestrator and GitHub feedback.">
-			{resolvedComments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} resolved aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => undefined} />)}
-		</Section> : null}
-		{!pr && !error && !prMissing ? <Text style={styles.empty}>No GitHub feedback is available for this pull request yet.</Text> : null}
-	</ScrollView>;
-}
+	if (!hostMatches) return <View style={styles.screen}><View style={SHEET_SCROLL_CONTENT}><SheetHeader title="Review actions" subtitle="Review belongs to another machine" /></View></View>;
 
-function PolicyRow({ title, description, value, loading, disabled, onChange }: { title: string; description: string; value: boolean; loading?: boolean; disabled?: boolean; onChange: (value: boolean) => void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return <View style={[styles.policyRow, disabled && styles.disabled]}>
-		<View style={styles.rowCopy}><Text style={styles.rowTitle}>{title}</Text><Text style={styles.rowSubtitle}>{description}</Text></View>
-		{loading ? <ActivityIndicator size="small" color={t.accent} /> : <Switch accessibilityLabel={title} disabled={disabled} value={value} onValueChange={onChange} />}
-	</View>;
+	const policyRows: ReviewPolicyRow[] = POLICIES.map(({ key, title, description, fallback }) => ({
+		key,
+		title,
+		description,
+		value: policies?.[key] ?? fallback,
+		busy: !policies || busy?.kind === "policy" && busy.id === key,
+	}));
+	const reviewItem = (item: PRReviewEntry): ReviewFeedbackItem => {
+		const id = item.reviewUrl || item.reviewerId;
+		const actions: ItemAction[] = [
+			...(item.reviewUrl ? [{ id: "open", label: "Open review", icon: "openExternal" as const, onPress: () => void openGitHub(item.reviewUrl!, { fromSheet: true }) }] : []),
+			...(item.body && pr && !sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatExternalReviewMessage(item, pr.url)) }] : []),
+		];
+		return {
+			key: item.reviewUrl || `${item.reviewerId}:${item.submittedAt}`,
+			author: item.reviewerId,
+			meta: sentenceCase(item.verdict.replaceAll("_", " ")),
+			body: item.body || "No written summary.",
+			bodyMissing: !item.body,
+			notInjected: item.autoInjectReview === false,
+			sent: sent.has(id),
+			menuLabel: `Actions for ${item.reviewerId}'s review`,
+			actions,
+			working: busy?.kind === "send" && busy.id === id,
+		};
+	};
+	// Desktop keeps these in a per-comment "⋯" menu rather than as buttons under every comment.
+	const commentItem = (item: ReviewCommentItem, resolved: boolean): ReviewFeedbackItem => {
+		const { reviewerId, comment } = item;
+		const id = commentKey(item);
+		const aoOwned = Boolean(comment.reviewId && aoReviewIds.has(comment.reviewId));
+		const actions: ItemAction[] = [
+			...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", icon: "openExternal" as const, onPress: () => void openGitHub(comment.url!, { fromSheet: true }) }] : []),
+			...(!sent.has(id) ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: () => void send(id, formatInlineReviewCommentMessage(comment, reviewerId)) }] : []),
+			...(!resolved && comment.url ? [{ id: "resolve", label: "Resolve", icon: "resolve" as const, onPress: () => confirmResolve(comment) }] : []),
+		];
+		return {
+			key: id,
+			author: reviewerId,
+			meta: `${aoOwned ? "Orchestrator review" : "GitHub"} · ${resolved ? "resolved" : "open"}`,
+			location: comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : "Inline comment",
+			body: comment.body || "No comment text.",
+			bodyMissing: !comment.body,
+			notInjected: comment.autoInjectReview === false,
+			sent: sent.has(id),
+			menuLabel: `Actions for ${reviewerId}'s comment`,
+			actions,
+			working: (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url),
+		};
+	};
+	const feedback: ReviewFeedbackSection[] = [
+		{ id: "reviews" as const, title: "GitHub reviews", footer: "Complete review summaries submitted on GitHub.", items: pr ? externalReviews.map(reviewItem) : [] },
+		{ id: "unresolved" as const, title: "Unresolved comments", footer: "Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.", items: comments.map((item) => commentItem(item, false)) },
+		{ id: "resolved" as const, title: "Resolved comments", footer: "Previously addressed Orchestrator and GitHub feedback.", items: resolvedComments.map((item) => commentItem(item, true)) },
+	].filter((section) => section.items.length > 0);
+
+	return <ReviewActionsSheet
+		subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and GitHub feedback"}
+		alerts={[
+			...(error ? [error] : []),
+			...(prMissing ? ["Pull request not found. Its URL may have changed; reopen review details from the current pull request."] : []),
+		]}
+		policies={policyRows}
+		locked={!policies || Boolean(busy)}
+		onPolicyChange={(key, value) => void updatePolicy(key, value)}
+		reviewer={availableReviewers.length || reviewerOverride ? {
+			reviewers: availableReviewers,
+			selectedReviewer: reviewerOverride,
+			effectiveReviewer,
+			onSelectReviewer: chooseReviewer,
+			models: effectiveReviewer ? (models?.models ?? []).map((model) => ({ id: model.id, label: model.label || model.id })) : [],
+			modelTitle: models?.selectionMode === "mode" ? "Mode" : "Model",
+			selectedModel: (models?.selectionMode === "mode" ? reviewerConfig.mode : reviewerConfig.model) ?? "",
+			onSelectModel: chooseModel,
+			busy: Boolean(busy),
+		} : undefined}
+		externalReviewers={externalReviewers.map((item) => ({
+			id: item.reviewerId,
+			detail: `${item.count} ${item.count === 1 ? "comment" : "comments"}`,
+			busy: busy?.kind === "rerequest" && busy.id === item.reviewerId,
+		}))}
+		onRerequest={(id) => {
+			const item = externalReviewers.find((reviewer) => reviewer.reviewerId === id);
+			if (item) void rerequest(item);
+		}}
+		feedback={feedback}
+		emptyFeedback={!pr && !error && !prMissing ? "No GitHub feedback is available for this pull request yet." : undefined}
+	/>;
 }
 
 function uniqueReviewers(pr: SessionPRSummary | undefined, aoReviewIds: Set<string>): PRUnresolvedReviewer[] {
@@ -344,69 +360,14 @@ function reviewComments(pr: SessionPRSummary | undefined, resolved: boolean): Re
 	return result;
 }
 
-function FeedbackCard({ item, resolved = false, aoOwned, sent, busy, disabled, onOpen, onSend, onResolve }: { item: ReviewCommentItem; resolved?: boolean; aoOwned: boolean; sent: boolean; busy?: BusyAction; disabled: boolean; onOpen: () => void; onSend: () => void; onResolve: () => void }) {
-	const styles = useThemedStyles(makeStyles);
-	const { reviewerId, comment } = item;
-	const id = comment.url || `${reviewerId}:${comment.file}`;
-	// Desktop keeps these in a per-comment "⋯" menu rather than as buttons under every comment.
-	const actions: ItemAction[] = [
-		...(comment.url ? [{ id: "open", label: comment.file ? "Open file & line" : "Open on GitHub", icon: "openExternal" as const, onPress: onOpen }] : []),
-		...(!sent ? [{ id: "send", label: "Send to worker", icon: "send" as const, onPress: onSend }] : []),
-		...(!resolved && comment.url ? [{ id: "resolve", label: "Resolve", icon: "resolve" as const, onPress: onResolve }] : []),
-	];
-	const working = (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url);
-	return <View style={styles.feedbackCard}>
-		<View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{reviewerId}</Text><Text style={styles.feedbackVerdict}>{aoOwned ? "Orchestrator review" : "GitHub"} · {resolved ? "resolved" : "open"}</Text><ItemActionsMenu accessibilityLabel={`Actions for ${reviewerId}'s comment`} actions={actions} disabled={disabled} loading={working} /></View>
-		{comment.autoInjectReview === false ? <Text style={styles.notInjected}>Not automatically sent to the worker</Text> : null}
-		<Text style={styles.feedbackLocation}>{comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : "Inline comment"}</Text>
-		<Text style={styles.feedbackBody}>{comment.body || "No comment text."}</Text>
-		{sent ? <SentNote /> : null}
-	</View>;
+function commentKey({ reviewerId, comment }: ReviewCommentItem): string {
+	return comment.url || `${reviewerId}:${comment.file}`;
 }
 
-function SentNote() {
-	const t = useTheme(); const styles = useThemedStyles(makeStyles);
-	return <View style={styles.sentNote}><Feather name="check" size={13} color={t.green} /><Text style={styles.sentNoteText}>Sent to worker</Text></View>;
-}
-
-function Section({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
-	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.section}><Text style={styles.sectionTitle}>{title}</Text><Text style={styles.sectionSubtitle}>{subtitle}</Text><View style={styles.rows}>{children}</View></View>;
-}
-
-function ActionRow({ icon, harness, title, subtitle, selected, loading, disabled, onPress }: { icon: keyof typeof Feather.glyphMap; harness?: string; title: string; subtitle?: string; selected?: boolean; loading?: boolean; disabled?: boolean; onPress: () => void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.row, pressed && styles.pressed, disabled && styles.disabled]}>
-		{harness ? <AgentLogo harness={harness} size={22} /> : <Feather name={icon} size={17} color={selected ? t.accent : t.textTertiary} />}
-		<View style={styles.rowCopy}><Text style={[styles.rowTitle, selected && { color: t.accent }]}>{title}</Text>{subtitle ? <Text numberOfLines={2} style={styles.rowSubtitle}>{subtitle}</Text> : null}</View>
-		{loading ? <ActivityIndicator size="small" color={t.accent} /> : selected ? <Feather name="check" size={17} color={t.accent} /> : <Feather name="chevron-right" size={16} color={t.textFaint} />}
-	</Pressable>;
+function sentenceCase(value: string): string {
+	return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgSurface },
-	error: { color: t.red, backgroundColor: t.tintRed, borderRadius: 10, padding: 10, fontSize: 13, lineHeight: 18, marginBottom: 8 },
-	section: { marginTop: 18 },
-	sectionTitle: { color: t.textTertiary, fontSize: 11, fontWeight: "700", letterSpacing: 0.7 },
-	sectionSubtitle: { color: t.textFaint, fontSize: 12, lineHeight: 17, marginTop: 4, marginBottom: 7 },
-	rows: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
-	row: { minHeight: 56, flexDirection: "row", alignItems: "center", gap: 11, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
-	policyRow: { minHeight: 64, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
-	rowCopy: { flex: 1, gap: 2 },
-	rowTitle: { color: t.textPrimary, fontSize: 15, fontWeight: "600" },
-	rowSubtitle: { color: t.textTertiary, fontSize: 12, lineHeight: 16 },
-	feedbackCard: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle, paddingVertical: 12, gap: 7 },
-	feedbackHeading: { flexDirection: "row", alignItems: "center", gap: 8 },
-	feedbackAuthor: { flex: 1, color: t.textPrimary, fontSize: 14, fontWeight: "700" },
-	feedbackVerdict: { color: t.textTertiary, fontSize: 11, textTransform: "capitalize" },
-	feedbackLocation: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: 12 },
-	feedbackBody: { color: t.textSecondary, fontSize: 13, lineHeight: 19 },
-	feedbackMuted: { color: t.textTertiary, fontSize: 13, fontStyle: "italic" },
-	notInjected: { color: t.amber, fontSize: 11 },
-	sentNote: { flexDirection: "row", alignItems: "center", gap: 5 },
-	sentNoteText: { color: t.green, fontSize: 12, fontWeight: "600" },
-	pressed: { opacity: 0.6 },
-	disabled: { opacity: 0.5 },
-	empty: { color: t.textTertiary, fontSize: 13, lineHeight: 18, paddingVertical: 12 },
 });

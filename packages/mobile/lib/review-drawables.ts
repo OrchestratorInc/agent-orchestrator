@@ -6,8 +6,11 @@ import type { ImageSourcePropType } from "react-native";
 // `node packages/mobile/scripts/generate-material-drawables.mjs <name>`.
 const drawables = {
 	chat_bubble: require("../assets/icons/chat_bubble.xml"),
+	check: require("../assets/icons/check.xml"),
 	check_circle: require("../assets/icons/check_circle.xml"),
 	close: require("../assets/icons/close.xml"),
+	expand_more: require("../assets/icons/expand_more.xml"),
+	group: require("../assets/icons/group.xml"),
 	more_horiz: require("../assets/icons/more_horiz.xml"),
 	open_in_new: require("../assets/icons/open_in_new.xml"),
 	play_arrow: require("../assets/icons/play_arrow.xml"),

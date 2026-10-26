@@ -2,7 +2,7 @@ import { Host } from "@expo/ui";
 import { Button, Image, Menu } from "@expo/ui/swift-ui";
 import { accessibilityLabel as a11yLabel, buttonStyle, contentShape, disabled as disabledModifier, frame, shapes, tint } from "@expo/ui/swift-ui/modifiers";
 import { StyleSheet, View } from "react-native";
-import { itemActionIcons, type ItemActionsMenuProps } from "./item-actions-menu.types";
+import { itemActionIcons, type ItemAction, type ItemActionsMenuProps } from "./item-actions-menu.types";
 import { Spinner } from "./Spinner";
 import { symbols } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
@@ -16,22 +16,33 @@ export function ItemActionsMenu({ actions, accessibilityLabel, disabled = false,
 	if (!actions.length) return null;
 	return (
 		<Host style={styles.slot} colorScheme={scheme}>
-			<Menu
-				// The label is the hit area: sized and shaped, or only the glyph (16×5pt) takes a tap.
-				label={<Image systemName={symbols.moreHorizontal.ios} size={iconSize.md} modifiers={[frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]} />}
-				modifiers={[buttonStyle("plain"), tint(t.textSecondary), frame({ width: touchTarget, height: touchTarget }), disabledModifier(disabled), a11yLabel(accessibilityLabel)]}
-			>
-				{actions.map((action) => (
-					<Button
-						key={action.id}
-						label={action.label}
-						systemImage={action.icon ? itemActionIcons[action.icon].ios : undefined}
-						role={action.destructive ? "destructive" : undefined}
-						onPress={action.onPress}
-					/>
-				))}
-			</Menu>
+			<ItemActionsPullDown actions={actions} accessibilityLabel={accessibilityLabel} disabled={disabled} tintColor={t.textSecondary} />
 		</Host>
+	);
+}
+
+/**
+ * The pull-down alone, for a SwiftUI tree that already has its Host, such as
+ * a Form row. Its plain style keeps a row's tap to the menu's own frame.
+ */
+export function ItemActionsPullDown({ actions, accessibilityLabel, disabled, tintColor }: { actions: readonly ItemAction[]; accessibilityLabel: string; disabled: boolean; tintColor: string }) {
+	if (!actions.length) return null;
+	return (
+		<Menu
+			// The label is the hit area: sized and shaped, or only the glyph (16×5pt) takes a tap.
+			label={<Image systemName={symbols.moreHorizontal.ios} size={iconSize.md} modifiers={[frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]} />}
+			modifiers={[buttonStyle("plain"), tint(tintColor), frame({ width: touchTarget, height: touchTarget }), disabledModifier(disabled), a11yLabel(accessibilityLabel)]}
+		>
+			{actions.map((action) => (
+				<Button
+					key={action.id}
+					label={action.label}
+					systemImage={action.icon ? itemActionIcons[action.icon].ios : undefined}
+					role={action.destructive ? "destructive" : undefined}
+					onPress={action.onPress}
+				/>
+			))}
+		</Menu>
 	);
 }
 

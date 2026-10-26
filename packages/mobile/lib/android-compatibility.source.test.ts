@@ -163,7 +163,7 @@ describe("Android native compatibility boundaries", () => {
 	// height, so a normal swipe down snapped back and closing felt random.
 	it("pins Android review actions to one 60% detent so a swipe down closes it", () => {
 		const layout = source("../app/_layout.tsx");
-		const actions = source("../app/sheets/review-actions.tsx");
+		const actions = source("./review-actions-sheet.tsx");
 		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
 		expect(layout).toContain("sheetInitialDetentIndex: 0");
 		expect(layout).toContain("sheetGrabberVisible: true");

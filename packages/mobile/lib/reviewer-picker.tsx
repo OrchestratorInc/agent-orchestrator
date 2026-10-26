@@ -1,92 +1,96 @@
-import { Feather } from "@expo/vector-icons";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { AgentLogo } from "./AgentLogo";
-import { haptics } from "./haptics";
-import { reviewerLabel, type ReviewerPickerProps } from "./reviewer-picker.types";
-import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { Box, DropdownMenu, DropdownMenuItem, Icon, ListItem, Text } from "@expo/ui/jetpack-compose";
+import { alpha, background, clickable, clip, fillMaxWidth, Shapes, size, testID } from "@expo/ui/jetpack-compose/modifiers";
+import { useState, type ReactNode } from "react";
+import { chipColorFor } from "./harnessLogo";
+import { logoFor } from "./harnessLogoAssets";
+import { reviewDrawable } from "./review-drawables";
+import { projectDefaultLabel, reviewerLabel, withCurrentOption, type ReviewerPickerProps } from "./reviewer-picker.types";
+import { useTheme } from "./ThemeProvider";
+import { font, iconSize, radius, stateOpacity } from "./tokens";
 
-type Picker = "reviewer" | "model" | null;
+type Menu = "reviewer" | "model";
 
-/** Android/web reviewer and model selectors, expanded inline like dropdowns. */
+/**
+ * The reviewer and its model as Material list items, each opening a dropdown
+ * menu of the choices with a check on the current one: the menu Android's own
+ * settings use for picking one value, anchored to the row it changes.
+ */
 export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer, onSelectReviewer, models, modelTitle, selectedModel, onSelectModel, busy }: ReviewerPickerProps) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const [expanded, setExpanded] = useState<Picker>(null);
+	const [open, setOpen] = useState<Menu | null>(null);
 	const reviewer = selectedReviewer || effectiveReviewer;
-	const reviewerText = selectedReviewer
-		? reviewerLabel(reviewers, selectedReviewer)
-		: effectiveReviewer ? `Project default · ${reviewerLabel(reviewers, effectiveReviewer)}` : "Project default";
+	const reviewerText = selectedReviewer ? reviewerLabel(reviewers, selectedReviewer) : projectDefaultLabel(reviewers, effectiveReviewer);
 	const modelText = selectedModel ? reviewerLabel(models, selectedModel) : "Provider default";
 
-	function toggle(which: Exclude<Picker, null>) {
-		haptics.tap();
-		setExpanded((current) => current === which ? null : which);
+	function choose(menu: Menu, id: string) {
+		setOpen(null);
+		if (menu === "reviewer") onSelectReviewer(id);
+		else onSelectModel(id);
 	}
 
-	function chooseReviewer(id: string) {
-		haptics.select();
-		setExpanded(null);
-		onSelectReviewer(id);
-	}
-
-	function chooseModel(id: string) {
-		haptics.select();
-		setExpanded(null);
-		onSelectModel(id);
-	}
-
-	return <View>
-		<Pressable accessibilityRole="button" accessibilityLabel={`Reviewer: ${reviewerText}`} accessibilityState={{ expanded: expanded === "reviewer", disabled: busy }} disabled={busy} onPress={() => toggle("reviewer")} style={({ pressed }) => [styles.selector, pressed && styles.pressed, busy && styles.disabled]}>
-			<Text style={styles.label}>Reviewer</Text>
-			<View style={styles.valueGroup}>
-				{reviewer ? <AgentLogo harness={reviewer} size={20} /> : <Feather name="users" size={17} color={t.textTertiary} />}
-				<Text numberOfLines={1} ellipsizeMode="tail" style={styles.value}>{reviewerText}</Text>
-				<Feather name={expanded === "reviewer" ? "chevron-up" : "chevron-down"} size={16} color={t.textTertiary} />
-			</View>
-		</Pressable>
-		{expanded === "reviewer" ? <View style={styles.options}>
-			<Option title="Project default" subtitle={effectiveReviewer ? reviewerLabel(reviewers, effectiveReviewer) : undefined} icon="users" selected={!selectedReviewer} disabled={busy} onPress={() => chooseReviewer("")} />
-			{reviewers.map((agent) => <Option key={agent.id} title={agent.label} harness={agent.id} selected={selectedReviewer === agent.id} disabled={busy} onPress={() => chooseReviewer(agent.id)} />)}
-		</View> : null}
-		{models.length ? <>
-			<Pressable accessibilityRole="button" accessibilityLabel={`${modelTitle}: ${modelText}`} accessibilityState={{ expanded: expanded === "model", disabled: busy }} disabled={busy} onPress={() => toggle("model")} style={({ pressed }) => [styles.selector, styles.modelSelector, pressed && styles.pressed, busy && styles.disabled]}>
-				<Text style={styles.label}>{modelTitle}</Text>
-				<View style={styles.valueGroup}>
-					<Text numberOfLines={1} ellipsizeMode="tail" style={styles.value}>{modelText}</Text>
-					<Feather name={expanded === "model" ? "chevron-up" : "chevron-down"} size={16} color={t.textTertiary} />
-				</View>
-			</Pressable>
-			{expanded === "model" ? <View style={styles.options}>
-				<Option title="Provider default" icon={null} selected={!selectedModel} disabled={busy} onPress={() => chooseModel("")} />
-				{models.map((model) => <Option key={model.id} title={model.label} icon={null} selected={selectedModel === model.id} disabled={busy} onPress={() => chooseModel(model.id)} />)}
-			</View> : null}
-		</> : null}
-	</View>;
+	return (
+		<>
+			<PickerRow title="Reviewer" value={reviewerText} leading={<HarnessMark harness={reviewer} />} open={open === "reviewer"} busy={busy} tag="review-reviewer" onOpen={() => setOpen("reviewer")} onDismiss={() => setOpen(null)}>
+				<Choice label={projectDefaultLabel(reviewers, effectiveReviewer)} leading={<Icon source={reviewDrawable("group")} size={iconSize.xl} />} selected={!selectedReviewer} onPress={() => choose("reviewer", "")} />
+				{withCurrentOption(reviewers, selectedReviewer).map((agent) => (
+					<Choice key={agent.id} label={agent.label} leading={<HarnessMark harness={agent.id} />} selected={agent.id === selectedReviewer} onPress={() => choose("reviewer", agent.id)} />
+				))}
+			</PickerRow>
+			{models.length ? (
+				<PickerRow title={modelTitle} value={modelText} open={open === "model"} busy={busy} tag="review-model" onOpen={() => setOpen("model")} onDismiss={() => setOpen(null)}>
+					<Choice label="Provider default" selected={!selectedModel} onPress={() => choose("model", "")} />
+					{withCurrentOption(models, selectedModel).map((model) => (
+						<Choice key={model.id} label={model.label} selected={model.id === selectedModel} onPress={() => choose("model", model.id)} />
+					))}
+				</PickerRow>
+			) : null}
+		</>
+	);
 }
 
-function Option({ title, subtitle, icon, harness, selected, disabled, onPress }: { title: string; subtitle?: string; icon?: keyof typeof Feather.glyphMap | null; harness?: string; selected: boolean; disabled: boolean; onPress: () => void }) {
+function PickerRow({ title, value, leading, open, busy, tag, onOpen, onDismiss, children }: { title: string; value: string; leading?: ReactNode; open: boolean; busy: boolean; tag: string; onOpen: () => void; onDismiss: () => void; children: ReactNode }) {
 	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return <Pressable accessibilityRole="button" accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.option, pressed && styles.pressed, disabled && styles.disabled]}>
-		{harness ? <AgentLogo harness={harness} size={20} /> : icon !== null ? <Feather name={icon ?? "user"} size={17} color={selected ? t.accent : t.textTertiary} /> : null}
-		<View style={styles.copy}><Text style={styles.title}>{title}</Text>{subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}</View>
-		{selected ? <Feather name="check" size={17} color={t.accent} /> : null}
-	</Pressable>;
+	return (
+		<DropdownMenu expanded={open && !busy} onDismissRequest={onDismiss} color={t.bgElevated} modifiers={[fillMaxWidth()]}>
+			<DropdownMenu.Trigger>
+				<ListItem
+					colors={{ containerColor: t.bgSurface, contentColor: t.textPrimary, supportingContentColor: t.textTertiary, trailingContentColor: t.textTertiary }}
+					modifiers={[...(busy ? [alpha(stateOpacity.disabled)] : [clickable(onOpen)]), testID(tag)]}
+				>
+					<ListItem.HeadlineContent><Text style={{ typography: "bodyLarge", fontFamily: font.regular }}>{title}</Text></ListItem.HeadlineContent>
+					<ListItem.SupportingContent><Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyMedium", fontFamily: font.regular }}>{value}</Text></ListItem.SupportingContent>
+					{leading ? <ListItem.LeadingContent>{leading}</ListItem.LeadingContent> : null}
+					<ListItem.TrailingContent><Icon source={reviewDrawable("expand_more")} size={iconSize.xl} /></ListItem.TrailingContent>
+				</ListItem>
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Items>{children}</DropdownMenu.Items>
+		</DropdownMenu>
+	);
 }
 
-const makeStyles = (t: Theme) => StyleSheet.create({
-	selector: { minHeight: 52, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
-	modelSelector: { marginTop: 2 },
-	label: { color: t.textPrimary, fontSize: 14, fontWeight: "600" },
-	valueGroup: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 7 },
-	value: { flexShrink: 1, color: t.textSecondary, fontSize: 14 },
-	options: { paddingLeft: 10, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
-	option: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 7, paddingRight: 2, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.borderSubtle },
-	copy: { flex: 1, minWidth: 0, gap: 2 },
-	title: { color: t.textPrimary, fontSize: 14, fontWeight: "500" },
-	subtitle: { color: t.textTertiary, fontSize: 12 },
-	pressed: { opacity: 0.6 },
-	disabled: { opacity: 0.5 },
-});
+function Choice({ label, leading, selected, onPress }: { label: string; leading?: ReactNode; selected: boolean; onPress: () => void }) {
+	const t = useTheme();
+	return (
+		<DropdownMenuItem elementColors={{ textColor: t.textPrimary, trailingIconColor: t.textPrimary }} onClick={onPress}>
+			<DropdownMenuItem.Text><Text>{label}</Text></DropdownMenuItem.Text>
+			{leading ? <DropdownMenuItem.LeadingIcon>{leading}</DropdownMenuItem.LeadingIcon> : null}
+			{selected ? (
+				<DropdownMenuItem.TrailingIcon>
+					<Icon source={reviewDrawable("check")} size={iconSize.xl} contentDescription="Selected" />
+				</DropdownMenuItem.TrailingIcon>
+			) : null}
+		</DropdownMenuItem>
+	);
+}
+
+/** A harness's brand mark in its own colours, on a chip only where the mark needs one to show. */
+function HarnessMark({ harness }: { harness: string }) {
+	const source = logoFor(harness);
+	if (!source) return <Icon source={reviewDrawable("terminal")} size={iconSize.xl} />;
+	const chip = chipColorFor(harness);
+	if (!chip) return <Icon source={source} tint={null} size={iconSize.xl} />;
+	return (
+		<Box contentAlignment="center" modifiers={[size(iconSize.xl, iconSize.xl), clip(Shapes.RoundedCorner(radius.sm)), background(chip)]}>
+			<Icon source={source} tint={null} size={iconSize.md} />
+		</Box>
+	);
+}
