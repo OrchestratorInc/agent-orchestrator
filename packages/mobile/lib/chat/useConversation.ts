@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { machineIdentity, type ServerConfig } from "../config";
 import {
 	cancelQueuedConversationTurn,
@@ -33,7 +33,7 @@ import {
 import type { ChatConfigOption, ChatExcerpt, ChatImage, ChatModel, ChatResource, ChatSkill, ConversationSnapshot, TurnSettings } from "./types";
 import { cachedConversationState, createMobileConversationPageCache, discardHistoricalPages, olderPageFits, withLivePage } from "./snapshot";
 import { conversationActionError, conversationErrorCode, conversationErrorIsPermanent, ignoreStaleApproval } from "./conversationErrors";
-import { subscribeConversationEvents } from "./conversationEvents";
+import { conversationStreamState, subscribeConversationEvents, watchConversationStream } from "./conversationEvents";
 import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
@@ -44,6 +44,12 @@ import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
+/**
+ * How long an opening chat waits for its machine's event stream before it
+ * loads anyway. The stream starts after the board's first poll succeeds, so
+ * on a slow link this covers that poll plus one round trip.
+ */
+export const STREAM_OPEN_WAIT_MS = 5_000;
 const conversationPageCache = createMobileConversationPageCache();
 const turnOptionsCache = createAsyncValueCache<string, { models: ChatModel[]; configOptions: ChatConfigOption[] }>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
@@ -149,14 +155,32 @@ export function useMobileConversation(
 	const hasConversation = Boolean(snapshot);
 	const hasProviderConfig = Boolean(snapshot?.capabilities?.includes("config_options"));
 
+	// The page load in flight, so a newer refresh can cancel its download.
+	const inFlight = useRef<AbortController | null>(null);
+	// Set when an event arrives while a load is in flight; see scheduleRefresh.
+	const refreshAgain = useRef(false);
+	const refreshRef = useRef<() => Promise<void>>(async () => {});
+	// When the latest page load started; the tunnel poll is timed from it.
+	const lastLoadStartedAt = useRef(0);
+	// A load ran before this machine's event stream opened, so changes between
+	// its read and the stream's head may be missing; see the mount effect.
+	const loadedBeforeStream = useRef(false);
+
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
+		// A newer load makes the older one's answer worthless; on a slow link its
+		// remaining download would only compete with this one.
+		inFlight.current?.abort();
+		const controller = new AbortController();
+		inFlight.current = controller;
+		lastLoadStartedAt.current = Date.now();
+		if (conversationStreamState(cfg) !== "open") loadedBeforeStream.current = true;
 		const request = refreshGate.begin();
 		setRefreshing(true);
 		try {
 			const live = options?.reviewId
-				? await getReviewerConversationPage(cfg, options.reviewId)
-				: await getConversationPage(cfg, sessionId);
+				? await getReviewerConversationPage(cfg, options.reviewId, undefined, { signal: controller.signal })
+				: await getConversationPage(cfg, sessionId, undefined, { signal: controller.signal });
 			if (!mounted.current || !refreshGate.isCurrent(request)) return;
 			setPages((old) => {
 				const next = withLivePage(old, live);
@@ -175,13 +199,32 @@ export function useMobileConversation(
 				setLoading(false);
 				setRefreshing(false);
 			}
+			if (inFlight.current === controller) {
+				inFlight.current = null;
+				if (refreshAgain.current && mounted.current) {
+					refreshAgain.current = false;
+					void refreshRef.current();
+				}
+			}
 		}
 	}, [cacheKey, cfg, options?.reviewId, refreshGate, sessionId]);
+	useLayoutEffect(() => { refreshRef.current = refresh; }, [refresh]);
 
+	// Live events coalesce rather than cancel: while an agent streams, events
+	// arrive faster than a page downloads on a slow link, and cancelling on each
+	// one would never let a page finish. One load runs at a time; events during
+	// it queue exactly one more, which starts when it lands.
+	const refreshOrQueue = useCallback(() => {
+		if (inFlight.current) refreshAgain.current = true;
+		else void refresh();
+	}, [refresh]);
 	const scheduleRefresh = useCallback(() => {
 		if (refreshTimer.current) clearTimeout(refreshTimer.current);
-		refreshTimer.current = setTimeout(() => void refresh(), REFRESH_DEBOUNCE_MS);
-	}, [refresh]);
+		refreshTimer.current = setTimeout(() => {
+			refreshTimer.current = null;
+			refreshOrQueue();
+		}, REFRESH_DEBOUNCE_MS);
+	}, [refreshOrQueue]);
 
 	const loadOlder = useCallback(async () => {
 		if (!cfg || !snapshot?.hasMoreBefore || loadingOlder) return;
@@ -206,13 +249,49 @@ export function useMobileConversation(
 		setPages(cached.pages);
 		setLoading(cached.loading);
 		setUnavailable(undefined);
-		void refresh();
+		loadedBeforeStream.current = false;
+		// Load once the event stream is open, not before. The daemon fixes the
+		// stream's head before it answers, so a load started after that holds
+		// every change up to the head and the stream delivers every one after:
+		// one load, no replay. Loading first would leave a gap only a second
+		// load could close. A stream that fails to open, or takes too long, does
+		// not hold the chat back; it reloads once when the stream opens later.
+		let waiting = false;
+		let stopWatching = () => {};
+		let fallback: ReturnType<typeof setTimeout> | undefined;
+		if (!cfg || conversationStreamState(cfg) === "open") void refresh();
+		else {
+			waiting = true;
+			const loadNow = () => {
+				if (!waiting) return;
+				waiting = false;
+				clearTimeout(fallback);
+				refreshOrQueue();
+			};
+			fallback = setTimeout(loadNow, STREAM_OPEN_WAIT_MS);
+			const onState = (state: string | undefined) => {
+				if (state === "failed") loadNow();
+				if (state !== "open") return;
+				stopWatching();
+				if (waiting) loadNow();
+				else if (loadedBeforeStream.current) refreshOrQueue();
+				loadedBeforeStream.current = false;
+			};
+			stopWatching = watchConversationStream(cfg, onState);
+			onState(conversationStreamState(cfg));
+		}
 		return () => {
+			waiting = false;
+			clearTimeout(fallback);
+			stopWatching();
 			mounted.current = false;
 			refreshGate.invalidate();
+			inFlight.current?.abort();
+			inFlight.current = null;
+			refreshAgain.current = false;
 			if (refreshTimer.current) clearTimeout(refreshTimer.current);
 		};
-	}, [cacheKey, refresh, refreshGate]);
+	}, [cacheKey, cfg, refresh, refreshOrQueue, refreshGate]);
 
 	useEffect(() => {
 		setPendingSends([]);
@@ -271,12 +350,26 @@ export function useMobileConversation(
 	// body is forwarded in ~128 KB chunks and a chat event is a few hundred
 	// bytes — so without this the screen shows the agent working indefinitely
 	// while the reply has already landed.
+	//
+	// A load starts at most `every` after the previous one, whatever started
+	// it, so a page is never older than on a fixed interval. Loads that events
+	// already started count, so a delivering stream saves those polls.
 	useEffect(() => {
 		const every = conversationPollIntervalFor(cfg);
 		if (every === null || unavailable) return;
-		const timer = setInterval(() => scheduleRefresh(), every);
-		return () => clearInterval(timer);
-	}, [cfg, unavailable, scheduleRefresh]);
+		let timer: ReturnType<typeof setTimeout>;
+		const tick = () => {
+			const wait = lastLoadStartedAt.current + every - Date.now();
+			if (wait > 0) {
+				timer = setTimeout(tick, wait);
+				return;
+			}
+			refreshOrQueue();
+			timer = setTimeout(tick, every);
+		};
+		timer = setTimeout(tick, every);
+		return () => clearTimeout(timer);
+	}, [cfg, unavailable, refreshOrQueue]);
 
 	const runAction = useCallback(
 		// `banner: false` keeps a failure out of the screen banner when the control

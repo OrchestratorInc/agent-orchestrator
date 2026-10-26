@@ -126,10 +126,10 @@ export async function rejectedEndpointNeedsRace(cfg: ServerConfig, status: numbe
 /**
  * How long the post-race endpoint refresh may take.
  *
- * The refresh runs inside the launch resolution, so without a bound a slow
- * network held the app in "connecting" for as long as the OS let a request
- * hang — after the race had already found a working endpoint. A refresh that
- * does not land in time is simply skipped; the stored endpoints still work.
+ * The refresh runs in the background of a connect, so this only stops a hung
+ * request from holding a connection open for as long as the OS allows. A
+ * refresh that does not land in time is simply skipped; the stored endpoints
+ * still work.
  */
 export const ENDPOINT_REFRESH_TIMEOUT_MS = 5_000;
 

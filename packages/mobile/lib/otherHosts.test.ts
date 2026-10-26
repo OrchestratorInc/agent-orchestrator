@@ -7,7 +7,7 @@ import type { HostSnapshot } from "./otherHosts";
 vi.mock("./api", () => ({
 	ApiError: class ApiError extends Error { constructor(public status: number) { super(String(status)); } },
 	getSessions: vi.fn(),
-	getNotifications: vi.fn(),
+	nextPollDelay: (_settled: unknown, intervalMs: number) => intervalMs,
 }));
 vi.mock("./connectRuntime", () => ({ connectToHost: vi.fn() }));
 vi.mock("./hosts", () => ({ findHost: vi.fn() }));
@@ -27,20 +27,19 @@ describe("another paired host's live runner", () => {
 
 	it("polls and publishes its own verified sessions", async () => {
 		const { connectToHost } = await import("./connectRuntime");
-		const { getSessions, getNotifications } = await import("./api");
+		const { getSessions } = await import("./api");
 		vi.mocked(connectToHost).mockResolvedValue({ ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config });
 		vi.mocked(getSessions).mockResolvedValue({
 			projects: [{ id: "same-project", name: "Todo" }],
 			sessions: [{ id: "same-session", projectId: "same-project", mode: "chat" } as DashboardSession],
-			orchestrators: [], orchestratorId: null, stats: {},
+			orchestrators: [], orchestratorId: null, stats: {}, settled: Promise.resolve({ notificationsUnread: 2, serialMs: 0, startedAt: 0 }),
 		});
-		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 2, nextCursor: undefined });
 		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
 		let snapshot = emptyHostSnapshot(host);
 		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
 		try {
 			await runner.refresh();
-			expect(getSessions).toHaveBeenCalledWith(config, "all");
+			expect(getSessions).toHaveBeenCalledWith(config, "all", undefined, { unread: true });
 			expect(snapshot.connection).toBe("open");
 			expect(snapshot.sessions[0].id).toBe("same-session");
 			expect(snapshot.notificationsUnread).toBe(2);
@@ -68,12 +67,11 @@ describe("another paired host's live runner", () => {
 	])("re-races and reconnects after a host's %s", async (_reason, status) => {
 		vi.useFakeTimers();
 		const { connectToHost } = await import("./connectRuntime");
-		const { ApiError, getSessions, getNotifications } = await import("./api");
+		const { ApiError, getSessions } = await import("./api");
 		vi.mocked(connectToHost).mockResolvedValue({ ok: true, hostId: host.id, endpoint: { kind: "lan", host: config.host, port: 3011, secure: false }, config });
 		vi.mocked(getSessions)
 			.mockRejectedValueOnce(status === undefined ? new Error("network lost") : new ApiError(status, "host mismatch"))
 			.mockResolvedValue({ projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} });
-		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
 		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
 		let snapshot = emptyHostSnapshot(host);
 		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
@@ -135,11 +133,10 @@ describe("another paired host's live runner", () => {
 
 	it("hides a cached bearer until a returning host has passed identity verification", async () => {
 		const { connectToHost } = await import("./connectRuntime");
-		const { getSessions, getNotifications } = await import("./api");
+		const { getSessions } = await import("./api");
 		let finishConnect!: (result: Awaited<ReturnType<typeof connectToHost>>) => void;
 		vi.mocked(connectToHost).mockImplementation(() => new Promise((resolve) => { finishConnect = resolve; }));
 		vi.mocked(getSessions).mockResolvedValue({ projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} });
-		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
 		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
 		let snapshot: HostSnapshot = { ...emptyHostSnapshot(host), config, connection: "open" };
 		const runner = startOtherHost(host, snapshot, (patch) => { snapshot = { ...snapshot, ...patch }; });
@@ -157,7 +154,7 @@ describe("another paired host's live runner", () => {
 		vi.setSystemTime(1_000_000);
 		const { connectToHost } = await import("./connectRuntime");
 		const { findHost } = await import("./hosts");
-		const { getSessions, getNotifications } = await import("./api");
+		const { getSessions } = await import("./api");
 		const tunnel = { kind: "tunnel" as const, host: "host-b.tunnel.test", port: 443, secure: true };
 		const lan = { kind: "lan" as const, host: "host-b.lan.test", port: 3011, secure: false };
 		const paired = { ...host, endpoints: [lan, tunnel] };
@@ -173,7 +170,6 @@ describe("another paired host's live runner", () => {
 			.mockResolvedValueOnce(answer)
 			.mockImplementationOnce(() => new Promise((resolve) => { finishOldPoll = resolve; }))
 			.mockResolvedValue(answer);
-		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
 		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
 		let snapshot = emptyHostSnapshot(paired);
 		const runner = startOtherHost(paired, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
@@ -187,13 +183,13 @@ describe("another paired host's live runner", () => {
 			await vi.advanceTimersByTimeAsync(1);
 			expect(snapshot.config).toBe(lanConfig);
 			expect(snapshot.connection).toBe("open");
-			expect(getSessions).toHaveBeenCalledWith(lanConfig, "all");
+			expect(getSessions).toHaveBeenCalledWith(lanConfig, "all", undefined, { unread: true });
 		} finally { runner.stop(); }
 	});
 
 	it("adopts a verified open primary without racing its identity again", async () => {
 		const { connectToHost } = await import("./connectRuntime");
-		const { getSessions, getNotifications } = await import("./api");
+		const { getSessions } = await import("./api");
 		const otherHosts = await import("./otherHosts") as typeof import("./otherHosts") & {
 			startVerifiedOtherHost?: typeof import("./otherHosts")["startOtherHost"];
 		};
@@ -201,14 +197,13 @@ describe("another paired host's live runner", () => {
 		if (!otherHosts.startVerifiedOtherHost) return;
 
 		vi.mocked(getSessions).mockResolvedValue({ projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} });
-		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
 		let snapshot: HostSnapshot = { ...otherHosts.emptyHostSnapshot(host), config, connection: "open", loading: false };
 		const runner = otherHosts.startVerifiedOtherHost(host, snapshot, (patch) => { snapshot = { ...snapshot, ...patch }; });
 		expect(runner).not.toBeNull();
 		try {
 			await runner!.refresh();
 			expect(connectToHost).not.toHaveBeenCalled();
-			expect(getSessions).toHaveBeenCalledWith(config, "all");
+			expect(getSessions).toHaveBeenCalledWith(config, "all", undefined, { unread: true });
 			expect(snapshot.connection).toBe("open");
 		} finally { runner?.stop(); }
 	});

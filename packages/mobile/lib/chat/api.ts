@@ -126,6 +126,7 @@ export async function getConversationPage(
 	cfg: ServerConfig,
 	sessionId: string,
 	beforeSequence?: number,
+	init?: Pick<RequestInit, "signal">,
 ): Promise<ConversationPage> {
 	const limit = beforeSequence === undefined ? CHAT_INITIAL_PAGE_SIZE : CHAT_HISTORY_PAGE_SIZE;
 	const query = new URLSearchParams({ limit: String(limit) });
@@ -133,6 +134,7 @@ export async function getConversationPage(
 	const res = await apiRequest(
 		cfg,
 		`${API}/sessions/${encodeURIComponent(sessionId)}/conversation?${query.toString()}`,
+		init,
 	);
 	return toSnapshot((await res.json()) as WireSnapshot);
 }
@@ -141,11 +143,12 @@ export async function getReviewerConversationPage(
 	cfg: ServerConfig,
 	reviewId: string,
 	beforeSequence?: number,
+	init?: Pick<RequestInit, "signal">,
 ): Promise<ConversationPage> {
 	const limit = beforeSequence === undefined ? CHAT_INITIAL_PAGE_SIZE : CHAT_HISTORY_PAGE_SIZE;
 	const query = new URLSearchParams({ limit: String(limit) });
 	if (beforeSequence !== undefined) query.set("beforeSequence", String(beforeSequence));
-	const res = await apiRequest(cfg, `${reviewConversationPath(reviewId)}?${query.toString()}`);
+	const res = await apiRequest(cfg, `${reviewConversationPath(reviewId)}?${query.toString()}`, init);
 	const snapshot = toSnapshot((await res.json()) as WireSnapshot);
 	return {
 		...snapshot,
@@ -408,6 +411,11 @@ export type ConversationStreamOptions = {
 	wantsPayload?: () => boolean;
 	/** A frame that advanced the cursor without being parsed. */
 	onCursorAdvance?: (seq: number) => void;
+	/**
+	 * The daemon accepted the stream. It fixed the cursor before sending these
+	 * headers, so every later change arrives as a frame.
+	 */
+	onOpen?: () => void;
 };
 
 /**
@@ -443,6 +451,7 @@ export async function streamGlobalConversationEvents(
 		? advertisedAfter
 		: after;
 	if (effectiveAfter !== after) onCursorReset?.(effectiveAfter);
+	options?.onOpen?.();
 
 	const decoder = new TextDecoder();
 	const reader = res.body.getReader();

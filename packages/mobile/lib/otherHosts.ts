@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { reconcileRows } from "./rowSharing";
-import { ApiError, getNotifications, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
+import { ApiError, getSessions, nextPollDelay, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
 import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
@@ -163,7 +163,7 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 		const c = runner.config;
 		if (!c || !isConfigured(c) || stopped) return;
 		try {
-			const answer = await getSessions(c, "all");
+			const answer = await getSessions(c, "all", undefined, { unread: true });
 			if (stopped || runner.config !== c) return;
 			if (answer.projects !== null) {
 				lastProjects = answer.projects;
@@ -185,14 +185,11 @@ function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, p
 				lastSyncAt: Date.now(),
 			});
 			connected = true;
+			const settled = await answer.settled;
 			if (stopped || runner.config !== c) return;
-			try {
-				const page = await getNotifications(c, { status: "unread", limit: 1 });
-				if (!stopped && runner.config === c) update({ notificationsUnread: page.unreadCount });
-			} catch {
-				// Older daemons may not serve notifications; the board remains usable.
-			}
-			if (!stopped && runner.config === c) schedule(pollIntervalFor(c));
+			// Older daemons may not serve notifications; the last count stands.
+			if (typeof settled?.notificationsUnread === "number") update({ notificationsUnread: settled.notificationsUnread });
+			schedule(settled ? nextPollDelay(settled, pollIntervalFor(c)) : pollIntervalFor(c));
 		} catch (cause) {
 			if (stopped || runner.config !== c) return;
 			const status = cause instanceof ApiError ? cause.status : undefined;

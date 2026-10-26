@@ -55,11 +55,18 @@ describe("connectHost", () => {
 		findHost: vi.fn(async () => host()),
 		race: vi.fn(async () => ({ ok: true as const, endpoint: lan, hostId: "h_paired" })),
 		refreshEndpoints: vi.fn(async () => [lan, tunnel]),
-		saveEndpoints: vi.fn(async () => {}),
+		saveEndpoints: vi.fn(async (_hostId: string, _update: (stored: Endpoint[]) => Endpoint[]) => {}),
 		adoptIdentity: vi.fn(async () => {}),
 		touch: vi.fn(async () => {}),
 		...over,
 	});
+
+	// What the deferred save writes, applied to the endpoints stored for the host.
+	const saved = (d: ReturnType<typeof deps>, stored: Endpoint[] = host().endpoints) => {
+		const call = d.saveEndpoints.mock.calls[0];
+		expect(call?.[0]).toBe("h_paired");
+		return call?.[1](stored);
+	};
 
 	it("returns a usable config for the endpoint that won", async () => {
 		const d = deps();
@@ -75,7 +82,7 @@ describe("connectHost", () => {
 		const d = deps();
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, tunnel]);
+		await vi.waitFor(() => expect(saved(d)).toEqual([lan, tunnel]));
 	});
 
 	it("keeps a working NAT endpoint when the daemon advertises an unreachable address of the same kind", async () => {
@@ -88,7 +95,7 @@ describe("connectHost", () => {
 
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, manual]);
+		await vi.waitFor(() => expect(saved(d, [manual])).toEqual([lan, manual]));
 	});
 
 	// A quick tunnel takes ~34s to restart and settle, and the daemon advertises
@@ -100,7 +107,7 @@ describe("connectHost", () => {
 
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, tunnel]);
+		await vi.waitFor(() => expect(saved(d)).toEqual([lan, tunnel]));
 	});
 
 	it("still adopts a rotated tunnel hostname over the stored one", async () => {
@@ -109,7 +116,15 @@ describe("connectHost", () => {
 
 		await connectHost("h_paired", d);
 
-		expect(d.saveEndpoints).toHaveBeenCalledWith("h_paired", [lan, rotated]);
+		await vi.waitFor(() => expect(saved(d)).toEqual([lan, rotated]));
+	});
+
+	it("merges onto the endpoints stored when it saves, not the ones read at connect", async () => {
+		const tailscale: Endpoint = { kind: "tailscale", host: "box.tail.ts.net", port: 3011, secure: false };
+		const d = deps({ refreshEndpoints: vi.fn(async () => [lan]) });
+		await connectHost("h_paired", d);
+		// A re-pair stored a Tailscale address after this connect read the host.
+		await vi.waitFor(() => expect(saved(d, [lan, tunnel, tailscale])).toEqual([lan, tunnel, tailscale]));
 	});
 
 	// A machine migrated from the single-server config has no id until it
@@ -150,6 +165,15 @@ describe("connectHost", () => {
 
 	// A refresh that fails must not lose a working connection: the endpoints we
 	// already have are still good enough to keep using.
+	it("returns without waiting for the endpoint refresh", async () => {
+		const d = deps({ refreshEndpoints: vi.fn(() => new Promise<never>(() => {})) });
+		const got = await connectHost("h_paired", d);
+
+		expect(got.ok).toBe(true);
+		expect(d.touch).toHaveBeenCalledWith("h_paired");
+		expect(d.saveEndpoints).not.toHaveBeenCalled();
+	});
+
 	it("stays connected when the endpoint refresh fails", async () => {
 		const d = deps({
 			refreshEndpoints: vi.fn(async () => {

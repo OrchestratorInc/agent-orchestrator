@@ -15,7 +15,7 @@ vi.mock("../api", () => ({ apiRequest: request, ApiError: class extends Error {}
 vi.mock("../config", () => ({ machineIdentity: () => "qa-host", authHeaders: () => ({}), httpBase: () => "http://qa-host" }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: storage }));
-vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
+vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {}, conversationStreamState: () => "open", watchConversationStream: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
 import { useMobileConversation, type MobileConversation } from "./useConversation";
 

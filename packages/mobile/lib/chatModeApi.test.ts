@@ -5,7 +5,7 @@ vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 
 import { fetch as expoFetch } from "expo/fetch";
-import { ApiError, apiRequest, delegateTask, getAgentModels, getArchivedSessions, getPreview, getSessions, getSettings, launchOrchestrator, mobileReachablePreviewURL, pinSession, renameSession, restoreSession, resumeSessionAgent, setSessionAutoInjectCI, setSessionAutoInjectReview, setSessionAutoReview, spawnSession, unpinSession, resetArchivePagingProbes } from "./api";
+import { ApiError, apiRequest, delegateTask, getAgentModels, getArchivedSessions, getPreview, getSessions, getSettings, launchOrchestrator, mobileReachablePreviewURL, nextPollDelay, pinSession, renameSession, restoreSession, resumeSessionAgent, setSessionAutoInjectCI, setSessionAutoInjectReview, setSessionAutoReview, spawnSession, unpinSession, resetArchivePagingProbes } from "./api";
 import * as chatApi from "./chat/api";
 import { UNREACHABLE_ACTION_COPY, UnreachableError, userFacingError } from "./connectionError";
 import type { ServerConfig } from "./config";
@@ -131,27 +131,98 @@ describe("mobile Chat API boundaries", () => {
 
 	it("falls back to the full list on a daemon that predates paging, and remembers it", async () => {
 		const archived = { id: "w-0", projectId: "p-1", mode: "chat", isTerminated: true };
-		vi.mocked(fetch)
+		const answers: Record<string, unknown> = {
 			// It understood active=true but has no summary: the archive is missing.
-			.mockResolvedValueOnce(response({ sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }] }))
-			.mockResolvedValueOnce(response({ sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }, archived] }))
-			.mockResolvedValueOnce(response({ sessions: [] }))
-			.mockResolvedValueOnce(response({ projects: [] }));
+			"/sessions?active=true&kind=worker": { sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }] },
+			"/sessions": { sessions: [{ id: "w-1", projectId: "p-1", mode: "chat" }, archived] },
+			"/orchestrators": { sessions: [] },
+			"/projects": { projects: [] },
+		};
+		vi.mocked(fetch).mockImplementation(async (url) => response(answers[String(url).replace("http://ao.test:3011/api/v1", "")]));
 		const first = await getSessions(cfg);
-		expect(vi.mocked(fetch).mock.calls.map(([url]) => url).slice(0, 2)).toEqual([
-			"http://ao.test:3011/api/v1/sessions?active=true&kind=worker",
-			"http://ao.test:3011/api/v1/sessions",
-		]);
+		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toContain("http://ao.test:3011/api/v1/sessions");
 		expect(first.archive).toBeNull();
 		expect(first.sessions.map((s) => s.id)).toEqual(["w-1", "w-0"]);
 
-		vi.mocked(fetch).mockClear()
-			.mockResolvedValueOnce(response({ sessions: [archived] }))
+		// The full list already carries the orchestrators, so /orchestrators is skipped.
+		const orchestrator = { id: "o-1", projectId: "p-1", mode: "chat", kind: "orchestrator" };
+		vi.mocked(fetch).mockReset()
+			.mockResolvedValueOnce(response({ sessions: [archived, orchestrator] }))
+			.mockResolvedValueOnce(response({ projects: [{ id: "p-1", name: "One" }] }));
+		const second = await getSessions(cfg);
+		expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+			"http://ao.test:3011/api/v1/sessions",
+			"http://ao.test:3011/api/v1/projects",
+		]);
+		expect(second.sessions.map((s) => s.id)).toEqual(["w-0"]);
+		expect(second.orchestrators).toMatchObject([{ id: "o-1", projectName: "One" }]);
+	});
+
+	it("sends the rest of the board once the /sessions headers accept the credential, before its body", async () => {
+		const pending: Array<(value: Response) => void> = [];
+		vi.mocked(fetch).mockImplementation(() => new Promise<Response>((resolve) => { pending.push(resolve); }));
+		const urls = () => vi.mocked(fetch).mock.calls.map(([url]) => String(url).replace("http://ao.test:3011/api/v1", ""));
+
+		const board = getSessions(cfg, "all", undefined, { unread: true });
+		await vi.waitFor(() => expect(urls()).toEqual(["/sessions?active=true&kind=worker"]));
+		let finishSessions!: () => void;
+		pending.shift()!(new Response(new ReadableStream({
+			start(controller) {
+				finishSessions = () => {
+					controller.enqueue(new TextEncoder().encode(JSON.stringify({ archived: NO_ARCHIVE, sessions: [] })));
+					controller.close();
+				};
+			},
+		})));
+		await vi.waitFor(() => expect(urls()).toEqual([
+			"/sessions?active=true&kind=worker",
+			"/orchestrators",
+			"/projects",
+			"/notifications?status=unread&limit=1",
+		]));
+		finishSessions();
+		pending.shift()!(response({ sessions: [] }));
+		pending.shift()!(response({ projects: [] }));
+		pending.shift()!(response({ error: "not found" }, 404));
+		// An older daemon without /notifications still loads the board.
+		expect(await (await board).settled).toMatchObject({ notificationsUnread: null });
+	});
+
+	it("publishes the board without waiting for the unread count", async () => {
+		let finishUnread!: (value: Response) => void;
+		vi.mocked(fetch).mockImplementation(async (url) => {
+			const path = String(url).replace("http://ao.test:3011/api/v1", "");
+			if (path.startsWith("/notifications")) return new Promise<Response>((resolve) => { finishUnread = resolve; });
+			return response(path.startsWith("/sessions") ? { archived: NO_ARCHIVE, sessions: [] } : path === "/projects" ? { projects: [] } : { sessions: [] });
+		});
+		const board = await getSessions(cfg, "all", undefined, { unread: true });
+		expect(board.sessions).toEqual([]);
+		let settled: unknown;
+		void board.settled!.then((value) => { settled = value; });
+		await Promise.resolve();
+		expect(settled).toBeUndefined();
+		finishUnread(response({ notifications: [], unreadCount: 3 }));
+		await vi.waitFor(() => expect(settled).toMatchObject({ notificationsUnread: 3 }));
+	});
+
+	it("paces the next poll as if the requests had gone one after another", () => {
+		// Started at 0, all done by 1 s, which main's serial order would have taken 3 s.
+		expect(nextPollDelay({ startedAt: 0, serialMs: 3_000 }, 8_000, 1_000)).toBe(10_000);
+		// Never sooner than the interval after this poll finished.
+		expect(nextPollDelay({ startedAt: 0, serialMs: 500 }, 8_000, 1_000)).toBe(8_000);
+	});
+
+	it("sends nothing else when the daemon rejects the credential, every tick", async () => {
+		vi.mocked(fetch)
+			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [] }))
 			.mockResolvedValueOnce(response({ sessions: [] }))
 			.mockResolvedValueOnce(response({ projects: [] }));
 		await getSessions(cfg);
-		expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://ao.test:3011/api/v1/sessions");
-		expect(vi.mocked(fetch).mock.calls).toHaveLength(3);
+		vi.mocked(fetch).mockReset().mockImplementation(async () => response({ message: "bad password" }, 401));
+		await expect(getSessions(cfg, "all", undefined, { unread: true })).rejects.toMatchObject({ status: 401 });
+		expect(vi.mocked(fetch).mock.calls).toHaveLength(1);
+		await expect(getSessions(cfg, "all", undefined, { unread: true })).rejects.toMatchObject({ status: 401 });
+		expect(vi.mocked(fetch).mock.calls).toHaveLength(2);
 	});
 
 	it("uses the first answer from a daemon too old to filter by state", async () => {
@@ -581,6 +652,27 @@ describe("mobile Chat API boundaries", () => {
 	// unbroken run starves the JS thread, which is also what services touches — the
 	// board renders but ignores taps until the OS or the renderer gives up. The reader
 	// must therefore hand the event loop back periodically, no matter how much is queued.
+		it("takes the head cursor and heartbeats from a real stream without publishing them as changes", async () => {
+		vi.mocked(expoFetch).mockResolvedValue(new Response([
+			"id: 7\nevent: cursor\ndata: {}\n\n",
+			"event: heartbeat\ndata: {}\n\n",
+			'id: 8\ndata: {"seq":8,"projectId":"p-1","sessionId":"w-1","type":"session_updated","payload":{"conversationId":"c-1"},"createdAt":"2026-10-26"}\n\n',
+			"event: heartbeat\ndata: {}\n\n",
+		].join(""), { headers: { "X-AO-Event-After": "7" } }) as unknown as Awaited<ReturnType<typeof expoFetch>>);
+		const resets: number[] = [];
+		const sessions: string[] = [];
+		const cursor = await chatApi.streamGlobalConversationEvents(
+			cfg, Number.MAX_SAFE_INTEGER, new AbortController().signal,
+			(event) => { if (event.sessionId) sessions.push(event.sessionId); },
+			(reset) => resets.push(reset),
+			{ onOpen: () => sessions.push("open") },
+		);
+		expect(vi.mocked(expoFetch).mock.lastCall?.[0]).toBe(`http://ao.test:3011/api/v1/events?after=${Number.MAX_SAFE_INTEGER}`);
+		expect(resets).toEqual([7]);
+		expect(sessions).toEqual(["open", "w-1"]);
+		expect(cursor).toBe(8);
+	});
+
 	it("yields to the event loop while draining a large replay", async () => {
 		vi.mocked(expoFetch).mockResolvedValue(new Response(
 			replayFrames(300),

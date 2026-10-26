@@ -8,11 +8,11 @@ import { shouldPoll } from "./appStatePoll";
 import {
 	ApiError,
 	delegateTask,
-	getNotifications,
 	getSessions,
 	killSession,
 	launchOrchestrator as apiLaunchOrchestrator,
 	mergePR as apiMergePR,
+	nextPollDelay,
 	pinSession as apiPinSession,
 	renameSession as apiRenameSession,
 	restoreSession,
@@ -24,6 +24,7 @@ import {
 	type DashboardSession,
 	type DashboardStats,
 	type OrchestratorLink,
+	type PollSettled,
 	type ProjectInfo,
 	type SessionMode,
 	type SpawnAttachmentInput,
@@ -281,6 +282,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Whether the most recent poll reached the daemon. Distinct from openRef,
 	// which latches on first connect and never clears.
 	const lastTickOkRef = useRef(false);
+	// Settles when the last successful poll's requests have all finished.
+	const lastSettledRef = useRef<Promise<PollSettled> | null>(null);
 	// When the last successful poll landed, for the stale-data banner. 0 means
 	// "never synced".
 	//
@@ -620,7 +623,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		try {
 			// getSessions returns projects, so don't fetch /projects again alongside
 			// it — that duplicate doubled the auth attempts spent per failing tick.
-			const sess = await getSessions(c, "all", { signal: controller.signal });
+			const sess = await getSessions(c, "all", { signal: controller.signal }, { unread: true });
 			// A poll that started against the previous pairing must not publish any
 			// of its board state after the user has moved to another machine.
 			if (!isCurrent()) return false;
@@ -646,21 +649,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				everConnectedRef.current = true;
 				mobileTelemetry()?.capture(MOBILE_EVENTS.connected, { trigger });
 			}
-			// Badge count for the board's bell. Deliberately after the session fetch
-			// and separately caught: an older daemon without /notifications must not
-			// knock the board offline. limit:1 because we only read unreadCount.
-			// The app may have gone to the background while the sessions request was
-			// in flight. Stop here rather than spending another request that would
-			// re-mark this device live after the user left.
-			if (!isCurrent()) return false;
-			try {
-				const page = await getNotifications(c, { status: "unread", limit: 1 }, { signal: controller.signal });
-				if (!isCurrent()) return false;
-				setNotificationsUnread(page.unreadCount);
-			} catch {
-				if (!isCurrent()) return false;
-				setNotificationsUnread(0);
-			}
+			// Badge count for the board's bell, fetched alongside but not waited
+			// for. A failure (an older daemon without /notifications) reads as no
+			// unread.
+			lastSettledRef.current = sess.settled ?? null;
+			void sess.settled?.then(({ notificationsUnread }) => {
+				if (isCurrent() && notificationsUnread !== undefined) setNotificationsUnread(notificationsUnread ?? 0);
+			});
 			return true;
 		} catch (e) {
 			if (!isCurrent()) return false;
@@ -777,7 +772,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			}
 			// Pace from completion, not start time: slow hosts must not accumulate
 			// overlapping full-history loads while the user scrolls or switches tabs.
-			if (!stopped) poll = setTimeout(() => void tick(), pollIntervalFor(config));
+			// A successful poll also waits as long as its requests would have taken
+			// one after another, so sending them together does not poll more often.
+			const settled = lastTickOkRef.current ? lastSettledRef.current : null;
+			const delay = settled ? nextPollDelay(await settled, pollIntervalFor(config)) : pollIntervalFor(config);
+			if (!stopped) poll = setTimeout(() => void tick(), delay);
 		};
 		void tick();
 		// Paced by which endpoint won: the event stream cannot deliver over the

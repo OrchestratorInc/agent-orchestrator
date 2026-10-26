@@ -36,7 +36,12 @@ export type ConnectDeps = {
 	race: (host: Host) => Promise<RaceOutcome>;
 	/** Asks the daemon what it advertises now, over the endpoint that just won. */
 	refreshEndpoints: (config: ServerConfig) => Promise<Endpoint[]>;
-	saveEndpoints: (hostId: string, endpoints: Endpoint[]) => Promise<void>;
+	/**
+	 * Rewrites a host's stored endpoints from the ones stored at that moment.
+	 * The refresh lands after connect returns, possibly after another connect or
+	 * a re-pair has stored newer ones, so it must not merge onto a stale copy.
+	 */
+	saveEndpoints: (hostId: string, update: (stored: Endpoint[]) => Endpoint[]) => Promise<void>;
 	/** Records the identity a machine reported that had none stored. */
 	adoptIdentity: (oldId: string, hostId: string) => Promise<void>;
 	touch: (hostId: string) => Promise<void>;
@@ -44,7 +49,7 @@ export type ConnectDeps = {
 
 /**
  * Connects to a paired machine: race its endpoints, then refresh what we know
- * about it from whichever one won.
+ * about it from whichever one won, in the background.
  *
  * The refresh is what makes the pairing self-healing. A tunnel hostname that
  * rotated, a LAN address that changed with the lease, a machine that gained
@@ -69,7 +74,10 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 
 	const hostKey = host.id === "" ? outcome.hostId : host.id;
 
-	try {
+	// Not awaited: the endpoints that just won are enough to start loading the
+	// board, so the refresh overlaps that load instead of adding a round trip
+	// to every connect and resume. What it learns is for the next race.
+	void (async () => {
 		const advertised = await deps.refreshEndpoints(config);
 		// The daemon cannot advertise a client-side NAT or proxy address that just worked.
 		const refreshed = advertised.some((e) => e.kind === outcome.endpoint.kind) &&
@@ -77,14 +85,11 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 			? [...advertised, outcome.endpoint] : advertised;
 		// Merged, not replaced: a kind the daemon omits — a tunnel mid-restart,
 		// above all — is unknown rather than gone. See mergeEndpoints.
-		await deps.saveEndpoints(
-			hostKey,
-			mergeEndpoints(host.endpoints, refreshed),
-		);
-	} catch {
+		await deps.saveEndpoints(hostKey, (stored) => mergeEndpoints(stored, refreshed));
+	})().catch(() => {
 		// A failed refresh must not cost us a working connection: the endpoints
 		// already stored are what got us here and remain good enough.
-	}
+	});
 	await deps.touch(hostKey);
 
 	return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };

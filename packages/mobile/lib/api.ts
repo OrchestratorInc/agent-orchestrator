@@ -188,7 +188,21 @@ export type SessionsResponse = {
 	 * the archive.
 	 */
 	archive?: ArchiveSummary | null;
+	/**
+	 * Settles once every request of this poll has: the unread count, when asked
+	 * for with `unread` (null when that request failed, e.g. an older daemon
+	 * without /notifications), and how long main's one-after-another order would
+	 * have taken from `startedAt`, for pacing the next poll.
+	 */
+	settled?: Promise<PollSettled>;
 };
+
+export type PollSettled = { notificationsUnread?: number | null; serialMs: number; startedAt: number };
+
+/** When the next poll may start: as often as main's serial requests allowed, never sooner than `intervalMs` from now. */
+export function nextPollDelay(settled: PollSettled, intervalMs: number, now = Date.now()): number {
+	return Math.max(intervalMs, settled.startedAt + settled.serialMs + intervalMs - now);
+}
 
 
 export type { ArchiveSummary } from "./archive/archiveSummary";
@@ -396,7 +410,19 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
+// A request fails `timeoutMs` after it starts, as it always has, unless a
+// successful body is still arriving then. A 70 KB board poll needs ~1.5 s at
+// 50 KB/s and much longer on a congested link; failing it while bytes flow
+// turned a slow body into "unreachable", which re-raced the endpoints and
+// reloaded everything.
 const REQUEST_TIMEOUT_MS = 12000;
+// A successful body may outlive `timeoutMs` while its bytes keep coming: it
+// fails once none have arrived for this long. TCP recovers a lost segment by
+// retransmitting after a timeout that starts near 1 s on a phone and doubles
+// on every further loss, so two or three losses in a row on a weak cell link
+// stall the body for 3-7 s. 8 s outlasts that, and a path silent for longer
+// is effectively gone.
+export const RESPONSE_BODY_STALL_MS = 8_000;
 const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
 // The daemon gives attachment uploads 10 minutes; allow time for its response.
 // A cold agent resume spawns the chat host and reloads the transcript; the
@@ -429,8 +455,63 @@ export class ApiError extends Error {
 	}
 }
 
-async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+// Last body and ETag per GET URL. The daemon answers an unchanged poll of a
+// list route with a bodyless 304, so the board poll re-downloads nothing while
+// nothing changed. A daemon without ETags never fills this.
+const revalidated = new Map<string, { etag: string; body: string }>();
+const REVALIDATED_LIMIT = 32;
+
+function rememberRevalidated(url: string, etag: string | null, body: string): void {
+	revalidated.delete(url);
+	if (!etag) return;
+	revalidated.set(url, { etag, body });
+	if (revalidated.size > REVALIDATED_LIMIT) revalidated.delete(revalidated.keys().next().value!);
+}
+
+// The body is read as a stream to time it, so it is decoded in JS rather than
+// by the native text(). Expo's JS TextDecoder walks every byte in a JS loop;
+// these two steps run in native string code instead. Measured on a 2.2 MB
+// conversation body: 20 ms against 31-33 ms in Hermes, and about the same
+// (6-7 ms) in V8. A native text() cannot report progress, so it is not used.
+
+/** One char per byte. Hermes caps a call at 4096 arguments. */
+function latin1(bytes: Uint8Array): string {
+	let out = "";
+	for (let i = 0; i < bytes.length; i += 4096) {
+		out += String.fromCharCode.apply(null, bytes.subarray(i, i + 4096) as unknown as number[]);
+	}
+	return out;
+}
+
+/**
+ * UTF-8 from one-char-per-byte text. A multi-byte character is a run of bytes
+ * >= 0x80 and never spans ASCII, so each run decodes on its own.
+ */
+function utf8FromLatin1(text: string): string {
+	return text.replace(/[\x80-\xff]+/g, (run) => {
+		try {
+			return decodeURIComponent(escape(run));
+		} catch {
+			// Invalid UTF-8: replacement characters, as text() would give.
+			return new TextDecoder().decode(Uint8Array.from(run, (char) => char.charCodeAt(0)));
+		}
+	});
+}
+
+/**
+ * `onAccepted` runs as soon as the daemon's headers accept the request (2xx or
+ * 304), before the body arrives.
+ */
+async function req(
+	cfg: ServerConfig,
+	path: string,
+	init?: RequestInit,
+	timeoutMs = REQUEST_TIMEOUT_MS,
+	onAccepted?: () => void,
+): Promise<Response> {
 	const url = `${httpBase(cfg)}${path}`;
+	const isGet = (init?.method ?? "GET").toUpperCase() === "GET";
+	const cached = isGet ? revalidated.get(url) : undefined;
 	// Without a timeout a sleeping/unreachable host (common over Tailscale) hangs
 	// the call for the OS TCP timeout (~75-120s), freezing Kill/send and the poll.
 	const controller = new AbortController();
@@ -443,7 +524,17 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		rejectAbort = () => reject(abortError());
 		controller.signal.addEventListener("abort", rejectAbort);
 	});
-	const timer = setTimeout(cancel, timeoutMs);
+	const startedAt = Date.now();
+	// Set once a successful body is being read; see RESPONSE_BODY_STALL_MS.
+	let lastByteAt: number | undefined;
+	const deadline = () => Math.max(startedAt + timeoutMs, lastByteAt === undefined ? 0 : lastByteAt + RESPONSE_BODY_STALL_MS);
+	let timer: ReturnType<typeof setTimeout>;
+	const watch = () => {
+		const remaining = deadline() - Date.now();
+		if (remaining <= 0) cancel();
+		else timer = setTimeout(watch, remaining);
+	};
+	timer = setTimeout(watch, timeoutMs);
 	let received: Response | undefined;
 	let bodyText = "";
 	try {
@@ -456,13 +547,32 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 					...authHeaders(cfg),
 					"Content-Type": "application/json",
 					...(installId ? { "X-AO-Install-Id": installId } : {}),
+					...(cached ? { "If-None-Match": cached.etag } : {}),
 					...(init?.headers ?? {}),
 				},
 			});
+			if (received.ok || received.status === 304) onAccepted?.();
 			// This boundary serves finite JSON responses, not SSE or downloads.
 			// Finish loading here so writes with no body consumer also release their
-			// timer, and /sessions cannot fan out while its body is still stalled.
-			bodyText = await received.text();
+			// timer.
+			// An error envelope is tiny, so it keeps the plain timeout.
+			// On iOS and Android the global fetch is expo/fetch (Expo's runtime
+			// installs it), whose body streams, as the event stream relies on. A
+			// fetch without a readable body keeps the plain timeout too.
+			if (!received.ok || !received.body) {
+				bodyText = await received.text();
+				return;
+			}
+			lastByteAt = Date.now();
+			const reader = received.body.getReader();
+			const chunks: string[] = [];
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				lastByteAt = Date.now();
+				chunks.push(latin1(value));
+			}
+			bodyText = utf8FromLatin1(chunks.join(""));
 		})()]);
 	} catch (e) {
 		// Leaving a screen/host is not a connectivity failure. The poll owner
@@ -484,7 +594,13 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 		init?.signal?.removeEventListener("abort", cancel);
 		controller.signal.removeEventListener("abort", rejectAbort);
 	}
-	const res = received!;
+	let res = received!;
+	if (res.status === 304 && cached) {
+		bodyText = cached.body;
+		res = new Response(null, { status: 200, statusText: "OK", headers: res.headers });
+	} else if (isGet && res.ok) {
+		rememberRevalidated(url, res.headers.get("etag"), bodyText);
+	}
 	if (!res.ok) {
 		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";
@@ -541,17 +657,23 @@ export async function getProject(cfg: ServerConfig, id: string): Promise<Project
 	return (data?.project ?? data) as ProjectDetail;
 }
 
-export async function getSessions(cfg: ServerConfig, _projectId?: string, init?: Pick<RequestInit, "signal">): Promise<SessionsResponse> {
+export async function getSessions(
+	cfg: ServerConfig,
+	_projectId?: string,
+	init?: Pick<RequestInit, "signal">,
+	opts: { unread?: boolean } = {},
+): Promise<SessionsResponse> {
 	// The daemon exposes sessions and orchestrators as two lists. Fetch both,
 	// keep worker sessions for the board, and map orchestrators for their screen.
 	//
-	// /sessions is probed FIRST, alone, rather than fanning out in one Promise.all.
-	// The daemon locks a device out for a minute after 5 failed auths, so a stale
-	// password used to cost 4 failures per poll tick (this call's three requests
-	// plus the caller's own /projects) — enough to arm the lockout in one or two
-	// ticks and make the user's next action, typically scanning a fresh pairing
-	// code, fail with 429 before the new password was ever checked. Probing first
-	// caps a bad-credential tick at a single failed attempt.
+	// /sessions is probed FIRST, alone. The daemon locks a device out for a
+	// minute after 5 failed auths, so a stale password used to cost 4 failures
+	// per poll tick — enough to arm the lockout in one or two ticks and make the
+	// user's next action, typically scanning a fresh pairing code, fail with 429
+	// before the new password was ever checked. Probing first caps a
+	// bad-credential tick at one failed attempt. The rest of the board goes out
+	// as soon as the /sessions headers accept this credential, without waiting
+	// for its body, so a tick costs two round trips rather than three.
 	//
 	// The poll asks for live workers only, with the archive's size: the archive is
 	// most of a long-running machine's sessions, and over a tunnel the poll runs
@@ -560,35 +682,55 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 	const hostKey = archiveHostKey(cfg);
 	const legacySince = legacyArchiveHosts.get(hostKey);
 	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
-	let sessRes = await req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init);
-	let sessData = await sessRes.json();
-	let archive = tryPaged ? wireArchiveSummary(sessData?.archived) : null;
-	if (tryPaged) {
-		if (archive) legacyArchiveHosts.delete(hostKey);
-		else {
+	const startedAt = Date.now();
+	let sessionsMs = 0;
+	let accepted!: () => void;
+	const sessionsAccepted = new Promise<void>((resolve) => { accepted = resolve; });
+	const sessionsRead = req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init, undefined, accepted)
+		.then((res) => res.json())
+		.then(async (data) => {
+			const archive = tryPaged ? wireArchiveSummary(data?.archived) : null;
+			if (!tryPaged) return { data, archive };
+			if (archive) {
+				legacyArchiveHosts.delete(hostKey);
+				return { data, archive };
+			}
 			legacyArchiveHosts.set(hostKey, Date.now());
 			// A daemon older still ignores `active` and has already sent everything,
 			// archived rows included; only one that filtered must be asked again.
-			const ignoredFilter = Array.isArray(sessData?.sessions) && sessData.sessions.some((s: WireSession) => s.isTerminated);
-			if (!ignoredFilter) {
-				sessRes = await req(cfg, `${API}/sessions`, init);
-				sessData = await sessRes.json();
-			}
-		}
-	}
+			const ignoredFilter = Array.isArray(data?.sessions) && data.sessions.some((s: WireSession) => s.isTerminated);
+			return { data: ignoredFilter ? data : await (await req(cfg, `${API}/sessions`, init)).json(), archive };
+		})
+		.finally(() => { sessionsMs = Date.now() - startedAt; });
 	// A failed /projects is reported as null rather than [] so a caller can tell
-	// "this daemon has no projects" from "we could not ask". It stays caught: an
-	// older daemon, or one blip on that one route, must not knock the board
-	// offline when /sessions answered fine.
-	const [orchRes, projects] = await Promise.all([
-		req(cfg, `${API}/orchestrators`, init),
-		getProjects(cfg, init).catch(() => null),
-	]);
-	const orchData = await orchRes.json();
+	// "this daemon has no projects" from "we could not ask". It and the unread
+	// count stay caught: an older daemon, or one blip on that one route, must not
+	// knock the board offline when /sessions answered fine. The unfiltered list
+	// of an older daemon already carries its orchestrators.
+	const rest = sessionsAccepted.then(() => Promise.all([
+		timed(tryPaged ? req(cfg, `${API}/orchestrators`, init).then((res) => res.json()) : Promise.resolve(null)),
+		timed(getProjects(cfg, init).catch(() => null)),
+	]));
+	// The board does not wait for the unread count, which only feeds the badge.
+	const unread = opts.unread
+		? sessionsAccepted.then(() => timed(getNotifications(cfg, { status: "unread", limit: 1 }, init).then((page) => page.unreadCount, () => null)))
+		: null;
+	const [{ data: sessData, archive }, [[orchData, orchMs], [projects, projectsMs]]] = await Promise.all([sessionsRead, rest]);
+	const settled = (unread ?? Promise.resolve([undefined, 0] as const)).then(([notificationsUnread, unreadMs]) => ({
+		notificationsUnread,
+		// What these requests take one after another, as they went before the
+		// /sessions headers released the rest. Callers pace their next poll from
+		// it so batching does not raise the poll rate (and data per minute).
+		serialMs: sessionsMs + Math.max(orchMs, projectsMs) + unreadMs,
+		startedAt,
+	}));
 	const nameOf = new Map((projects ?? []).map((p) => [p.id, p.name]));
 
 	const rawSessions: WireSession[] = Array.isArray(sessData?.sessions) ? sessData.sessions : [];
-	const rawOrchestrators: WireSession[] = Array.isArray(orchData?.sessions) ? orchData.sessions : [];
+	// Both lists come from one daemon query, oldest to newest.
+	const rawOrchestrators: WireSession[] = orchData
+		? (Array.isArray(orchData.sessions) ? orchData.sessions : [])
+		: rawSessions.filter((s) => s.kind === "orchestrator");
 
 	const sessions = rawSessions.filter((s) => s.kind !== "orchestrator").map(mapSession);
 
@@ -611,7 +753,12 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);
 
-	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive };
+	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive, settled };
+}
+
+function timed<T>(work: Promise<T>): Promise<readonly [T, number]> {
+	const started = Date.now();
+	return work.then((value) => [value, Date.now() - started] as const);
 }
 
 /**

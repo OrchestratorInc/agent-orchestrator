@@ -129,8 +129,10 @@ export async function updateHostAppearance(id: string, appearance: MachineAppear
  * advertises, so a rotated tunnel hostname or a changed LAN address is picked
  * up without the user doing anything.
  */
-export async function updateHostEndpoints(id: string, endpoints: Endpoint[]): Promise<void> {
-	await mutateStored((stored) => stored.map((h) => (h.id === id ? { ...h, endpoints } : h)));
+export async function updateHostEndpoints(id: string, endpoints: Endpoint[] | ((stored: Endpoint[]) => Endpoint[])): Promise<void> {
+	await mutateStored((stored) => stored.map((h) => (
+		h.id === id ? { ...h, endpoints: typeof endpoints === "function" ? endpoints(h.endpoints) : endpoints } : h
+	)));
 }
 
 /** Records a successful connection, so the list orders by recency. */
