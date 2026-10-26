@@ -14,7 +14,7 @@ vi.mock("./api", () => ({
 vi.mock("./connectRuntime", () => ({ connectToHost: vi.fn() }));
 vi.mock("./hosts", () => ({ findHost: vi.fn() }));
 vi.mock("./config", () => ({ isConfigured: (config: ServerConfig) => Boolean(config.host) }));
-vi.mock("./pollInterval", () => ({ FLEET_POLL_MS: 60_000 }));
+vi.mock("./pollInterval", () => ({ FLEET_IDLE_POLL_MS: 60_000, fleetPollMsFor: () => 60_000 }));
 
 type HandoffResult = ReturnType<typeof useOtherHosts> & {
 	claimPrimary?: (hostId: string) => VerifiedHostSnapshot | null;
