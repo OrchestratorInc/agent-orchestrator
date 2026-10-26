@@ -1,6 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserLiveState } from "../browserLive";
+import { space } from "../tokens";
 
 type Handlers = {
 	onStatus(status: "connecting" | "open" | "closed" | "error", message?: string): void;
@@ -191,6 +192,9 @@ describe("live browser controls", () => {
 		expect(toolbarButton("Forward").props).toMatchObject({ icon: "chevron.forward", disabled: true });
 		expect(toolbarButton("Reload").props).toMatchObject({ icon: "arrow.clockwise", disabled: false });
 		expect(tabsMenu().props).toMatchObject({ icon: "square.on.square", accessibilityLabel: "Tabs, 2 open, showing Todo app" });
+		// Android draws a spacer only with a fixed width; one without is dropped.
+		const gaps = toolbar.findAll((node) => (node.type as unknown) === "StackToolbarSpacer");
+		expect(gaps.map((gap) => gap.props.width)).toEqual([space.md, space.md]);
 		await act(async () => toolbarButton("Back").props.onPress());
 		await act(async () => toolbarButton("Reload").props.onPress());
 		expect(sent()).toEqual([

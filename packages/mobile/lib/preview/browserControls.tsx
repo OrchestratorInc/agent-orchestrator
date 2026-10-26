@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import { Platform, type ColorValue } from "react-native";
 import type { BrowserLiveState } from "../browserLive";
 import { toolbarIcon } from "../toolbarIcon";
+import { space } from "../tokens";
 
 /**
  * Whether the controls go in a bottom toolbar: Material 3's floating toolbar,
@@ -72,7 +73,8 @@ function tabsMenuLabel(tabs: readonly BrowserTab[]): string {
 /**
  * The live browser's controls as the screen's bottom toolbar: Back, Forward,
  * Reload (Stop while a page loads) and the tab menu, in Material 3's floating
- * toolbar.
+ * toolbar. Fixed gaps set history, reload and tabs apart; Android's toolbar
+ * draws no flexible spacer.
  *
  * A function rather than a component: Stack.Toolbar reads its children by
  * element type.
@@ -86,7 +88,7 @@ export function browserToolbar(controls: BrowserControls): ReactElement {
 		<Stack.Toolbar tintColor={controls.tint} backgroundColor={controls.surface}>
 			<Stack.Toolbar.Button icon={toolbarIcon("back")} accessibilityLabel="Back" tintColor={tint(!enabled || !canGoBack)} disabled={!enabled || !canGoBack} onPress={controls.onBack} />
 			<Stack.Toolbar.Button icon={toolbarIcon(forwardSymbol)} accessibilityLabel="Forward" tintColor={tint(!enabled || !canGoForward)} disabled={!enabled || !canGoForward} onPress={controls.onForward} />
-			<Stack.Toolbar.Spacer />
+			<Stack.Toolbar.Spacer width={space.md} />
 			{/* One item that changes in place, as Safari's does, rather than two
 			    trading places while a page loads. */}
 			<Stack.Toolbar.Button
@@ -96,7 +98,7 @@ export function browserToolbar(controls: BrowserControls): ReactElement {
 				disabled={!enabled}
 				onPress={loading ? controls.onStop : controls.onReload}
 			/>
-			<Stack.Toolbar.Spacer />
+			<Stack.Toolbar.Spacer width={space.md} />
 			<Stack.Toolbar.Menu
 				icon={toolbarIcon(tabsSymbol)}
 				accessibilityLabel={tabsMenuLabel(controls.tabs)}
