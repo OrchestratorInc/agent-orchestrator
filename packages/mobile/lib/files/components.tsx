@@ -10,6 +10,7 @@ import {
 	TextInput,
 	View,
 	type AccessibilityActionEvent,
+	type LayoutChangeEvent,
 } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { SvgXml } from "react-native-svg";
@@ -239,6 +240,7 @@ export function SelectionComposer({
 	onAction,
 	onCopy,
 	onClose,
+	onLayout,
 }: {
 	label: string;
 	busy: boolean;
@@ -247,6 +249,8 @@ export function SelectionComposer({
 	onAction: (action: ComposerAction, text: string) => void;
 	onCopy: () => void;
 	onClose: () => void;
+	/** Its height, for whatever has to sit above it: the page's toasts. */
+	onLayout?: (event: LayoutChangeEvent) => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -259,7 +263,7 @@ export function SelectionComposer({
 	return (
 		// The session dock's spacing: it rests on the safe-area inset and, with the
 		// keyboard up, sits KEYBOARD_DOCK_GAP above it instead.
-		<KeyboardStickyView offset={{ closed: 0, opened: restingInset - KEYBOARD_DOCK_GAP }} style={styles.composerDock}>
+		<KeyboardStickyView offset={{ closed: 0, opened: restingInset - KEYBOARD_DOCK_GAP }} onLayout={onLayout} style={styles.composerDock}>
 			<View accessibilityViewIsModal={false} style={[styles.composerShell, { paddingBottom: restingInset }]}>
 				{/* What the comment is about, where the session composer keeps its model row. */}
 				<View style={styles.composerMeta}>

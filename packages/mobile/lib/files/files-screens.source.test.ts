@@ -32,6 +32,11 @@ describe("the Files list", () => {
 		expect(source("./FolderList.tsx")).toContain("{...refreshControlColors(t)}");
 	});
 
+	it("chooses its view with the platform's segmented control, the count in the label", () => {
+		expect(index).toContain("<SegmentedChoice<Tab>");
+		expect(index).toContain('label: summary?.files ? `Changes ${summary.files}` : "Changes"');
+	});
+
 	// Opening a row is navigation, which the platforms do not mark with a haptic.
 	it("opens rows without a haptic, with each platform's press feedback", () => {
 		const rows = source("./rows.tsx");
@@ -39,5 +44,32 @@ describe("the Files list", () => {
 		expect(rows).toContain('usePressFeedback("row")');
 		expect(rows).toContain("rowDividerWidth");
 		expect(rows).not.toContain("hairlineWidth");
+	});
+});
+
+describe("the file viewer", () => {
+	const file = source("../../app/files/[sessionId]/file.tsx");
+
+	// iOS steps from the header's chevrons, as Mail does: UIKit's bottom toolbar
+	// is driven only from iOS 18 and stays on the navigation controller once
+	// shown. Android floats Material's toolbar over this page alone.
+	it("steps through changed files with native controls", () => {
+		expect(file).toContain('const STEP_IN_HEADER = Platform.OS === "ios";');
+		expect(file).toMatch(/STEP_IN_HEADER && canStep \? \(\s*<Stack\.Toolbar\.Button icon=\{fileIcon\("previous"\)\}/);
+		expect(file).toMatch(/!STEP_IN_HEADER && canStep && !selection \? \(\s*<Stack\.Toolbar placement="bottom">/);
+		expect(file).toContain("{stepLabel}</Text>");
+		expect(file).not.toContain("TOOLBAR_HEIGHT");
+	});
+
+	it("drops the tap-to-copy path bar for the header menu's Copy path", () => {
+		expect(file).not.toContain("pathPress");
+		expect(file).not.toContain("Copy path`");
+		expect(file).toContain("<SegmentedChoice<ViewChoice>");
+	});
+
+	it("confirms with the shared toast", () => {
+		expect(file).toContain("<ToastHost toast={toast}");
+		expect(file).not.toContain("setNotice");
+		expect(file).not.toContain("announceForAccessibility");
 	});
 });

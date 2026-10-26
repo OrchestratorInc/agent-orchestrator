@@ -20,12 +20,13 @@ describe("native header items", () => {
 		expect(review).not.toContain("headerRight");
 	});
 
-	it("makes the file viewer's wrap control a selectable header item", () => {
+	it("folds the file viewer's controls into one header menu, wrap checked in it", () => {
 		const file = source("../app/files/[sessionId]/file.tsx");
-		const toolbar = file.slice(file.indexOf('<Stack.Toolbar placement="right">'), file.indexOf("</Stack.Toolbar>"));
-		expect(toolbar).toContain('icon={toolbarIcon("wrapLines")}');
-		expect(toolbar).toContain("selected={wrap}");
-		expect(toolbar).toContain("setWrap((value) => !value)");
+		const header = file.slice(file.indexOf("const headerItems = useMemo("), file.indexOf("</Stack.Toolbar>"));
+		expect(header).toMatch(/<Stack\.Toolbar placement="right">[\s\S]*<Stack\.Toolbar\.Menu\s+icon=\{fileIcon\("more"\)\}/);
+		expect(header).toContain('isOn={wrap} onPress={() => setWrap((value) => !value)}>Wrap lines</Stack.Toolbar.MenuAction>');
+		expect(header).toContain("onPress={copyPath}>Copy path</Stack.Toolbar.MenuAction>");
+		expect(header).toContain("onPress={sharePath}>Share</Stack.Toolbar.MenuAction>");
 		expect(file).not.toContain("headerRight");
 		expect(file).not.toContain("headerAction");
 	});
