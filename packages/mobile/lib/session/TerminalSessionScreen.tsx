@@ -2,7 +2,7 @@ import { Feather } from "../icons";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
 import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Alert, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Keyboard, LayoutAnimation, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ApiError, getPreview, killSession, killSessionReviewer, sendMessage } from "../api";
 import { isConfigured } from "../config";
@@ -38,12 +38,13 @@ import {
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
 import { adjustTerminalViewport, fitTerminalViewport } from "./terminalViewport";
 import { isRuntimeGone, type RouteSession } from "./sessionRoute";
-import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../tokens";
+import { font, fontScaleCap, iconSize, radius, space, touchTarget, type } from "../tokens";
 import { toolbarIcon } from "../toolbarIcon";
 import { Spinner } from "../Spinner";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
-import { Button } from "../ui";
+import { Button, EmptyState } from "../ui";
+import type { PlatformSymbol } from "../symbols";
 import { TerminalNotice, TerminalNoticeHost, type TerminalNoticeMessage, type TerminalNoticeTone } from "./TerminalNotice";
 import { InterfaceSwitchConfirm, type InterfaceSwitchPolicy } from "./InterfaceSwitchConfirm";
 import { backOr } from "../backNavigation";
@@ -52,6 +53,9 @@ import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
 
 const FONT_SIZE = 12;
+
+/** A terminal with nothing running behind it: power, switched off. */
+const TERMINATED_GLYPH: PlatformSymbol = { ios: "power", android: "power_settings_new" };
 
 // Injected into the xterm WebView after load. xterm has its own touch handlers
 // that scroll by discrete lines (the janky "1 line per swipe"). We intercept in
@@ -1132,7 +1136,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// request, and two of them against a slow link is what the guard prevents.
 	const retryInterfaceCheck = useCallback(async () => {
 		if (recheckingRef.current) return;
-		haptics.tap();
 		recheckingRef.current = true;
 		setRechecking(true);
 		try {
@@ -1364,7 +1367,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		return (
 			<View style={styles.center}>
 				{headerItems}
-				<Text style={styles.centerText}>No machine paired.</Text>
+				<EmptyState icon="devices" title="No machine paired" />
 			</View>
 		);
 	}
@@ -1444,47 +1447,55 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				) : null}
 				{interfaceTransitionActive ? (
 					<View style={styles.interfaceOverlay}>
-						<View style={styles.interfaceCard}>
-							<Feather name={interfaceRecoveryMessage ? "alert-triangle" : "repeat"} size={iconSize.lg} color={t.accent} />
-							<Text style={styles.interfaceTitle}>{interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Chat"}</Text>
-							<Text style={styles.interfaceCopy}>{interfaceRecoveryMessage || terminalInterfacePhaseLabel(interfaceSwitch.transition?.phase)}</Text>
+						<View style={styles.interfaceCard} accessibilityViewIsModal>
+							{/* The system's own indicator while the switch runs: a turning
+							    glyph that never turned read as frozen. */}
+							{interfaceRecoveryMessage ? (
+								<AppSymbol name="warning" size={iconSize.xl} color={t.red} />
+							) : (
+								<Spinner size="large" />
+							)}
+							<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} style={styles.interfaceTitle}>
+								{interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Chat"}
+							</Text>
+							<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.interfaceCopy}>
+								{interfaceRecoveryMessage || terminalInterfacePhaseLabel(interfaceSwitch.transition?.phase)}
+							</Text>
 							{mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition) ? (
-								<Pressable
-									disabled={interfaceSwitch.cancelling}
-									onPress={() => { haptics.tap(); void interfaceSwitch.cancel().catch(() => {}); }}
-									style={styles.interfaceCancel}
-								>
-									<Text style={styles.interfaceCancelText}>{interfaceSwitch.cancelling ? "Cancelling…" : "Cancel switch"}</Text>
-								</Pressable>
+								<Button
+									variant="secondary"
+									title="Cancel switch"
+									loading={interfaceSwitch.cancelling}
+									onPress={() => void interfaceSwitch.cancel().catch(() => {})}
+									style={styles.interfaceAction}
+								/>
 							) : null}
-							{interfaceSwitch.error ? <Text style={styles.interfaceError}>{interfaceSwitch.error}</Text> : null}
+							{interfaceSwitch.error ? (
+								<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.interfaceError}>{interfaceSwitch.error}</Text>
+							) : null}
 							{interfaceSwitch.fetchFailed || interfaceRecoveryMessage ? (
-								<Pressable
-									disabled={rechecking}
+								<Button
+									variant="secondary"
+									title="Retry"
+									icon="refresh"
+									loading={rechecking}
 									onPress={() => void retryInterfaceCheck()}
-									style={styles.interfaceCancel}
-								>
-									<Text style={styles.interfaceCancelText}>{rechecking ? "Retrying…" : "Retry"}</Text>
-								</Pressable>
+									style={styles.interfaceAction}
+								/>
 							) : null}
 						</View>
 					</View>
 				) : null}
 				{dead && (
 					<View style={styles.deadOverlay}>
-						<View style={styles.deadIcon}>
-							<Feather name="power" size={iconSize.xl} color={t.textTertiary} />
-						</View>
-						<Text style={styles.deadTitle}>{shellOnly ? "Shell closed" : "Session terminated"}</Text>
-						<Text style={styles.deadMsg}>{shellOnly ? "This worktree shell is no longer running." : "This session has no live terminal. Restore it to bring the agent back."}</Text>
-						{!shellOnly ? <Pressable
-								onPress={() => { haptics.tap(); void onRestore(); }}
-							disabled={restoring}
-							style={({ pressed }) => [styles.restoreCta, (pressed || restoring) && { opacity: 0.8 }]}
-						>
-							<Feather name="rotate-ccw" size={iconSize.sm} color={t.onAccent} />
-							<Text style={styles.restoreCtaText}>{restoring ? "Restoring…" : "Restore session"}</Text>
-						</Pressable> : null}
+						<EmptyState
+							icon={TERMINATED_GLYPH}
+							title={shellOnly ? "Shell closed" : "Session terminated"}
+							message={shellOnly ? "This worktree shell is no longer running." : "This session has no live terminal. Restore it to bring the agent back."}
+							action={shellOnly ? undefined : (
+								<Button title="Restore session" icon="refresh" loading={restoring} onPress={() => void onRestore()} />
+							)}
+						/>
 					</View>
 				)}
 			</View>
@@ -1559,7 +1570,6 @@ const makeStyles = (t: Theme) =>
 		borderColor: t.borderDefault,
 	},
 	statusText: { flexShrink: 1, fontFamily: font.medium, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	centerText: { fontFamily: font.regular, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	transitionNotice: {
 		paddingTop: space.sm,
 		paddingLeft: space.lg,
@@ -1588,6 +1598,7 @@ const makeStyles = (t: Theme) =>
 		paddingHorizontal: space.xxl,
 		backgroundColor: t.scrim,
 	},
+	// A surface on the scrim needs no outline of its own.
 	interfaceCard: {
 		width: "100%",
 		maxWidth: 340,
@@ -1595,55 +1606,14 @@ const makeStyles = (t: Theme) =>
 		gap: space.sm,
 		paddingHorizontal: space.xl,
 		paddingVertical: space.xxl,
-		borderRadius: 16, borderCurve: "continuous",
-		borderWidth: 1,
-		borderColor: t.borderDefault,
+		borderRadius: radius.lg, borderCurve: "continuous",
 		backgroundColor: t.bgSurface,
 	},
-	interfaceTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600" },
-	interfaceCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "center" },
-	interfaceCancel: {
-		marginTop: space.xxs,
-		borderRadius: 8, borderCurve: "continuous",
-		borderWidth: 1,
-		borderColor: t.borderDefault,
-		paddingHorizontal: space.md,
-		paddingVertical: space.sm,
-	},
-	interfaceCancelText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	interfaceError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, textAlign: "center" },
-	deadOverlay: {
-		...StyleSheet.absoluteFill,
-		alignItems: "center",
-		justifyContent: "center",
-		padding: space.xxxl,
-		gap: space.sm,
-		backgroundColor: t.bgBase,
-	},
-	deadIcon: {
-		width: 64,
-		height: 64,
-		borderRadius: 16, borderCurve: "continuous",
-		backgroundColor: t.bgElevated,
-		borderWidth: 1,
-		borderColor: t.borderSubtle,
-		alignItems: "center",
-		justifyContent: "center",
-		marginBottom: space.xs,
-	},
-	deadTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600", textAlign: "center" },
-	deadMsg: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center", maxWidth: 300 },
-	restoreCta: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: space.sm,
-		backgroundColor: t.accent,
-		borderRadius: 8, borderCurve: "continuous",
-		paddingVertical: space.md,
-		paddingHorizontal: space.xl,
-		marginTop: space.sm,
-	},
-	restoreCtaText: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.subheadline.fontSize, fontWeight: "600" },
+	interfaceTitle: { ...type.headline, color: t.textPrimary, textAlign: "center" },
+	interfaceCopy: { ...type.footnote, color: t.textSecondary, textAlign: "center" },
+	interfaceAction: { marginTop: space.xxs, alignSelf: "stretch" },
+	interfaceError: { ...type.footnote, color: t.red, textAlign: "center" },
+	deadOverlay: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase },
 	// Accent-blue like the rest of the chrome. Red is reserved for the mic button
 	// alone: one small saturated element reads as "recording", a whole red panel
 	// reads as an error. It sits at the top of the dock, so it divides itself from

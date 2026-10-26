@@ -52,6 +52,19 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).not.toContain('Alert.alert(\n\t\t\t"Switch to Chat?"');
 	});
 
+	it("shows the switch in progress with the system spinner", () => {
+		expect(screen).toMatch(/\{interfaceRecoveryMessage \? \(\s*<AppSymbol name="warning"[^>]*\/>\s*\) : \(\s*<Spinner size="large" \/>/);
+		expect(screen).not.toContain('"repeat"');
+		expect(screen).toContain('<Button\n\t\t\t\t\t\t\t\t\tvariant="secondary"\n\t\t\t\t\t\t\t\t\ttitle="Cancel switch"');
+	});
+
+	it("draws a dead terminal with the shared empty state and its Restore button", () => {
+		expect(screen).toContain("<EmptyState\n\t\t\t\t\t\t\ticon={TERMINATED_GLYPH}");
+		expect(screen).toContain('<Button title="Restore session" icon="refresh" loading={restoring} onPress={() => void onRestore()} />');
+		expect(screen).not.toContain("deadIcon");
+		expect(screen).not.toContain("restoreCta");
+	});
+
 	it("keeps pinch and double-tap zoom, and adds a fit-to-width step", () => {
 		expect(screen).toContain("window.__aoAdjustTerminalZoom = function (direction)");
 		expect(screen).toContain("window.__aoFitTerminalWidth = function ()");
