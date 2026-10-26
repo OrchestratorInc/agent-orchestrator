@@ -23,6 +23,14 @@ func (l integrationChatLauncher) PreflightChat(ctx context.Context, harness doma
 	return l.service.PreflightChat(ctx, harness, permissions)
 }
 
+// ChatNeedsController lets the manager's startup reconcile ask whether an idle
+// session has durable work, so lazy-restore leaves empty idle sessions cold.
+// Upstream's chatLauncher exposes the same method; the helper that carried it
+// here was removed with the obsolete agent-switching integration test.
+func (l integrationChatLauncher) ChatNeedsController(ctx context.Context, id domain.SessionID) (bool, error) {
+	return l.service.ChatNeedsController(ctx, id)
+}
+
 func (l integrationChatLauncher) StartChat(ctx context.Context, cfg ChatStart) (ChatStarted, error) {
 	return l.service.StartChat(ctx, cfg)
 }
