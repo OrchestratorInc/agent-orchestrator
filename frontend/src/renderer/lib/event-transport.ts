@@ -216,10 +216,13 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 								const decoded = JSON.parse(String((event as MessageEvent).data)) as {
 									type?: unknown;
 									sessionId?: unknown;
-									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown };
+									payload?: { conversationId?: unknown; reviewId?: unknown; interfaceTransitionId?: unknown; shellTerminalHandleId?: unknown; kind?: unknown; agentId?: unknown };
 								};
 								const payload = typeof decoded.payload === "object" && decoded.payload !== null ? decoded.payload : undefined;
 								const sessionId = typeof decoded.sessionId === "string" && decoded.sessionId ? decoded.sessionId : undefined;
+								if (payload?.kind === "model_catalog" && typeof payload.agentId === "string") {
+									discardPendingAgentModelReads(["agent-models", hostId, payload.agentId], { reread: true });
+								}
 								if (typeof payload?.reviewId === "string") {
 									invalidate(["reviewer-conversation", hostId, payload.reviewId]);
 									conversationOnly = typeof payload.conversationId === "string";

@@ -541,7 +541,7 @@ describe("OpenCode single-read catalogs", () => {
 		}
 	});
 
-	it.each(["opencode", "opencode-v2"])("re-reads a running %s prefetch overtaken by a catalog event", async (agentId) => {
+	it.each(["opencode", "opencode-v2"])("re-reads a running %s prefetch overtaken by a catalog change after a generic resync", async (agentId) => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const options = agentModelsQueryOptions(agentId, "");
 		const seed: AgentModelCatalog = { agentId, models: [{ id: "provider/seed", label: "Seed" }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" };
@@ -562,6 +562,10 @@ describe("OpenCode single-read catalogs", () => {
 			// Without an observer nothing cancels this read, and the transport
 			// schedules no catch-up for it.
 			expect(client.isFetching({ queryKey: ["agent-models", agentId], type: "active" })).toBe(0);
+			// A lifecycle resync only stops sharing the read. The later catalog
+			// change must still reach it.
+			discardPendingAgentModelReads(["agent-models"]);
+			await client.invalidateQueries({ queryKey: ["agent-models"] }, { cancelRefetch: false });
 			await catalogEvent(client, agentId);
 			finishOld({ data: old });
 			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
@@ -574,6 +578,40 @@ describe("OpenCode single-read catalogs", () => {
 			finishOld({ data: old });
 			finishNew({ data: fresh });
 			await prefetch;
+			client.clear();
+		}
+	});
+
+	it("restarts only the changed agent's evicted prefetch", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const entry = (agentId: string, id: string): AgentModelCatalog => ({ agentId, models: [{ id, label: id }], selectionMode: "catalog", customModelEntry: "direct", allowCustom: true, source: "cli", stale: false, fetchedAt: "2026-10-18T00:00:00Z" });
+		const changed = agentModelsQueryOptions("opencode", "");
+		const other = agentModelsQueryOptions("opencode-v2", "");
+		const finish: Record<string, Array<(value: { data: AgentModelCatalog }) => void>> = { "opencode": [], "opencode-v2": [] };
+		vi.mocked(apiClient.GET).mockImplementation(((_path: string, init: { params: { path: { agent: string } } }) =>
+			new Promise((resolve) => { finish[init.params.path.agent].push(resolve); })) as never);
+		client.setQueryData(changed.queryKey, entry("opencode", "seed"));
+		client.setQueryData(other.queryKey, entry("opencode-v2", "seed"));
+		// Both queries are already invalidated, so TanStack emits no further
+		// invalidate events for them.
+		await client.invalidateQueries({ queryKey: ["agent-models"] }, { cancelRefetch: false });
+		const prefetches = Promise.all([client.prefetchQuery(changed), client.prefetchQuery(other)]);
+		try {
+			await vi.waitFor(() => expect(apiClient.GET).toHaveBeenCalledTimes(2));
+			discardPendingAgentModelReads(["agent-models"]);
+			await catalogEvent(client, "opencode");
+			finish["opencode"][0]({ data: entry("opencode", "old") });
+			finish["opencode-v2"][0]({ data: entry("opencode-v2", "current") });
+			await vi.waitFor(() => expect(finish["opencode"]).toHaveLength(2));
+			finish["opencode"][1]({ data: entry("opencode", "new") });
+			await prefetches;
+			expect(client.getQueryData(changed.queryKey)?.models).toEqual(entry("opencode", "new").models);
+			expect(readCachedAgentModels("opencode", "")?.models).toEqual(entry("opencode", "new").models);
+			expect(client.getQueryData(other.queryKey)?.models).toEqual(entry("opencode-v2", "current").models);
+			expect(apiClient.GET).toHaveBeenCalledTimes(3);
+		} finally {
+			for (const resolve of [...finish["opencode"], ...finish["opencode-v2"]]) resolve({ data: entry("opencode", "old") });
+			await prefetches;
 			client.clear();
 		}
 	});
