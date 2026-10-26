@@ -1,4 +1,3 @@
-import { chatFixtureEmpty } from "../../src/renderer/lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot } from "../../src/renderer/types/conversation";
 
 /** Deterministic synthetic workload, not a substitute for the five sandbox chats. */
@@ -29,8 +28,9 @@ export function largeTurnFixture(toolRows = 1850): ConversationSnapshot {
 		role: "assistant", origin: "provider", text: "Synthetic large turn complete.", streaming: false, createdAt: at,
 	});
 	return {
-		...chatFixtureEmpty, conversationId: "large-conversation", sessionId: "large-session",
-		controller: { state: "ready" }, items, latestSequence: items.length,
+		conversationId: "large-conversation", sessionId: "large-session", harness: "codex", mode: "chat",
+		controller: { state: "ready" }, items, latestSequence: items.length, oldestSequence: 1,
+		hasMoreBefore: false, settings: {},
 		turns: [{ id: turnId, state: "completed", requestedAt: at, startedAt: at, completedAt: "2026-10-26T00:01:00Z" }],
 	};
 }

@@ -24,7 +24,15 @@ import type { ConversationMessage } from "../../src/renderer/types/conversation"
 import type { ReviewTarget } from "../../src/renderer/hooks/useSessionWorkspaceFiles";
 import { measureChatOpen } from "./chat-open-measurement";
 import { largeTurnFixture } from "./large-turn-fixture";
+import { fixtureIdentity } from "./fixture-identity";
 import "../../src/renderer/styles.css";
+
+declare global {
+	interface Window {
+		/** Optional disposable-lab source probes; never installed by the application. */
+		__AO_CHAT_OPEN_CAPTURE?: ReturnType<typeof measureChatOpen>;
+	}
+}
 
 const root = createRoot(document.getElementById("performance-root")!);
 const client = new QueryClient({
@@ -86,30 +94,35 @@ export const performanceHarness = {
 	async largeTurn() {
 		// Build the fixture before starting: this measures mounting, not fixture construction.
 		const snapshot = largeTurnFixture();
+		const fixture = await fixtureIdentity(snapshot);
 		render(null);
 		await document.fonts.ready;
 		await frame();
-		const measurement = measureChatOpen();
+		const measurement = measureChatOpen({ traceMarks: true });
+		window.__AO_CHAT_OPEN_CAPTURE = measurement;
 		try {
-			render(
+			measurement.measureSync("renderSubmission", () => render(
 				<Profiler id="synthetic-chat-workspace" onRender={measurement.onRender}>
 					<ChatWorkspace snapshot={snapshot} sessionTitle="Synthetic large-turn workload" />
 				</Profiler>,
-			);
+			));
 			const result = await measurement.finish(() => document.querySelector<HTMLElement>('[data-chat-message-id="large-final"]'));
 			return {
 				workload: "synthetic-large-turn",
 				measurementScope: "render-to-last-message-visible; whole ChatWorkspace React render durations",
+				fixture,
 				toolRows: snapshot.items.filter((item) => item.kind === "activity").length,
 				mountedMessages: document.querySelectorAll("[data-chat-message-id]").length,
 				...result,
 			};
 		} finally {
 			measurement.cancel();
+			delete window.__AO_CHAT_OPEN_CAPTURE;
 		}
 	},
 	async largeTurnDisclosure() {
 		const snapshot = largeTurnFixture(50);
+		const fixture = await fixtureIdentity(snapshot);
 		render(<ChatWorkspace key="disclosure-workload" snapshot={snapshot} />);
 		await frame();
 		const log = document.querySelector<HTMLElement>('[role="log"][aria-label="Conversation"]')!;
@@ -132,7 +145,7 @@ export const performanceHarness = {
 			&& !openedText.includes(item.detail!.output!.trim())).length;
 		const missingNotes = snapshot.items.filter((item) => item.kind === "message"
 			&& item.id.startsWith("large-note-") && !openedText.includes(item.text.split("\n")[0]!)).length;
-		return { workload: "synthetic-large-turn-disclosure", toolRows: 50, collapsedBodiesMounted, missingOutputs, missingNotes };
+		return { workload: "synthetic-large-turn-disclosure", fixture, toolRows: 50, collapsedBodiesMounted, missingOutputs, missingNotes };
 	},
 	async events() {
 		const original = window.EventSource;
