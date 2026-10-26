@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { FileContentPane } from "./FileContentPane";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -26,7 +26,7 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 vi.mock("./ReadOnlyFileView", () => ({
-	ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
+	ReadOnlyFileView: ({ detail, side, editing, onEditChange }: { side?: string; detail: { content: string; path: string; imageMediaType?: string }; editing?: boolean; onEditChange?: (content: string) => void }) => detail.imageMediaType ? (
 		<img alt={detail.path} src="/api/v1/sessions/sess-1/workspace/file/blob" />
 	) : editing ? (
 		<textarea
@@ -34,7 +34,7 @@ vi.mock("./ReadOnlyFileView", () => ({
 			defaultValue={detail.content}
 			onChange={(event) => onEditChange?.(event.target.value)}
 		/>
-	) : <code>{detail.content}</code>,
+	) : <code data-side={side}>{detail.content}</code>,
 }));
 
 function renderWithQuery(children: ReactNode) {
@@ -53,6 +53,223 @@ describe("FileContentPane", () => {
 		subscribeMock.mockClear();
 		highlightReadyMock.mockReturnValue(true);
 		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("keeps inactive editor drafts without letting them handle the active tab's save shortcut", async () => {
+		const detail = {
+			sessionId: "sess-1",
+			path: "src/App.tsx",
+			status: "modified",
+			content: "original",
+			size: 8,
+			binary: false,
+			deleted: false,
+			contentTruncated: false,
+			diff: "",
+			diffTruncated: false,
+			editable: true,
+			fileFingerprint: "original-fingerprint",
+		};
+		getMock.mockResolvedValue({ data: detail });
+		putMock.mockResolvedValue({ data: { ...detail, content: "draft", fileFingerprint: "saved-fingerprint" } });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const annotation = noopAnnotation();
+		const pane = (active: boolean) => (
+			<QueryClientProvider client={client}>
+				<TooltipProvider>
+					<FileContentPane active={active} annotation={annotation} initialEditing initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+		const view = render(pane(true));
+		fireEvent.change(await screen.findByRole("textbox", { name: "Edit src/App.tsx" }), { target: { value: "draft" } });
+		view.rerender(pane(false));
+		fireEvent.keyDown(window, { key: "s", metaKey: true });
+		expect(putMock).not.toHaveBeenCalled();
+		expect(screen.getByRole("textbox", { name: "Edit src/App.tsx" })).toHaveValue("draft");
+		view.rerender(pane(true));
+		fireEvent.keyDown(window, { key: "s", metaKey: true });
+		await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
+	});
+
+	it("offers center navigation from a full-file preview", async () => {
+		const onOpenInCenter = vi.fn();
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "src/App.tsx",
+				status: "unmodified",
+				content: "complete source",
+				size: 15,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+				editable: false,
+			},
+		});
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" onOpenInCenter={onOpenInCenter} path="src/App.tsx" sessionId="sess-1" split={false} />);
+		await userEvent.click(await screen.findByRole("button", { name: "Open in center: src/App.tsx" }));
+		expect(onOpenInCenter).toHaveBeenCalledWith("file");
+	});
+
+	it("opens a historical file through the snapshot API and keeps it read-only even with editable metadata", async () => {
+		const source = { kind: "snapshot" as const, view: { branch: "feature", expectedTipSha: "a".repeat(40) }, commitShas: [], label: "feature · aaaaaaa" };
+		getMock.mockResolvedValue({
+			data: {
+				historical:true, sessionId: "sess-1",
+				path: "src/App.tsx",
+				status: "unmodified",
+				content: "snapshot content",
+				size: 16,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+				editable: true,
+				fileFingerprint: "old",
+			},
+		});
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" initialEditing source={source} path="src/App.tsx" sessionId="sess-1" split={false} />);
+		expect(await screen.findByText("snapshot content")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Edit file" })).toBeDisabled();
+		expect(screen.queryByRole("textbox", { name: "Edit src/App.tsx" })).not.toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/workspace/file",
+			expect.objectContaining({
+				params: { path: { sessionId: "sess-1" }, query: expect.objectContaining({ path: "src/App.tsx", snapshot: true, branch: "feature", expectedTipSha: "a".repeat(40) }) },
+			}),
+		);
+		expect(subscribeMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("opens a deleted snapshot file's previous content without reading the live file", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				historical:true, sessionId: "sess-1",
+				path: "removed.txt",
+ compareBaseSha: "a".repeat(40),
+				status: "deleted",
+				content: "previous content",
+				size: 16,
+				binary: false,
+				deleted: true,
+				contentTruncated: false,
+				diff: "deleted patch",
+				diffTruncated: false,
+				editable: false,
+			},
+		});
+		renderWithQuery(
+			<FileContentPane
+				annotation={noopAnnotation()}
+				initialMode="file"
+				source={{ kind: "snapshot", view: { branch: "feature" }, label: "feature" }}
+				path="removed.txt"
+				sessionId="sess-1"
+				split={false}
+			/>,
+		);
+		expect(await screen.findByText("previous content")).toHaveAttribute("data-side","before");
+ expect(screen.getByText("Previous version at aaaaaaaaaaaa")).toBeInTheDocument();
+		expect(getMock.mock.calls.every(([route]) => route.endsWith("/workspace/file"))).toBe(true);
+	});
+
+	it("renders snapshot images through revision-aware blobs rather than live preview URLs", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				historical:true, sessionId: "sess-1",
+				path: "logo.png",
+				status: "modified",
+				content: "",
+				size: 100,
+				binary: true,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+				editable: false,
+			},
+		});
+		renderWithQuery(
+			<FileContentPane
+				annotation={noopAnnotation()}
+				initialMode="file"
+				source={{ kind: "snapshot", view: { prNumber: 42, sourceUrl: "https://github.com/o/r/pull/42", expectedTipSha: "b".repeat(40) }, label: "PR #42" }}
+				path="logo.png"
+				sessionId="sess-1"
+				split={false}
+			/>,
+		);
+		const image = await screen.findByAltText("logo.png");
+		const url = new URL(image.getAttribute("src")!, "http://localhost");
+		expect(url.pathname).toBe("/api/v1/sessions/sess-1/workspace/file/blob");
+		expect(url.searchParams.get("snapshot")).toBe("true");
+		expect(url.searchParams.get("prNumber")).toBe("42");
+		expect(url.searchParams.get("expectedTipSha")).toBe("b".repeat(40));
+	});
+
+	it.each(["recording.mp4", "voice.mp3"])("streams a current workspace media file %s in the Files view", async (path) => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path, status: "added", additions: 0, deletions: 0, size: 100_000_000, binary: true, deleted: false, content: "", contentTruncated: true, diff: "", diffTruncated: false } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);
+		const media = await screen.findByLabelText(path);
+		expect(media).toHaveAttribute("src", expect.stringContaining(`/api/v1/sessions/sess-1/preview/files/${path}?raw=true`));
+		expect(media).toHaveAttribute("controls");
+		expect(getMock.mock.calls.some(([route]) => route.endsWith("/revision"))).toBe(false);
+	});
+
+	it.each(["recording.mp4", "voice.wav"])("preserves playback on an unchanged refetch and reloads a same-size replacement of %s", async (path) => {
+		const detail = { sessionId: "sess-1", path, status: "unmodified", additions: 0, deletions: 0, size: 1000, binary: true, deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false, fileFingerprint: "media-before" };
+		getMock.mockResolvedValue({ data: detail });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path={path} sessionId="sess-1" split={false} />);
+		const player = await screen.findByLabelText<HTMLMediaElement>(path);
+		const src = player.getAttribute("src");
+		player.currentTime = 12;
+		const client = subscribeMock.mock.calls[0]![1];
+		// A focus refetch gets a new load timestamp even when its file is unchanged.
+		const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
+		onTestFinished(() => now.mockRestore());
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(screen.getByLabelText(path)).toBe(player);
+		expect(player).toHaveAttribute("src", src);
+		expect(player.currentTime).toBe(12);
+
+		getMock.mockResolvedValue({ data: { ...detail, fileFingerprint: "media-after" } });
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		await waitFor(() => expect(screen.getByLabelText(path)).not.toBe(player));
+		const replacement = screen.getByLabelText<HTMLMediaElement>(path);
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(replacement).not.toHaveAttribute("src", src);
+		expect(replacement.currentTime).toBe(0);
+	});
+
+	it("previews a workspace SVG while keeping its source editable", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "diagram.svg", status: "unmodified", additions: 0, deletions: 0, size: 6, binary: false, deleted: false, content: "<svg/>", contentTruncated: false, diff: "", diffTruncated: false, editable: true, fileFingerprint: "svg-1" } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="rendered" path="diagram.svg" sessionId="sess-1" split={false} />);
+		expect(await screen.findByRole("img", { name: "diagram.svg" })).toHaveAttribute("src", expect.stringContaining("data:image/svg+xml"));
+		await userEvent.click(screen.getByRole("button", { name: "Edit file" }));
+		expect(screen.getByRole("textbox", { name: "Edit diagram.svg" })).toHaveValue("<svg/>");
+	});
+
+	it("refreshes a workspace image after a same-size replacement", async () => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "logo.png", status: "unmodified", additions: 0, deletions: 0, size: 100, binary: true, imageMediaType: "image/png", deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false, fileFingerprint: "same-metadata" } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="logo.png" sessionId="sess-1" split={false} />);
+		const image = await screen.findByRole("img", { name: "logo.png" });
+		const previousSrc = image.getAttribute("src");
+		const client = subscribeMock.mock.calls[0]![1] as QueryClient;
+		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
+		await waitFor(() => expect(screen.getByRole("img", { name: "logo.png" })).not.toHaveAttribute("src", previousSrc));
+	});
+
+	it.each([{ commitSha: "abc" }, { scope: "staged" as const }, { scope: "committed" as const }])("does not substitute live media for a historical view %j", async (options) => {
+		getMock.mockResolvedValue({ data: { sessionId: "sess-1", path: "clip.mp4", status: "modified", additions: 0, deletions: 0, size: 100, binary: true, deleted: false, content: "", contentTruncated: false, diff: "", diffTruncated: false } });
+		renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="file" path="clip.mp4" sessionId="sess-1" split={false} {...options} />);
+		await waitFor(() => expect(document.querySelector("code")).toBeInTheDocument());
+		expect(screen.queryByLabelText("clip.mp4")).not.toBeInTheDocument();
 	});
 
 	it("shows readable contents while the syntax grammar is still loading and watches a standalone file", async () => {

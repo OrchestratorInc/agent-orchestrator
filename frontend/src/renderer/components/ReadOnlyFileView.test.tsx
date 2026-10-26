@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ReadOnlyFileView } from "./ReadOnlyFileView";
+import { REVEALED_LINE_HIGHLIGHT_MS, ReadOnlyFileView } from "./ReadOnlyFileView";
 import type { WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
 
@@ -26,7 +26,7 @@ vi.mock("../lib/host-clients", () => {
 	};
 });
 vi.mock("@pierre/diffs/react", () => ({
-	File: ({ edit, editStateKey, file, lineAnnotations, onEditChange, options, renderAnnotation, renderGutterUtility }: {
+	File: ({ edit, editStateKey, file, lineAnnotations, onEditChange, options, renderAnnotation, renderGutterUtility, selectedLines }: {
 		edit?: boolean;
 		editStateKey?: string;
 		file: { name: string; contents: string };
@@ -35,8 +35,9 @@ vi.mock("@pierre/diffs/react", () => ({
 		options: { enableGutterUtility?: boolean; onPostRender?: () => void; overflow: string; unsafeCSS?: string };
 		renderAnnotation?: () => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number }) => ReactNode;
+		selectedLines?: { start: number; end: number } | null;
 	}) => (
-		<div data-edit={String(Boolean(edit))} data-edit-state-key={editStateKey} data-file-name={file.name} data-gutter-enabled={String(Boolean(options.enableGutterUtility))} data-overflow={options.overflow} data-surface-css={options.unsafeCSS}>
+		<div data-testid="pierre-file" data-selected-lines={selectedLines ? `${selectedLines.start}-${selectedLines.end}` : undefined} data-edit={String(Boolean(edit))} data-edit-state-key={editStateKey} data-file-name={file.name} data-gutter-enabled={String(Boolean(options.enableGutterUtility))} data-overflow={options.overflow} data-surface-css={options.unsafeCSS}>
 			{createElement("diffs-container", { ref: (element: HTMLElement | null) => {
 				if (!element || element.shadowRoot) return;
 				const root = element.attachShadow({ mode: "open" });
@@ -115,6 +116,25 @@ describe("ReadOnlyFileView", () => {
 		);
 		await waitFor(() => expect(lineScrollIntoView).toHaveBeenCalledTimes(2));
 		expect(onRevealLineConsumed).toHaveBeenLastCalledWith(2);
+	});
+
+	it("marks a revealed line, then clears the mark", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			render(
+				<ReadOnlyFileView
+					annotation={annotation()}
+					detail={baseDetail()}
+					revealLine={{ line: 120, requestKey: 1 }}
+					sessionId="sess-1"
+				/>,
+			);
+			await waitFor(() => expect(screen.getByTestId("pierre-file").dataset.selectedLines).toBe("120-120"));
+			act(() => vi.advanceTimersByTime(REVEALED_LINE_HIGHLIGHT_MS));
+			expect(screen.getByTestId("pierre-file").dataset.selectedLines).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("renders source through the wrapped Pierre/Shiki surface", () => {

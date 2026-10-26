@@ -22,6 +22,7 @@ import type {
 	CloudCpCreateOrganizationRequest,
 	CloudCpCreateOrganizationResponse,
 	CloudCpCreateGitHubProjectRequest,
+	CloudCpCreateStandaloneProjectRequest,
 	CloudCpCreateProjectRequest,
 	CloudCpCreateSessionRequest,
 	CloudCpErrorEnvelope,
@@ -64,6 +65,8 @@ import type {
 	CloudCpRestoreSessionResponse,
 	CloudCpRetrySessionStartupResponse,
 	CloudCpSessionResponse,
+	CloudCpArtifactAccessResponse,
+	CloudCpSessionArtifact,
 	CloudCpAcknowledgeInterfaceTransitionNoticeResponse,
 	CloudCpCancelInterfaceTransitionResponse,
 	CloudCpInterfaceTransitionStatusResponse,
@@ -114,6 +117,16 @@ export interface CloudCpClientOptions {
 
 export interface CloudCpRequestOptions {
 	signal?: AbortSignal;
+}
+
+/**
+ * Options for a session workspace call (/sessions/{id}/workspace/*). In a
+ * multi-repository session, `repository` is the folder name of one of the
+ * session's additional repositories (from the review summary's
+ * `repositories`); absent means the main repository.
+ */
+export interface CloudCpWorkspaceRequestOptions extends CloudCpRequestOptions {
+	repository?: string;
 }
 
 /**
@@ -186,6 +199,18 @@ export interface CloudCpClient {
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpSessionResponse>;
 	getSession(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpSessionResponse>;
+	createSessionArtifactAccess(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<CloudCpArtifactAccessResponse>;
+	listSessionArtifacts(
+		orgId: string,
+		sessionId: string,
+		options?: CloudCpRequestOptions,
+	): Promise<{ artifacts: CloudCpSessionArtifact[] }>;
+	/** Deletes one artifact file from cloud storage and the session's worker. */
+	deleteSessionArtifact(orgId: string, sessionId: string, path: string, options?: CloudCpRequestOptions): Promise<void>;
 	updateSessionPreferences(
 		orgId: string,
 		sessionId: string,
@@ -322,13 +347,13 @@ export interface CloudCpClient {
 		path: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpWorkspaceDiffFileDetail>;
-	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
-	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
-	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
-	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
-	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
-	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
-	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
+	getWorkspaceReview(orgId: string, sessionId: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewResponse>;
+	getWorkspaceReviewTree(orgId: string, sessionId: string, path?: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewTreeResponse>;
+	searchWorkspaceReview(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewSearchQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewSearchResponse>;
+	getWorkspaceReviewFile(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewFileQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewFileResponse>;
+	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
+	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
+	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
 	/** Re-provision a deleted session, keeping its conversation and work intact. */
 	restoreSession(
 		orgId: string,
@@ -436,6 +461,12 @@ export interface CloudCpClient {
 		body: CloudCpCreateGitHubProjectRequest,
 		options?: CloudCpMutationOptions,
 	): Promise<CloudCpProjectResponse>;
+	/** A project without a repository (POST /orgs/{orgId}/projects/standalone). */
+	createStandaloneProject(
+		orgId: string,
+		body: CloudCpCreateStandaloneProjectRequest,
+		options?: CloudCpMutationOptions,
+	): Promise<CloudCpProjectResponse>;
 }
 
 type QueryParams = Record<string, string | number | undefined>;
@@ -459,6 +490,12 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 		if (search !== "") url += `?${search}`;
 	}
 	return url;
+}
+
+/** The `repository` query parameter of a workspace call; undefined for the main repository. */
+function repositoryQuery(options: CloudCpWorkspaceRequestOptions | undefined): QueryParams | undefined {
+	const repository = options?.repository?.trim();
+	return repository ? { repository } : undefined;
 }
 
 /** Build one path segment from a caller-supplied identifier. */
@@ -690,6 +727,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		getSession: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, { signal: o?.signal }),
+		createSessionArtifactAccess: (orgId, sessionId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
+		listSessionArtifacts: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),
+		deleteSessionArtifact: (orgId, sessionId, path, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts?path=${encodeURIComponent(path)}`, { signal: o?.signal }),
 		getInterfaceTransition: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/interface-transition`, { signal: o?.signal }),
 		startInterfaceTransition: (orgId, sessionId, body, o) =>
@@ -789,33 +832,35 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				signal: o?.signal,
 			}),
 		getWorkspaceReview: (orgId, sessionId, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, { signal: o?.signal }),
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review`, {
+				query: repositoryQuery(o), signal: o?.signal,
+			}),
 		getWorkspaceReviewTree: (orgId, sessionId, path, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/tree`, {
-				query: { path }, signal: o?.signal,
+				query: { path, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		searchWorkspaceReview: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/search`, {
-				query: { query: query.query, cursor: query.cursor, limit: query.limit }, signal: o?.signal,
+				query: { query: query.query, cursor: query.cursor, limit: query.limit, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				query: { path: query.path, scope: query.scope, commitSha: query.commitSha }, signal: o?.signal,
+				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewDiffs: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		getWorkspaceReviewRevision: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
 				query: {
 					path: query.path, scope: query.scope, side: query.side, workspaceVersion: query.workspaceVersion,
-					expectedRevision: query.expectedRevision, commitSha: query.commitSha,
+					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...repositoryQuery(o),
 				}, signal: o?.signal,
 			}),
 		updateWorkspaceReviewFile: (orgId, sessionId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				body, signal: o?.signal,
+				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		restoreSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
@@ -855,7 +900,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		listChatEvents: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-events`, {
-				query: { after: query?.after, limit: query?.limit },
+				query: { after: query?.after, limit: query?.limit, types: query?.types?.length ? query.types.join(",") : undefined },
 				signal: o?.signal,
 			}),
 		subscribeSessionEvents,
@@ -897,6 +942,12 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		createGitHubProject: (orgId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/github/projects`, {
+				body,
+				signal: o?.signal,
+				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),
+			}),
+		createStandaloneProject: (orgId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/standalone`, {
 				body,
 				signal: o?.signal,
 				idempotencyKey: o?.idempotencyKey ?? newIdempotencyKey(),

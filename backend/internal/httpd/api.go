@@ -24,8 +24,10 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
+	AgentAccounts      controllers.AgentAccountService
 	Projects           projectsvc.Manager
 	Sessions           controllers.SessionService
 	ArtifactVersions   controllers.ArtifactVersionService
@@ -50,13 +52,19 @@ type APIDeps struct {
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
+	// ConversationSearch is the chat full-text index; nil answers 501.
+	ConversationSearch controllers.ConversationSearch
 	// Settings is the daemon-owned preference surface.
-	Settings                 controllers.SettingsService
-	DevImport                controllers.DevImportService
-	CDC                      cdc.Source
-	Events                   cdcSubscriber
-	Telemetry                ports.EventSink
+	Settings  controllers.SettingsService
+	DevImport controllers.DevImportService
+	CDC       cdc.Source
+	Events    cdcSubscriber
+	Telemetry ports.EventSink
+	// TelemetryIdentity is the live telemetry identity, served to the phone by
+	// GET /api/v1/telemetry/identity and updated by the desktop over loopback.
+	TelemetryIdentity        ports.TelemetryIdentityStore
 	Mobile                   *controllers.MobileController
+	BrowserLive              *BrowserLiveHub
 	Browser                  controllers.BrowserService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
@@ -72,8 +80,7 @@ type APIDeps struct {
 	Installer controllers.Installer
 	AgentAuth controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
-	GitHub            controllers.GitHubPATService
-	AgentSwitchPolicy AgentSwitchPolicyControl
+	GitHub controllers.GitHubPATService
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
@@ -121,6 +128,7 @@ type API struct {
 	deps          APIDeps
 	agents        *controllers.AgentsController
 	codexAccounts *controllers.CodexAccountsController
+	agentAccounts *controllers.AgentAccountsController
 	projects      *controllers.ProjectsController
 	sessions      *controllers.SessionsController
 	automations   *controllers.AutomationsController
@@ -142,6 +150,7 @@ type API struct {
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
+	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
@@ -166,6 +175,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 			Catalog: deps.Agents,
 		},
 		codexAccounts: &controllers.CodexAccountsController{Svc: deps.CodexAccounts},
+		agentAccounts: newAgentAccountsController(deps),
 		projects: &controllers.ProjectsController{
 			Mgr: deps.Projects,
 		},
@@ -196,13 +206,14 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
+		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
+		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
@@ -212,6 +223,30 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 }
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
+
+// setupRoute reports a request that may run the project's Setup steps.
+func setupRoute(req *http.Request) bool {
+	if req.Method != http.MethodPost {
+		return false
+	}
+	switch chi.RouteContext(req.Context()).RoutePattern() {
+	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore":
+		return true
+	}
+	return false
+}
+
+// serveWithSetupBudget serves a Setup route under budget, like
+// middleware.Timeout, except that the operation may extend the deadline
+// (ports.ExtendSpawnRequestBudget) once it knows its Setup steps.
+func serveWithSetupBudget(next http.Handler, w http.ResponseWriter, req *http.Request, budget time.Duration) {
+	ctx, timedOut, release := ports.NewSpawnRequestContext(req.Context(), budget)
+	defer release()
+	next.ServeHTTP(w, req.WithContext(ctx))
+	if timedOut() {
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}
+}
 
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
@@ -231,7 +266,27 @@ func (a *API) Register(root chi.Router) {
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					// A clone downloads the whole repository inside the request,
+					// which takes minutes for a large repository.
+					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
+						pattern == "/api/v1/projects/clone/prepare" {
+						clone.ServeHTTP(w, req)
+						return
+					}
+					// A spawn, an orchestrator start or a restore runs the project's
+					// Setup inside the request, and a Setup step may take far longer
+					// than one REST request: the operation extends this budget by its
+					// Setup steps' limits once it knows its project.
+					if setupRoute(req) {
+						budget := timeout
+						if attachmentUploadRoute(req) {
+							budget = max(timeout, 10*time.Minute)
+						}
+						serveWithSetupBudget(next, w, req, budget)
+						return
+					}
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
@@ -250,6 +305,7 @@ func (a *API) Register(root chi.Router) {
 			r.Use(presenceMiddleware(a.deps.Presence))
 			a.agents.Register(r)
 			a.codexAccounts.Register(r)
+			a.agentAccounts.Register(r)
 			a.projects.Register(r)
 			a.sessions.Register(r)
 			a.automations.Register(r)
@@ -271,6 +327,7 @@ func (a *API) Register(root chi.Router) {
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
+			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
@@ -302,6 +359,7 @@ func attachmentUploadRoute(req *http.Request) bool {
 		"/api/v1/orchestrators/delegate",
 		"/api/v1/sessions/{sessionId}/send",
 		"/api/v1/sessions/{sessionId}/conversation/messages",
+		"/api/v1/sessions/{sessionId}/provider-switch",
 		"/api/v1/sessions/{sessionId}/conversation/steer",
 		"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 		"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit",
@@ -335,6 +393,16 @@ func memoryPressure(svc controllers.SessionMemoryService) controllers.MemoryPres
 		return p
 	}
 	return nil
+}
+
+// newAgentAccountsController moves sessions through the session service when
+// it can, so a move maps errors like every other session command.
+func newAgentAccountsController(deps APIDeps) *controllers.AgentAccountsController {
+	c := &controllers.AgentAccountsController{Svc: deps.AgentAccounts}
+	if mover, ok := deps.Sessions.(controllers.AgentAccountSessionMover); ok {
+		c.Sessions = mover
+	}
+	return c
 }
 
 // agentBrowserURL is the host's agent browser, or nil when it has none.

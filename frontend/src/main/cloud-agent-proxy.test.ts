@@ -25,7 +25,7 @@ vi.mock("./agent-viewer", async (importOriginal) => {
 	};
 });
 
-import { createCloudAgentProxy, type CloudAgentProxy } from "./cloud-agent-proxy";
+import { createCloudAgentProxy, retryAfterMs, type CloudAgentProxy } from "./cloud-agent-proxy";
 
 type Seen = { method: string; url: string; auth?: string; cookie?: string; origin?: string; body: string };
 
@@ -52,14 +52,18 @@ afterEach(async () => {
 
 // A fake control plane on loopback: answers every request with the handler's
 // status and records what reached it.
-async function startCp(status: (req: IncomingMessage) => number = () => 200, answer = "ok"): Promise<{ baseUrl: string; seen: Seen[] }> {
+async function startCp(
+	status: (req: IncomingMessage) => number = () => 200,
+	answer = "ok",
+	extraHeaders: Record<string, string> = {},
+): Promise<{ baseUrl: string; seen: Seen[] }> {
 	const seen: Seen[] = [];
 	cp = createServer((req, res) => {
 		let body = "";
 		req.on("data", (chunk) => (body += chunk));
 		req.on("end", () => {
 			seen.push({ method: req.method ?? "", url: req.url ?? "", auth: req.headers.authorization, cookie: req.headers.cookie, origin: req.headers.origin, body });
-			res.writeHead(status(req), { "content-type": "text/plain", "set-cookie": "cp=1" });
+			res.writeHead(status(req), { "content-type": "text/plain", "set-cookie": "cp=1", ...extraHeaders });
 			res.end(answer);
 		});
 	});
@@ -120,6 +124,28 @@ describe("cloud agent proxy", () => {
 		expect(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).toBe("");
 		await expect(proxy.agentBrowserUrl("http://cp.example", "org-1", "ses-1")).rejects.toThrow(/https/);
 		await expect(proxy.agentBrowserUrl(baseUrl, "../x", "ses-1")).rejects.toThrow(/invalid/);
+	});
+
+	it("waits out the control plane's Retry-After for a session whose agent browser is not connected", async () => {
+		const { baseUrl, seen } = await startCp(() => 409, `{"code":"AGENT_BROWSER_UNAVAILABLE"}`, { "retry-after": "60" });
+		proxy = createCloudAgentProxy(() => dataDir);
+		let now = 1_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		expect(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).toBe("");
+		now += 59_000;
+		expect(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).toBe("");
+		expect(seen).toHaveLength(1);
+		now += 2_000;
+		expect(await proxy.agentBrowserUrl(baseUrl, "org-1", "ses-1")).toBe("");
+		expect(seen).toHaveLength(2);
+	});
+
+	it("reads Retry-After within bounds", () => {
+		expect(retryAfterMs(null)).toBe(30_000);
+		expect(retryAfterMs("soon")).toBe(30_000);
+		expect(retryAfterMs("1")).toBe(5_000);
+		expect(retryAfterMs("45")).toBe(45_000);
+		expect(retryAfterMs("86400")).toBe(300_000);
 	});
 
 	it("gives no agent browser while the sandbox's has not started: showing it would start it", async () => {

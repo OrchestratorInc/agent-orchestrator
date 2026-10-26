@@ -538,7 +538,7 @@ func TestLazyChatRestoreAndKillShareOperationGate(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(killErr, ErrSwitchInProgress) {
+	if !errors.Is(killErr, ErrOperationInProgress) {
 		t.Fatalf("kill bypassed in-flight restore gate: %v", killErr)
 	}
 	if _, err := m.Kill(context.Background(), rec.ID); err != nil {

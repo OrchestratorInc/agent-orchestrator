@@ -180,3 +180,44 @@ func assertCloudActivity(t *testing.T, store *Store, fixture notificationFixture
 		t.Fatalf("status = %q, want idle", session.Status(time.Now(), nil))
 	}
 }
+
+// A turn claims with no approval mode its effective mode does not allow, so
+// the worker never rejects it (for example "bypass exceeds session permission
+// cap" for a share grantee capped at standard in a trusted session); the
+// worker then derives the approval from the effective mode.
+func TestClaimWorkerTurnClampsTheApprovalModeToTheEffectiveMode(t *testing.T) {
+	for _, tc := range []struct {
+		name, harness, sessionMode, modeCap string
+		settings                            domain.ChatTurnSettings
+		wantMode, wantApproval              string
+	}{
+		{"trusted keeps bypass", "claude-code", "trusted", "", domain.ChatTurnSettings{ApprovalMode: "bypass-permissions"}, "trusted", "bypass-permissions"},
+		{"grantee capped at standard", "claude-code", "trusted", "standard", domain.ChatTurnSettings{ApprovalMode: "bypass-permissions"}, "standard", ""},
+		{"standard keeps accept-edits", "claude-code", "standard", "", domain.ChatTurnSettings{ApprovalMode: "accept-edits"}, "standard", "accept-edits"},
+		{"codex full access under standard", "codex", "trusted", "standard", domain.ChatTurnSettings{ApprovalMode: "default"}, "standard", ""},
+		{"plan turn", "claude-code", "trusted", "", domain.ChatTurnSettings{Mode: "read-only", ApprovalMode: "default"}, "read-only", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, admin, fixture := openNotificationTestStore(t)
+			ctx := context.Background()
+			execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_sessions SET interface = 'chat', harness = $3, mode = $4
+				WHERE org_id = $1 AND id = $2`, fixture.orgID, fixture.sessionID, tc.harness, tc.sessionMode)
+			principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+			if _, err := store.SendMessage(ctx, principal, fixture.orgID, fixture.sessionID,
+				uuid.NewString(), "hello", tc.settings); err != nil {
+				t.Fatal(err)
+			}
+			if tc.modeCap != "" {
+				execOneRowAsOrg(t, admin, fixture.orgID, `UPDATE ao_turns SET mode_cap = $3 WHERE org_id = $1 AND session_id = $2`,
+					fixture.orgID, fixture.sessionID, tc.modeCap)
+			}
+			turn, claimed, err := store.ClaimWorkerTurn(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch)
+			if err != nil || !claimed {
+				t.Fatalf("claim = %v, %v", claimed, err)
+			}
+			if turn.Mode != tc.wantMode || turn.ApprovalMode != tc.wantApproval {
+				t.Fatalf("claimed mode = %q approval = %q, want %q %q", turn.Mode, turn.ApprovalMode, tc.wantMode, tc.wantApproval)
+			}
+		})
+	}
+}

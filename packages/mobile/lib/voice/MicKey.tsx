@@ -37,6 +37,7 @@ export function MicKey({
 	size = MIC_SIZE,
 	variant = "glass",
 	glyphSize = 17,
+	disabled: disabledByOwner = false,
 }: {
 	state: VoiceState;
 	mode: VoiceMode;
@@ -52,6 +53,8 @@ export function MicKey({
 	 */
 	variant?: "glass" | "plain";
 	glyphSize?: number;
+	/** The field it dictates into cannot take text right now (stopped agent, send in flight). */
+	disabled?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -61,7 +64,8 @@ export function MicKey({
 	// Rendered even with no recogniser on the device. Returning null here used to
 	// remove the control from the row entirely, reflowing everything beside it.
 	const unavailable = state === "unavailable";
-	const disabled = unavailable || denied;
+	// Never while it is listening: a hands-free recording has to stay stoppable.
+	const disabled = unavailable || denied || (disabledByOwner && !live);
 	const controlShape = { width: size, height: size, borderRadius: circular ? size / 2 : MIC_RADIUS };
 
 	// A breathing ring behind the circle while the mic is open — the same

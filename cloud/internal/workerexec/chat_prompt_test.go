@@ -202,7 +202,7 @@ func TestCloudChatDeliversTerminalRolePromptOnStartAndResume(t *testing.T) {
 					if !strings.Contains(command.SystemPrompt, "PROJECT RULE MARKER") || strings.Contains(command.SystemPrompt, turn.Prompt) {
 						t.Fatal("project rules missing or user task mixed into standing instructions")
 					}
-					if strings.Contains(command.SystemPrompt, "## Additional repositories") != (role == "worker") {
+					if strings.Contains(command.SystemPrompt, "## Repositories") != (role == "worker") {
 						t.Fatal("additional repository instructions crossed the role boundary")
 					}
 					capture := filepath.Join(t.TempDir(), "requests.jsonl")

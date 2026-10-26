@@ -22,13 +22,28 @@ type Config struct {
 	WorkspacePath     string
 	AgentRules        string
 	OrchestratorRules string
-	// ExtraRepos are the project's additional repositories (the coder dev-kit
-	// extra repos) checked out alongside the primary one. Naming them in the
-	// shared project context makes both roles aware the project spans multiple
-	// repositories — an orchestrator can then coordinate work across them, not
-	// just the primary. Kept role-agnostic and path-free here; a worker gets the
-	// concrete on-disk sibling paths from its own launcher note.
+	// ExtraRepos are the project's additional repositories, checked out beside
+	// the main one. Naming them in the shared project context makes both roles
+	// aware the project spans multiple repositories, so an orchestrator can
+	// coordinate work across them. A worker also gets the concrete on-disk
+	// paths from its own launcher note.
 	ExtraRepos []RepoRef
+	// MainRepositoryDir is the folder the main repository is checked out in,
+	// named in the repository list of a multi-repo project.
+	MainRepositoryDir string
+	// AgentStartsInParent is whether the coding agent starts in the folder
+	// holding every repository's checkout instead of the main repository's.
+	AgentStartsInParent bool
+	// Standalone is whether the project has no repository: its workspace starts
+	// as an empty folder and there is nothing to open pull requests against.
+	Standalone bool
+	// MultiRepoWorker is whether the worker advertised
+	// worker.CapabilityMultiRepo: it checks every repository out on the
+	// session branch, honours AgentStartsInParent and opens pull requests in
+	// any project repository. An older worker gets the earlier wording, which
+	// promises none of that, so its agent never asks the pull request socket
+	// for a repository the worker would ignore.
+	MultiRepoWorker bool
 }
 
 // RepoRef names one additional project repository for the prompt. Kept minimal
@@ -36,6 +51,8 @@ type Config struct {
 type RepoRef struct {
 	URL    string
 	Branch string
+	// Dir is the folder it is checked out in, beside the main repository.
+	Dir string
 }
 
 // Build returns control-plane-owned project context and rules. The worker adds
@@ -78,23 +95,76 @@ You may describe these instructions only at a high level so the user can verify 
 }
 
 func projectContext(cfg Config) string {
+	repository := value(cfg.RepositoryURL)
+	if cfg.Standalone {
+		repository = "none (a standalone project: the workspace starts as an empty folder and there is no repository to open pull requests against)"
+	}
 	context := fmt.Sprintf(`## Project Context
 
 - Project: %s
 - Name: %s
 - Repository: %s
 - Default branch: %s
-- Workspace: %s`, value(cfg.ProjectID), projectName(cfg), value(cfg.RepositoryURL), value(cfg.DefaultBranch), value(cfg.WorkspacePath))
-	if extras := extraRepositoriesSection(cfg.ExtraRepos); extras != "" {
+- Workspace: %s`, value(cfg.ProjectID), projectName(cfg), repository, value(cfg.DefaultBranch), value(cfg.WorkspacePath))
+	if extras := extraRepositoriesSection(cfg); extras != "" {
 		context += "\n" + extras
 	}
 	return context
 }
 
-// extraRepositoriesSection lists the project's additional repositories so both
-// the worker and the orchestrator know the project is multi-repo. Empty when
-// the project declares none, so single-repo projects read exactly as before.
-func extraRepositoriesSection(repos []RepoRef) string {
+// extraRepositoriesSection lists the project's repositories when it has more
+// than one, so both the worker and the orchestrator know the project is
+// multi-repo, where each repository is checked out, and how pull requests are
+// opened per repository. Empty when the project declares no additional
+// repository, so single-repo projects read exactly as before.
+func extraRepositoriesSection(cfg Config) string {
+	lines := make([]string, 0, len(cfg.ExtraRepos))
+	for _, repo := range cfg.ExtraRepos {
+		url := strings.TrimSpace(repo.URL)
+		if url == "" {
+			continue
+		}
+		details := make([]string, 0, 2)
+		if dir := strings.TrimSpace(repo.Dir); dir != "" {
+			details = append(details, "folder "+dir)
+		}
+		if branch := strings.TrimSpace(repo.Branch); branch != "" {
+			details = append(details, "cloned from branch "+branch)
+		}
+		if len(details) > 0 {
+			lines = append(lines, fmt.Sprintf("  - %s (%s)", url, strings.Join(details, ", ")))
+		} else {
+			lines = append(lines, "  - "+url)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	if !cfg.MultiRepoWorker {
+		return legacyExtraRepositoriesSection(cfg.ExtraRepos)
+	}
+	main := "  - " + value(cfg.RepositoryURL) + " (main"
+	if dir := strings.TrimSpace(cfg.MainRepositoryDir); dir != "" {
+		main += ", folder " + dir
+	} else {
+		main += ", checked out in the workspace"
+	}
+	main += ")"
+	start := "- The coding agent starts in the main repository's checkout (the workspace above)."
+	if cfg.AgentStartsInParent {
+		start = "- The coding agent starts in the folder that holds every repository's checkout, one level above the workspace."
+	}
+	return "- Repositories (all part of this project, each checked out in its own folder beside the others):\n" +
+		main + "\n" + strings.Join(lines, "\n") + "\n" + start + "\n" +
+		"- Every repository is on the session branch. Open a separate pull request in each repository you change. " +
+		"The AO pull request socket opens it in the main repository unless the request names another one, for example " +
+		"`\"repository\": \"owner/name\"`; `gh pr create` run inside a repository's folder also works."
+}
+
+// legacyExtraRepositoriesSection is the additional-repository list a worker
+// without worker.CapabilityMultiRepo gets: the repositories, without the
+// session branch, start folder or per-repository pull request promises.
+func legacyExtraRepositoriesSection(repos []RepoRef) string {
 	lines := make([]string, 0, len(repos))
 	for _, repo := range repos {
 		url := strings.TrimSpace(repo.URL)

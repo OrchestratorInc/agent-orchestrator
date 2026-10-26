@@ -7,18 +7,13 @@
  * that: only for the latest turn that still counts, only once it was stopped.
  */
 
-import { render as rtlRender, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot, ConversationTurn } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-}
+import { renderChat as render } from "../../test/render-chat";
 
 /** turn-1 completed and turn-2 stopped by the user, with nothing in flight. */
 function stoppedSnapshot(change: (turns: ConversationTurn[]) => ConversationTurn[] = (turns) => turns): ConversationSnapshot {

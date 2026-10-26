@@ -80,7 +80,8 @@ func config(plugin Plugin) nativeacp.Config {
 // session's agent profile is written before launch. Spawn installs it already;
 // writing it here too covers a restore into a workspace that lost it.
 func configure(ctx context.Context, plugin Plugin, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
-	args := append([]string{"--acp"}, launchApprovalArgs(cfg.Permissions)...)
+	// AO controls release switching for Chat as well as the terminal.
+	args := append([]string{"--acp", "--no-auto-update"}, launchApprovalArgs(cfg.Permissions)...)
 	if strings.TrimSpace(cfg.SystemPrompt) != "" {
 		if err := plugin.InstallAgentProfile(ctx, ports.WorkspaceHookConfig{
 			SessionID:     string(cfg.SessionID),

@@ -113,12 +113,19 @@ export function describeHarness(input: HarnessDescribeInput) {
 	const autohandRepair = "Computer control needs a separate repair: autohand computer install";
 	const installWarning = agentId === "autohand" && job?.status === "succeeded" && job.output?.includes(autohandRepair) ? autohandRepair : undefined;
 	const hasDiagnostics = Boolean(job && (jobFailed || installWarning) && (job.error || job.output || job.method || job.expectedDestination));
-	const authSummary = authStatus === "configured" || authStatus === "authorized" ? t(isSetupAction ? "settings.harness.configured" : "settings.harness.loggedIn")
+	const unverifiedProvider = readinessAgent?.authentication.diagnostics?.some((step) => step.method === "provider_validation"
+		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code))
+		|| readinessAgent?.authentication.diagnostics?.some((step) => step.code === "model_selection_unresolved");
+	const renewsOnRun = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
+	const authSummary = renewsOnRun ? t("settings.harness.loggedIn")
+		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : "settings.harness.installed")
+		: authStatus === "authorized" ? t("settings.harness.loggedIn")
 		: authStatus === "not_applicable" || (!input.authPlansPending && (!authPlan || authPlan.action === "instructions")) ? t("settings.harness.installed")
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
 		: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
-	const progressLabel = job?.status === "verifying" ? t("settings.harness.verifying")
+	const progressLabel = job?.status === "waiting_for_idle" ? t("settings.harness.waitingForIdle")
+		: job?.status === "verifying" ? t("settings.harness.verifying")
 		: currentOperation === "update" ? t("settings.harness.updating")
 		: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
 	const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
@@ -142,7 +149,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 	return {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
-		authPlan, authState, authStatus, authSummary, accountDescription, rowAuthWorkflow, authBusy, needsLogin, isSetupAction, isDocumentationAction, canRelogin,
+		authPlan, authState, authStatus, authSummary, renewsOnRun, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, isSetupAction, isDocumentationAction, canRelogin,
 		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
 	};
 }

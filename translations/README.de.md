@@ -1,116 +1,65 @@
 <div align="center">
 
-### Orchestrator.inc
+<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
 
-#### Coding-Agenten an einem Ort planen, ausführen und überwachen.
+<h3>Schluss mit dem Babysitten von Agenten. Echte Arbeit mergen.</h3>
 
-[![GitHub stars](https://img.shields.io/github/stars/OrchestratorInc/agent-orchestrator?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/stargazers)
-![Top 6k repositories](https://img.shields.io/badge/Top%206k%20repositories-181717?style=flat&logo=github&logoColor=white)
-[![GitHub release](https://img.shields.io/github/v/release/OrchestratorInc/agent-orchestrator?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)
-[![GitHub downloads](https://img.shields.io/github/downloads/OrchestratorInc/agent-orchestrator/total?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/releases)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](../LICENSE)
-[![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
-[![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
+<p>
+  Betreibe eine ganze Flotte von Coding-Agenten und behalte Branches, Reviews und CI-Fehler trotzdem im Griff.
+</p>
 
-Gib jeder Coding-Aufgabe einen eigenen Agenten, Workspace und Feedback-Zyklus.<br />
-Plane und delegiere größere Vorhaben mit einem projektkundigen Orchestrator.<br />
-Verfolge jeden Worker, Pull Request, CI-Lauf und jedes Review in einem Live-Kanban.
+[![GitHub stars](https://img.shields.io/github/stars/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/stargazers)
+[![GitHub release](https://img.shields.io/github/v/release/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)
+[![GitHub downloads](https://img.shields.io/github/downloads/OrchestratorInc/agent-orchestrator/total?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-0B1A33?style=flat)](../LICENSE)
+[![X](https://img.shields.io/badge/@useOrchestrator-0B1A33?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
+[![Discord](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
-[**Orchestrator.inc herunterladen**](#installation) &nbsp;&bull;&nbsp; [Dokumentation](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [Mitwirken](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
+<br />
+
+[**Orchestrator.inc holen**](https://orchestrator.inc) &nbsp;&bull;&nbsp; [Dokumentation](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [Mitwirken](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
 [English](../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · **Deutsch** · [Português (Brasil)](README.pt-BR.md)
 
 <br />
 
 <img src="../docs/assets/readme/hero.png" alt="Orchestrator.inc-Kanban mit Worker-Sessions, gruppiert nach ihrem Live-Status" width="100%" />
+
 </div>
 
-## Ein Workspace für agentengestützte Entwicklung
+<br />
 
-Ein Coding-Agent kann eine Aufgabe erledigen. Sobald mehrere Agenten parallel an einem Projekt arbeiten, entsteht eine andere Herausforderung: entscheiden, was wichtig ist, die Arbeit sauber aufteilen, jedem Agenten den richtigen Kontext geben, Branch-Konflikte vermeiden und jede Änderung bis zu Review und Merge begleiten.
+## Warum Orchestrator.inc
 
-Orchestrator.inc ist ein lokaler Desktop-Workspace für genau diese Aufgabe. Füge ein Repository hinzu und erstelle eine Worker-Session mit dem Coding-Agenten, dem Modell und der Oberfläche, die am besten zur Aufgabe passen. Bei Git-basierter Arbeit erhält der Worker einen eigenen Branch und Worktree. Aufgabe, Konversation, Terminal, geänderte Dateien, Browser-Vorschau, Pull Request, CI- und Review-Status bleiben von Anfang bis Ende mit dieser Session verbunden.
+Ein Coding-Agent kann eine Aufgabe erledigen. Mehrere parallel zu betreiben heißt: die Arbeit aufteilen, Branch-Konflikte vermeiden und jede Änderung durch CI, Review und Merge begleiten. Orchestrator.inc ist ein lokaler Desktop-Workspace genau dafür: Jede Aufgabe erhält einen eigenen Agenten, Branch und Worktree, und dein Code bleibt auf deinem Rechner.
 
-Hinter der Desktop-App beobachtet der lokale Daemon von Orchestrator.inc die Aktivität der Agenten und den Zustand der Versionsverwaltung. So entsteht eine gemeinsame Live-Ansicht des Projekts statt einer Sammlung unverbundener Terminals, Branches und Browser-Tabs.
+## Funktionen
 
-<img src="../docs/assets/readme/tui.png" alt="Orchestrator.inc workspace with a supervised native agent interface" width="100%" />
+### Der Orchestrator steuert die Flotte
 
-## Worker erledigen klar abgegrenzte Aufgaben
+Sag dem Hauptagenten eines Projekts, was gebaut werden soll. Er plant die Arbeit, startet für jeden Teil einen Worker in einem eigenen Worktree und meldet sich nur, wenn er dich braucht.
 
-Ein Worker ist die Ausführungseinheit von Orchestrator.inc: eine Aufgabe, ein Coding-Agent und ein isolierter Workspace. Nutze **New task**, wenn die Aufgabe bereits klar ist. Beschreibe das gewünschte Ergebnis, wähle Agent und Modell, hänge relevante Dateien an und arbeite mit dem Agenten im strukturierten Chat oder in seiner nativen Terminal-Oberfläche.
+<img src="../docs/assets/readme/site/orchestrator.jpg" alt="Der Orchestrator teilt ein Billing-Feature auf drei Worker auf, jeder in einem eigenen Worktree mit einem anderen Coding-Agenten" width="100%" />
 
-Du kannst einen Worker jederzeit öffnen, um das Gespräch fortzusetzen, sein Terminal aufzurufen, Änderungen zu prüfen, den isolierten Browser zu verwenden, den Pull Request zu begutachten oder CI- und Review-Feedback an denselben Agenten zurückzugeben. Dadurch bleibt jede Aufgabe für sich verständlich und parallele Arbeit landet nicht in einem gemeinsamen Kontext.
+### Ein Board für jede Session
 
-<img src="../docs/assets/readme/new-task.png" alt="Creating a focused worker task in Orchestrator.inc" width="100%" />
+Sessions ordnen sich anhand von Agent, PR, CI und Reviews selbst in Spalten ein, sodass alles, was dich braucht, oben steht.
 
-## Der Orchestrator plant über das gesamte Projekt hinweg
+<img src="../docs/assets/readme/site/board.jpg" alt="Das Kanban-Board mit den Spalten Working, Needs you, In review und Ready to merge" width="100%" />
 
-Der Projekt-Orchestrator ist der dauerhafte Planungs- und Koordinationsagent von Orchestrator.inc. Er arbeitet eine Ebene über einzelnen Aufgaben und behält Produktentwicklung, technische Strategie, Prioritäten und die Reihenfolge der Arbeit im gesamten Repository im Blick.
+### CI schlägt fehl, der richtige Agent behebt es
 
-Nutze den Orchestrator, um eine Idee vor der Umsetzung zu erkunden, Produkt- und Technikansätze zu entwickeln, Zielkonflikte abzuwägen, besonders wirkungsvolle Aufgaben zu erkennen und aus einem unklaren Vorhaben einen konkreten Plan zu machen. Seine projektbezogene Konversation bewahrt Ziele, Entscheidungen, Einschränkungen und frühere Überlegungen. Diese Planungshistorie verbindet er mit dem Repository-Kontext und dem aktuellen Zustand von Orchestrator.inc, darunter aktive Worker, Zuständigkeiten, Pull Requests, CI und Reviews. Damit bleibt die Planung sowohl im Projekt als auch in der bereits laufenden Arbeit verankert.
+Fehlgeschlagene Checks, Review-Kommentare und Merge-Konflikte gehen an den Worker zurück, dem der Branch gehört, bis der PR genehmigt ist. Ein Reviewer-Agent kann jeden PR lesen, bevor ein Mensch es tut.
 
-Sobald ein Plan umsetzbar ist, kann der Orchestrator ihn in klar abgegrenzte Aufgaben zerlegen, Worker starten oder neu ausrichten, jedem Worker den relevanten Kontext mitgeben, den Fortschritt verfolgen und Folgearbeiten koordinieren. Der Orchestrator verantwortet Planung und Delegation. Worker verantworten Umsetzung, Tests, Commits und Pull Requests.
+<img src="../docs/assets/readme/site/feedback.jpg" alt="Eine Pull-Request-Timeline, in der ein fehlgeschlagener Check und ein Review-Kommentar an Claude Code zurückgehen, das einen Fix pusht" width="100%" />
 
-<img src="../docs/assets/readme/orchestrator.png" alt="Orchestrator.inc coordinating multiple workers with project context" width="100%" />
+### Nutze den Agenten, dem du schon vertraust
 
-## Das Kanban macht das System übersichtlich
+Wähle Agent und Modell pro Aufgabe und arbeite dann im strukturierten Chat oder in der nativen Terminal-Oberfläche des Agenten. Jeder Worker erhält außerdem einen Browser, um seine App anzuzeigen und zu testen.
 
-Jeder Worker erscheint auf demselben Live-Board, unabhängig davon, ob du ihn über **New task** gestartet oder über den Orchestrator delegiert hast. Orchestrator.inc leitet die Position jeder Karte aus Fakten zu Session, Pull Request, CI und Review ab. So wird das Kanban zur operativen Projektansicht:
+#### Unterstützte Agenten
 
-- **Working:** Worker, die aktiv umsetzen oder für eine weitere Anweisung bereit sind
-- **Needs you:** blockierte Sessions, fehlende Eingaben, fehlgeschlagene CI, angeforderte Änderungen oder verlorene Signale
-- **In review:** offene Pull Requests und Entwürfe, die auf Checks oder Reviews warten
-- **Ready to merge:** genehmigte oder mergefähige Arbeit; zusammengeführte Sessions bleiben sichtbar, bis sie archiviert werden
-
-Jede Karte hält Aufgabe, Agent, Branch, Aktivität, Pull Request und Status zusammen. Öffne sie, um Konversation oder Terminal, geänderte Dateien, PR-Zusammenfassung, Reviews und Vorschau zu prüfen. Das Board zeigt, was vorankommt, was blockiert ist und wo deine Aufmerksamkeit die größte Wirkung hat.
-
-<img src="../docs/assets/readme/hero.png" alt="Orchestrator.inc Kanban showing workers grouped by live status" width="100%" />
-
-## Ein Workflow von der Idee bis zum Merge
-
-1. **Starte auf der richtigen Ebene.** Gib eine klare Aufgabe direkt an einen Worker oder entwickle ein größeres Vorhaben mit dem Projekt-Orchestrator und lass ihn den Plan ausarbeiten.
-2. **Delegiere fokussierte Arbeit.** Starte Worker selbst oder lass den Orchestrator sie mit dem nötigen Kontext und klarer Zuständigkeit erstellen.
-3. **Arbeite isoliert.** Jeder Git-basierte Worker erhält einen eigenen Branch und Worktree. Scratch-Worker erhalten von Orchestrator.inc verwaltete Verzeichnisse ohne Branch.
-4. **Überwache den Live-Status.** Orchestrator.inc verfolgt Agentenaktivität, Pull Requests, CI, Review-Feedback und Merge-Konflikte und bildet diese Fakten im Kanban ab.
-5. **Schließe den Feedback-Zyklus.** Prüfe jeden Worker direkt, triff projektweite Entscheidungen mit dem Orchestrator und gib umsetzbare Fehler oder Review-Kommentare an den zuständigen Agenten zurück.
-
-Orchestrator.inc arbeitet mit den Coding-Agenten und dem Versionsverwaltungs-Workflow, die du bereits nutzt. Agenten behalten ihre jeweiligen Stärken. Orchestrator.inc liefert Projektkontext, isolierte Ausführung, Koordination und die operative Übersicht, die aus ihnen ein System machen.
-
-## Produkthighlights
-
-<table>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>Pull Requests und Agenten-Reviews</h3>
-      <p>Halte CI, Mergefähigkeit, Reviewer-Status und interaktive Agenten-Reviews beim Worker und gib angeforderte Änderungen an denselben Verantwortlichen zurück.</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/review.png" alt="Worker-Session mit Pull Request, CI und Agenten-Review-Status in Orchestrator.inc" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>Von Agenten steuerbarer Browser</h3>
-      <p>Zeige die lokale App eines Workers neben seiner Oberfläche an und prüfe sie dort. Browser-Profile sind pro Worker isoliert, damit parallele UI-Aufgaben keinen Status teilen.</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/browser.png" alt="Ein Worker steuert seine isolierte Browser-Vorschau in der App" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>Native Oberflächen, eine Aufsicht</h3>
-      <p>Nutze strukturierten Chat oder die native Terminal-Oberfläche des Agenten, während Orchestrator.inc Aufgaben, Workspace-Status und Feedback an einem Ort zusammenhält.</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/tui.png" alt="Agent terminal interface supervised inside Orchestrator.inc" width="100%" />
-    </td>
-  </tr>
-</table>
-
-## Unterstützte Agenten
-
-Coding-Agenten arbeiten in einem gemeinsamen Workflow. Die aktuellen Agenten und Modi stehen im [Funktionskatalog](https://docs.orchestrator.inc/plugins/agents).
+Die Unterstützung für Worker, Chat und Reviewer unterscheidet sich je nach Agent; die aktuelle Übersicht steht in den [Einrichtungsanleitungen für Agenten](https://docs.orchestrator.inc/plugins/agents).
 
 <table>
   <tr valign="middle">
@@ -168,64 +117,91 @@ Coding-Agenten arbeiten in einem gemeinsamen Workflow. Die aktuellen Agenten und
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/deepseek-harness-dark.svg" /><img src="../frontend/src/renderer/assets/agents/deepseek-harness-light.svg" alt="DeepSeek" width="24" height="24" align="middle" /></picture> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/opencode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/opencode-light.svg" alt="OpenCode 2" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenCode 2</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="../frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
 </table>
 
-[Einrichtungsanleitungen für Agenten ansehen →](https://docs.orchestrator.inc/plugins/agents)
+<br />
 
-**Nutze die Oberfläche, die gerade passt: strukturierten Chat oder die native Terminal-Oberfläche des Agenten.**
+### Orchestrator for Mobile
+
+Steuere die Agenten auf deinem Desktop vom Smartphone aus. Installiere die App für [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) oder [Android](https://play.google.com/store/apps/details?id=aoagents.dev). Scanne den QR-Code unter **Settings → Connect Mobile**, um sie mit deinem Desktop zu koppeln. Das funktioniert im heimischen WLAN und unterwegs.
+
+- **Benachrichtigungen.** Eine Push-Nachricht meldet sich, wenn ein Agent eine Frage hat oder eine Freigabe braucht.
+- **Antworten.** Antworte im Chat, gib die Anfrage frei oder öffne das Terminal des Agenten.
+- **Arbeit starten.** Lege einen neuen Worker an und wähle Agent und Modell.
+- **Prüfen.** Sieh dir Pull Requests und Reviewer-Ergebnisse an.
+
+<img src="../docs/assets/readme/site/mobile.jpg" alt="Die mobile App zeigt einen Agenten, der fragt, welcher Mail-Anbieter verwendet werden soll, und die vom Smartphone gesendete Antwort" width="100%" />
+
+### Cloud Agents
+
+Lass Worker in gehosteten Workspaces statt auf deinem Rechner laufen. Wähle **Clone to the cloud** und ein GitHub-Repository, um loszulegen.
+
+- **Läuft weiter.** Aufgaben laufen auch bei zugeklapptem Laptop weiter.
+- **Mitverfolgen.** Öffne Chat, Dateien und Terminal in der Desktop-App.
+- **Nichts auf deinem Rechner.** Code, Worktrees und Agenten liegen komplett in der Cloud.
+
+Die Einrichtung beschreibt der [Cloud-Leitfaden](https://docs.orchestrator.inc/guides/cloud).
 
 ## Installation
 
-Lade die neueste Orchestrator.inc-Desktop-App für deine Plattform herunter. Orchestrator.inc sucht automatisch nach Updates.
+Lade die App von [orchestrator.inc/download](https://orchestrator.inc/download/) oder aus den [GitHub Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest) herunter. Die App aktualisiert sich selbst.
 
-| Plattform             | Download                                                                                                                           |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| macOS (Apple silicon) | [Herunterladen](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg)   |
-| macOS (Intel)         | [Herunterladen](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg)     |
-| Windows               | [Herunterladen](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe)      |
-| Linux (AppImage)      | [Herunterladen](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
-| Linux (Debian/Ubuntu) | [Herunterladen](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb)      |
-| Linux (Fedora/RHEL)   | [Herunterladen](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
+| Plattform | Download |
+| :-- | :-- |
+| **macOS** (Apple silicon) | [`agent-orchestrator-darwin-arm64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg) |
+| **macOS** (Intel) | [`agent-orchestrator-darwin-x64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg) |
+| **Windows** | [`agent-orchestrator-win32-x64.exe`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe) |
+| **Linux** (AppImage) | [`agent-orchestrator-linux-x64.AppImage`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
+| **Linux** (Debian/Ubuntu) | [`agent-orchestrator-linux-x64.deb`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb) |
+| **Linux** (Fedora/RHEL) | [`agent-orchestrator-linux-x64.rpm`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm) |
 
-Öffne Orchestrator.inc und wähle das Repository aus, das Orchestrator.inc verwalten soll. Die Desktop-App führt den Daemon für dich aus, eine CLI ist daher nicht erforderlich. Im [Installationsleitfaden](https://docs.orchestrator.inc/installation) findest du Hinweise zur Einrichtung der Agenten-CLI und zur Fehlerbehebung.
-
-## Einen Bug melden
-
-[Melde einen Bug](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml) über dein eigenes GitHub-Konto. Ein paar Sätze in deinen eigenen Worten darüber, was du getan hast und was schiefgelaufen ist, reichen aus. Falls vorhanden, ergänze deine Erwartung, Schritte zur Reproduktion, Orchestrator.inc-Version und Betriebssystem sowie einen Screenshot. Diese Angaben helfen, sind aber keine Voraussetzung.
-
-Ein lokaler Coding-Agent kann dir mit dem [Bug-Triage-Skill](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md) helfen, den Bericht zu präzisieren und Belege zu sammeln. Beschränke den Inhalt der Issue auf deine Beobachtungen. Vom Agenten gesammelte Logs, Datenbankauszüge und Untersuchungsnotizen gehören in klar gekennzeichnete Anhänge. Prüfe jeden Entwurf, bevor du ihn über dein eigenes Konto einreichst. Bitte lass keinen Bot Issues in deinem Namen einreichen, damit die Zuordnung zum Melder erhalten bleibt.
-
-Wenn du Hilfe beim Beschreiben eines Problems brauchst, nutze den [Bug-Triage-Kanal auf Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). Weitere Hinweise findest du in den [Beitragsrichtlinien](../CONTRIBUTING.md#bugs-and-features).
-
-## Entwickeln und mitwirken
-
-Beiträge zu Code, Dokumentation, Triage, Beispielen und Tests sind willkommen.
-
-```bash
-git clone https://github.com/OrchestratorInc/agent-orchestrator.git
-cd agent-orchestrator
-```
-
-Der [Entwicklungsleitfaden](../docs/development.md) erklärt Voraussetzungen, lokale Einrichtung und Testbefehle. Lies [CONTRIBUTING.md](../CONTRIBUTING.md), bevor du einen Pull Request öffnest, und nutze [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) für Bugs und Funktionswünsche.
+Öffne Orchestrator.inc und wähle das Repository aus, das es verwalten soll. Die Desktop-App führt den Daemon für dich aus, eine CLI ist daher nicht erforderlich. Im [Installationsleitfaden](https://docs.orchestrator.inc/installation) findest du Hinweise zur Einrichtung der Agenten-CLI und zur Fehlerbehebung.
 
 ## Dokumentation
 
-| Dokument                                                            | Hier findest du                                                                            |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [Produktdokumentation](https://docs.orchestrator.inc)                      | Installation, Einrichtung von Agenten und tägliche Produktnutzung.                         |
-| [docs/architecture.md](../docs/architecture.md)                     | Backend-Mentalmodell, Lifecycle, Persistenz, CDC, Statusableitung und Daemon-Grenzen.      |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | Paketverantwortung und Zuordnung der einzelnen Backend-Bereiche.                           |
-| [docs/cli/README.md](../docs/cli/README.md)                         | CLI-Verhalten und Zuordnung der Daemon-Routen.                                             |
-| [docs/development.md](../docs/development.md)                       | Voraussetzungen, Build-Schritte, Testausführung und Fehlerbehebung für lokale Entwicklung. |
-| [docs/STATUS.md](../docs/STATUS.md)                                 | Was aktuell auf `main` ausgeliefert wird und woran noch gearbeitet wird.                   |
+| Dokument | Hier beginnen, wenn du Folgendes brauchst |
+| :-- | :-- |
+| [Produktdokumentation](https://docs.orchestrator.inc) | Installation, Einrichtung von Agenten und tägliche Produktnutzung. |
+| [docs/documentation-map.md](../docs/documentation-map.md) | Welche Dokumente sich an Menschen richten, welche maschinenlesbare Verträge sind und welche bei Abweichungen Vorrang haben. |
+| [docs/architecture.md](../docs/architecture.md) | Backend-Mentalmodell, Lifecycle, Persistenz, CDC, Statusableitung und Daemon-Grenzen. |
+| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | Paketverantwortung und Zuordnung der einzelnen Backend-Bereiche. |
+| [docs/cli/README.md](../docs/cli/README.md) | CLI-Verhalten und Zuordnung der Daemon-Routen. |
+| [docs/development.md](../docs/development.md) | Voraussetzungen, Build-Schritte, Testausführung und Fehlerbehebung für lokale Entwicklung. |
+| [docs/STATUS.md](../docs/STATUS.md) | Was aktuell auf `main` ausgeliefert wird und woran noch gearbeitet wird. |
+
+## Mitwirken
+
+Der [Entwicklungsleitfaden](../docs/development.md) erklärt Voraussetzungen, lokale Einrichtung und Testbefehle. Lies [CONTRIBUTING.md](../CONTRIBUTING.md), bevor du einen Pull Request öffnest, und nutze [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) für Bugs und Funktionswünsche.
+
+### Einen Bug melden
+
+[Melde einen Bug](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml) über dein eigenes GitHub-Konto. Ein paar Sätze dazu, was du getan hast und was schiefgelaufen ist, reichen aus; Version, Betriebssystem und Schritte zur Reproduktion helfen, falls du sie hast.
+
+Ein lokaler Coding-Agent kann mit dem [Bug-Triage-Skill](../.agents/skills/bug-triage/SKILL.md) beim Sammeln von Belegen helfen; lege seine Logs und Notizen in Anhängen ab und prüfe den Entwurf, bevor du ihn selbst einreichst. Bitte lass keinen Bot Issues für dich einreichen.
+
+Wenn du Hilfe beim Beschreiben eines Problems brauchst, komm in den [Bug-Triage-Kanal auf Discord](https://discord.com/channels/1476302178913357958/1491735678156013588). Weitere Hinweise findest du in den [Beitragsrichtlinien](../CONTRIBUTING.md#bugs-and-features).
 
 ## Community
 
-Komm auf unseren [Discord](https://discord.com/invite/UZv7JjxbwG), wenn du Hilfe suchst oder dich mit anderen Mitwirkenden austauschen möchtest. Folge [@useOrchestrator](https://x.com/useOrchestrator) für Neuigkeiten oder starte eine Diskussion in den [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues).
+Komm auf unseren [Discord](https://discord.com/invite/UZv7JjxbwG), wenn du Hilfe suchst oder dich mit anderen Mitwirkenden austauschen möchtest, folge [@useOrchestrator](https://x.com/useOrchestrator) für Neuigkeiten oder starte eine Diskussion in den [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues).
+
+## Sternverlauf
+
+<a href="https://www.star-history.com/#OrchestratorInc/agent-orchestrator&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date&theme=dark" />
+    <img src="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date" alt="Diagramm des Sternverlaufs für OrchestratorInc/agent-orchestrator" width="100%" />
+  </picture>
+</a>
 
 ## Produkttelemetrie
 
-Orchestrator.inc erfasst Nutzungs- und Zuverlässigkeitsdaten ohne Projektinhalte. Der GitHub-Projektinhaber und der angemeldete GitHub-Nutzername können jedoch Personen identifizieren; die Telemetrie ist daher nicht anonym. Beim Abschalten werden auch diese Angaben nicht mehr gesendet. [Details und Einstellungen](../docs/telemetry.md).
+Orchestrator.inc erfasst begrenzte Nutzungs- und Zuverlässigkeitstelemetrie, niemals deinen Code, deine Prompts, Agenten-Konversationen oder Zugangsdaten. Sie umfasst eine Installations-ID und deinen GitHub-Benutzernamen; wenn du dich bei AO Cloud anmeldest, zusätzlich deine AO-Cloud-Benutzer-ID und die E-Mail-Adresse dieses Kontos, einmalig als PostHog-Personeneigenschaft gesetzt (niemals aus der Git-Konfiguration gelesen). Unter Settings > General > Privacy > Share usage analytics schaltest du alles ab, für Desktop, Daemon und ein gekoppeltes Smartphone. [Genau nachlesen, was wir erfassen und wie du widersprichst](../docs/telemetry.md).
 
 ## Lizenz
 

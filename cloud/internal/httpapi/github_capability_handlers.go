@@ -26,14 +26,11 @@ type capabilityRequest struct {
 }
 
 type createScratchCapabilityRequest struct {
-	DisplayName          string `json:"displayName"`
-	GitHubInstallationID string `json:"githubInstallationId"`
-	Private              *bool  `json:"private,omitempty"`
-	TargetEnvironment    string `json:"targetEnvironment"`
-	Orchestrator         struct {
-		Harness string `json:"harness"`
-		Prompt  string `json:"prompt,omitempty"`
-	} `json:"orchestrator"`
+	DisplayName          string                     `json:"displayName"`
+	GitHubInstallationID string                     `json:"githubInstallationId"`
+	Private              *bool                      `json:"private,omitempty"`
+	TargetEnvironment    string                     `json:"targetEnvironment"`
+	Orchestrator         scratchOrchestratorRequest `json:"orchestrator"`
 }
 
 type environmentScratchProjectStore interface {
@@ -85,6 +82,7 @@ func (s *Server) createGitHubScratchCapability(
 		request.Orchestrator.Harness == "" ||
 		len(request.Orchestrator.Harness) > 120 ||
 		len(request.Orchestrator.Prompt) > 65536 ||
+		!request.Orchestrator.validDefaultInterface() ||
 		(request.TargetEnvironment != "development" &&
 			request.TargetEnvironment != "staging" &&
 			request.TargetEnvironment != "production") {
@@ -349,17 +347,14 @@ func (s *Server) createEnvironmentScratchProject(
 		return
 	}
 	var request struct {
-		OrgID                string         `json:"orgId"`
-		Capability           string         `json:"capability"`
-		GitHubInstallationID string         `json:"githubInstallationId"`
-		GitHubRepositoryID   string         `json:"githubRepositoryId"`
-		UserExternalID       string         `json:"userExternalId"`
-		DisplayName          string         `json:"displayName"`
-		Config               map[string]any `json:"config,omitempty"`
-		Orchestrator         struct {
-			Harness string `json:"harness"`
-			Prompt  string `json:"prompt,omitempty"`
-		} `json:"orchestrator"`
+		OrgID                string                     `json:"orgId"`
+		Capability           string                     `json:"capability"`
+		GitHubInstallationID string                     `json:"githubInstallationId"`
+		GitHubRepositoryID   string                     `json:"githubRepositoryId"`
+		UserExternalID       string                     `json:"userExternalId"`
+		DisplayName          string                     `json:"displayName"`
+		Config               map[string]any             `json:"config,omitempty"`
+		Orchestrator         scratchOrchestratorRequest `json:"orchestrator"`
 	}
 	if err := decodeJSON(w, r, &request); err != nil ||
 		requireUUID(request.OrgID, "orgId") != nil {
@@ -375,7 +370,8 @@ func (s *Server) createEnvironmentScratchProject(
 		request.DisplayName == "" || len(request.DisplayName) > 80 ||
 		request.Orchestrator.Harness == "" ||
 		len(request.Orchestrator.Harness) > 120 ||
-		len(request.Orchestrator.Prompt) > 65536 {
+		len(request.Orchestrator.Prompt) > 65536 ||
+		!request.Orchestrator.validDefaultInterface() {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "The scratch project request is invalid.")
 		return
 	}
@@ -465,6 +461,7 @@ func (s *Server) createEnvironmentScratchProject(
 				Harness:             request.Orchestrator.Harness,
 				DisplayName:         "Orchestrator",
 				Prompt:              request.Orchestrator.Prompt,
+				DefaultInterface:    domain.SessionInterface(request.Orchestrator.DefaultInterfaceMode),
 				Mode:                "trusted",
 				DeniedCommands:      []string{},
 				Provider:            plan.Provider,

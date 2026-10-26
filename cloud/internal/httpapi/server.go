@@ -14,6 +14,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/artifactstore"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
@@ -65,7 +67,9 @@ type Store interface {
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
-	ListClientEvents(context.Context, domain.Principal, string, string, int64, int) ([]domain.ClientEvent, bool, error)
+	// ListClientEvents lists the session's client events after a sequence,
+	// only of the given types when any are given.
+	ListClientEvents(ctx context.Context, principal domain.Principal, orgID, sessionID string, after int64, limit int, types []string) ([]domain.ClientEvent, bool, error)
 	SetSandboxDesiredState(ctx context.Context, principal domain.Principal, orgID, sessionID, desiredState string) error
 	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	RestoreSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
@@ -112,6 +116,7 @@ type Store interface {
 	RefreshTerminalInteraction(context.Context, domain.TerminalSession, time.Duration) error
 	QueueTerminalInput(context.Context, domain.TerminalSession, string, []byte) error
 	QueueTerminalResize(context.Context, domain.TerminalSession, uint16, uint16) error
+	QueueTerminalRepaint(context.Context, domain.TerminalSession) error
 	CloseTerminal(context.Context, domain.TerminalSession) error
 	AppendTerminalOutput(context.Context, string, string, string, string, int64, []byte) (int64, error)
 	AppendTerminalOutputAt(context.Context, string, string, string, string, int64, int64, []byte) (int64, error)
@@ -123,6 +128,7 @@ type Store interface {
 	GitHubInstallationForRepository(context.Context, string, string) (int64, int64, error)
 	PullRequestForMerge(context.Context, domain.Principal, string, string, int, string) (domain.PullRequest, error)
 	PullRequestSnapshot(context.Context, string, string) (domain.PullRequestSnapshot, error)
+	SessionPullRequestOpener(context.Context, domain.Principal, string, string) (domain.PullRequestOpener, error)
 	ListReviewRunsBySession(context.Context, domain.Principal, string, string) ([]domain.ReviewRunPullRequest, error)
 	PRFactsBySession(ctx context.Context, orgID string, sessionIDs []string) (map[string][]contract.PRFacts, error)
 	PullRequestsBySessions(ctx context.Context, orgID string, sessionIDs []string) (map[string][]domain.PullRequest, error)
@@ -215,6 +221,7 @@ type Server struct {
 	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
 	notificationWake        func()
+	analytics               analytics.Sink
 	sandboxWake             func()
 	projectSnapshots        ProjectSnapshotter
 	billingOptions          *BillingOptions
@@ -228,6 +235,15 @@ type Server struct {
 	handler             http.Handler
 	activity            *activity.Recorder
 	supportToken        string
+	// artifacts, artifactRows and artifactAccessKey serve cloud session
+	// artifacts; artifacts is nil when they are off.
+	artifacts         *artifactstore.Store
+	artifactRows      sessionArtifactStore
+	artifactAccessKey []byte
+	// shareRows and shareConfig serve artifact share links; both are nil
+	// when they are off.
+	shareRows   artifactShareStore
+	shareConfig *artifactShareConfig
 }
 
 type Options struct {
@@ -273,6 +289,8 @@ type Options struct {
 	TerminalStreamEnabled   bool
 	TerminalRelayEnabled    bool
 	NotificationWake        func()
+	// Analytics receives server-side product events. Nil disables them.
+	Analytics analytics.Sink
 	// SandboxWake asks the sandbox reconciler for an immediate pass; nil when
 	// this control plane runs no reconciler.
 	SandboxWake func()
@@ -286,6 +304,17 @@ type Options struct {
 	// SupportToken enables the operator support lookup route
 	// (AO_CLOUD_SUPPORT_TOKEN); empty leaves the route unregistered.
 	SupportToken string
+	// Artifacts stores cloud session artifact files (AO_CLOUD_ARTIFACTS); nil
+	// leaves the artifact routes unregistered and rejects requestedOutput
+	// "artifact".
+	Artifacts *artifactstore.Store
+	// ArtifactAccessSecret is the secret artifact file links are signed with,
+	// required with Artifacts.
+	ArtifactAccessSecret []byte
+	// ArtifactShares turns on public share links for single local artifact
+	// files (AO_CLOUD_ARTIFACT_SHARES); it needs Artifacts. Nil leaves the
+	// share routes unregistered.
+	ArtifactShares *ArtifactShareOptions
 }
 
 // ProjectSnapshotter looks up and builds a project's prepared snapshot.
@@ -386,12 +415,28 @@ func New(options Options) *Server {
 		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
+		analytics:                 options.Analytics,
 		sandboxWake:               options.SandboxWake,
 		projectSnapshots:          options.ProjectSnapshots,
 		billingOptions:            options.Billing,
 		notificationWaiters:       newNotificationWaiters(),
 		activity:                  options.Activity,
 		supportToken:              options.SupportToken,
+	}
+	if rows, ok := options.Store.(sessionArtifactStore); ok && options.Artifacts != nil {
+		server.artifacts = options.Artifacts
+		server.artifactRows = rows
+		server.artifactAccessKey = artifactAccessKeyFrom(options.ArtifactAccessSecret)
+	}
+	if rows, ok := options.Store.(artifactShareStore); ok && server.artifactsEnabled() {
+		shareConfig, err := parseArtifactShareOptions(options.ArtifactShares)
+		if err != nil {
+			logger.Error("artifact share links disabled", "error", err)
+		}
+		if err == nil && shareConfig != nil {
+			server.shareRows = rows
+			server.shareConfig = shareConfig
+		}
 	}
 	workerBinaries := [][]byte{options.WorkerBinary, options.WorkerHelperBinary}
 	for _, build := range options.WorkerBuilds {
@@ -420,6 +465,9 @@ func New(options Options) *Server {
 	router := chi.NewRouter()
 	router.Use(server.requestID)
 	router.Use(server.requestLog)
+	if server.artifactSharesEnabled() {
+		router.Use(server.artifactShareHost)
+	}
 	router.Get("/healthz", server.health)
 	router.Get("/readyz", server.ready)
 	router.Get("/github/healthz", server.githubHealth)
@@ -464,6 +512,12 @@ func New(options Options) *Server {
 		router.With(server.authenticate).Get("/me/hosts", server.listRemoteHosts)
 		router.With(server.authenticate).Put("/me/hosts/{hostId}", server.putRemoteHost)
 		router.With(server.authenticate).Delete("/me/hosts/{hostId}", server.deleteRemoteHost)
+		if server.artifactSharesEnabled() {
+			router.With(server.authenticate).Get("/me/artifact-shares", server.listArtifactShares)
+			router.With(server.authenticate).Post("/me/artifact-shares", server.createArtifactShare)
+			router.With(server.authenticate).Put("/me/artifact-shares/{shareId}", server.updateArtifactShare)
+			router.With(server.authenticate).Delete("/me/artifact-shares/{shareId}", server.revokeArtifactShare)
+		}
 		router.With(server.authenticate).Post("/orgs", server.createOrganization)
 		router.With(server.authenticate).Get("/invitations", server.listMyInvitations)
 		router.With(server.authenticate).Get("/me/providers", server.listUserProviderConnections)
@@ -497,6 +551,7 @@ func New(options Options) *Server {
 			router.Get("/worker/reconnect", server.workerReconnect)
 			router.Post("/worker/events", server.workerEvent)
 			router.Get("/worker/session", server.workerSession)
+			router.Post("/worker/interface/chat-start-fallback", server.workerChatStartFallback)
 			router.Post("/worker/notification-events", server.workerNotificationEvent)
 			router.Post("/worker/turns/claim", server.workerClaimTurn)
 			router.Get("/worker/turns/{turnId}/cancellation", server.workerTurnCancellation)
@@ -526,6 +581,13 @@ func New(options Options) *Server {
 			// claim routes; the control plane wakes it the instant a turn or
 			// transport request is enqueued for its session.
 			router.Get("/worker/work/wait", server.workerWaitForWork)
+			if server.artifactsEnabled() {
+				router.Get("/worker/artifacts", server.workerListArtifacts)
+				router.Post("/worker/artifacts/manifest", server.workerArtifactManifest)
+				router.Get("/worker/artifacts/blob/*", server.workerGetArtifactBlob)
+				router.Put("/worker/artifacts/blob/*", server.workerPutArtifactBlob)
+				router.Post("/worker/artifacts/commit", server.workerCommitArtifacts)
+			}
 			router.Post("/worker/transport/{requestId}/complete", server.workerCompleteTransport)
 			router.Post("/worker/transport/{requestId}/fail", server.workerFailTransport)
 			router.Post("/worker/terminals/{terminalId}/output", server.workerTerminalOutput)
@@ -536,6 +598,12 @@ func New(options Options) *Server {
 			router.Get("/worker/agent-browser/streams/{stream}", server.workerAgentBrowserStream)
 		})
 		router.Get("/terminal", server.connectTerminal)
+		// Artifact file links authenticate with a signed, session-bound token
+		// in the path.
+		if server.artifactsEnabled() {
+			router.Get("/artifact-files/{token}/*", server.serveArtifactFile)
+			router.Head("/artifact-files/{token}/*", server.serveArtifactFile)
+		}
 		router.Route("/orgs/{orgId}", func(router chi.Router) {
 			router.Use(server.authenticate)
 			if server.github != nil {
@@ -558,6 +626,7 @@ func New(options Options) *Server {
 			router.Patch("/notifications/{notificationId}", server.markNotificationRead)
 			router.Post("/notifications/read-all", server.markAllNotificationsRead)
 			router.Post("/projects", server.createProject)
+			router.Post("/projects/standalone", server.createStandaloneProject)
 			router.Get("/projects/{projectId}", server.getProject)
 			router.Patch("/projects/{projectId}/settings", server.updateProjectSettings)
 			router.Patch("/projects/{projectId}", server.updateProject)
@@ -593,6 +662,11 @@ func New(options Options) *Server {
 			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
+			if server.artifactsEnabled() {
+				router.Get("/sessions/{sessionId}/artifacts", server.listSessionArtifacts)
+				router.Delete("/sessions/{sessionId}/artifacts", server.deleteSessionArtifact)
+				router.Post("/sessions/{sessionId}/artifacts/access", server.createArtifactAccess)
+			}
 			router.Delete("/sessions/{sessionId}", server.deleteSession)
 			router.Post("/sessions/{sessionId}/messages", server.sendMessage)
 			router.Get("/sessions/{sessionId}/chat-models", server.getChatModels)
@@ -615,6 +689,7 @@ func New(options Options) *Server {
 			router.Put("/sessions/{sessionId}/workspace/file", server.writeWorkspaceFile)
 			router.Get("/sessions/{sessionId}/workspace/diff", server.getWorkspaceDiff)
 			router.Get("/sessions/{sessionId}/workspace/review", server.getWorkspaceReview)
+			router.Get("/sessions/{sessionId}/workspace/repositories", server.getWorkspaceRepositories)
 			router.Get("/sessions/{sessionId}/workspace/tree", server.getWorkspaceReviewTree)
 			router.Get("/sessions/{sessionId}/workspace/search", server.getWorkspaceReviewSearch)
 			router.Get("/sessions/{sessionId}/workspace/review/file", server.getWorkspaceReviewFile)
@@ -803,6 +878,17 @@ func (s *Server) principalForBearer(
 		return domain.Principal{}, err
 	}
 	return s.store.UpsertWorkOSUser(ctx, principal)
+}
+
+// capture reports a product event for the signed-in WorkOS user. Local-auth
+// (development) principals and anonymous callers are never reported.
+func (s *Server) capture(r *http.Request, event string, props map[string]any) {
+	if s.analytics == nil {
+		return
+	}
+	if p := principalFrom(r); p.Provider == "workos" && p.UserID != "" {
+		s.analytics.Capture(p.UserID, event, props)
+	}
 }
 
 func principalFrom(r *http.Request) domain.Principal {

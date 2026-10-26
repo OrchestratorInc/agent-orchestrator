@@ -790,6 +790,66 @@ describe("ChatMarkdown code highlighting", () => {
 });
 
 
+describe("ChatMarkdown block streaming", () => {
+	it.each([
+		["```text\nprint( ", "print( "],
+		["~~~text\n**literal ", "**literal "],
+		["    **literal", "**literal"],
+		["- item\n\n      **literal", "**literal"],
+		[">     **literal", "**literal"],
+		["[ref]: https://example.com\n\n    **literal", "**literal"],
+	])("preserves streamed code source: %s", (text, code) => {
+		const { container } = render(<ChatMarkdown text={text} streaming />);
+		expect(container.querySelector("pre")?.textContent).toBe(code);
+	});
+
+	it("repairs incomplete inline formatting for display only and keeps partial links inert", () => {
+		const { container, rerender } = render(<ChatMarkdown text="Some **unfinished" streaming />);
+		expect(container.querySelector("strong")).toHaveTextContent("unfinished");
+		rerender(<ChatMarkdown text="Some **unfinished" />);
+		expect(container.querySelector("strong")).toBeNull();
+		expect(container.textContent).toBe("Some **unfinished");
+		rerender(<ChatMarkdown text="See [docs](https://exam" streaming />);
+		expect(container.querySelector("a")).toBeNull();
+		expect(container.textContent).toBe("See docs");
+	});
+
+	it("leaves open fences literal and highlights a completed fence before the reply ends", async () => {
+		const code = 'const literal = "**unfinished";';
+		const fence = "```js\n" + code;
+		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
+		expect(container.querySelector("pre")?.textContent).toBe(code);
+		rerender(<ChatMarkdown text={fence + "\n```\n\nMore prose"} streaming />);
+		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toBeInTheDocument());
+		expect(container.querySelector("pre")?.textContent).toBe(code);
+	});
+
+	it("resolves late reference definitions and keeps footnote IDs document-wide", () => {
+		const text = "First [docs][ref]\n\nSecond\n\nThird";
+		const { container, rerender } = render(<ChatMarkdown text={text} streaming />);
+		rerender(<ChatMarkdown text={text + "\n\n[ref]: https://example.com/docs"} streaming />);
+		expect(screen.getByRole("link", { name: "docs" })).toHaveAttribute("href", "https://example.com/docs");
+		rerender(<ChatMarkdown text={"First[^a]\n\nSecond[^b]\n\n[^a]: Alpha\n\n[^b]: Beta"} />);
+		const ids = [...container.querySelectorAll("[id]")].map((node) => node.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(container.textContent).toContain("Alpha");
+		expect(container.textContent).toContain("Beta");
+	});
+
+	it("keeps source-relative fade offsets when a chat opens across several blocks", () => {
+		const text = "First\n\nSecond\n\nAlready visible";
+		const view = (source: string) => <ChatOpeningRef.Provider value={{ current: true }}><ChatMarkdown text={source} streaming /></ChatOpeningRef.Provider>;
+		const { container, rerender } = render(view(text));
+		expect(container.querySelectorAll(".stream-char")).toHaveLength(0);
+		rerender(view(text + " new"));
+		expect(container.querySelectorAll(".stream-char")).toHaveLength(4);
+		const first = container.querySelector("p");
+		rerender(view(text + " new\n\nTail"));
+		expect(container.querySelector("p")).toBe(first);
+	});
+});
+
+
 describe("ActivityTitle", () => {
 	it("keeps code delimiters inside multi-backtick code spans", () => {
 		const { container } = render(<ActivityTitle text={"Edit ``file`name.ts``"} />);

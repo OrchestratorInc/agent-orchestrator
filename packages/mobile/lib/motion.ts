@@ -52,6 +52,15 @@ export const SPIN_MS = 1000;
  */
 export const DRAWER_SPRING = { damping: 24, stiffness: 240, mass: 0.8 } as const;
 
+/**
+ * One sweep of a loading skeleton's shimmer, then a rest before the next.
+ *
+ * Slow and linear: the sweep says "still loading", and a quick or eased one
+ * reads as busy. The rest keeps a screen with several skeletons from strobing.
+ */
+export const SHIMMER_MS = 1300;
+export const SHIMMER_REST_MS = 400;
+
 /** Fallback used when the keyboard event carries no duration. */
 export const KEYBOARD_FALLBACK_MS = 250;
 

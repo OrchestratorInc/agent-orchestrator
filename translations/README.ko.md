@@ -1,116 +1,65 @@
 <div align="center">
 
-### Orchestrator.inc
+<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
 
-#### 한곳에서 코딩 에이전트의 작업을 계획하고 실행하고 감독하세요.
+<h3>에이전트를 일일이 돌보지 마세요. 실제 작업을 머지하세요.</h3>
 
-[![GitHub stars](https://img.shields.io/github/stars/OrchestratorInc/agent-orchestrator?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/stargazers)
-![Top 6k repositories](https://img.shields.io/badge/Top%206k%20repositories-181717?style=flat&logo=github&logoColor=white)
-[![GitHub release](https://img.shields.io/github/v/release/OrchestratorInc/agent-orchestrator?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)
-[![GitHub downloads](https://img.shields.io/github/downloads/OrchestratorInc/agent-orchestrator/total?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/releases)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](../LICENSE)
-[![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
-[![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
+<p>
+  브랜치, 리뷰, CI 실패를 관리 가능한 상태로 유지하면서 여러 코딩 에이전트를 함께 실행하세요.
+</p>
 
-모든 코딩 작업에 전용 에이전트, 워크스페이스, 피드백 루프를 제공하세요.<br />
-프로젝트를 이해하는 오케스트레이터와 더 큰 목표를 계획하고 위임하세요.<br />
-모든 워커, 풀 리퀘스트, CI 실행, 리뷰를 실시간 Kanban에서 확인하세요.
+[![GitHub stars](https://img.shields.io/github/stars/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/stargazers)
+[![GitHub release](https://img.shields.io/github/v/release/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)
+[![GitHub downloads](https://img.shields.io/github/downloads/OrchestratorInc/agent-orchestrator/total?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-0B1A33?style=flat)](../LICENSE)
+[![X](https://img.shields.io/badge/@useOrchestrator-0B1A33?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
+[![Discord](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
-[**Orchestrator.inc 다운로드**](#설치) &nbsp;&bull;&nbsp; [문서](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [릴리스](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [기여하기](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
+<br />
+
+[**Orchestrator.inc 받기**](https://orchestrator.inc) &nbsp;&bull;&nbsp; [문서](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [릴리스](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [기여하기](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
 [English](../README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · **한국어** · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português (Brasil)](README.pt-BR.md)
 
 <br />
 
 <img src="../docs/assets/readme/hero.png" alt="워커 세션을 실시간 상태별로 보여주는 Orchestrator.inc Kanban" width="100%" />
+
 </div>
 
-## 에이전트 중심 개발을 위한 워크스페이스
+<br />
 
-코딩 에이전트 하나는 작업 하나를 처리할 수 있습니다. 하지만 프로젝트에서 여러 에이전트를 동시에 실행하면 전혀 다른 일이 생깁니다. 무엇이 중요한지 결정하고, 작업을 명확히 나누고, 각 에이전트에 적절한 컨텍스트를 제공하고, 브랜치 충돌을 막고, 모든 변경 사항을 리뷰부터 머지까지 추적해야 합니다.
+## 왜 Orchestrator.inc인가
 
-Orchestrator.inc는 이 일을 위해 만든 로컬 데스크톱 워크스페이스입니다. 저장소를 추가하고 작업에 맞는 코딩 에이전트, 모델, 인터페이스로 워커 세션을 만드세요. Git 기반 작업에서는 Orchestrator.inc가 워커 전용 브랜치와 worktree를 제공합니다. 작업, 대화, 터미널, 변경된 파일, 브라우저 미리보기, 풀 리퀘스트, CI, 리뷰 상태가 처음부터 끝까지 해당 세션에 연결되어 유지됩니다.
+코딩 에이전트 하나는 작업 하나를 처리할 수 있습니다. 여러 에이전트를 실행하려면 작업을 나누고, 브랜치 충돌을 막고, 모든 변경 사항을 CI, 리뷰, 머지까지 추적해야 합니다. Orchestrator.inc는 이를 위한 로컬 데스크톱 워크스페이스입니다. 모든 작업은 전용 에이전트, 브랜치, worktree를 가지며, 코드는 내 컴퓨터를 벗어나지 않습니다.
 
-데스크톱 앱 뒤에서는 Orchestrator.inc의 로컬 데몬이 에이전트 활동과 소스 제어 상태를 감시합니다. 그 결과, 서로 분리된 터미널과 브랜치, 브라우저 탭의 모음이 아니라 프로젝트 전체를 하나의 공유 실시간 뷰에서 볼 수 있습니다.
+## 기능
 
-<img src="../docs/assets/readme/tui.png" alt="Orchestrator.inc workspace with a supervised native agent interface" width="100%" />
+### 오케스트레이터가 에이전트 전체를 운영합니다
 
-## 워커가 명확한 작업을 실행합니다
+프로젝트의 메인 에이전트에게 무엇을 만들고 싶은지 알려주세요. 오케스트레이터가 작업을 계획하고, 각 부분마다 별도 worktree에서 워커를 시작하며, 사용자가 필요할 때만 돌아옵니다.
 
-워커는 Orchestrator.inc의 실행 단위입니다. 하나의 작업, 하나의 코딩 에이전트, 하나의 격리된 워크스페이스로 구성됩니다. 해야 할 일이 이미 명확하다면 **New task**를 사용하세요. 원하는 결과를 설명하고, 에이전트와 모델을 선택하고, 관련 파일을 첨부한 뒤 구조화된 Chat 또는 에이전트 고유의 터미널 UI에서 작업할 수 있습니다.
+<img src="../docs/assets/readme/site/orchestrator.jpg" alt="결제 기능을 세 개의 워커로 나누는 오케스트레이터. 각 워커는 별도 worktree에서 서로 다른 코딩 에이전트로 실행됩니다" width="100%" />
 
-언제든 워커를 열어 대화를 계속하거나, 터미널에 연결하거나, 변경 사항을 살펴보거나, 격리된 브라우저를 사용하거나, 풀 리퀘스트를 검토하거나, CI 및 리뷰 피드백을 같은 에이전트에게 돌려보낼 수 있습니다. 덕분에 각 작업을 독립적으로 이해할 수 있고, 병렬 작업이 하나의 공유 컨텍스트에 뒤섞이지 않습니다.
+### 모든 세션을 하나의 보드에서
 
-<img src="../docs/assets/readme/new-task.png" alt="Creating a focused worker task in Orchestrator.inc" width="100%" />
+세션은 에이전트, PR, CI, 리뷰 상태에 따라 레인으로 자동 정렬되므로 사용자의 확인이 필요한 항목이 항상 맨 위에 표시됩니다.
 
-## 오케스트레이터가 프로젝트 전체를 계획합니다
+<img src="../docs/assets/readme/site/board.jpg" alt="Working, Needs you, In review, Ready to merge 레인이 있는 Kanban 보드" width="100%" />
 
-프로젝트 오케스트레이터는 Orchestrator.inc의 지속적인 계획 및 조정 에이전트입니다. 개별 작업보다 한 단계 높은 수준에서 제품 방향, 기술 전략, 우선순위, 저장소 전반의 작업 순서를 다룹니다.
+### CI가 실패하면 담당 에이전트가 고칩니다
 
-구현 전에 아이디어를 탐색하고, 제품 및 기술 접근 방식을 브레인스토밍하고, 트레이드오프를 검토하고, 영향력이 큰 작업을 찾고, 모호한 목표를 구체적인 계획으로 바꾸는 데 오케스트레이터를 사용할 수 있습니다. 프로젝트 단위의 대화에는 목표, 결정, 제약 조건, 이전 논의가 계속 보존됩니다. 오케스트레이터는 이 계획 기록을 저장소 컨텍스트 및 Orchestrator.inc의 실시간 상태와 결합합니다. 여기에는 활성 워커, 담당 범위, 풀 리퀘스트, CI, 리뷰가 포함됩니다. 따라서 계획은 프로젝트 자체와 이미 진행 중인 작업 모두에 기반합니다.
+실패한 검사, 리뷰 코멘트, 머지 충돌은 PR이 승인될 때까지 해당 브랜치를 맡은 워커에게 돌아갑니다. 사람이 보기 전에 리뷰어 에이전트가 모든 PR을 먼저 검토할 수도 있습니다.
 
-계획이 실행 가능한 상태가 되면 오케스트레이터는 이를 명확한 작업으로 나누고, 워커를 생성하거나 방향을 전환하고, 각 워커에 필요한 컨텍스트를 전달하고, 진행 상황을 추적하고, 후속 작업을 조정할 수 있습니다. 오케스트레이터는 계획과 위임을 맡고, 워커는 구현, 테스트, 커밋, 풀 리퀘스트를 맡습니다.
+<img src="../docs/assets/readme/site/feedback.jpg" alt="실패한 검사와 리뷰 코멘트가 Claude Code로 전달되고, Claude Code가 수정 사항을 푸시하는 풀 리퀘스트 타임라인" width="100%" />
 
-<img src="../docs/assets/readme/orchestrator.png" alt="Orchestrator.inc coordinating multiple workers with project context" width="100%" />
+### 이미 신뢰하는 에이전트를 그대로 사용하세요
 
-## Kanban이 전체 시스템을 한눈에 보여줍니다
+작업마다 에이전트와 모델을 선택한 뒤 구조화된 Chat 또는 에이전트 고유의 터미널 UI에서 작업하세요. 각 워커에는 앱을 미리 보고 테스트할 수 있는 브라우저도 제공됩니다.
 
-**New task**에서 직접 시작했든 오케스트레이터가 위임했든, 모든 워커가 같은 실시간 보드에 표시됩니다. Orchestrator.inc는 세션, 풀 리퀘스트, CI, 리뷰의 사실을 바탕으로 각 카드의 위치를 결정하여 Kanban을 프로젝트의 운영 뷰로 만듭니다.
+#### 지원 에이전트
 
-- **Working:** 현재 구현 중이거나 다음 지시를 받을 준비가 된 워커
-- **Needs you:** 차단됨, 입력 필요, CI 실패, 변경 요청 또는 신호 끊김 상태인 세션
-- **In review:** 검사나 리뷰를 기다리는 열려 있거나 초안 상태인 풀 리퀘스트
-- **Ready to merge:** 승인되었거나 머지할 수 있는 작업. 머지된 세션도 보관 처리할 때까지 계속 표시됩니다
-
-각 카드에는 작업, 에이전트, 브랜치, 활동, 풀 리퀘스트, 상태가 함께 표시됩니다. 카드를 열어 대화 또는 터미널, 변경된 파일, PR 요약, 리뷰, 미리보기를 확인할 수 있습니다. 보드는 무엇이 진행 중인지, 무엇이 막혔는지, 어디에 집중해야 가장 큰 효과를 낼 수 있는지 보여줍니다.
-
-<img src="../docs/assets/readme/hero.png" alt="Orchestrator.inc Kanban showing workers grouped by live status" width="100%" />
-
-## 아이디어부터 머지까지 하나의 워크플로로
-
-1. **알맞은 수준에서 시작하세요.** 명확한 작업은 워커에게 직접 맡기고, 더 큰 목표는 프로젝트 오케스트레이터와 구체화하여 계획을 세우세요.
-2. **작업을 명확히 나눠 위임하세요.** 직접 워커를 시작하거나, 오케스트레이터가 필요한 컨텍스트와 담당 범위를 갖춘 워커를 만들도록 하세요.
-3. **격리된 환경에서 개발하세요.** 모든 Git 기반 워커는 전용 브랜치와 worktree를 사용합니다. Scratch 워커는 Orchestrator.inc가 관리하는 브랜치 없는 디렉터리를 사용합니다.
-4. **실시간 상태를 감독하세요.** Orchestrator.inc는 에이전트 활동, 풀 리퀘스트, CI, 리뷰 피드백, 머지 충돌을 추적하고 그 사실을 Kanban에 반영합니다.
-5. **피드백 루프를 완성하세요.** 워커를 직접 살펴보고, 오케스트레이터와 프로젝트 수준의 결정을 내리고, 조치 가능한 실패나 리뷰 코멘트를 해당 작업을 맡은 에이전트에게 돌려보내세요.
-
-Orchestrator.inc는 이미 사용 중인 코딩 에이전트와 소스 제어 워크플로와 함께 작동합니다. 에이전트는 각자의 고유한 강점을 유지하고, Orchestrator.inc는 이들이 하나의 시스템으로 작동하는 데 필요한 프로젝트 컨텍스트, 격리된 실행 환경, 조정 기능, 운영 뷰를 제공합니다.
-
-## 제품 주요 기능
-
-<table>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>풀 리퀘스트와 에이전트 리뷰</h3>
-      <p>CI, 머지 가능 여부, 리뷰어 상태, 대화형 에이전트 리뷰를 워커 옆에서 확인하고 요청된 변경 사항을 같은 담당 에이전트에게 돌려보내세요.</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/review.png" alt="Orchestrator.inc에서 풀 리퀘스트, CI, 에이전트 리뷰 상태를 보여주는 워커 세션" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>에이전트가 제어할 수 있는 브라우저</h3>
-      <p>워커 인터페이스 옆에서 로컬 앱을 미리 보고 검사하세요. 브라우저 프로필은 워커별로 격리되므로 병렬 UI 작업 사이에 상태가 공유되지 않습니다.</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/browser.png" alt="격리된 인앱 브라우저 미리보기를 제어하는 워커" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>네이티브 인터페이스를 하나의 감독 화면에서</h3>
-      <p>구조화된 Chat 또는 에이전트의 네이티브 터미널 UI를 사용하면서 Orchestrator.inc가 작업 컨텍스트, 워크스페이스 상태, 피드백을 한곳에서 관리합니다.</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/tui.png" alt="Agent terminal interface supervised inside Orchestrator.inc" width="100%" />
-    </td>
-  </tr>
-</table>
-
-## 지원 에이전트
-
-코딩 에이전트를 하나의 감독 워크플로에서 사용할 수 있습니다. 현재 지원되는 에이전트와 모드는 [기능 목록](https://docs.orchestrator.inc/plugins/agents)을 확인하세요.
+워커, Chat, 리뷰어 지원 여부는 에이전트마다 다릅니다. 최신 지원 현황은 [에이전트 설정 가이드](https://docs.orchestrator.inc/plugins/agents)를 확인하세요.
 
 <table>
   <tr valign="middle">
@@ -168,64 +117,91 @@ Orchestrator.inc는 이미 사용 중인 코딩 에이전트와 소스 제어 �
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/deepseek-harness-dark.svg" /><img src="../frontend/src/renderer/assets/agents/deepseek-harness-light.svg" alt="DeepSeek" width="24" height="24" align="middle" /></picture> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/opencode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/opencode-light.svg" alt="OpenCode 2" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenCode 2</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="../frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
 </table>
 
-[에이전트 설정 가이드 살펴보기 →](https://docs.orchestrator.inc/plugins/agents)
+<br />
 
-**상황에 맞는 인터페이스를 사용하세요. 구조화된 Chat과 에이전트 고유의 터미널 UI를 모두 지원합니다.**
+### Orchestrator for Mobile
+
+데스크톱에서 실행 중인 에이전트를 휴대폰으로 제어하세요. [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) 또는 [Android](https://play.google.com/store/apps/details?id=aoagents.dev)용 앱을 설치하세요. **Settings → Connect Mobile**의 QR 코드를 스캔해 데스크톱과 페어링하세요. 집 Wi-Fi에서도, 외부에서도 작동합니다.
+
+- **알림 받기.** 에이전트에게 질문이 있거나 승인이 필요하면 푸시 알림이 옵니다.
+- **답하기.** 채팅으로 답하거나, 요청을 승인하거나, 에이전트의 터미널을 여세요.
+- **작업 시작.** 새 워커를 만들고 에이전트와 모델을 고르세요.
+- **리뷰.** 풀 리퀘스트와 리뷰어 결과를 확인하세요.
+
+<img src="../docs/assets/readme/site/mobile.jpg" alt="어떤 메일 제공업체를 사용할지 묻는 에이전트와 휴대폰에서 보낸 답장을 보여주는 모바일 앱" width="100%" />
+
+### Cloud Agents
+
+워커를 내 컴퓨터가 아닌 호스팅된 작업 공간에서 실행하세요. **Clone to the cloud**를 선택하고 GitHub 저장소를 고르면 시작됩니다.
+
+- **계속 실행.** 노트북을 덮어도 작업이 계속됩니다.
+- **진행 상황 확인.** 데스크톱 앱에서 채팅, 파일, 터미널을 여세요.
+- **내 컴퓨터에는 아무것도 없음.** 코드, 워크트리, 에이전트가 모두 클라우드에 있습니다.
+
+설정 방법은 [Cloud 가이드](https://docs.orchestrator.inc/guides/cloud)를 참고하세요.
 
 ## 설치
 
-사용 중인 플랫폼에 맞는 최신 Orchestrator.inc 데스크톱 앱을 다운로드하세요. Orchestrator.inc는 업데이트를 자동으로 확인합니다.
+[orchestrator.inc/download](https://orchestrator.inc/download/) 또는 [GitHub Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)에서 다운로드하세요. 앱은 자동으로 업데이트됩니다.
 
-| 플랫폼                | 다운로드                                                                                                                      |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| macOS (Apple silicon) | [다운로드](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg)   |
-| macOS (Intel)         | [다운로드](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg)     |
-| Windows               | [다운로드](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe)      |
-| Linux (AppImage)      | [다운로드](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
-| Linux (Debian/Ubuntu) | [다운로드](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb)      |
-| Linux (Fedora/RHEL)   | [다운로드](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
+| 플랫폼 | 다운로드 |
+| :-- | :-- |
+| **macOS** (Apple silicon) | [`agent-orchestrator-darwin-arm64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg) |
+| **macOS** (Intel) | [`agent-orchestrator-darwin-x64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg) |
+| **Windows** | [`agent-orchestrator-win32-x64.exe`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe) |
+| **Linux** (AppImage) | [`agent-orchestrator-linux-x64.AppImage`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
+| **Linux** (Debian/Ubuntu) | [`agent-orchestrator-linux-x64.deb`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb) |
+| **Linux** (Fedora/RHEL) | [`agent-orchestrator-linux-x64.rpm`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm) |
 
-Orchestrator.inc를 열고 Orchestrator.inc가 관리할 저장소를 지정하세요. 데스크톱 앱이 데몬을 실행하므로 CLI는 필요하지 않습니다. 에이전트 CLI 설정 및 문제 해결은 [설치 가이드](https://docs.orchestrator.inc/installation)를 참고하세요.
-
-## 버그 신고
-
-[버그 신고를 열 때](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml)는 본인의 GitHub 계정을 사용하세요. 무엇을 했고 어떤 문제가 발생했는지 자신의 말로 몇 문장만 적으면 됩니다. 예상한 결과, 재현 단계, Orchestrator.inc 버전과 운영체제, 스크린샷이 있다면 추가하세요. 도움이 되지만 필수는 아닙니다.
-
-로컬 코딩 에이전트는 [bug-triage skill](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md)을 사용해 신고 내용을 정리하고 증거를 수집하는 일을 도울 수 있습니다. 이슈 본문에는 본인의 관찰만 담고, 에이전트가 수집한 로그, 데이터베이스 발췌, 조사 메모는 내용을 알 수 있는 별도 첨부 파일로 제공하세요. 본인 계정으로 제출하기 전에 초안을 검토하세요. 봇에게 대신 이슈를 등록해 달라고 요청하지 마세요. 신고자 정보가 정확히 남아야 합니다.
-
-문제 설명에 도움이 필요하면 [Discord bug-triaging 채널](https://discord.com/channels/1476302178913357958/1491735678156013588)을 이용하세요. 자세한 내용은 [기여 가이드](../CONTRIBUTING.md#bugs-and-features)를 참고하세요.
-
-## 개발 및 기여
-
-코드, 문서, 트리아지, 예제, 테스트 등 다양한 기여를 환영합니다.
-
-```bash
-git clone https://github.com/OrchestratorInc/agent-orchestrator.git
-cd agent-orchestrator
-```
-
-사전 요구 사항, 로컬 설정, 테스트 명령은 [개발 가이드](../docs/development.md)부터 확인하세요. 풀 리퀘스트를 열기 전에 [CONTRIBUTING.md](../CONTRIBUTING.md)를 읽고, 버그와 기능 요청에는 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues)를 사용하세요.
+Orchestrator.inc를 열고 관리할 저장소를 지정하세요. 데스크톱 앱이 데몬을 실행하므로 CLI는 필요하지 않습니다. 에이전트 CLI 설정 및 문제 해결은 [설치 가이드](https://docs.orchestrator.inc/installation)를 참고하세요.
 
 ## 문서
 
-| 문서                                                                | 다음 정보가 필요할 때                                               |
-| ------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [제품 문서](https://docs.orchestrator.inc)                                 | 설치, 에이전트 설정, 일상적인 제품 사용법.                          |
-| [docs/architecture.md](../docs/architecture.md)                     | 백엔드 멘탈 모델, 라이프사이클, 영속성, CDC, 상태 도출, 데몬 경계.  |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 패키지 소유권과 각 백엔드 관심사가 속하는 위치.                     |
-| [docs/cli/README.md](../docs/cli/README.md)                         | CLI 동작과 데몬 라우트 매핑.                                        |
-| [docs/development.md](../docs/development.md)                       | 로컬 개발을 위한 사전 요구 사항, 빌드 단계, 테스트 실행, 문제 해결. |
-| [docs/STATUS.md](../docs/STATUS.md)                                 | 현재 `main`에 출시된 내용과 아직 진행 중인 항목.                    |
+| 문서 | 다음 정보가 필요할 때 |
+| :-- | :-- |
+| [제품 문서](https://docs.orchestrator.inc) | 설치, 에이전트 설정, 일상적인 제품 사용법. |
+| [docs/documentation-map.md](../docs/documentation-map.md) | 어떤 문서가 사람을 위한 것이고 어떤 문서가 기계 판독용 계약인지, 내용이 어긋날 때 어느 쪽이 우선하는지. |
+| [docs/architecture.md](../docs/architecture.md) | 백엔드 멘탈 모델, 라이프사이클, 영속성, CDC, 상태 도출, 데몬 경계. |
+| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 패키지 소유권과 각 백엔드 관심사가 속하는 위치. |
+| [docs/cli/README.md](../docs/cli/README.md) | CLI 동작과 데몬 라우트 매핑. |
+| [docs/development.md](../docs/development.md) | 로컬 개발을 위한 사전 요구 사항, 빌드 단계, 테스트 실행, 문제 해결. |
+| [docs/STATUS.md](../docs/STATUS.md) | 현재 `main`에 출시된 내용과 아직 진행 중인 항목. |
+
+## 기여하기
+
+사전 요구 사항, 로컬 설정, 테스트 명령은 [개발 가이드](../docs/development.md)부터 확인하세요. 풀 리퀘스트를 열기 전에 [CONTRIBUTING.md](../CONTRIBUTING.md)를 읽고, 버그와 기능 요청에는 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues)를 사용하세요.
+
+### 버그 신고
+
+본인의 GitHub 계정으로 [버그 신고를 여세요](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml). 무엇을 했고 어떤 문제가 발생했는지 몇 문장이면 충분합니다. 버전, 운영체제, 재현 단계가 있다면 도움이 됩니다.
+
+로컬 코딩 에이전트는 [bug-triage skill](../.agents/skills/bug-triage/SKILL.md)로 증거 수집을 도울 수 있습니다. 에이전트의 로그와 메모는 첨부 파일로 제공하고, 직접 제출하기 전에 초안을 검토하세요. 봇에게 대신 이슈를 등록하게 하지 마세요.
+
+문제 설명에 도움이 필요하면 [Discord bug-triaging 채널](https://discord.com/channels/1476302178913357958/1491735678156013588)에 참여하세요. 자세한 내용은 [기여 가이드](../CONTRIBUTING.md#bugs-and-features)를 참고하세요.
 
 ## 커뮤니티
 
 도움 및 기여자 논의를 위해 [Discord](https://discord.com/invite/UZv7JjxbwG)에 참여하고, 업데이트를 보려면 [@useOrchestrator](https://x.com/useOrchestrator)를 팔로우하세요. [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues)에서 대화를 시작할 수도 있습니다.
 
+## Star 기록
+
+<a href="https://www.star-history.com/#OrchestratorInc/agent-orchestrator&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date&theme=dark" />
+    <img src="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date" alt="OrchestratorInc/agent-orchestrator의 Star 기록 차트" width="100%" />
+  </picture>
+</a>
+
 ## 제품 텔레메트리
 
-Orchestrator.inc는 프로젝트 내용을 제외한 사용 및 안정성 지표를 수집합니다. 프로젝트의 GitHub 소유자와 로그인한 GitHub 사용자 이름은 개인을 식별할 수 있으므로 이 텔레메트리는 익명이 아닙니다. 텔레메트리를 끄면 이 정보 전송도 중단됩니다. [세부 정보와 설정](../docs/telemetry.md).
+Orchestrator.inc는 제한된 사용 및 안정성 텔레메트리를 수집하며, 코드, 프롬프트, 에이전트 대화, 자격 증명은 절대 수집하지 않습니다. 여기에는 설치 ID와 GitHub 사용자 이름이 포함됩니다. AO Cloud에 로그인하면 AO Cloud 사용자 ID와 해당 계정의 이메일 주소도 포함되며, 이는 PostHog person 속성으로 한 번 설정됩니다(git config에서 읽지 않음). Settings > General > Privacy > Share usage analytics에서 모두 끌 수 있으며, 이 설정은 데스크톱, 데몬, 페어링된 휴대폰에 모두 적용됩니다. [수집 항목과 옵트아웃 방법 자세히 보기](../docs/telemetry.md).
 
 ## 라이선스
 

@@ -1,7 +1,10 @@
-import { act, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
-import { ActivityRow, AssistantMessage, HumanMessage, TurnOutcome } from "./ChatTimelineItems";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ActivityRow, AssistantMessage, ChatHostId, HumanMessage, ProviderSwitchMarker, TurnOutcome } from "./ChatTimelineItems";
+import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
+import { groupScriptRuns } from "../../lib/cloud-script-runs";
 import type { ConversationMessage } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
@@ -55,7 +58,10 @@ beforeEach(() => {
 	});
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+	vi.useRealTimers();
+	vi.restoreAllMocks();
+});
 
 /** Run frames at ~60 Hz until the drain finishes; returns the time it took. */
 function drain(from = 0, limitMs = 5000) {
@@ -76,6 +82,54 @@ describe("TurnOutcome", () => {
 
 		expect(screen.getByText("The agent ran into a problem")).toBeInTheDocument();
 		expect(screen.getByText("Provider error")).toBeInTheDocument();
+	});
+
+	it("presents a non-retryable usage limit as a historical notice without controls", () => {
+		render(
+			<TurnOutcome
+				state="failed"
+				error="Manage your limit at https://example.com/billing."
+				usageLimit={{ resetsAt: "2026-10-14T16:50:00Z", autoResume: false }}
+			/>,
+		);
+
+		expect(screen.getByText("Usage limit reached")).toBeInTheDocument();
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "https://example.com/billing" })).toHaveAttribute("href", "https://example.com/billing");
+	});
+
+	it("resumes an eligible limited prompt after its reset", () => {
+		const onRetry = vi.fn();
+		render(<TurnOutcome state="failed" usageLimit={{ resetsAt: "2020-01-01T00:00:00Z", autoResume: false }} retry={{ onRetry }} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(screen.queryByText("The agent ran into a problem")).not.toBeInTheDocument();
+	});
+
+	it("waits for a limited prompt's reset before exposing manual recovery", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-10-14T15:00:00Z"));
+		const onRetry = vi.fn();
+		render(<TurnOutcome state="failed" usageLimit={{ resetsAt: "2026-10-14T15:01:00Z", autoResume: false }} retry={{ onRetry }} />);
+
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(60_000));
+
+		expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
+		expect(onRetry).not.toHaveBeenCalled();
+	});
+
+	it.each([{ pending: true }, { disabled: true }])("keeps limited-prompt retry errors visible while recovery is unavailable: %j", (control) => {
+		const onRetry = vi.fn();
+		render(<TurnOutcome state="failed" usageLimit={{ autoResume: false }} retry={{ onRetry, error: "Stop the current turn before retrying this one", ...control }} />);
+
+		expect(screen.getByRole("alert")).toHaveTextContent("Stop the current turn before retrying this one");
+		expect(screen.getByRole("button", { name: "Resume" })).toBeDisabled();
+		fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+		expect(onRetry).not.toHaveBeenCalled();
 	});
 
 	it("preserves multiline provider text and links without interpreting its structure", () => {
@@ -346,15 +400,33 @@ describe("ActivityRow", () => {
 		render(
 			<ActivityRow activity={{
 				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
-				activityKind: "system", status: "completed", summary: "Setup finished",
+				activityKind: "system", status: "completed", summary: "Setup passed",
 				detail: { event: "workspace.setup", setupStatus: "succeeded", exitCode: 0, durationMs: 12_400, output: "compose up\nready" },
 			}} />,
 		);
-		expect(screen.getByText("Setup finished in 12s")).toBeInTheDocument();
+		expect(screen.getByText("Setup passed in 12s")).toBeInTheDocument();
 		expect(screen.queryByText(/compose up/)).toBeNull();
 		act(() => screen.getByRole("button", { name: "Show output" }).click());
 		expect(screen.getByRole("button", { name: "Hide output" })).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText(/compose up/)).toBeInTheDocument();
+	});
+
+	it("draws a script run as the step log panel", () => {
+		const run = groupScriptRuns([{
+			sessionId: "s1", sequence: 1, type: "workspace.script.step", createdAt: "2026-10-13T00:00:00Z",
+			payload: { phase: "setup", runId: "r", step: 1, total: 1, command: "make", repository: "", status: "failed", exitCode: 2, durationMs: 1000, output: "boom" },
+		}])[0];
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "run", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "failed", summary: "Setup failed",
+				detail: { event: "workspace.script.run", scriptRun: run },
+			}} />,
+		);
+		expect(screen.getByTestId("script-run-panel")).toHaveAttribute("data-run-status", "failed");
+		expect(screen.getByText("Failed at step 1")).toBeInTheDocument();
+		expect(screen.getByText("boom")).toBeInTheDocument();
+		expect(screen.queryByTestId("project-setup-row")).toBeNull();
 	});
 
 	it("shows the failed setup step with its exit code", () => {
@@ -367,6 +439,30 @@ describe("ActivityRow", () => {
 		);
 		expect(screen.getByText("Setup step 2 failed (exit 2)")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Show output" })).toBeNull();
+	});
+
+	it("shows why a setup step failed and, expanded, who ran it and where its full log is", () => {
+		render(
+			<ActivityRow activity={{
+				kind: "activity", id: "startup", sequence: 1, revision: 1, createdAt: "2026-10-13T00:00:00Z",
+				activityKind: "system", status: "failed", summary: "Setup failed",
+				detail: {
+					event: "workspace.setup", setupStatus: "failed", setupStep: 1, exitCode: 1, output: "permission denied: docker.sock",
+					setupHint: "This step ran as ao-worker, which cannot use Docker.",
+					setupFailure: {
+						command: "docker compose up -d", user: "ao-worker", groups: ["ao-worker"],
+						dir: "/home/coder/app", logPath: "/x/setup-logs/step-1.log",
+					},
+				},
+			}} />,
+		);
+		expect(screen.getByText("This step ran as ao-worker, which cannot use Docker.")).toBeInTheDocument();
+		act(() => screen.getByRole("button", { name: "Show output" }).click());
+		const output = screen.getByText(/Ran as ao-worker \(groups: ao-worker\)/);
+		expect(output).toHaveTextContent("Step 1: docker compose up -d");
+		expect(output).toHaveTextContent("Ran in /home/coder/app");
+		expect(output).toHaveTextContent("Full output: /x/setup-logs/step-1.log");
+		expect(output).toHaveTextContent("permission denied: docker.sock");
 	});
 
 	it("does not present a recovered historical activity as failed", () => {
@@ -405,5 +501,25 @@ describe("HumanMessage", () => {
 
 		rerender(<HumanMessage message={human()} sessionId="s1" queued />);
 		expect(container.querySelector(".cursor-chat-human-message")).toHaveAttribute("data-queued");
+	});
+});
+
+describe("ProviderSwitchMarker", () => {
+	it("names a remote session's models from its host's catalog", () => {
+		const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+		client.setQueryData(agentModelsQueryKey("codex", "", "host-1"), { models: [{ id: "gpt-6", label: "GPT Six" }] });
+		client.setQueryData(agentModelsQueryKey("codex", ""), { models: [{ id: "gpt-6", label: "Local name" }] });
+		render(
+			<QueryClientProvider client={client}>
+				<ChatHostId.Provider value="host-1">
+					<ProviderSwitchMarker activity={{
+						kind: "activity", id: "switch", sequence: 1, revision: 1, activityKind: "system", status: "completed",
+						summary: "Switched provider", createdAt: "2026-01-01T00:00:00Z",
+						detail: { event: "provider_switch", sourceHarness: "claude-code", targetHarness: "codex", targetModel: "gpt-6" },
+					}} />
+				</ChatHostId.Provider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("GPT Six")).toBeInTheDocument();
 	});
 });

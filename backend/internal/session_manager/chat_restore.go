@@ -70,7 +70,7 @@ func (m *Manager) ensureChatController(ctx context.Context, id domain.SessionID,
 	default:
 		restoreCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 		defer cancel()
-		attempt.result, err = m.resumeAgentWithMode(restoreCtx, id)
+		attempt.result, err = m.resumeAgentWithMode(restoreCtx, id, false)
 	}
 	if err != nil {
 		attempt.err = err
