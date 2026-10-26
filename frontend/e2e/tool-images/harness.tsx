@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import type { ConversationActivity } from "../../src/renderer/types/conversation";
 import { ActivityRow } from "../../src/renderer/components/chat/ChatTimelineItems";
 import { TooltipProvider } from "../../src/renderer/components/ui/tooltip";
 import "../../src/renderer/i18n";
@@ -7,7 +8,7 @@ import "../../src/renderer/styles.css";
 // Synthetic 32x32 checkerboard PNG, deliberately scaled only by the existing ChatImage component.
 const data = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAASUlEQVR4nO3OMQ0AMAwDwcApxGIKpnBJGcRDFXn5wePLF1nd086tcb99AAAAwA7YPlA9AAAA/IDtA9UDAADAD9g+UD0AAADsgAePf/6mCWRFdQAAAABJRU5ErkJggg==";
 const image = { type: "image", data, mimeType: "image/png" };
-const samples = [
+const samples: unknown[] = [
 	image,
 	{ text: "Nested ACP image", content: { content: image } },
 	{ text: "Source image", source: { data, media_type: "image/png" } },
@@ -22,7 +23,9 @@ createRoot(document.getElementById("root")!).render(
 			<ActivityRow activity={{
 				kind: "activity", id: `synthetic-${index}`, sequence: index + 1, revision: 1,
 				createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
-				summary: `Read fixture ${index + 1}`, detail: { toolName: `Read fixture ${index + 1}`, content },
+				summary: `Read fixture ${index + 1}`,
+				// Exercise historical provider wire shapes beyond the typed message-content intersection.
+				detail: { toolName: `Read fixture ${index + 1}`, content: content as NonNullable<ConversationActivity["detail"]>["content"] },
 			}} />
 		</section>)}
 	</main></TooltipProvider>,
