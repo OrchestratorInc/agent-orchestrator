@@ -4915,6 +4915,21 @@ paths:
           type:
           - "null"
           - integer
+      - description: preview cuts the large detail bodies of settled command, mcp_tool,
+          file_change and auto_review activities and marks them detailOmitted. Read
+          the full row from the activity endpoint. Defaults to full.
+        in: query
+        name: activityDetail
+        schema:
+          description: preview cuts the large detail bodies of settled command, mcp_tool,
+            file_change and auto_review activities and marks them detailOmitted. Read
+            the full row from the activity endpoint. Defaults to full.
+          enum:
+          - full
+          - preview
+          type:
+          - "null"
+          - string
       responses:
         "200":
           content:
@@ -6391,6 +6406,21 @@ paths:
           type:
           - "null"
           - integer
+      - description: preview cuts the large detail bodies of settled command, mcp_tool,
+          file_change and auto_review activities and marks them detailOmitted. Read
+          the full row from the activity endpoint. Defaults to full.
+        in: query
+        name: activityDetail
+        schema:
+          description: preview cuts the large detail bodies of settled command, mcp_tool,
+            file_change and auto_review activities and marks them detailOmitted. Read
+            the full row from the activity endpoint. Defaults to full.
+          enum:
+          - full
+          - preview
+          type:
+          - "null"
+          - string
       responses:
         "200":
           content:
@@ -6398,6 +6428,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/ConversationSnapshotResponse'
           description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "404":
           content:
             application/json:
@@ -6423,6 +6459,60 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Read a chat session's durable conversation
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/conversation/activities/{activityId}:
+    get:
+      operationId: getSessionConversationActivity
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: AO conversation activity identifier, from the snapshot's activities
+          array.
+        in: path
+        name: activityId
+        required: true
+        schema:
+          description: AO conversation activity identifier, from the snapshot's activities
+            array.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationActivityResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one conversation activity with its full detail
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve:
@@ -15425,6 +15515,10 @@ components:
         detail:
           additionalProperties: {}
           type: object
+        detailBytes:
+          type: integer
+        detailOmitted:
+          type: boolean
         id:
           type: string
         kind:

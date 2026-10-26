@@ -2390,6 +2390,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/conversation/activities/{activityId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one conversation activity with its full detail */
+        get: operations["getSessionConversationActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve": {
         parameters: {
             query?: never;
@@ -5285,6 +5302,8 @@ export interface components {
             detail?: {
                 [key: string]: unknown;
             };
+            detailBytes?: number;
+            detailOmitted?: boolean;
             id: string;
             /** @enum {string} */
             kind: "activity";
@@ -14279,6 +14298,8 @@ export interface operations {
                 beforeSequence?: null | number;
                 /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
+                /** @description preview cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities and marks them detailOmitted. Read the full row from the activity endpoint. Defaults to full. */
+                activityDetail?: "full" | "preview" | null;
             };
             header?: never;
             path: {
@@ -16024,6 +16045,8 @@ export interface operations {
                 beforeSequence?: null | number;
                 /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
+                /** @description preview cuts the large detail bodies of settled command, mcp_tool, file_change and auto_review activities and marks them detailOmitted. Read the full row from the activity endpoint. Defaults to full. */
+                activityDetail?: "full" | "preview" | null;
             };
             header?: never;
             path: {
@@ -16041,6 +16064,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConversationSnapshotResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionConversationActivity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description AO conversation activity identifier, from the snapshot's activities array. */
+                activityId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationActivityResponse"];
                 };
             };
             /** @description Not Found */
