@@ -1,5 +1,5 @@
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider, QueryObserver, type InfiniteData } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryObserver, InfiniteQueryObserver, type InfiniteData } from "@tanstack/react-query";
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -21,7 +21,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 
 import {
 	clearConversationProviderCatalogs,
-	conversationQueryKey, refreshLocalConversation, mergeConversationPages,
+	conversationQueryKey, conversationQueryOptions, refreshLocalConversation, mergeConversationPages,
 	conversationConfigOptionsQueryKey,
 	useConversation,
 	ProviderSwitchFailed,
@@ -1451,6 +1451,42 @@ describe("local conversation deltas", () => {
 		expect(data.pages[0].changeCursor).toBe(11);
 		expect(data.pages[0].oldestSequence).toBe(live.oldestSequence);
 		expect(invalidate).not.toHaveBeenCalled();
+		unsubscribe(); queryClient.clear();
+	});
+	it.each(["delta-first", "older-first"] as const)("retains the final update and older history when pagination resolves %s", async (order) => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const live = cachedLive();
+		const key = conversationQueryKey("ao-1");
+		queryClient.setQueryData(key, { pages: [live], pageParams: [undefined] });
+		const observer = new InfiniteQueryObserver(queryClient, conversationQueryOptions("ao-1"));
+		const unsubscribe = observer.subscribe(() => {});
+		const deltaResponse = deferred<{ data: Parameters<typeof toSnapshot>[0]; error: undefined }>();
+		const olderResponse = deferred<{ data: Parameters<typeof toSnapshot>[0]; error: undefined }>();
+		getMock.mockReturnValueOnce(deltaResponse.promise).mockReturnValueOnce(olderResponse.promise);
+		const refresh = refreshLocalConversation(queryClient, "ao-1");
+		const pagination = observer.fetchNextPage({ cancelRefetch: false });
+		expect(getMock).toHaveBeenCalledTimes(2);
+		const delta = { ...WIRE, continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, changeCursor: 11, afterSequence: 4, latestSequence: 4, oldestSequence: 2, hasMoreBefore: true,
+			messages: [{ kind: "message" as const, id: "final-message", turnId: "turn-1", sequence: 4, revision: 2, role: "assistant" as const, origin: "provider" as const, createdAt: "2026-10-26T00:00:00Z", editAvailable: false, text: "finished", streaming: false }] };
+		const older = { ...WIRE, continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, oldestSequence: 1, hasMoreBefore: false,
+			messages: [{ kind: "message" as const, id: "older-message", turnId: "turn-1", sequence: 1, revision: 1, role: "user" as const, origin: "human" as const, createdAt: "2026-10-26T00:00:00Z", editAvailable: false, text: "history", streaming: false }] };
+		if (order === "delta-first") {
+			deltaResponse.resolve({ data: delta, error: undefined });
+			// Allow the delta handler to run while the real pagination request is pending.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			olderResponse.resolve({ data: older, error: undefined });
+		} else {
+			olderResponse.resolve({ data: older, error: undefined });
+			await pagination;
+			deltaResponse.resolve({ data: delta, error: undefined });
+		}
+		await Promise.all([refresh, pagination]);
+		const data = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages).toHaveLength(2);
+		expect(data.pages[0].changeCursor).toBe(11);
+		expect(data.pages[0].items).toContainEqual(expect.objectContaining({ id: "final-message", revision: 2, text: "finished", streaming: false }));
+		expect(data.pages[1].items).toContainEqual(expect.objectContaining({ id: "older-message", text: "history" }));
+		expect(getMock).toHaveBeenCalledTimes(2);
 		unsubscribe(); queryClient.clear();
 	});
 	it.each([

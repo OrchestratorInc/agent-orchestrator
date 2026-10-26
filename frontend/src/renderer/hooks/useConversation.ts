@@ -418,6 +418,14 @@ export async function refreshLocalConversation(queryClient: QueryClient, session
 	}
 	const afterSequence = live.latestSequence + 1;
 	const delta = await fetchConversationPage(sessionId, undefined, undefined, afterSequence, live.changeCursor);
+	// Pagination can start after this GET and commit pages captured before it.
+	// Let those writes finish before merging, including a replacement fetch that
+	// starts while we wait. No await separates the final idle check and cache write.
+	let pending = queryClient.getQueryCache().find({ queryKey, exact: true });
+	while (pending?.state.fetchStatus !== "idle" && pending?.promise) {
+		await pending.promise.catch(() => {});
+		pending = queryClient.getQueryCache().find({ queryKey, exact: true });
+	}
 	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
 	if (!current || delta.afterSequence !== afterSequence || delta.conversationId !== live.conversationId || delta.activeBranchId !== live.activeBranchId || delta.visibleAfterSequence !== live.visibleAfterSequence || current.pages[0] !== live) {
 		await fallback();
