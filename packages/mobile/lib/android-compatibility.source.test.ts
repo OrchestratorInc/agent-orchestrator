@@ -148,13 +148,15 @@ describe("Android native compatibility boundaries", () => {
 		const screen = source("./chat/ChatSessionScreen.tsx");
 		expect(screen).toContain("dismissKeyboardBeforeSheet");
 		expect(screen).toMatch(/openTurnSettings[\s\S]*await dismissKeyboardBeforeSheet/);
-		expect(screen).toMatch(/menuOpen[\s\S]*dismissKeyboardBeforeSheet/);
+		expect(screen).toMatch(/const presentSheet = useCallback\(async \(entry: ChatSheetEntry\) => \{\s*await dismissKeyboardBeforeSheet/);
 	});
 
-	it("pins conversation actions to one Android detent on first open", () => {
+	// The usage details are a few short rows, so the sheet wraps them: one
+	// Android detent, which a swipe down closes.
+	it("sizes the conversation usage sheet to its rows", () => {
 		const layout = source("../app/_layout.tsx");
-		expect(layout).toContain('{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
-		expect(layout).toContain('Platform.OS === "android" && androidDetents ? [...androidDetents]');
+		expect(layout).toContain('{ name: "sheets/conversation-usage", detents: "fitToContents" }');
+		expect(layout).not.toContain("sheets/conversation-actions");
 	});
 
 	// With two detents Material only hid the sheet after a drag past half its
@@ -183,22 +185,14 @@ describe("Android native compatibility boundaries", () => {
 		expect(rootLayout).toMatch(/name="settings"\s*options=\{\{\s*presentation: Platform\.OS === "ios" \? "formSheet" : "card",/);
 	});
 
-	it("renders conversation actions in a single native list with its conversation header", () => {
-		const actions = source("./chat/ConversationActionsSheet.tsx");
-		const registry = source("./chat/chatSheetRegistry.ts");
-		expect(actions).toContain("<FlatList");
-		expect(actions).toMatch(/ListHeaderComponent=\{<SheetHeader[\s\S]*?\/>}/);
-		expect(actions).not.toContain("<ScrollView");
-		expect(registry).toContain("sessionTitle: string");
-		expect(actions).toContain('title={snapshot.title || "Untitled conversation"}');
-		expect(actions).toContain('subtitle={`Session · ${entry.sessionTitle}`}');
-		expect(actions).toContain("backgroundColor: t.bgBase");
-		expect(actions).toContain("backgroundColor: t.bgElevated");
-		expect(actions).not.toMatch(/<ScrollView[\s\S]*<View style=\{styles\.header\}>/);
-	});
-
-	it("keeps Android conversation-menu drags with the list instead of dismissing its sheet", () => {
-		const actions = source("./chat/ConversationActionsSheet.tsx");
-		expect(actions).toMatch(/<FlatList[\s\S]*nestedScrollEnabled/);
+	// Material's overflow menu from the top app bar, as iOS gets UIKit's pull-down:
+	// the root needs a bundled drawable on Android, and the sections are inline
+	// submenus, which Compose draws as dividers.
+	it("opens conversation actions as the top app bar's overflow menu", () => {
+		const menu = source("./chat/conversationActionsMenu.tsx");
+		expect(menu).toContain('<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Conversation actions">');
+		expect(menu).toContain("<Stack.Toolbar.Menu key={group.title} inline>");
+		expect(menu).toContain('icon={Platform.OS === "ios" ? item.icon : undefined}');
+		expect(source("./toolbarIcon.android.ts")).toContain('more_vert: require("../assets/icons/more_vert.xml")');
 	});
 });

@@ -2,40 +2,13 @@ import type { ComposerPickerCatalog } from "./composerSuggestions";
 import type { ConversationMarker } from "./timelineModel";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
 
-export type ConversationActionsEntry = {
-	kind: "conversation-actions";
-	sessionId: string;
-	snapshot: ConversationSnapshot;
-	subscribeEntry(listener: (entry: ConversationActionsEntry) => void): () => void;
+/** The conversation's context window, token counts and account limits, kept current while the sheet is up. */
+export type ConversationUsageEntry = {
+	kind: "conversation-usage";
 	sessionTitle: string;
-	/** What the Turn settings row names; empty when nothing is known. */
-	modelLabel: string;
-	openingShell: boolean;
-	compacting: boolean;
-	mcpReloading: boolean;
-	refreshing: boolean;
-	compactSupported: boolean;
-	mcpReloadSupported: boolean;
-	interfaceSupported: boolean;
-	interfaceReason?: string;
-	interfaceSwitching: boolean;
-	canRename: boolean;
-	canPin: boolean;
-	pinned: boolean;
-	canDelete: boolean;
-	onMap(): void;
-	onFiles(): void;
-	onOpenShell(): void;
-	onPreview(): void;
-	onPullRequests(): void;
-	onSettings(): void;
-	onSwitchInterface(): void;
-	onCompact(): void;
-	onReload(): void;
-	onRename(): void;
-	onTogglePin(): void;
-	onRefresh(): void;
-	onDelete(): void;
+	snapshot: ConversationSnapshot;
+	/** Calls back at once with the latest snapshot, then on every change. */
+	subscribeSnapshot(listener: (snapshot: ConversationSnapshot) => void): () => void;
 };
 
 export type ConversationRenameEntry = {
@@ -48,7 +21,7 @@ export type ChatSheetEntry =
 	| { kind: "turn-settings"; snapshot: ConversationSnapshot; models: ChatModel[]; options: ChatConfigOption[]; disabled?: boolean; error?: string; onSettings(settings: TurnSettings): Promise<void>; onOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>; onRefresh(): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }> }
 	| { kind: "conversation-map"; markers: ConversationMarker[]; onSelect(sequence: number): void }
 	| { kind: "composer-picker"; catalog: ComposerPickerCatalog; initialQuery?: string; truncated?: boolean; onSelect(value: string): void }
-	| ConversationActionsEntry
+	| ConversationUsageEntry
 	| ConversationRenameEntry;
 
 const entries = new Map<string, ChatSheetEntry>();
@@ -70,7 +43,7 @@ export function chatSheetRoute(entry: ChatSheetEntry) {
 		"turn-settings": "/sheets/chat-settings",
 		"conversation-map": "/sheets/conversation-map",
 		"conversation-rename": "/sheets/conversation-rename",
-		"conversation-actions": "/sheets/conversation-actions",
+		"conversation-usage": "/sheets/conversation-usage",
 		"composer-picker": "/sheets/composer-picker",
 	}[entry.kind];
 	return { pathname, params: { sheetKey } } as const;

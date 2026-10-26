@@ -1,16 +1,12 @@
-import { Feather } from "../icons";
-import { useNavigation, useRouter } from "expo-router";
+import { Stack, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
-import { Alert, Keyboard, Pressable, StyleSheet, View } from "react-native";
+import { Alert, Keyboard, Platform, StyleSheet, View } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
 import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
-import { resetHeaderRightForSwap } from "../headerRightSwap";
 import { openGitHub } from "../openGitHub";
-import { glassHeaderControl } from "../native-header-items";
-import { NativeHeaderButton } from "../native-header-button";
 import { InlineBanner, type InlineBannerProps } from "../InlineBanner";
 import { useApp } from "../store";
 import {
@@ -30,14 +26,16 @@ import { ChatLinkProvider } from "./ChatMarkdown";
 import { ChatTimeline } from "./ChatTimeline";
 import { useChatKeyboard } from "./useChatKeyboard";
 import { ConversationTitle } from "./ConversationTitle";
-import { chatSheetRoute, type ConversationActionsEntry } from "./chatSheetRegistry";
+import { chatSheetRoute, type ChatSheetEntry } from "./chatSheetRegistry";
+import { conversationActionsMenu } from "./conversationActionsMenu";
+import { conversationMenuGroups, type ConversationMenuAction } from "./conversationMenuModel";
 import { quotaWarning } from "./conversationChrome";
 import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
 import { turnSettingsModelLabel } from "./turnSettingsModel";
-import { brokenMcpServers, can } from "./types";
+import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { TimelineStartup } from "./ChatTimeline";
@@ -49,15 +47,20 @@ import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
-import { iconSize, space } from "../tokens";
+import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useChangeSummary } from "../files/useChangeSummary";
+import PULL_REQUEST_GLYPH from "../../assets/icons/tab-pull-request.png";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
+
+// SF Symbols draws a pull request; Material Symbols has none, so Android keeps
+// lucide's, as the PR tab does. A bitmap, which Compose's icon also draws.
+const PULL_REQUEST_ICON = Platform.OS === "ios" ? "arrow.triangle.pull" : PULL_REQUEST_GLYPH;
 
 async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<void> {
 	Keyboard.dismiss();
@@ -83,14 +86,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const [headerRightReady, setHeaderRightReady] = useState(false);
-	useLayoutEffect(
-		() => resetHeaderRightForSwap(
-			() => navigation.setOptions(glassHeaderControl("right")),
-			() => setHeaderRightReady(true),
-		),
-		[navigation],
-	);
 	const { config, currentHostId, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
@@ -105,10 +100,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useEffect(() => {
 		if (connection === "open" && loadFailed) void refreshConversation();
 	}, [connection, loadFailed, refreshConversation]);
-	const actionsEntryRef = useRef<ConversationActionsEntry | undefined>(undefined);
-	const actionsListeners = useRef(new Set<(entry: ConversationActionsEntry) => void>());
 	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
-	const [menuOpen, setMenuOpen] = useState(false);
 	const [collapsedReviewPRKey, setCollapsedReviewPRKey] = useState<string>();
 	const [loadedReviewPromptStateKey, setLoadedReviewPromptStateKey] = useState<string>();
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
@@ -139,27 +131,20 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		? undefined
 		: session.provisionError || "The session did not finish starting.";
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
+	// The usage sheet follows the conversation while it is up: the numbers move
+	// with every turn.
+	const latestSnapshot = useRef<ConversationSnapshot | undefined>(conversation.snapshot);
+	const snapshotListeners = useRef(new Set<(snapshot: ConversationSnapshot) => void>());
 	useLayoutEffect(() => {
-		const entry = actionsEntryRef.current;
+		latestSnapshot.current = conversation.snapshot;
 		const snapshot = conversation.snapshot;
-		if (!entry || entry.sessionId !== session.id || !snapshot) return;
-		const liveEntry = {
-			...entry,
-			snapshot,
-			modelLabel: turnSettingsModelLabel(snapshot, conversation.models, conversation.configOptions),
-			openingShell,
-			compacting: conversation.pendingActions.includes("compact"),
-			mcpReloading: conversation.pendingActions.includes("mcp"),
-			refreshing: conversation.refreshing,
-			compactSupported: can(snapshot, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
-			mcpReloadSupported: can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
-		};
-		actionsEntryRef.current = liveEntry;
-		actionsListeners.current.forEach((listener) => listener(liveEntry));
-	}, [conversation.snapshot, conversation.models, conversation.configOptions, conversation.pendingActions, conversation.refreshing, conversation.actionCodes, openingShell, interfaceSwitch.status, interfaceSwitch.error, interfaceSwitch.starting, interfaceTransitionActive, session.id]);
+		if (snapshot) snapshotListeners.current.forEach((listener) => listener(snapshot));
+	}, [conversation.snapshot]);
+	const subscribeSnapshot = useCallback((listener: (snapshot: ConversationSnapshot) => void) => {
+		snapshotListeners.current.add(listener);
+		if (latestSnapshot.current) listener(latestSnapshot.current);
+		return () => { snapshotListeners.current.delete(listener); };
+	}, []);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
 		!interfaceSwitch.transition?.noticeAcknowledgedAt &&
@@ -288,33 +273,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
 
-	// The title is set on the first commit, above. Only the trailing control waits:
-	// native-stack measures the replacement for a frame, and deferring the whole
-	// options object meant the title arrived with it — iOS then animated the
-	// header in from the top, after the screen had already landed.
-	useLayoutEffect(() => {
-		navigation.setOptions(
-			headerRightReady
-				? glassHeaderControl("right", (
-					<View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-						{reviewPromptCollapsed && reviewPromptPR ? (
-							<Pressable
-								testID="header-pullRequest"
-								accessibilityRole="button"
-								accessibilityLabel="Show PR card"
-								onPress={() => { haptics.tap(); expandReviewPrompt(); }}
-								style={({ pressed }) => [styles.reviewHeaderPRButton, { backgroundColor: pressed ? t.accentTint : t.bgElevatedHover }]}
-							>
-								<Feather name="git-pull-request" size={iconSize.lg} color={t.textSecondary} />
-							</Pressable>
-						) : null}
-						<NativeHeaderButton icon="more" label="Conversation actions" onPress={() => { haptics.tap(); setMenuOpen(true); }} />
-					</View>
-				))
-				: glassHeaderControl("right"),
-		);
-	}, [expandReviewPrompt, headerRightReady, navigation, reviewPromptCollapsed, reviewPromptPR, t]);
-
 	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;
 	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
 	const quoteSequence = useRef(0);
@@ -369,7 +327,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		setOpeningShell(true);
 		try {
 			const shell = await openSessionShell(config, session.id, session.projectId);
-			setMenuOpen(false);
 			router.push({ pathname: "/shell/[handleId]", params: { handleId: shell.handleId, projectId: session.projectId, sessionId: session.id, title: shell.title, hostId: config.hostId } });
 		} catch (cause) {
 			Alert.alert("Couldn't open shell", userFacingError(cause));
@@ -451,7 +408,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
-			setMenuOpen(false);
 			try {
 				await interfaceSwitch.start("tui", policy);
 			} catch (cause) {
@@ -483,78 +439,117 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		);
 	}, [interfaceSwitch, startInterfaceSwitch, turnActive, turnWaiting]);
 
-	useEffect(() => {
-		const current = conversation.snapshot;
-		if (!menuOpen || !current) return;
-		setMenuOpen(false);
-		const entry: ConversationActionsEntry = {
-			kind: "conversation-actions",
-			sessionId: session.id,
-			snapshot: current,
-			subscribeEntry: (listener) => {
-				actionsListeners.current.add(listener);
-				listener(actionsEntryRef.current ?? entry);
-				return () => { actionsListeners.current.delete(listener); };
-			},
-			sessionTitle: sessionName,
-			modelLabel: turnSettingsModelLabel(current, conversation.models, conversation.configOptions),
-			openingShell,
-			compacting: conversation.pendingActions.includes("compact"),
-			mcpReloading: conversation.pendingActions.includes("mcp"),
-			refreshing: conversation.refreshing,
-			compactSupported: can(current, "compaction") && !conversationActionUnsupported("compact", conversation.actionCodes.compact),
-			mcpReloadSupported: can(current, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp),
-			interfaceSupported: Boolean(interfaceSwitch.status?.supported),
-			interfaceReason: interfaceSwitch.status?.reason || interfaceSwitch.error,
-			interfaceSwitching: interfaceTransitionActive || interfaceSwitch.starting,
-			// Orchestrators are not deleted from here; the board owns their lifecycle.
-			canDelete: !("projectName" in session),
-			// The daemon refuses to rename the project orchestrator.
-			canRename: !("projectName" in session),
-			canPin: !("projectName" in session),
-			pinned: "projectName" in session ? false : Boolean(session.isPinned),
-			onFiles: filesNavigation.openChanges,
-			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
-			onOpenShell: () => void openShell(),
-			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
-			onPullRequests: () => {
-				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
-					? reviewRouteForSession(session, currentHostId)
-					: undefined;
-				if (route) openPage(route);
-				else router.push({ pathname: "/(tabs)/prs", params: { hostId: currentHostId, projectId: session.projectId } });
-			},
-			onSettings: () => void openTurnSettings(),
-			onSwitchInterface: requestInterfaceSwitch,
-			onCompact: () => void conversation.compact().catch(() => {}),
-			onReload: () => void conversation.reloadMcp().catch(() => {}),
-			onRename: () => router.push(chatSheetRoute({
-				kind: "conversation-rename",
-				initialTitle: sessionName,
-				onRename: (next) => renameWorker(session.id, next),
-			})),
-			onTogglePin: () => {
-				if ("projectName" in session) return;
-				void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
-			},
-			onRefresh: () => void conversation.refresh(),
-			onDelete: () => {
-				haptics.warning();
-				Alert.alert(
-					ARCHIVE_SESSION_CONFIRM.title,
-					ARCHIVE_SESSION_CONFIRM.message,
-					[
-						{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
-						// Leave first: the session this screen is showing is about to stop
-						// existing, and the board is where its row disappears from.
-						{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
-					],
-				);
-			},
-		};
-		actionsEntryRef.current = entry;
-		void dismissKeyboardBeforeSheet(keyboardVisible).then(() => router.push(chatSheetRoute(actionsEntryRef.current ?? entry)));
-	}, [currentHostId, conversation, filesNavigation, interfaceSwitch, interfaceTransitionActive, keyboardVisible, menuOpen, openPage, openShell, openTurnSettings, openingShell, requestInterfaceSwitch, router, session, sessionName, setWorkerPinned, title]);
+	// Chat sheets take the keyboard's place rather than opening under it.
+	const presentSheet = useCallback(async (entry: ChatSheetEntry) => {
+		await dismissKeyboardBeforeSheet(keyboardVisible);
+		router.push(chatSheetRoute(entry));
+	}, [keyboardVisible, router]);
+	const openUsage = useCallback(() => {
+		const snapshot = latestSnapshot.current;
+		if (snapshot) void presentSheet({ kind: "conversation-usage", sessionTitle: sessionName, snapshot, subscribeSnapshot });
+	}, [presentSheet, sessionName, subscribeSnapshot]);
+
+	// What the menu shows, as plain values: the conversation streams, and the menu
+	// is rebuilt only when one of these changes, not on every event.
+	const menuSnapshot = conversation.snapshot;
+	const isOrchestrator = "projectName" in session;
+	const menuReady = Boolean(menuSnapshot);
+	// The daemon refuses to rename the project orchestrator.
+	const menuCanRename = !isOrchestrator && Boolean(menuSnapshot && can(menuSnapshot, "rename"));
+	const menuCanCompact = Boolean(menuSnapshot && can(menuSnapshot, "compaction")) && !conversationActionUnsupported("compact", conversation.actionCodes.compact);
+	const menuCanReloadMcp = Boolean(menuSnapshot && can(menuSnapshot, "mcp_reload")) && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp);
+	const menuHasUsage = Boolean(menuSnapshot?.usage || menuSnapshot?.rateLimits);
+	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
+	const menuModelLabel = menuSnapshot ? turnSettingsModelLabel(menuSnapshot, conversation.models, conversation.configOptions) : "";
+	const menuRefreshing = conversation.refreshing;
+	const menuCompacting = conversation.pendingActions.includes("compact");
+	const menuMcpReloading = conversation.pendingActions.includes("mcp");
+	const menuInterfaceSupported = Boolean(interfaceSwitch.status?.supported);
+	const menuInterfaceReason = interfaceSwitch.status?.reason || interfaceSwitch.error;
+	const menuInterfaceSwitching = interfaceTransitionActive || interfaceSwitch.starting;
+	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
+		canRename: menuCanRename,
+		// Orchestrators are not pinned or archived from here; the board owns their lifecycle.
+		canPin: !isOrchestrator,
+		canDelete: !isOrchestrator,
+		canCompact: menuCanCompact,
+		canReloadMcp: menuCanReloadMcp,
+		hasUsage: menuHasUsage,
+		pinned: menuPinned,
+		modelLabel: menuModelLabel,
+		openingShell,
+		refreshing: menuRefreshing,
+		compacting: menuCompacting,
+		mcpReloading: menuMcpReloading,
+		turnInFlight: turnActive,
+		interfaceSupported: menuInterfaceSupported,
+		interfaceReason: menuInterfaceReason,
+		interfaceSwitching: menuInterfaceSwitching,
+	}) : undefined, [isOrchestrator, menuCanCompact, menuCanReloadMcp, menuCanRename, menuCompacting, menuHasUsage, menuInterfaceReason, menuInterfaceSupported, menuInterfaceSwitching, menuMcpReloading, menuModelLabel, menuPinned, menuReady, menuRefreshing, openingShell, turnActive]);
+
+	// Each menu item's work, read when it is chosen, so the menu does not have to
+	// change whenever a callback does.
+	const menuActions: Record<ConversationMenuAction, () => void> = {
+		files: filesNavigation.openChanges,
+		shell: () => void openShell(),
+		preview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
+		pull_requests: () => {
+			const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
+				? reviewRouteForSession(session, currentHostId)
+				: undefined;
+			if (route) openPage(route);
+			// The board is already under this page: going back to it, rather than
+			// pushing a second board on top.
+			else router.dismissTo({ pathname: "/prs", params: { hostId: currentHostId, projectId: session.projectId } });
+		},
+		map: () => {
+			const snapshot = latestSnapshot.current;
+			if (snapshot) void presentSheet({ kind: "conversation-map", markers: conversationMarkers(snapshot), onSelect: setJumpToSequence });
+		},
+		refresh: () => void conversation.refresh(),
+		settings: () => void openTurnSettings(),
+		usage: openUsage,
+		rename: () => void presentSheet({
+			kind: "conversation-rename",
+			initialTitle: sessionName,
+			onRename: (next) => renameWorker(session.id, next),
+		}),
+		pin: () => {
+			if ("projectName" in session) return;
+			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
+		},
+		compact: () => void conversation.compact().catch(() => {}),
+		terminal_ui: requestInterfaceSwitch,
+		reload_mcp: () => void conversation.reloadMcp().catch(() => {}),
+		delete: () => {
+			haptics.warning();
+			Alert.alert(
+				ARCHIVE_SESSION_CONFIRM.title,
+				ARCHIVE_SESSION_CONFIRM.message,
+				[
+					{ text: ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+					// Leave first: the session this screen is showing is about to stop
+					// existing, and the board is where its row disappears from.
+					{ text: ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: () => { backOr(router); void kill(session.id).catch(() => {}); } },
+				],
+			);
+		},
+	};
+	const menuActionsRef = useRef(menuActions);
+	menuActionsRef.current = menuActions;
+	const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);
+
+	// The PR card, once folded away, comes back from the header; the actions are
+	// the native pull-down menu beside it.
+	const showPRButton = reviewPromptCollapsed && Boolean(reviewPromptPR);
+	const headerItems = useMemo(() => menuGroups ? (
+		<Stack.Toolbar placement="right">
+			{showPRButton ? (
+				<Stack.Toolbar.Button icon={PULL_REQUEST_ICON} iconRenderingMode="template" accessibilityLabel="Show PR card" onPress={expandReviewPrompt} />
+			) : null}
+			{conversationActionsMenu(menuGroups, runMenuAction)}
+		</Stack.Toolbar>
+	) : null, [expandReviewPrompt, menuGroups, runMenuAction, showPRButton]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -637,6 +632,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			behavior={chatKeyboard.behavior}
 			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
 		>
+			{headerItems}
 			{interfaceTransitionActive ? (
 				<InlineBanner
 					tone="warning"
@@ -687,7 +683,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				onDismiss={dismissBanner}
 			/>
 			{conversation.error ? <DismissibleBanner copy={errorBanner("load", conversation.error)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="offline" action="Retry" onPress={() => void conversation.refresh()} /> : null}
-			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="warning" action="Details" onPress={() => setMenuOpen(true)} /> : null}
+			{quota ? <DismissibleBanner copy={quotaBanner(quota)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone={quota.severity === "critical" ? "danger" : "warning"} icon="warning" action="Details" onPress={openUsage} /> : null}
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="error" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon={{ ios: "arrow.uturn.backward", android: "undo" }} /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="error" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
@@ -806,7 +802,6 @@ function signInCommand(harness: string): string | undefined { return harness ===
 const makeStyles = (t: Theme) => StyleSheet.create({
 	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	reviewHeaderPRButton: { width: 44, height: 44, borderRadius: 22, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderStrong, alignItems: "center", justifyContent: "center", overflow: "hidden" },
 	center: { flex: 1, backgroundColor: t.bgBase },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.
 	startupLoading: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.xl, paddingTop: space.md },

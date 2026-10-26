@@ -71,13 +71,13 @@ describe("navigation surfaces", () => {
 		expect(session).not.toContain("deferRouteContent");
 	});
 
-	// The title is native header state, so it is set on the first commit. Deferring
-	// it with the trailing control made iOS animate the header in from the top.
-	it("sets the session header title without waiting for the control swap", () => {
-		const titleEffect = session.indexOf("headerTitle: () => (");
-		const gatedControl = session.indexOf("headerRightReady\n\t\t\t\t? glassHeaderControl");
-		expect(titleEffect).toBeGreaterThan(-1);
-		expect(gatedControl).toBeGreaterThan(-1);
-		expect(gatedControl).toBeGreaterThan(titleEffect);
+	// The title is native header state, set on the first commit. The trailing
+	// items are native bar items too, declared from the page, so nothing waits a
+	// frame to be measured and swapped in.
+	it("sets the session header title and items natively", () => {
+		expect(session).toContain("headerTitle: () => (");
+		expect(session).toContain('<Stack.Toolbar placement="right">');
+		expect(session).not.toContain("glassHeaderControl");
+		expect(session).not.toContain("resetHeaderRightForSwap");
 	});
 });
