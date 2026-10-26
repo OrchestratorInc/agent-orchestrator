@@ -14,7 +14,8 @@ const MODEL_CATALOG_REFRESH_POLL_MS = 3_000;
 
 // Survive observer teardown during a session open, while keeping hosts and
 // credential scopes separate. Login invalidation drops pending reads too.
-const pendingOpenCodeCatalogs = new Map<string, Promise<AgentModelCatalog>>();
+type PendingOpenCodeCatalog = { promise: Promise<AgentModelCatalog>; invalidated: boolean };
+const pendingOpenCodeCatalogs = new Map<string, PendingOpenCodeCatalog>();
 const openCodeRequestPrefix = (agentId: string, hostId?: string) => JSON.stringify([hostId || LOCAL_HOST, agentId]) + ":";
 
 
@@ -83,17 +84,37 @@ export function agentModelsQueryOptions(agentId: string, scope: string, hostId?:
 				if (!client.getQueryData(key) && browsing) client.setQueryData(key, browsing);
 				const before = client.getQueryData<AgentModelCatalog>(key);
 				const requestKey = openCodeRequestPrefix(agentId, hostId) + catalogScope;
-				let pending = pendingOpenCodeCatalogs.get(requestKey);
-				if (!pending) {
-					pending = requestAgentModels(agentId, catalogScope, "cached", hostId);
-					pendingOpenCodeCatalogs.set(requestKey, pending);
+				let result: AgentModelCatalog;
+				for (;;) {
+					let pending = pendingOpenCodeCatalogs.get(requestKey);
+					if (!pending) {
+						pending = { promise: requestAgentModels(agentId, catalogScope, "cached", hostId), invalidated: false };
+						pendingOpenCodeCatalogs.set(requestKey, pending);
+						const active = pending;
+						void active.promise.finally(() => {
+							if (pendingOpenCodeCatalogs.get(requestKey) === active) pendingOpenCodeCatalogs.delete(requestKey);
+						}).catch(() => {});
+					}
 					const active = pending;
-					void active.finally(() => {
-						if (pendingOpenCodeCatalogs.get(requestKey) === active) pendingOpenCodeCatalogs.delete(requestKey);
-					}).catch(() => {});
+					// CDC also invalidates inactive queries after their last observer
+					// cancels. Do not let a remount reuse that detached pre-event GET.
+					const unsubscribe = client.getQueryCache().subscribe((event) => {
+						if (event.type === "updated" && event.action.type === "invalidate"
+							&& event.query === client.getQueryCache().find({ queryKey: key, exact: true })) {
+							active.invalidated = true;
+							if (pendingOpenCodeCatalogs.get(requestKey) === active) pendingOpenCodeCatalogs.delete(requestKey);
+						}
+					});
+					try {
+						result = await active.promise;
+					} finally {
+						unsubscribe();
+					}
+					signal.throwIfAborted();
+					// An active query can also be invalidated without cancellation.
+					// Guarantee a post-event read before publishing or saving it.
+					if (!active.invalidated) break;
 				}
-				const result = await pending;
-				signal.throwIfAborted();
 				const current = client.getQueryData<AgentModelCatalog>(key);
 				const latest = current && current !== before ? current : result;
 				cacheAgentModels(latest, agentId, catalogScope, hostId);
