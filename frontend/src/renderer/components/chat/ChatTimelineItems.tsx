@@ -14,7 +14,7 @@ import { ChatImage } from "./ChatImage";
 import { useSentAttachmentPreview } from "../../lib/sent-attachment-previews";
 import { CloudMessageAttachments } from "./CloudMessageAttachments";
 import { splitCloudAttachmentReferences } from "../../lib/cloud-attachments";
-import { normalizeToolContent, ToolImage } from "./tool-content-images";
+import { normalizeToolContent, splitToolResult, ToolImage } from "./tool-content-images";
 import { createContext, Fragment, memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -2664,9 +2664,7 @@ function McpToolBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 			{args !== undefined ? <JsonPayload label="Arguments" value={args} /> : null}
 			{detail?.result !== undefined ? (
-				normalizeToolContent(detail.result).some((part) => part.kind === "image")
-					? <ToolContent value={detail.result} />
-					: <JsonPayload label="Result" value={detail.result} />
+				<ToolResult value={detail.result} />
 			) : null}
 			{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
 			{detail?.progress ? (
@@ -2759,6 +2757,17 @@ function AOToolRow({ view }: { view: AOToolView }) {
 					</motion.div>
 				) : null}
 			</AnimatePresence>
+		</div>
+	);
+}
+
+function ToolResult({ value }: { value: unknown }) {
+	const result = splitToolResult(value);
+	if (result.images.length === 0) return <JsonPayload label="Result" value={value} />;
+	return (
+		<div className="flex max-w-full flex-col gap-2">
+			{result.images.map((image, index) => <ToolImage key={index} image={image} />)}
+			<JsonPayload label="Result" value={result.value} />
 		</div>
 	);
 }
