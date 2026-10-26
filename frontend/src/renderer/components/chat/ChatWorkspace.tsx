@@ -127,7 +127,7 @@ import {
 	ChatHostId,
 } from "./ChatTimelineItems";
 import {
-	FromOrchestrator,
+	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
 	OrchestratorReply,
@@ -142,6 +142,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
+import { AutomationMessage } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -1423,13 +1424,6 @@ function ChatWorkspaceContent({
 	const discarded = snapshot.turns.filter((t) => t.rolledBack).length;
 
 	const brokenServers = useMemo(() => brokenMcpServers(snapshot), [snapshot]);
-	const reauthErrorInChat = snapshot.turns.some(
-		(entry) => entry.state === "failed" && Boolean(entry.errorMessage?.trim()) &&
-			entry.errorMessage?.trim() === snapshot.account?.reauthReason?.trim(),
-	) || snapshot.items.some(
-		(item) => item.kind === "activity" && item.activityKind === "error" &&
-			Boolean(item.summary.trim()) && item.summary.trim() === snapshot.account?.reauthReason?.trim(),
-	);
 	const editHumanMessage = onEditMessage;
 	const pendingApproval = useMemo(
 		() => latestPendingInteraction(snapshot.items, "approval", turn),
@@ -1811,9 +1805,9 @@ function ChatWorkspaceContent({
 					}
 					role="tabpanel"
 				>
-					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
+							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
 					) : null}
 					{!draftPersistenceAvailable ? (
 						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">
@@ -3913,6 +3907,10 @@ export function Timeline({
 			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
+		// Older history loads as the reader scrolls up within a screen of the top,
+		// before they reach it. The button above the first turn stays as the
+		// loading state and for histories too short to scroll.
+		if (movedUp && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
 		updateScrollbar();
 	}
 
@@ -4846,7 +4844,11 @@ function TimelineItem({
 				/>
 			);
 		}
-		return <FromOrchestrator item={item}><OriginMessage message={item} /></FromOrchestrator>;
+		return (
+			<FromAgent item={item}>
+				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
+			</FromAgent>
+		);
 	}
 	if (item.activityKind === "approval") {
 		// Pending approval owns the composer. Keeping it in the grouping model still
@@ -4868,9 +4870,9 @@ function TimelineItem({
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
 		return (
-			<FromOrchestrator item={item}>
+			<FromAgent item={item}>
 				<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
-			</FromOrchestrator>
+			</FromAgent>
 		);
 	}
 	// A plan whose turn AO never correlated — one from before this controller

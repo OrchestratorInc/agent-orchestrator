@@ -1004,6 +1004,9 @@ func TestOrdinaryResumeRejectsProviderHandleOutsideActiveBranch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match session handle") {
 		t.Fatalf("ordinary resume error = %v, want active-branch handle mismatch", err)
 	}
+	if !errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("mismatch error = %v, want ErrChatResumeFailed so the API answers 409", err)
+	}
 	if resumeCalls != 0 {
 		t.Fatalf("driver resume calls = %d, want mismatch rejected before provider launch", resumeCalls)
 	}

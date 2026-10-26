@@ -4903,13 +4903,13 @@ paths:
           type:
           - "null"
           - integer
-      - description: Maximum combined messages and activities to return. Defaults
-          to 200.
+      - description: Maximum messages to return; tool activity between them comes
+          along without counting. Defaults to 200.
         in: query
         name: limit
         schema:
-          description: Maximum combined messages and activities to return. Defaults
-            to 200.
+          description: Maximum messages to return; tool activity between them comes
+            along without counting. Defaults to 200.
           maximum: 500
           minimum: 1
           type:
@@ -6375,13 +6375,13 @@ paths:
           type:
           - "null"
           - integer
-      - description: Maximum combined messages and activities to return. Defaults
-          to 200.
+      - description: Maximum messages to return; tool activity between them comes
+          along without counting. Defaults to 200.
         in: query
         name: limit
         schema:
-          description: Maximum combined messages and activities to return. Defaults
-            to 200.
+          description: Maximum messages to return; tool activity between them comes
+            along without counting. Defaults to 200.
           maximum: 500
           minimum: 1
           type:

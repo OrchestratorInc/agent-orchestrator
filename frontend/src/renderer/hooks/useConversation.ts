@@ -411,12 +411,27 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	});
 }
 
+/**
+ * A cached local chat whose controller is ready or working. Such a chat learns
+ * every change through events; one still starting up or waking does not.
+ */
+export function conversationSettled(queryClient: QueryClient, sessionId: string): boolean {
+	const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId))?.pages[0]?.controller.state;
+	return state === "ready" || state === "busy";
+}
+
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
 	return infiniteQueryOptions({
 		queryKey: conversationQueryKey(sessionId, hostId),
 		initialPageParam: undefined as number | undefined,
 		queryFn: ({ pageParam }) => fetchConversationPage(sessionId, hostId, pageParam),
 		getNextPageParam: (page) => (page.hasMoreBefore ? page.oldestSequence : undefined),
+		// A local chat changes only through events, which invalidate it even while
+		// it is closed, and a reconnect invalidates every chat. Opening an unchanged
+		// chat again therefore needs no request; refetching here reloaded every page
+		// it had. Remote chats keep the default and their own polling.
+		...(hostId ? {} : { staleTime: Infinity }),
+		gcTime: 30 * 60_000,
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading
 		// instead of explaining why there is no conversation. Only genuinely
@@ -483,8 +498,10 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
+		// A live refresh may be in flight; cancelling it would drop the newest
+		// page for good. The older page then loads on the next scroll or click.
 		loadOlder: () => {
-			void query.fetchNextPage();
+			void query.fetchNextPage({ cancelRefetch: false });
 		},
 	};
 }

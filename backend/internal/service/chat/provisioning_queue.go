@@ -93,8 +93,12 @@ func (s *Service) queueWithoutController(
 		ClientMessageID:     msg.ClientMessageID,
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
+		SenderSessionID:     msg.SenderSessionID,
+		SenderProjectID:     msg.SenderProjectID,
+		SenderDisplayName:   msg.SenderDisplayName,
 		AuthoredByUser:      msg.AuthoredByUser,
 		Continuation:        msg.Continuation,
+		InteractionAt:       msg.InteractionAt,
 	}
 	created, err := s.store.AppendUserMessage(ctx, conversation.ID, record.ID, "", message, turnID, now)
 	if errors.Is(err, domain.ErrConversationRebound) {

@@ -10,6 +10,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import { conversationQueryKey } from "../hooks/useConversation";
 import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -1476,6 +1477,24 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
 		view.unmount();
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2));
+	});
+
+	it("reloads Chat history on open only while the cached chat is not ready", async () => {
+		workerSession("sess-1").mode = "chat";
+		for (const [state, reloads] of [["ready", 0], ["hibernated", 1]] as const) {
+			let finishView!: (result: { error: undefined }) => void;
+			chatViewPostMock.mockImplementationOnce(() => new Promise((resolve) => { finishView = resolve; }));
+			const view = render(<SessionView sessionId="sess-1" />);
+			view.client.setQueryData(conversationQueryKey("sess-1"), { pages: [{ controller: { state } }], pageParams: [undefined] });
+			const invalidate = vi.spyOn(view.client, "invalidateQueries");
+			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
+			await act(async () => { finishView({ error: undefined }); });
+			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
+			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
+			expect(conversationReloads, state).toHaveLength(reloads);
+			view.unmount();
+			chatViewPostMock.mockClear();
+		}
 	});
 
 	it("releases Chat without waiting for a pending wake and cleans up its late response", async () => {

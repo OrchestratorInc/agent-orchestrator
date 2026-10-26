@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
+import { useUiStore } from "../../stores/ui-store";
 import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -948,5 +949,47 @@ describe("ChatMarkdown streaming fade", () => {
 			</ChatLinkProvider>,
 		);
 		expect(screen.getByRole("link")).toHaveTextContent("docs");
+	});
+});
+
+describe("ChatMarkdown math", () => {
+	afterEach(() => useUiStore.setState({ renderMath: false }));
+
+	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
+		// With math off, `$a~b$` is prose, and streaming repair escapes its `~`.
+		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
+		act(() => useUiStore.setState({ renderMath: true }));
+		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
+		expect(container.querySelector("[data-tex]")).toHaveAttribute("data-tex", "a~b");
+	});
+
+	it("leaves dollar signs as text while the setting is off", () => {
+		const { container } = render(<ChatMarkdown text="Costs $5 and $10, or $x^2$." />);
+		expect(container).toHaveTextContent("Costs $5 and $10, or $x^2$.");
+		expect(container.querySelector("[data-math]")).toBeNull();
+	});
+
+	it("typesets inline and display formulas in every delimiter when on", async () => {
+		useUiStore.setState({ renderMath: true });
+		const { container } = render(
+			<ChatMarkdown text={"Euler $e^{i\\pi}+1=0$ and \\(x^2\\).\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$"} />,
+		);
+		await waitFor(() => expect(container.querySelectorAll('[data-math="inline"] .katex')).toHaveLength(2));
+		expect(container.querySelectorAll('[data-math="display"] .katex-display')).toHaveLength(2);
+		expect(container).not.toHaveTextContent("\\(");
+	});
+
+	it("typesets a ```math fence without the setting", async () => {
+		const { container } = render(<ChatMarkdown text={"```math\na^2+b^2=c^2\n```"} />);
+		await waitFor(() => expect(container.querySelector('[data-math="display"] .katex-display')).not.toBeNull());
+		expect(container.querySelector("pre")).toBeNull();
+	});
+
+	it("shows the TeX source when KaTeX cannot parse it", async () => {
+		useUiStore.setState({ renderMath: true });
+		const { container } = render(<ChatMarkdown text={"Try $\\notacommand{x}$ and $y$."} />);
+		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
+		expect(container.querySelectorAll('[data-math="inline"] .katex')).toHaveLength(1);
+		expect(container).toHaveTextContent("$\\notacommand{x}$");
 	});
 });

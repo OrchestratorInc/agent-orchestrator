@@ -14274,7 +14274,7 @@ export interface operations {
             query?: {
                 /** @description Read items older than this conversation sequence. Omit for the newest page. */
                 beforeSequence?: null | number;
-                /** @description Maximum combined messages and activities to return. Defaults to 200. */
+                /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
             };
             header?: never;
@@ -16017,7 +16017,7 @@ export interface operations {
             query?: {
                 /** @description Read items older than this conversation sequence. Omit for the newest page. */
                 beforeSequence?: null | number;
-                /** @description Maximum combined messages and activities to return. Defaults to 200. */
+                /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
             };
             header?: never;

@@ -1741,6 +1741,16 @@ FROM conversation_messages
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human';
 
+-- Earliest prompt of the named turns. A page that ends among interleaved turns
+-- (a prompt queued while another turn runs) reaches back to it, so a turn is not
+-- shown without its prompt. Zero when none of the turns has a prompt.
+-- name: SelectConversationEarliestTurnPrompt :one
+SELECT CAST(COALESCE(MIN(sequence), 0) AS INTEGER) AS first_sequence
+FROM conversation_messages
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND role = 'user'
+  AND turn_id IN (sqlc.slice('turn_ids'));
+
 -- name: SelectConversationQueuedEditDelivery :one
 SELECT request_hash FROM conversation_queued_edit_deliveries
 WHERE conversation_id = ? AND client_message_id = ?;

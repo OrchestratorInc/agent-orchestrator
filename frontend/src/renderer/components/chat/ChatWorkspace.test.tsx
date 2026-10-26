@@ -6,6 +6,7 @@ import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWorkspace, promptSpacerHeight, promptTopInset } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
+import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
 import {
 	chatFixture,
@@ -559,6 +560,27 @@ describe("ChatWorkspace timeline", () => {
 		log.scrollTop = 3190;
 		fireEvent.scroll(log);
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).not.toBeInTheDocument();
+	});
+
+	it("loads older history as the reader scrolls up within a screen of the top", () => {
+		const onLoadOlder = vi.fn();
+		const snapshot = chatFixtureLongHistory(8);
+		const view = render(<ChatWorkspace snapshot={snapshot} hasOlder onLoadOlder={onLoadOlder} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.scroll(log);
+		log.scrollTop = 1500;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).not.toHaveBeenCalled();
+
+		log.scrollTop = 600;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+		view.rerender(<ChatWorkspace snapshot={snapshot} hasOlder loadingOlder onLoadOlder={onLoadOlder} />);
+		log.scrollTop = 300;
+		fireEvent.scroll(log);
+		expect(onLoadOlder).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
@@ -3266,12 +3288,13 @@ describe("automation reports", () => {
 
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
-		expect(screen.getByText("1 annotation on Example")).toBeInTheDocument();
-		expect(screen.getByText("Make this clearer.")).toBeInTheDocument();
+		const feedback = screen.getByTestId("your-action");
+		expect(feedback).toHaveTextContent("Example");
+		expect(feedback).toHaveTextContent("Make this clearer.");
+		expect(feedback).toHaveTextContent("Queued · sends when the agent finishes");
 	});
 
-	it("renders browser annotation transport as a compact feedback card", () => {
+	it("renders browser annotation transport as the user's feedback, without its transport details", () => {
 		const source = chatFixture.items.find((item) => item.id === "m-4") as ConversationMessage;
 		const message: ConversationMessage = {
 			...source,
@@ -3297,10 +3320,9 @@ Task: Address the feedback below according to its wording. Visual adjustments ar
 </browser_annotations>`,
 		};
 
-		render(<OriginMessage message={message} />);
+		render(<AutomationMessage message={message} fallback={null} />);
 
-		expect(screen.getByText("Browser feedback")).toBeInTheDocument();
-		expect(screen.getByText("1 annotation on Google")).toBeInTheDocument();
+		expect(screen.getByText("Google")).toBeInTheDocument();
 		expect(screen.getByText("2 visual changes")).toBeInTheDocument();
 		expect(screen.getByText("div.badge")).toBeInTheDocument();
 		expect(screen.getByText("New")).toBeInTheDocument();

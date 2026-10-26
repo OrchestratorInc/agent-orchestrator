@@ -210,7 +210,7 @@ test("renderer: opening another session focuses its chat composer @T0", async ({
 	await expect(composer).toHaveText("typed after switching");
 });
 
-test("renderer: hovering a Chat session fetches its conversation before opening it @T0", async ({ page }) => {
+test("renderer: hovering a Chat session fetches its conversation once, and opening it reuses that @T0", async ({ page }) => {
 	await setup(page);
 	let requests = 0;
 	await page.route(`http://127.0.0.1:8080/api/v1/sessions/${sessionB}/conversation*`, async (route) => {
@@ -223,9 +223,13 @@ test("renderer: hovering a Chat session fetches its conversation before opening 
 	const row = page.getByRole("button", { name: /Open Session B/ }).first();
 	await row.hover();
 	await expect.poll(() => requests).toBe(1);
+	const viewRegistered = page.waitForResponse((response) =>
+		response.request().method() === "POST" && response.url().endsWith(`/sessions/${sessionB}/chat-view`));
 	await row.click();
 	await expect(page.getByText(`Existing conversation in ${sessionB}`)).toBeVisible();
-	// Opening registers a Chat view and refreshes the prefetched snapshot after a possible wake.
-	// React Query may also refetch the stale prefetched snapshot on mount.
-	await expect.poll(() => requests).toBeGreaterThanOrEqual(2);
+	// A ready chat changes only through events, so neither mounting it nor
+	// registering its Chat view downloads the prefetched history again.
+	await viewRegistered;
+	await page.waitForTimeout(500);
+	expect(requests).toBe(1);
 });

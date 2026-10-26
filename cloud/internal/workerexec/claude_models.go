@@ -2,13 +2,19 @@ package workerexec
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -53,6 +59,7 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 	}
 	defer func() { _ = stopProviderProcess(process); _ = process.Wait() }()
 	conn := acp.NewClientSideConnection(&cloudACPClient{}, stdin, stdout)
+	probeKey := claudeProbeKey(adapter, command.Path, env)
 	if _, err := conn.Initialize(ctx, acp.InitializeRequest{ProtocolVersion: acp.ProtocolVersionNumber}); err != nil {
 		return worker.ChatModelsResponse{}, fmt.Errorf("initialize Claude ACP: %w", err)
 	}
@@ -63,7 +70,7 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 		if loadErr == nil {
 			models, model, effort := claudeModelsFromOptions(loaded.ConfigOptions)
 			if len(models) > 0 {
-				probeClaudeApprovalModes(ctx, conn, acp.SessionId(nativeConversationID), models, model, loaded.ConfigOptions, loaded.Modes)
+				probeClaudeApprovalModes(ctx, conn, probeKey, acp.SessionId(nativeConversationID), models, model, loaded.ConfigOptions, loaded.Modes)
 				return claudeModelCatalog(models, model, effort, provider, loaded.ConfigOptions, loaded.Modes), nil
 			}
 		}
@@ -78,7 +85,7 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 	if len(models) == 0 {
 		return worker.ChatModelsResponse{}, errors.New("Claude ACP did not advertise model choices")
 	}
-	probeClaudeApprovalModes(ctx, conn, session.SessionId, models, model, session.ConfigOptions, session.Modes)
+	probeClaudeApprovalModes(ctx, conn, probeKey, session.SessionId, models, model, session.ConfigOptions, session.Modes)
 	return claudeModelCatalog(models, model, effort, provider, session.ConfigOptions, session.Modes), nil
 }
 
@@ -86,12 +93,16 @@ func DiscoverClaudeModels(ctx context.Context, command Command, nativeConversati
 // discovery session (claudeApprovalModesByModel) by switching the session to
 // the model and reading the options Claude ACP then advertises. The probes
 // share one short budget so a slow adapter cannot hold up the catalog, and the
-// session is put back on its own model afterwards. No turn runs on this
-// session: it belongs to the discovery process, which ends with the request.
-func probeClaudeApprovalModes(ctx context.Context, conn *acp.ClientSideConnection, sessionID acp.SessionId, models []worker.ChatModel, current string, options []acp.SessionConfigOption, modes *acp.SessionModeState) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	setModel := func(model string) ([]acp.SessionConfigOption, error) {
+// session is put back on its own model afterwards, with a budget of its own.
+// No turn runs on this session: it belongs to the discovery process, which
+// ends with the request.
+//
+// A model's probed modes are remembered under key (claudeProbeKey) for
+// claudeProbeTTL, so a worker's later catalog requests skip the probes: each
+// one restarts the model in the adapter, and on a slow sandbox they pushed the
+// catalog past the control plane's wait.
+func probeClaudeApprovalModes(ctx context.Context, conn *acp.ClientSideConnection, key string, sessionID acp.SessionId, models []worker.ChatModel, current string, options []acp.SessionConfigOption, modes *acp.SessionModeState) {
+	setModel := func(ctx context.Context, model string) ([]acp.SessionConfigOption, error) {
 		response, err := conn.SetSessionConfigOption(ctx, acp.SetSessionConfigOptionRequest{ValueId: &acp.SetSessionConfigOptionValueId{
 			SessionId: sessionID, ConfigId: "model", Value: acp.SessionConfigValueId(model),
 		}})
@@ -100,14 +111,113 @@ func probeClaudeApprovalModes(ctx context.Context, conn *acp.ClientSideConnectio
 		}
 		return response.ConfigOptions, nil
 	}
+	probeCtx, cancel := context.WithTimeout(ctx, claudeProbeBudget)
+	defer cancel()
 	switched := false
-	claudeApprovalModesByModel(models, current, options, modes, func(model string) ([]acp.SessionConfigOption, error) {
+	claudeApprovalModesByModel(models, current, options, modes, func(model string) ([]string, error) {
+		if cached, ok := claudeProbes.get(key, model, time.Now()); ok {
+			return cached, nil
+		}
 		switched = true
-		return setModel(model)
+		probed, err := setModel(probeCtx, model)
+		if err != nil {
+			return nil, err
+		}
+		// Only modes read while the session is really on model describe it.
+		if _, now, _ := claudeModelsFromOptions(probed); now != model {
+			return nil, fmt.Errorf("Claude ACP stayed on %q when switched to %q", now, model)
+		}
+		approvalModes := claudeApprovalModesFromOptions(probed, nil)
+		claudeProbes.put(key, model, approvalModes, time.Now())
+		return approvalModes, nil
 	})
 	if switched && current != "" {
-		_, _ = setModel(current)
+		restoreCtx, cancel := context.WithTimeout(ctx, claudeProbeRestoreBudget)
+		defer cancel()
+		_, _ = setModel(restoreCtx, current)
 	}
+}
+
+const (
+	// claudeProbeBudget bounds all of one catalog request's mode probes.
+	claudeProbeBudget = 5 * time.Second
+	// claudeProbeRestoreBudget is the switch back to the session's own model,
+	// kept apart so probes that use their whole budget cannot strand it.
+	claudeProbeRestoreBudget = 2 * time.Second
+	// claudeProbeTTL bounds how long a probed model's modes are reused, so an
+	// adapter change the key cannot see is picked up within it.
+	claudeProbeTTL = 30 * time.Minute
+)
+
+// claudeProbeKey identifies what a model's approval modes depend on: Claude
+// ACP offers auto only for a model whose Claude Code model info supports it,
+// and that info follows from the Claude Code build and the account and
+// provider it runs with. The key therefore covers the adapter and Claude Code
+// executables (path, size and modification time, so an in-place upgrade
+// counts) and the environment the adapter starts with, which carries the
+// credentials, provider and model configuration. It is a digest: no
+// credential is kept in memory as a key.
+func claudeProbeKey(adapter, claudeCode string, env map[string]string) string {
+	hash := sha256.New()
+	for _, path := range []string{adapter, claudeCode} {
+		resolved := path
+		if !filepath.IsAbs(resolved) {
+			if found, err := exec.LookPath(resolved); err == nil {
+				resolved = found
+			}
+		}
+		fmt.Fprintf(hash, "%s\x00", resolved)
+		if info, err := os.Stat(resolved); err == nil {
+			fmt.Fprintf(hash, "%d\x00%d\x00", info.Size(), info.ModTime().UnixNano())
+		}
+	}
+	keys := make([]string, 0, len(env))
+	for name := range env {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	for _, name := range keys {
+		fmt.Fprintf(hash, "%s=%s\x00", name, env[name])
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// claudeProbes remembers each model's probed approval modes; see
+// probeClaudeApprovalModes.
+var claudeProbes = &claudeProbeCache{}
+
+type claudeProbeCache struct {
+	mu      sync.Mutex
+	entries map[string]claudeProbeEntry
+}
+
+type claudeProbeEntry struct {
+	modes    []string
+	probedAt time.Time
+}
+
+func (c *claudeProbeCache) get(key, model string, now time.Time) ([]string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key+"\x00"+model]
+	if !ok || now.Sub(entry.probedAt) >= claudeProbeTTL {
+		return nil, false
+	}
+	return slices.Clone(entry.modes), true
+}
+
+func (c *claudeProbeCache) put(key, model string, modes []string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]claudeProbeEntry)
+	}
+	for name, entry := range c.entries {
+		if now.Sub(entry.probedAt) >= claudeProbeTTL {
+			delete(c.entries, name)
+		}
+	}
+	c.entries[key+"\x00"+model] = claudeProbeEntry{modes: slices.Clone(modes), probedAt: now}
 }
 
 // claudeApprovalModesByModel sets each model's ApprovalModes to the approval
@@ -117,7 +227,7 @@ func probeClaudeApprovalModes(ctx context.Context, conn *acp.ClientSideConnectio
 // Without a mode option a switch reports no modes, so other models are left
 // unknown rather than probed. A model whose probe fails keeps no modes, which
 // a client reads as unknown.
-func claudeApprovalModesByModel(models []worker.ChatModel, current string, options []acp.SessionConfigOption, modes *acp.SessionModeState, probe func(model string) ([]acp.SessionConfigOption, error)) {
+func claudeApprovalModesByModel(models []worker.ChatModel, current string, options []acp.SessionConfigOption, modes *acp.SessionModeState, probe func(model string) ([]string, error)) {
 	modeOption := false
 	for _, option := range options {
 		if option.Select != nil && option.Select.Id == "mode" {
@@ -136,7 +246,7 @@ func claudeApprovalModesByModel(models []worker.ChatModel, current string, optio
 		if err != nil {
 			continue
 		}
-		models[index].ApprovalModes = claudeApprovalModesFromOptions(probed, nil)
+		models[index].ApprovalModes = probed
 	}
 }
 

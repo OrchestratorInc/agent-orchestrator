@@ -55,7 +55,7 @@ import {
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
-import { conversationQueryKey } from "../hooks/useConversation";
+import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
 import { discardCapturedPendingFileAttachments } from "../hooks/useFileAttachments";
 import { useCloudCp } from "../hooks/useCloudCp";
 import type { CloudCpAOReviewRun, CloudCpSessionReviewState } from "../lib/cloud-cp";
@@ -1442,10 +1442,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					body: { viewId, active },
 				});
 				if (error) throw error;
-				// Remote conversations already refresh every two seconds.
+				// Remote conversations already refresh every two seconds. A ready or
+				// working chat hears every change through events, and a wake emits
+				// one, so only a chat still waking or stopped is refreshed here;
+				// refreshing a settled one reloaded every page it had on each return.
 				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
-					void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+					if (!conversationSettled(queryClient, sessionId)) {
+						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
+					}
 					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				}
 			} finally {

@@ -151,7 +151,7 @@ describe("orchestrator worker updates", () => {
 	});
 });
 
-describe("orchestrator messages in a worker chat", () => {
+describe("agent messages in a worker chat", () => {
 	const workspaces = [{
 		id: "proj", name: "proj", path: "/tmp/proj",
 		sessions: [
@@ -166,7 +166,7 @@ describe("orchestrator messages in a worker chat", () => {
 	it("draws the orchestrator's message under its name, linked to its session", () => {
 		renderOrchestrator([sent("Keep the draft local until Dhruv approves.", "proj-1"), reply("t1", 2, "Kept it local.")], vi.fn(), workspaces, "worker");
 
-		const message = screen.getByTestId("orchestrator-message");
+		const message = screen.getByTestId("agent-message");
 		expect(message).toHaveTextContent("Keep the draft local until Dhruv approves.");
 		expect(message).not.toHaveTextContent("[from");
 		expect(within(message).getByRole("link", { name: "Orchestrator" })).toHaveAttribute("href", "ao://sessions/proj/proj-1");
@@ -175,7 +175,7 @@ describe("orchestrator messages in a worker chat", () => {
 	it("marks the paths in its plain prose as code and links the sessions it names", () => {
 		renderOrchestrator([sent("Compare /tmp/proj/.ao/shot.png with proj-7, then report.", "proj-1"), reply("t1", 2, "On it.")], vi.fn(), workspaces, "worker");
 
-		const message = screen.getByTestId("orchestrator-message");
+		const message = screen.getByTestId("agent-message");
 		expect(within(message).getByText("/tmp/proj/.ao/shot.png").tagName).toBe("CODE");
 		expect(within(message).getByRole("link", { name: "proj-7" })).toHaveAttribute("href", "ao://sessions/proj/proj-7");
 		expect(message).toHaveTextContent("Compare /tmp/proj/.ao/shot.png with proj-7, then report.");
@@ -184,7 +184,7 @@ describe("orchestrator messages in a worker chat", () => {
 	it("keeps an authored reference link to its own target", () => {
 		renderOrchestrator([sent("See [proj-7][target].\n\n[target]: ao://sessions/proj/proj-1", "proj-1"), reply("t1", 2, "Ok.")], vi.fn(), workspaces, "worker");
 
-		const links = within(screen.getByTestId("orchestrator-message")).getAllByRole("link", { name: "proj-7" });
+		const links = within(screen.getByTestId("agent-message")).getAllByRole("link", { name: "proj-7" });
 		expect(links).toHaveLength(1);
 		expect(links[0]).toHaveAttribute("href", "ao://sessions/proj/proj-1");
 	});
@@ -204,10 +204,18 @@ describe("orchestrator messages in a worker chat", () => {
 		await waitFor(() => expect(result.current.plugins).not.toBe(first));
 	});
 
-	it("leaves a message from any other session as it was", () => {
+	it("names a sibling worker by its task", () => {
 		renderOrchestrator([sent("Rebased on main.", "proj-7"), reply("t1", 2, "Noted.")], vi.fn(), workspaces, "worker");
 
-		expect(screen.queryByTestId("orchestrator-message")).not.toBeInTheDocument();
+		const message = screen.getByTestId("agent-message");
+		expect(message).toHaveTextContent("Rebased on main.");
+		expect(within(message).getByRole("link", { name: "Sibling worker" })).toHaveAttribute("href", "ao://sessions/proj/proj-7");
+	});
+
+	it("leaves a message whose sender this chat cannot find as it was", () => {
+		renderOrchestrator([sent("Rebased on main.", "proj-404"), reply("t1", 2, "Noted.")], vi.fn(), workspaces, "worker");
+
+		expect(screen.queryByTestId("agent-message")).not.toBeInTheDocument();
 		expect(screen.getByText("Rebased on main.")).toBeInTheDocument();
 	});
 });

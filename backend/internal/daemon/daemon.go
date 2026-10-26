@@ -630,7 +630,10 @@ func Run(buildVersion string) error {
 	sessMgr.SetTerminalInputGate(termMgr)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
-	lcStack.LCM.SetSessionInputLease(sessMgr)
+	// Lifecycle reactions deliberately do not hold Session Manager's input
+	// lease: they reach the agent through sessMgr.Send, which leases its own
+	// pane writes. Holding it here deadlocked every reaction to a hibernated
+	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log})
