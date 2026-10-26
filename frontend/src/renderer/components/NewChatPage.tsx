@@ -23,7 +23,7 @@ import { hasProviderPermissionMode, partitionConfigOptions, TRIGGER_CLASS, TurnS
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { useUiStore } from "../stores/ui-store";
-import { topbarDragStyle } from "./ShellTopbar";
+import { topbarDragStyle } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";

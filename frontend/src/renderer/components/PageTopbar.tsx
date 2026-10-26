@@ -16,7 +16,7 @@ import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
  */
 
 const usesNativeDragRegion = isMacPlatform() || isLinuxPlatform();
-const dragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
+export const topbarDragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "drag" } as CSSProperties) : undefined;
 const noDragStyle = usesNativeDragRegion ? ({ WebkitAppRegion: "no-drag" } as CSSProperties) : undefined;
 
 const TopbarTrailingActionsContext = createContext<HTMLDivElement | null>(null);
@@ -74,7 +74,7 @@ function usePageTopbarPaddingLeft() {
 }
 
 function PageTopbarFrame({ className, ...props }: ComponentProps<"header">) {
-	return <header className={cn("flex h-toolbar w-full shrink-0 items-center", className)} style={dragStyle} {...props} />;
+	return <header className={cn("flex h-toolbar w-full shrink-0 items-center", className)} style={topbarDragStyle} {...props} />;
 }
 
 export const topbarTitleClass = "text-brand font-semibold tracking-tight leading-none text-foreground whitespace-nowrap";
@@ -94,7 +94,7 @@ export function PageTopbar({
 	return (
 		<PageTopbarFrame
 			className={cn("workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-(--gap-topbar-control)", className)}
-			style={{ ...dragStyle, paddingLeft: isMacPlatform() ? undefined : paddingLeft }}
+			style={{ ...topbarDragStyle, paddingLeft: isMacPlatform() ? undefined : paddingLeft }}
 			{...props}
 		>
 			<div className="flex min-w-0 flex-1 items-center gap-2.5">
