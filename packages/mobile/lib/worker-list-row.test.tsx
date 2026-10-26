@@ -69,9 +69,13 @@ vi.mock("./ThemeProvider", () => {
 	};
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
 });
-vi.mock("./worker-action-model", () => ({ workerContextActions: () => [] }));
+vi.mock("./worker-action-model", async (importOriginal) => ({
+	...await importOriginal<typeof import("./worker-action-model")>(),
+	workerContextActions: () => [],
+}));
 vi.mock("./worker-row-actions", () => ({ WorkerRowActions: "WorkerRowActions" }));
-vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+// A host that keeps the row's handlers, so a test can press, act and swipe.
+vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: (props: { children: React.ReactNode }) => createElement("RowInteraction", props, props.children) }));
 vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader" }));
 vi.mock("./store", () => ({ useApp: () => ({ ...boardStore, ...useContext(appContext) }) }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
@@ -234,6 +238,33 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+});
+
+// Haptics mark an outcome or a destructive confirmation; opening a row,
+// pressing a rail control or folding a section stays silent, and one action
+// never buzzes twice.
+describe("worker board haptics", () => {
+	it("fires one warning as Archive asks to confirm, and nothing for the presses before it", async () => {
+		const { haptics } = await import("./haptics");
+		const { Alert } = await import("react-native");
+		const fired = () => Object.values(haptics).flatMap((fn) => vi.mocked(fn).mock.calls.length ? [fn] : []);
+		for (const fn of Object.values(haptics)) vi.mocked(fn).mockClear();
+		vi.mocked(Alert.alert).mockClear();
+		router.push.mockClear();
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<WorkerBoardList sessions={[session]} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />); });
+		const row = renderer.root.findByType("RowInteraction" as never);
+		act(() => row.props.onPress());
+		expect(router.push).toHaveBeenCalledTimes(1);
+		act(() => row.props.onAction("rename"));
+		act(() => row.props.rightActions.props.onSetPinned(true));
+		expect(fired()).toEqual([]);
+		act(() => row.props.rightActions.props.onDelete());
+		expect(Alert.alert).toHaveBeenCalledTimes(1);
+		expect(fired()).toEqual([haptics.warning]);
+		expect(vi.mocked(haptics.warning)).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
 	});
 });
 

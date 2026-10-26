@@ -274,7 +274,6 @@ export function WorkerBoardList({
 		}
 	}, [onRefresh, resort]);
 	const showLatest = useCallback(() => {
-		haptics.select();
 		scrollAfterResort.current = true;
 		resort();
 	}, [resort]);
@@ -325,8 +324,9 @@ export function WorkerBoardList({
 		[collapsedSections, listSections, archiveStatusShown, archiveOpen],
 	);
 
+	// Disclosure and plain presses stay silent; haptics mark an outcome (a pin, a
+	// recovery, a restore) or a destructive confirmation.
 	const toggleSection = useCallback((zone: string) => {
-		haptics.tap();
 		setCollapsedSections((current) => ({ ...current, [zone]: !current[zone] }));
 	}, []);
 
@@ -358,7 +358,6 @@ export function WorkerBoardList({
 	// Both are recoveries rather than destructive, so neither asks first — the
 	// failure path is an alert, not a confirmation.
 	const runWorkerRecovery = useCallback(async (session: DashboardSession, kind: "resume" | "restore") => {
-		haptics.tap();
 		try {
 			await (kind === "resume" ? resumeAgent(session.id, sessionHostId(session)) : restore(session.id, sessionHostId(session)));
 			haptics.success();
@@ -419,7 +418,6 @@ export function WorkerBoardList({
 		restoringRef.current = key;
 		setRestoringKey(key);
 		setRestoreErrors(({ [key]: _cleared, ...rest }) => rest);
-		haptics.tap();
 		try {
 			await restore(session.id, sessionHostId(session));
 			if (!current()) return;
@@ -602,10 +600,7 @@ function ArchiveHeader({ count, open, onToggle }: { count: number; open: boolean
 			accessibilityState={{ expanded: open }}
 			accessibilityLabel={`Archive, ${count} session${count === 1 ? "" : "s"}`}
 			android_ripple={feedback.android_ripple}
-			onPress={() => {
-				haptics.tap();
-				onToggle();
-			}}
+			onPress={onToggle}
 			style={({ pressed }) => [styles.archiveHeader, pressed && feedback.pressed]}
 		>
 			<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.sm} color={t.textTertiary} />

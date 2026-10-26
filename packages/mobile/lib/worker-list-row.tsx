@@ -141,6 +141,8 @@ export const WorkerListRow = memo(
 		});
 		return () => subscription.remove();
 	}, [cancelRename, isRenaming]);
+	// No haptics on these presses: the pin's result and Archive's confirmation
+	// each give their own, and opening a row is navigation.
 	const renderRightActions = useCallback(
 		() => (
 			<WorkerRowActions
@@ -148,16 +150,14 @@ export const WorkerListRow = memo(
 				pinned={Boolean(session.isPinned)}
 				onSetPinned={(pinned) => {
 					closeActionRailRef.current();
-					haptics.tap();
 					void onSetPinned(pinned);
 				}}
-				onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
+				onDelete={() => { closeActionRailRef.current(); onDelete(); }}
 			/>
 		),
 		[onDelete, onSetPinned, row.title, session.isPinned],
 	);
 	const openSession = useCallback(() => {
-		haptics.tap();
 		router.push({
 			pathname: "/session/[id]",
 			params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? hostId },
@@ -184,7 +184,6 @@ export const WorkerListRow = memo(
 			case "unpin":
 				return void onSetPinned(false);
 			case "rename":
-				haptics.tap();
 				setRenameTitle(row.title);
 				return onRenameStart();
 			case "resume":
