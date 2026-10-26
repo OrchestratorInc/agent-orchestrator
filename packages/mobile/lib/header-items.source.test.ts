@@ -30,10 +30,12 @@ describe("native header items", () => {
 		expect(file).not.toContain("headerAction");
 	});
 
-	it("draws the shared header button's unread dot natively", () => {
+	// Every page's title, back button and actions are the native header's, so
+	// the drawn header row and its icon button are gone.
+	it("leaves no drawn header row to build a page header from", () => {
 		const ui = source("./ui.tsx");
-		const button = ui.slice(ui.indexOf("export function HeaderIconButton"), ui.indexOf("export const MASCOT_ASPECT"));
-		expect(button).toContain("badge={badge}");
-		expect(button).not.toContain("headerBadge");
+		expect(ui).not.toContain("export function ScreenHeader");
+		expect(ui).not.toContain("export function HeaderIconButton");
+		expect(ui).not.toContain("native-header-button");
 	});
 });

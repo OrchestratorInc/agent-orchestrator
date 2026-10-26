@@ -27,7 +27,6 @@ vi.mock("./icons", async () => {
 	return { Feather: (props: object) => React.createElement("Feather", props) };
 });
 vi.mock("./haptics", () => ({ haptics: { tap() {} } }));
-vi.mock("./native-header-button", () => ({ NativeHeaderButton: "NativeHeaderButton" }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => true }));
 vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
 vi.mock("./ThemeProvider", async () => {

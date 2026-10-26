@@ -35,7 +35,6 @@ vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./MachineIdentity", () => ({ MachineAvatar: "MachineAvatar" }));
 vi.mock("./hosts", () => ({ loadHosts: async () => fixtures.hosts }));
 vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
-vi.mock("./native-header-button", () => ({ NativeHeaderButton: "NativeHeaderButton" }));
 vi.mock("./RouteErrorBoundary", () => ({ SheetErrorBoundary: () => null }));
 
 import MachineNameSheet from "../app/sheets/machine-name";

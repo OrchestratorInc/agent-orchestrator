@@ -36,10 +36,6 @@ vi.mock("./icons", async () => {
 	return { Feather: (props: object) => React.createElement("Feather", props) };
 });
 vi.mock("./haptics", () => ({ haptics: { tap() {} } }));
-vi.mock("./native-header-button", async () => {
-	const React = await import("react");
-	return { NativeHeaderButton: (props: object) => React.createElement("NativeHeaderButton", props) };
-});
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
 vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
 vi.mock("./ThemeProvider", () => {
@@ -48,24 +44,7 @@ vi.mock("./ThemeProvider", () => {
 });
 
 import { fontScaleCap, space, type } from "./tokens";
-import { ListSectionHeader, NumberedStep, ScreenHeader, SheetHeader } from "./ui";
-
-describe("ScreenHeader", () => {
-	it("keeps a long title on one line when a right-side identity is present", () => {
-		let renderer!: ReactTestRenderer;
-		act(() => {
-			renderer = create(<ScreenHeader title="A very long project name" right="Machine" />);
-		});
-
-		const title = renderer.root.findAll((node) => (node.type as unknown) === "Text" && node.children.includes("A very long project name"))[0];
-		expect(title.props.numberOfLines).toBe(1);
-		expect(title.props.ellipsizeMode).toBe("tail");
-	});
-
-	it("marks its title as a heading", () => {
-		expect(textNode(render(<ScreenHeader title="Projects" />), "Projects").props.accessibilityRole).toBe("header");
-	});
-});
+import { ListSectionHeader, NumberedStep, SheetHeader } from "./ui";
 
 describe("SheetHeader", () => {
 	it("marks its title as a heading", () => {

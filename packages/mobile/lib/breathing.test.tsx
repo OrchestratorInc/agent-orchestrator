@@ -46,7 +46,6 @@ vi.mock("react-native", async () => {
 });
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./haptics", () => ({ haptics: { tap() {} } }));
-vi.mock("./native-header-button", () => ({ NativeHeaderButton: "NativeHeaderButton" }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => fixtures.reduceMotion }));
 vi.mock("./motionHooks", () => ({ useEnterTransition: () => ({}) }));
 vi.mock("./ThemeProvider", async () => {

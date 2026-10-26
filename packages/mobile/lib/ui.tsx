@@ -17,7 +17,6 @@ import { resolveChromeIcon, type ChromeIcon } from "./chromeIcon";
 import { haptics } from "./haptics";
 import { BREATHE_MS, shouldBreathe } from "./motion";
 import { useEnterTransition } from "./motionHooks";
-import { NativeHeaderButton, type NativeHeaderButtonIcon } from "./native-header-button";
 import { usePressFeedback, type PressTone } from "./pressFeedback";
 import { Spinner } from "./Spinner";
 import { useReducedMotion } from "./useReducedMotion";
@@ -169,35 +168,6 @@ export function Pill({
 	);
 }
 
-// A bare glyph for the header's trailing slot, with an optional unread dot.
-// No haptic: every one of these navigates or opens a dialog, and neither the
-// system's header items nor its back button tick.
-export function HeaderIconButton({
-	icon,
-	label,
-	onPress,
-	badge = 0,
-}: {
-	icon: NativeHeaderButtonIcon;
-	/** Required — the control has no visible text. */
-	label: string;
-	onPress: () => void;
-	/** Non-zero shows an unread dot. The number itself is not drawn. */
-	badge?: number;
-}) {
-	const s = useThemedStyles(makeStyles);
-	return (
-		<View style={s.headerIconBtn}>
-			<NativeHeaderButton
-				icon={icon}
-				label={badge > 0 ? `${label}, ${badge} unread` : label}
-				badge={badge}
-				onPress={onPress}
-			/>
-		</View>
-	);
-}
-
 // `mascot.png` is the desktop mascot (frontend/assets/ao-mascot.png) cropped to
 // its artwork, with the eye sockets filled so they stay dark on light themes.
 // Its aspect ratio, as height / width.
@@ -242,29 +212,6 @@ export function MascotLamp({ status, size = 40 }: { status?: ConnStatus; size?: 
 					</View>
 				</>
 			) : null}
-		</View>
-	);
-}
-
-export function ScreenHeader({
-	title,
-	left,
-	right,
-}: {
-	title: string;
-	left?: ReactNode;
-	right?: ReactNode;
-}) {
-	const s = useThemedStyles(makeStyles);
-	return (
-		<View style={s.screenHeader}>
-			{left}
-			<View style={{ flex: 1, minWidth: 0 }}>
-				<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.title} numberOfLines={1} ellipsizeMode="tail" style={s.screenTitle}>
-					{title}
-				</Text>
-			</View>
-			{right}
 		</View>
 	);
 }
@@ -658,15 +605,6 @@ const makeStyles = (t: Theme) =>
 		pillText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		pillTextActive: { color: t.accent },
 
-		screenHeader: {
-			flexDirection: "row",
-			alignItems: "center",
-			paddingHorizontal: space.lg,
-			paddingTop: space.sm,
-			paddingBottom: space.sm,
-			gap: space.md,
-		},
-		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		// Enlarged from 30x26: the wand-tip lamp replaced the "live" pill, so the tip
 		// has to be big enough for the dot to actually read as a status light.
 		mascotWrap: { marginTop: space.hair },
@@ -685,18 +623,6 @@ const makeStyles = (t: Theme) =>
 			shadowOpacity: 0.9,
 			shadowRadius: 6,
 			shadowOffset: { width: 0, height: 0 },
-		},
-		screenTitle: { fontFamily: "Geist_600SemiBold",
-			color: t.textPrimary,
-			fontSize: type.title1.fontSize,
-			fontWeight: "600",
-			letterSpacing: -0.5,
-		},
-		screenSubtitle: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, marginTop: space.none },
-		headerIconBtn: {
-			alignItems: "center",
-			justifyContent: "center",
-			padding: space.hair,
 		},
 
 		// The platform's touch target is the floor, so a one-line button is exactly
