@@ -22,7 +22,7 @@ import { font, fontScaleCap, radius, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
 import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
-import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SelectionComposer, type ComposerAction } from "../../../lib/files/components";
+import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
 import { fileIcon } from "../../../lib/files/fileIcons";
 import {
 	annotationTarget,
@@ -83,6 +83,7 @@ function SessionFileContent() {
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
 	const { width } = useWindowDimensions();
+	const codeScale = useCodeScale();
 
 	const { manifest } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
 	const changes = useMemo(() => manifest ? orderedChanges(changeGroups(manifest)) : [], [manifest]);
@@ -273,7 +274,7 @@ function SessionFileContent() {
 	// end of the current selection picks that end up instead of starting over.
 	const drag = useLineDrag({
 		listRef: list,
-		gutterWidth: gutterWidth(digits) + 16,
+		gutterWidth: gutterWidth(digits, codeScale) + 16,
 		enabled: rows.length > 0,
 		onStart: (index) => {
 			setActionError(undefined);
@@ -425,7 +426,7 @@ function SessionFileContent() {
 				maxToRenderPerBatch={60}
 				windowSize={15}
 				onViewableItemsChanged={onViewable}
-				onScrollToIndexFailed={({ index }) => list.current?.scrollToOffset({ offset: index * 19, animated: true })}
+				onScrollToIndexFailed={({ index }) => list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true })}
 				contentContainerStyle={{ paddingBottom: (selection ? 260 : review.comments.length ? 140 : 96) + stepperClearance }}
 				renderItem={({ item, index }) => item.type === "fold" ? (
 					<FoldRow hidden={item.hidden} section={item.section} expandable={item.expandable} onExpand={() => expand(item.id)} />
@@ -451,7 +452,7 @@ function SessionFileContent() {
 		);
 		body = wrap ? listView : (
 			<ScrollView horizontal bounces={false} contentContainerStyle={{ minWidth: width }}>
-				<View style={{ width: Math.max(width, codeContentWidth(rows, digits)) }}>{listView}</View>
+				<View style={{ width: Math.max(width, codeContentWidth(rows, digits, codeScale)) }}>{listView}</View>
 			</ScrollView>
 		);
 	}

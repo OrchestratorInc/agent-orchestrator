@@ -9,6 +9,7 @@ import {
 	Text,
 	TextInput,
 	View,
+	useWindowDimensions,
 	type AccessibilityActionEvent,
 	type LayoutChangeEvent,
 } from "react-native";
@@ -18,15 +19,20 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ComposerGlass, composerGlassSupported } from "../chat/composer-glass";
 import { dockRestingInset, KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
 import { highlightCode, type SyntaxTokenKind } from "../chat/syntaxHighlight";
+import { AppSymbol } from "../AppSymbol";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { Feather } from "../icons";
+import { usePressFeedback } from "../pressFeedback";
+import { Spinner } from "../Spinner";
 import type { Theme } from "../theme";
 import { textSelectionColors } from "../textSelection";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../tokens";
+import { font, fontScaleCap, iconSize, press, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import type { WorkspaceFileStatus } from "./api";
+import { CODE_FONT_SIZE, CODE_LINE_HEIGHT, CODE_MAX_SCALE, codeScale, gutterWidth, MARKER_WIDTH } from "./codeMetrics";
 import { fileIconSvg, folderIconSvg } from "./fileTypeIcon";
-import { changeAccessibilityLabel, plural, sectionLabel, splitPath, statusLabel, type ChangeEntry, type DisplayRow, type LineRow } from "./model";
+import { plural, type LineRow } from "./model";
 import type { ReviewComment } from "./reviewStore";
 
 // ---- Status + counts ------------------------------------------------------------
@@ -93,20 +99,15 @@ export function LineCounts({ additions, deletions, binary }: { additions: number
 
 // ---- Diff lines ---------------------------------------------------------------------
 
-/** Monospace metrics for the code rows: fixed, so unwrapped rows can be measured without layout. */
-export const CODE_FONT_SIZE = 12.5;
-export const CODE_LINE_HEIGHT = 19;
-const CODE_CHAR_WIDTH = CODE_FONT_SIZE * 0.6;
+/** The selection's bar and the knobs at its ends, which share its centre line. */
+const SELECTION_BAR_INSET = 3;
+const SELECTION_BAR_WIDTH = 3;
+const SELECTION_KNOB = SELECTION_BAR_INSET * 2 + SELECTION_BAR_WIDTH;
 
-export function codeContentWidth(rows: DisplayRow[], gutterDigits: number): number {
-	let longest = 0;
-	for (const row of rows) if (row.type === "line" && row.row.text.length > longest) longest = row.row.text.length;
-	return gutterWidth(gutterDigits) + MARKER_WIDTH + space.lg + Math.ceil(longest * CODE_CHAR_WIDTH);
-}
+export { CODE_FONT_SIZE, CODE_LINE_HEIGHT, CODE_MAX_SCALE, codeContentWidth, codeScale, gutterWidth } from "./codeMetrics";
 
-const MARKER_WIDTH = 16;
-export function gutterWidth(digits: number): number {
-	return Math.max(2, digits) * CODE_CHAR_WIDTH + space.md;
+export function useCodeScale(): number {
+	return codeScale(useWindowDimensions().fontScale);
 }
 
 function tokenColor(kind: SyntaxTokenKind, t: Theme): string {
@@ -138,7 +139,7 @@ export const DiffLine = memo(function DiffLine({
 	onSelect,
 	onExtend,
 }: {
-	/** The ends of a selection get a knob in the gutter: where a drag picks the range back up. */
+	/** The ends of a selection get a knob on its bar: where a drag picks the range back up. */
 	edge?: "start" | "end" | "both";
 	row: LineRow;
 	index: number;
@@ -153,6 +154,7 @@ export const DiffLine = memo(function DiffLine({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const scale = useCodeScale();
 	const tokens = useMemo(() => row.segments ? undefined : highlightCode(row.text, language), [language, row.segments, row.text]);
 	const number = row.kind === "del" ? row.oldNo : row.newNo;
 	const marker = row.kind === "add" ? "+" : row.kind === "del" ? "−" : " ";
@@ -173,13 +175,11 @@ export const DiffLine = memo(function DiffLine({
 			onPress={() => { haptics.select(); onSelect(index); }}
 			style={[styles.line, tint ? { backgroundColor: tint } : null, selected && styles.lineSelected]}
 		>
-			{edge === "start" || edge === "both" ? <View pointerEvents="none" style={[styles.knob, styles.knobTop]} /> : null}
-			{edge === "end" || edge === "both" ? <View pointerEvents="none" style={[styles.knob, styles.knobBottom]} /> : null}
-			<View style={[styles.gutter, { width: gutterWidth(digits) }]}>
-				<Text maxFontSizeMultiplier={1} style={styles.gutterText}>{number ?? ""}</Text>
+			<View style={[styles.gutter, { width: gutterWidth(digits, scale) }]}>
+				<Text maxFontSizeMultiplier={CODE_MAX_SCALE} style={styles.gutterText}>{number ?? ""}</Text>
 			</View>
-			<Text maxFontSizeMultiplier={1} style={[styles.marker, { color: row.kind === "add" ? t.green : row.kind === "del" ? t.red : t.textFaint }]}>{marker}</Text>
-			<Text maxFontSizeMultiplier={1.4} numberOfLines={wrap ? undefined : 1} style={[styles.code, wrap ? styles.codeWrap : null]}>
+			<Text maxFontSizeMultiplier={CODE_MAX_SCALE} style={[styles.marker, { width: MARKER_WIDTH * scale, color: row.kind === "add" ? t.green : row.kind === "del" ? t.red : t.textFaint }]}>{marker}</Text>
+			<Text maxFontSizeMultiplier={CODE_MAX_SCALE} numberOfLines={wrap ? undefined : 1} style={[styles.code, wrap ? styles.codeWrap : null]}>
 				{row.segments
 					? row.segments.map((segment, at) => (
 						<Text key={at} style={segment.changed ? { backgroundColor: strong } : undefined}>{segment.text}</Text>
@@ -188,6 +188,12 @@ export const DiffLine = memo(function DiffLine({
 						? tokens.map((token, at) => <Text key={at} style={{ color: tokenColor(token.kind, t) }}>{token.text}</Text>)
 						: row.text || " "}
 			</Text>
+			{/* The selection's edge, drawn over the gutter rather than as a border
+			    that would push the line over; its knobs sit inside the row, clear
+			    of the screen's edge and of the rows around it. */}
+			{selected ? <View pointerEvents="none" style={styles.selectionBar} /> : null}
+			{edge === "start" || edge === "both" ? <View pointerEvents="none" style={[styles.knob, styles.knobTop]} /> : null}
+			{edge === "end" || edge === "both" ? <View pointerEvents="none" style={[styles.knob, styles.knobBottom]} /> : null}
 		</Pressable>
 	);
 });
@@ -204,6 +210,7 @@ function withStrongTint(tint: string): string {
 export const FoldRow = memo(function FoldRow({ hidden, section, expandable, onExpand }: { hidden: number; section?: string; expandable: boolean; onExpand: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const step = Math.min(hidden, 20);
 	const label = expandable
 		? hidden > step ? `Show ${step} of ${plural(hidden, "hidden line")}` : `Show ${plural(hidden, "hidden line")}`
@@ -213,10 +220,11 @@ export const FoldRow = memo(function FoldRow({ hidden, section, expandable, onEx
 			disabled={!expandable}
 			accessibilityRole={expandable ? "button" : "text"}
 			accessibilityLabel={section ? `${label}, ${section}` : label}
-			onPress={() => { haptics.tap(); onExpand(); }}
-			style={({ pressed }) => [styles.fold, pressed && { opacity: press.opacity }]}
+			onPress={onExpand}
+			android_ripple={expandable ? feedback.android_ripple : undefined}
+			style={({ pressed }) => [styles.fold, pressed && feedback.pressed]}
 		>
-			<Feather name={expandable ? "unfold-vertical" : "more-horizontal"} size={iconSize.sm} color={t.textTertiary} />
+			<AppSymbol name={expandable ? "chevronUpDown" : "moreHorizontal"} size={iconSize.sm} color={t.textTertiary} />
 			<Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.foldText}>
 				{label}
 				{section ? <Text style={styles.foldSection}>{`  ${section}`}</Text> : null}
@@ -255,6 +263,8 @@ export function SelectionComposer({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
+	const iconFeedback = usePressFeedback("icon");
+	const sendFeedback = usePressFeedback("button", { tone: "onAccent" });
 	// Extending the range keeps what was typed; a new selection remounts the composer.
 	const [text, setText] = useState(initialText ?? "");
 	const trimmed = text.trim();
@@ -267,13 +277,13 @@ export function SelectionComposer({
 			<View accessibilityViewIsModal={false} style={[styles.composerShell, { paddingBottom: restingInset }]}>
 				{/* What the comment is about, where the session composer keeps its model row. */}
 				<View style={styles.composerMeta}>
-					<Feather name="message-square-text" size={iconSize.sm} color={t.textTertiary} />
+					<AppSymbol name="chat" size={iconSize.sm} color={t.textTertiary} />
 					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.composerLabel}>{label}</Text>
-					<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" hitSlop={6} onPress={() => { haptics.success(); onCopy(); }} style={({ pressed }) => [styles.composerIcon, pressed && { opacity: press.opacity }]}>
-						<Feather name="copy" size={iconSize.md} color={t.textSecondary} />
+					<Pressable accessibilityRole="button" accessibilityLabel="Copy selected lines" onPress={() => { haptics.success(); onCopy(); }} android_ripple={iconFeedback.android_ripple} style={({ pressed }) => [styles.composerIcon, pressed && iconFeedback.pressed]}>
+						<AppSymbol name="copy" size={iconSize.md} color={t.textSecondary} />
 					</Pressable>
-					<Pressable accessibilityRole="button" accessibilityLabel="Clear selection" hitSlop={6} onPress={() => { haptics.tap(); onClose(); }} style={({ pressed }) => [styles.composerIcon, pressed && { opacity: press.opacity }]}>
-						<Feather name="x" size={iconSize.md} color={t.textSecondary} />
+					<Pressable accessibilityRole="button" accessibilityLabel="Clear selection" onPress={onClose} android_ripple={iconFeedback.android_ripple} style={({ pressed }) => [styles.composerIcon, pressed && iconFeedback.pressed]}>
+						<AppSymbol name="close" size={iconSize.md} color={t.textSecondary} />
 					</Pressable>
 				</View>
 				{error ? <Text accessibilityRole="alert" style={styles.composerError}>{error}</Text> : null}
@@ -299,20 +309,23 @@ export function SelectionComposer({
 							accessibilityHint="Queues the comment so several can be sent together"
 							accessibilityState={{ disabled: !ready }}
 							disabled={!ready}
-							onPress={() => { haptics.tap(); onAction("comment", text); }}
-							style={({ pressed }) => [styles.composerPlain, !ready && styles.disabled, pressed && { opacity: press.opacity }]}
+							onPress={() => onAction("comment", text)}
+							android_ripple={iconFeedback.android_ripple}
+							style={({ pressed }) => [styles.composerPlain, !ready && styles.disabled, pressed && iconFeedback.pressed]}
 						>
-							<Feather name="message-square-plus" size={iconSize.lg} color={t.textSecondary} />
+							<AppSymbol name={{ ios: "plus.bubble", android: "add_comment" }} size={iconSize.lg} color={t.textSecondary} />
 						</Pressable>
 						<Pressable
 							accessibilityRole="button"
 							accessibilityLabel="Send comment now"
 							accessibilityState={{ disabled: !ready, busy }}
 							disabled={!ready}
-							onPress={() => { haptics.tap(); onAction("send", text); }}
-							style={({ pressed }) => [styles.composerSend, !trimmed && !busy && { opacity: 0.35 }, pressed && { opacity: 0.8 }]}
+							onPress={() => onAction("send", text)}
+							android_ripple={sendFeedback.android_ripple}
+							style={({ pressed }) => [styles.composerSend, !trimmed && !busy && styles.disabled, pressed && sendFeedback.pressed]}
 						>
-							{busy ? <ActivityIndicator size="small" color={t.bgBase} /> : <Feather name="arrow-up" size={17} color={t.bgBase} />}
+							{/* The accent fill's own ink: the page colour vanished on a near-white accent. */}
+							{busy ? <Spinner color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.md} color={t.onAccent} weight="semibold" />}
 						</Pressable>
 					</View>
 				</View>
@@ -323,6 +336,9 @@ export function SelectionComposer({
 
 // ---- Inline comment -----------------------------------------------------------------
 
+/** The comment card's remove control; its hit area is grown to the touch target. */
+const INLINE_ACTION = 28;
+
 /**
  * A comment under the line it is about, the way a GitHub review thread sits in
  * a diff: the app's card, a quiet byline, the words. A queued comment can be
@@ -332,27 +348,30 @@ export function SelectionComposer({
 export const InlineComment = memo(function InlineComment({ comment, digits, onRemove }: { comment: ReviewComment; digits: number; onRemove: (id: string) => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const scale = useCodeScale();
+	const feedback = usePressFeedback("icon");
 	const sent = comment.status === "sent";
 	const range = comment.label.split(" · ").pop() ?? comment.label;
 	return (
-		<View style={[styles.inlineWrap, { paddingLeft: gutterWidth(digits) + MARKER_WIDTH }]}>
+		<View style={[styles.inlineWrap, { paddingLeft: gutterWidth(digits, scale) + MARKER_WIDTH * scale }]}>
 			<View accessible accessibilityLabel={`Your comment on ${range}, ${sent ? "sent to the agent" : "pending, not sent yet"}: ${comment.feedback}`} style={styles.inlineCard}>
 				<View style={styles.inlineHead}>
 					<View style={styles.inlineAvatar}>
-						<Feather name="user" size={11} color={t.textSecondary} />
+						<AppSymbol name={{ ios: "person.fill", android: "person" }} size={iconSize.xs} color={t.textSecondary} />
 					</View>
 					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.inlineAuthor}>You</Text>
 					<Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.inlineMeta}>{range}</Text>
-					{sent ? <Feather name="check" size={12} color={t.green} /> : null}
+					{sent ? <AppSymbol name="checkmark" size={iconSize.xs} color={t.green} weight="semibold" /> : null}
 					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.inlineState, sent && { color: t.green }]}>{sent ? "Sent" : "Pending"}</Text>
 					<Pressable
 						accessibilityRole="button"
 						accessibilityLabel={sent ? `Dismiss comment on ${range}` : `Delete comment on ${range}`}
-						hitSlop={12}
-						onPress={() => { haptics.tap(); onRemove(comment.id); }}
-						style={({ pressed }) => [styles.inlineAction, pressed && { opacity: press.opacity }]}
+						hitSlop={(touchTarget - INLINE_ACTION) / 2}
+						onPress={() => onRemove(comment.id)}
+						android_ripple={feedback.android_ripple}
+						style={({ pressed }) => [styles.inlineAction, pressed && feedback.pressed]}
 					>
-						<Feather name={sent ? "x" : "trash-2"} size={iconSize.sm} color={t.textTertiary} />
+						<AppSymbol name={sent ? "close" : "delete"} size={iconSize.sm} color={t.textTertiary} />
 					</Pressable>
 				</View>
 				<Text selectable maxFontSizeMultiplier={fontScaleCap.body} style={styles.inlineText}>{comment.feedback}</Text>
@@ -456,18 +475,19 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 
 
 	line: { flexDirection: "row", alignItems: "flex-start", minHeight: CODE_LINE_HEIGHT, paddingRight: space.lg },
-	lineSelected: { backgroundColor: t.accentTint, borderLeftWidth: 3, borderLeftColor: t.accent },
+	lineSelected: { backgroundColor: t.accentTint },
+	selectionBar: { position: "absolute", left: SELECTION_BAR_INSET, top: 0, bottom: 0, width: SELECTION_BAR_WIDTH, backgroundColor: t.accent },
 	gutter: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", paddingRight: space.xs, minHeight: CODE_LINE_HEIGHT },
-	gutterText: { fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE - 1.5, lineHeight: CODE_LINE_HEIGHT, color: t.textFaint },
-	knob: { position: "absolute", left: -4, width: 9, height: 9, borderRadius: 5, backgroundColor: t.accent, zIndex: 1 },
-	knobTop: { top: -4 },
-	knobBottom: { bottom: -4 },
-	marker: { width: MARKER_WIDTH, textAlign: "center", fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE, lineHeight: CODE_LINE_HEIGHT },
+	gutterText: { fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE, lineHeight: CODE_LINE_HEIGHT, color: t.textFaint },
+	knob: { position: "absolute", left: 0, width: SELECTION_KNOB, height: SELECTION_KNOB, borderRadius: SELECTION_KNOB / 2, backgroundColor: t.accent },
+	knobTop: { top: 0 },
+	knobBottom: { bottom: 0 },
+	marker: { textAlign: "center", fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE, lineHeight: CODE_LINE_HEIGHT },
 	code: { fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE, lineHeight: CODE_LINE_HEIGHT, color: t.textPrimary },
 	codeWrap: { flex: 1, flexShrink: 1 },
 
-	fold: { minHeight: touchTarget - space.sm, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, backgroundColor: t.bgSubtle, borderTopWidth: StyleSheet.hairlineWidth, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-	foldText: { flex: 1, fontFamily: font.medium, fontSize: type.caption1.fontSize, color: t.textSecondary },
+	fold: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, backgroundColor: t.bgSubtle, borderTopWidth: rowDividerWidth, borderBottomWidth: rowDividerWidth, borderColor: t.borderSubtle },
+	foldText: { flex: 1, ...type.footnote, fontFamily: font.medium, color: t.textSecondary },
 	foldSection: { fontFamily: t.fontMono, color: t.textTertiary },
 
 	composerDock: { position: "absolute", left: 0, right: 0, bottom: 0 },
@@ -477,23 +497,23 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// The session composer's meta row: its left edge, and the close button over send.
 	composerMeta: { height: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm, paddingRight: space.xs },
 	composerLabel: { flex: 1, fontFamily: font.semibold, fontSize: type.footnote.fontSize, fontWeight: "600", color: t.textSecondary },
-	composerIcon: { width: 44, height: 44, alignItems: "center", justifyContent: "center", marginLeft: -space.sm },
+	composerIcon: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center", marginLeft: -space.sm },
 	composerError: { ...type.footnote, color: t.red, paddingHorizontal: space.sm },
 	composerPill: { minHeight: 56, padding: space.xs, backgroundColor: composerGlassSupported ? "transparent" : t.bgElevated, borderRadius: COMPOSER_RADIUS, borderCurve: "continuous" },
 	composerRow: { flexDirection: "row", alignItems: "flex-end", gap: space.xxs },
 	composerInput: { flex: 1, minHeight: 44, maxHeight: 138, fontFamily: font.regular, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, color: t.textPrimary, paddingHorizontal: space.md, paddingVertical: space.md, textAlignVertical: "top" },
 	composerPlain: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
 	composerSend: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center", backgroundColor: t.accent },
-	disabled: { opacity: 0.45 },
+	disabled: { opacity: stateOpacity.disabled },
 
 	inlineWrap: { paddingRight: space.md, paddingTop: space.xs, paddingBottom: space.sm, backgroundColor: t.bgBase },
-	inlineCard: { backgroundColor: t.bgElevated, borderRadius: radius.md, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.md, gap: space.xs },
+	inlineCard: { backgroundColor: t.bgElevated, borderRadius: radius.md, borderCurve: "continuous", borderWidth: rowDividerWidth, borderColor: t.borderDefault, paddingHorizontal: space.md, paddingTop: space.sm, paddingBottom: space.md, gap: space.xs },
 	inlineHead: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	inlineAvatar: { width: 20, height: 20, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: t.bgSubtle },
 	inlineAuthor: { fontFamily: font.semibold, fontSize: type.footnote.fontSize, color: t.textPrimary },
 	inlineMeta: { flex: 1, fontFamily: font.regular, fontSize: type.footnote.fontSize, color: t.textTertiary },
-	inlineState: { fontFamily: font.medium, fontSize: type.caption1.fontSize, color: t.textTertiary },
-	inlineAction: { width: 28, height: 28, marginRight: -space.xs, alignItems: "center", justifyContent: "center" },
+	inlineState: { ...type.footnote, fontFamily: font.medium, color: t.textTertiary },
+	inlineAction: { width: INLINE_ACTION, height: INLINE_ACTION, borderRadius: INLINE_ACTION / 2, marginRight: -space.xs, alignItems: "center", justifyContent: "center" },
 	inlineText: { ...type.subheadline, color: t.textPrimary, paddingLeft: 20 + space.xs },
 	trayDock: { position: "absolute", left: 0, right: 0, alignItems: "center" },
 	trayPill: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.xl, borderRadius: radius.pill, backgroundColor: t.accent, shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
