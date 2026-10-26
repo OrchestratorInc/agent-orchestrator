@@ -148,7 +148,15 @@ it("does not overwrite a newer row with a delayed registration detail response",
 	get.mockImplementationOnce(() => detail.promise);
 	const view = renderHook(() => useChatViewRegistration("chat", true), { wrapper });
 	await waitFor(() => expect(requests(sessionPath)).toHaveLength(1));
-	const row = { id: "chat", projectId: "project", mode: "chat", harness: "codex", status: "idle", activity: { state: "idle" } } as const;
+	const row: components["schemas"]["ControllersSessionView"] = {
+		id: "chat", projectId: "project", mode: "chat", harness: "codex", status: "idle",
+		activity: { state: "idle", lastActivityAt: "2026-10-26T00:00:00Z" },
+		autoInjectCI: false, autoInjectReview: false, autoReviewEnabled: false,
+		chatProviderPreserved: false, createdAt: "2026-10-26T00:00:00Z", displayStatus: "Exited",
+		isPinned: false, isTerminated: false, kanbanColumn: "building", kind: "worker",
+		lastEventAt: "2026-10-26T00:00:00Z", outputType: "none", prs: [],
+		statusReadiness: "ready", terminateOnPrMerge: false, updatedAt: "2026-10-26T00:00:00Z",
+	};
 	patchWorkspaceSession(client, { ...row, displayName: "Newer event" });
 	await act(async () => { detail.resolve({ data: { session: { ...row, displayName: "Stale registration" } } }); });
 	expect(client.getQueryData(workspaceQueryKey)).toEqual([
