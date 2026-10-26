@@ -178,13 +178,13 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 			{remote && !connected && <p className="text-xs text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>
 		{!connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-4" onSubmit={(event) => { event.preventDefault(); void start(); }}>
-			<fieldset disabled={locked} className="grid auto-rows-fr grid-cols-1 gap-2 @min-[32rem]:grid-cols-2">
+			<fieldset disabled={locked} className="grid auto-rows-fr divide-y divide-border overflow-hidden rounded-lg bg-(--color-bg-primary)">
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
 				{availableMethods.map((item) => {
 					const key = agentId === "claude-code" && item.id === "browser" ? "claude" : item.id;
 					const label = t(`settings.harness.loginUi.methods.${key}`, { defaultValue: item.label });
 					const MethodIcon = item.secret ? KeyRound : item.id === "device_code" ? Smartphone : item.id === "sso" || item.id === "console" ? Building2 : UserRound;
-					return <label key={item.id} className="relative flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-(--color-interactive-hover) has-[:checked]:border-foreground/60 has-[:checked]:bg-(--color-bg-primary) has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
+					return <label key={item.id} className="relative flex cursor-pointer items-start gap-3 px-4 py-2.5 transition-colors hover:bg-(--color-interactive-hover) has-[:checked]:bg-(--color-interactive-active) has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
 						<input type="radio" className="peer sr-only" name={titleId} aria-label={label} aria-describedby={titleId + "-" + item.id} value={item.id} checked={selectedMethodId === item.id} onChange={() => { setMethodId(item.id); setSecret(""); setLoginCode(""); setError(""); updateOperation(undefined); }} />
 						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted peer-checked:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
 						<span className="min-w-0 flex-1 space-y-1">
