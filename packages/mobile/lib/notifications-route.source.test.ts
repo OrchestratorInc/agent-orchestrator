@@ -37,3 +37,25 @@ describe("notifications header", () => {
 		expect(page).toContain("[clearable]);");
 	});
 });
+
+// The page is built from the shared pieces rather than local copies of them.
+describe("notifications body", () => {
+	const page = source("../app/notifications.tsx");
+
+	it("says what went wrong through the shared, announced toast", () => {
+		expect(page).toContain("<ToastHost toast={toast} />");
+		expect(page).not.toContain('pointerEvents="none"');
+	});
+
+	it("draws its dividers at the shared width and heads groups with the shared header", () => {
+		expect(page).toContain("borderBottomWidth: rowDividerWidth");
+		expect(page).toContain("<ListSectionHeader label={section.title} count={section.data.length} />");
+		expect(page).not.toMatch(/hairlineWidth|NotificationSectionHeader|Feather/);
+	});
+
+	// From a pushed page, navigate would put a second board on the stack.
+	it("returns to the PRs tab by popping to the board", () => {
+		expect(page).toContain('router.dismissTo({ pathname: "/prs", params: { hostId: notification.hostId } })');
+		expect(page).not.toContain('router.navigate({ pathname: "/prs"');
+	});
+});
