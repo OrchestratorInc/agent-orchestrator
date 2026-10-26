@@ -169,6 +169,9 @@ jobs:
 
   typecheck:
     runs-on: ubuntu-latest
+    env:
+      # tsc needs Electron's types, not its binary; skip the flaky download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     defaults:
       run:
         working-directory: frontend
