@@ -1,5 +1,5 @@
 import { Feather } from "../lib/icons";
-import { useFocusEffect, useRouter, type Href } from "expo-router";
+import { Stack, useFocusEffect, useRouter, type Href } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { useOpenPage } from "../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -38,10 +38,11 @@ import { useApp } from "../lib/store";
 import { MINUTE_MS, useNow } from "../lib/useNow";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { Button, Dot, EmptyState, HeaderIconButton, ScreenHeader } from "../lib/ui";
+import { Button, Dot, EmptyState } from "../lib/ui";
+import { TabPageScroll } from "../lib/TabPageScroll";
+import { toolbarIcon } from "../lib/toolbarIcon";
 import { UnpairedState } from "../lib/UnpairedState";
 import { space, type } from "../lib/tokens";
-import { backOr } from "../lib/backNavigation";
 import { userFacingError } from "../lib/connectionError";
 import { NotificationSwipeRow } from "../lib/NotificationSwipeRow";
 import { MachineIdentity } from "../lib/MachineIdentity";
@@ -421,23 +422,30 @@ function NotificationsContent() {
 		return () => clearTimeout(timer);
 	}, [notice]);
 
+	// Memoized on whether there is anything to clear: the screen re-renders on
+	// every poll, and each new toolbar element registers the header's options
+	// again. The item calls the latest confirm, whose clear reads this render's
+	// machines.
+	const confirmClearAllRef = useRef(confirmClearAll);
+	confirmClearAllRef.current = confirmClearAll;
+	const clearable = items.length > 0;
+	const headerItems = useMemo(() => clearable ? (
+		<Stack.Toolbar placement="right">
+			<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />
+		</Stack.Toolbar>
+	) : null, [clearable]);
+
 	return (
 		<View style={styles.screen}>
-			<View style={{ height: insets.top }} />
-			<ScreenHeader
-				title="Notifications"
-				left={<HeaderIconButton icon="back" label="Back" onPress={() => backOr(router)} />}
-				right={
-					items.length > 0 ? (
-						<HeaderIconButton icon="trash" label="Clear all" onPress={confirmClearAll} />
-					) : undefined
-				}
-			/>
-
+			{headerItems}
+			{/* The list, or the scroll view standing in for it, is the page's first
+			    view: on iOS the large title collapses with it. */}
 			{loading ? (
-				<View style={styles.center}>
-					<ActivityIndicator color={t.accent} />
-				</View>
+				<TabPageScroll>
+					<View style={styles.center}>
+						<ActivityIndicator color={t.accent} />
+					</View>
+				</TabPageScroll>
 			) : (
 				<SectionList
 					sections={sections}

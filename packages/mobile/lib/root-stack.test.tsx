@@ -54,7 +54,7 @@ async function renderRoot(platform: string) {
 	return renderer;
 }
 
-const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]"];
+const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]", "notifications"];
 
 describe("root stack", () => {
 	// A cold start on a deep link or a notification tap lands with the board
@@ -128,7 +128,6 @@ describe("root stack", () => {
 			expect(options("(tabs)", board(1)).title).toBe("Projects");
 			expect(options("(tabs)", board(2)).title).toBe("Pull Requests");
 			expect(options("(tabs)").headerShown).toBe(false);
-			expect(options("notifications")).toMatchObject({ headerShown: false, title: "Notifications" });
 		} finally {
 			act(() => renderer.unmount());
 		}
@@ -149,6 +148,11 @@ describe("root stack", () => {
 			}
 			// Titled before the page renames itself to the project.
 			expect(renderer.root.findByProps({ name: "project/[id]" }).props.options.title).toBe("Project");
+			// Notifications takes a large title on iOS, like the board it opens from.
+			const notifications = renderer.root.findByProps({ name: "notifications" }).props.options;
+			expect(notifications.title).toBe("Notifications");
+			if (platform === "ios") expect(notifications.headerLargeTitleEnabled).toBe(true);
+			else expect(notifications).not.toHaveProperty("headerLargeTitleEnabled");
 		} finally {
 			act(() => renderer.unmount());
 		}

@@ -43,6 +43,7 @@ vi.mock("react-native", async () => {
 		Alert: { alert: fixtures.alert },
 		Pressable: host("Pressable"),
 		RefreshControl: host("RefreshControl"),
+		ScrollView: host("ScrollView"),
 		SectionList: ({ sections, renderItem, renderSectionHeader, ListHeaderComponent, ListFooterComponent, ListEmptyComponent, ...props }: {
 			sections: { key: string; data: unknown[] }[];
 			renderItem: (args: { item: unknown }) => React.ReactNode;
@@ -68,8 +69,11 @@ vi.mock("react-native", async () => {
 });
 vi.mock("expo-router", async () => {
 	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	const router = { navigate: vi.fn(), push: vi.fn(), back: vi.fn(), canGoBack: () => false };
 	return {
-		useRouter: () => ({ navigate: vi.fn(), push: vi.fn(), back: vi.fn(), canGoBack: () => false }),
+		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton") }) },
+		useRouter: () => router,
 		// Runs the effect while focused and its cleanup on blur, like react-navigation.
 		useFocusEffect: (effect: () => (() => void) | void) => {
 			const focused = React.useSyncExternalStore(fixtures.focus.subscribe, () => fixtures.focus.value);
@@ -127,13 +131,12 @@ vi.mock("./useNow", () => ({ MINUTE_MS: 60_000, useNow: () => Date.parse("2026-1
 vi.mock("./ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => (props: object) => React.createElement(name, props);
-	return { Button: host("Button"), Dot: host("Dot"), EmptyState: host("EmptyState"), HeaderIconButton: host("HeaderIconButton"), ScreenHeader: host("ScreenHeader") };
+	return { Button: host("Button"), Dot: host("Dot"), EmptyState: host("EmptyState") };
 });
 vi.mock("./UnpairedState", async () => {
 	const React = await import("react");
 	return { UnpairedState: () => React.createElement("UnpairedState") };
 });
-vi.mock("./backNavigation", () => ({ backOr: vi.fn() }));
 vi.mock("./connectionError", () => ({ userFacingError: (_cause: unknown, fallback: string) => fallback }));
 vi.mock("./NotificationSwipeRow", async () => {
 	const React = await import("react");
@@ -168,10 +171,11 @@ afterEach(async () => {
 describe("NotificationsScreen", () => {
 	it("clears every connected machine's history from the header after confirming", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
-		const header = () => renderer!.root.findByType("ScreenHeader" as never);
-		expect(header().props.right.props).toEqual(expect.objectContaining({ icon: "trash", label: "Clear all" }));
+		const clearAll = () => renderer!.root.findByType("StackToolbarButton" as never);
+		expect(renderer!.root.findByType("StackToolbar" as never).props.placement).toBe("right");
+		expect(clearAll().props).toEqual(expect.objectContaining({ icon: "trash", accessibilityLabel: "Clear all" }));
 
-		act(() => { header().props.right.props.onPress(); });
+		act(() => { clearAll().props.onPress(); });
 		expect(fixtures.clearAllNotifications).not.toHaveBeenCalled();
 		const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
 		fixtures.refreshHost.mockClear();
@@ -195,8 +199,8 @@ describe("NotificationsScreen", () => {
 		const base = fixtures.getNotifications.getMockImplementation()!;
 		fixtures.getNotifications.mockImplementation(async () => { throw new Error("connection lost"); });
 		try {
-			const header = renderer!.root.findByType("ScreenHeader" as never);
-			act(() => { header.props.right.props.onPress(); });
+			const clearAll = renderer!.root.findByType("StackToolbarButton" as never);
+			act(() => { clearAll.props.onPress(); });
 			const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
 			await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
 		} finally {
@@ -211,8 +215,8 @@ describe("NotificationsScreen", () => {
 	it("leaves an offline machine's rows alone and says so", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		fixtures.offline.add("mac");
-		const header = renderer!.root.findByType("ScreenHeader" as never);
-		act(() => { header.props.right.props.onPress(); });
+		const clearAll = renderer!.root.findByType("StackToolbarButton" as never);
+		act(() => { clearAll.props.onPress(); });
 		const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
 		await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
 
@@ -370,6 +374,6 @@ describe("NotificationsScreen", () => {
 	it("hides Clear all when there is nothing to clear", async () => {
 		fixtures.getNotifications.mockImplementation(async () => ({ notifications: [], nextCursor: undefined, unreadCount: 0 }));
 		await act(async () => { renderer = create(<NotificationsScreen />); });
-		expect(renderer!.root.findByType("ScreenHeader" as never).props.right).toBeUndefined();
+		expect(renderer!.root.findAllByType("StackToolbar" as never)).toHaveLength(0);
 	});
 });

@@ -21,7 +21,7 @@ import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { LayoutGrid } from "../lib/layoutGrid";
-import { stackScreenOptions } from "../lib/stackScreenOptions";
+import { largeTitleScreenOptions, stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { symbolFonts } from "../lib/symbolFonts";
 import { ThemeProvider, useTheme, useThemeState } from "../lib/ThemeProvider";
@@ -239,9 +239,8 @@ function Shell() {
 						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgSurface : "transparent" },
 					}}
 				/>
-				{/* Draws its own header. The title is for the back-history menu, like the
-				    board's. */}
-				<Stack.Screen name="notifications" options={{ headerShown: false, title: "Notifications" }} />
+				{/* A large title on iOS, like the board it is opened from. */}
+				<Stack.Screen name="notifications" options={{ title: "Notifications", ...largeTitleScreenOptions() }} />
 				{/* The page renames itself to the project once it loads. */}
 				<Stack.Screen name="project/[id]" options={{ title: "Project" }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
