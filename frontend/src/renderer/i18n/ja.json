@@ -2532,6 +2532,7 @@
 	"settings.harness.expandOptions": "{{agent}} のオプションを展開",
 	"settings.harness.collapseOptions": "{{agent}} のオプションを折りたたむ",
 	"settings.harness.updating": "更新中…",
+	"settings.harness.elapsed": "経過時間 {{elapsed}}",
 	"settings.harness.slowDownloadHint": "ダウンロード中です。低速なネットワークでは数分かかることがあります。",
 	"settings.harness.showOutput": "出力を表示",
 	"settings.harness.hideOutput": "出力を非表示",

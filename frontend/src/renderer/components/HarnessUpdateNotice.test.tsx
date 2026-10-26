@@ -763,7 +763,9 @@ describe("harness updates while sessions run", () => {
 		mountNotice();
 		const busy = await screen.findByRole("button", { name: "Updating…" });
 		expect(busy).toBeDisabled();
-		expect(busy).toHaveTextContent(/Updating…2:4\d/);
+		// The button keeps one width; the time sits below the versions.
+		expect(busy).toHaveTextContent(/^Updating…$/);
+		expect(screen.getByText(/^2:4\d elapsed$/)).toBeInTheDocument();
 		expect(screen.getByText("Still downloading. This can take a few minutes on slow networks.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Show output" }));
 		expect(screen.getByLabelText("Installer output")).toHaveTextContent("Downloading Claude Code 2.1.292 42%");
@@ -772,7 +774,8 @@ describe("harness updates while sessions run", () => {
 	it("keeps a just-started update to its elapsed time", async () => {
 		jobs = [{ target: "claude-code", status: "installing", startedAt: new Date(Date.now() - 5_000).toISOString() }];
 		mountNotice();
-		expect(await screen.findByRole("button", { name: "Updating…" })).toHaveTextContent(/Updating…0:0\d/);
+		expect(await screen.findByRole("button", { name: "Updating…" })).toBeDisabled();
+		expect(screen.getByText(/^0:0\d elapsed$/)).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Show output" })).toBeNull();
 	});
 

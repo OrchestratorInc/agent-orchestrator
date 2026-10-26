@@ -2576,6 +2576,7 @@
 	"settings.harness.expandOptions": "Expandir opciones de {{agent}}",
 	"settings.harness.collapseOptions": "Contraer opciones de {{agent}}",
 	"settings.harness.updating": "Actualizando…",
+	"settings.harness.elapsed": "{{elapsed}} transcurridos",
 	"settings.harness.slowDownloadHint": "Todavía se está descargando. En redes lentas puede tardar unos minutos.",
 	"settings.harness.showOutput": "Mostrar salida",
 	"settings.harness.hideOutput": "Ocultar salida",

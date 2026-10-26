@@ -1607,6 +1607,7 @@
 	"settings.harness.expandOptions": "Expand {{agent}} options",
 	"settings.harness.collapseOptions": "Collapse {{agent}} options",
 	"settings.harness.updating": "Updating…",
+	"settings.harness.elapsed": "{{elapsed}} elapsed",
 	"settings.harness.slowDownloadHint": "Still downloading. This can take a few minutes on slow networks.",
 	"settings.harness.showOutput": "Show output",
 	"settings.harness.hideOutput": "Hide output",

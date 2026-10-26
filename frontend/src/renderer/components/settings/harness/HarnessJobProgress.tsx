@@ -55,6 +55,15 @@ export function JobElapsed({ job, className }: { job?: TimedJob; className?: str
 	return <span aria-hidden="true" data-job-elapsed="" className={cn("tabular-nums", className)}>{formatElapsed(elapsedMs)}</span>;
 }
 
+/** How long a running job has run, on its own line, for a surface whose busy
+ * button keeps one width. Hidden from assistive technology like JobElapsed. */
+export function JobElapsedLine({ job, className }: { job?: TimedJob; className?: string }) {
+	const { t } = useTranslation();
+	const elapsedMs = useJobElapsed(job);
+	if (elapsedMs === undefined) return null;
+	return <p aria-hidden="true" data-job-elapsed="" className={cn("tabular-nums", className)}>{t("settings.harness.elapsed", { elapsed: formatElapsed(elapsedMs) })}</p>;
+}
+
 /**
  * Once a job has run a while, says why it can take minutes and offers the
  * output the installer has printed so far, which refreshes as the job polls.

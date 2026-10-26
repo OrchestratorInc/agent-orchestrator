@@ -2532,6 +2532,7 @@
 	"settings.harness.expandOptions": "Optionen für {{agent}} aufklappen",
 	"settings.harness.collapseOptions": "Optionen für {{agent}} zuklappen",
 	"settings.harness.updating": "Wird aktualisiert…",
+	"settings.harness.elapsed": "{{elapsed}} vergangen",
 	"settings.harness.slowDownloadHint": "Der Download läuft noch. In langsamen Netzwerken kann das einige Minuten dauern.",
 	"settings.harness.showOutput": "Ausgabe anzeigen",
 	"settings.harness.hideOutput": "Ausgabe ausblenden",
