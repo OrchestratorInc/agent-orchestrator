@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 
@@ -53,5 +54,12 @@ describe("WorkerRowActions", () => {
 		const pinIcon = renderer.root.findByProps({ name: "pin" }).props;
 		const archiveIcon = renderer.root.findByProps({ name: "archive" }).props;
 		expect({ size: archiveIcon.size, color: archiveIcon.color }).toEqual({ size: pinIcon.size, color: pinIcon.color });
+	});
+
+	// Both rails draw the pin the way the system symbol stands, never tilted.
+	it("keeps swipe-action pins upright", () => {
+		const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+		expect(source("./worker-row-actions.tsx")).not.toContain("rotate");
+		expect(source("./worker-row-actions.ios.tsx")).not.toContain("rotationEffect");
 	});
 });
