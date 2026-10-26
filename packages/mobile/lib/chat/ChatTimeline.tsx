@@ -1,3 +1,4 @@
+import { Host, Switch } from "@expo/ui";
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
@@ -11,9 +12,7 @@ import {
 	Platform,
 	Pressable,
 	StyleSheet,
-	Switch,
 	Text,
-	TextInput,
 	View,
 } from "react-native";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
@@ -24,7 +23,7 @@ import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
-import { useTheme, useThemedStyles } from "../ThemeProvider";
+import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
 import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
@@ -1083,10 +1082,32 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 }
 
 function InputField({ name, property, required, value, onChange }: { name: string; property: InputProperty; required: boolean; value: unknown; onChange(value: unknown): void }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const { scheme } = useThemeState();
 	const label = `${property.title || humanizeInputName(name)}${required ? " *" : ""}`;
-	if (property.type === "boolean") return <View style={styles.switchRow}><Text style={styles.inputLabel}>{label}</Text><Switch accessibilityLabel={label} value={Boolean(value)} onValueChange={onChange} trackColor={{ true: t.accent }} /></View>;
+	if (property.type === "boolean") {
+		const checked = Boolean(value);
+		// The label and the switch are one control to a screen reader, as a native
+		// toggle row is. The hosted switch has no label of its own on Android, so
+		// it is hidden and the row answers to activate instead.
+		return <View
+			accessible
+			accessibilityRole="switch"
+			accessibilityLabel={label}
+			accessibilityState={{ checked }}
+			accessibilityActions={[{ name: "activate" }]}
+			onAccessibilityAction={(event) => { if (event.nativeEvent.actionName === "activate") onChange(!checked); }}
+			style={styles.switchRow}
+		>
+			<Text style={[styles.inputLabel, styles.switchLabel]}>{label}</Text>
+			<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+				{/* No tint: the switch keeps the system's colours, as Settings' does. */}
+				<Host style={styles.switchHost} colorScheme={scheme}>
+					<Switch value={checked} onValueChange={onChange} />
+				</Host>
+			</View>
+		</View>;
+	}
 	const options = inputOptions(property);
 	if (options.length) {
 		const multi = property.type === "array";
@@ -1308,7 +1329,10 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	inputQuestion: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
 	inputLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	inputHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+	switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md },
+	switchLabel: { flex: 1 },
+	// The system switch's own footprint, as Settings hosts it.
+	switchHost: { width: 54, height: 34 },
 	urlBox: { backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm },
 	urlText: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	validation: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },

@@ -117,6 +117,24 @@ describe("turn rollback", () => {
 	});
 });
 
+describe("elicitation boolean input", () => {
+	const field = source.slice(source.indexOf("function InputField"), source.indexOf("function CompactionMarker"));
+
+	// React Native's Android switch is the older SwitchCompat, beside M3 controls
+	// everywhere else in the flow.
+	it("hosts the universal native switch", () => {
+		expect(source).toContain('import { Host, Switch } from "@expo/ui";');
+		expect(source).not.toMatch(/import \{[^}]*\bSwitch\b[^}]*\} from "react-native"/);
+		expect(field).toContain("<Switch value={checked} onValueChange={onChange} />");
+	});
+
+	it("reads as one labelled switch that a screen reader can toggle", () => {
+		expect(field).toContain('accessibilityRole="switch"');
+		expect(field).toContain("accessibilityState={{ checked }}");
+		expect(field).toContain('if (event.nativeEvent.actionName === "activate") onChange(!checked);');
+	});
+});
+
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");
