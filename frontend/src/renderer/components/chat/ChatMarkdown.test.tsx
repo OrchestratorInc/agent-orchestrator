@@ -468,6 +468,40 @@ describe("ChatMarkdown", () => {
 		}
 	});
 
+	it.each([0, 1])("does not request ordinary inline source paths with %s archived sessions", async (archivedCount) => {
+		linkSource.workspaces = [{ id: "project", archivedCount, sessions: [] }];
+		const get = vi.spyOn(apiClient, "GET");
+		try {
+			const { client } = renderWithSessionLinkHandler("`backend/internal/service/foo.go`", vi.fn());
+			await act(async () => {
+				await client.invalidateQueries({ queryKey: ["session"] });
+				await client.invalidateQueries({ queryKey: ["artifact-path-session"] });
+			});
+			expect(get).not.toHaveBeenCalled();
+			expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		} finally {
+			get.mockRestore();
+		}
+	});
+
+	it("does not repeat a confirmed missing inline artifact target after workspace invalidation", async () => {
+		linkSource.workspaces = [{ id: "project", archivedCount: 1, sessions: [] }];
+		const get = vi.spyOn(apiClient, "GET").mockResolvedValue({ error: { code: "SESSION_NOT_FOUND" }, response: new Response(null, { status: 404 }) } as Awaited<ReturnType<typeof apiClient.GET>>);
+		try {
+			const { client } = renderWithSessionLinkHandler("`worker-1/plan.md`", vi.fn());
+			await waitFor(() => expect(client.getQueryData(["artifact-path-session", "worker-1"])).toBeNull());
+			await act(async () => {
+				await client.invalidateQueries({ queryKey: ["workspaces"] });
+				await client.invalidateQueries({ queryKey: ["session"] });
+				await client.invalidateQueries({ queryKey: ["artifact-path-session"] });
+			});
+			expect(get).toHaveBeenCalledTimes(1);
+			expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		} finally {
+			get.mockRestore();
+		}
+	});
+
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());

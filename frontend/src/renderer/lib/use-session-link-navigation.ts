@@ -4,7 +4,7 @@ import { useCloudProjectsQuery, useCloudSessionsQuery, remoteWorkspaceQueryKey, 
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
-import { apiClient } from "./api-client";
+import { apiClient, apiErrorCode } from "./api-client";
 import { LOCAL_HOST } from "./hosts";
 import { useNavigateToSession } from "./navigate-to-session";
 import { artifactLink, artifactLinkForPath, artifactPathCandidates, parseArtifactLink, parseSessionLink, resolveSessionLink } from "./session-links";
@@ -34,11 +34,27 @@ function localLinkSessionOptions(sessionId: string, workspaces: WorkspaceSummary
 /** Resolve only the session IDs named by inline artifact paths, never archive pages. */
 export function useArtifactPathLink(value: string, workspaces: WorkspaceSummary[], sourceHostId?: string, sourceKind?: "cloud") {
 	const listed = artifactLinkForPath(value, workspaces);
-	const candidates = listed ? [] : artifactPathCandidates(value);
+	const explicitArtifactPath = value.replace(/\\/g, "/").includes("/artifacts/");
+	const candidates = listed ? [] : artifactPathCandidates(value).filter((candidate) => explicitArtifactPath || /^.+-[1-9][0-9]*$/.test(candidate.sessionId));
+	const queryClient = useQueryClient();
 	const local = (!sourceHostId || sourceHostId === LOCAL_HOST) && sourceKind !== "cloud"
-		&& workspaces.some((workspace) => workspace.archivedCount !== undefined);
+		&& workspaces.some((workspace) => (workspace.archivedCount ?? 0) > 0);
 	const ids = [...new Set(candidates.map((candidate) => candidate.sessionId))];
-	const reads = useQueries({ queries: ids.map((id) => ({ ...localLinkSessionOptions(id, workspaces), enabled: local, retry: false })) });
+	const reads = useQueries({ queries: ids.map((id) => ({
+		queryKey: ["artifact-path-session", id],
+		queryFn: async () => {
+			try {
+				return await queryClient.fetchQuery({ ...localLinkSessionOptions(id, workspaces), retry: false });
+			} catch (error) {
+				if (apiErrorCode(error) === "SESSION_NOT_FOUND") return null;
+				throw error;
+			}
+		},
+		// A confirmed missing speculative target must not refetch with workspace CDC.
+		enabled: (query) => local && query.state.data !== null,
+		retry: false,
+		staleTime: 10_000,
+	})) });
 	if (listed || !local) return listed;
 	for (const candidate of candidates) {
 		const session = reads.find((read) => read.data?.id === candidate.sessionId)?.data;
