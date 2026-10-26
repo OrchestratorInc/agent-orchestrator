@@ -3530,8 +3530,6 @@
 	"usage.limits.left": "残り",
 	"usage.limits.barLabel": "{{window}}: 残り {{value}}",
 	"usage.limits.resetsIn": "{{value}} 後にリセット",
-	"usage.limits.segmentLeft": "残り {{value}}",
-	"usage.limits.notReported": "報告なし",
 	"usage.limits.empty": "上限を報告しているアカウントはまだありません",
 	"usage.limits.emptyBody": "設定 → エージェントで Codex または Claude Code にサインインすると、サブスクリプションの上限が表示されます。",
 	"usage.limits.openSettings": "エージェント設定を開く"

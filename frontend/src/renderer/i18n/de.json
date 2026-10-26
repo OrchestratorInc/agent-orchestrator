@@ -3530,8 +3530,6 @@
 	"usage.limits.left": "übrig",
 	"usage.limits.barLabel": "{{window}}: {{value}} übrig",
 	"usage.limits.resetsIn": "Zurückgesetzt in {{value}}",
-	"usage.limits.segmentLeft": "{{value}} übrig",
-	"usage.limits.notReported": "Nicht gemeldet",
 	"usage.limits.empty": "Noch keine Konten mit Limits",
 	"usage.limits.emptyBody": "Melde dich unter Einstellungen → Agenten bei Codex oder Claude Code an, um die Abo-Limits zu sehen.",
 	"usage.limits.openSettings": "Agent-Einstellungen öffnen"

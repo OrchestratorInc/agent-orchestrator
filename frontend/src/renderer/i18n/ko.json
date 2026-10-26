@@ -3530,8 +3530,6 @@
 	"usage.limits.left": "남음",
 	"usage.limits.barLabel": "{{window}}: {{value}} 남음",
 	"usage.limits.resetsIn": "{{value}} 후 초기화",
-	"usage.limits.segmentLeft": "{{value}} 남음",
-	"usage.limits.notReported": "보고 없음",
 	"usage.limits.empty": "아직 한도를 보고한 계정이 없습니다",
 	"usage.limits.emptyBody": "설정 → 에이전트에서 Codex 또는 Claude Code에 로그인하면 구독 한도가 표시됩니다.",
 	"usage.limits.openSettings": "에이전트 설정 열기"

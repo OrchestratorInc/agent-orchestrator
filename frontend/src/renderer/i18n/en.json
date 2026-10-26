@@ -3511,8 +3511,6 @@
 	"usage.limits.left": "left",
 	"usage.limits.barLabel": "{{window}}: {{value}} left",
 	"usage.limits.resetsIn": "Resets in {{value}}",
-	"usage.limits.segmentLeft": "{{value}} left",
-	"usage.limits.notReported": "Not reported",
 	"usage.limits.empty": "No accounts report limits yet",
 	"usage.limits.emptyBody": "Sign in to Codex or Claude Code under Settings → Agents to see their subscription limits.",
 	"usage.limits.openSettings": "Open agent settings"

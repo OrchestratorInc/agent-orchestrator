@@ -3512,8 +3512,6 @@
 	"usage.limits.left": "剩余",
 	"usage.limits.barLabel": "{{window}}：剩余 {{value}}",
 	"usage.limits.resetsIn": "{{value}}后重置",
-	"usage.limits.segmentLeft": "剩余 {{value}}",
-	"usage.limits.notReported": "未报告",
 	"usage.limits.empty": "还没有账户报告限额",
 	"usage.limits.emptyBody": "在 设置 → 代理 中登录 Codex 或 Claude Code，即可查看订阅限额。",
 	"usage.limits.openSettings": "打开代理设置"

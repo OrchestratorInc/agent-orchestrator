@@ -3594,8 +3594,6 @@
 	"usage.limits.left": "restante",
 	"usage.limits.barLabel": "{{window}}: {{value}} restante",
 	"usage.limits.resetsIn": "Se reinicia en {{value}}",
-	"usage.limits.segmentLeft": "{{value}} restante",
-	"usage.limits.notReported": "No informado",
 	"usage.limits.empty": "Ninguna cuenta informa de límites todavía",
 	"usage.limits.emptyBody": "Inicia sesión en Codex o Claude Code en Ajustes → Agentes para ver sus límites de suscripción.",
 	"usage.limits.openSettings": "Abrir ajustes de agentes"

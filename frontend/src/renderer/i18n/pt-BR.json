@@ -3594,8 +3594,6 @@
 	"usage.limits.left": "restante",
 	"usage.limits.barLabel": "{{window}}: {{value}} restante",
 	"usage.limits.resetsIn": "Redefine em {{value}}",
-	"usage.limits.segmentLeft": "{{value}} restante",
-	"usage.limits.notReported": "Não informado",
 	"usage.limits.empty": "Nenhuma conta informa limites ainda",
 	"usage.limits.emptyBody": "Entre no Codex ou no Claude Code em Configurações → Agentes para ver os limites da assinatura.",
 	"usage.limits.openSettings": "Abrir configurações de agentes"

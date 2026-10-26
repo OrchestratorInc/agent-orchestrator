@@ -1,14 +1,14 @@
 import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
-import { formatCountdown, poolLimits, type LimitSegment, type PooledWindow } from "../../lib/usage-limits";
+import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { formatCountdown, groupAccounts, remainingPercent } from "../../lib/usage-limits";
 import { formatRelativeTime } from "../../lib/usage-format";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { AgentAvatar } from "../AgentAvatar";
+import { formatPlanName } from "../settings/CodexAccountDetails";
 import { Button } from "../ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code" };
 
@@ -17,10 +17,10 @@ function remainingTone(remaining: number): string {
 	return remaining <= 0 ? "bg-error" : remaining <= 25 ? "bg-warning" : "bg-foreground/80";
 }
 
-/** Subscription windows for every signed-in account, pooled per provider. */
+/** Subscription windows for every signed-in account, one block per account under its provider. */
 export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount[]; now: Date }) {
 	const { t, i18n } = useTranslation();
-	const providers = useMemo(() => poolLimits(accounts), [accounts]);
+	const providers = useMemo(() => groupAccounts(accounts), [accounts]);
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 
 	if (providers.length === 0) {
@@ -35,54 +35,63 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 
 	return (
 		<div className="flex flex-col gap-10">
-			{providers.map((entry) => {
-				const issues = entry.accounts.filter((account) => !account.signedIn || account.problem);
-				return (
-					<section key={entry.provider} aria-labelledby={`usage-limits-${entry.provider}`} className="flex flex-col gap-4">
-						<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-							<h2 id={`usage-limits-${entry.provider}`} className="inline-flex items-center gap-2 text-control font-medium text-foreground">
-								<AgentAvatar provider={PROVIDER_HARNESS[entry.provider]} decorative className="size-4" />
-								{agentAccountProviderNames[entry.provider]}
-							</h2>
-							<span className="text-xs text-muted-foreground">{t("usage.limits.accounts", { count: entry.accounts.length })}</span>
-							{entry.resetCredits > 0 ? (
-								<span className="text-xs tabular-nums text-muted-foreground">{t("usage.limits.resetCredits", { value: entry.resetCredits })}</span>
-							) : null}
-							{entry.checkedAt ? (
-								<span className="ms-auto text-xs text-muted-foreground">{t("usage.limits.checked", { value: formatRelativeTime(entry.checkedAt, now, i18n.language) })}</span>
-							) : null}
-						</div>
-						{entry.windows.length > 0 ? (
-							<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
-								{entry.windows.map((window) => (
-									<LimitWindowRow key={window.id} window={window} accounts={entry.accounts} now={now} />
-								))}
-							</div>
-						) : (
-							<p className="text-xs text-muted-foreground">{t("usage.limits.noWindows")}</p>
-						)}
-						{issues.length > 0 ? (
-							<ul className="flex flex-col gap-1">
-								{issues.map((account) => (
-									<li key={account.id} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-										<TriangleAlert aria-hidden="true" className="size-icon-sm text-warning" />
-										<span className="text-foreground">{agentAccountName(account, t)}</span>
-										<span>{account.signedIn ? account.problem : t("usage.limits.signedOut")}</span>
-									</li>
-								))}
-							</ul>
+			{providers.map((entry) => (
+				<section key={entry.provider} aria-labelledby={`usage-limits-${entry.provider}`} className="flex flex-col gap-4">
+					<div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+						<h2 id={`usage-limits-${entry.provider}`} className="inline-flex items-center gap-2 text-control font-medium text-foreground">
+							<AgentAvatar provider={PROVIDER_HARNESS[entry.provider]} decorative className="size-4" />
+							{agentAccountProviderNames[entry.provider]}
+						</h2>
+						<span className="text-xs text-muted-foreground">{t("usage.limits.accounts", { count: entry.accounts.length })}</span>
+						{entry.checkedAt ? (
+							<span className="ms-auto text-xs text-muted-foreground">{t("usage.limits.checked", { value: formatRelativeTime(entry.checkedAt, now, i18n.language) })}</span>
 						) : null}
-					</section>
-				);
-			})}
+					</div>
+					{/* One grid for every account, so bars and figures line up down the provider. */}
+					<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
+						{entry.accounts.map((account, index) => (
+							<AccountLimitRows key={account.id} account={account} first={index === 0} now={now} />
+						))}
+					</div>
+				</section>
+			))}
 		</div>
 	);
 }
 
-function LimitWindowRow({ window, accounts, now }: { window: PooledWindow; accounts: readonly AgentAccount[]; now: Date }) {
+function AccountLimitRows({ account, first, now }: { account: AgentAccount; first: boolean; now: Date }) {
+	const { t } = useTranslation();
+	const windows = account.limits?.windows ?? [];
+	const plan = formatPlanName(account.plan);
+	const resetCredits = account.limits?.resetCredits ?? 0;
+	const meta = [
+		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
+		account.default ? t("settings.agentAccounts.default") : null,
+		resetCredits > 0 ? t("usage.limits.resetCredits", { value: resetCredits }) : null,
+	].filter(Boolean).join(" · ");
+	const issue = account.signedIn ? account.problem : t("usage.limits.signedOut");
+	return (
+		<>
+			<div className={cn("col-span-full flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5", !first && "mt-4")} data-usage-account={account.id}>
+				<span className="truncate text-control font-medium text-foreground">{agentAccountName(account, t)}</span>
+				{meta ? <span className="text-xs text-muted-foreground">{meta}</span> : null}
+				{issue ? (
+					<span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+						<TriangleAlert aria-hidden="true" className="size-icon-sm self-center text-warning" />
+						{issue}
+					</span>
+				) : null}
+			</div>
+			{windows.map((window) => <LimitWindowRow key={window.id} window={window} now={now} />)}
+			{windows.length === 0 && !issue ? <p className="col-span-full text-xs text-muted-foreground">{t("usage.limits.noWindows")}</p> : null}
+		</>
+	);
+}
+
+function LimitWindowRow({ window, now }: { window: AgentAccountLimitWindow; now: Date }) {
 	const { t, i18n } = useTranslation();
-	const remaining = Math.round(window.remainingPercent);
-	const countdown = formatCountdown(window.nextResetAt, now);
+	const remaining = Math.round(remainingPercent(window.usedPercent));
+	const countdown = formatCountdown(window.resetsAt, now);
 	const percent = new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format(remaining / 100);
 	return (
 		<>
@@ -92,62 +101,18 @@ function LimitWindowRow({ window, accounts, now }: { window: PooledWindow; accou
 				<span className="ms-1 text-xs text-muted-foreground">{t("usage.limits.left")}</span>
 			</span>
 			<div
-				className="flex h-2.5 min-w-0 gap-1"
-				role="img"
+				role="progressbar"
 				aria-label={t("usage.limits.barLabel", { window: window.label, value: percent })}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-valuenow={remaining}
+				className="h-2.5 min-w-0 overflow-hidden rounded-full bg-muted"
 			>
-				{window.segments.map((segment) => (
-					<LimitSegmentBar
-						key={segment.accountId}
-						segment={segment}
-						name={accountName(accounts, segment.accountId, t)}
-						now={now}
-						single={window.segments.length === 1}
-					/>
-				))}
+				<div className={cn("h-full rounded-full", remainingTone(remaining))} style={{ width: `${remaining}%` }} />
 			</div>
 			<span className="whitespace-nowrap text-end text-xs tabular-nums text-muted-foreground">
 				{countdown ? t("usage.limits.resetsIn", { value: countdown }) : ""}
 			</span>
 		</>
-	);
-}
-
-function accountName(accounts: readonly AgentAccount[], accountId: string, t: Parameters<typeof agentAccountName>[1]): string {
-	const account = accounts.find((candidate) => candidate.id === accountId);
-	return account ? agentAccountName(account, t) : accountId;
-}
-
-function LimitSegmentBar({ segment, name, now, single }: { segment: LimitSegment; name: string; now: Date; single: boolean }) {
-	const { t, i18n } = useTranslation();
-	const countdown = formatCountdown(segment.resetsAt, now);
-	const reported = segment.remainingPercent !== null;
-	const percent = reported
-		? new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format((segment.remainingPercent ?? 0) / 100)
-		: null;
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<div
-					tabIndex={single ? -1 : 0}
-					className={cn(
-						"relative h-full min-w-0 flex-1 overflow-hidden rounded-full bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring",
-						!reported && "bg-[repeating-linear-gradient(135deg,var(--color-muted)_0_4px,transparent_4px_8px)]",
-					)}
-				>
-					{reported ? (
-						<div
-							className={cn("h-full rounded-full", remainingTone(segment.remainingPercent ?? 0))}
-							style={{ width: `${segment.remainingPercent}%` }}
-						/>
-					) : null}
-				</div>
-			</TooltipTrigger>
-			<TooltipContent side="top" className="flex flex-col gap-0.5 tabular-nums">
-				<span className="font-medium">{name}</span>
-				<span>{reported ? t("usage.limits.segmentLeft", { value: percent }) : t("usage.limits.notReported")}</span>
-				{countdown ? <span>{t("usage.limits.resetsIn", { value: countdown })}</span> : null}
-			</TooltipContent>
-		</Tooltip>
 	);
 }

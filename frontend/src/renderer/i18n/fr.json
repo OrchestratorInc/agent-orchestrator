@@ -3594,8 +3594,6 @@
 	"usage.limits.left": "restant",
 	"usage.limits.barLabel": "{{window}} : {{value}} restant",
 	"usage.limits.resetsIn": "Réinitialisation dans {{value}}",
-	"usage.limits.segmentLeft": "{{value}} restant",
-	"usage.limits.notReported": "Non signalé",
 	"usage.limits.empty": "Aucun compte ne signale de limites pour l’instant",
 	"usage.limits.emptyBody": "Connectez-vous à Codex ou Claude Code dans Paramètres → Agents pour voir leurs limites d’abonnement.",
 	"usage.limits.openSettings": "Ouvrir les paramètres des agents"
