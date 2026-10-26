@@ -9,17 +9,29 @@ describe("project row", () => {
 	// Matches a worker row: a divider, not a bordered card.
 	it("is a flat row with a divider", () => {
 		expect(card).toMatch(/row:\s*\{\s*borderBottomWidth:\s*rowDividerWidth/);
-		expect(card).toMatch(/body:\s*\{\s*paddingHorizontal:\s*space\.lg/);
+		expect(card).toMatch(/body:\s*\{\s*paddingLeft:\s*space\.lg/);
 	});
 
-	// The full-width button outweighed the project name; a footer pill does not,
-	// and is still the only solid control on the row.
-	it("carries the orchestrator as a footer strip with a compact pill", () => {
-		expect(card).toContain("styles.footer");
-		expect(card).toContain("<OrchestratorPill");
+	// The full-width button outweighed the project name; a compact pill does
+	// not, and is still the only solid control on the row. It is a capsule in a
+	// trailing slot that takes its own width, so a large text size narrows the
+	// body rather than running it under a pill laid over a fixed reservation.
+	it("carries the orchestrator as a capsule pill in a trailing slot", () => {
+		expect(card).toContain("trailing={<OrchestratorPill");
 		expect(card).toContain("<OrchestratorIcon");
 		expect(card).toContain("copy.short");
-		expect(card).toMatch(/pill:\s*\{[^}]*height:\s*28/s);
+		expect(card).toMatch(/pill:\s*\{[^}]*minHeight:\s*PILL_HEIGHT[^}]*borderRadius:\s*radius\.pill/s);
+		expect(card).toMatch(/trailingSlot:\s*\{\s*flexShrink:\s*0/);
+		expect(card).not.toContain('position: "absolute"');
+		expect(card).not.toMatch(/paddingRight:\s*1[25]0/);
+	});
+
+	// iOS highlights a row and fades a button; Android ripples both.
+	it("answers a press the way each platform does", () => {
+		expect(card).toContain('usePressFeedback("row")');
+		expect(card).toContain("android_ripple={feedback.android_ripple}");
+		expect(card).not.toContain("opacity: 0.8");
+		expect(card).not.toContain("<ActivityIndicator");
 	});
 
 	it("keeps counts as quiet text rather than chips", () => {
@@ -28,12 +40,15 @@ describe("project row", () => {
 		expect(card).not.toContain('<Feather name="folder"');
 	});
 
-	// Never nested: the pill sits over the row instead of inside its Pressable.
 	it("opens the project from the row and the orchestrator from the pill", () => {
 		expect(card).toContain("onPress={() => onOpenProject(row)}");
-		expect(card).toContain('pointerEvents="box-none"');
 		expect(projects).toContain('pathname: "/project/[id]"');
 		expect(projects).toContain("onOrchestrator={openOrchestrator}");
+	});
+
+	// Opening a page is navigation, not a moment worth a buzz.
+	it("opens a project without a haptic", () => {
+		expect(projects).not.toContain("haptics.select()");
 	});
 });
 

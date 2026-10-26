@@ -1,12 +1,13 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { ActivityIndicator, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { RefreshControl, SectionList, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { haptics } from "../../../lib/haptics";
 import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
 import { refreshControlColors } from "../../../lib/refreshControlColors";
+import { Spinner } from "../../../lib/Spinner";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
@@ -61,7 +62,6 @@ export default function ProjectsScreen() {
 	const openProject = (row: OrchestratorProjectRow) => {
 		const hostId = "hostId" in row.project && typeof row.project.hostId === "string" ? row.project.hostId : undefined;
 		if (!hostId) return;
-		haptics.select();
 		router.push({ pathname: "/project/[id]", params: { id: row.project.id, hostId } });
 	};
 
@@ -86,7 +86,7 @@ export default function ProjectsScreen() {
 				<TabPageScroll>
 					{staleBanner}
 					<View style={styles.center}>
-						<ActivityIndicator color={t.accent} />
+						<Spinner color={t.accent} accessibilityLabel="Loading projects" />
 					</View>
 				</TabPageScroll>
 			) : (

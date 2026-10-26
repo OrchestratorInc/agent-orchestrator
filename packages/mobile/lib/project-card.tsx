@@ -1,5 +1,5 @@
-import { Feather } from "./icons";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { useState, type ReactNode } from "react";
+import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { OrchestratorIcon } from "./orchestrator-icon";
 import {
 	orchestratorButtonCopy,
@@ -13,21 +13,28 @@ import type { Theme } from "./theme";
 import type { HostedProjectRow } from "./hostedRows";
 import type { HostSnapshot } from "./otherHosts";
 import { rowDividerWidth } from "./divider";
+import { usePressFeedback } from "./pressFeedback";
+import { Spinner } from "./Spinner";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { fontScaleCap, space, type } from "./tokens";
+import { fontScaleCap, iconSize, radius, space, touchTarget, type } from "./tokens";
 import { Dot } from "./ui";
 import { MachineIdentity } from "./MachineIdentity";
 import { machineAppearance } from "./machineAppearance";
+
+/** The pill's resting height; a larger text size grows it. */
+const PILL_HEIGHT = 32;
+/** Reaches the platform's touch target around a pill drawn smaller than it. */
+const PILL_HIT_SLOP = { top: (touchTarget - PILL_HEIGHT) / 2, bottom: (touchTarget - PILL_HEIGHT) / 2, left: space.sm, right: space.sm };
 
 /**
  * One project on the Projects page: who it is, how its fleet is doing, and the
  * way into its orchestrator.
  *
  * A flat row with a divider, like a worker row, rather than a card: the two
- * lists read as one app. The body opens the project page; a footer strip names
- * the orchestrator's state on the left and carries a compact pill on the right
- * that opens, starts or resumes it. The pill is the only solid control on the
- * row, so it outranks the counts without dominating the name.
+ * lists read as one app. The body opens the project page; a trailing slot
+ * carries a compact pill that opens, starts or resumes the orchestrator. The
+ * pill is the only solid control on the row, so it outranks the counts without
+ * dominating the name.
  */
 export function ProjectCard({
 	row,
@@ -40,65 +47,108 @@ export function ProjectCard({
 	onOpenProject: (row: OrchestratorProjectRow) => void;
 	onOrchestrator: (row: OrchestratorProjectRow) => void;
 }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const t = useTheme();
 	const status = orchestratorStatus(t, row.link);
 	const summary = projectCardSummary(row);
 	const blocker = projectBlockerLine(row);
 
 	return (
-		<View style={styles.row}>
+		<TrailingActionRow
+			style={styles.row}
+			bodyStyle={styles.body}
+			accessibilityLabel={`${row.project.name}, ${row.project.hostName} machine, ${status.label}, ${summary.workers}`}
+			accessibilityHint="Opens the project"
+			onPress={() => onOpenProject(row)}
+			trailing={<OrchestratorPill row={row} busy={busy} onPress={onOrchestrator} />}
+		>
+			<View style={styles.titleRow}>
+				<Text style={styles.project} numberOfLines={1}>
+					{row.project.name}
+				</Text>
+				<MachineIdentity
+					name={row.project.hostName}
+					appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
+					style={styles.machineIdentity}
+				/>
+			</View>
+
+			<View style={styles.summaryRow}>
+				<Dot color={status.color} size={6} breathing={status.breathing} />
+				<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
+					{status.label}
+				</Text>
+			</View>
+
+			{blocker ? (
+				// Two texts so the ellipsis lands on the worker name, not the age.
+				<View style={styles.blockerRow}>
+					<Text style={styles.blockerWorker} numberOfLines={1}>
+						{blocker.worker}
+					</Text>
+					<Text style={styles.blocker} numberOfLines={1}>
+						{` · ${blocker.reason}`}
+						{blocker.age ? ` · ${blocker.age}` : ""}
+					</Text>
+				</View>
+			) : null}
+
+			<Text style={styles.footerLabel} numberOfLines={1}>
+				{summary.workers}
+			</Text>
+		</TrailingActionRow>
+	);
+}
+
+/**
+ * A list row whose body is one control and whose trailing slot holds another.
+ * The two sit side by side rather than one inside the other, so each stays its
+ * own accessible control, and the slot takes only the width its control needs:
+ * at a large text size the body narrows instead of running under it.
+ *
+ * iOS highlights the whole row while the body is held, as a table cell
+ * highlights under its accessory; Android ripples where the finger is.
+ */
+function TrailingActionRow({
+	style,
+	bodyStyle,
+	accessibilityLabel,
+	accessibilityHint,
+	disabled,
+	onPress,
+	trailing,
+	children,
+}: {
+	style: StyleProp<ViewStyle>;
+	bodyStyle: StyleProp<ViewStyle>;
+	accessibilityLabel: string;
+	accessibilityHint?: string;
+	disabled?: boolean;
+	onPress: () => void;
+	trailing: ReactNode;
+	children: ReactNode;
+}) {
+	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
+	const [pressed, setPressed] = useState(false);
+	return (
+		<View style={[styles.trailingRow, style, pressed && feedback.pressed]}>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={`${row.project.name}, ${row.project.hostName} machine, ${status.label}, ${summary.workers}`}
-				accessibilityHint="Opens the project"
-				onPress={() => onOpenProject(row)}
-				style={({ pressed }) => [styles.body, pressed && styles.pressed]}
+				accessibilityLabel={accessibilityLabel}
+				accessibilityHint={accessibilityHint}
+				accessibilityState={disabled ? { disabled } : undefined}
+				disabled={disabled}
+				android_ripple={feedback.android_ripple}
+				onPress={onPress}
+				// Only iOS draws a pressed style; Android's ripple needs no re-render.
+				onPressIn={feedback.pressed ? () => setPressed(true) : undefined}
+				onPressOut={feedback.pressed ? () => setPressed(false) : undefined}
+				style={[styles.trailingBody, bodyStyle]}
 			>
-				<View style={styles.titleRow}>
-					<Text style={styles.project} numberOfLines={1}>
-						{row.project.name}
-					</Text>
-					<MachineIdentity
-						name={row.project.hostName}
-						appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
-						style={styles.machineIdentity}
-					/>
-					<Feather name="chevron-right" size={15} color={t.textFaint} />
-				</View>
-
-				<View style={styles.summaryRow}>
-					<Dot color={status.color} size={6} breathing={status.breathing} />
-					<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
-						{status.label}
-					</Text>
-				</View>
-
-				{blocker ? (
-					// Two texts so the ellipsis lands on the worker name, not the age.
-					<View style={styles.blockerRow}>
-						<Text style={styles.blockerWorker} numberOfLines={1}>
-							{blocker.worker}
-						</Text>
-						<Text style={styles.blocker} numberOfLines={1}>
-							{` · ${blocker.reason}`}
-							{blocker.age ? ` · ${blocker.age}` : ""}
-						</Text>
-					</View>
-				) : null}
-
-				{/* Footer strip. The right edge is left clear for the pill, which sits
-				    over it rather than inside this Pressable so the two never nest. */}
-				<View style={styles.footer}>
-					<Text style={styles.footerLabel} numberOfLines={1}>
-						{summary.workers}
-					</Text>
-				</View>
+				{children}
 			</Pressable>
-
-			<View style={styles.pillSlot} pointerEvents="box-none">
-				<OrchestratorPill row={row} busy={busy} onPress={onOrchestrator} />
-			</View>
+			<View style={styles.trailingSlot}>{trailing}</View>
 		</View>
 	);
 }
@@ -123,17 +173,19 @@ function OrchestratorPill({
 	// stopped orchestrator does not look ready.
 	const solid = copy.running;
 	const ink = solid ? t.bgBase : t.textPrimary;
+	const feedback = usePressFeedback("button", { tone: solid ? "onAccent" : "neutral" });
 	return (
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={`${copy.label}, ${row.project.name}`}
 			accessibilityState={{ busy, disabled: busy }}
 			disabled={busy}
-			hitSlop={8}
+			hitSlop={PILL_HIT_SLOP}
+			android_ripple={feedback.android_ripple}
 			onPress={() => onPress(row)}
-			style={({ pressed }) => [styles.pill, solid ? styles.pillSolid : styles.pillOutline, pressed && styles.buttonPressed]}
+			style={({ pressed }) => [styles.pill, solid ? styles.pillSolid : styles.pillOutline, pressed && feedback.pressed]}
 		>
-			{busy ? <ActivityIndicator size="small" color={ink} /> : <OrchestratorIcon size={15} color={ink} />}
+			{busy ? <Spinner size={iconSize.sm} color={ink} /> : <OrchestratorIcon size={iconSize.sm} color={ink} />}
 			<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={[styles.pillLabel, { color: ink }]} numberOfLines={1}>
 				{copy.running && openLabel ? openLabel : copy.short}
 			</Text>
@@ -195,44 +247,36 @@ export function ProjectPageHeader({
 				))}
 			</View>
 
-			{/* The whole row opens the orchestrator, and so does the pill. The pill
-			    is laid over the row rather than inside its Pressable, so the two
-			    never nest and each stays its own accessible control. */}
-			<View>
-				<Pressable
-					accessibilityRole="button"
-					accessibilityLabel={`${orchestratorButtonCopy(row, busy).label}, ${status.label}, ${row.detail}`}
-					disabled={busy}
-					onPress={() => onPress(row)}
-					style={({ pressed }) => [styles.orchestratorRow, pressed && styles.pressed]}
-				>
-					{/* The worker row's three lines — eyebrow, title, detail — at its exact
-					    metrics, so the orchestrator is the same height as the rows below. */}
-					<View style={[styles.main, styles.orchestratorMain]}>
-						<View style={styles.orchestratorEyebrow}>
-							<OrchestratorIcon size={14} color={t.textSecondary} />
-							<Text style={styles.orchestratorEyebrowText} numberOfLines={1}>
-								{row.link?.harness || "Orchestrator"}
-							</Text>
-						</View>
-						<Text style={styles.orchestratorTitle} numberOfLines={1}>
-							Orchestrator
-						</Text>
-						<View style={styles.summaryRow}>
-							<Dot color={status.color} size={6} breathing={status.breathing} />
-							<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
-								{status.label}
-							</Text>
-							<Text style={styles.summary} numberOfLines={1}>
-								{` · ${row.detail}`}
-							</Text>
-						</View>
-					</View>
-				</Pressable>
-				<View style={styles.orchestratorPillSlot} pointerEvents="box-none">
-					<OrchestratorPill row={row} busy={busy} onPress={onPress} openLabel="Open" />
+			{/* The whole row opens the orchestrator, and so does the pill beside it. */}
+			<TrailingActionRow
+				style={styles.orchestratorRow}
+				bodyStyle={styles.orchestratorBody}
+				accessibilityLabel={`${orchestratorButtonCopy(row, busy).label}, ${status.label}, ${row.detail}`}
+				disabled={busy}
+				onPress={() => onPress(row)}
+				trailing={<OrchestratorPill row={row} busy={busy} onPress={onPress} openLabel="Open" />}
+			>
+				{/* The worker row's three lines — eyebrow, title, detail — at its exact
+				    metrics, so the orchestrator is the same height as the rows below. */}
+				<View style={styles.orchestratorEyebrow}>
+					<OrchestratorIcon size={14} color={t.textSecondary} />
+					<Text style={styles.orchestratorEyebrowText} numberOfLines={1}>
+						{row.link?.harness || "Orchestrator"}
+					</Text>
 				</View>
-			</View>
+				<Text style={styles.orchestratorTitle} numberOfLines={1}>
+					Orchestrator
+				</Text>
+				<View style={styles.summaryRow}>
+					<Dot color={status.color} size={6} breathing={status.breathing} />
+					<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
+						{status.label}
+					</Text>
+					<Text style={styles.summary} numberOfLines={1}>
+						{` · ${row.detail}`}
+					</Text>
+				</View>
+			</TrailingActionRow>
 		</View>
 	);
 }
@@ -241,15 +285,16 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		// A flat row like a worker row: no card, just the divider.
 		row: { borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
-		body: { paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.md, gap: space.xxs },
-		pressed: { backgroundColor: t.bgSubtle },
-		main: { flex: 1, minWidth: 0, gap: space.xs },
+		body: { paddingLeft: space.lg, paddingVertical: space.md, gap: space.xxs },
+		trailingRow: { flexDirection: "row", alignItems: "stretch" },
+		trailingBody: { flex: 1, minWidth: 0, justifyContent: "center" },
+		// Centred on the row whatever its height, and never narrower than its pill.
+		trailingSlot: { flexShrink: 0, justifyContent: "center", paddingLeft: space.md, paddingRight: space.lg },
 
 		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		project: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
 		machineIdentity: { maxWidth: 120 },
 		projectMachineIdentity: { maxWidth: 132, flexShrink: 1 },
-		timestamp: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontVariant: ["tabular-nums"], fontFamily: t.fontMono },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },
 		summaryStrong: { fontFamily: "Geist_600SemiBold", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
@@ -260,24 +305,20 @@ const makeStyles = (t: Theme) =>
 		blocker: { fontFamily: "Geist_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
 		blockerWorker: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
 
-		// Height matches the pill so the strip's text centres on it; the right
-		// padding keeps the status clear of the pill laid over this edge.
-		footer: { flexDirection: "row", alignItems: "center", minHeight: 28, marginTop: space.sm, paddingRight: 150 },
-		footerLabel: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-		pillSlot: { position: "absolute", right: 18, bottom: 12, height: 28, justifyContent: "center" },
-		pill: { flexDirection: "row", alignItems: "center", gap: space.xs, height: 28, paddingHorizontal: space.md, borderRadius: 12 },
+		footerLabel: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+		// A capsule, as both platforms draw a button; `overflow` keeps the Android
+		// ripple inside it.
+		pill: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: PILL_HEIGHT, paddingHorizontal: space.md, paddingVertical: space.xxs, borderRadius: radius.pill, overflow: "hidden" },
 		pillSolid: { backgroundColor: t.textPrimary },
 		pillOutline: { borderWidth: 1, borderColor: t.borderStrong },
-		buttonPressed: { opacity: 0.8 },
 		pillLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 
 		stats: { flexDirection: "row", marginHorizontal: space.lg, marginTop: space.xxs, borderTopWidth: rowDividerWidth, borderBottomWidth: rowDividerWidth, borderColor: t.borderSubtle },
 		stat: { flex: 1, alignItems: "center", paddingVertical: space.sm, gap: space.none },
 		statValue: { color: t.textPrimary, fontSize: type.body.fontSize, lineHeight: type.body.lineHeight, fontWeight: "600", fontFamily: t.fontMono, fontVariant: ["tabular-nums"] },
-		statLabel: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		orchestratorRow: { minHeight: 76, flexDirection: "row", alignItems: "center", gap: space.md, paddingLeft: space.lg, paddingRight: 120, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
-		orchestratorPillSlot: { position: "absolute", right: 18, top: 0, bottom: 0, justifyContent: "center" },
-		orchestratorMain: { gap: space.hair },
+		statLabel: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		orchestratorRow: { minHeight: 76, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
+		orchestratorBody: { paddingLeft: space.lg, paddingVertical: space.sm, gap: space.hair },
 		orchestratorEyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
 		orchestratorEyebrowText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
 		orchestratorTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
