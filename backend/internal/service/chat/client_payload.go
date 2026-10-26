@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -75,5 +76,5 @@ func legacyMessageMatches(existing domain.ConversationMessage, msg ports.ChatUse
 		return false
 	}
 	canonical, err := json.Marshal(clientPayloadContent(stored))
-	return err == nil && string(canonical) == string(content)
+	return err == nil && bytes.Equal(canonical, content)
 }
