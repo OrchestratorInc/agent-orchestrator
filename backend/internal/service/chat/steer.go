@@ -304,7 +304,9 @@ func (c *Controller) PromoteQueuedTurn(
 		landed = target
 	}
 	activityID := c.newID()
-	activity, err := makeSteerActivity(activityID, msg, turnID)
+	activity, err := makeSteerActivity(activityID, msg, turnID, steerProviderInput{
+		Text: msg.Text, Content: msg.Content, SourceTurnIDs: []string{turnID},
+	})
 	if err != nil {
 		return PromoteQueuedTurnResult{}, settleUncertain(err)
 	}
@@ -491,11 +493,13 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	if landed == "" {
 		landed = turn
 	}
-	var providerInput steerProviderInput
+	providerInput := steerProviderInput{
+		Text: providerMessage.Text, Content: providerMessage.Content,
+		SourceTurnIDs: queuedBatchIDs(batch),
+	}
 	if len(batch) > 0 {
 		settleCtx := context.WithoutCancel(ctx)
 		target, err := c.store.TurnByProviderID(settleCtx, c.conversation.ID, landed)
-		providerInput.Text = providerMessage.Text
 		if err == nil && target.ProviderInputText == "" {
 			err = c.store.RecordProviderInput(settleCtx, target.ID, providerMessage.Text)
 			providerInput.StoredOnTurn = err == nil
@@ -787,8 +791,10 @@ func (c *Controller) recordSteer(
 }
 
 type steerProviderInput struct {
-	Text         string
-	StoredOnTurn bool
+	Text          string
+	Content       []ports.ChatContent
+	SourceTurnIDs []string
+	StoredOnTurn  bool
 }
 
 func makeSteerActivity(
@@ -817,8 +823,11 @@ func makeSteerActivity(
 	if sourceTurnID != "" {
 		detail["sourceTurnId"] = sourceTurnID
 	}
-	if len(providerInputs) > 0 && providerInputs[0].Text != "" {
+	if len(providerInputs) > 0 {
+		detail["providerInputCaptured"] = true
 		detail["providerInputText"] = providerInputs[0].Text
+		detail["providerInputContent"] = providerInputs[0].Content
+		detail["providerInputSourceTurnIds"] = providerInputs[0].SourceTurnIDs
 		detail["providerInputStoredOnTurn"] = providerInputs[0].StoredOnTurn
 	}
 	if len(msg.Content) > 0 {

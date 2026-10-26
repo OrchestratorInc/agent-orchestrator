@@ -1705,7 +1705,7 @@ LIMIT 1;
 -- Content blocks for every message absorbed by a failed provider turn.
 -- Row order matches the original batch, including steer fallback batches.
 -- name: SelectConversationProviderInputContent :many
-SELECT conversation_messages.delivery_content_json
+SELECT conversation_turns.id AS source_turn_id, conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages ON conversation_messages.turn_id = conversation_turns.id
     AND conversation_messages.role = 'user'
@@ -1713,6 +1713,17 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (conversation_turns.id = sqlc.arg(turn_id)
        OR conversation_turns.promoted_to_turn_id = sqlc.arg(turn_id))
 ORDER BY conversation_turns.rowid;
+
+-- Accepted steering inputs are separate provider inputs on the same turn.
+-- Their detail rows retain the exact content sent to the provider.
+-- name: SelectConversationSteerRetryInputs :many
+SELECT detail_json FROM conversation_activities
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND turn_id = sqlc.arg(turn_id)
+  AND kind = 'system'
+  AND status = 'completed'
+  AND json_extract(detail_json, '$.event') = 'steer'
+ORDER BY sequence;
 
 -- A replayed retry request returns the attempt already linked to its source.
 -- The relation is daemon-owned rather than inferred from caller-controlled text.

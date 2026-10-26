@@ -1873,15 +1873,18 @@ func (c *Controller) dispatch(
 	msg.Settings = c.turnSettings()
 	msg = excerptDeliveryMessage(msg)
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
-	if len(followers) > 0 {
-		if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
+	if err := c.store.RecordProviderInput(ctx, turnID, msg.Text); err != nil {
+		if len(followers) > 0 {
 			ids := append([]string{turnID}, followers...)
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, ids,
 				"batch provider input could not be recorded: "+err.Error(), c.now()); failErr != nil {
 				c.log.Error("failed to settle unrecorded queued batch", "error", failErr)
 			}
-			return domain.ConversationTurn{}, fmt.Errorf("record batch provider input: %w", err)
+		} else if settleErr := c.store.SettleTurnByID(context.WithoutCancel(ctx), turnID,
+			domain.TurnStateFailed, "provider input could not be recorded: "+err.Error(), c.now()); settleErr != nil {
+			c.log.Error("failed to settle unrecorded provider input", "error", settleErr)
 		}
+		return domain.ConversationTurn{}, fmt.Errorf("record provider input: %w", err)
 	}
 	failFollowers := func(reason string) {
 		if len(followers) == 0 {

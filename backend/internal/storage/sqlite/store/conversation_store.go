@@ -4307,6 +4307,22 @@ func (s *Store) ProviderEventsSince(
 	return rows, nil
 }
 
+type steerRetryInput struct {
+	Text                       string              `json:"text"`
+	Content                    []ports.ChatContent `json:"content"`
+	ProviderInputText          string              `json:"providerInputText"`
+	ProviderInputContent       []ports.ChatContent `json:"providerInputContent"`
+	ProviderInputCaptured      bool                `json:"providerInputCaptured"`
+	ProviderInputStoredOnTurn  bool                `json:"providerInputStoredOnTurn"`
+	ProviderInputSourceTurnIDs []string            `json:"providerInputSourceTurnIds"`
+}
+
+type retryProviderInputItem struct {
+	Text         string `json:"text"`
+	ContentStart int    `json:"contentStart,omitempty"`
+	ContentCount int    `json:"contentCount,omitempty"`
+}
+
 // RetryPrompt returns the durable human prompt of a failed turn, for
 // re-dispatching it as a new turn. The content is loaded from AO's own rows
 // rather than from a client request that could be stale or substituted.
@@ -4328,8 +4344,39 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		DeliveryContentJSON: row.DeliveryContentJson,
 		ActiveLineage:       row.ActiveLineage,
 	}
-	if prompt.ProviderInputText == "" {
+	activityDetails, err := s.qr.SelectConversationSteerRetryInputs(ctx, gen.SelectConversationSteerRetryInputsParams{
+		ConversationID: conversationID, TurnID: sql.NullString{String: turnID, Valid: true},
+	})
+	if err != nil {
+		return domain.RetryPrompt{}, fmt.Errorf("read steer inputs %s: %w", turnID, err)
+	}
+	if prompt.ProviderInputText == "" && len(activityDetails) == 0 {
 		return prompt, nil
+	}
+	steers := make([]steerRetryInput, 0, len(activityDetails))
+	steeredSourceIDs := make(map[string]bool)
+	initialText := prompt.Text
+	initialWasRendered := prompt.ProviderInputText != ""
+	if initialWasRendered {
+		initialText = prompt.ProviderInputText
+	}
+	for _, detail := range activityDetails {
+		var steer steerRetryInput
+		if err := json.Unmarshal([]byte(detail), &steer); err != nil {
+			return domain.RetryPrompt{}, fmt.Errorf("decode steer input %s: %w", turnID, err)
+		}
+		if steer.ProviderInputStoredOnTurn && steer.ProviderInputText == prompt.ProviderInputText {
+			// Older turns could save the first batch steer in this field instead of
+			// the opening input. Its activity still identifies that steer.
+			initialText = prompt.Text
+			initialWasRendered = false
+		}
+		if steer.ProviderInputCaptured {
+			for _, id := range steer.ProviderInputSourceTurnIDs {
+				steeredSourceIDs[id] = true
+			}
+		}
+		steers = append(steers, steer)
 	}
 	blocks, err := s.qr.SelectConversationProviderInputContent(ctx, gen.SelectConversationProviderInputContentParams{
 		ConversationID: conversationID, TurnID: turnID,
@@ -4338,20 +4385,42 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		return domain.RetryPrompt{}, fmt.Errorf("read provider input content %s: %w", turnID, err)
 	}
 	var content []ports.ChatContent
-	for _, raw := range blocks {
-		if raw == "" {
+	for _, block := range blocks {
+		if steeredSourceIDs[block.SourceTurnID] || block.DeliveryContentJson == "" {
 			continue
 		}
 		var items []ports.ChatContent
-		if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		if err := json.Unmarshal([]byte(block.DeliveryContentJson), &items); err != nil {
 			return domain.RetryPrompt{}, fmt.Errorf("decode provider input content %s: %w", turnID, err)
 		}
 		for _, item := range items {
-			if (item.Type == "excerpt" && item.Excerpt != nil) || (item.Type == "text" && item.Internal) {
+			if initialWasRendered && ((item.Type == "excerpt" && item.Excerpt != nil) || (item.Type == "text" && item.Internal)) {
 				continue
 			}
 			content = append(content, item)
 		}
+	}
+	if len(steers) > 0 {
+		inputs := []retryProviderInputItem{{Text: initialText, ContentCount: len(content)}}
+		for _, steer := range steers {
+			text := steer.Text
+			blocks := steer.Content
+			if steer.ProviderInputText != "" {
+				text = steer.ProviderInputText
+			}
+			if steer.ProviderInputCaptured {
+				blocks = steer.ProviderInputContent
+			}
+			inputs = append(inputs, retryProviderInputItem{
+				Text: text, ContentStart: len(content), ContentCount: len(blocks),
+			})
+			content = append(content, blocks...)
+		}
+		encoded, err := json.Marshal(inputs)
+		if err != nil {
+			return domain.RetryPrompt{}, fmt.Errorf("encode provider inputs %s: %w", turnID, err)
+		}
+		prompt.ProviderInputText = "AO prior provider inputs in order. Each JSON item is one complete input; content blocks follow contentStart and contentCount indices.\n" + string(encoded)
 	}
 	prompt.DeliveryContentJSON = ""
 	if len(content) > 0 {

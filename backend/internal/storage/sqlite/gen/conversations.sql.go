@@ -3322,7 +3322,7 @@ func (q *Queries) SelectConversationProviderEvents(ctx context.Context, arg Sele
 }
 
 const selectConversationProviderInputContent = `-- name: SelectConversationProviderInputContent :many
-SELECT conversation_messages.delivery_content_json
+SELECT conversation_turns.id AS source_turn_id, conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages ON conversation_messages.turn_id = conversation_turns.id
     AND conversation_messages.role = 'user'
@@ -3337,21 +3337,26 @@ type SelectConversationProviderInputContentParams struct {
 	TurnID         string
 }
 
+type SelectConversationProviderInputContentRow struct {
+	SourceTurnID        string
+	DeliveryContentJson string
+}
+
 // Content blocks for every message absorbed by a failed provider turn.
 // Row order matches the original batch, including steer fallback batches.
-func (q *Queries) SelectConversationProviderInputContent(ctx context.Context, arg SelectConversationProviderInputContentParams) ([]string, error) {
+func (q *Queries) SelectConversationProviderInputContent(ctx context.Context, arg SelectConversationProviderInputContentParams) ([]SelectConversationProviderInputContentRow, error) {
 	rows, err := q.db.QueryContext(ctx, selectConversationProviderInputContent, arg.ConversationID, arg.TurnID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []string{}
+	items := []SelectConversationProviderInputContentRow{}
 	for rows.Next() {
-		var delivery_content_json string
-		if err := rows.Scan(&delivery_content_json); err != nil {
+		var i SelectConversationProviderInputContentRow
+		if err := rows.Scan(&i.SourceTurnID, &i.DeliveryContentJson); err != nil {
 			return nil, err
 		}
-		items = append(items, delivery_content_json)
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -3461,6 +3466,46 @@ func (q *Queries) SelectConversationSteerDelivery(ctx context.Context, arg Selec
 		&i.SettledAt,
 	)
 	return i, err
+}
+
+const selectConversationSteerRetryInputs = `-- name: SelectConversationSteerRetryInputs :many
+SELECT detail_json FROM conversation_activities
+WHERE conversation_id = ?1
+  AND turn_id = ?2
+  AND kind = 'system'
+  AND status = 'completed'
+  AND json_extract(detail_json, '$.event') = 'steer'
+ORDER BY sequence
+`
+
+type SelectConversationSteerRetryInputsParams struct {
+	ConversationID string
+	TurnID         sql.NullString
+}
+
+// Accepted steering inputs are separate provider inputs on the same turn.
+// Their detail rows retain the exact content sent to the provider.
+func (q *Queries) SelectConversationSteerRetryInputs(ctx context.Context, arg SelectConversationSteerRetryInputsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationSteerRetryInputs, arg.ConversationID, arg.TurnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var detail_json string
+		if err := rows.Scan(&detail_json); err != nil {
+			return nil, err
+		}
+		items = append(items, detail_json)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const selectConversationTurnByID = `-- name: SelectConversationTurnByID :one

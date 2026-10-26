@@ -466,8 +466,93 @@ func TestSteerFlushesPendingChatMessages(t *testing.T) {
 		t.Fatalf("queue after steer = %v", err)
 	}
 	target, err := h.st.TurnByProviderID(ctx, h.ctrl.ConversationID(), result.Steer.ProviderTurnID)
-	if err != nil || target.ProviderInputText != steers[0].msg.Text {
-		t.Fatalf("steered batch replay identity = %+v, %v", target, err)
+	if err != nil || target.ProviderInputText != "do the long thing" {
+		t.Fatalf("opening provider input identity = %+v, %v", target, err)
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundSteerInput := false
+	for _, activity := range snapshot.Activities {
+		var detail struct {
+			ProviderInputText     string `json:"providerInputText"`
+			ProviderInputCaptured bool   `json:"providerInputCaptured"`
+		}
+		if err := json.Unmarshal(activity.Detail, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if detail.ProviderInputText == steers[0].msg.Text && detail.ProviderInputCaptured {
+			foundSteerInput = true
+		}
+	}
+	if !foundSteerInput {
+		t.Fatalf("steered provider input missing from activities: %+v", snapshot.Activities)
+	}
+}
+
+func TestFailedSteeredBatchRetryKeepsEveryInputAndImage(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	caps := provider.Capabilities()
+	caps[ports.ChatCapabilityImages] = true
+	provider.setCapabilities(caps)
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "queued guidance", ClientMessageID: "retry-steer-queued", Origin: domain.MessageOriginHuman,
+		Content: []ports.ChatContent{{Type: "image", Data: "cXVldWVk", MIMEType: "image/png"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, msg := range []ports.ChatUserMessage{
+		{Text: "first correction", ClientMessageID: "retry-steer-first", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "image", Data: "Zmlyc3Q=", MIMEType: "image/png"}}},
+		{Text: "second correction", ClientMessageID: "retry-steer-second", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "image", Data: "c2Vjb25k", MIMEType: "image/png"}}},
+	} {
+		result, err := h.svc.SteerOrSend(ctx, testSession, msg, false)
+		if err != nil || !result.Steered {
+			t.Fatalf("steer %d = %+v, %v", i, result, err)
+		}
+	}
+	active, found, err := h.st.ConversationMessageByClientID(ctx, h.ctrl.ConversationID(), "turn-1")
+	if err != nil || !found {
+		t.Fatalf("opening message = %+v, %v", active, err)
+	}
+	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
+		ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateFailed,
+		Err: errors.New("provider failed")})
+	failedTurnSnapshot(t, h, active.TurnID)
+	if _, err := h.svc.RetryTurn(ctx, testSession, active.TurnID); err != nil {
+		t.Fatal(err)
+	}
+	sent := provider.sentMessages()
+	if len(sent) != 2 {
+		t.Fatalf("provider sends = %+v", sent)
+	}
+	retried := sent[1]
+	_, payload, found := strings.Cut(retried.Text, "\n")
+	if !found {
+		t.Fatalf("retry input has no boundary: %q", retried.Text)
+	}
+	var inputs []struct {
+		Text         string `json:"text"`
+		ContentStart int    `json:"contentStart"`
+		ContentCount int    `json:"contentCount"`
+	}
+	if err := json.Unmarshal([]byte(payload), &inputs); err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 3 || inputs[0].Text != "do the long thing" ||
+		!strings.Contains(inputs[1].Text, "queued guidance") ||
+		!strings.Contains(inputs[1].Text, "first correction") ||
+		inputs[2].Text != "second correction" ||
+		inputs[0].ContentCount != 0 || inputs[1].ContentStart != 0 ||
+		inputs[1].ContentCount != 2 || inputs[2].ContentStart != 2 || inputs[2].ContentCount != 1 {
+		t.Fatalf("retry provider input boundaries = %+v", inputs)
+	}
+	if len(retried.Content) != 3 || retried.Content[0].Data != "cXVldWVk" ||
+		retried.Content[1].Data != "Zmlyc3Q=" || retried.Content[2].Data != "c2Vjb25k" {
+		t.Fatalf("retry images = %+v", retried.Content)
 	}
 }
 
