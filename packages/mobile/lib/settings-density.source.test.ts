@@ -48,9 +48,15 @@ describe("the iOS settings form", () => {
 	it("is SwiftUI's Form through the universal FieldGroup, in the app's family at a Dynamic Type style", () => {
 		expect(ios).toContain('import { FieldGroup, Host, ListItem } from "@expo/ui";');
 		expect(ios).toContain("<FieldGroup.Section");
-		expect(ios).toContain('font({ family: typeface.regular, textStyle: "body" })');
-		// Text scales with its text style, never a bare point size.
-		expect(ios).not.toMatch(/font\(\{[^}]*\bsize:/);
+		expect(ios).toContain('font({ family: typeface.regular, size: type.body.fontSize, textStyle: "body" })');
+		const fonts = ios.match(/font\(\{[^}]*\}\)/g) ?? [];
+		expect(fonts.length).toBeGreaterThan(0);
+		for (const call of fonts) {
+			// Text scales with its text style, never at a bare point size.
+			if (/\bsize:/.test(call)) expect(call).toMatch(/\btextStyle:/);
+			// A custom face without a size draws at 17pt whatever its text style.
+			if (/\bfamily:/.test(call)) expect(call).toMatch(/\bsize: type\.\w+\.fontSize/);
+		}
 	});
 
 	it("uses the native controls: Toggle, menu and inline Pickers, and a role-carrying Button", () => {

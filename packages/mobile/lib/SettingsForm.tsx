@@ -1,6 +1,7 @@
 import { FieldGroup, Host, ListItem } from "@expo/ui";
 import { Button, HStack, Image, Label, LabeledContent, Picker, ProgressView, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
 import {
+	accessibilityAddTraits,
 	accessibilityHidden,
 	background,
 	buttonStyle,
@@ -31,7 +32,7 @@ import {
 	type SettingsValueRowProps,
 } from "./SettingsForm.types";
 import { useTheme, useThemeState } from "./ThemeProvider";
-import { font as typeface, space } from "./tokens";
+import { font as typeface, space, type } from "./tokens";
 
 export { settingsIcons, type SettingsIconName, type SettingsOption, type SettingsTone } from "./SettingsForm.types";
 
@@ -55,7 +56,7 @@ export function SettingsForm({ children, testID }: SettingsFormProps) {
 					scrollContentBackground("hidden"),
 					background(t.bgBase),
 					// Every row's text in the app's family, scaled with Dynamic Type.
-					font({ family: typeface.regular, textStyle: "body" }),
+					font({ family: typeface.regular, size: type.body.fontSize, textStyle: "body" }),
 					foregroundStyle(t.textPrimary),
 				]}
 			>
@@ -65,18 +66,36 @@ export function SettingsForm({ children, testID }: SettingsFormProps) {
 	);
 }
 
+/**
+ * The title and footer are footnote text drawn here, not the Form's own header
+ * text, which would pick up the Form's body font. The title keeps VoiceOver's
+ * heading trait.
+ */
 export function SettingsSection({ title, footer, children, testID }: SettingsSectionProps) {
 	return (
-		<FieldGroup.Section title={title} testID={testID}>
+		<FieldGroup.Section testID={testID}>
+			{title ? <FieldGroup.SectionHeader><SectionText header>{title}</SectionText></FieldGroup.SectionHeader> : null}
 			{children}
-			{footer ? <FieldGroup.SectionFooter><SectionFooterText>{footer}</SectionFooterText></FieldGroup.SectionFooter> : null}
+			{footer ? <FieldGroup.SectionFooter><SectionText>{footer}</SectionText></FieldGroup.SectionFooter> : null}
 		</FieldGroup.Section>
 	);
 }
 
-function SectionFooterText({ children }: { children: string }) {
+function SectionText({ children, header = false }: { children: string; header?: boolean }) {
 	const t = useTheme();
-	return <Text modifiers={[font({ family: typeface.regular, textStyle: "footnote" }), foregroundStyle(t.textSecondary)]}>{children}</Text>;
+	return (
+		<Text
+			modifiers={[
+				// A custom face's size is its base, which the text style only scales;
+				// without one it would draw at body size.
+				font({ family: typeface.regular, size: type.footnote.fontSize, textStyle: "footnote" }),
+				foregroundStyle(t.textSecondary),
+				...(header ? [accessibilityAddTraits(["isHeader"])] : []),
+			]}
+		>
+			{children}
+		</Text>
+	);
 }
 
 /**

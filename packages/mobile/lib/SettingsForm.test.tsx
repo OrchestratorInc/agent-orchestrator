@@ -13,7 +13,7 @@ vi.mock("@expo/ui", async () => {
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
 		Host: host("Host"),
-		FieldGroup: Object.assign(host("FieldGroup"), { Section: host("FieldGroupSection"), SectionFooter: host("FieldGroupSectionFooter") }),
+		FieldGroup: Object.assign(host("FieldGroup"), { Section: host("FieldGroupSection"), SectionHeader: host("FieldGroupSectionHeader"), SectionFooter: host("FieldGroupSectionFooter") }),
 		ListItem: host("ListItem"),
 	};
 });
@@ -25,7 +25,7 @@ vi.mock("@expo/ui/swift-ui", async () => {
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const modifier = (type: string) => (...args: unknown[]) => ({ $type: type, args });
 	return Object.fromEntries(
-		["accessibilityHidden", "background", "buttonStyle", "disabled", "font", "foregroundStyle", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
+		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonStyle", "disabled", "font", "foregroundStyle", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
 	);
 });
 
@@ -72,16 +72,31 @@ describe("the iOS settings form", () => {
 		expect(form.props.testID).toBe("form");
 		expect(has(form, "scrollContentBackground", "hidden")).toBe(true);
 		expect(has(form, "background", "#base")).toBe(true);
-		expect(has(form, "font", { family: "Geist_400Regular", textStyle: "body" })).toBe(true);
+		expect(has(form, "font", { family: "Geist_400Regular", size: 17, textStyle: "body" })).toBe(true);
 	});
 
-	it("titles sections natively and explains them in a footnote footer", () => {
+	// A custom face draws at its given size, which the text style only scales, so
+	// the header and footer name the footnote size; the Form's body font would
+	// otherwise reach them.
+	it("titles sections with a footnote header and explains them in a footnote footer", () => {
 		const root = render(<SettingsSection title="Account" footer="Paired machines sync.">{null}</SettingsSection>);
-		expect(root.findByType("FieldGroupSection" as never).props.title).toBe("Account");
+		const footnote = { family: "Geist_400Regular", size: 13, textStyle: "footnote" };
+		const header = root.findByType("FieldGroupSectionHeader" as never).findByType("Text" as never);
+		expect(header.props.children).toBe("Account");
+		expect(has(header, "font", footnote)).toBe(true);
+		expect(has(header, "foregroundStyle", "#secondary")).toBe(true);
+		expect(has(header, "accessibilityAddTraits", ["isHeader"])).toBe(true);
 		const footer = root.findByType("FieldGroupSectionFooter" as never).findByType("Text" as never);
 		expect(footer.props.children).toBe("Paired machines sync.");
-		expect(has(footer, "font", { family: "Geist_400Regular", textStyle: "footnote" })).toBe(true);
+		expect(has(footer, "font", footnote)).toBe(true);
 		expect(has(footer, "foregroundStyle", "#secondary")).toBe(true);
+		expect(has(footer, "accessibilityAddTraits")).toBe(false);
+	});
+
+	it("leaves out the header and footer a section does not have", () => {
+		const root = render(<SettingsSection>{null}</SettingsSection>);
+		expect(root.findAllByType("FieldGroupSectionHeader" as never)).toHaveLength(0);
+		expect(root.findAllByType("FieldGroupSectionFooter" as never)).toHaveLength(0);
 	});
 
 	it("draws a link row as a list button with its value and the disclosure chevron", () => {
@@ -193,8 +208,7 @@ describe("the iOS settings form", () => {
 		expect(has(picker, "pickerStyle", "inline")).toBe(true);
 		expect(has(picker, "labelsHidden")).toBe(true);
 		const options = picker.findAllByType("HStack" as never);
-		expect(options.map((option) => (option.props.modifiers as Modifier[])[0])).toEqual([{ $type: "tag", args: ["nord"] }, { $type: "tag", args: ["ayu"] }]);
-		expect(options[0].findAllByType("Swatch" as never)).toHaveLength(1);
+		expect(options.map((option) => (option.props.modifiers as Modifier[])[0])).toEqual([{ $type: "tag", args: ["nord"] }, { $type: "tag", args: ["ayu"] }]);		expect(options[0].findAllByType("Swatch" as never)).toHaveLength(1);
 		picker.props.onSelectionChange("ayu");
 		expect(onValueChange).toHaveBeenCalledWith("ayu");
 	});
