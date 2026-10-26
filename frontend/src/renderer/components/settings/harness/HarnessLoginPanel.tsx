@@ -178,7 +178,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 			{remote && !connected && <p className="text-xs text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>
 		{!connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-4" onSubmit={(event) => { event.preventDefault(); void start(); }}>
-			<fieldset disabled={locked} className="grid grid-cols-1 gap-2 @min-[32rem]:grid-cols-2">
+			<fieldset disabled={locked} className="grid auto-rows-fr grid-cols-1 gap-2 @min-[32rem]:grid-cols-2">
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
 				{availableMethods.map((item) => {
 					const key = agentId === "claude-code" && item.id === "browser" ? "claude" : item.id;
