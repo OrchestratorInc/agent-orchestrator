@@ -73,14 +73,15 @@ export function SpawnComposerControls({
 	);
 }
 
+// Every control is a full touch target tall; the rows take their height from it.
 const styles = StyleSheet.create({
-	stack: { gap: space.hair },
-	destinationRow: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs },
-	destinationHost: { flex: 1, minWidth: 0, height: 36 },
-	rail: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.xs },
+	stack: { gap: space.xs },
+	destinationRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
+	destinationHost: { flex: 1, minWidth: 0, height: touchTarget },
+	rail: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	iconHost: { width: touchTarget, height: touchTarget },
 	iconButton: { width: touchTarget, height: touchTarget, borderRadius: radius.xl },
-	menuHost: { flex: 1, minWidth: 0, height: 44 },
-	spawnHost: { width: "100%", height: 44 },
-	spawnButton: { width: "100%", height: 44, borderRadius: 16 },
+	menuHost: { flex: 1, minWidth: 0, height: touchTarget },
+	spawnHost: { width: "100%", height: touchTarget },
+	spawnButton: { width: "100%", height: touchTarget, borderRadius: radius.lg },
 });

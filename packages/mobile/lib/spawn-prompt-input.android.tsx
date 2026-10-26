@@ -1,7 +1,7 @@
 import { StyleSheet, TextInput } from "react-native";
 import { useTheme } from "./ThemeProvider";
 import { textSelectionColors } from "./textSelection";
-import { space, type } from "./tokens";
+import { radius, space, type } from "./tokens";
 
 export type SpawnPromptInputProps = {
 	value: string;
@@ -41,7 +41,7 @@ const styles = StyleSheet.create({
 		height: 112,
 		paddingHorizontal: space.lg,
 		paddingVertical: space.sm,
-		borderRadius: 16,
+		borderRadius: radius.lg,
 		borderCurve: "continuous",
 		fontSize: type.callout.fontSize,
 		lineHeight: type.callout.lineHeight,
