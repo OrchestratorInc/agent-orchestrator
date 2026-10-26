@@ -11,9 +11,12 @@ const registry = createConversationEventRegistry();
 
 /**
  * How recently a heartbeat must have arrived for the stream to count as
- * delivering. The daemon sends one every 10 s; an intermediary that buffers
- * small writes (a Cloudflare quick tunnel) holds them back, so they stop
- * arriving on time exactly when events would too.
+ * delivering. The daemon writes one every 10 s on a fixed ticker, busy or idle,
+ * into the same response as the events and in order with them, so a heartbeat
+ * that arrives proves the events written before it arrived too. An
+ * intermediary that buffers small writes (a Cloudflare quick tunnel) holds the
+ * heartbeats back with the events, so they stop arriving on time exactly when
+ * events would too.
  */
 export const STREAM_HEALTHY_WITHIN_MS = 15_000;
 const lastHeartbeatAt = new Map<string, number>();
