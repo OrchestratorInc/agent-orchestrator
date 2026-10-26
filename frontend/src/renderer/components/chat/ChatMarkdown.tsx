@@ -186,9 +186,11 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	const [parsed, setParsed] = useState(() => streaming ? splitStreamingMarkdown(text, undefined, renderMath) : {
 		source: text, math: renderMath, blocks: [{ source: text, start: 0, repairInline: false }], stableCount: 0,
 	});
-	// Chunks are cut in the math dialect they render in, so turning math on or
-	// off re-cuts them. One block is a whole document in either dialect.
-	const current = parsed.source === text && (parsed.math === renderMath || parsed.blocks.length === 1);
+	// Chunks are cut, and their prose repair decided, in the math dialect they
+	// render in, so turning math on or off re-cuts them. A settled single block
+	// is exempt: it is a whole document in either dialect, and repair only runs
+	// while streaming.
+	const current = parsed.source === text && (parsed.math === renderMath || (!streaming && parsed.blocks.length === 1));
 	const blocks = current ? parsed : splitStreamingMarkdown(text, parsed, renderMath);
 	if (blocks !== parsed) setParsed(blocks);
 	const animate = fading && !prefersReducedMotion();

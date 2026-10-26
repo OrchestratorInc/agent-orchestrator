@@ -955,6 +955,14 @@ describe("ChatMarkdown streaming fade", () => {
 describe("ChatMarkdown math", () => {
 	afterEach(() => useUiStore.setState({ renderMath: false }));
 
+	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
+		// With math off, `$a~b$` is prose, and streaming repair escapes its `~`.
+		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
+		act(() => useUiStore.setState({ renderMath: true }));
+		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
+		expect(container.querySelector("[data-tex]")).toHaveAttribute("data-tex", "a~b");
+	});
+
 	it("leaves dollar signs as text while the setting is off", () => {
 		const { container } = render(<ChatMarkdown text="Costs $5 and $10, or $x^2$." />);
 		expect(container).toHaveTextContent("Costs $5 and $10, or $x^2$.");
