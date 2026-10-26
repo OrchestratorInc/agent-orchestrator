@@ -19,6 +19,12 @@ const mocks = vi.hoisted(() => ({
 	hideShellTopbar: true,
 }));
 
+vi.mock("./PdfPreview", () => ({
+	PdfPreview: ({ firstPageOnly, path, src }: { firstPageOnly?: boolean; path: string; src: string }) => <div data-testid="pdf-thumbnail" data-first-page-only={firstPageOnly} data-src={src}>{path}</div>,
+}));
+vi.mock("./chat/MermaidBlock", () => ({
+	MermaidBlock: ({ code }: { code: string }) => <div data-testid="mermaid-thumbnail">{code}</div>,
+}));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKey: ["workspaces"],
@@ -354,6 +360,44 @@ describe("ArtifactsView", () => {
 		await waitFor(() => expect(within(screen.getByRole("region", { name: "AO" })).getByTitle("No preview available")).toBeInTheDocument());
 		expect(reopened.container.querySelector("iframe")).toBeNull();
 		expect(fetch).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		{ name: "metrics.csv", content: 'Name,Value\n"Alpha, Inc",42\nBeta,7\n', text: "Alpha, Inc", type: "table" },
+		{ name: "metrics.tsv", content: "Name\tValue\nAlpha\t42\n", text: "Alpha", type: "table" },
+		{ name: "flow.mmd", content: "flowchart LR\n A --> B", text: "A --> B", type: "mermaid" },
+		{ name: "flow.mermaid", content: "flowchart LR\n A --> B", text: "A --> B", type: "mermaid" },
+	])("renders a $name thumbnail with the shared renderer", async ({ name, content, text, type }) => {
+		const file = session("ao-format", "Preview formats", [{ name, kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
+		file.artifactFiles![0].rawUrl = `http://127.0.0.1:3002/${name}`;
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [file] }];
+		vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(content)));
+		const { container } = renderView();
+
+		await waitFor(() => expect(container.textContent).toContain(text));
+		expect(container.querySelector(type === "table" ? "table" : '[data-testid="mermaid-thumbnail"]')).not.toBeNull();
+		expect(container.querySelector("[inert]")).not.toBeNull();
+	});
+
+	it("renders Mermaid fences inside Markdown thumbnails", async () => {
+		const file = session("ao-diagram", "Architecture", [{ name: "architecture.md", updatedAt: "2026-10-11T10:00:00Z" }]);
+		file.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/architecture.md";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [file] }];
+		vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response("```mermaid\nflowchart LR\n A --> B\n```")));
+		const { container } = renderView();
+
+		await waitFor(() => expect(container.querySelector('[data-testid="mermaid-thumbnail"]')).toHaveTextContent("A --> B"));
+	});
+
+	it("renders the first PDF page as a thumbnail with its file version", () => {
+		const file = session("ao-pdf", "Report", [{ name: "report.pdf", kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
+		file.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/report.pdf";
+		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [file] }];
+		const { container } = renderView();
+
+		const preview = container.querySelector('[data-testid="pdf-thumbnail"]');
+		expect(preview).toHaveAttribute("data-first-page-only", "true");
+		expect(preview).toHaveAttribute("data-src", "http://127.0.0.1:3002/report.pdf?v=2026-10-11T10%3A00%3A00Z");
 	});
 
 	it("shows image previews and falls back to a placeholder when the image fails", () => {
