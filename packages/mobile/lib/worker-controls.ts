@@ -37,13 +37,6 @@ export function filterWorkersByEnvironmentAndProject<T extends { projectId: stri
 	return filterWorkersByProject(environmentWorkers, projectId, projects);
 }
 
-export function workerSearchPresentation(
-	requestedOpen: boolean,
-	query: string,
-): "collapsed" | "expanded" {
-	return requestedOpen || query.trim().length > 0 ? "expanded" : "collapsed";
-}
-
 export function workerProjectLabel(
 	projects: readonly WorkerProject[],
 	projectId: string,

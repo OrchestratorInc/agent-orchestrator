@@ -14,8 +14,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
  * Android ends the page at the top of the navigation bar, which keeps clear of
  * the system bar itself, so there is nothing left to clear. The insets the page
  * reads there are still the window's, which is why this does not return them.
- * The keyboard is measured from the window's bottom edge rather than the
- * page's, so anything riding it also needs `useTabPageBottomGap`.
  */
 export function useTabBarInset(): number {
 	const insets = useSafeAreaInsets();

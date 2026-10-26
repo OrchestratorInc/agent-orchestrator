@@ -77,46 +77,28 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).not.toContain("MenuView");
 	});
 
-	it("uses React Native Android inputs for worker search and elicitation", () => {
-		for (const file of ["./worker-dock.android.tsx", "./chat/elicitation-native-controls.android.tsx"]) {
-			const path = fileURLToPath(new URL(file, import.meta.url));
-			expect(existsSync(path)).toBe(true);
-			const android = existsSync(path) ? source(file) : "";
-			expect(android).toContain("TextInput");
-			expect(android).not.toContain("@expo/ui");
-			expect(android).not.toContain('width: "100%"');
+	it("uses React Native Android inputs for elicitation", () => {
+		const file = "./chat/elicitation-native-controls.android.tsx";
+		const path = fileURLToPath(new URL(file, import.meta.url));
+		expect(existsSync(path)).toBe(true);
+		const android = existsSync(path) ? source(file) : "";
+		expect(android).toContain("TextInput");
+		expect(android).not.toContain("@expo/ui");
+		expect(android).not.toContain('width: "100%"');
+	});
+
+	// The top app bar's own search action and a Compose dropdown take the place
+	// of the hand-built dock and its bottom sheet, and spawning is Material's FAB.
+	it("searches, filters and spawns Android workers with native controls", () => {
+		const board = source("../app/(tabs)/(workers)/index.tsx");
+		expect(board).toContain("<Stack.SearchBar");
+		expect(board).toContain("onClose={searchClosed}");
+		expect(board).toContain('<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />');
+		expect(source("./BoardHeaderItems.tsx")).toContain("{!ios ? filter : null}");
+		expect(source("./AddFab.android.tsx")).toContain('import { FloatingActionButton, Host, Icon } from "@expo/ui/jetpack-compose";');
+		for (const gone of ["./worker-dock.android.tsx", "./worker-controls-sheet.android.tsx", "./worker-controls-sheet.tsx"]) {
+			expect(existsSync(fileURLToPath(new URL(gone, import.meta.url)))).toBe(false);
 		}
-		expect(source("./worker-dock.android.tsx")).toContain('testID="worker-search-close"');
-	});
-
-	it("keeps the Android worker actions at opposite edges and hosts their native sheet", () => {
-		const dock = source("./worker-dock.android.tsx");
-		expect(dock).toContain("styles.flexSpacer");
-		expect(dock).toMatch(/flexSpacer:\s*\{\s*flex:\s*1\s*\}/);
-		expect(dock).toContain('row: { flex: 1, height: 52, flexDirection: "row"');
-
-		const controls = source("./worker-controls-sheet.android.tsx");
-		expect(controls).toContain("BottomSheet");
-		expect(controls).toContain('@expo/ui/community/bottom-sheet');
-	});
-
-	it("uses a draggable native Android worker-controls sheet", () => {
-		const controls = source("./worker-controls-sheet.android.tsx");
-		expect(controls).toContain('@expo/ui/community/bottom-sheet');
-		expect(controls).toContain("BottomSheetView");
-		expect(controls).toContain("enablePanDownToClose");
-		expect(controls).not.toMatch(/\bModal\b/);
-		expect(controls).not.toContain("styles.grabber");
-		expect(controls).toContain('snapPoints={["55%", "85%"]}');
-		expect(controls).toContain("enableDynamicSizing={false}");
-		expect(controls).toMatch(/projectList:\s*\{[^}]*flex:\s*1/s);
-	});
-
-	it("keeps the iOS worker-controls host full width", () => {
-		const controls = source("./worker-controls-sheet.tsx");
-		expect(controls).toContain('@expo/ui/community/bottom-sheet');
-		expect(controls).toContain('snapPoints={["55%", "85%"]}');
-		expect(controls).not.toContain("<Host");
 	});
 
 	it("makes the entire iOS Spawn prompt a native text-input hit target", () => {

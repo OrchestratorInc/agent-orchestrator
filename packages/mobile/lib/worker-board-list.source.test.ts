@@ -23,14 +23,15 @@ describe("worker board list identity", () => {
 	});
 });
 
-describe("worker dock keyboard lift", () => {
-	// The library's animated `height` is the keyboard's frame origin, which is
-	// negative while the keyboard is up — its own avoiding view negates it before
-	// use. Feeding it to a `max(…, 0)` gave a lift of exactly zero, which parked
-	// the search field under the keyboard instead of above it.
-	it("drives the lift from progress, not from the animated height", () => {
-		expect(board).toContain("-keyboardAnimation.progress.value * workerDockLift(keyboardOverlap, tabBarInset)");
-		expect(board).not.toContain("keyboardAnimation.height.value");
+describe("worker search", () => {
+	// The search field is the header's own, which the system keeps clear of the
+	// keyboard. The dock it replaces rode the keyboard by hand, and every way of
+	// measuring that (a late visibility flag, the animated frame origin, a page
+	// that ends above the window's bottom) put the field in the wrong place.
+	it("searches from the native header rather than a field riding the keyboard", () => {
+		expect(board).toContain("<Stack.SearchBar");
+		expect(board).not.toContain("react-native-keyboard-controller");
+		expect(board).not.toContain("keyboardAnimation");
 	});
 });
 

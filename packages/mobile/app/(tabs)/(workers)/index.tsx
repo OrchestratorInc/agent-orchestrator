@@ -1,8 +1,7 @@
-import { useRouter } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
-import Animated, { useAnimatedStyle } from "react-native-reanimated";
-import { useKeyboardState, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { AddFab, addFabClearance } from "../../../lib/AddFab";
 import { haptics } from "../../../lib/haptics";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
@@ -13,15 +12,12 @@ import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { useTabBarInset } from "../../../lib/useTabBarInset";
-import { useTabPageBottomGap } from "../../../lib/useTabPageBottomGap";
 import { useHeaderOverlap } from "../../../lib/useHeaderOverlap";
 import { Button, EmptyState } from "../../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
 import { hostedProjectKey } from "../../../lib/hostedRows";
-import { WorkerDock } from "../../../lib/worker-dock";
-import { keyboardOverPage, workerDockKeyboardLayout, workerDockLift, workerListBottomInset } from "../../../lib/worker-dock-layout";
-import { WorkerControlsSheet } from "../../../lib/worker-controls-sheet";
+import { workerFilterMenu } from "../../../lib/worker-filter-menu";
 import { WorkerMachineState } from "../../../lib/worker-machine-state";
 import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
 import {
@@ -34,7 +30,6 @@ import {
 	workerProjectForEnvironment,
 	workerProjectLabel,
 	workerProjectOptions,
-	workerSearchPresentation,
 } from "../../../lib/worker-controls";
 import { space } from "../../../lib/tokens";
 
@@ -46,7 +41,6 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const tabBarInset = useTabBarInset();
-	const page = useTabPageBottomGap();
 	const headerOverlap = useHeaderOverlap();
 	const { config, configured, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
@@ -58,13 +52,12 @@ export default function FleetScreen() {
 		: notificationsUnread;
 	const [refreshing, setRefreshing] = useState(false);
 	const [query, setQuery] = useState("");
-	const [searchRequested, setSearchRequested] = useState(false);
-	const [controlsOpen, setControlsOpen] = useState(false);
 	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
 	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
-	// the memoised dock only needs who the machines are. Rebuilding this on every
-	// tick re-rendered the dock mid-tap, the bug the stable handlers below avoid.
+	// the memoised header menu only needs who the machines are. Rebuilding this on
+	// every tick would register the header again mid-tap, the bug the stable
+	// handlers below avoid.
 	const environmentsKey = JSON.stringify(hostStates.map((host) => [host.hostId, host.name, host.appearance.symbol]));
 	const environments = useMemo(
 		() => sortWorkerEnvironments(hostStates.map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance }))),
@@ -75,40 +68,21 @@ export default function FleetScreen() {
 		() => workerProjectOptions(allProjects, workerEnvironmentId),
 		[allProjects, workerEnvironmentId],
 	);
-	// Stable identities so the memoised dock is not rebuilt on every poll — a
-	// re-render mid-tap is what made the filter menu open only sometimes.
-	const openSearch = useCallback(() => setSearchRequested(true), []);
-	const closeSearch = useCallback(() => {
-		Keyboard.dismiss();
-		setQuery("");
-		setSearchRequested(false);
-	}, []);
-	const openControls = useCallback(() => {
-		Keyboard.dismiss();
-		haptics.tap();
-		setControlsOpen(true);
-	}, []);
+	// Stable identities so the memoised header items are not rebuilt on every
+	// poll — a re-render mid-tap is what made the filter menu open only sometimes.
+	// The search bar's handlers register header options the same way.
+	const searchChanged = useCallback((event: { nativeEvent: { text: string } }) => setQuery(event.nativeEvent.text), []);
+	const searchClosed = useCallback(() => setQuery(""), []);
+	// The machine the app reaches first, as a value: hostStates itself is new on
+	// every poll, and the spawn action is a header item.
+	const openHostId = hostStates.find((host) => host.connection === "open")?.hostId;
 	const spawnWorker = useCallback(() => {
 		Keyboard.dismiss();
-		haptics.tap();
 		const project = spawnProjectParam(workerProjectId, allProjects);
-		const connectedHostId = connection === "open" ? config?.hostId : hostStates.find((host) => host.connection === "open")?.hostId;
+		const connectedHostId = connection === "open" ? config?.hostId : openHostId;
 		const selectedHostId = workerEnvironmentId === ALL_WORKER_ENVIRONMENTS ? undefined : workerEnvironmentId;
 		router.push({ pathname: "/spawn", params: { hostId: project?.hostId ?? selectedHostId ?? connectedHostId ?? config?.hostId, ...project } });
-	}, [allProjects, config?.hostId, connection, hostStates, router, workerEnvironmentId, workerProjectId]);
-	// Two selectors rather than the whole state object, so the board re-renders
-	// only when one of these two values actually changes.
-	//
-	// The hook listens on keyboardWillShow / keyboardDidHide — `will`, not `did`.
-	// That is the fix: the Android branch this replaces listened for
-	// keyboardDidShow, which fires only once the IME has finished animating, so
-	// the dock and the list inset arrived a beat after the keyboard had landed.
-	const keyboardHeight = useKeyboardState((state) => state.height);
-	const keyboardVisible = useKeyboardState((state) => state.isVisible);
-	// The keyboard's own animated height, for the dock. The `isVisible` flag above
-	// turns over when the keyboard has *finished* moving, so anything positioned
-	// from it arrives late — see `workerDockLift`.
-	const keyboardAnimation = useReanimatedKeyboardAnimation();
+	}, [allProjects, config?.hostId, connection, openHostId, router, workerEnvironmentId, workerProjectId]);
 	const listRef = useRef<FlatList<BoardRow>>(null);
 
 	const projectSessions = useMemo(
@@ -130,7 +104,6 @@ export default function FleetScreen() {
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- archiveSourcesKey covers every field read here
 	}, [archiveSourcesKey]);
-	const searchOpen = workerSearchPresentation(searchRequested, query) === "expanded";
 	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;
 	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
 	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
@@ -141,6 +114,15 @@ export default function FleetScreen() {
 		setWorkerEnvironmentId(environmentId);
 		setWorkerProjectId((projectId) => workerProjectForEnvironment(allProjects, environmentId, projectId));
 	}, [allProjects]);
+	const filterMenu = useMemo(() => workerFilterMenu({
+		environments,
+		selectedEnvironmentId: workerEnvironmentId,
+		onSelectEnvironment: selectEnvironment,
+		projects: allProjects,
+		selectedProjectId: workerProjectId,
+		onSelectProject: setWorkerProjectId,
+		badgeColor: t.accent,
+	}), [allProjects, environments, selectEnvironment, t.accent, workerEnvironmentId, workerProjectId]);
 
 	useEffect(() => {
 		if (
@@ -173,18 +155,6 @@ export default function FleetScreen() {
 		finally { setRefreshing(false); }
 	}, [refreshAll, refreshHost, selectedHost?.hostId]);
 
-	// The keyboard's height runs from the window's bottom edge, which Android's
-	// page stops short of: it ends at the tab bar.
-	const keyboardOverlap = keyboardOverPage(keyboardHeight, page.gap);
-	const keyboardLayout = workerDockKeyboardLayout(keyboardOverlap, tabBarInset, keyboardVisible);
-	// `progress`, not the animated `height`: that value is the keyboard's frame
-	// origin, which is negative while the keyboard is up (the library's own
-	// avoiding view negates it before use). Feeding it to a `max(…, 0)` produced a
-	// lift of exactly nothing, which parked the search field under the keyboard.
-	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: -keyboardAnimation.progress.value * workerDockLift(keyboardOverlap, tabBarInset) }],
-	}));
-
 	if (!configured && hostStates.length === 0) {
 		return (
 			<View style={styles.screen}>
@@ -214,7 +184,7 @@ export default function FleetScreen() {
 	);
 
 	return (
-		<View ref={page.ref} onLayout={page.onLayout} style={[styles.screen, { paddingBottom: keyboardLayout.rootPaddingBottom }]}>
+		<View style={styles.screen}>
 			{!selectedHost && fleetLoading && allSessions.length === 0 ? (
 				<TabPageScroll>
 					{listHeader}
@@ -230,8 +200,9 @@ export default function FleetScreen() {
 					query={query}
 					identityKey={boardIdentityKey}
 					listRef={listRef}
-					// iOS insets the list by the tab bar already; it pads only for the dock.
-					contentBottomInset={workerListBottomInset(keyboardLayout.dockBottom) - tabBarInset}
+					// iOS insets the list by the tab bar already; Android pads it clear
+					// of the floating spawn button too.
+					contentBottomInset={addFabClearance + space.xxl}
 					contentInsetAdjustmentBehavior="automatic"
 					overlayTopInset={headerOverlap}
 					refreshing={refreshing}
@@ -266,13 +237,13 @@ export default function FleetScreen() {
 							<EmptyState
 								icon="folder"
 								title={`No workers in ${selectedProjectLabel}`}
-								message="Choose another project from the Workers controls."
+								message="Choose another project from the filter menu."
 							/>
 						) : workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? (
 							<EmptyState
 								icon="monitor"
 								title={`No workers on ${selectedEnvironmentLabel ?? "this environment"}`}
-								message="Choose another environment from the Workers controls."
+								message="Choose another environment from the filter menu."
 							/>
 						) : (
 							<EmptyState
@@ -286,39 +257,26 @@ export default function FleetScreen() {
 				/>
 			)}
 
-			{/* Resting position plus the keyboard's lift, animated: the dock travels with
-			    the keys instead of jumping once they have finished moving. */}
-			<Animated.View style={[styles.dock, { bottom: keyboardLayout.restingBottom }, dockRise]}>
-				<WorkerDock
-					query={query}
-					onQueryChange={setQuery}
-					searchOpen={searchOpen}
-					onSearchOpen={openSearch}
-					onSearchClose={closeSearch}
-					onOpenControls={openControls}
-					projectFiltered={workerProjectId !== ALL_WORKER_PROJECTS || workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS}
-					environments={environments}
-					selectedEnvironmentId={workerEnvironmentId}
-					onSelectEnvironment={selectEnvironment}
-					projects={allProjects}
-					selectedProjectId={workerProjectId}
-					onSelectProject={setWorkerProjectId}
-					onSpawn={spawnWorker}
-				/>
-			</Animated.View>
-
-			<WorkerControlsSheet
-				open={controlsOpen}
-				onDismiss={() => setControlsOpen(false)}
-				onSearch={() => setSearchRequested(true)}
-				environments={environments}
-				selectedEnvironmentId={workerEnvironmentId}
-				onSelectEnvironment={selectEnvironment}
-				projects={allProjects}
-				selectedProjectId={workerProjectId}
-				onSelectProject={setWorkerProjectId}
+			<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />
+			{/* The header's own search: UISearchController under the large title on
+			    iOS, the top app bar's search action on Android. Filtering stays in
+			    place on the board, so the content is not dimmed behind it. */}
+			<Stack.SearchBar
+				placeholder="Search workers"
+				// Under the large title on every iOS version, rather than iOS 26's
+				// toolbar slot, which this tab bar would have to share.
+				placement="stacked"
+				obscureBackground={false}
+				autoCapitalize="none"
+				tintColor={t.highlight}
+				textColor={t.textPrimary}
+				hintTextColor={t.textTertiary}
+				headerIconColor={t.accent}
+				onChangeText={searchChanged}
+				onCancelButtonPress={searchClosed}
+				onClose={searchClosed}
 			/>
-			<BoardHeaderItems unread={unreadCount} />
+			<BoardHeaderItems unread={unreadCount} filter={filterMenu} onAdd={spawnWorker} addLabel="Spawn worker" />
 		</View>
 	);
 }
@@ -328,11 +286,4 @@ const makeStyles = (t: Theme) =>
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
 		errorActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: space.sm, alignItems: "center" },
-		dock: {
-			position: "absolute",
-			left: 16,
-			right: 16,
-			height: 52,
-			flexDirection: "row",
-		},
 	});

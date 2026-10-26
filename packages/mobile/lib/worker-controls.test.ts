@@ -9,7 +9,6 @@ import {
 	workerProjectForEnvironment,
 	workerProjectLabel,
 	workerProjectOptions,
-	workerSearchPresentation,
 	chipRevealOffset,
 	showsEnvironmentFilter,
 	sortWorkerEnvironments,
@@ -79,17 +78,6 @@ describe("environment worker filtering", () => {
 		expect(workerProjectForEnvironment(projects, "dev", hostedProjectKey(projects[0]))).toBe(ALL_WORKER_PROJECTS);
 		expect(workerProjectForEnvironment(projects, "dev", hostedProjectKey(projects[1]))).toBe(hostedProjectKey(projects[1]));
 		expect(workerProjectForEnvironment(projects, "dev", ALL_WORKER_PROJECTS)).toBe(ALL_WORKER_PROJECTS);
-	});
-});
-
-describe("workerSearchPresentation", () => {
-	it("stays expanded while a non-empty query is visible", () => {
-		expect(workerSearchPresentation(false, "compiler")).toBe("expanded");
-	});
-
-	it("collapses only when search is closed and empty", () => {
-		expect(workerSearchPresentation(false, "")).toBe("collapsed");
-		expect(workerSearchPresentation(true, "")).toBe("expanded");
 	});
 });
 

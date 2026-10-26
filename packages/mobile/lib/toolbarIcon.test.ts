@@ -16,7 +16,7 @@ describe("toolbarIcon", () => {
 
 	// Typecheck holds this list to registry names with a bundled drawable.
 	it("covers the header glyphs the app declares", () => {
-		const names: ToolbarSymbolName[] = ["add", "back", "checkmark", "close", "delete", "more", "notifications", "openExternal", "settings", "wrapLines"];
+		const names: ToolbarSymbolName[] = ["add", "back", "checkmark", "close", "delete", "devices", "filter", "folder", "more", "notifications", "openExternal", "projects", "settings", "wrapLines"];
 		const bundled: readonly string[] = materialDrawableNames;
 		expect(names.filter((name) => !bundled.includes(symbols[name].android))).toEqual([]);
 	});
