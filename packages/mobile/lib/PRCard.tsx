@@ -32,7 +32,8 @@ const ACTION_TITLES: Record<PRCardAction, string> = {
 };
 
 /**
- * A pull-request row with the same hierarchy and density as WorkerListRow.
+ * A pull-request row with the same hierarchy as WorkerListRow: an eyebrow, the
+ * title, then metadata, none of it smaller than footnote.
  *
  * A tap opens the review. Everything else about the pull request is in the
  * row's long-press menu — a SwiftUI context menu on iOS, a Material dropdown on
@@ -149,11 +150,11 @@ const makeStyles = (t: Theme) =>
 			borderBottomWidth: rowDividerWidth,
 			borderBottomColor: t.borderSubtle,
 		},
-		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		status: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
+		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: type.footnote.lineHeight },
+		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		status: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		copy: { gap: space.hair },
 		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
-		details: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },
-		blockers: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, marginTop: space.hair, marginLeft: space.xl },
+		details: { color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
+		blockers: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair, marginLeft: space.xl },
 	});

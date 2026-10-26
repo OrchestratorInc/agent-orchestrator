@@ -256,8 +256,8 @@ export function ProjectPageHeader({
 				onPress={() => onPress(row)}
 				trailing={<OrchestratorPill row={row} busy={busy} onPress={onPress} openLabel="Open" />}
 			>
-				{/* The worker row's three lines — eyebrow, title, detail — at its exact
-				    metrics, so the orchestrator is the same height as the rows below. */}
+				{/* The worker row's three lines — eyebrow, title, detail — so the
+				    orchestrator reads as one of the rows below. */}
 				<View style={styles.orchestratorEyebrow}>
 					<OrchestratorIcon size={14} color={t.textSecondary} />
 					<Text style={styles.orchestratorEyebrowText} numberOfLines={1}>
@@ -297,15 +297,15 @@ const makeStyles = (t: Theme) =>
 		projectMachineIdentity: { maxWidth: 132, flexShrink: 1 },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },
-		summaryStrong: { fontFamily: "Geist_600SemiBold", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
+		summaryStrong: { fontFamily: "Geist_600SemiBold", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		statusLabel: { marginLeft: space.xs },
-		summary: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+		summary: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
 		blockerRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },
-		blocker: { fontFamily: "Geist_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-		blockerWorker: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "600" },
+		blocker: { fontFamily: "Geist_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		blockerWorker: { fontFamily: "Geist_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 
-		footerLabel: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
+		footerLabel: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		// A capsule, as both platforms draw a button; `overflow` keeps the Android
 		// ripple inside it.
 		pill: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: PILL_HEIGHT, paddingHorizontal: space.md, paddingVertical: space.xxs, borderRadius: radius.pill, overflow: "hidden" },
@@ -319,7 +319,7 @@ const makeStyles = (t: Theme) =>
 		statLabel: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		orchestratorRow: { minHeight: 76, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
 		orchestratorBody: { paddingLeft: space.lg, paddingVertical: space.sm, gap: space.hair },
-		orchestratorEyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-		orchestratorEyebrowText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
+		orchestratorEyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: type.footnote.lineHeight },
+		orchestratorEyebrowText: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		orchestratorTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
 	});

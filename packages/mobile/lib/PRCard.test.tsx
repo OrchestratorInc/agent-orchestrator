@@ -148,6 +148,14 @@ describe("PRCard", () => {
 		expect(xml).toContain('android:viewportWidth="960"');
 	});
 
+	// The eyebrow, details and blockers are quiet through colour and weight,
+	// never smaller than footnote.
+	it("sets no text below 13pt", () => {
+		const source = readFileSync(fileURLToPath(new URL("./PRCard.tsx", import.meta.url)), "utf8");
+		expect(source).not.toMatch(/type\.caption[12]/);
+		expect(source).toMatch(/blockers:\s*\{[^}]*fontSize: type\.footnote\.fontSize/);
+	});
+
 	// iOS's context menu takes the long press natively. On Android the row's own
 	// press handler holds the touch, so the row opens the dropdown itself.
 	it("opens the menu from the row's long press on Android only", () => {

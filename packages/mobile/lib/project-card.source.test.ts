@@ -34,6 +34,12 @@ describe("project row", () => {
 		expect(card).not.toContain("<ActivityIndicator");
 	});
 
+	// Metadata is quiet through colour and weight, never smaller than footnote.
+	it("sets no text below 13pt", () => {
+		expect(card).not.toMatch(/type\.caption[12]/);
+		expect(card).toContain("fontSize: type.footnote.fontSize");
+	});
+
 	it("keeps counts as quiet text rather than chips", () => {
 		expect(card).toContain("projectCardSummary(row)");
 		expect(card).not.toContain("<Chip");
