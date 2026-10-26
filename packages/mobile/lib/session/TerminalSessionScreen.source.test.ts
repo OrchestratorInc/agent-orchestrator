@@ -81,11 +81,18 @@ describe("the terminal screen's native chrome", () => {
 		expect(screen).not.toContain("restoreCta");
 	});
 
+	it("keeps explaining a crashed terminal view for as long as it stays black", () => {
+		// A snackbar would time out while the grid stays black, so it is screen state.
+		expect(screen).toContain("onRenderProcessGone: () => setViewGone(true),");
+		expect(screen).toMatch(/\{viewGone \? \(\s*(\/\/[^\n]*\n\s*)*<View style=\{styles\.deadOverlay\} accessibilityRole="alert">\s*<EmptyState\s+icon="warning"\s+iconColor=\{t\.red\}/);
+		expect(screen).toContain('action={<Button title="Go back" onPress={leave} />}');
+	});
+
 	it("floats a native scroll-to-top button that drives the WebView", () => {
 		// The jump stays in the page; the button, its colours and its visibility are React Native's.
 		expect(screen).toContain("window.__aoScrollTop = function ()");
 		expect(screen).toContain("'AO_SCROLLTOP ' + (show ? 1 : 0)");
-		expect(screen).toContain("{canScrollTop && !dead ? <ScrollTopButton onPress={scrollToTop} /> : null}");
+		expect(screen).toContain("{canScrollTop && !dead && !viewGone ? <ScrollTopButton onPress={scrollToTop} /> : null}");
 		expect(screen).not.toContain("ao-scrolltop");
 		expect(screen).not.toContain("setInterval(update");
 		expect(screen).not.toContain("rgba(16,17,20");

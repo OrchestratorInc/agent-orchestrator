@@ -856,11 +856,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 	// Whether there is older output to jump to, as the WebView last reported it.
 	const [canScrollTop, setCanScrollTop] = useState(false);
+	// Android killed the WebView's renderer: the grid is black for good. Held as
+	// state, not a notice, because a snackbar would leave before the problem does.
+	const [viewGone, setViewGone] = useState(false);
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
-		// The replacement WebView reports its own answer once it is up.
+		// The replacement WebView reports its own answer once it is up, and
+		// starts with a renderer of its own.
 		setCanScrollTop(false);
+		setViewGone(false);
 	}, [scheme, style]);
 
 	// Poll the daemon's on-demand preview detector while the terminal is open, just
@@ -1379,9 +1384,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			nestedScrollEnabled: true,
 			// Surface an Android WebView render-process crash instead of a silent black
 			// screen, so the user can tell the terminal died vs. never loaded.
-			onRenderProcessGone: () => showNotice("The terminal view stopped working. Go back and open the session again."),
+			onRenderProcessGone: () => setViewGone(true),
 		}),
-		[showNotice],
+		[],
 	);
 
 	if (unpaired) {
@@ -1465,7 +1470,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						</View>
 					</View>
 				) : null}
-				{canScrollTop && !dead ? <ScrollTopButton onPress={scrollToTop} /> : null}
+				{canScrollTop && !dead && !viewGone ? <ScrollTopButton onPress={scrollToTop} /> : null}
 				{interfaceTransitionActive ? (
 					<View style={styles.interfaceOverlay}>
 						<View style={styles.interfaceCard}>
@@ -1507,7 +1512,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 						</View>
 					</View>
 				) : null}
-				{dead && (
+				{viewGone ? (
+					// Ahead of a dead session's overlay: Restore would reattach to a
+					// renderer that is no longer there.
+					<View style={styles.deadOverlay} accessibilityRole="alert">
+						<EmptyState
+							icon="warning"
+							iconColor={t.red}
+							title="The terminal view stopped working"
+							message={shellOnly ? "Go back and open the shell again." : "Go back and open the session again."}
+							action={<Button title="Go back" onPress={leave} />}
+						/>
+					</View>
+				) : dead && (
 					<View style={styles.deadOverlay}>
 						<EmptyState
 							icon={TERMINATED_GLYPH}
