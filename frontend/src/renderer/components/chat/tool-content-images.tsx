@@ -6,7 +6,8 @@ type ToolContentPart = { kind: "text"; text: string } | ToolImagePart;
 function toolImage(record: Record<string, unknown>, truncated: boolean): ToolImagePart | undefined {
 	const source = record.source && typeof record.source === "object"
 		? record.source as Record<string, unknown> : undefined;
-	if (record.type !== "image" && !(source && ("data" in source || "media_type" in source))) return undefined;
+	const imageSource = typeof source?.media_type === "string" && /^image\//i.test(source.media_type);
+	if (record.type !== "image" && !imageSource) return undefined;
 	const data = source?.data ?? record.data;
 	const mime = source?.media_type ?? record.mimeType;
 	// Only a bounded MIME token is used in visible labels; never echo arbitrary payload fields.

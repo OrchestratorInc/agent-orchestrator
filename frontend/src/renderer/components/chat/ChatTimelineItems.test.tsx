@@ -446,6 +446,20 @@ describe("ActivityRow", () => {
 		expect(result.content[0]).toHaveProperty("data", png);
 	});
 
+	it("keeps non-image structured source text in the original result JSON", () => {
+		const result = { content: [{ type: "text", text: "loaded" }], structuredContent: { source: { data: "CSV source text", media_type: "text/plain" }, rows: 2 } };
+		const { container } = render(<ActivityRow activity={{
+			kind: "activity", id: "text-source-result", sequence: 1, revision: 1,
+			createdAt: "2026-10-26T00:00:00Z", activityKind: "mcp_tool", status: "completed",
+			summary: "Read", detail: { toolName: "Read", result },
+		}} />);
+		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
+		expect(screen.queryByRole("img")).toBeNull();
+		expect(container.querySelector("pre")).toHaveTextContent("CSV source text");
+		expect(container.querySelector("pre")).toHaveTextContent("text/plain");
+		expect(container.textContent).not.toContain("Tool image");
+	});
+
 	it("keeps text-only MCP output in its existing code block", () => {
 		const { container } = render(tool({ type: "text", text: "plain result" }));
 		fireEvent.click(screen.getByRole("button", { name: /Read/ }));
