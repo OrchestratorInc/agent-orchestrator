@@ -43,10 +43,25 @@ describe("the icons the shared controls are given", () => {
 	// is handed has to draw as a system symbol.
 	const domainGlyphs = new Set(["git-pull-request"]);
 
+	// The names an element's `icon` hands over. An inline `{ ios, android }`
+	// pair is already a system symbol, which typecheck holds to both sets, so
+	// its strings are not names to resolve.
+	const pair = /\{\s*(?:ios|android):\s*"[^"]*",\s*(?:ios|android):\s*"[^"]*",?\s*\}/g;
+	function iconNames(element: string): string[] {
+		return [...element.matchAll(/\bicon=(\{[^}\n]*\}|"[^"]*")/g)]
+			.flatMap((match) => [...match[1].replace(pair, "").matchAll(/"([^"]+)"/g)].map((name) => name[1]));
+	}
+
+	it("reads names, not the sides of an inline symbol pair", () => {
+		expect(iconNames('<Button icon={{ ios: "keyboard", android: "keyboard" }} title="Type" />')).toEqual([]);
+		expect(iconNames('<Button icon={busy ? "x" : { ios: "tray", android: "inbox" }} title="Open" />')).toEqual(["x"]);
+		expect(iconNames('<EmptyState icon="refresh-cw" title="Retry" />')).toEqual(["refresh-cw"]);
+	});
+
 	it("draws every chrome glyph as a system symbol", () => {
 		const code = [...sources("app"), ...sources("lib")];
 		const elements = code.flatMap((source) => [...source.matchAll(/<(?:EmptyState|Button)\b[\s\S]*?\/>/g)].map((match) => match[0]));
-		const names = elements.flatMap((element) => [...element.matchAll(/\bicon=(\{[^}\n]*\}|"[^"]*")/g)].flatMap((match) => [...match[1].matchAll(/"([^"]+)"/g)].map((name) => name[1])));
+		const names = elements.flatMap(iconNames);
 		// The connection failures hand the board's empty state an icon from data.
 		const failures = [...readFileSync(join(root, "lib/connectionError.ts"), "utf8").matchAll(/\bicon: "([^"]+)"/g)].map((match) => match[1]);
 		expect(names.length).toBeGreaterThan(40);

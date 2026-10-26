@@ -34,7 +34,6 @@ import { connectSheetRoute, machineNameSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
 import { Button, EmptyState, NumberedStep } from "../lib/ui";
 import { Spinner } from "../lib/Spinner";
-import type { PlatformSymbol } from "../lib/symbols";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { NativeHeaderButton } from "../lib/native-header-button";
 import { toolbarIcon } from "../lib/toolbarIcon";
@@ -47,9 +46,6 @@ import { backOr } from "../lib/backNavigation";
 // static choice, because a modal whose header appears after it mounts is
 // rebuilt and would lose the scan in progress.
 const NATIVE_BAR = Platform.OS === "ios";
-
-// Typing the address in, as opposed to scanning it.
-const MANUAL_ENTRY_SYMBOL: PlatformSymbol = { ios: "keyboard", android: "keyboard" };
 
 export default function PairScreen() {
 	const t = useTheme();
@@ -437,7 +433,7 @@ export default function PairScreen() {
 			<View style={[styles.manual, { paddingBottom: insets.bottom + space.sm }]}>
 				<Button
 					variant="ghost"
-					icon={MANUAL_ENTRY_SYMBOL}
+					icon={{ ios: "keyboard", android: "keyboard" }}
 					title="Enter details manually"
 					onPress={() => router.push(connectSheetRoute(() => void finish(), repairHost?.id))}
 				/>
