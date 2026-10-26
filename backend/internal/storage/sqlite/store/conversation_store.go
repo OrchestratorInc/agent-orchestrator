@@ -2847,7 +2847,10 @@ func (s *Store) SettleTurnByID(
 ) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	if _, err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
+	// A direct by-id settle moves a turn to an explicit outcome from any state
+	// (for example an account switch relabelling a failed turn as interrupted),
+	// so it must not inherit SettleConversationTurn's running-only guard.
+	if err := s.qw.SettleConversationTurnByID(ctx, gen.SettleConversationTurnByIDParams{
 		State:        state,
 		ErrorMessage: errMessage,
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},

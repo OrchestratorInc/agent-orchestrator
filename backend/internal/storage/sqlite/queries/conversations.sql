@@ -778,6 +778,16 @@ UPDATE conversation_turns
 SET state = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
 WHERE id = ? AND state IN ('queued', 'running', 'recovered');
 
+-- SettleConversationTurnByID reinterprets a turn's terminal outcome regardless of
+-- its current state: an account switch relabels a failed turn as interrupted, and
+-- test/lifecycle callers move a turn to an explicit state. The state guard on
+-- SettleConversationTurn above exists only to make the event-projection settle
+-- (SettleTurn) idempotent, so it must not restrict these direct by-id settles.
+-- name: SettleConversationTurnByID :exec
+UPDATE conversation_turns
+SET state = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+WHERE id = ?;
+
 -- A streamed assistant item may not receive item/completed when steering causes
 -- the provider to finish the turn without replaying it: the accumulated text is
 -- still the durable answer, and the enclosing turn is the terminal boundary.

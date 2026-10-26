@@ -4638,6 +4638,34 @@ func (q *Queries) SettleConversationTurn(ctx context.Context, arg SettleConversa
 	return result.RowsAffected()
 }
 
+const settleConversationTurnByID = `-- name: SettleConversationTurnByID :exec
+UPDATE conversation_turns
+SET state = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
+WHERE id = ?
+`
+
+type SettleConversationTurnByIDParams struct {
+	State        domain.TurnState
+	ErrorMessage string
+	CompletedAt  sql.NullTime
+	ID           string
+}
+
+// SettleConversationTurnByID reinterprets a turn's terminal outcome regardless of
+// its current state: an account switch relabels a failed turn as interrupted, and
+// test/lifecycle callers move a turn to an explicit state. The state guard on
+// SettleConversationTurn above exists only to make the event-projection settle
+// (SettleTurn) idempotent, so it must not restrict these direct by-id settles.
+func (q *Queries) SettleConversationTurnByID(ctx context.Context, arg SettleConversationTurnByIDParams) error {
+	_, err := q.db.ExecContext(ctx, settleConversationTurnByID,
+		arg.State,
+		arg.ErrorMessage,
+		arg.CompletedAt,
+		arg.ID,
+	)
+	return err
+}
+
 const settleOrphanedConversationTurns = `-- name: SettleOrphanedConversationTurns :exec
 UPDATE conversation_turns
 SET state = 'failed',
