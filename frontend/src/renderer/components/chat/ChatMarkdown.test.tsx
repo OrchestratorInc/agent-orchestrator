@@ -460,7 +460,7 @@ describe("ChatMarkdown", () => {
 		} }, response: new Response() } as Awaited<ReturnType<typeof apiClient.GET>>);
 		try {
 			const { client } = renderWithSessionLinkHandler("`worker-1/plan.md`", vi.fn());
-			await waitFor(() => expect(client.getQueryState(["session", "worker-1"])?.status).toBe("success"));
+			await waitFor(() => expect(client.getQueryState(["artifact-path-session", "worker-1"])?.status).toBe("success"));
 			expect(screen.queryByRole("link")).not.toBeInTheDocument();
 			expect(screen.getByText("worker-1/plan.md").tagName).toBe("CODE");
 		} finally {
