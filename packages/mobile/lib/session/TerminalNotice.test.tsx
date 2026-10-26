@@ -105,7 +105,8 @@ describe("the Android terminal notice", () => {
 		const host = renderer!.root.findByType("ToastHost" as never);
 		const toast = host.props.toast as ToastController;
 		expect(host.props.bottomOffset).toBe(120);
-		expect(toast.current).toMatchObject({ text: "Couldn't restore the session.", duration: "long", tone: "warning" });
+		// A failure can be closed before it times out; news cannot.
+		expect(toast.current).toMatchObject({ text: "Couldn't restore the session.", duration: "long", tone: "warning", dismissible: true });
 		expect(onDismiss).toHaveBeenCalledOnce();
 	});
 
@@ -114,7 +115,7 @@ describe("the Android terminal notice", () => {
 			renderer = create(<AndroidTerminalNoticeHost notice={{ id: 4, text: "Sent to the terminal.", tone: "info" }} onDismiss={vi.fn()} bottomOffset={0} />);
 		});
 		const toast = renderer!.root.findByType("ToastHost" as never).props.toast as ToastController;
-		expect(toast.current).toMatchObject({ duration: "short", tone: "neutral" });
+		expect(toast.current).toMatchObject({ duration: "short", tone: "neutral", dismissible: false });
 	});
 
 	it("draws no inline row", async () => {

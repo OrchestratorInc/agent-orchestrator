@@ -1,6 +1,6 @@
 import { Host, SnackbarHost, type SnackbarHostRef } from "@expo/ui/jetpack-compose";
-import { useEffect, useRef } from "react";
-import { StyleSheet } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeState } from "./ThemeProvider";
 import type { ToastHostProps } from "./Toast.types";
@@ -13,8 +13,9 @@ export type { ToastController, ToastDuration, ToastHostProps, ToastMessage, Toas
  * colours, with Compose's timing, motion and TalkBack announcement.
  *
  * The host stays mounted and takes the snackbar's height, so it covers nothing
- * while no message is up, and lets touches through while one is: a message
- * carries no action here, so there is nothing on it to tap. Compose queues a
+ * while no message is up. A plain message carries nothing to tap, so touches
+ * pass through it; a dismissible one has a close button, so while one is up
+ * (or queued) the snackbar takes the touches over itself. Compose queues a
  * message shown while another is up and cannot take one down early, so `hide`
  * has no effect on a snackbar already showing.
  */
@@ -22,26 +23,41 @@ export function ToastHost({ toast, bottomOffset }: ToastHostProps) {
 	const { scheme } = useThemeState();
 	const insets = useSafeAreaInsets();
 	const snackbar = useRef<SnackbarHostRef>(null);
+	// Dismissible snackbars that Compose has not finished with, on screen or queued.
+	const [closable, setClosable] = useState(0);
 	const { current, hide } = toast;
 
 	useEffect(() => {
 		if (!current) return;
-		const done = () => hide(current.id);
-		snackbar.current?.showSnackbar({ message: current.text, duration: current.duration }).then(done, done);
+		const shown = snackbar.current?.showSnackbar({ message: current.text, duration: current.duration, withDismissAction: current.dismissible });
+		if (!shown) return;
+		if (current.dismissible) setClosable((count) => count + 1);
+		const done = () => {
+			hide(current.id);
+			if (current.dismissible) setClosable((count) => count - 1);
+		};
+		shown.then(done, done);
 	}, [current, hide]);
 
 	return (
-		<Host
-			matchContents={{ vertical: true }}
-			// The screen places the snackbar, so it does not also lift itself over
-			// the keyboard: the same offset holds on both platforms.
-			ignoreSafeAreaKeyboardInsets
-			colorScheme={scheme}
-			pointerEvents="none"
+		// The Compose host ignores `pointerEvents`, so this view decides whether
+		// touches reach the snackbar. Not collapsable: flattening it away when it
+		// turns touchable would move the host, and the snackbar with it.
+		<View
+			collapsable={false}
+			pointerEvents={closable > 0 ? "box-none" : "none"}
 			style={[styles.anchor, { bottom: bottomOffset ?? insets.bottom + space.xl }]}
 		>
-			<SnackbarHost ref={snackbar} />
-		</Host>
+			<Host
+				matchContents={{ vertical: true }}
+				// The screen places the snackbar, so it does not also lift itself over
+				// the keyboard: the same offset holds on both platforms.
+				ignoreSafeAreaKeyboardInsets
+				colorScheme={scheme}
+			>
+				<SnackbarHost ref={snackbar} />
+			</Host>
+		</View>
 	);
 }
 

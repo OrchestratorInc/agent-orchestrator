@@ -17,7 +17,7 @@ export function useToast(): ToastController {
 	const lastId = useRef(0);
 	const show = useCallback((text: string, options: ToastOptions = {}) => {
 		lastId.current += 1;
-		setCurrent({ id: lastId.current, text, duration: options.duration ?? "short", tone: options.tone ?? "neutral" });
+		setCurrent({ id: lastId.current, text, duration: options.duration ?? "short", tone: options.tone ?? "neutral", dismissible: options.dismissible ?? false });
 	}, []);
 	// A message that times out after a newer one replaced it must not take the
 	// newer one down with it, so the host hides by id.

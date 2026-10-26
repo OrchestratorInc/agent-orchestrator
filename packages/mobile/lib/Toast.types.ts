@@ -16,7 +16,17 @@ export type ToastDuration = "short" | "long";
  */
 export type ToastTone = "neutral" | "success" | "warning";
 
-export type ToastOptions = { duration?: ToastDuration; tone?: ToastTone };
+export type ToastOptions = {
+	duration?: ToastDuration;
+	tone?: ToastTone;
+	/**
+	 * Adds a way to close the message before it times out, for a failure the
+	 * user may want gone sooner. Android gives the snackbar its close button and
+	 * lets it take touches while it is up. iOS ignores it: the HUD never takes a
+	 * touch and is gone within six seconds anyway.
+	 */
+	dismissible?: boolean;
+};
 
 export type ToastMessage = {
 	/** New for every `show`, so the same words shown twice still count as two messages. */
@@ -24,6 +34,7 @@ export type ToastMessage = {
 	text: string;
 	duration: ToastDuration;
 	tone: ToastTone;
+	dismissible: boolean;
 };
 
 export type ToastController = {

@@ -107,7 +107,7 @@ describe("useToast", () => {
 	it("defaults to a short, neutral message", () => {
 		render(<Screen />);
 		act(() => toast.show("Sent."));
-		expect(toast.current).toMatchObject({ text: "Sent.", duration: "short", tone: "neutral" });
+		expect(toast.current).toMatchObject({ text: "Sent.", duration: "short", tone: "neutral", dismissible: false });
 	});
 });
 
@@ -165,12 +165,51 @@ describe("ToastHost on Android", () => {
 	it("shows each message as a Material snackbar and clears it once Compose dismisses it", async () => {
 		render(<Screen android />);
 		const host = renderer!.root.findByType("ComposeHost" as never);
-		expect(host.props).toMatchObject({ matchContents: { vertical: true }, pointerEvents: "none", colorScheme: "dark" });
+		expect(host.props).toMatchObject({ matchContents: { vertical: true }, colorScheme: "dark" });
 		expect(host.props).not.toHaveProperty("seedColor");
 		await act(async () => toast.show("Path copied."));
-		expect(fixtures.showSnackbar).toHaveBeenCalledExactlyOnceWith({ message: "Path copied.", duration: "short" });
+		expect(fixtures.showSnackbar).toHaveBeenCalledExactlyOnceWith({ message: "Path copied.", duration: "short", withDismissAction: false });
 		expect(toast.current).toBeUndefined();
 		expect(fixtures.announce).not.toHaveBeenCalled();
+	});
+
+	// The Compose host ignores `pointerEvents`, so an RN view around it decides.
+	it("lets touches through a plain message", async () => {
+		render(<Screen android bottomOffset={96} />);
+		const anchor = () => renderer!.root.findByType("View" as never);
+		expect(anchor().props).toMatchObject({ collapsable: false, pointerEvents: "none" });
+		expect(anchor().props.style[1]).toEqual({ bottom: 96 });
+		expect(renderer!.root.findByType("ComposeHost" as never).props).not.toHaveProperty("pointerEvents");
+		fixtures.showSnackbar.mockReturnValueOnce(new Promise(() => {}));
+		act(() => toast.show("Path copied."));
+		expect(anchor().props.pointerEvents).toBe("none");
+	});
+
+	it("gives a dismissible message its close button and the touches over it until it goes", async () => {
+		let close!: (result: string) => void;
+		fixtures.showSnackbar.mockReturnValueOnce(new Promise((resolve) => { close = resolve; }));
+		render(<Screen android />);
+		const anchor = () => renderer!.root.findByType("View" as never);
+		act(() => toast.show("Couldn't restore the session.", { duration: "long", dismissible: true }));
+		expect(fixtures.showSnackbar).toHaveBeenCalledExactlyOnceWith({ message: "Couldn't restore the session.", duration: "long", withDismissAction: true });
+		expect(anchor().props.pointerEvents).toBe("box-none");
+		await act(async () => close("dismissed"));
+		expect(toast.current).toBeUndefined();
+		expect(anchor().props.pointerEvents).toBe("none");
+	});
+
+	// Compose queues: a plain message shown after a dismissible one waits behind
+	// it, so the close button must stay reachable until that one has gone.
+	it("keeps a dismissible snackbar closable while a newer message queues behind it", async () => {
+		let close!: (result: string) => void;
+		fixtures.showSnackbar.mockReturnValueOnce(new Promise((resolve) => { close = resolve; })).mockReturnValueOnce(new Promise(() => {}));
+		render(<Screen android />);
+		const anchor = () => renderer!.root.findByType("View" as never);
+		act(() => toast.show("Message not sent.", { dismissible: true }));
+		act(() => toast.show("Sent to the terminal."));
+		expect(anchor().props.pointerEvents).toBe("box-none");
+		await act(async () => close("dismissed"));
+		expect(anchor().props.pointerEvents).toBe("none");
 	});
 
 	it("leaves a newer message alone when an older snackbar finishes", async () => {

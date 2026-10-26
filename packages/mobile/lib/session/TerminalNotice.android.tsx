@@ -13,7 +13,7 @@ export function TerminalNotice(_props: TerminalNoticeProps): null {
 /**
  * A terminal notice on Android: Material 3's snackbar above the dock, with the
  * system's timing and TalkBack announcement. A failure stays up long enough to
- * read; news is brief.
+ * read and can be closed sooner; news is brief.
  */
 export function TerminalNoticeHost({ notice, onDismiss, bottomOffset }: TerminalNoticeHostProps) {
 	const toast = useToast();
@@ -21,7 +21,7 @@ export function TerminalNoticeHost({ notice, onDismiss, bottomOffset }: Terminal
 
 	useEffect(() => {
 		if (!notice) return;
-		show(notice.text, notice.tone === "error" ? { duration: "long", tone: "warning" } : { duration: "short" });
+		show(notice.text, notice.tone === "error" ? { duration: "long", tone: "warning", dismissible: true } : { duration: "short" });
 		// The snackbar holds it from here. Clearing the screen's copy lets the same
 		// words come back later as a new notice.
 		onDismiss();
