@@ -5633,6 +5633,16 @@ components:
           type: boolean
         requestedOutput:
           $ref: "#/components/schemas/RequestedOutput"
+        requestedBy:
+          type: object
+          additionalProperties: false
+          description: The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches.
+          required: [userId, name]
+          properties:
+            userId:
+              type: string
+            name:
+              type: string
         outputType:
           $ref: "#/components/schemas/SessionOutputType"
         artifactCount:

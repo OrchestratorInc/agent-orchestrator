@@ -3062,6 +3062,11 @@ export interface components {
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
             requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
+            requestedBy?: {
+                userId: string;
+                name: string;
+            };
             outputType?: components["schemas"]["SessionOutputType"];
             /** @description How many committed artifact files the session has, on the session read and list routes while the deployment keeps artifacts. */
             artifactCount?: number;

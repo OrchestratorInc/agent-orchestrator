@@ -132,6 +132,11 @@ type Session struct {
 	// RequestedOutput is the deliverable the session was created for: empty
 	// for the ordinary task flow, RequestedOutputArtifact for a file.
 	RequestedOutput string
+	// RequestedByUserID is the guest the session was started for, when
+	// someone a project was shared with asked its orchestrator for it; empty
+	// otherwise. RequestedByName is their display name.
+	RequestedByUserID string
+	RequestedByName   string
 	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
 	OutputType string
 	CreatedAt  time.Time
