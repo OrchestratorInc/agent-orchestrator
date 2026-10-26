@@ -18,6 +18,7 @@ vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: (fac
 vi.mock("../voice/MicKey", () => ({ MicKey: "MicKey" }));
 vi.mock("../voice/useVoiceInput", () => ({ useVoiceInput: () => ({}) }));
 vi.mock("./ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
+vi.mock("./useImagePaste", () => ({ useImagePaste: () => () => {} }));
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 
 import { launchImageLibraryAsync } from "expo-image-picker";
