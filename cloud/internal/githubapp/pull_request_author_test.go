@@ -100,7 +100,7 @@ func authorPullRequestServer(t *testing.T, backend *installationRepositoryServer
 	}))
 }
 
-func newAuthorTestService(t *testing.T, store *authorStubStore, server *httptest.Server, logs *bytes.Buffer) *Service {
+func newAuthorTestService(t *testing.T, store Store, server *httptest.Server, logs *bytes.Buffer) *Service {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	svc, err := NewService(store, newAppTestClient(t, server.URL, server.Client()),
@@ -225,5 +225,87 @@ func TestRaisePullRequestDoesNotRetryARejectedRequestAsTheApp(t *testing.T) {
 	}
 	if len(authorizations) != 1 {
 		t.Fatalf("authorizations = %v, want the owner's attempt only", authorizations)
+	}
+}
+
+// mergeStubStore resolves the repository's installation and its
+// whole-installation connection, as the Postgres store does.
+type mergeStubStore struct {
+	authorStubStore
+}
+
+func (*mergeStubStore) GitHubInstallationForRepository(context.Context, string, string) (int64, int64, error) {
+	return 1234, 1, nil
+}
+
+func (*mergeStubStore) GitHubRepositoryAccessScope(context.Context, string, string) (string, string, error) {
+	return domain.GitHubAccessScopeInstallation, "", nil
+}
+
+// mergeServer merges as whoever the bearer token is, recording each attempt.
+// refuseUser makes GitHub answer the owner's token with that status.
+func mergeServer(t *testing.T, refuseUser int, authorizations *[]string) *httptest.Server {
+	t.Helper()
+	backend := &installationRepositoryServer{repos: []Repository{{ID: 1, FullName: "octo/app"}}}
+	inner := backend.handler(t)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/repos/octo/app/pulls/7/merge" {
+			inner(w, r)
+			return
+		}
+		authorization := r.Header.Get("Authorization")
+		*authorizations = append(*authorizations, authorization)
+		if authorization == "Bearer "+testOwnerUserToken && refuseUser != 0 {
+			w.WriteHeader(refuseUser)
+			_, _ = w.Write([]byte(`{"message":"refused"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"merged":true}`))
+	}))
+}
+
+func newMergeTestService(t *testing.T, server *httptest.Server, owner bool) *Service {
+	t.Helper()
+	store := &mergeStubStore{authorStubStore{creator: "user-owner"}}
+	if owner {
+		store.connection = ownerConnection(t, store.creator)
+	}
+	var logs bytes.Buffer
+	return newAuthorTestService(t, store, server, &logs)
+}
+
+// A session's pull request is merged as the session's owner, like it was
+// opened; without their authorization, or when GitHub refuses it, the App
+// merges it as before; a merge GitHub rejects on its merits is not retried.
+func TestMergePullRequestMergesAsTheSessionOwner(t *testing.T) {
+	installation := "Bearer ghs_testinstallationtoken"
+	owner := "Bearer " + testOwnerUserToken
+	for _, test := range []struct {
+		name       string
+		owner      bool
+		refuseUser int
+		want       []string
+		wantErr    bool
+	}{
+		{"owner authorized", true, 0, []string{owner}, false},
+		{"owner never authorized", false, 0, []string{installation}, false},
+		{"GitHub refuses the owner", true, http.StatusForbidden, []string{owner, installation}, false},
+		{"owner's authorization revoked", true, http.StatusUnauthorized, []string{owner, installation}, false},
+		{"not mergeable", true, http.StatusMethodNotAllowed, []string{owner}, true},
+		{"head moved", true, http.StatusConflict, []string{owner}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var authorizations []string
+			server := mergeServer(t, test.refuseUser, &authorizations)
+			defer server.Close()
+			svc := newMergeTestService(t, server, test.owner)
+			err := svc.MergePullRequest(context.Background(), "org-1", "sess-1", "octo/app", 7, "abc")
+			if (err != nil) != test.wantErr {
+				t.Fatalf("MergePullRequest err = %v, want error %v", err, test.wantErr)
+			}
+			if strings.Join(authorizations, ",") != strings.Join(test.want, ",") {
+				t.Fatalf("merge attempts = %v, want %v", authorizations, test.want)
+			}
+		})
 	}
 }

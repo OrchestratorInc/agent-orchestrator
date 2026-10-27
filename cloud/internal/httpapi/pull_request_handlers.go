@@ -115,7 +115,10 @@ func (s *Server) mergePullRequestAs(w http.ResponseWriter, r *http.Request, prin
 				writeError(w, r, http.StatusConflict, "pr_not_mergeable", "The pull request has changed. Refresh its status before merging.")
 				return false
 			}
-			err = s.github.MergePullRequest(r.Context(), orgID, pr.Repository, number, input.ExpectedHeadSHA)
+			// Merged as the session's owner (their GitHub authorization), whoever
+			// asked: a guest's merge is approved by an owner and still merges as
+			// the session's owner.
+			err = s.github.MergePullRequest(r.Context(), orgID, sessionID, pr.Repository, number, input.ExpectedHeadSHA)
 			merged = true
 		}
 	}

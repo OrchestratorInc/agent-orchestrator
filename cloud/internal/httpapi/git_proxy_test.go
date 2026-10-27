@@ -464,3 +464,67 @@ func TestGitProxyStreamsAChunkedPushIntact(t *testing.T) {
 		t.Fatalf("GitHub received %d bytes, want the %d bytes sent", len(received), len(want))
 	}
 }
+
+// GitHub may refuse a just-minted token on its git frontend for a moment: the
+// proxy asks for the ref advertisement again rather than failing the push.
+func TestGitProxyRetriesARefusedRefAdvertisement(t *testing.T) {
+	tokens := worker.NewTokenManager([]byte(strings.Repeat("k", 32)))
+	token, err := tokens.Issue(worker.Claims{
+		OrgID: testOrgID, SessionID: gitProxyTestSession, WorkerID: "w1", Epoch: 1, Scopes: []string{"worker:git"},
+	}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var gets, posts int
+	refuse := 2
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method == http.MethodPost {
+			posts++
+			http.Error(w, "refused", http.StatusForbidden)
+			return
+		}
+		gets++
+		if gets <= refuse {
+			http.Error(w, "Permission denied", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-git-receive-pack-advertisement")
+		_, _ = io.WriteString(w, "001f# service=git-receive-pack\n0000")
+	}))
+	defer upstream.Close()
+	server := New(Options{
+		Store: &gitProxyStore{}, WorkerTokens: tokens, CheckoutBroker: &gitProxyBroker{},
+		GitUpstreamURL: upstream.URL, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	server.gitProxyRetryDelays = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	proxy := httptest.NewServer(server.Handler())
+	defer proxy.Close()
+	base := worker.GitProxyBaseURL(proxy.URL, gitProxyTestSession) + "acme/app.git/"
+	do := func(method, path string) int {
+		t.Helper()
+		request, _ := http.NewRequest(method, base+path, strings.NewReader(""))
+		request.SetBasicAuth("ao-worker", token)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		return response.StatusCode
+	}
+
+	if status := do(http.MethodGet, "info/refs?service=git-receive-pack"); status != http.StatusOK || gets != 3 {
+		t.Fatalf("advertisement = %d after %d requests, want 200 after two refusals", status, gets)
+	}
+	// Past the retries the refusal is git's to see.
+	gets, refuse = 0, 10
+	if status := do(http.MethodGet, "info/refs?service=git-receive-pack"); status != http.StatusForbidden || gets != 4 {
+		t.Fatalf("advertisement = %d after %d requests, want 403 after 1 + 3 retries", status, gets)
+	}
+	// A streamed RPC body cannot be replayed, so a refused POST is not retried.
+	if status := do(http.MethodPost, "git-upload-pack"); status != http.StatusForbidden || posts != 1 {
+		t.Fatalf("RPC = %d after %d requests, want one 403", status, posts)
+	}
+}

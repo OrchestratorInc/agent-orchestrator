@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,5 +99,100 @@ func TestWorkerGitHubTokenNeverHandsOutAPAT(t *testing.T) {
 			t.Fatalf("%s: status = %d, want 403; body=%s", target, w.Code, w.Body.String())
 		}
 		assertNoGitHubCredential(t, w.Body.String(), grantTestPAT)
+	}
+}
+
+// gitProxyFlagStore records whether the worker was bootstrapped with the git
+// proxy capability.
+type gitProxyFlagStore struct {
+	patServerStore
+	gitProxy bool
+}
+
+func (s *gitProxyFlagStore) WorkerUsesGitProxy(context.Context, string, string, string, int64) (bool, error) {
+	return s.gitProxy, nil
+}
+
+// legacyGrantBroker records the legacy push grants it issues.
+type legacyGrantBroker struct {
+	cliGrantBroker
+	legacyRepos []string
+}
+
+func (b *legacyGrantBroker) IssueLegacyPushGrant(_ context.Context, _, _, repo string) (githubapp.CheckoutGrant, error) {
+	b.legacyRepos = append(b.legacyRepos, repo)
+	return githubapp.CheckoutGrant{
+		CloneURL: "https://github.com/octo/widgets.git", Token: "LEGACY_WRITE_TOKEN", ExpiresAt: time.Now().Add(time.Hour),
+	}, nil
+}
+
+func newLegacyGrantServer(t *testing.T, gitProxy bool) (*Server, *legacyGrantBroker) {
+	t.Helper()
+	broker := &legacyGrantBroker{cliGrantBroker: cliGrantBroker{cli: githubapp.CheckoutGrant{
+		Token: "CLI_INSTALLATION_TOKEN", ExpiresAt: time.Now().Add(time.Hour),
+	}}}
+	srv := New(Options{
+		Store:          &gitProxyFlagStore{patServerStore: patServerStore{patErr: postgres.ErrNotFound}, gitProxy: gitProxy},
+		CheckoutBroker: broker,
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	return srv, broker
+}
+
+// A worker bootstrapped before the git proxy keeps its push token (its running
+// credential helper and pull request bridge still ask for one) until its
+// sandbox is recreated.
+func TestPreProxyWorkersStillGetAPushToken(t *testing.T) {
+	srv, broker := newLegacyGrantServer(t, false)
+	w := httptest.NewRecorder()
+	srv.workerGitHubToken(w, workerRequest(t, http.MethodPost, "/worker/github-token?repo=octo/widgets", "", "worker:git"))
+	var token worker.GitHubTokenResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &token); err != nil || w.Code != http.StatusOK || token.Token != "LEGACY_WRITE_TOKEN" {
+		t.Fatalf("github-token = %d %s, want the legacy push token", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	srv.workerLegacyPushGrant(w, workerRequest(t, http.MethodPost, "/worker/push-grant", "", "worker:git"))
+	var grant map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &grant); err != nil || w.Code != http.StatusOK ||
+		grant["token"] != "LEGACY_WRITE_TOKEN" || grant["cloneUrl"] != "https://github.com/octo/widgets.git" {
+		t.Fatalf("push-grant = %d %s, want the legacy push grant", w.Code, w.Body.String())
+	}
+	if strings.Join(broker.legacyRepos, ",") != "octo/widgets," {
+		t.Fatalf("legacy grants for %q, want the helper's repository then the bridge's broad grant", broker.legacyRepos)
+	}
+	if broker.cliCalls != 0 {
+		t.Fatalf("a pre-proxy worker got the CLI grant %d times", broker.cliCalls)
+	}
+}
+
+// A current worker never gets a push token, whatever its request says.
+func TestCurrentWorkersNeverGetAPushToken(t *testing.T) {
+	srv, broker := newLegacyGrantServer(t, true)
+	w := httptest.NewRecorder()
+	srv.workerGitHubToken(w, workerRequest(t, http.MethodPost, "/worker/github-token?repo=octo/widgets", "", "worker:git"))
+	var token worker.GitHubTokenResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &token); err != nil || token.Token != "CLI_INSTALLATION_TOKEN" {
+		t.Fatalf("github-token = %d %s, want the CLI grant", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	srv.workerLegacyPushGrant(w, workerRequest(t, http.MethodPost, "/worker/push-grant", "", "worker:git"))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("push-grant for a current worker = %d %s, want 404", w.Code, w.Body.String())
+	}
+	assertNoGitHubCredential(t, w.Body.String(), "LEGACY_WRITE_TOKEN")
+	if len(broker.legacyRepos) != 0 {
+		t.Fatalf("a current worker got legacy push grants: %q", broker.legacyRepos)
+	}
+}
+
+func TestWorkerRequestedRepository(t *testing.T) {
+	for raw, want := range map[string]string{
+		"octo/app": "octo/app", "octo/app.git": "octo/app", "/octo/app/": "octo/app",
+		"": "", "octo": "", "octo/app/extra": "", "octo/ap p": "",
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/worker/github-token?"+url.Values{"repo": {raw}}.Encode(), nil)
+		if got := workerRequestedRepository(r); got != want {
+			t.Errorf("workerRequestedRepository(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }

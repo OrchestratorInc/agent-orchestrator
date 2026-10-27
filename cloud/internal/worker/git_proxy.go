@@ -14,6 +14,10 @@ import (
 // plane checks the worker and the session's repository grant, then forwards
 // the request to GitHub with a credential only it holds.
 
+// CapabilityGitProxy, in a worker's bootstrap capabilities, means its git
+// reaches GitHub only through the git proxy, so it never asks for a push token.
+const CapabilityGitProxy = "git.proxy"
+
 // GitProxyRoutePrefix is the path the control plane serves the git proxy
 // under, followed by <sessionId>/<owner>/<repo>.git/<git smart-HTTP path>.
 const GitProxyRoutePrefix = "/api/cloud/v1/worker/git/"

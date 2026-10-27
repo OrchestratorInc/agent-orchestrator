@@ -692,6 +692,14 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusServiceUnavailable, "SCM_BROKER_UNAVAILABLE", "GitHub credentials are not available.")
 		return
 	}
+	if s.legacyGitWorker(r.Context(), claims) {
+		// A pre-proxy worker's credential helper (which names the repository)
+		// and gh wrapper still push with this token.
+		s.writeLegacyPushGrant(w, r, claims, workerRequestedRepository(r), func(grant githubapp.CheckoutGrant) any {
+			return worker.GitHubTokenResponse{Token: grant.Token, ExpiresAt: grant.ExpiresAt}
+		})
+		return
+	}
 	grant, err := s.checkoutBroker.IssueCLIGrant(r.Context(), claims.OrgID, claims.SessionID)
 	if err == nil && grant.Token != "" && grant.ExpiresAt.After(time.Now()) {
 		writeJSON(w, http.StatusOK, worker.GitHubTokenResponse{Token: grant.Token, ExpiresAt: grant.ExpiresAt})
@@ -708,6 +716,99 @@ func (s *Server) workerGitHubToken(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.Error("worker GitHub broker returned an invalid grant", "request_id", requestID(r))
 	writeError(w, r, http.StatusBadGateway, "SCM_BROKER_FAILED", "A GitHub credential could not be issued.")
+}
+
+// legacyGitWorker reports whether the session's worker was bootstrapped before
+// the git proxy existed: its running credential helper and pull request bridge
+// still ask for a push token, and get one until its sandbox is recreated. The
+// answer comes from what the worker reported at bootstrap, before any agent
+// ran, which the sandbox cannot change afterwards. Remove (with
+// workerLegacyPushGrant and IssueLegacyPushGrant) one release after the git
+// proxy ships.
+func (s *Server) legacyGitWorker(ctx context.Context, claims worker.Claims) bool {
+	store, ok := s.store.(interface {
+		WorkerUsesGitProxy(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error)
+	})
+	if !ok {
+		return false
+	}
+	gitProxy, err := store.WorkerUsesGitProxy(ctx, claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
+	if err != nil {
+		s.logger.Warn("look up the worker's git proxy capability", "error", err, "session_id", claims.SessionID)
+		return false
+	}
+	return !gitProxy
+}
+
+// workerLegacyPushGrant is the push grant a pre-proxy worker's pull request
+// bridge asks for before it pushes. A current worker pushes through the git
+// proxy and is refused here.
+func (s *Server) workerLegacyPushGrant(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	claims := workerFrom(r)
+	if !worker.HasScope(claims, "worker:git") {
+		writeError(w, r, http.StatusForbidden, "SCOPE_REQUIRED", "The worker:git scope is required.")
+		return
+	}
+	if s.checkoutBroker == nil || !s.legacyGitWorker(r.Context(), claims) {
+		writeError(w, r, http.StatusNotFound, "not_found", "Push grants are not issued; push through the git proxy.")
+		return
+	}
+	s.writeLegacyPushGrant(w, r, claims, "", func(grant githubapp.CheckoutGrant) any {
+		return legacyCheckoutGrantResponse{CloneURL: grant.CloneURL, Token: grant.Token, ExpiresAt: grant.ExpiresAt}
+	})
+}
+
+// legacyCheckoutGrantResponse is the push grant a pre-proxy worker decodes.
+type legacyCheckoutGrantResponse struct {
+	CloneURL  string    `json:"cloneUrl"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+func (s *Server) writeLegacyPushGrant(
+	w http.ResponseWriter,
+	r *http.Request,
+	claims worker.Claims,
+	repo string,
+	response func(githubapp.CheckoutGrant) any,
+) {
+	grant, err := s.checkoutBroker.IssueLegacyPushGrant(r.Context(), claims.OrgID, claims.SessionID, repo)
+	if err == nil && grant.Token != "" && grant.ExpiresAt.After(time.Now()) {
+		s.logger.Info("served a push token to a worker bootstrapped before the git proxy",
+			"session_id", claims.SessionID, "repository", repo)
+		writeJSON(w, http.StatusOK, response(grant))
+		return
+	}
+	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
+		writeError(w, r, http.StatusForbidden, "PUSH_NOT_AUTHORIZED", "This session does not have an active repository grant.")
+		return
+	}
+	if err == nil {
+		err = errors.New("the repository broker returned an invalid grant")
+	}
+	s.logger.Error("issue legacy worker push grant", "error", err, "request_id", requestID(r))
+	writeError(w, r, http.StatusBadGateway, "SCM_BROKER_FAILED", "A repository push grant could not be issued.")
+}
+
+// workerRequestedRepository extracts the "owner/repo" a pre-proxy worker's
+// credential helper names with ?repo= (git supplies host and path because the
+// helper runs with credential.useHttpPath=true). It returns "" for a missing or
+// malformed value, which asks for the broad grant.
+func workerRequestedRepository(r *http.Request) string {
+	raw := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if raw == "" {
+		return ""
+	}
+	raw = strings.TrimSuffix(strings.Trim(raw, "/"), ".git")
+	owner, repo, ok := strings.Cut(raw, "/")
+	if !ok ||
+		owner == "" || repo == "" ||
+		strings.ContainsAny(owner, "/ \t") ||
+		strings.ContainsAny(repo, "/ \t") {
+		return ""
+	}
+	return owner + "/" + repo
 }
 
 func (s *Server) workerRaisePullRequest(w http.ResponseWriter, r *http.Request) {

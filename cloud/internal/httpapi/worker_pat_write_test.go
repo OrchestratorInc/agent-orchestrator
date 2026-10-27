@@ -109,6 +109,9 @@ func (b *recordingCheckoutBroker) IssueCLIGrant(context.Context, string, string)
 func (b *recordingCheckoutBroker) IssueGitProxyGrant(context.Context, string, string, string, bool) (githubapp.CheckoutGrant, error) {
 	return githubapp.CheckoutGrant{}, nil
 }
+func (b *recordingCheckoutBroker) IssueLegacyPushGrant(context.Context, string, string, string) (githubapp.CheckoutGrant, error) {
+	return githubapp.CheckoutGrant{}, nil
+}
 func (b *recordingCheckoutBroker) RaisePullRequest(context.Context, string, string, domain.RaisePullRequest) (domain.PullRequest, error) {
 	b.raiseCalls++
 	if b.raiseErr != nil {

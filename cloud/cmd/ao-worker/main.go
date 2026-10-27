@@ -74,6 +74,7 @@ var workerCapabilities = []string{
 	worker.CapabilityMultiRepo,
 	worker.CapabilityArtifacts,
 	worker.CapabilityChatStart,
+	worker.CapabilityGitProxy,
 }
 
 func main() {

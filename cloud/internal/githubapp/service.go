@@ -103,8 +103,13 @@ type CheckoutGrant struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
-// MergePullRequest uses the installation's repository-scoped write token.
-func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string, number int, expectedHeadSHA string) error {
+// MergePullRequest merges a session's pull request as the session's owner,
+// with their GitHub App user token, like the pull request was opened. When the
+// owner has not authorized the App, or GitHub refuses their authorization for
+// this repository (401/403/404), it merges with the installation's
+// repository-scoped write token, as before. Any other refusal (the pull
+// request is not mergeable, its head moved) is returned as it is.
+func (s *Service) MergePullRequest(ctx context.Context, orgID, sessionID, repository string, number int, expectedHeadSHA string) error {
 	installationID, repositoryID, err := s.store.GitHubInstallationForRepository(ctx, orgID, repository)
 	if err != nil {
 		return err
@@ -115,6 +120,14 @@ func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string
 	}
 	if err := s.requireUserScopedPush(ctx, orgID, repository, repositoryID); err != nil {
 		return err
+	}
+	if token := s.sessionOwnerGitHubToken(ctx, orgID, sessionID); token != "" {
+		err := s.client.MergePullRequest(ctx, token, owner, repo, number, expectedHeadSHA)
+		if !userTokenRefused(err) {
+			return err
+		}
+		s.logger.Info("GitHub refused the session owner's authorization for a merge; merging as the App",
+			"org_id", orgID, "session_id", sessionID, "repository", repository, "number", number)
 	}
 	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
 	if err != nil {

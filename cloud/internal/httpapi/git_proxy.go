@@ -260,6 +260,24 @@ func (s *Server) forwardGitRequest(
 		upstream.SetBasicAuth("x-access-token", token)
 	}
 	response, err := s.gitProxyClient.Do(upstream)
+	// GitHub can refuse an installation token it minted moments ago on its git
+	// frontend for a while. The ref advertisement (a GET with no body) is safe
+	// to ask again, and once it succeeds the token works for the RPC after it.
+	for attempt := 0; err == nil && token != "" && r.Method == http.MethodGet &&
+		response.StatusCode == http.StatusForbidden && attempt < len(s.gitProxyRetryDelays); attempt++ {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		_ = response.Body.Close()
+		timer := time.NewTimer(s.gitProxyRetryDelays[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		s.logger.Info("git proxy retrying a refused ref advertisement",
+			"repository", request.owner+"/"+request.repo, "push", request.push, "attempt", attempt+1)
+		response, err = s.gitProxyClient.Do(upstream.Clone(ctx))
+	}
 	if err != nil {
 		var maxBytes *http.MaxBytesError
 		if errors.As(err, &maxBytes) {
@@ -301,6 +319,11 @@ func (s *Server) forwardGitRequest(
 	}
 	s.logger.Info("git proxy request complete", attrs...)
 }
+
+// defaultGitProxyRetryDelays space the retries of a refused ref advertisement
+// (see forwardGitRequest): about 20 seconds in all, well inside git's own
+// low-speed limit.
+var defaultGitProxyRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second, 6 * time.Second, 8 * time.Second}
 
 // flushingWriter flushes after every write so git sees progress and the
 // pack as GitHub sends them.

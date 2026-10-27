@@ -170,6 +170,9 @@ type CheckoutBroker interface {
 	// IssueGitProxyGrant is the credential the git proxy forwards one fetch or
 	// push of a session repository with; it never leaves the control plane.
 	IssueGitProxyGrant(ctx context.Context, orgID, sessionID, repoFullName string, push bool) (githubapp.CheckoutGrant, error)
+	// IssueLegacyPushGrant is a pre-proxy worker's push token (see
+	// legacyGitWorker); remove with it.
+	IssueLegacyPushGrant(ctx context.Context, orgID, sessionID, repoFullName string) (githubapp.CheckoutGrant, error)
 	RaisePullRequest(context.Context, string, string, domain.RaisePullRequest) (domain.PullRequest, error)
 	ClaimPullRequest(context.Context, string, string, string) (domain.PullRequest, error)
 	SubmitReview(context.Context, string, string, string, domain.SubmitReviewResult) (domain.ReviewRun, error)
@@ -220,6 +223,7 @@ type Server struct {
 	gitUpstreamURL               string
 	gitProxyClient               *http.Client
 	allowAnonymousGitHubCheckout bool
+	gitProxyRetryDelays          []time.Duration
 	brokerAuthToken              string
 	environmentControlToken      string
 	secretCipher                 *secrets.Cipher
@@ -491,6 +495,7 @@ func New(options Options) *Server {
 	if server.gitProxyClient == nil {
 		server.gitProxyClient = newGitProxyClient()
 	}
+	server.gitProxyRetryDelays = defaultGitProxyRetryDelays
 	if server.reviewService == nil && options.GitHub != nil {
 		server.reviewService = options.GitHub
 	}
@@ -607,6 +612,9 @@ func New(options Options) *Server {
 			router.Get("/worker/credential", server.workerCredential)
 			router.Post("/worker/checkout-grant", server.workerCheckoutGrant)
 			router.Post("/worker/github-token", server.workerGitHubToken)
+			// Only workers bootstrapped before the git proxy use it (see
+			// legacyGitWorker).
+			router.Post("/worker/push-grant", server.workerLegacyPushGrant)
 			router.Post("/worker/pull-requests", server.workerRaisePullRequest)
 			router.Post("/worker/pull-requests/claim", server.workerClaimPullRequest)
 			router.Post("/worker/pull-requests/refs", server.workerReportGitRefs)
