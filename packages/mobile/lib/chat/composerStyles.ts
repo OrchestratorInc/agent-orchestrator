@@ -24,6 +24,12 @@ export const COMPOSER_FIELD_HEIGHT = 44;
 export const COMPOSER_MAX_HEIGHT = 150;
 export const COMPOSER_FIELD_MAX_HEIGHT = 138;
 export const COMPOSER_LINE_HEIGHT = type.subheadline.lineHeight;
+/**
+ * The chat composer's filled controls, drawn this tall inside their touch
+ * targets: the plus's circle, the model's capsule and the round button, so the
+ * row's three shapes line up.
+ */
+export const COMPOSER_DISC = 34;
 /** The pill's corner, and so also the radius of the glass drawn behind it: half its resting height, a capsule. */
 export const COMPOSER_RADIUS = COMPOSER_HEIGHT / 2;
 

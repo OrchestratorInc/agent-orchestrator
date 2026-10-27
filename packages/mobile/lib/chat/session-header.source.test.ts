@@ -43,16 +43,15 @@ describe("session header controls", () => {
 		expect(session).toContain("const menuRefreshing = manualRefreshing;");
 	});
 
-	it("restores the folded PR card from a bar item beside the menu", () => {
-		const start = session.indexOf('<Stack.Toolbar placement="right">');
-		const items = session.slice(start, start + 600);
-		expect(items).toContain('accessibilityLabel="Show PR card" onPress={expandReviewPrompt}');
-		expect(items.indexOf("Show PR card")).toBeLessThan(items.indexOf("conversationActionsMenu("));
-		expect(session).toContain('const PULL_REQUEST_ICON = Platform.OS === "ios" ? "arrow.triangle.pull" : PULL_REQUEST_GLYPH;');
+	// The PR lives in the composer's chips, so the header holds the actions menu alone.
+	it("keeps the PR out of the header", () => {
+		expect(session).not.toContain("Show PR card");
+		expect(session).not.toContain("PULL_REQUEST_ICON");
+		expect(readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8")).toContain("<PRChipContent pr={activeReviewPR} summary={reviewPRSummary} />");
 	});
 
 	// Files are reached from the actions menu and the composer's changes pill;
-	// the header keeps only the PR restore control and the actions menu.
+	// the header keeps only the actions menu.
 	it("keeps session files out of the header", () => {
 		const start = session.indexOf('<Stack.Toolbar placement="right">');
 		const end = session.indexOf("</Stack.Toolbar>", start);

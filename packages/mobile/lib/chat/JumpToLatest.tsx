@@ -1,8 +1,7 @@
 import { Host } from "@expo/ui";
-import { Button, HStack, Image, Text } from "@expo/ui/swift-ui";
-import { accessibilityLabel, buttonBorderShape, buttonStyle, controlSize, font, foregroundStyle, tint } from "@expo/ui/swift-ui/modifiers";
-import { Platform, StyleSheet } from "react-native";
-import { appFont } from "../swiftUIFont";
+import { Button, Image } from "@expo/ui/swift-ui";
+import { accessibilityLabel, buttonBorderShape, buttonStyle, controlSize, font, tint } from "@expo/ui/swift-ui/modifiers";
+import { Platform, StyleSheet, View } from "react-native";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import { space } from "../tokens";
 import { jumpToLatestColors } from "./chatChrome";
@@ -15,37 +14,37 @@ export type { JumpToLatestProps } from "./JumpToLatest.types";
 const liquidGlass = Platform.OS === "ios" && parseInt(String(Platform.Version), 10) >= 26;
 
 /**
- * The jump back to the newest message, floating over the conversation: a Liquid
- * Glass capsule on iOS. Before iOS 26 it is the same capsule drawn opaque in the
- * elevated surface, so it stays legible over the text it covers.
- * Android's is ./JumpToLatest.android, Material's small FAB.
+ * The jump back to the newest message: a small Liquid Glass circle holding only
+ * the arrow, centred just above the composer. Before iOS 26 it is the same
+ * circle drawn opaque in the elevated surface, so it stays legible over the
+ * text it covers. Android's is ./JumpToLatest.android, Material's small FAB.
  */
 export function JumpToLatest({ onPress }: JumpToLatestProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const colors = jumpToLatestColors(t);
 	return (
-		<Host matchContents colorScheme={scheme} style={styles.anchor}>
-			<Button
-				onPress={onPress}
-				modifiers={[
-					buttonStyle(liquidGlass ? "glass" : "borderedProminent"),
-					buttonBorderShape("capsule"),
-					controlSize("large"),
-					// A prominent button fills with its tint; glass takes it as ink.
-					tint(liquidGlass ? colors.foregroundColor : colors.backgroundColor),
-					accessibilityLabel(JUMP_TO_LATEST_LABEL),
-				]}
-			>
-				<HStack spacing={space.xs}>
-					<Image systemName="arrow.down" color={colors.foregroundColor} modifiers={[font({ textStyle: "subheadline", weight: "semibold" })]} />
-					<Text modifiers={[appFont("subheadline", { weight: "600" }), foregroundStyle(colors.foregroundColor)]}>Latest</Text>
-				</HStack>
-			</Button>
-		</Host>
+		<View pointerEvents="box-none" style={styles.anchor}>
+			<Host matchContents colorScheme={scheme}>
+				<Button
+					onPress={onPress}
+					modifiers={[
+						buttonStyle(liquidGlass ? "glass" : "borderedProminent"),
+						buttonBorderShape("circle"),
+						controlSize("small"),
+						// A prominent button fills with its tint; glass takes it as ink.
+						tint(liquidGlass ? colors.foregroundColor : colors.backgroundColor),
+						accessibilityLabel(JUMP_TO_LATEST_LABEL),
+					]}
+				>
+					<Image systemName="arrow.down" color={colors.foregroundColor} modifiers={[font({ textStyle: "footnote", weight: "semibold" })]} />
+				</Button>
+			</Host>
+		</View>
 	);
 }
 
 const styles = StyleSheet.create({
-	anchor: { position: "absolute", right: space.lg, bottom: space.md },
+	// Centred along the bottom of the space it is given: the list above the composer.
+	anchor: { position: "absolute", left: 0, right: 0, bottom: space.sm, alignItems: "center" },
 });

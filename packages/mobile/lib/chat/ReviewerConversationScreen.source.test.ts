@@ -46,6 +46,8 @@ describe("reviewer conversation parity", () => {
 		expect(source).toContain("style={[styles.screen, chatKeyboard.rootStyle]}");
 		expect(source).toContain("restingInset={chatKeyboard.restingInset}");
 		expect(source).not.toContain("keyboardVerticalOffset={88}");
-		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard();");
+		// The session's chat lays out under iOS 26's clear bar; the reviewer's
+		// below its bar.
+		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });");
 	});
 });

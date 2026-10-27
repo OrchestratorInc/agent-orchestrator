@@ -1,8 +1,15 @@
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { AgentLogo } from "../AgentLogo";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { radius, space, type } from "../tokens";
+
+/**
+ * What the bar leaves the title between its back button and actions menu: two
+ * 44pt glass buttons, their 16pt margins and the gaps beside them.
+ */
+const BAR_CHROME = 180;
+const MAX_TITLE_WIDTH = 260;
 
 /** The agent's state in a word, so the header never says it by colour alone. */
 export function conversationStateLabel(state: string): string {
@@ -30,6 +37,10 @@ export function ConversationTitle({
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	// Sized to the window, not fixed: a set width wider than the space between
+	// the bar's buttons ran the state label under the actions menu.
+	const { width: windowWidth } = useWindowDimensions();
+	const maxWidth = Math.min(MAX_TITLE_WIDTH, windowWidth - BAR_CHROME);
 	const stateColor = state === "busy" ? t.orange : state === "ready" ? t.green : state === "stopped" ? t.red : t.amber;
 	const stateLabel = state ? conversationStateLabel(state) : undefined;
 
@@ -38,7 +49,7 @@ export function ConversationTitle({
 			accessible
 			accessibilityRole="header"
 			accessibilityLabel={[title, subtitle, stateLabel].filter(Boolean).join(", ")}
-			style={styles.header}
+			style={[styles.header, { maxWidth }]}
 		>
 			<AgentLogo harness={harness} size={22} />
 			<View style={styles.copy}>
@@ -58,7 +69,7 @@ export function ConversationTitle({
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	header: { maxWidth: 240, flexDirection: "row", alignItems: "center", gap: space.sm },
+	header: { flexDirection: "row", alignItems: "center", gap: space.sm },
 	copy: { minWidth: 0, flexShrink: 1, alignItems: "flex-start", justifyContent: "center" },
 	title: { fontFamily: "DMSans_600SemiBold", maxWidth: "100%", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
 	subtitleRow: { maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xs },

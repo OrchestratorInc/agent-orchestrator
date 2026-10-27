@@ -1,9 +1,11 @@
 import { Host } from "@expo/ui";
-import { Button, HStack, Image, Menu, Picker, Section, Text, Toggle } from "@expo/ui/swift-ui";
-import { accessibilityLabel, buttonStyle, contentShape, disabled as disabledModifier, font, foregroundStyle, frame, imageScale, lineLimit, padding, pickerStyle, shapes, tag, truncationMode } from "@expo/ui/swift-ui/modifiers";
+import { Button, HStack, Image, Menu, Picker, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { accessibilityLabel, backgroundOverlay, buttonStyle, clipShape, contentShape, disabled as disabledModifier, font, foregroundStyle, frame, lineLimit, padding, pickerStyle, shapes, tag, truncationMode } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
+import { approvalSymbol } from "../approvalSymbol";
+import { COMPOSER_DISC } from "./composerStyles";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import type { IOSSymbol } from "../symbols";
 import { useTheme, useThemeState } from "../ThemeProvider";
@@ -11,9 +13,8 @@ import { space, touchTarget } from "../tokens";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow, type TurnSettingTopic } from "./turnSettingsModel";
 
-// SwiftUI's flexible frame cannot be handed infinity across the bridge; any
-// width past the widest screen does the same job and lets the label fill its row.
-const FILL = 10_000;
+/** The model's capsule: the new-task sheet's, scaled to the composer's row. */
+const CAPSULE_HEIGHT = COMPOSER_DISC;
 
 const topicSymbols: Record<Exclude<TurnSettingTopic, "permissions">, IOSSymbol> = {
 	model: "square.stack.3d.up",
@@ -44,19 +45,21 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 		void saved.then(() => {}, () => setGeneration((value) => value + 1));
 	};
 
-	// The model's whole stretch of the row is its menu's own label, so every
-	// point of it opens the menu.
+	// The model in a filled capsule, as the new-task sheet draws who runs a
+	// task: the harness's mark, the model and its effort, and the menu arrow.
+	// The label is a full touch target tall around the capsule, so every point
+	// of it opens the menu.
 	const label = (
-		<HStack spacing={space.xs} modifiers={[frame({ maxWidth: FILL, minHeight: touchTarget, alignment: "leading" }), contentShape(shapes.rectangle())]}>
-			{/* The harness's mark beside its model, as the spawn sheet names it. */}
-			{snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null}
-			<Text modifiers={[font({ textStyle: "footnote", weight: "semibold" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")]}>{summary || "Turn settings"}</Text>
-			<Image systemName="chevron.up.chevron.down" color={t.textSecondary} modifiers={[font({ textStyle: "footnote", weight: "semibold" }), imageScale("small")]} />
+		<HStack modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
+			<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.md }), frame({ minHeight: CAPSULE_HEIGHT, maxHeight: CAPSULE_HEIGHT }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule")]}>
+				{snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null}
+				<Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")]}>{summary || "Turn settings"}</Text>
+				<Image systemName="chevron.up.chevron.down" color={t.textSecondary} modifiers={[font({ textStyle: "caption2", weight: "semibold" })]} />
+			</HStack>
 		</HStack>
 	);
 	const modifiers = [
 		buttonStyle("plain"),
-		padding({ horizontal: space.sm }),
 		accessibilityLabel(summary ? `Turn settings, ${summary}` : "Turn settings"),
 		disabledModifier(Boolean(disabled)),
 	];
@@ -64,6 +67,8 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 
 	return (
 		<Host style={styles.host} ignoreSafeArea="all" colorScheme={scheme}>
+			{/* The model at the row's start beside attach, approvals at its end
+			    beside the round button; the space between them gives way first. */}
 			<HStack spacing={space.none}>
 				<Menu key={generation} label={label} modifiers={modifiers}>
 					<Section title="Turn settings">
@@ -74,22 +79,22 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 						<Button label="All turn settings" systemImage={topicSymbols.setting} onPress={onOpenFallback} />
 					</Section>
 				</Menu>
+				<Spacer minLength={0} />
 				{approvalRow && approvalRow.kind !== "boolean" ? (
 					<Menu
 						key={`approval-${generation}`}
+						// The mode as its symbol alone, the new-task sheet's for each mode;
+						// the menu and VoiceOver name it.
 						label={
-							<HStack spacing={space.xxs} modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
-								{/* One native asset stays crisp at every display scale, where a
-								    ring and a check drawn as two symbols would not line up. */}
-								<Image assetName="CircleDashedCheck" modifiers={[imageScale("small")]} />
-								<Text modifiers={[font({ textStyle: "footnote", weight: "semibold" }), foregroundStyle(t.textSecondary), lineLimit(1)]}>{parts.approval || approvalRow.value}</Text>
-								<Image systemName="chevron.up.chevron.down" color={t.textSecondary} modifiers={[font({ textStyle: "footnote", weight: "semibold" }), imageScale("small")]} />
-							</HStack>
+							<Image
+								systemName={approvalSymbol(approvalSelection?.permissionMode, snapshot.harness)}
+								color={t.textSecondary}
+								modifiers={[font({ textStyle: "subheadline", weight: "medium" }), frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]}
+							/>
 						}
 						modifiers={[
 							buttonStyle("plain"),
-							padding({ horizontal: space.sm }),
-							accessibilityLabel(`${approvalRow.label}, ${approvalRow.value}`),
+							accessibilityLabel(`${approvalRow.label}, ${parts.approval || approvalRow.value}`),
 							disabledModifier(Boolean(disabled)),
 						]}
 					>
@@ -98,6 +103,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 								<Toggle
 									key={choice.value}
 									label={choice.label}
+									systemImage={approvalSymbol(choice.permissionMode, snapshot.harness)}
 									isOn={choice.value === approvalSelection?.value}
 									onIsOnChange={(on) => { if (on) choose(approvalRow, choice.value); }}
 								/>

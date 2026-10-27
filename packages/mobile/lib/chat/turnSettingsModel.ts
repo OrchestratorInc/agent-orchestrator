@@ -6,6 +6,8 @@ export type TurnSettingChoice = {
 	label: string;
 	description?: string;
 	selected: boolean;
+	/** The AO approval mode a permissions choice applies, when it maps to one. */
+	permissionMode?: ApprovalMode;
 };
 
 export type TurnSettingRow = {
@@ -328,6 +330,7 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 				label: approvalLabel(item.value, snapshot.harness),
 				description: item.description,
 				selected: item.value === approval,
+				permissionMode: item.value,
 			})),
 			target: { kind: "settings", key: "approvalMode" },
 		});
@@ -409,6 +412,7 @@ function providerRow(option: ChatConfigOption): TurnSettingRow {
 			label: choice.name,
 			description: choice.description,
 			selected: choice.value === option.currentValue,
+			permissionMode: choice.permissionMode,
 		})),
 		target: { kind: "option", optionId: option.id },
 		providerKind: providerTurnControlKind(option),

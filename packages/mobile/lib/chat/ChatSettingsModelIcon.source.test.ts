@@ -20,8 +20,9 @@ describe("model setting icon", () => {
 });
 
 describe("approvals setting icon", () => {
-	it("uses the dashed check circle artwork on iOS and the shield symbol on Android", () => {
-		expect(ios).toContain('<Image assetName="CircleDashedCheck" modifiers={[imageScale("small")]} />');
+	// Each mode its own symbol, the new-task sheet's, on iOS; the shield in Android's menu.
+	it("draws the mode's own symbol on iOS and the shield symbol on Android", () => {
+		expect(ios).toContain("systemName={approvalSymbol(approvalSelection?.permissionMode, snapshot.harness)}");
 		expect(menuIcons).toContain('permissions: { ios: "checkmark.shield", android: "verified_user" }');
 	});
 });

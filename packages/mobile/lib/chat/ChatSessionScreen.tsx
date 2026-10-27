@@ -1,8 +1,8 @@
 import { Stack, useNavigation, useRouter } from "expo-router";
+import { useHeaderHeight } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
-import { Alert, Keyboard, Platform, StyleSheet, View } from "react-native";
+import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import { mobileReachablePreviewURL, restoreSession, resumeSessionAgent, type DashboardSession, type OrchestratorLink } from "../api";
 import { machineIdentity } from "../config";
 import { haptics } from "../haptics";
@@ -17,6 +17,7 @@ import {
 	useInterfaceTransition,
 } from "../session/useInterfaceTransition";
 import type { Theme } from "../theme";
+import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell } from "./api";
 import { requestDockModel } from "./requestDockModel";
@@ -55,13 +56,11 @@ import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useChangeSummary } from "../files/useChangeSummary";
-import PULL_REQUEST_GLYPH from "../../assets/icons/tab-pull-request.png";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
-// SF Symbols draws a pull request; Material Symbols has none, so Android keeps
-// lucide's, as the PR tab does. A bitmap, which Compose's icon also draws.
-const PULL_REQUEST_ICON = Platform.OS === "ios" ? "arrow.triangle.pull" : PULL_REQUEST_GLYPH;
+/** How long the composer's height holds still before the timeline takes it: past its spring. */
+const COMPOSER_SETTLE_MS = 120;
 
 async function dismissKeyboardBeforeSheet(keyboardVisible: boolean): Promise<void> {
 	Keyboard.dismiss();
@@ -102,8 +101,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		if (connection === "open" && loadFailed) void refreshConversation();
 	}, [connection, loadFailed, refreshConversation]);
 	const interfaceSwitch = useInterfaceTransition(config, session.id, refreshBoard);
-	const [collapsedReviewPRKey, setCollapsedReviewPRKey] = useState<string>();
-	const [loadedReviewPromptStateKey, setLoadedReviewPromptStateKey] = useState<string>();
 	const [jumpToSequence, setJumpToSequence] = useState<number>();
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
 	// An earlier prompt open in its inline editor takes the keyboard, so the
@@ -127,7 +124,24 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const dismissBanner = useCallback((key: string) => setDismissedBanners((current) => new Set(current).add(key)), []);
 	// keyboard-controller's early events, corrected by React Native's when it
 	// misses a transition. See useChatKeyboard.
-	const chatKeyboard = useChatKeyboard();
+	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
+	const headerOverlap = useGlassHeaderOverlap();
+	// On iOS 26 the banners float under the header, over the list's top, and the
+	// list starts below them.
+	const [bannersHeight, setBannersHeight] = useState(0);
+	const [composerHeight, setComposerHeight] = useState(0);
+	// The jump back to the newest message steps aside while the composer is open.
+	const [composerOpen, setComposerOpen] = useState(false);
+	// The composer springs open and closed, and its height changes every frame
+	// of that. The timeline takes the height once it settles, rather than
+	// re-rendering the conversation for each frame.
+	const composerSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(composerSettle.current), []);
+	const measureComposer = useCallback((event: LayoutChangeEvent) => {
+		const height = Math.round(event.nativeEvent.layout.height);
+		clearTimeout(composerSettle.current);
+		composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);
+	}, []);
 	const keyboardVisible = chatKeyboard.keyboardVisible;
 	const turnOptionsRequestedFor = useRef<string | undefined>(undefined);
 	const terminated = "projectName" in session ? Boolean(session.isTerminal) : Boolean(session.isTerminated);
@@ -205,42 +219,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		: session.projectId ? projects.find((project) => project.id === session.projectId)?.name : "Standalone";
 	const headerHarness = conversation.snapshot?.harness || session.harness || "Agent";
 	const headerState = conversation.snapshot?.controller.state;
-	const reviewPromptPRCandidate = "projectName" in session ? undefined : sessionPRReadyForReview(session);
-	const reviewPromptKey = reviewPromptPRCandidate ? `${reviewPromptPRCandidate.url}#${reviewPromptPRCandidate.number}` : undefined;
-	const reviewPromptHostKey = config ? machineIdentity(config) : currentHostId;
-	const reviewPromptStateStorageKey = reviewPromptKey && reviewPromptHostKey
-		? `ao.chat.reviewPromptCollapsed:${encodeURIComponent(reviewPromptHostKey)}:${encodeURIComponent(session.id)}:${encodeURIComponent(reviewPromptKey)}`
-		: undefined;
-	useEffect(() => {
-		let cancelled = false;
-		setLoadedReviewPromptStateKey(undefined);
-		setCollapsedReviewPRKey(undefined);
-		if (!reviewPromptKey || !reviewPromptStateStorageKey) {
-			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
-			return () => { cancelled = true; };
-		}
-		AsyncStorage.getItem(reviewPromptStateStorageKey).then((value) => {
-			if (cancelled) return;
-			setCollapsedReviewPRKey(value === "1" ? reviewPromptKey : undefined);
-			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
-		}).catch(() => {
-			if (cancelled) return;
-			setLoadedReviewPromptStateKey(reviewPromptStateStorageKey);
-		});
-		return () => { cancelled = true; };
-	}, [reviewPromptKey, reviewPromptStateStorageKey]);
-	const reviewPromptStateReady = !reviewPromptStateStorageKey || loadedReviewPromptStateKey === reviewPromptStateStorageKey;
-	const reviewPromptPR = reviewPromptStateReady ? reviewPromptPRCandidate : undefined;
-	const reviewPromptCollapsed = Boolean(reviewPromptStateReady && reviewPromptKey && reviewPromptKey === collapsedReviewPRKey);
-	const collapseReviewPrompt = useCallback(() => {
-		if (!reviewPromptKey || !reviewPromptStateStorageKey) return;
-		setCollapsedReviewPRKey(reviewPromptKey);
-		void AsyncStorage.setItem(reviewPromptStateStorageKey, "1").catch(() => {});
-	}, [reviewPromptKey, reviewPromptStateStorageKey]);
-	const expandReviewPrompt = useCallback(() => {
-		setCollapsedReviewPRKey(undefined);
-		if (reviewPromptStateStorageKey) void AsyncStorage.removeItem(reviewPromptStateStorageKey).catch(() => {});
-	}, [reviewPromptStateStorageKey]);
+	// The PR ready for review, as a chip over the composer that opens it.
+	const reviewPromptPR = "projectName" in session ? undefined : sessionPRReadyForReview(session);
 	const reviewSummaries = usePRSummaries(config && reviewPromptPR ? [{ config, sessionId: session.id }] : []);
 	const reviewPromptSummary = config && reviewPromptPR ? reviewSummaries.summaryFor(config, session.id, reviewPromptPR.number) : undefined;
 
@@ -276,6 +256,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			),
 		});
 	}, [headerHarness, headerState, navigation, projectName, title, t]);
+	// iOS 26: the conversation scrolls up under the system's glass bar, which
+	// blurs it beneath the title, as Settings and the board do. The edge effect
+	// is the system's own: setting `scrollEdgeEffects` from here turned it off.
+	// The route also holds terminal sessions, so the stack's own bar comes back
+	// when this screen goes.
+	useLayoutEffect(() => {
+		if (!SYSTEM_GLASS_HEADER) return;
+		navigation.setOptions({ headerTransparent: true, headerStyle: undefined });
+		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle });
+	}, [navigation, t]);
 
 	const composerKey = config ? JSON.stringify([machineIdentity(config), session.id]) : session.id;
 	const [quoteRequest, setQuoteRequest] = useState<ResponseQuoteRequest>();
@@ -551,17 +541,13 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	menuActionsRef.current = menuActions;
 	const runMenuAction = useCallback((action: ConversationMenuAction) => menuActionsRef.current[action](), []);
 
-	// The PR card, once folded away, comes back from the header; the actions are
-	// the native pull-down menu beside it.
-	const showPRButton = reviewPromptCollapsed && Boolean(reviewPromptPR);
+	// The actions are the native pull-down menu. A folded PR card comes back from
+	// the strip it leaves in the composer, not from here.
 	const headerItems = useMemo(() => menuGroups ? (
 		<Stack.Toolbar placement="right">
-			{showPRButton ? (
-				<Stack.Toolbar.Button icon={PULL_REQUEST_ICON} iconRenderingMode="template" accessibilityLabel="Show PR card" onPress={expandReviewPrompt} />
-			) : null}
 			{conversationActionsMenu(menuGroups, runMenuAction)}
 		</Stack.Toolbar>
-	) : null, [expandReviewPrompt, menuGroups, runMenuAction, showPRButton]);
+	) : null, [menuGroups, runMenuAction]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. Nothing else
@@ -602,9 +588,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	}
 	// A session that is still starting shows its checklist straight away rather than a bare spinner.
 	if (conversation.loading && !conversation.snapshot && startupView && !startupView.failed) {
-		return <View style={styles.startupLoading}><SessionStartupStatus startup={startupView} /></View>;
+		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><EmptyState busy title="Loading conversation…" /></View>;
+	if (conversation.loading && !conversation.snapshot) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
 	if (conversation.unavailable) {
 		return <Failure>
 			<EmptyState
@@ -633,19 +619,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const mcpReloadSupported = can(snapshot, "mcp_reload") && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp);
 	const steerUnsupported = conversationActionUnsupported("steer", conversation.actionCodes.steer);
 
-	return (
-		// keyboard-controller's avoider, not React Native's. Both do the same
-		// arithmetic; this one interpolates the padding with the keyboard's own
-		// animation, so the composer travels with the keys. RN's re-renders once per
-		// keyboard event on the JS thread, which is the single-frame jump up when
-		// the keyboard opens.
-		<KeyboardAvoidingView
-			style={[styles.screen, chatKeyboard.rootStyle]}
-			behavior={chatKeyboard.behavior}
-			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
-		>
-			{headerItems}
-			<ConversationRenamePrompt request={renameRequest} onClose={closeRename} />
+	const banners = (
+		<>
 			{interfaceTransitionActive ? (
 				<InlineBanner
 					tone="warning"
@@ -700,6 +675,24 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="error" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon={{ ios: "arrow.uturn.backward", android: "undo" }} /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="error" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
+		</>
+	);
+
+	return (
+		// keyboard-controller's avoider, not React Native's. Both do the same
+		// arithmetic; this one interpolates the padding with the keyboard's own
+		// animation, so the composer travels with the keys. RN's re-renders once per
+		// keyboard event on the JS thread, which is the single-frame jump up when
+		// the keyboard opens.
+		<KeyboardAvoidingView
+			style={[styles.screen, chatKeyboard.rootStyle]}
+			behavior={chatKeyboard.behavior}
+			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
+		>
+			{headerItems}
+			<ConversationRenamePrompt request={renameRequest} onClose={closeRename} />
+			{SYSTEM_GLASS_HEADER ? null : banners}
+			<View style={styles.conversation}>
 			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<ChatTimeline
@@ -717,10 +710,21 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onJumpHandled={clearJumpToSequence}
 					answeredBelow={answeredBelow}
 					startup={timelineStartup}
+					underHeader={headerOverlap}
+					topInset={bannersHeight}
+					bottomInset={composerHeight}
+					jumpHidden={composerOpen}
 				/>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>
-			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
+			{SYSTEM_GLASS_HEADER ? (
+				<View pointerEvents="box-none" style={[styles.floatingBanners, { top: headerOverlap }]} onLayout={(event) => setBannersHeight(event.nativeEvent.layout.height)}>
+					{banners}
+				</View>
+			) : null}
+			{/* The composer floats over the conversation, which scrolls on under its
+			    glass; the timeline leaves its measured height clear at the end. */}
+			<View pointerEvents="box-none" style={styles.floatingComposer} onLayout={measureComposer}>
 			<View style={editingMessage ? styles.composerHidden : undefined}>
 				<ChatComposer
 					key={composerKey}
@@ -728,9 +732,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onQuoteHandled={quoteHandled}
 					reviewPR={reviewPromptPR}
 					reviewPRSummary={reviewPromptSummary}
-					reviewPRCollapsed={reviewPromptCollapsed}
-					onCollapseReviewPR={collapseReviewPrompt}
 					onOpenReview={reviewPromptPR ? () => openPage(reviewRouteForPR(session.id, reviewPromptPR, currentHostId)) : undefined}
+					onExpandedChange={setComposerOpen}
 					sessionId={session.id}
 					config={config}
 					snapshot={snapshot}
@@ -770,6 +773,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					startingAgentName={startupShown && !startupView?.failed ? startupView?.agentName : undefined}
 				/>
 			</View>
+			</View>
+			</View>
+			{editingMessage ? <View style={{ height: chatKeyboard.restingInset }} /> : null}
 		</KeyboardAvoidingView>
 	);
 }
@@ -796,7 +802,14 @@ function DismissibleBanner({ copy, dismissed, onDismiss, ...props }: Omit<Inline
 /** A screen-filling state the conversation cannot get past, announced as it appears. */
 function Failure({ children }: { children: ReactNode }) {
 	const styles = useThemedStyles(makeStyles);
-	return <View accessibilityRole="alert" style={styles.center}>{children}</View>;
+	const headerOverlap = useGlassHeaderOverlap();
+	return <View accessibilityRole="alert" style={[styles.center, { paddingTop: headerOverlap }]}>{children}</View>;
+}
+
+/** How much of the screen iOS 26's clear header covers; nothing elsewhere. */
+function useGlassHeaderOverlap(): number {
+	const headerHeight = useHeaderHeight();
+	return SYSTEM_GLASS_HEADER ? headerHeight : 0;
 }
 
 function sessionTitle(session: MobileChatSession): string { return "displayName" in session ? session.displayName || session.issueTitle || session.issueLabel || session.id : session.projectName || session.id; }
@@ -816,6 +829,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	composerHidden: { display: "none" },
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, backgroundColor: t.bgBase },
+	conversation: { flex: 1 },
+	// The page's colour, so the conversation scrolling up passes under the
+	// banners rather than showing between them.
+	floatingComposer: { position: "absolute", left: 0, right: 0, bottom: 0 },
+	floatingBanners: { position: "absolute", left: 0, right: 0, backgroundColor: t.bgBase },
 	// Where the timeline will draw the checklist, so the handoff to it does not move it.
 	startupLoading: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: space.xl, paddingTop: space.md },
 });

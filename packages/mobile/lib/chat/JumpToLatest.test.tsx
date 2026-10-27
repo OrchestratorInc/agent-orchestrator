@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const platform = vi.hoisted(() => ({ OS: "ios", Version: "26.0" }));
 
-vi.mock("react-native", () => ({ Platform: platform, StyleSheet: { create: (styles: object) => styles } }));
+vi.mock("react-native", () => ({ Platform: platform, StyleSheet: { create: (styles: object) => styles }, View: "View" }));
 vi.mock("../ThemeProvider", () => ({
 	useTheme: () => ({ bgElevated: "#elevated", textPrimary: "#ink" }),
 	useThemeState: () => ({ scheme: "dark" }),
@@ -16,7 +16,7 @@ vi.mock("@expo/ui", async () => {
 vi.mock("@expo/ui/swift-ui", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
-	return { Button: host("SwiftButton"), HStack: host("HStack"), Image: host("SwiftImage"), Text: host("SwiftText") };
+	return { Button: host("SwiftButton"), Image: host("SwiftImage") };
 });
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 	accessibilityLabel: (label: string) => ({ accessibilityLabel: label }),
@@ -65,44 +65,42 @@ async function renderIOS(onPress = vi.fn()) {
 }
 
 describe("JumpToLatest on iOS", () => {
-	it("is a Liquid Glass capsule named for screen readers", async () => {
+	it("is a small Liquid Glass circle holding only the arrow, named for screen readers", async () => {
 		const onPress = vi.fn();
 		const button = await renderIOS(onPress);
 		expect(button.props.modifiers).toEqual(expect.arrayContaining([
 			{ buttonStyle: "glass" },
-			{ buttonBorderShape: "capsule" },
+			{ buttonBorderShape: "circle" },
+			{ controlSize: "small" },
 			{ tint: "#ink" },
 			{ accessibilityLabel: "Jump to latest message" },
 		]));
 		expect(button.findByType("SwiftImage" as never).props.systemName).toBe("arrow.down");
-		expect(button.findByType("SwiftText" as never).props.children).toBe("Latest");
+		expect(button.findAllByType("SwiftText" as never)).toHaveLength(0);
 		act(() => button.props.onPress());
 		expect(onPress).toHaveBeenCalledOnce();
 	});
 
-	// Dynamic Type has to reach the label and its arrow, which a bare point size would not.
-	it("sizes its label and arrow by text style", async () => {
+	// Dynamic Type has to reach the arrow, which a bare point size would not.
+	it("sizes its arrow by text style", async () => {
 		const button = await renderIOS();
-		const fontOf = (type: string) => button.findByType(type as never).props.modifiers.find((modifier: { font?: object }) => modifier.font).font;
-		expect(fontOf("SwiftText")).toMatchObject({ textStyle: "subheadline" });
-		expect(fontOf("SwiftImage")).toEqual({ textStyle: "subheadline", weight: "semibold" });
-		expect(button.findByType("SwiftImage" as never).props.size).toBeUndefined();
+		const arrow = button.findByType("SwiftImage" as never);
+		expect(arrow.props.modifiers.find((modifier: { font?: object }) => modifier.font).font).toEqual({ textStyle: "footnote", weight: "semibold" });
+		expect(arrow.props.size).toBeUndefined();
 	});
 
-	// SwiftUI finds a custom font by the name inside the font file; expo-font's
-	// alias would leave the label in the system face.
-	it("names DM Sans by its PostScript name", async () => {
-		const button = await renderIOS();
-		const font = button.findByType("SwiftText" as never).props.modifiers.find((modifier: { font?: object }) => modifier.font).font;
-		expect(font.family).toBe("DMSans-SemiBold");
+	// Centred just above the composer, along the bottom of the list's room.
+	it("sits centred at the bottom of the space it is given", async () => {
+		const { JumpToLatest } = await import("./JumpToLatest");
+		await act(async () => { renderer = create(<JumpToLatest onPress={vi.fn()} />); });
+		expect(renderer!.root.findByType("View" as never).props.style).toMatchObject({ position: "absolute", left: 0, right: 0, alignItems: "center" });
 	});
 
 	// Before iOS 26 the glass styles draw no material at all.
-	it("fills the capsule with the elevated surface before Liquid Glass", async () => {
+	it("fills the circle with the elevated surface before Liquid Glass", async () => {
 		platform.Version = "18.4";
 		const button = await renderIOS();
 		expect(button.props.modifiers).toEqual(expect.arrayContaining([{ buttonStyle: "borderedProminent" }, { tint: "#elevated" }]));
-		expect(button.findByType("SwiftText" as never).props.modifiers).toContainEqual({ foregroundStyle: "#ink" });
 	});
 });
 
@@ -119,11 +117,9 @@ describe("JumpToLatest on Android", () => {
 		expect(onPress).toHaveBeenCalledOnce();
 	});
 
-	it("sits 16dp in from the bottom-end corner", async () => {
+	it("sits centred just above the composer", async () => {
 		const { JumpToLatest } = await import("./JumpToLatest.android");
 		await act(async () => { renderer = create(<JumpToLatest onPress={vi.fn()} />); });
-		const host = renderer!.root.findByType("ComposeHost" as never);
-		const padding = renderer!.root.findByType("SmallFloatingActionButton" as never).props.modifiers[0].paddingAll;
-		expect(host.props.style).toMatchObject({ position: "absolute", end: 16 - padding, bottom: 16 - padding });
+		expect(renderer!.root.findByType("View" as never).props.style).toMatchObject({ position: "absolute", left: 0, right: 0, alignItems: "center" });
 	});
 });

@@ -4,8 +4,9 @@ import { Platform, Pressable, StyleSheet, View } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { usePressFeedback } from "../pressFeedback";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import { iconSize, stateOpacity, touchTarget } from "../tokens";
+import { iconSize, radius, stateOpacity, touchTarget } from "../tokens";
 import { chatMenuIcon } from "./chatMenuIcons";
+import { COMPOSER_DISC } from "./composerStyles";
 
 /**
  * The composer's way to attach a photo or a file: the system's pull-down menu,
@@ -33,7 +34,9 @@ export function ChatAttachmentMenu({
 	const button = { accessibilityRole: "button", accessibilityLabel: "Attach", accessibilityState: { disabled } } as const;
 	// A plus, not a paperclip: the composer is one row of three controls, and the
 	// clip read as an attachment badge on the field rather than a way in.
-	const glyph = <AppSymbol name="add" size={iconSize.xl} color={t.textSecondary} />;
+	// The plus in a filled circle, the height of the model's capsule beside it,
+	// inside a full touch target.
+	const glyph = <View style={[styles.disc, { backgroundColor: t.bgElevated }]}><AppSymbol name="add" size={iconSize.lg} color={t.textSecondary} /></View>;
 
 	if (disabled) return <View accessible {...button} style={[styles.trigger, styles.disabled]}>{glyph}</View>;
 
@@ -61,5 +64,6 @@ export function ChatAttachmentMenu({
 
 const styles = StyleSheet.create({
 	trigger: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+	disc: { width: COMPOSER_DISC, height: COMPOSER_DISC, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
 	disabled: { opacity: stateOpacity.disabled },
 });

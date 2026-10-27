@@ -92,7 +92,15 @@ describe("response copy control", () => {
 describe("jump to latest", () => {
 	// Each platform's own floating control (see JumpToLatest), not a bordered pill.
 	it("floats the native control over the list", () => {
-		expect(source).toContain("{showJump ? <JumpToLatest onPress={() => { followsTail.current = true; setShowJump(false); scrollToLatest(true); }} /> : null}");
+		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
+		// Floating above what sits over the list's end, so it never moves the
+		// composer or the conversation, and fading rather than popping.
+		// It steps aside while the composer is open.
+		expect(source).toContain('{showJump && !jumpHidden ? <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom: bottomInset }]}>');
+		const screen = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
+		expect(screen).toContain("jumpHidden={composerOpen}");
+		expect(screen).toContain("onExpandedChange={setComposerOpen}");
+		expect(source).toContain("<JumpToLatest onPress={jumpToLatest} />");
 		expect(source).not.toContain("styles.jump");
 	});
 });

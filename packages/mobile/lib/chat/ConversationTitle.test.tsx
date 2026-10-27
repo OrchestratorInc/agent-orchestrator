@@ -10,6 +10,7 @@ vi.mock("../AgentLogo", () => ({ AgentLogo }));
 vi.mock("react-native", () => ({
 	StyleSheet: { create: (styles: unknown) => styles },
 	Text,
+	useWindowDimensions: () => ({ width: 390, height: 844 }),
 	View,
 }));
 vi.mock("../ThemeProvider", () => ({

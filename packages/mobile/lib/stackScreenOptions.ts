@@ -3,6 +3,13 @@ import { Platform } from "react-native";
 import type { Theme } from "./theme";
 
 /**
+ * iOS 26 draws a navigation bar as Liquid Glass with a scroll-edge blur under
+ * it. A page that lays its scroll view out under a clear bar (`headerTransparent`
+ * with no `headerStyle`) gets that blur instead of a painted slab.
+ */
+export const SYSTEM_GLASS_HEADER = Platform.OS === "ios" && parseInt(String(Platform.Version), 10) >= 26;
+
+/**
  * The native-stack defaults every stack in the app shares: the root stack and
  * any stack nested in it (a tab's, Settings'). Spread them first and add what a
  * stack needs on top, so each one pushes, tints and titles its pages the same

@@ -10,17 +10,20 @@ const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios
 describe("iOS turn settings menu trigger", () => {
 	// The label used to be an invisible SwiftUI text in a fixed 220pt host with
 	// the visible summary drawn over it, so a tap right of 220pt did nothing.
-	it("draws the real summary as the menu's own label across the whole row", () => {
+	it("draws the real summary as the menu's own label", () => {
 		expect(source).toContain("<Menu key={generation} label={label} modifiers={modifiers}>");
 		expect(source).not.toContain("opacity(0)");
 		expect(source).not.toContain("width: 220");
 		expect(source).toContain('host: { alignSelf: "stretch", height: touchTarget }');
-		expect(source).toContain("frame({ maxWidth: FILL, minHeight: touchTarget, alignment: \"leading\" }), contentShape(shapes.rectangle())");
+		// A full touch target tall around the new-task sheet's filled capsule.
+		expect(source).toContain("<HStack modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>");
+		expect(source).toContain('frame({ minHeight: CAPSULE_HEIGHT, maxHeight: CAPSULE_HEIGHT }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule")');
 		expect(source).toContain('accessibilityLabel(summary ? `Turn settings, ${summary}` : "Turn settings")');
 	});
 
 	it("sizes the label with Dynamic Type and marks it a pull-down", () => {
-		expect(source).toContain('font({ textStyle: "footnote", weight: "semibold" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")');
+		// The new-task sheet's selector type.
+		expect(source).toContain('font({ textStyle: "subheadline", weight: "medium" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")');
 		expect(source).toContain('<Image systemName="chevron.up.chevron.down"');
 		expect(source).not.toMatch(/font\(\{ size:/);
 	});
@@ -44,10 +47,14 @@ describe("iOS turn settings choices", () => {
 	});
 
 	// The approval mode is its own control beside the model, so it is never
-	// read as part of the model, and it keeps the dashed-check artwork.
-	it("puts the approval mode on its own control with the dashed-check artwork", () => {
+	// read as part of the model: the mode's symbol alone, named to VoiceOver,
+	// with each choice in its menu marked by its own.
+	it("puts the approval mode on its own icon-only control", () => {
 		expect(source).toContain('const approvalRow = rows.find((row) => turnSettingTopic(row) === "permissions");');
-		expect(source).toContain('<Image assetName="CircleDashedCheck" modifiers={[imageScale("small")]} />');
+		expect(source).toContain("systemName={approvalSymbol(approvalSelection?.permissionMode, snapshot.harness)}");
+		expect(source).toContain("frame({ width: touchTarget, height: touchTarget })");
+		expect(source).toContain("accessibilityLabel(`${approvalRow.label}, ${parts.approval || approvalRow.value}`)");
+		expect(source).toContain("systemImage={approvalSymbol(choice.permissionMode, snapshot.harness)}");
 		expect(source).toContain("{modelRows.map((row) => <SettingPicker");
 	});
 });

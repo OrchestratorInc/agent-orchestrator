@@ -27,6 +27,7 @@ import { logoFor } from "./harnessLogoAssets";
 import { haptics } from "./haptics";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { defaultModelChoice } from "./spawnModel";
+import { approvalSymbol } from "./approvalSymbol";
 import type { IOSSymbol } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { space, touchTarget } from "./tokens";
@@ -131,7 +132,7 @@ export function SpawnComposerControls({
 						    is never read as part of the model. Short enough that the
 						    project's name gives way first. */}
 						<Menu
-							label={<SelectorLabel icon={<SelectorGlyph name={approvalSymbol(approvalMode)} />} title={approvalOption?.shortLabel ?? approvalOption?.label ?? "Auto"} indicator="chevron.up.chevron.down" priority={1} />}
+							label={<SelectorLabel icon={<SelectorGlyph name={approvalSymbol(approvalMode, harness)} />} title={approvalOption?.shortLabel ?? approvalOption?.label ?? "Auto"} indicator="chevron.up.chevron.down" priority={1} />}
 							modifiers={[
 								buttonStyle("plain"),
 								menuOrder("fixed"),
@@ -143,7 +144,7 @@ export function SpawnComposerControls({
 						>
 							<Section title="Approval">
 								{approvalModes.map((mode) => (
-									<Choice key={mode.id} label={mode.label} systemImage={approvalSymbol(mode.id)} selected={mode.id === approvalMode} onChoose={() => choose(onSelectApprovalMode, mode.id)} />
+									<Choice key={mode.id} label={mode.label} systemImage={approvalSymbol(mode.id, harness)} selected={mode.id === approvalMode} onChoose={() => choose(onSelectApprovalMode, mode.id)} />
 								))}
 							</Section>
 						</Menu>
@@ -295,20 +296,6 @@ function SelectorText({ children }: { children: string }) {
 /** A symbol that scales with the label beside it; the disclosure arrow sits a step smaller. */
 function SelectorGlyph({ name, indicator = false }: { name: IOSSymbol; indicator?: boolean }) {
 	return <Image systemName={name} modifiers={[font(indicator ? { textStyle: "caption2", weight: "semibold" } : { textStyle: "subheadline" })]} />;
-}
-
-/** Each approval mode's symbol, from asking first to asking for nothing. */
-function approvalSymbol(mode: string): IOSSymbol {
-	switch (mode) {
-		case "default":
-			return "hand.raised";
-		case "accept-edits":
-			return "pencil";
-		case "bypass-permissions":
-			return "exclamationmark.shield";
-		default:
-			return "checkmark.shield";
-	}
 }
 
 function projectSystemImage(project?: SpawnComposerOption): "plus.bubble" | "folder" {

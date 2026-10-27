@@ -10,8 +10,10 @@ import {
 	Pressable,
 	StyleSheet,
 	Text,
+	useWindowDimensions,
 	View,
 } from "react-native";
+import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
 import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
@@ -31,6 +33,7 @@ import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
 import { userMessageSurfaceStyle } from "./chatChrome";
+import { useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
@@ -51,6 +54,9 @@ import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
 import { JumpToLatest } from "./JumpToLatest";
+
+/** The jump back to the newest message fades in and out rather than popping. */
+const JUMP_FADE_MS = 160;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -108,6 +114,10 @@ export const ChatTimeline = memo(function ChatTimeline({
 	onJumpHandled,
 	answeredBelow,
 	startup,
+	underHeader = 0,
+	topInset = 0,
+	bottomInset = 0,
+	jumpHidden = false,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -131,6 +141,18 @@ export const ChatTimeline = memo(function ChatTimeline({
 	answeredBelow?: number;
 	/** Setup progress for a session that is still starting. */
 	startup?: TimelineStartup;
+	/**
+	 * How far a clear header covers the timeline's top (iOS 26's glass bar). The
+	 * list insets itself for it, so the system blurs what scrolls beneath the
+	 * bar; the empty states pad for it.
+	 */
+	underHeader?: number;
+	/** What floats over the list's top below the header (the screen's banners). */
+	topInset?: number;
+	/** What floats over the list's end (the composer), so the newest message clears it. */
+	bottomInset?: number;
+	/** Keeps the jump back to the newest message out of the way (while the composer is open). */
+	jumpHidden?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -151,9 +173,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const openingTurnId = startup?.view.openingTurnId;
 	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
-	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
+	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
 	const groups = plan.groups;
-	const inverted = plan.inverted;
+	const contentStyle = useMemo(() => topInset || bottomInset
+		? [styles.content, { paddingTop: space.md + topInset, paddingBottom: space.xxxl + bottomInset }]
+		: styles.content, [bottomInset, styles.content, topInset]);
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
 	const nextEdits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
@@ -167,11 +191,9 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// predictive back on Android, so this guards the screen's removal instead.
 	usePreventRemove(editing, cancelEdit);
 	const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);
-	const jumpViewPosition = inverted ? 0.82 : 0.18;
-	const scrollToLatest = (animated: boolean) => {
-		if (inverted) listRef.current?.scrollToOffset({ offset: 0, animated });
-		else listRef.current?.scrollToEnd({ animated });
-	};
+	const jumpViewPosition = 0.18;
+	const scrollToLatest = (animated: boolean) => listRef.current?.scrollToEnd({ animated });
+	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -180,12 +202,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// turn never matched and the jump silently did nothing.
 		const index = groups.findIndex((group) => group.anchor === jumpToSequence || group.items.some((item) => item.sequence === jumpToSequence));
 		if (index >= 0) {
-			followsTail.current = index === (inverted ? 0 : groups.length - 1);
+			followsTail.current = index === groups.length - 1;
 			setShowJump(!followsTail.current);
 			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
+	}, [groups, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
 	// The keyboard shrinks the list, so bring the prompt being edited back into view.
 	const editingTurnId = editDraft?.turnId;
@@ -194,9 +216,9 @@ export const ChatTimeline = memo(function ChatTimeline({
 		const index = groups.findIndex((group) => group.turnId === editingTurnId);
 		if (index < 0) return;
 		// A row is the whole turn, so pin its top (the prompt) to the top of the
-		// viewport; on an inverted list that is the row's far end.
-		requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: inverted ? 1 : 0, viewOffset: inverted ? -space.md : space.md }));
-	}, [editingTurnId, groups, inverted]);
+		// viewport.
+		requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0, viewOffset: space.md + underHeader + topInset }));
+	}, [editingTurnId, groups, topInset, underHeader]);
 	useEffect(() => {
 		if (!editingTurnId) return;
 		revealEdit();
@@ -211,7 +233,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// No brief in the timeline (a promptless start): the checklist stands alone.
 		return (
 			<View style={styles.timelineWrap}>
-				<View style={[styles.list, styles.content]}>
+				<View style={[styles.list, styles.content, { paddingTop: space.md + underHeader + topInset }]}>
 					<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
 				</View>
 			</View>
@@ -220,7 +242,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 	if (plan.kind === "empty") {
 		return (
 			<View style={styles.timelineWrap}>
-				<View style={styles.emptySurface}>
+				<View style={[styles.emptySurface, { paddingTop: underHeader + topInset }]}>
 					<EmptyConversation controller={snapshot.controller.state} />
 				</View>
 			</View>
@@ -251,10 +273,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 				ref={listRef}
 				data={groups}
 				extraData={rowState}
-				inverted={plan.inverted}
 				keyExtractor={(group) => group.key}
 				style={styles.list}
-				contentContainerStyle={styles.content}
+				contentContainerStyle={contentStyle}
+				contentInsetAdjustmentBehavior={underHeader ? "automatic" : undefined}
+				scrollIndicatorInsets={{ bottom: bottomInset }}
 				keyboardShouldPersistTaps="handled"
 				initialNumToRender={4}
 				maxToRenderPerBatch={4}
@@ -265,9 +288,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
 				onScroll={(event) => {
 					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-					followsTail.current = inverted
-						? Math.abs(contentOffset.y) < 120
-						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
+					followsTail.current = contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
 					setShowJump(!followsTail.current);
 					notifyRenderViewport();
 				}}
@@ -280,8 +301,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
 					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 				}}
-				ListHeaderComponent={inverted ? standaloneStartup : olderControl}
-				ListFooterComponent={inverted ? olderControl : standaloneStartup}
+				ListHeaderComponent={olderControl}
+				ListFooterComponent={standaloneStartup}
 				renderItem={({ item: group }) => <ConversationTurnGroup
 					group={group}
 					snapshot={snapshot}
@@ -307,7 +328,11 @@ export const ChatTimeline = memo(function ChatTimeline({
 			{detached && editDraft ? <View style={styles.detachedEditor}>
 				<InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked onCancel={cancelEdit} onEdit={submitEdit} />
 			</View> : null}
-			{showJump ? <JumpToLatest onPress={() => { followsTail.current = true; setShowJump(false); scrollToLatest(true); }} /> : null}
+			{/* Floating above whatever sits over the list's end, so it never moves
+			    the composer or the conversation; it fades rather than pops. */}
+			{showJump && !jumpHidden ? <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom: bottomInset }]}>
+				<JumpToLatest onPress={jumpToLatest} />
+			</Animated.View> : null}
 		</View>
 	);
 });
@@ -360,9 +385,9 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	// The prompt's editor grows as it opens and as lines are typed. Android's
-	// inverted list misplaces rows whose layout transition runs under that growth,
-	// so the turn being edited lays out without the fold motion.
+	// The prompt's editor grows as it opens and as lines are typed. The list
+	// misplaces rows whose layout transition runs under that growth, so the turn
+	// being edited lays out without the fold motion.
 	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
 	const WorkBody = editing ? View : FoldBody;
 	const BelowFold = editing ? View : FoldLayout;
@@ -409,6 +434,14 @@ const TimelineItem = memo(function TimelineItem({
 	showCursor?: boolean;
 }) {
 	const styles = useThemedStyles(makeStyles);
+	// The long-press menu hosts the bubble in a SwiftUI view sized to its
+	// content, which gives the bubble no width to wrap against: a percentage
+	// there resolves against nothing and the message runs out as one line past
+	// the screen. So the bubble's widest is in points, 88% of the row it sits
+	// in, estimated from the window until the row has measured itself.
+	const { width: windowWidth } = useWindowDimensions();
+	const userRow = useMenuRowWidth();
+	const bubbleWidth = Math.floor((userRow.width ?? windowWidth - 2 * space.xl) * 0.88);
 	if (item.kind === "message") {
 		if (item.role === "user" && item.origin === "human") {
 			if (editor) return <View style={styles.userRow}>{editor}</View>;
@@ -417,12 +450,12 @@ const TimelineItem = memo(function TimelineItem({
 			// Long-press opens Edit and Copy, so the text is not selectable: a
 			// selection would take the same gesture.
 			return (
-				<View style={styles.userRow}>
-					<MessageContextMenu style={styles.userMenu} canEdit={Boolean(onEdit)} onAction={(action) => {
+				<View style={styles.userRow} onLayout={userRow.onLayout}>
+					<MessageContextMenu canEdit={Boolean(onEdit)} onAction={(action) => {
 						if (action === "edit") onEdit?.(item);
 						else { void Clipboard.setStringAsync(editableMessageText(item.text).body.trim()); haptics.success(); }
 					}}>
-						<View style={[styles.userBubble, styles.menuBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
+						<View style={[styles.userBubble, { maxWidth: bubbleWidth }, item.content?.some((content) => content.type === "excerpt" && content.text) && { width: bubbleWidth }]}>
 							<SentResponseQuotes content={item.content} />
 							{body ? <Text style={styles.userText}>{body}</Text> : null}
 							{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
@@ -1188,10 +1221,7 @@ const makeStyles = (t: Theme) => {
 		older: { alignSelf: "center", minHeight: touchTarget, flexDirection: "row", gap: space.xs, alignItems: "center", paddingHorizontal: space.md, marginBottom: space.xs },
 		olderText: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize },
 		userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
-		userMenu: { maxWidth: "88%" },
-		menuBubble: { maxWidth: "100%" },
 		userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: radius.xl, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
-		quotedBubble: { width: "88%" },
 		userText: { fontFamily: "DMSans_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
 		delivery: { fontFamily: "DMSans_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.footnote.fontSize },
 		attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
