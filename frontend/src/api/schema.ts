@@ -7741,6 +7741,7 @@ export interface components {
         };
         StartAgentUILoginRequest: {
             method: string;
+            model?: string;
             secret?: string;
         };
         StartAwakeRequest: {

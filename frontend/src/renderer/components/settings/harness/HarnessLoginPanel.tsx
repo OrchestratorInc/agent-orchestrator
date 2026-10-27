@@ -28,6 +28,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	const availableMethods = remote && agentId === "codex" ? methods.filter((item) => item.id !== "browser") : methods;
 	const [methodId, setMethodId] = useState(availableMethods[0]?.id ?? "browser");
 	const [secret, setSecret] = useState("");
+	const [model, setModel] = useState("");
 	const [loginCode, setLoginCode] = useState("");
 	const [operation, setOperation] = useState<AgentLoginSnapshot>();
 	const [busy, setBusy] = useState(false);
@@ -45,6 +46,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	verifyRef.current = onVerify;
 	const method = availableMethods.find((item) => item.id === methodId) ?? (methodId ? availableMethods[0] : undefined);
 	const selectedMethodId = method?.id ?? methodId;
+	const needsModel = (agentId === "qwen" || agentId === "openhands" || agentId === "continue" && selectedMethodId !== "env_CONTINUE_API_KEY") && selectedMethodId.startsWith("env_");
 	const running = operation?.status === "running";
 	const locked = busy || running || verifying;
 	const updateOperation = (next: AgentLoginSnapshot | undefined) => {
@@ -131,7 +133,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	}, [agentId, remote, operation?.id, operation?.status, operation?.loginUrl, operation?.method, operation?.acceptsCode]);
 
 	const start = async (target = method) => {
-		if (pending.current || locked || !target || (target.secret && !secret.trim())) return;
+		const targetNeedsModel = (agentId === "qwen" || agentId === "openhands" || agentId === "continue" && target?.id !== "env_CONTINUE_API_KEY") && target?.id.startsWith("env_");
+		if (pending.current || locked || !target || (target.secret && !secret.trim()) || (targetNeedsModel && !model.trim())) return;
 		pending.current = true;
 		setBusy(true);
 		setError("");
@@ -142,7 +145,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		try {
 			await runAgentLoginTask(agentId, hostId, async () => {
 				if (!mounted.current) return;
-				const next = await startAgentUILogin(agentId, target.id, credential, hostId);
+				const next = targetNeedsModel
+					? await startAgentUILogin(agentId, target.id, credential, hostId, model.trim())
+					: await startAgentUILogin(agentId, target.id, credential, hostId);
 				if (!mounted.current) {
 					const dispose = () => cancelAgentUILogin(agentId, next.id, hostId);
 					try {
@@ -207,6 +212,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		// Clicking an open credential row again collapses it.
 		setMethodId(item.secret && selectedMethodId === item.id ? "" : item.id);
 		setSecret("");
+		setModel("");
 		setLoginCode("");
 		setError("");
 		updateOperation(undefined);
@@ -280,7 +286,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 					</button>
 					{open && <div ref={secretRowRef} className="flex scroll-mb-4 flex-wrap items-center gap-2 pr-4 pb-4 pl-15" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
 						<Input placeholder={secretPlaceholder(item.id)} aria-label={t(item.id === "api_key" ? "settings.harness.loginUi.apiKey" : item.id === "setup_token" ? "settings.harness.loginUi.setupToken" : "settings.harness.loginUi.accessToken")} className="min-w-48 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} onChange={(event) => setSecret(event.target.value)} />
-						<Button type="submit" disabled={busy || !secret.trim()}>
+						{needsModel && <label className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-settings-label"><span>{t("settings.models.custom")}</span><Input className="border-border bg-(--color-bg-primary) font-mono text-[13px]" value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} onChange={(event) => setModel(event.target.value)} /></label>}
+						<Button type="submit" disabled={busy || !secret.trim() || (needsModel && !model.trim())}>
 							{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
 							{t("settings.harness.loginUi.save")}
 						</Button>

@@ -133,7 +133,19 @@ func (c *AgentAuthController) startUILogin(w http.ResponseWriter, r *http.Reques
 		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Expected one login request.", nil))
 		return
 	}
-	result, err := svc.StartLogin(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret)
+	var result agentauth.LoginSnapshot
+	var err error
+	if req.Model != "" {
+		if withModel, ok := c.Svc.(interface {
+			StartLoginWithModel(context.Context, string, string, string, string) (agentauth.LoginSnapshot, error)
+		}); ok {
+			result, err = withModel.StartLoginWithModel(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, req.Model)
+		} else {
+			err = apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "This login method does not accept a model.", nil)
+		}
+	} else {
+		result, err = svc.StartLogin(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

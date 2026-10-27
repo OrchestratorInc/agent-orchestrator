@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +149,11 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 	if keys, err := providerkeys.Load(dataDir); err == nil {
 		for name, value := range keys {
 			_ = os.Setenv(name, value)
+			// launchd and systemd user environments are session-scoped. Restore
+			// them when AO starts again after a login or daemon restart.
+			if runtime.GOOS != "windows" {
+				_ = publishProviderKey(context.Background(), name, value)
+			}
 		}
 	}
 	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}

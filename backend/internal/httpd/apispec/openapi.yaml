@@ -21876,6 +21876,8 @@ components:
       properties:
         method:
           type: string
+        model:
+          type: string
         secret:
           type: string
       required:
