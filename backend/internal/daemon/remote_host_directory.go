@@ -20,18 +20,25 @@ import (
 // through AO Cloud. A failed publish is retried on the next tick.
 func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.BridgeService, controlPlaneURL string, log *slog.Logger) {
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	lastSent := ""
+	lastSent, lastHash, waited := "", "", ""
 	publish := func() {
-		address, hash := accountTunnelAddress(bridge)
+		address, hash, fixed := accountTunnelAddress(bridge)
 		key := address + "\x00" + hash
 		if address == "" || hash == "" || key == lastSent {
+			return
+		}
+		// Just linked, a machine on a quick tunnel is about to move to the
+		// fixed address the link listed it at; publishing the quick one first
+		// would overwrite that. It waits a tick to see whether it stays.
+		if !fixed && hash != lastHash && key != waited {
+			waited = key
 			return
 		}
 		if err := publishRemoteHostAddress(ctx, client, controlPlaneURL, bridge.HostID, address, hash); err != nil {
 			log.Warn("remote host address publish failed", "err", err)
 			return
 		}
-		lastSent = key
+		lastSent, lastHash = key, hash
 	}
 	publish()
 	ticker := time.NewTicker(30 * time.Second)
@@ -46,17 +53,20 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 	}
 }
 
-func accountTunnelAddress(bridge *controllers.BridgeService) (string, string) {
+// accountTunnelAddress is the tunnel address to publish, the account token
+// digest to publish it with, and whether the address is this machine's fixed
+// one.
+func accountTunnelAddress(bridge *controllers.BridgeService) (address, hash string, fixed bool) {
 	state, err := mobilebridge.Load(bridge.ConfigPath)
 	if err != nil || !state.Enabled || state.AccountTokenHash == "" || !bridge.LAN.Running() {
-		return "", ""
+		return "", "", false
 	}
 	for _, endpoint := range bridge.AdvertisedEndpoints() {
 		if endpoint.Kind == mobilebridge.KindTunnel && endpoint.Secure {
-			return "https://" + net.JoinHostPort(endpoint.Host, fmt.Sprint(endpoint.Port)), state.AccountTokenHash
+			return "https://" + net.JoinHostPort(endpoint.Host, fmt.Sprint(endpoint.Port)), state.AccountTokenHash, bridge.TunnelStatus().Fixed
 		}
 	}
-	return "", ""
+	return "", "", false
 }
 
 func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlPlaneURL, hostID, address, hash string) error {

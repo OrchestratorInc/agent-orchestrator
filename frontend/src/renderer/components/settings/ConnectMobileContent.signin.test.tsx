@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { apiClient } from "../../lib/api-client";
+import { RemoteHostLimitError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 
 // Remote access away from home needs sign-in. The daemon fake is just enough
@@ -92,6 +93,16 @@ test("a signed-in computer is linked before its tunnel starts", async () => {
 	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "pw-1");
 	expect(vi.mocked(linkThisComputer).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(apiClient.POST).mock.invocationCallOrder[1]);
 	expect(screen.queryByTestId("mobile-sign-in-for-remote")).toBeNull();
+});
+
+test("a full account is said, and remote access still starts", async () => {
+	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new RemoteHostLimitError("An account can list up to 10 machines. Remove one to add another."));
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+
+	expect(await screen.findByText("An account can list up to 10 machines. Remove one to add another.")).toBeVisible();
+	expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]);
 });
 
 test("a new password links the computer again, so its fixed address survives", async () => {

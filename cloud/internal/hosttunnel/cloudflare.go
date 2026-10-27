@@ -37,7 +37,9 @@ type Tunnel struct {
 	ID       string
 	Hostname string
 	RunToken string
-	// RecordCreated is set when Ensure made the DNS record.
+	// Created and RecordCreated are set when Ensure made the tunnel and the
+	// DNS record, rather than finding them.
+	Created       bool
 	RecordCreated bool
 }
 
@@ -74,8 +76,35 @@ func (c *Cloudflare) recordsPath() string {
 // repairs a deleted tunnel or a record someone edited.
 //
 // The tunnel is locally configured: the connector's --url names the machine's
-// port, so a port change needs no API call.
+// port, so a port change needs no API call. A call that fails partway undoes
+// what it made: no row names it, so the sweep would never find it.
 func (c *Cloudflare) Ensure(ctx context.Context, userID, hostID string) (Tunnel, error) {
+	out, err := c.ensure(ctx, userID, hostID)
+	if err != nil {
+		c.Discard(ctx, out)
+		return Tunnel{}, err
+	}
+	return out, nil
+}
+
+// Discard deletes what the Ensure call that returned t made, for a caller that
+// could not record it. Found parts are left alone.
+func (c *Cloudflare) Discard(ctx context.Context, t Tunnel) {
+	// Undone even after the caller gave up waiting.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if t.RecordCreated {
+		if record, err := c.findRecord(ctx, t.Hostname); err == nil && record.ID != "" && record.Content == t.ID+".cfargotunnel.com" {
+			_ = c.do(ctx, http.MethodDelete, c.recordsPath()+"/"+url.PathEscape(record.ID), nil, nil)
+		}
+	}
+	if t.Created {
+		_ = c.do(ctx, http.MethodDelete, c.tunnelsPath()+"/"+url.PathEscape(t.ID), nil, nil)
+	}
+}
+
+// ensure is Ensure without the undo. On failure it still returns what it made.
+func (c *Cloudflare) ensure(ctx context.Context, userID, hostID string) (Tunnel, error) {
 	name := tunnelName(userID, hostID)
 	var found []struct {
 		ID           string `json:"id"`
@@ -105,7 +134,7 @@ func (c *Cloudflare) Ensure(ctx context.Context, userID, hostID string) (Tunnel,
 		if err := c.do(ctx, http.MethodPost, c.tunnelsPath(), map[string]any{"name": name, "config_src": "local"}, &created); err != nil {
 			return Tunnel{}, fmt.Errorf("create tunnel: %w", err)
 		}
-		out.ID = created.ID
+		out.ID, out.Created = created.ID, created.ID != ""
 	}
 	if out.ID == "" {
 		return Tunnel{}, errors.New("cloudflare returned a tunnel without an id")
@@ -115,7 +144,7 @@ func (c *Cloudflare) Ensure(ctx context.Context, userID, hostID string) (Tunnel,
 	record := map[string]any{"type": "CNAME", "name": out.Hostname, "content": target, "proxied": true, "ttl": 1}
 	existing, err := c.findRecord(ctx, out.Hostname)
 	if err != nil {
-		return Tunnel{}, err
+		return out, err
 	}
 	switch {
 	case existing.ID == "":
@@ -127,14 +156,14 @@ func (c *Cloudflare) Ensure(ctx context.Context, userID, hostID string) (Tunnel,
 		err = c.do(ctx, http.MethodPut, c.recordsPath()+"/"+url.PathEscape(existing.ID), record, nil)
 	}
 	if err != nil {
-		return Tunnel{}, fmt.Errorf("write dns record: %w", err)
+		return out, fmt.Errorf("write dns record: %w", err)
 	}
 
 	if err := c.do(ctx, http.MethodGet, c.tunnelsPath()+"/"+url.PathEscape(out.ID)+"/token", nil, &out.RunToken); err != nil {
-		return Tunnel{}, fmt.Errorf("get run token: %w", err)
+		return out, fmt.Errorf("get run token: %w", err)
 	}
 	if out.RunToken == "" {
-		return Tunnel{}, errors.New("cloudflare returned an empty run token")
+		return out, errors.New("cloudflare returned an empty run token")
 	}
 	return out, nil
 }
@@ -355,9 +384,14 @@ func (c *Cloudflare) do(ctx context.Context, method, path string, body, result a
 	return json.Unmarshal(env.Result, result)
 }
 
+// ErrWrongZone means the configured zone is not the named zone of the tunnel
+// account. Unlike an unreachable Cloudflare, it does not pass.
+var ErrWrongZone = errors.New("host tunnel zone does not match")
+
 // Verify reads the zone once, so a zone outside the tunnel account fails at
-// boot: the edge refuses a CNAME to another account's tunnel (error 1014)
-// while the connector still registers, so it would look healthy.
+// boot with ErrWrongZone: the edge refuses a CNAME to another account's
+// tunnel (error 1014) while the connector still registers, so it would look
+// healthy.
 func (c *Cloudflare) Verify(ctx context.Context) error {
 	var z struct {
 		Name    string `json:"name"`
@@ -369,10 +403,10 @@ func (c *Cloudflare) Verify(ctx context.Context) error {
 		return fmt.Errorf("read zone: %w", err)
 	}
 	if z.Name != c.Zone {
-		return fmt.Errorf("zone %s is %q, not %q", c.ZoneID, z.Name, c.Zone)
+		return fmt.Errorf("%w: zone %s is %q, not %q", ErrWrongZone, c.ZoneID, z.Name, c.Zone)
 	}
 	if z.Account.ID != c.AccountID {
-		return fmt.Errorf("zone %s belongs to account %s, not %s", z.Name, z.Account.ID, c.AccountID)
+		return fmt.Errorf("%w: zone %s belongs to account %s, not %s", ErrWrongZone, z.Name, z.Account.ID, c.AccountID)
 	}
 	return nil
 }

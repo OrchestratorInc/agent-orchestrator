@@ -1,6 +1,6 @@
 import { getAccountAccessToken, loadAccount, type Account } from "./account";
 import { ignoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
-import { isLocalNetworkHost } from "./connectionError";
+import { isLocalNetworkHost, isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
@@ -16,7 +16,7 @@ function endpoint(raw: string): Endpoint | null {
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
 			// Tunnels, quick or named, are https on a public name; the LAN listener is plain http.
-			kind: url.hostname.endsWith(".ts.net") ? "tailscale"
+			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale"
 				: url.protocol === "https:" && !isLocalNetworkHost(url.hostname) ? "tunnel" : "lan",
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),

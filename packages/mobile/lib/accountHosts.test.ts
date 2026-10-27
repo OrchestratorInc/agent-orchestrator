@@ -84,6 +84,11 @@ it("classifies directory addresses: named tunnels as tunnels, LAN names as LAN",
 	pair("http://studio.local:3011");
 	await syncAccountHosts(account);
 	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "lan", host: "studio.local", port: 3011, secure: false }, quick]);
+
+	// Nor may a Tailscale address, https or not.
+	pair("https://100.72.46.7:443");
+	await syncAccountHosts(account);
+	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tailscale", host: "100.72.46.7", port: 443, secure: true }, quick]);
 });
 
 it("keeps a forgotten account machine hidden until explicitly re-paired", async () => {

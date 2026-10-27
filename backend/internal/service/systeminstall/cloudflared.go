@@ -61,17 +61,17 @@ var cloudflaredDownloadWaits = []time.Duration{5 * time.Second, 30 * time.Second
 func (s *Service) DownloadCloudflaredInBackground(onInstalled func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.onCloudflaredInstalled = onInstalled
 	if s.cloudflaredAutoStarted {
 		return
 	}
-	s.cloudflaredAutoStarted = true
-	s.onCloudflaredInstalled = onInstalled
 	if job, ok := s.jobs[TargetCloudflared]; ok && job.Status == StatusRunning {
-		return // A download the user started reports to onInstalled too.
+		return // An install the user started reports to onInstalled too.
 	}
 	// Only the download runs unasked. A package manager can prompt, update
 	// itself first or need root, so that stays behind the desktop's button.
 	if plan, ok := s.cloudflaredDownloadPlan(); ok {
+		s.cloudflaredAutoStarted = true
 		s.startPlanLocked(TargetCloudflared, plan)
 	}
 }

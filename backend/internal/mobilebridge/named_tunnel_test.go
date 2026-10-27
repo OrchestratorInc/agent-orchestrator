@@ -39,6 +39,9 @@ func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.digests = append(f.digests, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	if f.status != 0 {
 		w.WriteHeader(f.status)
+		if f.status == http.StatusUnauthorized { // as AO Cloud words a refusal
+			_, _ = w.Write([]byte(`{"error":"Unauthorized","code":"unauthorized","message":"Invalid host credential."}`))
+		}
 		return
 	}
 	token := "run-token-tun-1"
@@ -94,7 +97,7 @@ func knownTunnel(t *testing.T, cloud *fakeAOCloud, src *FixedTunnelSource) {
 	cloud.mu.Lock()
 	cloud.since = time.Now().Add(-24 * time.Hour)
 	cloud.mu.Unlock()
-	b, err := json.Marshal(cachedNamedTunnel{Key: src.cacheKey("host-uuid"), Tunnel: NamedTunnel{
+	b, err := json.Marshal(cachedNamedTunnel{Key: src.cacheKey("host-uuid", "account-digest"), Tunnel: NamedTunnel{
 		Hostname: "h-test.example.dev", RunToken: "run-token-tun-1", Since: time.Now().Add(-24 * time.Hour),
 	}})
 	if err == nil {
@@ -141,9 +144,19 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	if err == nil || cached.RunToken != "run-token-tun-1" {
 		t.Fatalf("down = %+v, %v", cached, err)
 	}
-	// Another host never borrows the cache.
+	// Another host never borrows the cache, nor does another account's link.
 	if other, _ := src.TunnelFor(ctx, "other-host", false); other.RunToken != "" {
 		t.Fatalf("other host = %+v", other)
+	}
+	link(t, src, "other-account-digest")
+	if other, _ := src.TunnelFor(ctx, "host-uuid", false); other.RunToken != "" {
+		t.Fatalf("another account's link started %+v", other)
+	}
+	link(t, src, "account-digest")
+	// A proxy's refusal is not AO Cloud's: the cache stays.
+	cloud.set(http.StatusForbidden)
+	if got, err := src.TunnelFor(ctx, "host-uuid", false); errors.Is(err, errHostRefused) || got.RunToken == "" {
+		t.Fatalf("403 = %+v, %v", got, err)
 	}
 
 	// Removed from every account: the tunnel is gone, and so is the cache.

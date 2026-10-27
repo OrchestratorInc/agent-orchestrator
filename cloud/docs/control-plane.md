@@ -267,7 +267,9 @@ deployment keeps one control-plane replica for this path.
 With the four `AO_CLOUD_HOST_TUNNEL_*` settings, a machine that a signed-in
 device links to an account gets its own Cloudflare tunnel, so its address stays
 the same across restarts. The control plane holds the Cloudflare API token; a
-machine only ever receives its own tunnel's run token.
+machine only ever receives its own tunnel's run token. A zone that is not
+the named zone of the tunnel account turns fixed addresses off at startup;
+an unreachable Cloudflare does not.
 
 - The address is `h-<hash of the account and host IDs>.<zone>`, one level
   under the zone apex because Universal SSL covers one level only. Each account
@@ -277,7 +279,8 @@ machine only ever receives its own tunnel's run token.
   a URL (`PUT /api/cloud/v1/me/hosts/{hostId}`) gets a locally configured
   tunnel and its proxied CNAME first and is then listed at that address, so no
   device looks the name up before it exists. If Cloudflare fails, the
-  registration fails with 502; without the settings it is refused with 422.
+  registration fails with 502 and anything the call made in Cloudflare is
+  deleted again; without the settings it is refused with 422.
   Either way the desktop links the computer at its quick tunnel's address.
 - The machine fetches its run token from
   `POST /api/cloud/v1/remote-hosts/{hostId}/tunnel`, proving the host with the
@@ -311,7 +314,8 @@ machine only ever receives its own tunnel's run token.
   after the row was written, since a registration makes its tunnel first), of a
   host AO Cloud has not seen for
   90 days, and of a tunnel no connector has served an hour after it was made,
-  so registrations made only to hold tunnels keep nothing. It acts only on
+  so registrations made only to hold tunnels keep nothing. A tunnel made under
+  a record kept from an earlier one loses only the tunnel. It acts only on
   tunnels its own rows name, since other AO Clouds may share the account.
   A machine whose record went gets both back at the same address.
 - Zone records and tunnels are the limits. A Free zone holds 200 records and

@@ -66,14 +66,14 @@ func (t *TunnelRunner) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if errors.Is(err, errFixedTunnelReady) || errors.Is(err, errFixedTunnelChanged) {
-			t.logger().Info("mobile tunnel restarting for its new address", "reason", err)
-			continue
-		}
 		// A connector that stayed up is not a failing one; only rapid exits
 		// should escalate the wait.
 		if time.Since(startedAt) >= stableTunnelRun {
 			attempt = 0
+		}
+		if errors.Is(err, errFixedTunnelReady) || errors.Is(err, errFixedTunnelChanged) {
+			t.logger().Info("mobile tunnel restarting for its new address", "reason", err)
+			continue
 		}
 		wait := TunnelBackoff(attempt)
 		attempt++
@@ -135,9 +135,15 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 
 	// Reserved after provisioning, which can take seconds, to keep the
 	// bind-and-release window short.
+	// A start that fails before the process exists still ends the run in the
+	// status: a planned restart already shows it as starting.
+	notStarted := func(err error) error {
+		t.Runtime.Exited(err)
+		return err
+	}
 	metricsPort, err := freeLoopbackPort()
 	if err != nil {
-		return fmt.Errorf("reserve metrics port: %w", err)
+		return notStarted(fmt.Errorf("reserve metrics port: %w", err))
 	}
 
 	// Its own context, so a connector nobody can reach any more can be stopped
@@ -155,12 +161,12 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// cloudflared logs to stderr; the hostname is only available there.
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("stderr pipe: %w", err)
+		return notStarted(fmt.Errorf("stderr pipe: %w", err))
 	}
 	cmd.Stdout = io.Discard
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start cloudflared: %w", err)
+		return notStarted(fmt.Errorf("start cloudflared: %w", err))
 	}
 	t.Runtime.Started()
 	pidOwner := newTunnelPIDOwner(t.PIDPath)
@@ -386,6 +392,9 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func(NamedTun
 // password, or the tunnel was remade with a new token. Removal deletes the tunnel while it is connected, and AO Cloud is
 // what says so. An unreachable AO Cloud is not a withdrawal.
 //
+// It asks at once when nudged: a device just linked the machine, possibly to
+// another account, whose tunnel is another one.
+//
 // It also asks as soon as every connection has been down for lostGrace. A
 // machine offline for more than AO Cloud's five minutes has had its tunnel
 // released, and asking is what makes AO Cloud give it a new one, so a laptop
@@ -404,6 +413,7 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 		case <-ctx.Done():
 			return
 		case <-time.After(every):
+		case <-t.nudge:
 		case <-health.lost:
 			select {
 			case <-ctx.Done():

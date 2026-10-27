@@ -2,6 +2,9 @@ import { cloudCpFetch } from "./cloud-cp/renderer-client";
 
 export type AccountRemoteHost = { hostId: string; label: string; url: string; token: string };
 
+/** AO Cloud refused a new machine because the account lists as many as it can. */
+export class RemoteHostLimitError extends Error {}
+
 async function request(baseUrl: string, method: string, path: string, body?: unknown): Promise<Response> {
 	const response = await cloudCpFetch(`${baseUrl.replace(/\/+$/, "")}/api/cloud/v1/me/hosts${path}`, {
 		method,
@@ -13,7 +16,7 @@ async function request(baseUrl: string, method: string, path: string, body?: unk
 	if (!response.ok) {
 		// A full account is the one refusal the user can act on, so its message is shown.
 		const refusal = (await response.json().catch(() => null)) as { code?: string; message?: string } | null;
-		if (refusal?.code === "remote_host_limit_reached" && refusal.message) throw new Error(refusal.message);
+		if (refusal?.code === "remote_host_limit_reached" && refusal.message) throw new RemoteHostLimitError(refusal.message);
 		throw new Error(`AO Cloud host sync failed (${response.status}).`);
 	}
 	return response;

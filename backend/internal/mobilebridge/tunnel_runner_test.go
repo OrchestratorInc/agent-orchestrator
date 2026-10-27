@@ -315,6 +315,50 @@ func TestTunnelRunnerDropsAFixedAddressAOCloudWithdrew(t *testing.T) {
 	}
 }
 
+// Linked again, perhaps to another account, a machine serving a fixed tunnel
+// asks AO Cloud at once instead of at its next check.
+func TestTunnelRunnerRechecksAFixedTunnelWhenNudged(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	cloud.tokens = []string{"run-token-tun-1", "run-token-tun-2"}
+	bin, _ := fakeCloudflared(t, registeredLine)
+	r := namedRunner(t, bin, src)
+	r.recheckEvery = time.Hour
+	nudge := make(chan struct{}, 1)
+	r.nudge = nudge
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.runOnce(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); r.Runtime.UnsettledHostname() == ""; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("fixed connector never registered")
+		}
+	}
+	nudge <- struct{}{}
+	select {
+	case err := <-done:
+		if !errors.Is(err, errFixedTunnelChanged) || r.next == nil || r.next.RunToken != "run-token-tun-2" {
+			t.Fatalf("runOnce = %v, next %+v", err, r.next)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the nudge did not recheck the fixed tunnel")
+	}
+}
+
+// A connector that cannot even start after a planned restart says why,
+// rather than reading as starting forever.
+func TestTunnelRunnerReportsAStartThatFailsAfterARestart(t *testing.T) {
+	r := &TunnelRunner{Binary: filepath.Join(t.TempDir(), "missing"), LocalPort: 4321, Runtime: &TunnelRuntime{}}
+	r.Runtime.Started() // as a planned restart leaves it
+	if err := r.runOnce(context.Background()); err == nil {
+		t.Fatal("a missing binary started")
+	}
+	if snap := r.Runtime.Snapshot(); snap.Running || !strings.Contains(snap.LastError, "start cloudflared") {
+		t.Fatalf("status = %+v", snap)
+	}
+}
+
 func TestTunnelRunnerTriesANewLinkAtOnce(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	cloud.set(http.StatusUnauthorized) // linked once, then removed from the account

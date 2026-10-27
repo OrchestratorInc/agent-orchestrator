@@ -202,6 +202,28 @@ func TestDownloadCloudflaredInBackgroundRunsOnce(t *testing.T) {
 	}
 }
 
+// Remote access that asks while the user's own package-manager install runs
+// only waits on it. When that install fails, the next ask still downloads.
+func TestDownloadCloudflaredInBackgroundAfterAFailedUserInstall(t *testing.T) {
+	s, calls := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
+		return "/Users/test/.ao/bin/cloudflared", nil
+	}, "brew")
+	s.cloudflaredDownloadFailed.Store(true) // the user is offered brew
+	s.commands = testCommandRunner(func(ctx context.Context, _ []string) *exec.Cmd {
+		return exec.CommandContext(ctx, "sh", "-c", "sleep 0.3; exit 1")
+	})
+	if job, err := s.Start(context.Background(), TargetCloudflared); err != nil || job.Status != StatusRunning || job.Method == cloudflaredDownloadMethod {
+		t.Fatalf("user install = %+v, %v", job, err)
+	}
+	s.DownloadCloudflaredInBackground(func() {})
+	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	s.DownloadCloudflaredInBackground(func() {})
+	waitForStatus(t, s, TargetCloudflared, StatusSucceeded)
+	if calls.Load() != 1 {
+		t.Fatalf("downloads = %d, want 1", calls.Load())
+	}
+}
+
 // Only the download runs unasked. Where there is nothing to download, the
 // trigger must not fall through to running a package manager.
 func TestDownloadCloudflaredInBackgroundNeverRunsAPackageManager(t *testing.T) {

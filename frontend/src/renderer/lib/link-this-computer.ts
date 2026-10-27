@@ -16,8 +16,9 @@ export function fitLabel(name: string): string {
  * account's devices without a password. Without url it is done before the
  * tunnel starts: AO Cloud makes this computer's fixed address and lists it
  * there, so it never starts a quick tunnel only to replace it. An AO Cloud
- * that has no fixed addresses refuses that, and the caller links again with
- * the quick tunnel's url once it has one.
+ * that has no fixed addresses refuses that. Allow access then links again with
+ * the quick tunnel's url once it has one; Connect Mobile leaves the computer
+ * unlisted, as it did before fixed addresses.
  * Returns the host id the account now lists.
  */
 export async function linkThisComputer(cloudBaseUrl: string, accountId: string, password: string, url?: string): Promise<string> {

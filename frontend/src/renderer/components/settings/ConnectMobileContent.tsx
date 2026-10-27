@@ -8,6 +8,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
+import { RemoteHostLimitError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -343,11 +344,17 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
 	const accountId = session?.user.id ?? "";
 	const signedIn = Boolean(cloudBaseUrl && accountId);
+	// Why the last link left this computer out of the account, when the user can act on it.
+	const [linkError, setLinkError] = useState("");
 	const linkIfSignedIn = async (password: string) => {
+		setLinkError("");
 		if (!signedIn || !password) return;
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
-		// address changes on restart.
-		await linkThisComputer(cloudBaseUrl, accountId, password).catch(() => undefined);
+		// address changes on restart. A full account is said, since removing
+		// a machine fixes it.
+		await linkThisComputer(cloudBaseUrl, accountId, password).catch((cause: unknown) => {
+			if (cause instanceof RemoteHostLimitError) setLinkError(cause.message);
+		});
 	};
 
 	const query = useQuery({
@@ -531,6 +538,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		disable.reset();
 		setSecure.reset();
 		setBrowserRemoteAccess.reset();
+		setLinkError("");
 	};
 
 	const copyPassword = async () => {
@@ -568,6 +576,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(setSecure.error instanceof Error && setSecure.error.message) ||
 		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
 		stayAwake.error ||
+		linkError ||
 		null;
 
 	const turnOff = () => {

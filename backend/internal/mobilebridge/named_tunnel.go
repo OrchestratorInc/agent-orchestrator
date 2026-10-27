@@ -60,7 +60,8 @@ var (
 	// errNotLinked means no signed-in device has linked this machine yet.
 	errNotLinked = errors.New("this machine is not linked to an AO account")
 	// errHostRefused means AO Cloud does not list this machine under the
-	// digest any more: its account removed it.
+	// digest any more: its account removed it. Only AO Cloud's own answer
+	// says so, never a proxy's.
 	errHostRefused = errors.New("AO Cloud no longer lists this machine")
 )
 
@@ -91,7 +92,7 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 	if state.AccountTokenHash == "" {
 		return NamedTunnel{}, errNotLinked
 	}
-	key := s.cacheKey(hostID)
+	key := s.cacheKey(hostID, state.AccountTokenHash)
 	cached := loadNamedTunnelCache(s.CachePath, key)
 	t, err := s.request(ctx, hostID, state.AccountTokenHash, repair)
 	if errors.Is(err, errHostRefused) {
@@ -113,8 +114,10 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 	return t, nil
 }
 
-func (s *FixedTunnelSource) cacheKey(hostID string) string {
-	return strings.TrimRight(s.ControlPlaneURL, "/") + "/" + hostID
+// cacheKey names the AO Cloud, host and account link a cached tunnel came
+// from: a machine linked to another account since has another tunnel.
+func (s *FixedTunnelSource) cacheKey(hostID, digest string) string {
+	return strings.TrimRight(s.ControlPlaneURL, "/") + "/" + hostID + "#" + digest
 }
 
 func loadNamedTunnelCache(path, key string) NamedTunnel {
@@ -127,7 +130,12 @@ func loadNamedTunnelCache(path, key string) NamedTunnel {
 	return cached.Tunnel
 }
 
-var fixedTunnelClient = &http.Client{Timeout: 15 * time.Second}
+// fixedTunnelClient follows no redirect, which would carry the host digest
+// elsewhere, as the address publisher's client does.
+var fixedTunnelClient = &http.Client{
+	Timeout:       15 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, repair bool) (NamedTunnel, error) {
 	target, err := ControlPlaneTarget(s.ControlPlaneURL, "/api/cloud/v1/remote-hosts/"+url.PathEscape(hostID)+"/tunnel")
@@ -150,10 +158,14 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 		return NamedTunnel{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return NamedTunnel{}, errHostRefused
-	case resp.StatusCode != http.StatusOK:
+	if resp.StatusCode != http.StatusOK {
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		if resp.StatusCode == http.StatusUnauthorized &&
+			json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&refusal) == nil && refusal.Code == "unauthorized" {
+			return NamedTunnel{}, errHostRefused
+		}
 		return NamedTunnel{}, fmt.Errorf("AO Cloud returned %d for the fixed address", resp.StatusCode)
 	}
 	var t NamedTunnel

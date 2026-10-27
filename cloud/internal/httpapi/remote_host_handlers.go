@@ -364,7 +364,11 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 		writeError(w, r, http.StatusTooManyRequests, "tunnel_rate_limited", "This account changed fixed addresses too often. Try again later.")
 		return hostTunnelResponse{}, false
 	}
-	tunnel, err := s.hostTunnels.Ensure(r.Context(), userID, hostID)
+	// Finished even if the client hangs up, so no tunnel is left half made or
+	// unrecorded.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
+	defer cancel()
+	tunnel, err := s.hostTunnels.Ensure(ctx, userID, hostID)
 	if err != nil {
 		s.logger.Warn("provision host tunnel", "host_id", hostID, "error", err)
 		writeError(w, r, http.StatusBadGateway, "tunnel_unavailable", "The fixed address could not be prepared.")
@@ -372,13 +376,15 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 	}
 	encrypted, nonce, err := s.secretCipher.Encrypt([]byte(tunnel.RunToken), aad)
 	if err != nil {
+		s.hostTunnels.Discard(ctx, tunnel)
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The tunnel credential could not be stored.")
 		return hostTunnelResponse{}, false
 	}
-	since, err := tunnels.SaveRemoteHostTunnel(r.Context(), domain.RemoteHostTunnel{
+	since, err := tunnels.SaveRemoteHostTunnel(ctx, domain.RemoteHostTunnel{
 		UserID: userID, HostID: hostID, TunnelID: tunnel.ID, Hostname: tunnel.Hostname, EncryptedRunToken: encrypted, RunTokenNonce: nonce,
 	}, tunnel.RecordCreated)
 	if err != nil {
+		s.hostTunnels.Discard(ctx, tunnel)
 		s.writeStoreError(w, r, err)
 		return hostTunnelResponse{}, false
 	}

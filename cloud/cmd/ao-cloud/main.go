@@ -523,13 +523,20 @@ func run(logger *slog.Logger) error {
 			AccountID: cfg.HostTunnelAccountID, ZoneID: cfg.HostTunnelZoneID,
 			Zone: cfg.HostTunnelZone, APIToken: cfg.HostTunnelAPIToken,
 		}
-		// Not fatal: machines fall back to quick tunnels while Cloudflare is
-		// unreachable, and a wrong zone is logged loudly here.
-		if err := hostTunnels.Verify(ctx); err != nil {
-			logger.Error("host tunnel zone check failed", "zone", cfg.HostTunnelZone, "error", err)
+		// A wrong zone turns fixed addresses off: its tunnels would register and
+		// look healthy while the edge refuses every request. An unreachable
+		// Cloudflare is not fatal; machines fall back to quick tunnels meanwhile.
+		switch err := hostTunnels.Verify(ctx); {
+		case errors.Is(err, hosttunnel.ErrWrongZone):
+			logger.Error("fixed machine addresses disabled: wrong zone", "zone", cfg.HostTunnelZone, "error", err)
+			hostTunnels = nil
+		case err != nil:
+			logger.Warn("host tunnel zone check failed", "zone", cfg.HostTunnelZone, "error", err)
 		}
-		logger.Info("fixed machine addresses enabled", "zone", cfg.HostTunnelZone)
-		go hosttunnel.RunSweeper(ctx, store, hostTunnels, hosttunnel.DefaultSweepInterval, logger)
+		if hostTunnels != nil {
+			logger.Info("fixed machine addresses enabled", "zone", cfg.HostTunnelZone)
+			go hosttunnel.RunSweeper(ctx, store, hostTunnels, hosttunnel.DefaultSweepInterval, logger)
+		}
 	}
 	var artifactShares *httpapi.ArtifactShareOptions
 	if cfg.ArtifactSharesEnabled {

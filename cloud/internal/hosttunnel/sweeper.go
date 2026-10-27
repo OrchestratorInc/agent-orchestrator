@@ -163,6 +163,22 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 			}
 			continue
 		}
+		// A tunnel made under a record kept from an earlier one belongs to a
+		// machine that did run: it loses the tunnel and keeps its address.
+		if row.CreatedAt.Before(row.UpdatedAt) {
+			if released, err := cf.Release(ctx, id); err != nil || !released {
+				if err != nil {
+					fail(err)
+				}
+				continue
+			}
+			if err := store.ReleaseRemoteHostTunnel(ctx, id); err != nil {
+				fail(err)
+				continue
+			}
+			done++
+			continue
+		}
 		if err := cf.Delete(ctx, id, row.Hostname); err != nil {
 			fail(err)
 			continue

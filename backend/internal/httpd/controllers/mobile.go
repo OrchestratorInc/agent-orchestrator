@@ -474,6 +474,9 @@ func (b *BridgeService) tunnelEndpoint() *mobilebridge.TunnelEndpoint {
 	return t.Endpoint()
 }
 
+// TunnelStatus is the connector's status, as Status reports it.
+func (b *BridgeService) TunnelStatus() mobilebridge.TunnelStatus { return b.tunnelStatus() }
+
 func (b *BridgeService) tunnelStatus() mobilebridge.TunnelStatus {
 	b.awaitBootTunnel()
 	t := b.tunnel()

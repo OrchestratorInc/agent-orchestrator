@@ -3,6 +3,7 @@ package hosttunnel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -27,6 +28,7 @@ type fakeCloudflare struct {
 	configSrc string
 	records   map[string]fakeRecord // by name
 	live      bool                  // tunnels refuse deletion until connections are dropped
+	noToken   bool                  // run token reads fail
 }
 
 type fakeTunnel struct {
@@ -129,6 +131,10 @@ func (f *fakeCloudflare) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		switch {
 		case r.Method == http.MethodGet && sub == "token":
+			if f.noToken {
+				fail(http.StatusInternalServerError, 1000, "internal error")
+				return
+			}
 			result = "run-token-" + id
 		case r.Method == http.MethodGet && sub == "":
 			result = map[string]any{"id": id, "status": t.status, "created_at": "2026-01-01T00:00:00Z", "conns_inactive_at": t.inactive}
@@ -250,8 +256,40 @@ func TestVerifyRejectsAnotherZone(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Zone = "other.dev"
-	if err := c.Verify(context.Background()); err == nil {
-		t.Fatal("wrong zone name passed")
+	if err := c.Verify(context.Background()); !errors.Is(err, ErrWrongZone) {
+		t.Fatalf("wrong zone name = %v, want ErrWrongZone", err)
+	}
+	// Cloudflare not answering is not a wrong zone.
+	c.Zone, c.ZoneID = "example.dev", "missing"
+	if err := c.Verify(context.Background()); err == nil || errors.Is(err, ErrWrongZone) {
+		t.Fatalf("unreadable zone = %v", err)
+	}
+}
+
+// A call that fails partway leaves nothing behind: no row would name it, so
+// the sweep would never delete it.
+func TestEnsureUndoesWhatAFailedCallMade(t *testing.T) {
+	cf, c := newFakeCloudflare(t)
+	ctx := context.Background()
+	cf.noToken = true
+	if _, err := c.Ensure(ctx, userID, hostID); err == nil {
+		t.Fatal("ensure without a run token succeeded")
+	}
+	if len(cf.tunnels) != 0 || len(cf.records) != 0 {
+		t.Fatalf("left tunnels=%v records=%v", cf.tunnels, cf.records)
+	}
+	// What it found is left alone.
+	cf.noToken = false
+	kept, err := c.Ensure(ctx, userID, hostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cf.noToken = true
+	if _, err := c.Ensure(ctx, userID, hostID); err == nil {
+		t.Fatal("ensure without a run token succeeded")
+	}
+	if _, ok := cf.tunnels[kept.ID]; !ok || cf.records[kept.Hostname].content != kept.ID+".cfargotunnel.com" {
+		t.Fatalf("a failed call removed a found tunnel or record: %v %v", cf.tunnels, cf.records)
 	}
 }
 
@@ -392,14 +430,23 @@ func TestSweepDeletesTunnelsNoConnectorEverServed(t *testing.T) {
 	}
 	rows["newer"] = domain.RemoteHostTunnel{HostID: "h_replaced", TunnelID: "newer", Hostname: "h-replaced.example.dev"}
 	cf.records["h-unused.example.dev"] = fakeRecord{id: "rec-unused", content: "unused.cfargotunnel.com", proxied: true}
+	// Made under a record kept from the machine's earlier tunnel: the machine
+	// ran before, so only the tunnel goes.
+	cf.tunnels["remade"] = fakeTunnel{name: "ao-h_remade", status: "inactive", created: old}
+	rows["remade"] = domain.RemoteHostTunnel{HostID: "h_remade", TunnelID: "remade", Hostname: "h-remade.example.dev",
+		CreatedAt: now.Add(-30 * 24 * time.Hour), UpdatedAt: old}
+	cf.records["h-remade.example.dev"] = fakeRecord{id: "rec-remade", content: "remade.cfargotunnel.com", proxied: true}
 	store := &fakeSweepStore{rows: rows}
 
 	deleted, err := Sweep(context.Background(), store, c, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted != 106 || len(store.deleted) != 106 {
-		t.Fatalf("deleted %d: %v", deleted, store.deleted)
+	if deleted != 107 || len(store.deleted) != 106 || !slices.Equal(store.released, []string{"remade"}) {
+		t.Fatalf("done %d, deleted %v, released %v", deleted, store.deleted, store.released)
+	}
+	if _, ok := cf.tunnels["remade"]; ok || cf.records["h-remade.example.dev"].id == "" {
+		t.Fatal("a remade tunnel was kept, or its address was not")
 	}
 	for _, kept := range []string{"young", "foreign", "replaced", "ran", "other"} {
 		if _, ok := cf.tunnels[kept]; !ok {
