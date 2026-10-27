@@ -59,11 +59,10 @@ describe("session header controls", () => {
 		expect(session).toContain("files: filesNavigation.openChanges");
 	});
 
-	// From a pushed page, navigating to a tab pushed a second board on top. A
-	// host/project filter written to the board's own tab would hide its project
-	// switcher until another tab is chosen, so the tab is reached unfiltered.
-	it("returns to the board's PR tab instead of stacking another board", () => {
-		expect(session).toContain('else router.dismissTo("/prs");');
+	// Pull Requests is a page of its own, opened over the session so back
+	// returns to it.
+	it("opens the Pull Requests page over the session for several PRs", () => {
+		expect(session).toContain('else openPage("/prs");');
 		expect(session).not.toContain("/(tabs)/prs");
 		expect(session).not.toMatch(/dismissTo\(\{\s*pathname: "\/prs"/);
 	});

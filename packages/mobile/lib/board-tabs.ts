@@ -11,7 +11,6 @@ import type { DashboardSession } from "./api";
 export const boardTabs = [
 	{ name: "(workers)", title: "Workers", href: "/" },
 	{ name: "(projects)", title: "Projects", href: "/projects" },
-	{ name: "(prs)", title: "Pull Requests", href: "/prs" },
 ] as const;
 
 export type BoardTab = (typeof boardTabs)[number];

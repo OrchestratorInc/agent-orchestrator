@@ -44,7 +44,6 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { usePressFeedback } from "../../lib/pressFeedback";
 import { refreshControlColors } from "../../lib/refreshControlColors";
-import { TabPageScroll } from "../../lib/TabPageScroll";
 import { toolbarIcon } from "../../lib/toolbarIcon";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { iconSize, radius, space, stateOpacity, type } from "../../lib/tokens";
@@ -309,9 +308,9 @@ function NotificationsContent() {
 		// while it is up would open inside it.
 		if (action.kind === "open") openPage({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: notification.hostId } });
 		else if (action.kind === "review") openPage(notificationTarget(notification, knownHostIds) as Href);
-		// Back to the board's own PRs tab: navigating from this pushed page would
-		// stack a second board on top of it.
-		else if (action.kind === "prs") router.dismissTo({ pathname: "/prs", params: { hostId: notification.hostId } });
+		// Pull Requests is a sheet of its own on iOS, so this one closes first
+		// rather than presenting the second inside it.
+		else if (action.kind === "prs") openPage({ pathname: "/prs", params: { hostId: notification.hostId } });
 		else if (action.kind === "restore") {
 			haptics.warning();
 			notify("This session is terminated. Tap restore to bring it back.");
@@ -463,93 +462,93 @@ function NotificationsContent() {
 		// wrongly and the page shows blank under its bar.
 		<View style={styles.screen} collapsable={false}>
 			{headerItems}
-			{/* The list, or the scroll view standing in for it, is the page's first
-			    view: on iOS 26 the clear bar blurs it as it scrolls under. */}
-			{loading ? (
-				<TabPageScroll>
-					<View style={styles.center}>
-						<ActivityIndicator color={t.accent} />
-					</View>
-				</TabPageScroll>
-			) : (
-				<SectionList
-					sections={sections}
-					keyExtractor={(item) => notificationIdentity(item.hostId, item.id)}
-					contentInsetAdjustmentBehavior="automatic"
-					contentContainerStyle={
-						items.length === 0
-							? { flexGrow: 1 }
-							: { paddingBottom: insets.bottom + 24 }
-					}
-					stickySectionHeadersEnabled={false}
-					refreshControl={
-						<RefreshControl
-							refreshing={refreshing}
-							// The refresh control gives each platform's own feedback.
-							onRefresh={() => void load("refresh")}
-							{...refreshControlColors(t)}
+			{/* The list is the page's first view: on iOS 26 the clear bar blurs it
+			    as it scrolls under. It is the only scroll view the page ever has,
+			    the first load included. Swapping a stand-in scroll view for it
+			    while the sheet came up left iOS 26's floating bar over the sheet
+			    taking every touch, so neither the close button nor the list
+			    responded. */}
+			<SectionList
+				sections={sections}
+				keyExtractor={(item) => notificationIdentity(item.hostId, item.id)}
+				contentInsetAdjustmentBehavior="automatic"
+				contentContainerStyle={
+					items.length === 0
+						? { flexGrow: 1 }
+						: { paddingBottom: insets.bottom + 24 }
+				}
+				stickySectionHeadersEnabled={false}
+				refreshControl={
+					<RefreshControl
+						refreshing={refreshing}
+						// The refresh control gives each platform's own feedback.
+						onRefresh={() => void load("refresh")}
+						{...refreshControlColors(t)}
+					/>
+				}
+				onEndReached={() => { if (hasMore) void load("more"); }}
+				onEndReachedThreshold={0.4}
+				ListHeaderComponent={
+					unavailableFeeds.length > 0 && items.length > 0 ? (
+						<View style={styles.inlineError}>
+							<AppSymbol name="offline" size={iconSize.sm} color={t.textSecondary} />
+							<Text style={styles.inlineErrorText}>
+								{unavailableFeeds.length === hostStates.length
+									? `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} offline. Showing previously loaded activity.`
+									: `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} unavailable. Showing activity from the available machines.`}
+							</Text>
+						</View>
+					) : null
+				}
+				renderSectionHeader={({ section }) => (
+					section.title
+						? <ListSectionHeader label={section.title} count={section.data.length} />
+						: null
+				)}
+				renderItem={({ item }) => (
+					<NotificationRow
+						item={item}
+						highlighted={highlightedIds.has(notificationIdentity(item.hostId, item.id))}
+						now={now}
+						action={notificationAction(item, sessionState(item.hostId, item.sessionId)).kind}
+						restoring={restoringId === notificationIdentity(item.hostId, item.sessionId)}
+						onPress={() => open(item)}
+						onRestore={() => item.sessionId && restoreSession(item.hostId, item.sessionId)}
+						onClear={() => clear(item)}
+					/>
+				)}
+				ListFooterComponent={
+					loadingMore ? (
+						<View style={styles.footer}>
+							<ActivityIndicator color={t.accent} />
+						</View>
+					) : null
+				}
+				ListEmptyComponent={
+					loading ? (
+						<View style={styles.center}>
+							<ActivityIndicator color={t.accent} />
+						</View>
+					) : hostStates.length > 0 && unavailableFeeds.length === hostStates.length ? (
+						<EmptyState
+							icon="wifi-off"
+							title="Machines are offline"
+							message="Notifications will appear when at least one paired machine reconnects."
+							action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}
 						/>
-					}
-					onEndReached={() => { if (hasMore) void load("more"); }}
-					onEndReachedThreshold={0.4}
-					ListHeaderComponent={
-						unavailableFeeds.length > 0 && items.length > 0 ? (
-							<View style={styles.inlineError}>
-								<AppSymbol name="offline" size={iconSize.sm} color={t.textSecondary} />
-								<Text style={styles.inlineErrorText}>
-									{unavailableFeeds.length === hostStates.length
-										? `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} offline. Showing previously loaded activity.`
-										: `${unavailableFeeds.map((feed) => feed.hostName).join(", ")} ${unavailableFeeds.length === 1 ? "is" : "are"} unavailable. Showing activity from the available machines.`}
-								</Text>
-							</View>
-						) : null
-					}
-					renderSectionHeader={({ section }) => (
-						section.title
-							? <ListSectionHeader label={section.title} count={section.data.length} />
-							: null
-					)}
-					renderItem={({ item }) => (
-						<NotificationRow
-							item={item}
-							highlighted={highlightedIds.has(notificationIdentity(item.hostId, item.id))}
-							now={now}
-							action={notificationAction(item, sessionState(item.hostId, item.sessionId)).kind}
-							restoring={restoringId === notificationIdentity(item.hostId, item.sessionId)}
-							onPress={() => open(item)}
-							onRestore={() => item.sessionId && restoreSession(item.hostId, item.sessionId)}
-							onClear={() => clear(item)}
+					) : hostStates.length === 0 ? (
+						// Shared with the tabs: "Connecting…" while the launch race runs,
+						// the pairing prompt only once it has found no machine.
+						<UnpairedState />
+					) : (
+						<EmptyState
+							icon="check-circle"
+							title="All caught up"
+							message="Updates from workers and pull requests across your machines will appear here when they need you."
 						/>
-					)}
-					ListFooterComponent={
-						loadingMore ? (
-							<View style={styles.footer}>
-								<ActivityIndicator color={t.accent} />
-							</View>
-						) : null
-					}
-					ListEmptyComponent={
-						hostStates.length > 0 && unavailableFeeds.length === hostStates.length ? (
-							<EmptyState
-								icon="wifi-off"
-								title="Machines are offline"
-								message="Notifications will appear when at least one paired machine reconnects."
-								action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}
-							/>
-						) : hostStates.length === 0 ? (
-							// Shared with the tabs: "Connecting…" while the launch race runs,
-							// the pairing prompt only once it has found no machine.
-							<UnpairedState />
-						) : (
-							<EmptyState
-								icon="check-circle"
-								title="All caught up"
-								message="Updates from workers and pull requests across your machines will appear here when they need you."
-							/>
-						)
-					}
-				/>
-			)}
+					)
+				}
+			/>
 
 			{/* Sits above the list rather than replacing it: the row that prompted
 			    this is still on screen and still has a restore button to press. */}

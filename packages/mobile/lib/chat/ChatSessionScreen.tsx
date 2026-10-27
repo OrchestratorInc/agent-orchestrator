@@ -495,11 +495,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				? reviewRouteForSession(session, currentHostId)
 				: undefined;
 			if (route) openPage(route);
-			// The board is already under this page: going back to it, rather than
-			// pushing a second board on top. Unfiltered, because a scope written to
-			// the board's own tab hides its project switcher for the rest of the
-			// visit, with nothing on the page to clear it.
-			else router.dismissTo("/prs");
+			// Several PRs open Pull Requests over this page, so closing it
+			// returns here.
+			else openPage("/prs");
 		},
 		map: () => {
 			const snapshot = latestSnapshot.current;

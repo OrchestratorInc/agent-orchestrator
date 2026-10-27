@@ -14,8 +14,8 @@ describe("opening pages outside sheets", () => {
 
 	// Android pushes Settings as a page with its own top app bar, so a page
 	// opened from it is pushed on top instead of dismissing Settings first.
-	it("treats Settings and Notifications as presented on iOS only", () => {
-		for (const name of ["settings", "notifications"]) {
+	it("treats Settings, Notifications and Pull Requests as presented on iOS only", () => {
+		for (const name of ["settings", "notifications", "prs"]) {
 			expect(isPresentedRoute(name, "ios")).toBe(true);
 			expect(isPresentedRoute(name, "android")).toBe(false);
 		}

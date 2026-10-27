@@ -1,4 +1,4 @@
-import { Stack, useFocusEffect, useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import { AddFab, addFabClearance } from "../../../lib/AddFab";
@@ -50,7 +50,6 @@ export default function FleetScreen() {
 		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
 		: notificationsUnread;
 	const [refreshing, setRefreshing] = useState(false);
-	const [query, setQuery] = useState("");
 	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
 	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
@@ -67,11 +66,6 @@ export default function FleetScreen() {
 		() => workerProjectOptions(allProjects, workerEnvironmentId),
 		[allProjects, workerEnvironmentId],
 	);
-	// Stable identities so the memoised header items are not rebuilt on every
-	// poll — a re-render mid-tap is what made the filter menu open only sometimes.
-	// The search bar's handlers register header options the same way.
-	const searchChanged = useCallback((event: { nativeEvent: { text: string } }) => setQuery(event.nativeEvent.text), []);
-	const searchClosed = useCallback(() => setQuery(""), []);
 	// The machine the app reaches first, as a value: hostStates itself is new on
 	// every poll, and the spawn action is a header item.
 	const openHostId = hostStates.find((host) => host.connection === "open")?.hostId;
@@ -106,7 +100,7 @@ export default function FleetScreen() {
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- archiveSourcesKey covers every field read here
 	}, [archiveSourcesKey]);
-	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;
+	const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;
 	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
 	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
 	const selectedHost = hostStates.find((host) => host.hostId === workerEnvironmentId);
@@ -190,7 +184,6 @@ export default function FleetScreen() {
 				key={boardIdentityKey}
 				sessions={projectSessions}
 				archiveSources={archiveSources}
-				query={query}
 				identityKey={boardIdentityKey}
 				listRef={listRef}
 				// iOS insets the list by the tab bar already; Android pads it clear
@@ -215,8 +208,6 @@ export default function FleetScreen() {
 							onSelectEnvironment={selectEnvironment}
 							onRetry={onRefresh}
 						/>
-					) : query.trim() ? (
-						<EmptyState icon="search" title="No workers found" message={`No workers match “${query.trim()}”.`} />
 					) : fleetError ? (
 						<EmptyState
 							icon={hostStates.length > 1 ? "unplug" : failure.icon}
@@ -256,30 +247,12 @@ export default function FleetScreen() {
 			/>
 
 			{unpaired ? (
-				// Settings is where pairing starts; there is nothing yet to search,
-				// filter or spawn.
+				// Settings is where pairing starts; there is nothing yet to filter
+				// or spawn.
 				<BoardHeaderItems unread={0} notifications={false} />
 			) : (
 				<>
 					<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />
-					{/* The header's own search: UISearchController under the large title on
-					    iOS, the top app bar's search action on Android. Filtering stays in
-					    place on the board, so the content is not dimmed behind it. */}
-					<Stack.SearchBar
-						placeholder="Search workers"
-						// Under the large title on every iOS version, rather than iOS 26's
-						// toolbar slot, which this tab bar would have to share.
-						placement="stacked"
-						obscureBackground={false}
-						autoCapitalize="none"
-						tintColor={t.highlight}
-						textColor={t.textPrimary}
-						hintTextColor={t.textTertiary}
-						headerIconColor={t.accent}
-						onChangeText={searchChanged}
-						onCancelButtonPress={searchClosed}
-						onClose={searchClosed}
-					/>
 					{/* New task is the tab bar's own round button on iOS and the
 					    floating New button on Android; the header keeps settings and
 					    alerts. */}

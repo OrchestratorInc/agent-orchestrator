@@ -153,12 +153,32 @@ export function SpawnComposerControls({
 
 				</VStack>
 
-				{/* The composer's own line: who runs the task at the start, then
-				    attach and the one round button that sends it, side by side. The
-				    harness's mark and the model it runs (the harness's name only when
-				    the catalog names no default); each agent in its menu opens one
-				    level down onto its models. */}
+				{/* The composer's own line, as the chat composer's: attach at the
+				    start beside who runs the task, and the one round button that
+				    sends it at the end. The harness's mark and the model it runs
+				    (the harness's name only when the catalog names no default);
+				    each agent in its menu opens one level down onto its models. */}
 				<HStack spacing={space.sm}>
+					<Menu
+						label={
+							<Image
+								systemName="paperclip"
+								modifiers={[
+									font({ textStyle: "body", weight: "medium" }),
+									foregroundStyle(t.textPrimary),
+									frame({ width: ACTION_HEIGHT, height: ACTION_HEIGHT }),
+									backgroundOverlay({ color: t.bgElevated }),
+									clipShape("circle"),
+									contentShape(shapes.rectangle()),
+								]}
+							/>
+						}
+						modifiers={[buttonStyle("plain"), menuOrder("fixed"), disabledModifier(busy), accessibilityLabel("Attach"), accessibilityIdentifier("spawn-attachment")]}
+					>
+						<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />
+						<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
+					</Menu>
+
 					<Menu
 						label={
 							// Enclosed, as the circles beside it are: one capsule of
@@ -203,27 +223,6 @@ export function SpawnComposerControls({
 					</Menu>
 
 					<Spacer minLength={0} />
-
-					<Menu
-						label={
-							<Image
-								systemName="paperclip"
-								modifiers={[
-									font({ textStyle: "body", weight: "medium" }),
-									foregroundStyle(t.textPrimary),
-									frame({ width: ACTION_HEIGHT, height: ACTION_HEIGHT }),
-									backgroundOverlay({ color: t.bgElevated }),
-									clipShape("circle"),
-									contentShape(shapes.rectangle()),
-								]}
-							/>
-						}
-						modifiers={[buttonStyle("plain"), menuOrder("fixed"), disabledModifier(busy), accessibilityLabel("Attach"), accessibilityIdentifier("spawn-attachment")]}
-					>
-						<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />
-						<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />
-					</Menu>
-
 
 					{/* One round button that follows the prompt: with text it starts the
 					    task, with none it dictates, and while the mic is open it stops,

@@ -25,13 +25,23 @@ export function orchestratorState(link: OrchestratorLink | null | undefined): Or
 	return "running";
 }
 
+/**
+ * A live orchestrator session whose agent process has gone: a quit, a usage
+ * limit, or every agent after the daemon restarts. The session is intact and
+ * opening it resumes the agent, so it stays "running" for launching, but it is
+ * not coordinating anything and must not read as though it were.
+ */
+export function orchestratorAgentExited(link: OrchestratorLink | null | undefined): boolean {
+	return orchestratorState(link) === "running" && link?.status === "exited";
+}
+
 export function orchestratorStatus(
 	t: Theme,
 	link: OrchestratorLink | null | undefined,
 ): { label: string; color: string; breathing: boolean } {
 	const state = orchestratorState(link);
 	if (state === "missing") return { label: "Not started", color: t.textFaint, breathing: false };
-	if (state === "stopped") return { label: "Stopped", color: t.textTertiary, breathing: false };
+	if (state === "stopped" || orchestratorAgentExited(link)) return { label: "Stopped", color: t.textTertiary, breathing: false };
 	// `no_signal` describes missing activity telemetry, not a dead runtime. The
 	// project row already knows this orchestrator is live from its runtime facts,
 	// so presenting it as anything other than online is misleading.
@@ -252,14 +262,46 @@ export function projectRowChips(row: OrchestratorProjectRow): ProjectRowChip[] {
  * and the typography — and so the test can assert on the worker rather than on
  * punctuation.
  */
-export type ProjectBlocker = { worker: string; reason: string; age: string };
+type BlockerZone = "respond" | "action" | "review" | "merge";
+/**
+ * `status` is the session status the reason stands for, so the row tints it as
+ * the worker's own row on the Workers tab does.
+ */
+export type ProjectBlocker = { worker: string; reason: string; age: string; status: string };
 
-const BLOCKER_REASON: Record<string, string> = {
-	respond: "waiting on your reply",
-	action: "waiting on your approval",
-	review: "checks failing",
-	merge: "ready to merge",
-};
+const BLOCKER_ZONES: ReadonlySet<string> = new Set<BlockerZone>(["respond", "action", "review", "merge"]);
+
+function blockerZone(worker: DashboardSession): BlockerZone | null {
+	const zone = attentionOf(worker);
+	return BLOCKER_ZONES.has(zone) ? (zone as BlockerZone) : null;
+}
+
+/**
+ * Why the worker is blocked, in the words its own row uses. A zone gathers
+ * several causes — review holds failing checks, requested changes and open
+ * comments alike — so naming the zone alone told a worker with requested
+ * changes that its checks were failing.
+ */
+function blockerCause(worker: DashboardSession, zone: BlockerZone): { reason: string; status: string } {
+	const pr = worker.pr ?? worker.prs?.[0];
+	switch (zone) {
+		case "respond":
+			if (worker.status === "errored") return { reason: "Crashed", status: "errored" };
+			if (worker.status === "stuck") return { reason: "Stuck", status: "stuck" };
+			return { reason: "Waiting on your reply", status: "needs_input" };
+		case "action":
+			return { reason: "Waiting on your approval", status: "needs_input" };
+		case "merge":
+			return { reason: "Ready to merge", status: "mergeable" };
+		case "review":
+			if (worker.status === "ci_failed") return { reason: "Checks failing", status: "ci_failed" };
+			if (worker.status === "changes_requested") return { reason: "Changes requested", status: "changes_requested" };
+			if (worker.status === "commented") return { reason: "Unresolved comments", status: "commented" };
+			if (pr?.ciStatus === "failing") return { reason: "Checks failing", status: "ci_failed" };
+			if (pr?.reviewDecision === "changes_requested") return { reason: "Changes requested", status: "changes_requested" };
+			return { reason: "Needs review", status: "changes_requested" };
+	}
+}
 
 export function projectBlockerLine(
 	row: OrchestratorProjectRow,
@@ -269,15 +311,16 @@ export function projectBlockerLine(
 
 	// Oldest first: the thing that has been blocked longest is the thing to name.
 	const blocked = row.workers
-		.filter((worker) => BLOCKER_REASON[attentionOf(worker)])
+		.filter((worker) => blockerZone(worker))
 		.sort((a, b) => (a.lastActivityAt ?? "").localeCompare(b.lastActivityAt ?? ""));
 
 	const worker = blocked[0];
-	if (!worker) return null;
+	const zone = worker ? blockerZone(worker) : null;
+	if (!worker || !zone) return null;
 
 	return {
 		worker: sessionTitle(worker),
-		reason: BLOCKER_REASON[attentionOf(worker)] ?? "needs attention",
+		...blockerCause(worker, zone),
 		age: worker.lastActivityAt ? relativeTime(worker.lastActivityAt, now) : "",
 	};
 }
@@ -341,8 +384,9 @@ export function orchestratorProjectSections(
 		const sessionUrgency = workerUrgency(zones);
 		const urgency = Math.min(linkUrgency ?? Number.POSITIVE_INFINITY, sessionUrgency ?? Number.POSITIVE_INFINITY);
 		const hasAttention = Number.isFinite(urgency);
+		// Workers waiting on you outrank an exited agent, which only needs opening.
 		const section: OrchestratorProjectSectionKey =
-			state !== "running" ? "not-running" : hasAttention ? "attention" : "coordinating";
+			state !== "running" ? "not-running" : hasAttention ? "attention" : orchestratorAgentExited(link) ? "not-running" : "coordinating";
 		const action: OrchestratorProjectAction = state === "running" ? "open" : state === "stopped" ? "resume" : "start";
 		const activityAt = latestTimestamp([link?.updatedAt, ...workers.map((worker) => worker.lastActivityAt)]);
 
@@ -425,8 +469,12 @@ export function orchestratorButtonCopy(row: OrchestratorProjectRow, busy: boolea
 		const label = row.action === "resume" ? "Resuming…" : "Starting…";
 		return { label, short: label, running: false };
 	}
+	// Still opened rather than relaunched: the session screen resumes its agent.
+	if (row.action === "open" && orchestratorAgentExited(row.link)) {
+		return { label: "Resume orchestrator", short: "Resume", running: false };
+	}
 	switch (row.action) {
-		case "open": return { label: "Open orchestrator", short: "Orchestrator", running: true };
+		case "open": return { label: "Open orchestrator", short: "Open", running: true };
 		case "resume": return { label: "Resume orchestrator", short: "Resume", running: false };
 		case "start": return { label: "Start orchestrator", short: "Start", running: false };
 	}

@@ -9,7 +9,6 @@ describe("board tabs", () => {
 		expect(boardTabs.map(({ name, href }) => [name, href])).toEqual([
 			["(workers)", "/"],
 			["(projects)", "/projects"],
-			["(prs)", "/prs"],
 		]);
 	});
 
@@ -17,7 +16,6 @@ describe("board tabs", () => {
 		[undefined, "Workers"],
 		["(workers)", "Workers"],
 		["(projects)", "Projects"],
-		["(prs)", "Pull Requests"],
 	])("names the board after its %s tab", (tab, expected) => {
 		expect(boardTitle(tab)).toBe(expected);
 	});

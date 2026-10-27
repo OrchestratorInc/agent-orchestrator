@@ -9,7 +9,7 @@ import {
 	type ProjectPageStats,
 	type OrchestratorProjectRow,
 } from "./orchestratorView";
-import type { Theme } from "./theme";
+import { statusVisual, type Theme } from "./theme";
 import type { HostedProjectRow } from "./hostedRows";
 import type { HostSnapshot } from "./otherHosts";
 import { rowDividerWidth } from "./divider";
@@ -35,15 +35,21 @@ const PILL_HIT_SLOP = { top: (touchTarget - PILL_HEIGHT) / 2, bottom: (touchTarg
  * carries a compact pill that opens, starts or resumes the orchestrator. The
  * pill is the only filled control on the row, so it outranks the counts without
  * dominating the name.
+ *
+ * The name has the body's full width; everything else is one quiet line under
+ * it, plus the blocker on a row that needs attention.
  */
 export function ProjectCard({
 	row,
 	busy,
+	showMachine = true,
 	onOpenProject,
 	onOrchestrator,
 }: {
 	row: HostedProjectRow;
 	busy: boolean;
+	/** Off when one machine is paired: it would repeat the same name on every row. */
+	showMachine?: boolean;
 	onOpenProject: (row: OrchestratorProjectRow) => void;
 	onOrchestrator: (row: OrchestratorProjectRow) => void;
 }) {
@@ -52,50 +58,60 @@ export function ProjectCard({
 	const status = orchestratorStatus(t, row.link);
 	const summary = projectCardSummary(row);
 	const blocker = projectBlockerLine(row);
-
+	const blockerColor = blocker ? statusVisual(t, blocker.status).color : undefined;
 	return (
 		<TrailingActionRow
 			style={styles.row}
 			bodyStyle={styles.body}
-			accessibilityLabel={`${row.project.name}, ${row.project.hostName} machine, ${status.label}, ${summary.workers}`}
+			accessibilityLabel={[
+				row.project.name,
+				showMachine ? `${row.project.hostName} machine` : null,
+				`orchestrator ${status.label}`,
+				summary.workers,
+				blocker ? `${blocker.reason}: ${blocker.worker}` : null,
+			].filter(Boolean).join(", ")}
 			accessibilityHint="Opens the project"
 			onPress={() => onOpenProject(row)}
 			trailing={<OrchestratorPill row={row} busy={busy} onPress={onOrchestrator} />}
+			footer={blocker ? (
+				// Under the pill rather than beside it, so the worker's name has the
+				// row's width. The reason comes first, in the colour the worker's own
+				// row gives it, so it survives the ellipsis; the name is what gives way.
+				<View style={styles.blockerRow}>
+					<Text style={[styles.blockerReason, { color: blockerColor }]} numberOfLines={1}>
+						{blocker.reason}
+					</Text>
+					<Text style={styles.blockerWorker} numberOfLines={1}>
+						{` · ${blocker.worker}`}
+					</Text>
+					{blocker.age ? (
+						<Text style={styles.blocker} numberOfLines={1}>
+							{` · ${blocker.age}`}
+						</Text>
+					) : null}
+				</View>
+			) : undefined}
 		>
 			<Text style={styles.project} numberOfLines={1}>
 				{row.project.name}
 			</Text>
 
+			{/* The orchestrator's state, the fleet's size, and where it runs. */}
 			<View style={styles.summaryRow}>
 				<Dot color={status.color} size={6} breathing={status.breathing} />
 				<Text style={[styles.summaryStrong, styles.statusLabel, { color: status.color }]} numberOfLines={1}>
 					{status.label}
 				</Text>
-			</View>
-
-			{blocker ? (
-				// Two texts so the ellipsis lands on the worker name, not the age.
-				<View style={styles.blockerRow}>
-					<Text style={styles.blockerWorker} numberOfLines={1}>
-						{blocker.worker}
-					</Text>
-					<Text style={styles.blocker} numberOfLines={1}>
-						{` · ${blocker.reason}`}
-						{blocker.age ? ` · ${blocker.age}` : ""}
-					</Text>
-				</View>
-			) : null}
-
-			{/* The worker row's metadata line: the count, and the machine at its end. */}
-			<View style={styles.footerRow}>
-				<Text style={styles.footerLabel} numberOfLines={1}>
-					{summary.workers}
+				<Text style={styles.summary} numberOfLines={1}>
+					{` · ${summary.workers}`}
 				</Text>
-				<MachineIdentity
-					name={row.project.hostName}
-					appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
-					style={styles.machineIdentity}
-				/>
+				{showMachine ? (
+					<MachineIdentity
+						name={row.project.hostName}
+						appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
+						style={styles.machineIdentity}
+					/>
+				) : null}
 			</View>
 		</TrailingActionRow>
 	);
@@ -109,6 +125,9 @@ export function ProjectCard({
  *
  * iOS highlights the whole row while the body is held, as a table cell
  * highlights under its accessory; Android ripples where the finger is.
+ *
+ * A footer runs the row's full width under both. It presses as the body does
+ * but is hidden from a screen reader, whose body label already reads it out.
  */
 function TrailingActionRow({
 	style,
@@ -118,6 +137,7 @@ function TrailingActionRow({
 	disabled,
 	onPress,
 	trailing,
+	footer,
 	children,
 }: {
 	style: StyleProp<ViewStyle>;
@@ -127,11 +147,15 @@ function TrailingActionRow({
 	disabled?: boolean;
 	onPress: () => void;
 	trailing: ReactNode;
+	footer?: ReactNode;
 	children: ReactNode;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("row");
 	const [pressed, setPressed] = useState(false);
+	// Only iOS draws a pressed style; Android's ripple needs no re-render.
+	const onPressIn = feedback.pressed ? () => setPressed(true) : undefined;
+	const onPressOut = feedback.pressed ? () => setPressed(false) : undefined;
 	return (
 		<View style={[style, pressed && feedback.pressed]}>
 			<View style={styles.trailingRow}>
@@ -143,15 +167,31 @@ function TrailingActionRow({
 					disabled={disabled}
 					android_ripple={feedback.android_ripple}
 					onPress={onPress}
-					// Only iOS draws a pressed style; Android's ripple needs no re-render.
-					onPressIn={feedback.pressed ? () => setPressed(true) : undefined}
-					onPressOut={feedback.pressed ? () => setPressed(false) : undefined}
-					style={[styles.trailingBody, bodyStyle]}
+					onPressIn={onPressIn}
+					onPressOut={onPressOut}
+					style={[styles.trailingBody, bodyStyle, footer ? styles.bodyAboveFooter : null]}
 				>
 					{children}
 				</Pressable>
-				<View style={styles.trailingSlot}>{trailing}</View>
+				{/* Moved down by what the body gave up, so the pill stays level with
+				    the same two lines on every row. */}
+				<View style={[styles.trailingSlot, footer ? styles.slotAboveFooter : null]}>{trailing}</View>
 			</View>
+			{footer ? (
+				<Pressable
+					accessible={false}
+					accessibilityElementsHidden
+					importantForAccessibility="no-hide-descendants"
+					disabled={disabled}
+					android_ripple={feedback.android_ripple}
+					onPress={onPress}
+					onPressIn={onPressIn}
+					onPressOut={onPressOut}
+					style={styles.footer}
+				>
+					{footer}
+				</Pressable>
+			) : null}
 			<View style={styles.divider} />
 		</View>
 	);
@@ -290,16 +330,21 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		// A flat row like a worker row: no card, just the inset divider.
 		row: { backgroundColor: t.bgBase },
-		body: { paddingLeft: space.lg, paddingVertical: space.sm + space.hair, gap: space.hair },
+		body: { paddingLeft: space.lg, paddingVertical: space.md, gap: space.hair },
+		bodyAboveFooter: { paddingBottom: space.hair },
+		slotAboveFooter: { paddingTop: space.md - space.hair },
+		footer: { paddingHorizontal: space.lg, paddingBottom: space.md },
 		trailingRow: { flexDirection: "row", alignItems: "stretch" },
 		trailingBody: { flex: 1, minWidth: 0, justifyContent: "center" },
 		// Centred on the row whatever its height, and never narrower than its pill.
 		trailingSlot: { flexShrink: 0, justifyContent: "center", paddingLeft: space.md, paddingRight: space.lg },
 		// Inset to the text, as a worker row's is.
-		divider: { marginLeft: space.lg, height: rowDividerWidth, backgroundColor: t.borderDefault },
+		divider: { marginLeft: space.lg, height: rowDividerWidth, backgroundColor: t.borderSubtle },
 
-		project: { fontFamily: type.headline.fontFamily, color: t.textPrimary, fontSize: type.headline.fontSize, lineHeight: type.headline.lineHeight, fontWeight: type.headline.fontWeight },
-		machineIdentity: { maxWidth: "55%", marginLeft: "auto" },
+		project: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
+		// Pushed to the line's end, as on a worker row, and the first thing to
+		// give way when the line runs out.
+		machineIdentity: { marginLeft: "auto", paddingLeft: space.sm, maxWidth: "50%", flexShrink: 1 },
 		projectMachineIdentity: { maxWidth: 132, flexShrink: 1 },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },
@@ -309,10 +354,9 @@ const makeStyles = (t: Theme) =>
 
 		blockerRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },
 		blocker: { fontFamily: "DMSans_400Regular", flexShrink: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		blockerWorker: { fontFamily: "DMSans_600SemiBold", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		blockerReason: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		blockerWorker: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
-		footerRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minWidth: 0 },
-		footerLabel: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		// A capsule, as both platforms draw a button; `overflow` keeps the Android
 		// ripple inside it.
 		pill: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: PILL_HEIGHT, paddingHorizontal: space.md, paddingVertical: space.xxs, borderRadius: radius.pill, overflow: "hidden" },

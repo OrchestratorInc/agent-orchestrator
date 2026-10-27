@@ -131,9 +131,6 @@ function choose(menu: ReactTestInstance, label: string) {
 function selectedEnvironment(): string | undefined {
 	return choices(environmentMenu()).find((node) => node.props.isOn)?.props.children;
 }
-function search(text: string) {
-	act(() => renderer.root.findByType("StackSearchBar" as never).props.onChangeText({ nativeEvent: { text } }));
-}
 function selectWindows() {
 	act(() => { renderer = create(<FleetScreen />); });
 	choose(environmentMenu(), "Windows");
@@ -188,9 +185,12 @@ describe("Workers header", () => {
 
 	// The header is the native bar's: its title comes from the tab's stack, and
 	// its actions are bar items the page declares, not a row drawn in the page.
-	it("declares Settings and Notifications as trailing header items", () => {
+	it("declares Settings, Pull Requests and Notifications as trailing header items", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		const [settings, notifications] = headerButtons();
+		const [settings, prs, notifications] = headerButtons();
+		expect(prs.props).toMatchObject({ icon: "arrow.triangle.pull", accessibilityLabel: "Pull Requests" });
+		act(() => prs.props.onPress());
+		expect(fixtures.push).toHaveBeenCalledWith("/prs");
 		expect(settings.props).toMatchObject({ icon: "gear", accessibilityLabel: "Settings" });
 		expect(notifications.props).toMatchObject({ icon: "bell", accessibilityLabel: "Notifications" });
 		expect(notifications.findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
@@ -203,7 +203,7 @@ describe("Workers header", () => {
 	it("badges Notifications with the unread count across machines", () => {
 		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, notificationsUnread: 2 }));
 		act(() => { renderer = create(<FleetScreen />); });
-		const notifications = headerButtons()[1];
+		const notifications = headerButtons()[2];
 		expect(notifications.props.accessibilityLabel).toBe("Notifications, 4 unread");
 		expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("4");
 	});
@@ -246,48 +246,11 @@ describe("Workers header", () => {
 	});
 });
 
-// Search is the header's own: UISearchController under the large title on iOS,
-// the top app bar's search action on Android.
 describe("Workers search", () => {
-	it("searches from the native header search bar", () => {
+	// The filter menu narrows the board; there is no search to keep in sync.
+	it("has no header search bar", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(renderer.root.findByType("StackSearchBar" as never).props).toMatchObject({
-			placeholder: "Search workers",
-			placement: "stacked",
-			obscureBackground: false,
-			autoCapitalize: "none",
-			tintColor: "#highlight",
-		});
-		search("audit");
-		expect(renderer.root.findByType(WorkerBoardList).props.query).toBe("audit");
-	});
-
-	it("says no workers were found when the search matches none", () => {
-		fixtures.hostStates[0].sessions = [];
-		act(() => { renderer = create(<FleetScreen />); });
-		search("missing");
-		expect(emptyState().props).toMatchObject({ title: "No workers found", message: "No workers match “missing”." });
-	});
-
-	// iOS cancels with its own button; Android closes the action view, by its X
-	// or by Back. Either way the board returns to every worker.
-	it.each(["onCancelButtonPress", "onClose"])("clears the search on %s", (event) => {
-		act(() => { renderer = create(<FleetScreen />); });
-		search("audit");
-		act(() => renderer.root.findByType("StackSearchBar" as never).props[event]());
-		expect(renderer.root.findByType(WorkerBoardList).props.query).toBe("");
-	});
-
-	// The bar registers its options with the header, so a handler that changed on
-	// every poll would register them again each time.
-	it("keeps the search bar's handlers across polls", () => {
-		act(() => { renderer = create(<FleetScreen />); });
-		const before = renderer.root.findByType("StackSearchBar" as never).props;
-		fixtures.hostStates = fixtures.hostStates.map((host) => ({ ...host, lastSyncAt: host.lastSyncAt + 8_000 }));
-		act(() => renderer.update(<FleetScreen />));
-		const after = renderer.root.findByType("StackSearchBar" as never).props;
-		expect(after.onChangeText).toBe(before.onChangeText);
-		expect(after.onClose).toBe(before.onClose);
+		expect(renderer.root.findAllByType("StackSearchBar" as never)).toHaveLength(0);
 	});
 });
 
@@ -382,7 +345,7 @@ describe("Workers spawn action", () => {
 	// settings and alerts in its header, and hands the button its own filters.
 	it("starts a task from the tab bar's button on the board's own filters", () => {
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Notifications"]);
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
 		act(() => startNewTask(() => fixtures.push("/spawn")));
 		expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/spawn", params: { hostId: "mac" } });
 	});
@@ -392,7 +355,7 @@ describe("Workers spawn action", () => {
 	it("floats the Android spawn button instead of a header item", () => {
 		fixtures.platform = "android";
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Notifications"]);
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
 		const fab = renderer.root.findByType("AddFab" as never);
 		expect(fab.props).toMatchObject({ label: "Spawn worker", bottomInset: 0, testID: "spawn-worker" });
 		expect(renderer.root.findByType(WorkerBoardList).props.contentBottomInset).toBe(72 + 24);
@@ -502,11 +465,6 @@ describe("Workers selected-machine reachability", () => {
 		Object.assign(fixtures.hostStates[1], { connection: "open", error: null });
 		selectWindows();
 		expect(emptyState().props.title).toBe("No workers on Windows");
-	});
-	it("does not hide unreachable-machine feedback behind an empty search", () => {
-		selectWindows();
-		search("missing");
-		expect(emptyState().props.title).toBe("Can't reach Windows");
 	});
 	it("keeps already loaded workers visible when their machine becomes unreachable", () => {
 		fixtures.hostStates[1].sessions = [session("cached")];

@@ -42,6 +42,5 @@ describe("native hosts take the platform's own theme", () => {
 
 	it("gives native text fields the caret colour of the app's React Native fields", () => {
 		expect(source("lib/chat/elicitation-native-controls.ios.tsx")).toMatch(/<TextField[\s\S]*?modifiers=\{\[[\s\S]*?tint\(t\.highlight\)[\s\S]*?\]\}/);
-		expect(source("app/(tabs)/(workers)/index.tsx")).toMatch(/<Stack\.SearchBar[^>]*tintColor=\{t\.highlight\}/);
 	});
 });

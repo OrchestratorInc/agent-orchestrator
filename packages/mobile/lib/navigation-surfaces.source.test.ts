@@ -40,7 +40,7 @@ describe("navigation surfaces", () => {
 	// Each board tab is a route group with a stack of its own: the stack gives the
 	// tab's page a native header, the group keeps the page's URL.
 	it("gives each board tab a native large-title header", () => {
-		for (const [group, screen] of [["(workers)", "index"], ["(projects)", "projects"], ["(prs)", "prs"]]) {
+		for (const [group, screen] of [["(workers)", "index"], ["(projects)", "projects"]]) {
 			expect(source(`../app/(tabs)/${group}/_layout.tsx`)).toContain(`<TabStack screen="${screen}" title={boardTitle("${group}")} />`);
 		}
 		expect(source("./TabStack.tsx")).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>");
@@ -49,18 +49,23 @@ describe("navigation surfaces", () => {
 	// The header row each page used to draw (a safe-area spacer, a title and a bell
 	// with a hand-drawn dot) is the native bar now, with its actions as bar items.
 	it("leaves the tab roots' titles and actions to the native header", () => {
-		for (const page of ["../app/(tabs)/(workers)/index.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/(tabs)/(prs)/prs.tsx"]) {
+		for (const page of ["../app/(tabs)/(workers)/index.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/prs/index.tsx"]) {
 			const text = source(page);
 			expect(text).not.toContain("ScreenHeader");
 			expect(text).not.toContain("HeaderIconButton");
 			expect(text).not.toContain("insets.top");
-			expect(text).toContain("<BoardHeaderItems unread={");
 			expect(text).toContain('contentInsetAdjustmentBehavior="automatic"');
+			// Pull Requests is a sheet over the board, so it closes from its bar
+			// rather than carrying the board's own items.
+			if (page.endsWith("prs/index.tsx")) expect(text).not.toContain("BoardHeaderItems");
+			else expect(text).toContain("<BoardHeaderItems unread={");
 		}
 		const items = source("./BoardHeaderItems.tsx");
 		expect(items).toContain('<Stack.Toolbar placement="right">');
 		expect(items).toContain("icon={SETTINGS_ICON} hidesSharedBackground");
 		expect(items).toContain("icon={NOTIFICATIONS_ICON}");
+		expect(items).toContain('const PULL_REQUESTS_ICON = Platform.OS === "ios" ? "arrow.triangle.pull" : PULL_REQUEST_GLYPH;');
+		expect(items).toContain('<Stack.Toolbar.Button icon={PULL_REQUESTS_ICON} iconRenderingMode="template" hidesSharedBackground accessibilityLabel="Pull Requests" onPress={() => router.push("/prs")} />');
 		expect(items).toContain("<Stack.Toolbar.Badge>");
 	});
 

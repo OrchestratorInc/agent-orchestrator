@@ -62,16 +62,15 @@ afterEach(() => {
 });
 
 describe("board tabs", () => {
-	it("lays out Workers, Projects and Pull Requests as native tabs with system glyphs", () => {
+	// Pull Requests opens from the board's header instead, as a page.
+	it("lays out Workers and Projects as native tabs with system glyphs", () => {
 		render();
-		expect(triggers().map((trigger) => trigger.props.name)).toEqual(["(workers)", "(projects)", "(prs)"]);
-		expect(triggers().map((trigger) => trigger.findByType("TriggerLabel" as never).props.children)).toEqual(["Workers", "Projects", "Pull Requests"]);
-		const [workers, projects, prs] = triggers().map((trigger) => trigger.findByType("TriggerIcon" as never).props);
-		expect(workers).toMatchObject({ sf: "square.stack.3d.up.fill", md: "stacks" });
-		expect(projects).toMatchObject({ sf: "folder.fill", md: "folder" });
-		// SF Symbols has a pull request; Android draws lucide's from a bitmap.
-		expect(prs.sf).toBe("arrow.triangle.pull");
-		expect(String(prs.src)).toContain("tab-pull-request");
+		expect(triggers().map((trigger) => trigger.props.name)).toEqual(["(workers)", "(projects)"]);
+		expect(triggers().map((trigger) => trigger.findByType("TriggerLabel" as never).props.children)).toEqual(["Workers", "Projects"]);
+		const [workers, projects] = triggers().map((trigger) => trigger.findByType("TriggerIcon" as never).props);
+		// Outlined at rest, filled once selected.
+		expect(workers).toMatchObject({ sf: { default: "square.stack.3d.up", selected: "square.stack.3d.up.fill" }, md: "stacks" });
+		expect(projects).toMatchObject({ sf: { default: "folder", selected: "folder.fill" }, md: "folder" });
 	});
 
 	// Tapping the current tab again scrolls its list to the top, natively.
@@ -118,7 +117,7 @@ describe("board tabs", () => {
 		fixtures.sessions = [session("a", "needs_input"), session("b", "stuck"), session("c", "working")];
 		render();
 		const badges = triggers().map((trigger) => trigger.findAllByType("TriggerBadge" as never).map((badge) => badge.props.children));
-		expect(badges).toEqual([["2"], [], []]);
+		expect(badges).toEqual([["2"], []]);
 	});
 
 	// New task in the tab bar's own row on iOS: the search role's item, which

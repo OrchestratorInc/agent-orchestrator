@@ -17,19 +17,17 @@ describe("worker board list identity", () => {
 	it("remounts the whole animation boundary without retaining outgoing rows", () => {
 		expect(list).toContain("<LayoutAnimationConfig key={identityKey} skipEntering skipExiting>");
 		expect(list).not.toContain("<FlatList\n\t\t\t\t\tref={listRef}\n\t\t\t\t\tkey={identityKey}");
-		expect(board).toContain("const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}|${query.trim()}`;");
+		expect(board).toContain("const boardIdentityKey = `${workerEnvironmentId}|${workerProjectId}`;");
 		expect(board).toContain("key={boardIdentityKey}");
 		expect(board).toContain("identityKey={boardIdentityKey}");
 	});
 });
 
 describe("worker search", () => {
-	// The search field is the header's own, which the system keeps clear of the
-	// keyboard. The dock it replaces rode the keyboard by hand, and every way of
-	// measuring that (a late visibility flag, the animated frame origin, a page
-	// that ends above the window's bottom) put the field in the wrong place.
-	it("searches from the native header rather than a field riding the keyboard", () => {
-		expect(board).toContain("<Stack.SearchBar");
+	// The board has no search: the filter menu narrows it. Nor does it bring
+	// back the dock that rode the keyboard by hand.
+	it("has no search field, in the header or riding the keyboard", () => {
+		expect(board).not.toContain("<Stack.SearchBar");
 		expect(board).not.toContain("react-native-keyboard-controller");
 		expect(board).not.toContain("keyboardAnimation");
 	});
@@ -115,7 +113,7 @@ describe("board tab roots", () => {
 	// children hoisted after it. As a tab's root it became the page's first
 	// native view, ahead of the list, so the large title and the tab bar had no
 	// scroll view to follow and stayed expanded over the rows.
-	it.each(["../app/(tabs)/(workers)/index.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/(tabs)/(prs)/prs.tsx"])(
+	it.each(["../app/(tabs)/(workers)/index.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/prs/index.tsx"])(
 		"leaves the page background to the stack in %s",
 		(path) => {
 			expect(source(path)).toMatch(/\bscreen: \{ flex: 1 \},/);

@@ -15,7 +15,7 @@ const rootLayout = "_layout.tsx";
 const screenRoutes = [
 	"(tabs)/(workers)/index.tsx",
 	"(tabs)/(projects)/projects.tsx",
-	"(tabs)/(prs)/prs.tsx",
+	"prs/index.tsx",
 	"(tabs)/compose.tsx",
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
@@ -58,9 +58,9 @@ const deferredRoutes = [
 	"(tabs)/_layout.tsx",
 	"(tabs)/(workers)/_layout.tsx",
 	"(tabs)/(projects)/_layout.tsx",
-	"(tabs)/(prs)/_layout.tsx",
 	"settings/_layout.tsx",
 	"notifications/_layout.tsx",
+	"prs/_layout.tsx",
 ];
 
 describe("route error boundaries", () => {

@@ -36,9 +36,17 @@ describe("notifications header", () => {
 
 	// The clear bar blurs whatever scrolls under it, so the page's first view is
 	// the one inset for it.
-	it("keeps the list, or a scroll view in its place, first under the bar", () => {
+	it("keeps the list first under the bar", () => {
 		expect(page).toContain('contentInsetAdjustmentBehavior="automatic"');
-		expect(page).toMatch(/\{headerItems\}[\s\S]*?\{loading \? \(\s*<TabPageScroll>/);
+		expect(page).toMatch(/\{headerItems\}[\s\S]*?\*\/\}\s*<SectionList/);
+	});
+
+	// A stand-in scroll view swapped for the list while the sheet came up left
+	// iOS 26's floating bar over the sheet taking every touch: the close button
+	// and the rows stopped responding.
+	it("loads inside the list rather than in a scroll view standing in for it", () => {
+		expect(page).not.toContain("TabPageScroll");
+		expect(page).toMatch(/ListEmptyComponent=\{\s*loading \? \(\s*<View style=\{styles\.center\}>\s*<ActivityIndicator/);
 	});
 
 	// On iOS the sheet closes from its bar, as Settings does, and Clear all
@@ -72,9 +80,10 @@ describe("notifications body", () => {
 		expect(page).toContain('action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}');
 	});
 
-	// From a pushed page, navigate would put a second board on the stack.
-	it("returns to the PRs tab by popping to the board", () => {
-		expect(page).toContain('router.dismissTo({ pathname: "/prs", params: { hostId: notification.hostId } })');
-		expect(page).not.toContain('router.navigate({ pathname: "/prs"');
+	// Pull Requests is a sheet of its own on iOS: pushed from this one, it would
+	// be presented inside it.
+	it("closes the sheet before opening Pull Requests", () => {
+		expect(page).toContain('openPage({ pathname: "/prs", params: { hostId: notification.hostId } })');
+		expect(page).not.toMatch(/router\.(dismissTo|navigate|push)\(\{ pathname: "\/prs"/);
 	});
 });

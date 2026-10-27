@@ -4,7 +4,7 @@ import { memo, useRef } from "react";
 import { Feather } from "./icons";
 import { useOpenPage } from "./pageNavigation";
 import { Platform, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent } from "react-native";
-import { sessionTitle, shortLabel, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
+import { sessionTitle, type DashboardPR, type DashboardSession, type SessionPRSummary } from "./api";
 import { rowDividerWidth } from "./divider";
 import { haptics } from "./haptics";
 import { openGitHub } from "./openGitHub";
@@ -66,7 +66,9 @@ export const PRCard = memo(function PRCard({
 	const menuWidth = useMenuRowWidth();
 	const state = summary ? stateVisualOf(t, summary.state as PRLifecycle) : prStateVisual(t, pr);
 	const title = summary?.title?.trim() || prTitle(pr, sessionTitle(session));
-	const project = shortLabel(summary?.repo || session.projectId || "Standalone");
+	// The repository's own name, without its owner: the line ends in an
+	// ellipsis if it still runs long, rather than losing its middle.
+	const project = (summary?.repo || session.projectId || "Standalone").split("/").pop() || "Standalone";
 	const projectLabel = hostName ? `${hostName} · ${project}` : project;
 	const branches = summary
 		? [summary.sourceBranch, summary.targetBranch].filter(Boolean).join(" → ")
@@ -74,7 +76,7 @@ export const PRCard = memo(function PRCard({
 	const diff = summary && (summary.changedFiles > 0 || summary.additions > 0 || summary.deletions > 0)
 		? `${summary.changedFiles} ${summary.changedFiles === 1 ? "file" : "files"}  +${summary.additions} −${summary.deletions}`
 		: "";
-	const detail = [`#${pr.number}`, branches, diff].filter(Boolean).join("  ·  ");
+	const detail = [`#${pr.number}`, branches, diff].filter(Boolean).join(" · ");
 	const atoms = summary ? prStatusAtoms(summary) : [prSummaryLine(pr)];
 	const status = atoms[0] ?? { text: state.label, tone: "passive" as const };
 	const blockers = summary ? prBlockerLine(summary) : null;
@@ -148,17 +150,17 @@ const makeStyles = (t: Theme) =>
 			minHeight: 76,
 			justifyContent: "center",
 			paddingHorizontal: space.lg,
-			paddingVertical: space.sm + space.hair,
+			paddingVertical: space.sm,
 			gap: space.hair,
 			backgroundColor: t.bgBase,
 		},
 		// Inset to the text, as a worker row's is.
-		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderDefault },
-		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: type.footnote.lineHeight },
-		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
-		status: { fontFamily: "DMSans_600SemiBold", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
+		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
+		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		status: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 		copy: { gap: space.hair },
-		title: { fontFamily: type.headline.fontFamily, color: t.textPrimary, fontSize: type.headline.fontSize, lineHeight: type.headline.lineHeight, fontWeight: type.headline.fontWeight },
+		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
 		details: { color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
-		blockers: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair, marginLeft: space.xl },
+		blockers: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
 	});

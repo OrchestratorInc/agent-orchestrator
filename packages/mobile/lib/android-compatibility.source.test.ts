@@ -96,10 +96,8 @@ describe("Android native compatibility boundaries", () => {
 
 	// The top app bar's own search action and a Compose dropdown take the place
 	// of the hand-built dock and its bottom sheet, and spawning is Material's FAB.
-	it("searches, filters and spawns Android workers with native controls", () => {
+	it("filters and spawns Android workers with native controls", () => {
 		const board = source("../app/(tabs)/(workers)/index.tsx");
-		expect(board).toContain("<Stack.SearchBar");
-		expect(board).toContain("onClose={searchClosed}");
 		expect(board).toContain('<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />');
 		expect(source("./BoardHeaderItems.tsx")).toContain("{!ios ? filter : null}");
 		expect(source("./AddFab.android.tsx")).toContain('import { ExtendedFloatingActionButton, Host, Icon, Text } from "@expo/ui/jetpack-compose";');

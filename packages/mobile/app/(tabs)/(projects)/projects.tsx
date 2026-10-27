@@ -105,6 +105,7 @@ export default function ProjectsScreen() {
 						<ProjectCard
 							row={item}
 							busy={busyProjects.has(hostedProjectKey(item.project))}
+							showMachine={hostStates.length > 1}
 							onOpenProject={openProject}
 							onOrchestrator={openOrchestrator}
 						/>

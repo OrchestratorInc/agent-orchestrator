@@ -120,11 +120,10 @@ describe("root stack", () => {
 				const value = renderer.root.findByProps({ name }).props.options;
 				return typeof value === "function" ? value({ route }) : value;
 			};
-			const board = (index: number) => ({ name: "(tabs)", state: { index, routes: [{ name: "(workers)" }, { name: "(projects)" }, { name: "(prs)" }] } });
+			const board = (index: number) => ({ name: "(tabs)", state: { index, routes: [{ name: "(workers)" }, { name: "(projects)" }] } });
 			expect(options("(tabs)").title).toBe("Workers");
 			expect(options("(tabs)", board(0)).title).toBe("Workers");
 			expect(options("(tabs)", board(1)).title).toBe("Projects");
-			expect(options("(tabs)", board(2)).title).toBe("Pull Requests");
 			expect(options("(tabs)").headerShown).toBe(false);
 		} finally {
 			act(() => renderer.unmount());
@@ -174,6 +173,10 @@ describe("root stack", () => {
 			const notifications = renderer.root.findByProps({ name: "notifications" }).props.options;
 			expect(notifications).toMatchObject({ title: "Notifications", headerShown: false });
 			expect(notifications.presentation).toBe(platform === "ios" ? "formSheet" : "card");
+			// Pull Requests is presented the same way, headed by app/prs/_layout.
+			const prs = renderer.root.findByProps({ name: "prs" }).props.options;
+			expect(prs).toMatchObject({ title: "Pull Requests", headerShown: false });
+			expect(prs.presentation).toBe(platform === "ios" ? "formSheet" : "card");
 		} finally {
 			act(() => renderer.unmount());
 		}

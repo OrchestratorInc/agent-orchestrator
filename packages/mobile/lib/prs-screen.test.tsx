@@ -11,13 +11,7 @@ const fixture = vi.hoisted(() => ({
 	summaries: new Map<string, SessionPRSummary>(),
 	reload: vi.fn(), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
 	theme: new Proxy({}, { get: () => "#888888" }),
-	// The board's tab navigator, which the page listens to for a change of tab.
-	tabListeners: new Set<(event: { data: { state: { index: number; routes: { name: string }[] } } }) => void>(),
-	navigation: { setParams: vi.fn(), getParent: () => fixture.tabs },
-	tabs: { addListener: (type: string, listener: (event: { data: { state: { index: number; routes: { name: string }[] } } }) => void) => {
-		if (type === "state") fixture.tabListeners.add(listener);
-		return () => fixture.tabListeners.delete(listener);
-	} },
+	router: { push: vi.fn(), navigate: vi.fn(), back: vi.fn(), canGoBack: () => true, replace: vi.fn() },
 }));
 vi.mock("react-native", async () => {
 	const React = await import("react");
@@ -36,9 +30,8 @@ vi.mock("expo-router", async () => {
 	const React = await import("react");
 	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
 	return {
-		useRouter: () => ({ push: vi.fn(), navigate: vi.fn() }),
+		useRouter: () => fixture.router,
 		useLocalSearchParams: () => fixture.params,
-		useNavigation: () => fixture.navigation,
 		useFocusEffect: (callback: () => void) => { fixture.focus = callback; },
 		Stack: { Toolbar: Object.assign(host("StackToolbar"), { Button: host("StackToolbarButton"), Badge: host("StackToolbarBadge") }) },
 	};
@@ -72,7 +65,7 @@ vi.mock("./usePRSummaries", () => ({ PR_SUMMARY_REUSE_MS: 60_000, usePRSummaries
 } }));
 vi.mock("./ui", () => ({ Button: "Button", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
 
-import PRsScreen from "../app/(tabs)/(prs)/prs";
+import PRsScreen from "../app/prs/index";
 let renderer: ReactTestRenderer | undefined;
 function session(hostId: string): HostedSession {
 	return {
@@ -92,20 +85,18 @@ beforeEach(() => {
 	}));
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
 	fixture.reload.mockClear(); fixture.focus = undefined; fixture.summaryTargets = [];
-	fixture.navigation.setParams.mockClear(); fixture.tabListeners.clear();
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-// Every tab mounts with the board, and the details are a request per worker.
-it("waits for the tab's first visit before loading PR details", () => {
+// A page now, mounted only when opened, so its details load straight away.
+it("loads PR details as the page opens, without reloading them on its first focus", () => {
 	act(() => { renderer = create(<PRsScreen />); });
-	expect(fixture.summaryTargets.at(-1)).toEqual([]);
-	act(() => fixture.focus?.());
 	expect(fixture.summaryTargets.at(-1)).toHaveLength(2);
+	act(() => fixture.focus?.());
 	expect(fixture.reload).not.toHaveBeenCalled();
 });
 
-it("revalidates retained PR details on a later visit but not on rapid tab switches", () => {
+it("revalidates PR details on a later return but not on quick ones", () => {
 	const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
 	act(() => { renderer = create(<PRsScreen />); });
 	act(() => fixture.focus?.());
@@ -152,29 +143,6 @@ it("scopes PRs to the requested host and project", () => {
 	expect(fixture.cardRenders).toHaveLength(1);
 	expect(fixture.cardRenders[0]).toContain("windows");
 });
-// A notification scopes the tab to its machine. The tab is the board's own, so
-// the scope must not outlive the visit and hide the project switcher for good.
-it("keeps a notification's scope over a pushed page and drops it once another tab is chosen", () => {
-	fixture.params = { hostId: "windows" };
-	act(() => { renderer = create(<PRsScreen />); });
-	const tabState = (name: string) => ({ data: { state: { index: 1, routes: [{ name: "(workers)" }, { name }] } } });
-	expect(fixture.tabListeners.size).toBe(1);
-	for (const listener of fixture.tabListeners) listener(tabState("(prs)"));
-	expect(fixture.navigation.setParams).not.toHaveBeenCalled();
-	for (const listener of fixture.tabListeners) listener(tabState("(projects)"));
-	expect(fixture.navigation.setParams).toHaveBeenCalledWith({ hostId: undefined, projectId: undefined });
-	// Clearing changes the tabs' state again; that must not clear a second time.
-	expect(fixture.tabListeners.size).toBe(0);
-	fixture.params = {};
-	act(() => renderer!.update(<PRsScreen />));
-	expect(fixture.tabListeners.size).toBe(0);
-});
-
-it("leaves an unscoped tab's params alone", () => {
-	act(() => { renderer = create(<PRsScreen />); });
-	expect(fixture.tabListeners.size).toBe(0);
-});
-
 it("retains the default PR scroll buffer", () => {
 	act(() => { renderer = create(<PRsScreen />); });
 	const list = renderer!.root.findByType("SectionList" as never);
@@ -183,15 +151,29 @@ it("retains the default PR scroll buffer", () => {
 	expect(list.props.initialNumToRender).toBeUndefined();
 });
 
-// A large-title bar is translucent and the page is laid out under it, so the PR
-// list is the page's first view, and what sat above it now heads the list.
+// The sheet's bar is clear on iOS 26 and the page is laid out under it, so the
+// PR list is the page's first view (after the bar's items, which draw no view
+// of their own), and what sat above it now heads the list.
 it("makes the PR list the page's first view, inset under the header", () => {
 	fixture.hostStates = fixture.hostStates.slice(0, 1);
 	act(() => { renderer = create(<PRsScreen />); });
 	const screen = renderer!.root.findAllByType("View" as never)[0];
-	const first = screen.children[0] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string; ListHeaderComponent?: { props: { children: { type: unknown }[] } } } };
+	expect((screen.children[0] as { props: { placement?: string } }).props.placement).toBe("right");
+	const first = screen.children[1] as { type: unknown; props: { contentInsetAdjustmentBehavior?: string; ListHeaderComponent?: { props: { children: { type: unknown }[] } } } };
 	expect(first.props.contentInsetAdjustmentBehavior).toBe("automatic");
 	expect(first.props.ListHeaderComponent?.props.children.map((child) => child.type)).toEqual(["ProjectSwitcher", "PRFilterControl", "StaleBanner"]);
+});
+
+// A stand-in scroll view swapped for the list while the sheet came up left
+// iOS 26's floating bar over the sheet taking every touch, so the first load
+// waits inside the list.
+it("loads inside the list rather than in a scroll view standing in for it", () => {
+	fixture.allSessions = [];
+	fixture.hostStates = fixture.hostStates.map((host) => ({ ...host, sessions: [], loading: true }));
+	act(() => { renderer = create(<PRsScreen />); });
+	const list = renderer!.root.findByType("SectionList" as never);
+	expect(list.props.ListEmptyComponent.props.children.props.accessibilityLabel).toBe("Loading pull requests");
+	expect(renderer!.root.findAllByType("TabPageScroll" as never)).toHaveLength(0);
 });
 
 // A segmented control heads the list under the title, as each platform places
@@ -235,11 +217,13 @@ it("confirms a copied pull-request link without redrawing the cards", () => {
 	expect(fixture.cardRenders).toEqual([]);
 });
 
-it("badges the Notifications header item with every machine's unread count", () => {
-	fixture.hostStates = fixture.hostStates.map((host) => ({ ...host, notificationsUnread: 3 }));
+// A sheet over the board on iOS: it closes from its bar, and the board's
+// Settings and alerts stay the board's.
+it("closes the sheet from its bar instead of carrying the board's items", () => {
+	fixture.router.back.mockClear();
 	act(() => { renderer = create(<PRsScreen />); });
-	const [settings, notifications] = renderer!.root.findByType("StackToolbar" as never).findAllByType("StackToolbarButton" as never);
-	expect(settings.props.accessibilityLabel).toBe("Settings");
-	expect(notifications.props.accessibilityLabel).toBe("Notifications, 6 unread");
-	expect(notifications.findByType("StackToolbarBadge" as never).props.children).toBe("6");
+	const buttons = renderer!.root.findAllByType("StackToolbarButton" as never);
+	expect(buttons.map((button) => button.props.accessibilityLabel)).toEqual(["Close pull requests"]);
+	act(() => buttons[0].props.onPress());
+	expect(fixture.router.back).toHaveBeenCalledTimes(1);
 });

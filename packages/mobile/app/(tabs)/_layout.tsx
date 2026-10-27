@@ -6,18 +6,11 @@ import { boardTitle, workersNeedingYou } from "../../lib/board-tabs";
 import { rippleColor } from "../../lib/pressFeedback";
 import { startNewTask } from "../../lib/newTaskAction";
 import { useApp } from "../../lib/store";
-import { symbols, type IOSSymbol } from "../../lib/symbols";
+import { symbols } from "../../lib/symbols";
 import { useTheme } from "../../lib/ThemeProvider";
-// SF Symbols draws a pull request; Material Symbols has none, so Android keeps
-// lucide's, the glyph the notifications and the PR page use. It is a bundled
-// bitmap because NativeTabs decodes only bitmaps there, not vector drawables
-// (scripts/generate-lucide-tab-icon.mjs writes it).
-import PULL_REQUEST_GLYPH from "../../assets/icons/tab-pull-request.png";
-
-const PULL_REQUEST_SYMBOL: IOSSymbol = "arrow.triangle.pull";
-
 /**
- * The board: Workers, Projects and Pull Requests as the platform's own tab bar.
+ * The board: Workers and Projects as the platform's own tab bar. Pull
+ * Requests opens from the header, as a page over the board.
  * UITabBarController on iOS (a sidebar on iPad), Material navigation bar on
  * Android.
  *
@@ -54,19 +47,15 @@ export default function BoardTabsLayout() {
 			rippleColor={rippleColor(t)}
 		>
 			<NativeTabs.Trigger name="(workers)">
-				{/* Solid glyphs, as tab bars draw them: outlines at tab size read
-				    thin and loose next to the labels. */}
-				<NativeTabs.Trigger.Icon sf="square.stack.3d.up.fill" md={symbols.workers.android} />
+				{/* Outlined at rest and filled once selected, as Apple's own tab
+				    bars draw them. */}
+				<NativeTabs.Trigger.Icon sf={{ default: "square.stack.3d.up", selected: "square.stack.3d.up.fill" }} md={symbols.workers.android} />
 				<NativeTabs.Trigger.Label>{boardTitle("(workers)")}</NativeTabs.Trigger.Label>
 				{waiting > 0 ? <NativeTabs.Trigger.Badge>{String(waiting)}</NativeTabs.Trigger.Badge> : null}
 			</NativeTabs.Trigger>
 			<NativeTabs.Trigger name="(projects)">
-				<NativeTabs.Trigger.Icon sf="folder.fill" md={symbols.projects.android} />
+				<NativeTabs.Trigger.Icon sf={{ default: "folder", selected: "folder.fill" }} md={symbols.projects.android} />
 				<NativeTabs.Trigger.Label>{boardTitle("(projects)")}</NativeTabs.Trigger.Label>
-			</NativeTabs.Trigger>
-			<NativeTabs.Trigger name="(prs)">
-				<NativeTabs.Trigger.Icon sf={PULL_REQUEST_SYMBOL} src={PULL_REQUEST_GLYPH} />
-				<NativeTabs.Trigger.Label>{boardTitle("(prs)")}</NativeTabs.Trigger.Label>
 			</NativeTabs.Trigger>
 			{/* New task in the tab bar's own row: iOS 26 sets the search role's
 			    item apart from the tabs as a round button, and the compose glyph

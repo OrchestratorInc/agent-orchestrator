@@ -13,6 +13,7 @@ const fixtures = vi.hoisted(() => {
 		clearAllNotifications: vi.fn(async (_config: unknown) => {}),
 		alert: vi.fn(),
 		router: { navigate: vi.fn(), push: vi.fn(), back: vi.fn(), dismissTo: vi.fn(), canGoBack: () => false },
+		openPage: vi.fn(),
 		focus: (() => {
 			const listeners = new Set<() => void>();
 			return {
@@ -127,7 +128,7 @@ vi.mock("./notification-type-icon", async () => {
 	return { NotificationTypeIcon: (props: object) => React.createElement("NotificationTypeIcon", props) };
 });
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
-vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
+vi.mock("./pageNavigation", () => ({ useOpenPage: () => fixtures.openPage }));
 vi.mock("./useNow", () => ({ MINUTE_MS: 60_000, useNow: () => Date.parse("2026-10-08T11:00:00Z") }));
 vi.mock("./ui", async () => {
 	const React = await import("react");
@@ -406,7 +407,8 @@ describe("NotificationsScreen", () => {
 		expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all")).toHaveLength(0);
 	});
 
-	it("returns to the board's PRs tab for a PR outcome instead of stacking a second board", async () => {
+	// Pull Requests is a sheet of its own on iOS, so it opens once this one closes.
+	it("opens Pull Requests for a PR outcome through openPage", async () => {
 		const base = fixtures.getNotifications.getMockImplementation()!;
 		fixtures.getNotifications.mockImplementation(async (config: { hostId: "dev" | "mac" }) => config.hostId === "mac"
 			? { notifications: [{ id: "mac-pr", sessionId: "", projectId: "project-2", prUrl: "", type: "pr_merged", title: "Merged it", body: "", status: "read", createdAt: "2026-10-08T08:00:00Z" }], nextCursor: undefined, unreadCount: 0 }
@@ -414,10 +416,12 @@ describe("NotificationsScreen", () => {
 		try {
 			fixtures.router.navigate.mockClear();
 			fixtures.router.dismissTo.mockClear();
+			fixtures.openPage.mockClear();
 			await act(async () => { renderer = create(<NotificationsScreen />); });
 			const row = renderer!.root.find((node) => String(node.type) === "Pressable" && node.props.accessibilityLabel === "Merged it, Merged, Mac machine");
 			act(() => { row.props.onPress(); });
-			expect(fixtures.router.dismissTo).toHaveBeenCalledWith({ pathname: "/prs", params: { hostId: "mac" } });
+			expect(fixtures.openPage).toHaveBeenCalledWith({ pathname: "/prs", params: { hostId: "mac" } });
+			expect(fixtures.router.dismissTo).not.toHaveBeenCalled();
 			expect(fixtures.router.navigate).not.toHaveBeenCalled();
 		} finally {
 			fixtures.getNotifications.mockImplementation(base);

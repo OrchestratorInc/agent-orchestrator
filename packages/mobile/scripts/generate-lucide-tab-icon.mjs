@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Writes a lucide icon as PNG bitmaps for an Android NativeTabs icon, for a
-// domain glyph Material Symbols does not have (the pull request).
+// Writes a lucide icon as PNG bitmaps for a native bar icon, for a domain glyph
+// the system symbol sets do not draw (the pull request, in the board header).
 //
 // NativeTabs takes a Material Symbol by name (`md`) or an image source (`src`).
 // On Android react-native-screens decodes `src` with Fresco and keeps only a
@@ -10,7 +10,7 @@
 //
 // Run from the repo with the mobile app installed, naming the lucide icon and
 // the file to write:
-//   node packages/mobile/scripts/generate-lucide-tab-icon.mjs git-pull-request-arrow tab-pull-request
+//   node packages/mobile/scripts/generate-lucide-tab-icon.mjs git-pull-request pull-request
 // It writes packages/mobile/assets/icons/<file>.png at 24dp, plus the @1.5x to
 // @4x densities Metro picks from.
 
@@ -23,7 +23,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const mobile = join(here, "..");
 const [icon, output] = process.argv.slice(2);
 if (!icon || !output) {
-	console.error("Name a lucide icon and the file to write, e.g. git-pull-request-arrow tab-pull-request.");
+	console.error("Name a lucide icon and the file to write, e.g. git-pull-request pull-request.");
 	process.exit(1);
 }
 

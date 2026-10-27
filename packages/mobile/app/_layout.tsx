@@ -254,12 +254,10 @@ function Shell() {
 						headerShown: Platform.OS === "ios",
 						...(Platform.OS === "ios" ? { headerTransparent: true, headerStyle: undefined, headerTitle: "" } : null),
 						title: "New task",
-						sheetAllowedDetents: Platform.OS === "ios" ? [0.5, 0.9] : undefined,
-						// Opens tall on iOS. At the half detent the keyboard is taller
-						// than the sheet, so the selectors and Start task had nowhere to
-						// go and ended up clipped beneath it; dragging down to half is
-						// still there for anyone who wants the board behind it.
-						sheetInitialDetentIndex: Platform.OS === "ios" ? 1 : 0,
+						// Fully open or closed on iOS, like Settings and Notifications: no
+						// half detent, where the keyboard is taller than the sheet and the
+						// selectors and Start task end up clipped beneath it.
+						sheetAllowedDetents: Platform.OS === "ios" ? [1] : undefined,
 						sheetGrabberVisible: Platform.OS === "ios",
 						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgSurface : "transparent" },
 					}}
@@ -283,6 +281,24 @@ function Shell() {
 				/>
 				{/* The page renames itself to the project once it loads. */}
 				<Stack.Screen name="project/[id]" options={{ title: "Project" }} />
+				{/* Pull Requests opens from the board's header and holds a stack of
+				    its own, whose page draws the header. On iOS it is a full-height
+				    sheet over the board, like Notifications; on Android a full-screen
+				    page with the system back. */}
+				<Stack.Screen
+					name="prs"
+					options={{
+						presentation: Platform.OS === "ios" ? "formSheet" : "card",
+						headerShown: false,
+						title: "Pull Requests",
+						...(Platform.OS === "ios" ? {
+							sheetAllowedDetents: [1],
+							sheetGrabberVisible: true,
+							sheetCornerRadius,
+						} : null),
+						contentStyle: { backgroundColor: t.bgBase },
+					}}
+				/>
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
 				{/* iOS bars the modal natively, with its close item; Android keeps a
 				    full-screen page with Material's close button in the body. Fixed

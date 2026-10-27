@@ -14,7 +14,7 @@ describe("refreshControlColors", () => {
 	});
 
 	it("is what every board list's pull-to-refresh draws with", () => {
-		for (const path of ["./worker-board-list.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/(tabs)/(prs)/prs.tsx"]) {
+		for (const path of ["./worker-board-list.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/prs/index.tsx"]) {
 			const text = source(path);
 			expect(text).toMatch(/<RefreshControl refreshing=\{refreshing\} onRefresh=\{\w+\} \{\.\.\.refreshControlColors\(t\)\} \/>/);
 			expect(text).not.toMatch(/<RefreshControl[^>]*tintColor=/);
