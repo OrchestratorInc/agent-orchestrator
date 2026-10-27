@@ -99,8 +99,10 @@ describe("agent authentication hooks", () => {
 		const post = vi.spyOn(apiClient, "POST");
 		await expect(startAgentUILogin("codex", "browser", "")).resolves.toEqual(snapshot);
 		await expect(startAgentUILogin("codex", "api_key", "test-secret", "local")).resolves.toEqual(snapshot);
+		await expect(startAgentUILogin("openhands", "env_LLM_API_KEY", "test-key", "local", "anthropic/claude-sonnet-4-5")).resolves.toEqual(snapshot);
 		expect(request).toHaveBeenNthCalledWith(1, { action: "start", agentId: "codex", method: "browser" });
 		expect(request).toHaveBeenNthCalledWith(2, { action: "start", agentId: "codex", method: "api_key", secret: "test-secret" });
+		expect(request).toHaveBeenNthCalledWith(3, { action: "start", agentId: "openhands", method: "env_LLM_API_KEY", secret: "test-key", model: "anthropic/claude-sonnet-4-5" });
 		request.mockResolvedValue({ status: 200, body: { ...snapshot, status: "succeeded" } });
 		await expect(getAgentUILogin("codex", "login-1")).resolves.toMatchObject({ status: "succeeded" });
 		await expect(submitAgentUILoginCode("claude-code", "login-1", "code#state")).resolves.toMatchObject({ status: "succeeded" });
