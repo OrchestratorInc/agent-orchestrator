@@ -48,11 +48,16 @@ var cloudflaredDownloads = map[string]ports.ManagedBinaryDownload{
 	},
 }
 
-// DownloadCloudflaredInBackground starts AO's pinned cloudflared download the
-// first time remote access finds no usable connector, and calls onInstalled
-// once the binary has landed. Later calls do nothing, so a connector that
-// keeps resolving as missing cannot become a download loop, and after a failed
-// download the package-manager route is the user's to start.
+// cloudflaredDownloadWaits spaces the tries of a failing download. A laptop
+// that turns remote access back on at boot can ask before its network is up.
+var cloudflaredDownloadWaits = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute}
+
+// DownloadCloudflaredInBackground starts AO's pinned cloudflared download when
+// remote access finds no usable connector, and calls onInstalled once the
+// binary has landed. Later calls do nothing while that download runs or once
+// it landed, so a connector that keeps resolving as missing cannot become a
+// download loop. A download that failed every try is started again by the
+// next call, which only a user action or a daemon start makes.
 func (s *Service) DownloadCloudflaredInBackground(onInstalled func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -66,19 +71,55 @@ func (s *Service) DownloadCloudflaredInBackground(onInstalled func()) {
 	}
 	// Only the download runs unasked. A package manager can prompt, update
 	// itself first or need root, so that stays behind the desktop's button.
-	if plan := s.planCloudflared(); plan.download != nil {
+	if plan, ok := s.cloudflaredDownloadPlan(); ok {
 		s.startPlanLocked(TargetCloudflared, plan)
 	}
 }
 
+// cloudflaredDownloadPlan is the pinned download for this platform, when AO
+// has one and a downloader.
+func (s *Service) cloudflaredDownloadPlan() (Plan, bool) {
+	download, ok := cloudflaredDownloads[s.goos+"/"+s.goarch]
+	if !ok || s.managedBinaries == nil {
+		return Plan{}, false
+	}
+	download.Name = "cloudflared"
+	if s.goos == "windows" {
+		download.Name += ".exe"
+	}
+	return Plan{Target: TargetCloudflared, Method: cloudflaredDownloadMethod, download: &download}, true
+}
+
 // runCloudflaredDownload installs the pinned connector and records the
-// outcome onto job, like run. A failed download switches planCloudflared to
-// the package-manager fallback, so the next Start offers that instead of the
-// same download.
+// outcome onto job, like run, trying again after each of downloadWaits. A
+// download that failed every try switches planCloudflared to the
+// package-manager fallback, so the user's next Start offers that instead of
+// the same download.
 func (s *Service) runCloudflaredDownload(parent context.Context, download ports.ManagedBinaryDownload, job *Job) {
-	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
-	defer cancel()
-	path, err := s.managedBinaries.InstallManagedBinary(ctx, download)
+	var path string
+	var err error
+	for try := 0; ; try++ {
+		ctx, cancel := context.WithTimeout(parent, s.installTimeout)
+		path, err = s.managedBinaries.InstallManagedBinary(ctx, download)
+		cancel()
+		if err == nil || parent.Err() != nil || try >= len(s.downloadWaits) {
+			break
+		}
+		select {
+		case <-parent.Done():
+		case <-time.After(s.downloadWaits[try]):
+		}
+	}
+	if err == nil && parent.Err() == nil {
+		// The connector starts before the job reads as done, so a client that
+		// sees the download finish already sees the connector.
+		s.mu.Lock()
+		onInstalled := s.onCloudflaredInstalled
+		s.mu.Unlock()
+		if onInstalled != nil {
+			onInstalled()
+		}
+	}
 	now := time.Now()
 
 	s.mu.Lock()
@@ -91,6 +132,7 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 	}
 	if err != nil {
 		s.cloudflaredDownloadFailed.Store(true)
+		s.cloudflaredAutoStarted = false
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("Could not download cloudflared %s: %v", cloudflaredVersion, err)
 		s.mu.Unlock()
@@ -99,12 +141,9 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 	job.Status = StatusSucceeded
 	job.ExpectedDestination = path
 	job.Output = fmt.Sprintf("cloudflared %s installed at %s (sha256 %s verified)", cloudflaredVersion, path, download.SHA256)
-	onSucceeded, onInstalled := s.onSucceeded, s.onCloudflaredInstalled
+	onSucceeded := s.onSucceeded
 	s.mu.Unlock()
 	if onSucceeded != nil {
 		onSucceeded(TargetCloudflared)
-	}
-	if onInstalled != nil {
-		onInstalled()
 	}
 }

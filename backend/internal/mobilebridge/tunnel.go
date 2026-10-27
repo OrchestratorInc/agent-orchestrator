@@ -286,9 +286,13 @@ type TunnelStatus struct {
 	// started yet" were both a zero value, so the desktop showed an ordinary QR
 	// and the user had no way to learn that reaching this machine from outside
 	// the network is simply not available here.
-	Supported bool   `json:"supported"`
-	Running   bool   `json:"running"`
-	Ready     bool   `json:"ready"`
+	Supported bool `json:"supported"`
+	Running   bool `json:"running"`
+	Ready     bool `json:"ready"`
+	// Fixed is set while the connector serves this machine's fixed address,
+	// whose hostname stays the same across restarts, rather than a quick
+	// tunnel's.
+	Fixed     bool   `json:"fixed"`
 	Hostname  string `json:"hostname"`
 	Location  string `json:"location"`
 	LastError string `json:"lastError"`
@@ -310,6 +314,8 @@ type TunnelRuntime struct {
 	// a brand-new quick tunnel hostname takes roughly twenty more seconds to
 	// resolve, and a phone handed the address before then gets "no such host".
 	settled bool
+	// fixed is set once this run serves a named tunnel; see NamedHostname.
+	fixed   bool
 	lastErr string
 }
 
@@ -324,6 +330,7 @@ func (r *TunnelRuntime) Started() {
 	r.log = TunnelLog{}
 	r.running = true
 	r.settled = false
+	r.fixed = false
 	r.lastErr = ""
 }
 
@@ -375,6 +382,7 @@ func (r *TunnelRuntime) NamedHostname(hostname string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.log.URL = "https://" + hostname
+	r.fixed = true
 }
 
 // UnsettledHostname is a registered hostname still inside its settling window,
@@ -395,6 +403,7 @@ func (r *TunnelRuntime) Snapshot() TunnelStatus {
 	return TunnelStatus{
 		Running:   r.running,
 		Ready:     r.running && r.log.Ready() && r.settled,
+		Fixed:     r.fixed,
 		Hostname:  hostnameOf(r.log.URL),
 		Location:  r.log.Location,
 		LastError: r.lastErr,

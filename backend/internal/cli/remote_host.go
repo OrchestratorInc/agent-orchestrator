@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -20,6 +19,7 @@ type remoteHostStatus struct {
 	Tunnel       struct {
 		Supported bool   `json:"supported"`
 		Running   bool   `json:"running"`
+		Fixed     bool   `json:"fixed"`
 		LastError string `json:"lastError"`
 	} `json:"tunnel"`
 	Endpoints []struct {
@@ -73,7 +73,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Remote host enabled\nHost ID: %s\n", status.HostID); err != nil {
 					return err
 				}
-				publicAddress, quickTunnel := false, false
+				publicAddress := false
 				for _, endpoint := range status.Endpoints {
 					scheme := "http"
 					if endpoint.Secure {
@@ -81,8 +81,6 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					}
 					if endpoint.Kind == "tunnel" {
 						publicAddress = true
-						// The one tunnel whose address rotates; a linked machine's is fixed.
-						quickTunnel = strings.HasSuffix(strings.ToLower(endpoint.Host), ".trycloudflare.com")
 					}
 					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Address: %s://%s\n", scheme, net.JoinHostPort(endpoint.Host, strconv.Itoa(endpoint.Port))); err != nil {
 						return err
@@ -90,7 +88,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				}
 				if publicAddress {
 					message := "Fixed address: it stays the same after restarts."
-					if quickTunnel {
+					if !status.Tunnel.Fixed {
 						message = "Quick tunnel: the address changes on restart and has no uptime guarantee. Add this machine from a signed-in AO desktop to give it a fixed address."
 					}
 					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
@@ -110,8 +108,8 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 							flag = "--tunnel-only"
 						}
 						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable " + flag + "`"
-						// AO downloads its own cloudflared once per run where it has a
-						// pinned build; the tunnel starts by itself when it lands.
+						// AO downloads its own cloudflared where it has a pinned
+						// build; the tunnel starts by itself when it lands.
 						var install struct {
 							Status string `json:"status"`
 						}

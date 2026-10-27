@@ -373,6 +373,22 @@ it("says when the account lists as many machines as it can", async () => {
 	expect(fake.daemon.enabled).toBe(false);
 });
 
+it("keeps this computer in the account when it was listed before a failed turn-on", async () => {
+	vi.useFakeTimers({ shouldAdvanceTime: true });
+	Object.assign(fake.daemon, { enabled: true, password: "pw-phone", noPublicTunnel: true, linked: true, readsUntilTunnel: Number.POSITIVE_INFINITY });
+	fake.cloud.hosts.set(fake.HOST_ID, { label: "Dhruv’s Mac mini", url: `https://${fake.FIXED}:443`, token: fake.TOKEN });
+	renderAccess();
+	const toggle = await readySwitch();
+	fireEvent.click(toggle);
+	await act(async () => {
+		await vi.advanceTimersByTimeAsync(120_000);
+	});
+
+	expect(await screen.findByRole("alert")).toBeVisible();
+	expect(fake.cloud.hosts.has(fake.HOST_ID)).toBe(true);
+	expect(fake.log).not.toContain(`cloud DELETE ${fake.HOST_ID}`);
+});
+
 it("puts a paired phone's LAN-only access back when linking fails", async () => {
 	Object.assign(fake.daemon, { enabled: true, password: "pw-phone", noPublicTunnel: true });
 	fake.cloud.failPut = true;

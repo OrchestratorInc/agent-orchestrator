@@ -269,8 +269,11 @@ device links to an account gets its own Cloudflare tunnel, so its address stays
 the same across restarts. The control plane holds the Cloudflare API token; a
 machine only ever receives its own tunnel's run token.
 
-- The address is `h-<hash of the host ID>.<zone>`, one level under the zone
-  apex because Universal SSL covers one level only. A host registered without
+- The address is `h-<hash of the account and host IDs>.<zone>`, one level
+  under the zone apex because Universal SSL covers one level only. Each account
+  that lists a host gets its own tunnel and address: anyone can list any host
+  ID with a token they chose, and that registration must never reach the tunnel
+  the host's own account uses. A host registered without
   a URL (`PUT /api/cloud/v1/me/hosts/{hostId}`) gets a locally configured
   tunnel and its proxied CNAME first and is then listed at that address, so no
   device looks the name up before it exists. If Cloudflare fails, the
@@ -278,14 +281,20 @@ machine only ever receives its own tunnel's run token.
   Either way the desktop links the computer at its quick tunnel's address.
 - The machine fetches its run token from
   `POST /api/cloud/v1/remote-hosts/{hostId}/tunnel`, proving the host with the
-  digest of its account token, as the address publish does. It returns the
-  stored token without calling Cloudflare, and makes a tunnel only for a host
-  that has none, or whose tunnel the sweep released. `{"repair":true}`, sent
+  digest of its account token, as the address publish does, and gets the
+  tunnel of the account that token was issued to. It returns the stored token
+  without calling Cloudflare, and makes a tunnel only for a host that has
+  none, or whose tunnel the sweep released. `since` in the answer is when the
+  DNS record was made; the machine holds a newer address back from devices for
+  its settle delay. `{"repair":true}`, sent
   after the machine's connector had
   no live connection for 3 minutes or was refused four times in a row, makes the
-  tunnel and record exist again, at most once a minute per host.
-- `ao_remote_host_tunnels` keeps one row per host, whichever accounts list it,
-  with the run token encrypted like host tokens.
+  tunnel and record exist again, at most once a minute per host. Calls that
+  write tunnels are limited to 30 an hour per account (429
+  `tunnel_rate_limited`), since every account shares the API token's rate
+  limit; the window is kept per replica.
+- `ao_remote_host_tunnels` keeps one row per account and host, with the run
+  token encrypted like host tokens.
 - A machine's tunnel is released 5 minutes after its last connector left
   (asleep, offline or quit): the sweep deletes the tunnel, keeps the DNS
   record, and sets `released_at`. Cloudflare counts every tunnel against the
@@ -295,10 +304,12 @@ machine only ever receives its own tunnel's run token.
   Cloudflare routes the address to that tunnel, about a minute later. A
   connector that came back first makes Cloudflare refuse the deletion, and it
   keeps its tunnel.
-- Removing the last registration deletes the tunnel and its record before the
-  removal answers, so a host added back right after gets a new tunnel. The
-  sweep runs every 5 minutes. Besides releasing tunnels, it deletes the tunnel
-  and record of a host no account lists, of a host AO Cloud has not seen for
+- Removing a host from an account deletes that account's tunnel and record
+  before the removal answers, so a host added back right after gets a new
+  tunnel. The sweep runs every 5 minutes. Besides releasing tunnels, it deletes
+  the tunnel and record of a host its account no longer lists (10 minutes
+  after the row was written, since a registration makes its tunnel first), of a
+  host AO Cloud has not seen for
   90 days, and of a tunnel no connector has served an hour after it was made,
   so registrations made only to hold tunnels keep nothing. It acts only on
   tunnels its own rows name, since other AO Clouds may share the account.

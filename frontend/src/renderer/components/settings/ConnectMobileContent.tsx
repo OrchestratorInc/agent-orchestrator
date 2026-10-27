@@ -402,7 +402,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			if (started.error) throw new Error(apiErrorMessage(started.error));
 			return started.data;
 		},
-		onSuccess: invalidate,
+		// The first call can turn the bridge on before the second fails, so read back what is actually on.
+		onSettled: invalidate,
 		onError: () => setOptimisticEnabled(null),
 	});
 

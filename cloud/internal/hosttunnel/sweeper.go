@@ -25,6 +25,10 @@ const (
 	// OfflineRetention is how long a registered machine keeps its DNS record,
 	// and with it its row, after AO Cloud last saw it.
 	OfflineRetention = 90 * 24 * time.Hour
+	// UnregisteredGrace keeps a tunnel no account lists for a while after it
+	// was written: a registration makes its tunnel first and lists the host
+	// right after.
+	UnregisteredGrace = 10 * time.Minute
 	// DefaultSweepInterval runs the sweep every five minutes, so a
 	// disconnected tunnel goes within ten.
 	DefaultSweepInterval = 5 * time.Minute
@@ -32,11 +36,11 @@ const (
 
 // SweepStore is what the sweep reads and writes.
 type SweepStore interface {
-	ListRemoteHostTunnelSweepCandidates(context.Context, time.Time) ([]domain.RemoteHostTunnelCandidate, error)
-	GetRemoteHostTunnel(context.Context, string) (domain.RemoteHostTunnel, bool, error)
-	TouchRemoteHostTunnel(context.Context, string, time.Time) error
-	ReleaseRemoteHostTunnel(context.Context, string, string) error
-	DeleteRemoteHostTunnel(context.Context, string, string) error
+	ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff, unregisteredBefore time.Time) ([]domain.RemoteHostTunnelCandidate, error)
+	FindRemoteHostTunnel(ctx context.Context, tunnelID string) (domain.RemoteHostTunnel, bool, error)
+	TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seenAt time.Time) error
+	ReleaseRemoteHostTunnel(ctx context.Context, tunnelID string) error
+	DeleteRemoteHostTunnel(ctx context.Context, tunnelID string) error
 }
 
 // RunSweeper sweeps at once and then every interval until ctx ends.
@@ -66,9 +70,10 @@ func RunSweeper(ctx context.Context, store SweepStore, cf *Cloudflare, interval 
 }
 
 // Sweep releases the tunnels of machines that went offline, deletes the
-// tunnels no connector ever served, and deletes the tunnels and DNS records of
-// machines no account registers any more or AO Cloud has not seen for
-// OfflineRetention. It returns how many tunnels it released or deleted.
+// tunnels no connector ever served, and deletes the tunnels and DNS records
+// whose account no longer lists the machine, or whose machine AO Cloud has not
+// seen for OfflineRetention. It returns how many tunnels it released or
+// deleted.
 //
 // Cloudflare's listings name every host tunnel in the account, including other
 // AO Clouds' sharing it, so a listed tunnel is acted on only when this AO
@@ -79,7 +84,7 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 	fail := func(err error) { errs = append(errs, err) }
 
 	cutoff := now.Add(-OfflineRetention)
-	candidates, err := store.ListRemoteHostTunnelSweepCandidates(ctx, cutoff)
+	candidates, err := store.ListRemoteHostTunnelSweepCandidates(ctx, cutoff, now.Add(-UnregisteredGrace))
 	if err != nil {
 		return 0, err
 	}
@@ -92,7 +97,7 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 				continue
 			}
 			if status.Online {
-				if err := store.TouchRemoteHostTunnel(ctx, c.HostID, now); err != nil {
+				if err := store.TouchRemoteHostTunnel(ctx, c.TunnelID, now); err != nil {
 					fail(err)
 				}
 				continue
@@ -103,31 +108,31 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 			fail(err)
 			continue
 		}
-		if err := store.DeleteRemoteHostTunnel(ctx, c.HostID, c.TunnelID); err != nil {
+		if err := store.DeleteRemoteHostTunnel(ctx, c.TunnelID); err != nil {
 			fail(err)
 			continue
 		}
 		done++
 	}
 
-	ours := func(t ListedTunnel) (domain.RemoteHostTunnel, bool) {
-		row, found, err := store.GetRemoteHostTunnel(ctx, t.HostID)
+	ours := func(tunnelID string) (domain.RemoteHostTunnel, bool) {
+		row, found, err := store.FindRemoteHostTunnel(ctx, tunnelID)
 		if err != nil {
 			fail(err)
 			return row, false
 		}
-		return row, found && row.TunnelID == t.ID && !row.Released
+		return row, found && !row.Released
 	}
 
 	disconnected, err := cf.Disconnected(ctx, now.Add(-DisconnectedRetention))
 	if err != nil {
 		fail(err)
 	}
-	for _, t := range disconnected {
-		if _, ok := ours(t); !ok {
+	for _, id := range disconnected {
+		if _, ok := ours(id); !ok {
 			continue
 		}
-		released, err := cf.Release(ctx, t.ID)
+		released, err := cf.Release(ctx, id)
 		if err != nil {
 			fail(err)
 			continue
@@ -135,7 +140,7 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 		if !released { // its machine came back since the listing
 			continue
 		}
-		if err := store.ReleaseRemoteHostTunnel(ctx, t.HostID, t.ID); err != nil {
+		if err := store.ReleaseRemoteHostTunnel(ctx, id); err != nil {
 			fail(err)
 			continue
 		}
@@ -146,23 +151,23 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 	if err != nil {
 		fail(err)
 	}
-	for _, t := range unused {
-		row, ok := ours(t)
+	for _, id := range unused {
+		row, ok := ours(id)
 		if !ok {
 			continue
 		}
 		// Asked again, so a machine that connected since the listing keeps it.
-		if status, err := cf.Status(ctx, t.ID); err != nil || !status.NeverConnected {
+		if status, err := cf.Status(ctx, id); err != nil || !status.NeverConnected {
 			if err != nil {
 				fail(err)
 			}
 			continue
 		}
-		if err := cf.Delete(ctx, t.ID, row.Hostname); err != nil {
+		if err := cf.Delete(ctx, id, row.Hostname); err != nil {
 			fail(err)
 			continue
 		}
-		if err := store.DeleteRemoteHostTunnel(ctx, t.HostID, t.ID); err != nil {
+		if err := store.DeleteRemoteHostTunnel(ctx, id); err != nil {
 			fail(err)
 			continue
 		}

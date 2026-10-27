@@ -17825,6 +17825,8 @@ components:
       type: object
     MobileTunnelStatus:
       properties:
+        fixed:
+          type: boolean
         hostname:
           type: string
         lastError:
@@ -17841,6 +17843,7 @@ components:
       - supported
       - running
       - ready
+      - fixed
       - hostname
       - location
       - lastError

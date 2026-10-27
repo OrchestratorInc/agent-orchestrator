@@ -283,7 +283,7 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"h-0d483066194a12a5dc17.useao.dev","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true}}`)
+		_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"h-0d483066194a12a5dc17.useao.dev","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true,"fixed":true}}`)
 	}))
 	t.Cleanup(srv.Close)
 	writeRunFileFor(t, cfg, srv)

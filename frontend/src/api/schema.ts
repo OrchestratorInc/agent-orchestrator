@@ -6179,6 +6179,7 @@ export interface components {
             warning: string;
         };
         MobileTunnelStatus: {
+            fixed: boolean;
             hostname: string;
             lastError: string;
             location: string;

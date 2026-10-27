@@ -66,8 +66,8 @@ func readArgs(t *testing.T, argsFile string) (argv, token string) {
 }
 
 func TestTunnelRunnerAdvertisesAKnownFixedAddressAtOnce(t *testing.T) {
-	_, src := newFixedSource(t)
-	knownTunnel(t, src)
+	cloud, src := newFixedSource(t)
+	knownTunnel(t, cloud, src)
 	bin, argsFile := fakeCloudflared(t, registeredLine)
 
 	if got := advertisedHostname(t, namedRunner(t, bin, src)); got != "h-test.example.dev" {
@@ -82,7 +82,7 @@ func TestTunnelRunnerAdvertisesAKnownFixedAddressAtOnce(t *testing.T) {
 
 func TestTunnelRunnerStartsTheCachedTunnelWhenAOCloudIsDown(t *testing.T) {
 	cloud, src := newFixedSource(t)
-	knownTunnel(t, src)
+	knownTunnel(t, cloud, src)
 	cloud.set(http.StatusBadGateway)
 	bin, _ := fakeCloudflared(t, registeredLine)
 
@@ -157,12 +157,40 @@ func TestTunnelRunnerAsksForItsTunnelOnceEveryConnectionStaysDown(t *testing.T) 
 	if n := cloud.requests(); n != 2 {
 		t.Fatalf("asked AO Cloud %d times, want once at start and once after the drop", n)
 	}
+	// The next start serves the tunnel that answer handed out, and the
+	// restart never reads as a failure.
+	if r.next == nil || r.next.RunToken != "run-token-tun-2" {
+		t.Fatalf("next = %+v", r.next)
+	}
+	if snap := r.Runtime.Snapshot(); !snap.Running || snap.LastError != "" {
+		t.Fatalf("restarting status = %+v", snap)
+	}
+}
+
+// A repair asked for while AO Cloud cannot be reached is asked for again at
+// the next start, not dropped.
+func TestTunnelRunnerKeepsARepairAOCloudNeverHeard(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	knownTunnel(t, cloud, src)
+	cloud.set(http.StatusBadGateway)
+	bin, _ := fakeCloudflared(t, registeredLine)
+	r := namedRunner(t, bin, src)
+	r.repair = true
+	advertisedHostname(t, r) // the cached tunnel serves meanwhile
+	if !r.repair {
+		t.Fatal("a repair AO Cloud never heard was dropped")
+	}
+	cloud.set(0)
+	advertisedHostname(t, r)
+	if r.repair || len(cloud.repairs) != 2 || !cloud.repairs[1] {
+		t.Fatalf("repair %v, requests %v", r.repair, cloud.repairs)
+	}
 }
 
 // An edge restart drops a connection and registers it again within seconds.
 func TestTunnelRunnerDoesNotAskWhenAConnectionComesBack(t *testing.T) {
 	cloud, src := newFixedSource(t)
-	knownTunnel(t, src)
+	knownTunnel(t, cloud, src)
 	bin, _ := fakeCloudflared(t, registeredLine+"\n"+droppedLines+"\n"+registeredLine)
 	r := namedRunner(t, bin, src)
 	r.deadAfter, r.recheckEvery, r.lostGrace = time.Hour, time.Hour, 50*time.Millisecond
@@ -239,6 +267,11 @@ func TestTunnelRunnerMovesAQuickTunnelToTheFixedAddressOnceLinked(t *testing.T) 
 	if err := <-done; !errors.Is(err, errFixedTunnelReady) {
 		t.Fatalf("runOnce = %v, want the switch to the fixed address", err)
 	}
+	// Between the two connectors the tunnel reads as starting, so no client
+	// takes the switch for a failure.
+	if snap := r.Runtime.Snapshot(); !snap.Running || snap.LastError != "" {
+		t.Fatalf("switching status = %+v", snap)
+	}
 
 	// The check that found the address cached it, but its record is seconds
 	// old: the fixed connector still waits out the settle delay.
@@ -251,6 +284,10 @@ func TestTunnelRunnerMovesAQuickTunnelToTheFixedAddressOnceLinked(t *testing.T) 
 	}
 	if ep := r.Runtime.Endpoint(); ep != nil {
 		t.Fatalf("advertised %q before its new record settled", ep.Hostname)
+	}
+	// It started on the answer that found the address, without asking again.
+	if n := cloud.requests(); n != 1 {
+		t.Fatalf("asked AO Cloud %d times for one switch", n)
 	}
 }
 

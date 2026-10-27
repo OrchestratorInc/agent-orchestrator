@@ -457,9 +457,13 @@ type Service struct {
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
 	officialVersion func(context.Context, Target) (string, error)
-	// cloudflaredDownloadFailed turns planCloudflared to the package-manager
-	// fallback for the rest of this daemon run.
+	// cloudflaredDownloadFailed turns planCloudflared, the install the user
+	// starts, to the package-manager fallback once a download failed every
+	// try. The automatic download still tries again.
 	cloudflaredDownloadFailed atomic.Bool
+	// downloadWaits spaces a failing download's tries; see
+	// cloudflaredDownloadWaits.
+	downloadWaits []time.Duration
 	// cloudflaredAutoStarted records that remote access already asked for the
 	// connector once; onCloudflaredInstalled is its callback. Both under mu.
 	cloudflaredAutoStarted bool
@@ -531,6 +535,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		goos:                       runtime.GOOS,
 		goarch:                     runtime.GOARCH,
 		installTimeout:             defaultInstallTimeout,
+		downloadWaits:              cloudflaredDownloadWaits,
 		persistenceTimeout:         defaultPersistenceTimeout,
 		stop:                       stop,
 		backgroundContext:          backgroundContext,
@@ -1259,20 +1264,19 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 			return
 		}
 	}
+	if connectorInstalled := s.onCloudflaredInstalled; job.Target == TargetCloudflared && connectorInstalled != nil {
+		// A package-manager install remote access waited on, like the
+		// download: the connector starts before the job reads as done.
+		s.mu.Unlock()
+		connectorInstalled()
+		s.mu.Lock()
+	}
 	job.Status = StatusSucceeded
 	callback := s.onSucceeded
 	target := job.Target
-	var connectorInstalled func()
-	if target == TargetCloudflared {
-		// A package-manager install remote access waited on, like the download.
-		connectorInstalled = s.onCloudflaredInstalled
-	}
 	s.mu.Unlock()
 	if callback != nil {
 		callback(target)
-	}
-	if connectorInstalled != nil {
-		connectorInstalled()
 	}
 }
 
@@ -1735,12 +1739,8 @@ func (s *Service) planGH() Plan {
 // pinned asset, a Service without a downloader, or once the download failed
 // during this daemon run.
 func (s *Service) planCloudflared() Plan {
-	if download, ok := cloudflaredDownloads[s.goos+"/"+s.goarch]; ok && s.managedBinaries != nil && !s.cloudflaredDownloadFailed.Load() {
-		download.Name = "cloudflared"
-		if s.goos == "windows" {
-			download.Name += ".exe"
-		}
-		return Plan{Target: TargetCloudflared, Method: cloudflaredDownloadMethod, download: &download}
+	if plan, ok := s.cloudflaredDownloadPlan(); ok && !s.cloudflaredDownloadFailed.Load() {
+		return plan
 	}
 	switch s.goos {
 	case "windows":

@@ -37,18 +37,29 @@ type Tunnel struct {
 	ID       string
 	Hostname string
 	RunToken string
+	// RecordCreated is set when Ensure made the DNS record.
+	RecordCreated bool
 }
 
-// Hostname is hostID's fixed address. Derived from the random host ID rather
-// than stored, so the label never carries a machine or user name, and a
-// recreated tunnel keeps the address. It sits directly under the zone apex:
-// Universal SSL covers one level only.
-func (c *Cloudflare) Hostname(hostID string) string {
-	sum := sha256.Sum256([]byte("ao-named-tunnel:" + hostID))
-	return "h-" + hex.EncodeToString(sum[:10]) + "." + c.Zone
+// Hostname is the fixed address userID's account gives hostID. Derived from
+// the random IDs rather than stored, so the label never carries a machine or
+// user name, and a recreated tunnel keeps the address. Each account that lists
+// a host gets its own: an account that lists another account's host ID gets a
+// tunnel at an address no device of that account uses. It sits directly under
+// the zone apex: Universal SSL covers one level only.
+func (c *Cloudflare) Hostname(userID, hostID string) string {
+	return "h-" + tunnelLabel(userID, hostID) + "." + c.Zone
 }
 
-func tunnelName(hostID string) string { return "ao-" + hostID }
+func tunnelLabel(userID, hostID string) string {
+	sum := sha256.Sum256([]byte("ao-named-tunnel:" + userID + ":" + hostID))
+	return hex.EncodeToString(sum[:10])
+}
+
+// tunnelPrefix starts every host tunnel's name.
+const tunnelPrefix = "ao-"
+
+func tunnelName(userID, hostID string) string { return tunnelPrefix + tunnelLabel(userID, hostID) }
 
 func (c *Cloudflare) tunnelsPath() string {
 	return "/accounts/" + url.PathEscape(c.AccountID) + "/cfd_tunnel"
@@ -58,14 +69,14 @@ func (c *Cloudflare) recordsPath() string {
 	return "/zones/" + url.PathEscape(c.ZoneID) + "/dns_records"
 }
 
-// Ensure makes hostID's tunnel and its proxied DNS record exist and returns
-// them with the run token. Idempotent, so it also repairs a deleted tunnel or
-// a record someone edited.
+// Ensure makes the tunnel userID's account gives hostID, and its proxied DNS
+// record, exist and returns them with the run token. Idempotent, so it also
+// repairs a deleted tunnel or a record someone edited.
 //
 // The tunnel is locally configured: the connector's --url names the machine's
 // port, so a port change needs no API call.
-func (c *Cloudflare) Ensure(ctx context.Context, hostID string) (Tunnel, error) {
-	name := tunnelName(hostID)
+func (c *Cloudflare) Ensure(ctx context.Context, userID, hostID string) (Tunnel, error) {
+	name := tunnelName(userID, hostID)
 	var found []struct {
 		ID           string `json:"id"`
 		Name         string `json:"name"`
@@ -74,7 +85,7 @@ func (c *Cloudflare) Ensure(ctx context.Context, hostID string) (Tunnel, error) 
 	if err := c.do(ctx, http.MethodGet, c.tunnelsPath()+"?is_deleted=false&name="+url.QueryEscape(name), nil, &found); err != nil {
 		return Tunnel{}, fmt.Errorf("list tunnels: %w", err)
 	}
-	out := Tunnel{Hostname: c.Hostname(hostID)}
+	out := Tunnel{Hostname: c.Hostname(userID, hostID)}
 	for _, t := range found {
 		if t.Name != name {
 			continue
@@ -109,6 +120,7 @@ func (c *Cloudflare) Ensure(ctx context.Context, hostID string) (Tunnel, error) 
 	switch {
 	case existing.ID == "":
 		err = c.do(ctx, http.MethodPost, c.recordsPath(), record, nil)
+		out.RecordCreated = err == nil
 	case existing.Content != target || !existing.Proxied:
 		// Recreated tunnel, or proxying switched off by hand: an unproxied
 		// cfargotunnel.com CNAME serves nothing. Keep the address, repair it.
@@ -146,7 +158,8 @@ func (c *Cloudflare) findRecord(ctx context.Context, hostname string) (dnsRecord
 
 // Delete removes a tunnel and the DNS record that points at it. A record that
 // points at another tunnel is left alone: the machine recreated its tunnel
-// under the same address. Already-deleted parts count as deleted.
+// under the same address. Already-deleted parts count as deleted: measured,
+// Cloudflare answers both deletes of a deleted tunnel with success.
 func (c *Cloudflare) Delete(ctx context.Context, tunnelID, hostname string) error {
 	tunnel := c.tunnelsPath() + "/" + url.PathEscape(tunnelID)
 	// Cloudflare refuses to delete a tunnel with live connections (code 1022).
@@ -205,37 +218,31 @@ func (c *Cloudflare) Status(ctx context.Context, tunnelID string) (Status, error
 	return Status{OfflineSince: since, NeverConnected: t.Status == "inactive"}, nil
 }
 
-// ListedTunnel is a tunnel found by a listing, with the host its name names.
-type ListedTunnel struct {
-	ID     string
-	HostID string
-}
-
 // NeverConnected lists the host tunnels made before createdBefore that no
 // connector has ever served, Cloudflare's "inactive". The account may hold
 // other tunnels, and other AO Clouds' host tunnels: the caller checks each
 // against its own records before deleting it.
-func (c *Cloudflare) NeverConnected(ctx context.Context, createdBefore time.Time) ([]ListedTunnel, error) {
+func (c *Cloudflare) NeverConnected(ctx context.Context, createdBefore time.Time) ([]string, error) {
 	return c.listHostTunnels(ctx, "inactive", url.Values{"existed_at": {createdBefore.UTC().Format(time.RFC3339)}}, nil)
 }
 
 // Disconnected lists the host tunnels whose last connector left before
 // downBefore, Cloudflare's "down". The caller checks them like NeverConnected's.
-func (c *Cloudflare) Disconnected(ctx context.Context, downBefore time.Time) ([]ListedTunnel, error) {
+func (c *Cloudflare) Disconnected(ctx context.Context, downBefore time.Time) ([]string, error) {
 	return c.listHostTunnels(ctx, "down", nil, func(inactiveAt *time.Time) bool {
 		return inactiveAt != nil && !inactiveAt.After(downBefore)
 	})
 }
 
-// listHostTunnels pages through the account's host tunnels in one state. keep,
-// when set, filters on when each tunnel's connections went.
-func (c *Cloudflare) listHostTunnels(ctx context.Context, status string, filter url.Values, keep func(*time.Time) bool) ([]ListedTunnel, error) {
+// listHostTunnels pages through the IDs of the account's host tunnels in one
+// state. keep, when set, filters on when each tunnel's connections went.
+func (c *Cloudflare) listHostTunnels(ctx context.Context, status string, filter url.Values, keep func(*time.Time) bool) ([]string, error) {
 	const perPage = 100
-	var out []ListedTunnel
+	var out []string
 	// The account holds at most 1,000 tunnels, so ten pages cover it.
 	for page := 1; page <= 10; page++ {
 		q := url.Values{
-			"is_deleted": {"false"}, "status": {status}, "include_prefix": {tunnelName("")},
+			"is_deleted": {"false"}, "status": {status}, "include_prefix": {tunnelPrefix},
 			"per_page": {strconv.Itoa(perPage)}, "page": {strconv.Itoa(page)},
 		}
 		for k, v := range filter {
@@ -250,9 +257,8 @@ func (c *Cloudflare) listHostTunnels(ctx context.Context, status string, filter 
 			return out, fmt.Errorf("list %s tunnels: %w", status, err)
 		}
 		for _, t := range found {
-			hostID, ok := strings.CutPrefix(t.Name, tunnelName(""))
-			if ok && t.ID != "" && (keep == nil || keep(t.ConnsInactiveAt)) {
-				out = append(out, ListedTunnel{ID: t.ID, HostID: hostID})
+			if strings.HasPrefix(t.Name, tunnelPrefix) && t.ID != "" && (keep == nil || keep(t.ConnsInactiveAt)) {
+				out = append(out, t.ID)
 			}
 		}
 		if len(found) < perPage {

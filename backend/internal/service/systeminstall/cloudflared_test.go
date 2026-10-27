@@ -95,13 +95,14 @@ func TestCloudflaredDownloadLandsAndReportsSuccess(t *testing.T) {
 	}
 }
 
-// A failed or refused download must not leave remote access stuck: the next
-// Start hands the user today's package-manager route instead of the same
-// download again.
+// A download that fails every try must not leave remote access stuck: the
+// user's next Start hands them today's package-manager route instead of the
+// same download again.
 func TestCloudflaredDownloadFailureFallsBackToThePackageManager(t *testing.T) {
 	s, calls := newDownloadService("linux", "amd64", func(ports.ManagedBinaryDownload) (string, error) {
 		return "", errors.New("cloudflared checksum mismatch")
 	}, "apt-get")
+	s.downloadWaits = []time.Duration{time.Millisecond}
 
 	if _, err := s.Start(context.Background(), TargetCloudflared); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -119,8 +120,52 @@ func TestCloudflaredDownloadFailureFallsBackToThePackageManager(t *testing.T) {
 	if next.Status != StatusUnsupported || next.Command != "sudo apt-get install -y cloudflared" {
 		t.Fatalf("second job = %+v, want the manual apt-get fallback", next)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("download attempts = %d, want 1", calls.Load())
+	if calls.Load() != 2 {
+		t.Fatalf("download attempts = %d, want the first and one more", calls.Load())
+	}
+}
+
+// A laptop that turns remote access back on at boot can ask before its
+// network is up. The download is tried again, and the connector starts
+// before the job reads as done, so the desktop never sees "finished" with no
+// connector.
+func TestCloudflaredDownloadRecoversFromATransientFailure(t *testing.T) {
+	var tries atomic.Int32
+	s, _ := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
+		if tries.Add(1) == 1 {
+			return "", errors.New("dial tcp: lookup github.com: no such host")
+		}
+		return "/Users/test/.ao/bin/cloudflared", nil
+	})
+	s.downloadWaits = []time.Duration{time.Millisecond}
+	statusAtInstall := make(chan Status, 1)
+	s.DownloadCloudflaredInBackground(func() {
+		job, _ := s.Status(context.Background(), TargetCloudflared)
+		statusAtInstall <- job.Status
+	})
+	waitForStatus(t, s, TargetCloudflared, StatusSucceeded)
+	select {
+	case status := <-statusAtInstall:
+		if status != StatusRunning {
+			t.Fatalf("job read %q while the connector started, want running", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("onInstalled did not run after the second try landed")
+	}
+}
+
+// A download that failed every try is started again the next time remote
+// access looks for a connector, not only after a daemon restart.
+func TestDownloadCloudflaredInBackgroundTriesAgainAfterAFailure(t *testing.T) {
+	s, calls := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
+		return "", errors.New("connection reset")
+	})
+	s.DownloadCloudflaredInBackground(func() {})
+	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	s.DownloadCloudflaredInBackground(func() {})
+	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	if calls.Load() != 2 {
+		t.Fatalf("downloads = %d, want one per trigger", calls.Load())
 	}
 }
 
@@ -177,15 +222,21 @@ func TestPackageManagerCloudflaredStartsTheWaitingConnector(t *testing.T) {
 	s.commands = testCommandRunner(func(ctx context.Context, _ []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "true")
 	})
-	installed := make(chan struct{}, 1)
-	s.DownloadCloudflaredInBackground(func() { installed <- struct{}{} })
+	statusAtInstall := make(chan Status, 1)
+	s.DownloadCloudflaredInBackground(func() {
+		job, _ := s.Status(context.Background(), TargetCloudflared)
+		statusAtInstall <- job.Status
+	})
 
 	if _, err := s.Start(context.Background(), TargetCloudflared); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	waitForStatus(t, s, TargetCloudflared, StatusSucceeded)
 	select {
-	case <-installed:
+	case status := <-statusAtInstall:
+		if status != StatusRunning {
+			t.Fatalf("job read %q while the connector started, want running", status)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("the connector waiting on cloudflared was not started")
 	}

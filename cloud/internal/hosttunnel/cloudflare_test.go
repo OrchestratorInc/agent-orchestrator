@@ -159,29 +159,36 @@ func (f *fakeCloudflare) takeCalls() []string {
 	return calls
 }
 
-const hostID = "h_00000000-0000-0000-0000-000000000001"
+const (
+	userID = "00000000-0000-0000-0000-000000000002"
+	hostID = "h_00000000-0000-0000-0000-000000000001"
+)
 
 func TestEnsureMakesOneLocallyConfiguredTunnelAndRepairsIt(t *testing.T) {
 	cf, c := newFakeCloudflare(t)
 	ctx := context.Background()
-	host := c.Hostname(hostID)
+	host := c.Hostname(userID, hostID)
 	if !strings.HasPrefix(host, "h-") || !strings.HasSuffix(host, ".example.dev") || strings.Count(host, ".") != 2 {
 		t.Fatalf("hostname %q", host)
 	}
+	// Another account listing the same host ID gets another address.
+	if other := c.Hostname("00000000-0000-0000-0000-000000000003", hostID); other == host {
+		t.Fatalf("two accounts share %q", host)
+	}
 
-	first, err := c.Ensure(ctx, hostID)
+	first, err := c.Ensure(ctx, userID, hostID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.ID != "tun-1" || first.Hostname != host || first.RunToken != "run-token-tun-1" || cf.configSrc != "local" ||
+	if first.ID != "tun-1" || first.Hostname != host || first.RunToken != "run-token-tun-1" || !first.RecordCreated || cf.configSrc != "local" ||
 		cf.records[host] != (fakeRecord{id: "rec-" + host, content: "tun-1.cfargotunnel.com", proxied: true}) {
 		t.Fatalf("first = %+v, config_src=%q, records=%v", first, cf.configSrc, cf.records)
 	}
 
 	// Idempotent: the same tunnel, and no writes.
 	cf.takeCalls()
-	again, err := c.Ensure(ctx, hostID)
-	if err != nil || again != first {
+	again, err := c.Ensure(ctx, userID, hostID)
+	if want := (Tunnel{ID: first.ID, Hostname: first.Hostname, RunToken: first.RunToken}); err != nil || again != want {
 		t.Fatalf("again = %+v, %v", again, err)
 	}
 	for _, call := range cf.takeCalls() {
@@ -194,8 +201,8 @@ func TestEnsureMakesOneLocallyConfiguredTunnelAndRepairsIt(t *testing.T) {
 	// proxying switched off is repaired.
 	delete(cf.tunnels, "tun-1")
 	cf.records[host] = fakeRecord{id: "rec-" + host, content: "tun-1.cfargotunnel.com"}
-	recreated, err := c.Ensure(ctx, hostID)
-	if err != nil || recreated.ID != "tun-2" || recreated.Hostname != host ||
+	recreated, err := c.Ensure(ctx, userID, hostID)
+	if err != nil || recreated.ID != "tun-2" || recreated.Hostname != host || recreated.RecordCreated ||
 		cf.records[host].content != "tun-2.cfargotunnel.com" || !cf.records[host].proxied {
 		t.Fatalf("recreated = %+v, %v, record=%+v", recreated, err, cf.records[host])
 	}
@@ -203,8 +210,8 @@ func TestEnsureMakesOneLocallyConfiguredTunnelAndRepairsIt(t *testing.T) {
 
 func TestEnsureRefusesARemotelyManagedTunnel(t *testing.T) {
 	cf, c := newFakeCloudflare(t)
-	cf.tunnels["tun-9"] = fakeTunnel{name: tunnelName(hostID), remote: true}
-	if _, err := c.Ensure(context.Background(), hostID); err == nil || !strings.Contains(err.Error(), "managed remotely") {
+	cf.tunnels["tun-9"] = fakeTunnel{name: tunnelName(userID, hostID), remote: true}
+	if _, err := c.Ensure(context.Background(), userID, hostID); err == nil || !strings.Contains(err.Error(), "managed remotely") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -212,7 +219,7 @@ func TestEnsureRefusesARemotelyManagedTunnel(t *testing.T) {
 func TestDeleteDropsConnectionsAndKeepsARecordForAnotherTunnel(t *testing.T) {
 	cf, c := newFakeCloudflare(t)
 	ctx := context.Background()
-	first, err := c.Ensure(ctx, hostID)
+	first, err := c.Ensure(ctx, userID, hostID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +232,7 @@ func TestDeleteDropsConnectionsAndKeepsARecordForAnotherTunnel(t *testing.T) {
 	}
 	// Deleting again is a no-op, and a record now pointing at a newer tunnel
 	// survives the old tunnel's delete.
-	second, err := c.Ensure(ctx, hostID)
+	second, err := c.Ensure(ctx, userID, hostID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,41 +257,41 @@ func TestVerifyRejectsAnotherZone(t *testing.T) {
 
 type fakeSweepStore struct {
 	candidates []domain.RemoteHostTunnelCandidate
-	rows       map[string]domain.RemoteHostTunnel // by host
+	rows       map[string]domain.RemoteHostTunnel // by tunnel
 	touched    []string
 	seen       map[string]time.Time
 	released   []string
 	deleted    []string
 }
 
-func (s *fakeSweepStore) ReleaseRemoteHostTunnel(_ context.Context, hostID, tunnelID string) error {
-	if row, ok := s.rows[hostID]; ok && row.TunnelID == tunnelID {
+func (s *fakeSweepStore) ReleaseRemoteHostTunnel(_ context.Context, tunnelID string) error {
+	if row, ok := s.rows[tunnelID]; ok && !row.Released {
 		row.Released = true
-		s.rows[hostID] = row
-		s.released = append(s.released, hostID)
+		s.rows[tunnelID] = row
+		s.released = append(s.released, tunnelID)
 	}
 	return nil
 }
 
-func (s *fakeSweepStore) GetRemoteHostTunnel(_ context.Context, hostID string) (domain.RemoteHostTunnel, bool, error) {
-	row, ok := s.rows[hostID]
+func (s *fakeSweepStore) FindRemoteHostTunnel(_ context.Context, tunnelID string) (domain.RemoteHostTunnel, bool, error) {
+	row, ok := s.rows[tunnelID]
 	return row, ok, nil
 }
 
-func (s *fakeSweepStore) ListRemoteHostTunnelSweepCandidates(context.Context, time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
+func (s *fakeSweepStore) ListRemoteHostTunnelSweepCandidates(context.Context, time.Time, time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
 	return s.candidates, nil
 }
-func (s *fakeSweepStore) TouchRemoteHostTunnel(_ context.Context, hostID string, seenAt time.Time) error {
-	s.touched = append(s.touched, hostID)
+func (s *fakeSweepStore) TouchRemoteHostTunnel(_ context.Context, tunnelID string, seenAt time.Time) error {
+	s.touched = append(s.touched, tunnelID)
 	if s.seen == nil {
 		s.seen = map[string]time.Time{}
 	}
-	s.seen[hostID] = seenAt
+	s.seen[tunnelID] = seenAt
 	return nil
 }
-func (s *fakeSweepStore) DeleteRemoteHostTunnel(_ context.Context, hostID, _ string) error {
-	s.deleted = append(s.deleted, hostID)
-	delete(s.rows, hostID)
+func (s *fakeSweepStore) DeleteRemoteHostTunnel(_ context.Context, tunnelID string) error {
+	s.deleted = append(s.deleted, tunnelID)
+	delete(s.rows, tunnelID)
 	return nil
 }
 
@@ -328,9 +335,9 @@ func TestSweepReleasesTheTunnelsOfMachinesThatLeft(t *testing.T) {
 	gone, brief := now.Add(-10*time.Minute), now.Add(-2*time.Minute)
 	rows := map[string]domain.RemoteHostTunnel{}
 	for _, host := range []string{"asleep", "brief", "back"} {
-		rows["h_"+host] = domain.RemoteHostTunnel{HostID: "h_" + host, TunnelID: host, Hostname: "h-" + host + ".example.dev"}
+		rows[host] = domain.RemoteHostTunnel{HostID: "h_" + host, TunnelID: host, Hostname: "h-" + host + ".example.dev"}
 	}
-	rows["h_replaced"] = domain.RemoteHostTunnel{HostID: "h_replaced", TunnelID: "newer", Hostname: "h-replaced.example.dev"}
+	rows["newer"] = domain.RemoteHostTunnel{HostID: "h_replaced", TunnelID: "newer", Hostname: "h-replaced.example.dev"}
 	cf.tunnels["asleep"] = fakeTunnel{name: "ao-h_asleep", status: "down", inactive: &gone}
 	cf.tunnels["brief"] = fakeTunnel{name: "ao-h_brief", status: "down", inactive: &brief}
 	// Listed as down, but its machine reconnected before the release.
@@ -344,7 +351,7 @@ func TestSweepReleasesTheTunnelsOfMachinesThatLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if done != 1 || strings.Join(store.released, ",") != "h_asleep" || len(store.deleted) != 0 || !store.rows["h_asleep"].Released {
+	if done != 1 || strings.Join(store.released, ",") != "asleep" || len(store.deleted) != 0 || !store.rows["asleep"].Released {
 		t.Fatalf("done %d, released %v, deleted %v", done, store.released, store.deleted)
 	}
 	if _, ok := cf.tunnels["asleep"]; ok {
@@ -378,12 +385,12 @@ func TestSweepDeletesTunnelsNoConnectorEverServed(t *testing.T) {
 	for i := range 105 {
 		id := fmt.Sprintf("bulk-%03d", i)
 		cf.tunnels[id] = fakeTunnel{name: "ao-h_" + id, status: "inactive", created: old}
-		rows["h_"+id] = domain.RemoteHostTunnel{HostID: "h_" + id, TunnelID: id, Hostname: "h-" + id + ".example.dev"}
+		rows[id] = domain.RemoteHostTunnel{HostID: "h_" + id, TunnelID: id, Hostname: "h-" + id + ".example.dev"}
 	}
 	for _, host := range []string{"unused", "young", "ran"} {
-		rows["h_"+host] = domain.RemoteHostTunnel{HostID: "h_" + host, TunnelID: host, Hostname: "h-" + host + ".example.dev"}
+		rows[host] = domain.RemoteHostTunnel{HostID: "h_" + host, TunnelID: host, Hostname: "h-" + host + ".example.dev"}
 	}
-	rows["h_replaced"] = domain.RemoteHostTunnel{HostID: "h_replaced", TunnelID: "newer", Hostname: "h-replaced.example.dev"}
+	rows["newer"] = domain.RemoteHostTunnel{HostID: "h_replaced", TunnelID: "newer", Hostname: "h-replaced.example.dev"}
 	cf.records["h-unused.example.dev"] = fakeRecord{id: "rec-unused", content: "unused.cfargotunnel.com", proxied: true}
 	store := &fakeSweepStore{rows: rows}
 

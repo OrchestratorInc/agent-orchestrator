@@ -104,75 +104,105 @@ func (s *Store) UpdateRemoteHostAddress(ctx context.Context, userID, hostID, add
 	})
 }
 
-// GetRemoteHostTunnel reads one host's tunnel. The HTTP edge must prove the
-// host token digest first.
-func (s *Store) GetRemoteHostTunnel(ctx context.Context, hostID string) (domain.RemoteHostTunnel, bool, error) {
+const remoteHostTunnelColumns = `user_id, host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce,
+	created_at, updated_at, last_seen_at, released_at IS NOT NULL`
+
+func scanRemoteHostTunnel(row pgx.Row) (domain.RemoteHostTunnel, bool, error) {
 	var t domain.RemoteHostTunnel
-	err := s.withService(ctx, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce, updated_at, last_seen_at,
-				released_at IS NOT NULL
-			FROM ao_remote_host_tunnels WHERE host_id = $1`, hostID).
-			Scan(&t.HostID, &t.TunnelID, &t.Hostname, &t.EncryptedRunToken, &t.RunTokenNonce, &t.UpdatedAt, &t.LastSeenAt, &t.Released)
-	})
+	err := row.Scan(&t.UserID, &t.HostID, &t.TunnelID, &t.Hostname, &t.EncryptedRunToken, &t.RunTokenNonce,
+		&t.CreatedAt, &t.UpdatedAt, &t.LastSeenAt, &t.Released)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RemoteHostTunnel{}, false, nil
 	}
 	return t, err == nil, err
 }
 
-func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTunnel) error {
-	return s.withService(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO ao_remote_host_tunnels
-			(host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce)
-			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT (host_id) DO UPDATE SET tunnel_id = EXCLUDED.tunnel_id,
-			hostname = EXCLUDED.hostname, encrypted_run_token = EXCLUDED.encrypted_run_token,
-			run_token_nonce = EXCLUDED.run_token_nonce, updated_at = now(), last_seen_at = now(),
-			released_at = NULL`,
-			t.HostID, t.TunnelID, t.Hostname, t.EncryptedRunToken, t.RunTokenNonce)
+// GetRemoteHostTunnel reads the tunnel userID's account gives hostID. The
+// HTTP edge must prove the host token digest first.
+func (s *Store) GetRemoteHostTunnel(ctx context.Context, userID, hostID string) (domain.RemoteHostTunnel, bool, error) {
+	var t domain.RemoteHostTunnel
+	var found bool
+	err := s.withService(ctx, func(tx pgx.Tx) error {
+		var err error
+		t, found, err = scanRemoteHostTunnel(tx.QueryRow(ctx, `SELECT `+remoteHostTunnelColumns+`
+			FROM ao_remote_host_tunnels WHERE user_id = $1 AND host_id = $2`, userID, hostID))
 		return err
 	})
+	return t, found, err
 }
 
-func (s *Store) TouchRemoteHostTunnel(ctx context.Context, hostID string, seenAt time.Time) error {
+// FindRemoteHostTunnel reads the row naming a tunnel Cloudflare listed.
+func (s *Store) FindRemoteHostTunnel(ctx context.Context, tunnelID string) (domain.RemoteHostTunnel, bool, error) {
+	var t domain.RemoteHostTunnel
+	var found bool
+	err := s.withService(ctx, func(tx pgx.Tx) error {
+		var err error
+		t, found, err = scanRemoteHostTunnel(tx.QueryRow(ctx, `SELECT `+remoteHostTunnelColumns+`
+			FROM ao_remote_host_tunnels WHERE tunnel_id = $1`, tunnelID))
+		return err
+	})
+	return t, found, err
+}
+
+// SaveRemoteHostTunnel writes a tunnel Cloudflare made or repaired and
+// returns when its DNS record was made: now when recordCreated, or for a new
+// row, and otherwise kept from the row it replaces.
+func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTunnel, recordCreated bool) (time.Time, error) {
+	var since time.Time
+	err := s.withService(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `INSERT INTO ao_remote_host_tunnels
+			(user_id, host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (user_id, host_id) DO UPDATE SET tunnel_id = EXCLUDED.tunnel_id,
+			hostname = EXCLUDED.hostname, encrypted_run_token = EXCLUDED.encrypted_run_token,
+			run_token_nonce = EXCLUDED.run_token_nonce, updated_at = now(), last_seen_at = now(),
+			released_at = NULL,
+			created_at = CASE WHEN $7 THEN now() ELSE ao_remote_host_tunnels.created_at END
+			RETURNING created_at`,
+			t.UserID, t.HostID, t.TunnelID, t.Hostname, t.EncryptedRunToken, t.RunTokenNonce, recordCreated).Scan(&since)
+	})
+	return since, err
+}
+
+func (s *Store) TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seenAt time.Time) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET last_seen_at = $2 WHERE host_id = $1`, hostID, seenAt)
+		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET last_seen_at = $2 WHERE tunnel_id = $1`, tunnelID, seenAt)
 		return err
 	})
 }
 
 // ReleaseRemoteHostTunnel records that tunnelID was deleted while its host was
-// offline, only while the row still names it: a host that got a new tunnel in
+// offline, only while a row still names it: a host that got a new tunnel in
 // the meantime keeps it.
-func (s *Store) ReleaseRemoteHostTunnel(ctx context.Context, hostID, tunnelID string) error {
+func (s *Store) ReleaseRemoteHostTunnel(ctx context.Context, tunnelID string) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET released_at = now()
-			WHERE host_id = $1 AND tunnel_id = $2 AND released_at IS NULL`, hostID, tunnelID)
+			WHERE tunnel_id = $1 AND released_at IS NULL`, tunnelID)
 		return err
 	})
 }
 
 // DeleteRemoteHostTunnel removes the row only while it still names tunnelID,
 // so a sweep never drops a tunnel the machine recreated in the meantime.
-func (s *Store) DeleteRemoteHostTunnel(ctx context.Context, hostID, tunnelID string) error {
+func (s *Store) DeleteRemoteHostTunnel(ctx context.Context, tunnelID string) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM ao_remote_host_tunnels WHERE host_id = $1 AND tunnel_id = $2`, hostID, tunnelID)
+		_, err := tx.Exec(ctx, `DELETE FROM ao_remote_host_tunnels WHERE tunnel_id = $1`, tunnelID)
 		return err
 	})
 }
 
-// ListRemoteHostTunnelSweepCandidates returns tunnels no account registers any
-// more, and tunnels whose machine has not fetched its token since cutoff,
-// released or not.
-func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
+// ListRemoteHostTunnelSweepCandidates returns tunnels whose account no longer
+// lists their host, once unwritten since unregisteredBefore, and tunnels whose
+// machine has not fetched its token since cutoff, released or not.
+func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff, unregisteredBefore time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
 	items := []domain.RemoteHostTunnelCandidate{}
 	err := s.withService(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT t.host_id, t.tunnel_id, t.hostname, t.last_seen_at,
-				EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.host_id = t.host_id), t.released_at IS NOT NULL
-			FROM ao_remote_host_tunnels t
-			WHERE t.last_seen_at < $1
-				OR NOT EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.host_id = t.host_id)
-			ORDER BY t.last_seen_at LIMIT 500`, cutoff)
+		rows, err := tx.Query(ctx, `SELECT host_id, tunnel_id, hostname, last_seen_at, registered, released FROM (
+				SELECT t.host_id, t.tunnel_id, t.hostname, t.last_seen_at, t.updated_at, t.released_at IS NOT NULL AS released,
+					EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.user_id = t.user_id AND h.host_id = t.host_id) AS registered
+				FROM ao_remote_host_tunnels t) c
+			WHERE c.last_seen_at < $1 OR (NOT c.registered AND c.updated_at < $2)
+			ORDER BY c.last_seen_at LIMIT 500`, cutoff, unregisteredBefore)
 		if err != nil {
 			return err
 		}

@@ -22,6 +22,8 @@ type fakeAOCloud struct {
 	// tokens are handed out in turn, the last one from then on; empty means
 	// run-token-tun-1 every time.
 	tokens []string
+	// since is when the DNS record was made; zero means just now.
+	since time.Time
 }
 
 func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +45,11 @@ func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(f.tokens) > 0 {
 		token = f.tokens[min(len(f.repairs), len(f.tokens))-1]
 	}
-	_ = json.NewEncoder(w).Encode(map[string]string{"hostname": "h-test.example.dev", "runToken": token})
+	since := f.since
+	if since.IsZero() {
+		since = time.Now()
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"hostname": "h-test.example.dev", "runToken": token, "since": since})
 }
 
 func (f *fakeAOCloud) set(status int) {
@@ -81,10 +87,13 @@ func link(t *testing.T, src *FixedTunnelSource, digest string) {
 	}
 }
 
-// knownTunnel caches the fake's tunnel as first fetched a day ago, as on
+// knownTunnel makes the fake's record a day old and caches its tunnel, as on
 // every start after the first.
-func knownTunnel(t *testing.T, src *FixedTunnelSource) {
+func knownTunnel(t *testing.T, cloud *fakeAOCloud, src *FixedTunnelSource) {
 	t.Helper()
+	cloud.mu.Lock()
+	cloud.since = time.Now().Add(-24 * time.Hour)
+	cloud.mu.Unlock()
 	b, err := json.Marshal(cachedNamedTunnel{Key: src.cacheKey("host-uuid"), Tunnel: NamedTunnel{
 		Hostname: "h-test.example.dev", RunToken: "run-token-tun-1", Since: time.Now().Add(-24 * time.Hour),
 	}})
@@ -111,13 +120,18 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	ctx := context.Background()
 
+	knownTunnel(t, cloud, src)
 	first, err := src.TunnelFor(ctx, "host-uuid", false)
-	if err != nil || first.Hostname != "h-test.example.dev" || first.RunToken != "run-token-tun-1" || time.Since(first.Since) > time.Minute {
+	if err != nil || first.Hostname != "h-test.example.dev" || first.RunToken != "run-token-tun-1" || !first.Since.Equal(cloud.since) {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
-	// A later answer keeps the first sighting: the record is no newer.
+	// AO Cloud deleted the record and made it again under the same name: the
+	// address is new again, though the machine has known the name for a day.
+	cloud.mu.Lock()
+	cloud.since = time.Now()
+	cloud.mu.Unlock()
 	again, err := src.TunnelFor(ctx, "host-uuid", true)
-	if err != nil || !again.Since.Equal(first.Since) || cloud.repairs[1] != true || cloud.digests[1] != "account-digest" {
+	if err != nil || !again.Since.Equal(cloud.since) || cloud.repairs[1] != true || cloud.digests[1] != "account-digest" {
 		t.Fatalf("again = %+v, %v, repairs %v, digests %v", again, err, cloud.repairs, cloud.digests)
 	}
 

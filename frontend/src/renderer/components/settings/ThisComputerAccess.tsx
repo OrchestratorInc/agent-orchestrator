@@ -107,6 +107,8 @@ export function ThisComputerAccess() {
 
 	const turnOn = async () => {
 		const before = await fetchMobileStatus();
+		// Listed before this turn-on, by Connect Mobile or an earlier one: a failure here leaves it listed.
+		const listed = accountHosts.data?.some((host) => host.hostId === before.hostId) ?? false;
 		let hostId = "";
 		let shared = false;
 		try {
@@ -132,7 +134,7 @@ export function ThisComputerAccess() {
 		} finally {
 			// Not shared, the switch shows off; leaving access on, or the account listing this computer, would contradict it.
 			if (!shared) {
-				if (hostId) await deleteAccountRemoteHost(cloudBaseUrl, hostId).catch(() => undefined);
+				if (hostId && !listed) await deleteAccountRemoteHost(cloudBaseUrl, hostId).catch(() => undefined);
 				await restoreRemoteAccess(before);
 			}
 		}

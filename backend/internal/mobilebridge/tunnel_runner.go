@@ -41,8 +41,11 @@ type TunnelRunner struct {
 	HostID string
 
 	// repair asks AO Cloud to remake the tunnel on the next start, after the
-	// fixed address stopped being served. Run is the only goroutine using it.
+	// fixed address stopped being served, until AO Cloud has answered. next is
+	// a tunnel AO Cloud already handed out for the next start. Run is the only
+	// goroutine using either.
 	repair bool
+	next   *NamedTunnel
 	// nudge makes a quick tunnel ask AO Cloud for the fixed address now.
 	nudge <-chan struct{}
 
@@ -104,14 +107,22 @@ var (
 
 func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	var named NamedTunnel
-	if t.Fixed != nil {
+	switch {
+	case t.Fixed == nil:
+	case t.next != nil && !t.repair:
+		// Fetched by the run that stopped to start it.
+		named = *t.next
+	default:
 		// Bounded well under stableTunnelRun, so a failing request never
 		// counts as a stable run that resets the backoff ladder.
 		provisionCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
 		var err error
 		named, err = t.Fixed.TunnelFor(provisionCtx, t.HostID, t.repair)
 		cancel()
-		t.repair = false
+		// A repair AO Cloud never heard is asked for again at the next start.
+		if err == nil || errors.Is(err, errHostRefused) || errors.Is(err, errNotLinked) {
+			t.repair = false
+		}
 		switch {
 		case named.RunToken != "" && err != nil:
 			t.logger().Warn("could not reach AO Cloud; starting the cached fixed tunnel", "error", err)
@@ -119,6 +130,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 			t.logger().Warn("no fixed address for this machine; starting a quick tunnel", "error", err)
 		}
 	}
+	t.next = nil
 	fixed := named.RunToken != ""
 
 	// Reserved after provisioning, which can take seconds, to keep the
@@ -177,6 +189,8 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	var upgraded, withdrawn atomic.Bool
 	// unserved holds why a fixed connector looks unable to serve its tunnel.
 	var unserved atomic.Pointer[string]
+	// next is the tunnel a watcher stopped this run to start.
+	var next atomic.Pointer[NamedTunnel]
 	markUnserved := func(reason string) {
 		unserved.CompareAndSwap(nil, &reason)
 		stopRun()
@@ -186,9 +200,9 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	case fixed:
 		health = newConnectorHealth(time.Now())
 		go t.watchConnector(runCtx, health, markUnserved)
-		go t.watchFixedTunnel(runCtx, named, health, func() { withdrawn.Store(true); stopRun() })
+		go t.watchFixedTunnel(runCtx, named, health, func(n *NamedTunnel) { next.Store(n); withdrawn.Store(true); stopRun() })
 	case t.Fixed != nil:
-		go t.awaitFixedTunnel(runCtx, func() { upgraded.Store(true); stopRun() })
+		go t.awaitFixedTunnel(runCtx, func(n NamedTunnel) { next.Store(&n); upgraded.Store(true); stopRun() })
 	}
 
 	scanner := bufio.NewScanner(stderr)
@@ -203,6 +217,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	}
 
 	waitErr := cmd.Wait()
+	t.next = next.Load()
 	switch {
 	case unserved.Load() != nil:
 		waitErr = errors.New(*unserved.Load())
@@ -212,7 +227,13 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	case withdrawn.Load():
 		waitErr = errFixedTunnelChanged
 	}
-	t.Runtime.Exited(waitErr)
+	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged)) {
+		// A planned restart reads as starting, not failed: the next connector
+		// follows at once.
+		t.Runtime.Started()
+	} else {
+		t.Runtime.Exited(waitErr)
+	}
 	// Only if this runner still owns the record: a replacement started while
 	// this one was unwinding will already have written its own pid there.
 	_ = pidOwner.release(cmd.Process.Pid)
@@ -325,7 +346,7 @@ const (
 // never costs a working address. Waiting for a link only reads a local file;
 // asking AO Cloud backs off, except that a new link (a new account token)
 // is tried at once.
-func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func()) {
+func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func(NamedTunnel)) {
 	every := t.upgradeEvery
 	if every == 0 {
 		every = fixedUpgradeInterval
@@ -347,7 +368,7 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func()) {
 		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, false)
 		cancel()
 		if err == nil && named.RunToken != "" {
-			ready()
+			ready(named)
 			return
 		}
 		if digest != tried {
@@ -360,9 +381,9 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func()) {
 }
 
 // watchFixedTunnel calls withdrawn once AO Cloud stops handing out the tunnel
-// this connector serves: every account removed the machine, its link was
-// revoked by a new pairing password, or the tunnel was remade with a new
-// token. Removal deletes the tunnel while it is connected, and AO Cloud is
+// this connector serves, with the tunnel it hands out instead, if any: the
+// account removed the machine, its link was revoked by a new pairing
+// password, or the tunnel was remade with a new token. Removal deletes the tunnel while it is connected, and AO Cloud is
 // what says so. An unreachable AO Cloud is not a withdrawal.
 //
 // It also asks as soon as every connection has been down for lostGrace. A
@@ -370,7 +391,7 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func()) {
 // released, and asking is what makes AO Cloud give it a new one, so a laptop
 // that wakes is back once Cloudflare routes the address to that tunnel. An
 // edge restart reconnects within seconds and asks nothing.
-func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel, health *connectorHealth, withdrawn func()) {
+func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel, health *connectorHealth, withdrawn func(*NamedTunnel)) {
 	every, grace := t.recheckEvery, t.lostGrace
 	if every == 0 {
 		every = fixedRecheckInterval
@@ -396,9 +417,12 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 		requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
 		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, false)
 		cancel()
-		if errors.Is(err, errHostRefused) || errors.Is(err, errNotLinked) ||
-			(err == nil && (named.RunToken != serving.RunToken || named.Hostname != serving.Hostname)) {
-			withdrawn()
+		if errors.Is(err, errHostRefused) || errors.Is(err, errNotLinked) {
+			withdrawn(nil)
+			return
+		}
+		if err == nil && (named.RunToken != serving.RunToken || named.Hostname != serving.Hostname) {
+			withdrawn(&named)
 			return
 		}
 	}

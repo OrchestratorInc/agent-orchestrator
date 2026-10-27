@@ -180,7 +180,9 @@ type Server struct {
 	localAuthEnabled bool
 	localSessionTTL  time.Duration
 	localAuthLimiter *fixedWindowLimiter
-	sandboxProvider  string
+	// tunnelLimiter spaces the Cloudflare writes each account can cause.
+	tunnelLimiter   *fixedWindowLimiter
+	sandboxProvider string
 	// availableSandboxProviders is every provider a client may select for a
 	// session, always including sandboxProvider (the default). It gates the
 	// per-session provider override and is reported to clients via /me.
@@ -398,6 +400,7 @@ func New(options Options) *Server {
 		localAuthEnabled:          options.LocalAuthEnabled,
 		localSessionTTL:           options.LocalSessionTTL,
 		localAuthLimiter:          newFixedWindowLimiter(10, time.Minute, 4096),
+		tunnelLimiter:             newFixedWindowLimiter(tunnelWritesPerAccount, tunnelWriteWindow, 16384),
 		sandboxProvider:           sandboxProvider,
 		availableSandboxProviders: availableSandboxProviders,
 		capabilityGatedProviders:  capabilityGatedProviders,

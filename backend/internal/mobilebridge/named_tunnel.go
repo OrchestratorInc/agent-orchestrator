@@ -46,9 +46,8 @@ func NewFixedTunnelSource(controlPlaneURL, dataDir string) *FixedTunnelSource {
 type NamedTunnel struct {
 	Hostname string `json:"hostname"`
 	RunToken string `json:"runToken"`
-	// Since is when this machine first got Hostname from AO Cloud. Its DNS
-	// record is no older, so until it settles, resolvers that asked for the
-	// name earlier may still hold an NXDOMAIN. Zero means long ago.
+	// Since is when AO Cloud made Hostname's DNS record. Until it settles,
+	// resolvers that asked for the name earlier may still hold an NXDOMAIN.
 	Since time.Time `json:"since,omitzero"`
 }
 
@@ -61,7 +60,7 @@ var (
 	// errNotLinked means no signed-in device has linked this machine yet.
 	errNotLinked = errors.New("this machine is not linked to an AO account")
 	// errHostRefused means AO Cloud does not list this machine under the
-	// digest any more: it was removed from every account.
+	// digest any more: its account removed it.
 	errHostRefused = errors.New("AO Cloud no longer lists this machine")
 )
 
@@ -82,7 +81,7 @@ func (s *FixedTunnelSource) digest() string {
 // When AO Cloud cannot answer it returns the cached tunnel together with the
 // error, so the caller can log it and still start the connector: the run
 // token is all a connector needs. A machine AO Cloud refuses loses the cache,
-// because its tunnel is deleted with its last registration. A tunnel with an
+// because its tunnel is deleted with its registration. A tunnel with an
 // empty RunToken is unusable.
 func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair bool) (NamedTunnel, error) {
 	state, err := Load(s.StatePath)
@@ -102,10 +101,9 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 	if err != nil {
 		return cached, err // the zero value when nothing is cached
 	}
-	// Kept across answers: the quick-to-fixed check and the rechecks all
-	// write this cache, so "cached" never means "old".
-	t.Since = cached.Since
-	if cached.Hostname != t.Hostname {
+	// AO Cloud knows when the record was made, even one it deleted and made
+	// again under the same name; the hostname alone cannot tell.
+	if t.Since.IsZero() {
 		t.Since = time.Now()
 	}
 	// A lost cache only costs the fallback until the next good answer.
