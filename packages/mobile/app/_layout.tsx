@@ -18,7 +18,7 @@ import { UpdatesManager } from "../lib/UpdatesManager";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { LayoutGrid } from "../lib/layoutGrid";
-import { largeTitleScreenOptions, stackScreenOptions } from "../lib/stackScreenOptions";
+import { stackScreenOptions } from "../lib/stackScreenOptions";
 import { AppProvider } from "../lib/store";
 import { appFonts } from "../lib/appFonts";
 import { symbolFonts } from "../lib/symbolFonts";
@@ -261,8 +261,23 @@ function Shell() {
 						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgSurface : "transparent" },
 					}}
 				/>
-				{/* A large title on iOS, like the board it is opened from. */}
-				<Stack.Screen name="notifications" options={{ title: "Notifications", ...largeTitleScreenOptions() }} />
+				{/* Notifications holds a stack of its own, whose page draws the
+				    header. On iOS it is a full-height sheet over the board, like
+				    Settings; on Android a full-screen page with the system back. */}
+				<Stack.Screen
+					name="notifications"
+					options={{
+						presentation: Platform.OS === "ios" ? "formSheet" : "card",
+						headerShown: false,
+						title: "Notifications",
+						...(Platform.OS === "ios" ? {
+							sheetAllowedDetents: [1],
+							sheetGrabberVisible: true,
+							sheetCornerRadius,
+						} : null),
+						contentStyle: { backgroundColor: t.bgBase },
+					}}
+				/>
 				{/* The page renames itself to the project once it loads. */}
 				<Stack.Screen name="project/[id]" options={{ title: "Project" }} />
 				<Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />

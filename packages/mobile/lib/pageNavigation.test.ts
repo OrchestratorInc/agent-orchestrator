@@ -9,14 +9,16 @@ describe("opening pages outside sheets", () => {
 	it("recognises every sheet and modal the root stack presents", () => {
 		for (const name of ["sheets/review-actions", "sheets/conversation-usage", "settings", "spawn", "pair"]) expect(isPresentedRoute(name, "ios")).toBe(true);
 		expect(isPresentedRoute("settings/environments", "ios")).toBe(false);
-		for (const name of ["(tabs)", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "notifications"]) expect(isPresentedRoute(name, "ios")).toBe(false);
+		for (const name of ["(tabs)", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]"]) expect(isPresentedRoute(name, "ios")).toBe(false);
 	});
 
 	// Android pushes Settings as a page with its own top app bar, so a page
 	// opened from it is pushed on top instead of dismissing Settings first.
-	it("treats Settings as presented on iOS only", () => {
-		expect(isPresentedRoute("settings", "ios")).toBe(true);
-		expect(isPresentedRoute("settings", "android")).toBe(false);
+	it("treats Settings and Notifications as presented on iOS only", () => {
+		for (const name of ["settings", "notifications"]) {
+			expect(isPresentedRoute(name, "ios")).toBe(true);
+			expect(isPresentedRoute(name, "android")).toBe(false);
+		}
 		for (const name of ["sheets/review-actions", "spawn", "pair"]) expect(isPresentedRoute(name, "android")).toBe(true);
 	});
 

@@ -52,7 +52,7 @@ async function renderRoot(platform: string) {
 	return renderer;
 }
 
-const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]", "notifications"];
+const pushedPages = ["session/[id]", "review/[sessionId]", "reviewer/[reviewId]", "shell/[handleId]", "preview/[id]", "files/[sessionId]/index", "files/[sessionId]/file", "project/[id]"];
 
 describe("root stack", () => {
 	// A cold start on a deep link or a notification tap lands with the board
@@ -169,11 +169,11 @@ describe("root stack", () => {
 			}
 			// Titled before the page renames itself to the project.
 			expect(renderer.root.findByProps({ name: "project/[id]" }).props.options.title).toBe("Project");
-			// Notifications takes a large title on iOS, like the board it opens from.
+			// Notifications is a sheet on iOS and a page on Android, either way
+			// headed by its own stack's bar (app/notifications/_layout).
 			const notifications = renderer.root.findByProps({ name: "notifications" }).props.options;
-			expect(notifications.title).toBe("Notifications");
-			if (platform === "ios") expect(notifications.headerLargeTitleEnabled).toBe(true);
-			else expect(notifications).not.toHaveProperty("headerLargeTitleEnabled");
+			expect(notifications).toMatchObject({ title: "Notifications", headerShown: false });
+			expect(notifications.presentation).toBe(platform === "ios" ? "formSheet" : "card");
 		} finally {
 			act(() => renderer.unmount());
 		}

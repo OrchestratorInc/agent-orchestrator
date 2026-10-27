@@ -30,6 +30,10 @@ export default function BoardTabsLayout() {
 	const router = useRouter();
 	const { allSessions } = useApp();
 	const waiting = workersNeedingYou(allSessions);
+	// iOS labels stay in the system font at the system size, as in Apple's own
+	// bars: any font family there also takes React Native's 14pt default and
+	// swells the bar. Android's Material bar takes the app's face.
+	const labelFont = Platform.OS === "ios" ? {} : { fontFamily: "DMSans_500Medium" };
 	// The store changes on every poll; the tabs only need to change with the
 	// theme or the badge.
 	return useMemo(() => (
@@ -39,8 +43,8 @@ export default function BoardTabsLayout() {
 			tintColor={t.accent}
 			iconColor={{ default: t.textSecondary, selected: t.accent }}
 			labelStyle={{
-				default: { fontFamily: "DMSans_500Medium", color: t.textSecondary },
-				selected: { fontFamily: "DMSans_500Medium", color: t.accent },
+				default: { ...labelFont, color: t.textSecondary },
+				selected: { ...labelFont, color: t.accent },
 			}}
 			// iOS keeps the system material behind the bar (glass on iOS 26), which
 			// already follows the theme's light or dark. Android's bar is a flat
@@ -50,12 +54,14 @@ export default function BoardTabsLayout() {
 			rippleColor={rippleColor(t)}
 		>
 			<NativeTabs.Trigger name="(workers)">
-				<NativeTabs.Trigger.Icon sf={symbols.workers.ios} md={symbols.workers.android} />
+				{/* Solid glyphs, as tab bars draw them: outlines at tab size read
+				    thin and loose next to the labels. */}
+				<NativeTabs.Trigger.Icon sf="square.stack.3d.up.fill" md={symbols.workers.android} />
 				<NativeTabs.Trigger.Label>{boardTitle("(workers)")}</NativeTabs.Trigger.Label>
 				{waiting > 0 ? <NativeTabs.Trigger.Badge>{String(waiting)}</NativeTabs.Trigger.Badge> : null}
 			</NativeTabs.Trigger>
 			<NativeTabs.Trigger name="(projects)">
-				<NativeTabs.Trigger.Icon sf={{ default: symbols.projects.ios, selected: "folder.fill" }} md={symbols.projects.android} />
+				<NativeTabs.Trigger.Icon sf="folder.fill" md={symbols.projects.android} />
 				<NativeTabs.Trigger.Label>{boardTitle("(projects)")}</NativeTabs.Trigger.Label>
 			</NativeTabs.Trigger>
 			<NativeTabs.Trigger name="(prs)">
@@ -63,9 +69,10 @@ export default function BoardTabsLayout() {
 				<NativeTabs.Trigger.Label>{boardTitle("(prs)")}</NativeTabs.Trigger.Label>
 			</NativeTabs.Trigger>
 			{/* New task in the tab bar's own row: iOS 26 sets the search role's
-			    item apart from the tabs as a round button, and its "+" replaces
-			    the magnifying glass. Disabled, so a press never selects it; the
-			    press opens the spawn sheet the way the page under it would.
+			    item apart from the tabs as a round button, and the compose glyph
+			    Notes and Mail use replaces the magnifying glass. Disabled, so a
+			    press never selects it; the press opens the spawn sheet the way the
+			    page under it would.
 			    Android keeps its floating New button and never shows this tab:
 			    the role is iOS's, and `hidden` stays fixed so the tabs never
 			    remount. */}
@@ -77,7 +84,7 @@ export default function BoardTabsLayout() {
 				accessibilityLabel="New task"
 				listeners={{ tabPress: () => startNewTask(() => router.push("/spawn")) }}
 			>
-				<NativeTabs.Trigger.Icon sf="plus" md="add" />
+				<NativeTabs.Trigger.Icon sf="square.and.pencil" md="add" />
 			</NativeTabs.Trigger>
 		</NativeTabs>
 	), [router, t, waiting]);

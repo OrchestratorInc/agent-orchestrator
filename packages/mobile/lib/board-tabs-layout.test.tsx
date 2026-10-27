@@ -67,8 +67,8 @@ describe("board tabs", () => {
 		expect(triggers().map((trigger) => trigger.props.name)).toEqual(["(workers)", "(projects)", "(prs)"]);
 		expect(triggers().map((trigger) => trigger.findByType("TriggerLabel" as never).props.children)).toEqual(["Workers", "Projects", "Pull Requests"]);
 		const [workers, projects, prs] = triggers().map((trigger) => trigger.findByType("TriggerIcon" as never).props);
-		expect(workers).toMatchObject({ sf: "square.3.layers.3d", md: "stacks" });
-		expect(projects).toMatchObject({ sf: { default: "folder", selected: "folder.fill" }, md: "folder" });
+		expect(workers).toMatchObject({ sf: "square.stack.3d.up.fill", md: "stacks" });
+		expect(projects).toMatchObject({ sf: "folder.fill", md: "folder" });
 		// SF Symbols has a pull request; Android draws lucide's from a bitmap.
 		expect(prs.sf).toBe("arrow.triangle.pull");
 		expect(String(prs.src)).toContain("tab-pull-request");
@@ -96,13 +96,21 @@ describe("board tabs", () => {
 		expect(renderer!.root.findByType("NativeTabs" as never).props).toMatchObject({
 			tintColor: "#accent",
 			iconColor: { default: "#textSecondary", selected: "#accent" },
-			labelStyle: {
-				default: { fontFamily: "DMSans_500Medium", color: "#textSecondary" },
-				selected: { fontFamily: "DMSans_500Medium", color: "#accent" },
-			},
+			labelStyle: { default: { color: "#textSecondary" }, selected: { color: "#accent" } },
 			indicatorColor: "#accentTint",
 			backgroundColor: os === "android" ? "#bgSurface" : undefined,
 		});
+	});
+
+	// Any font family on iOS also takes React Native's 14pt default, which makes
+	// the bar bigger than the system's, so iOS keeps the system font.
+	it.each([["ios", undefined], ["android", "DMSans_500Medium"]])("sets the tab label font on %s", (os, family) => {
+		fixtures.platform.OS = os as string;
+		render();
+		const { labelStyle } = renderer!.root.findByType("NativeTabs" as never).props;
+		expect(labelStyle.default.fontFamily).toBe(family);
+		expect(labelStyle.selected.fontFamily).toBe(family);
+		expect(labelStyle.default.fontSize).toBeUndefined();
 	});
 
 	// Workers waiting on a person: the one count worth lighting a tab for.
@@ -121,7 +129,7 @@ describe("board tabs", () => {
 		render();
 		const compose = renderer!.root.findAllByType("Trigger" as never).find((trigger) => trigger.props.name === "compose")!;
 		expect(compose.props).toMatchObject({ role: "search", disabled: true, hidden: os !== "ios", accessibilityLabel: "New task" });
-		expect(compose.findByType("TriggerIcon" as never).props).toMatchObject({ sf: "plus" });
+		expect(compose.findByType("TriggerIcon" as never).props).toMatchObject({ sf: "square.and.pencil" });
 		act(() => compose.props.listeners.tabPress());
 		expect(fixtures.push).toHaveBeenCalledWith("/spawn");
 		fixtures.push.mockClear();

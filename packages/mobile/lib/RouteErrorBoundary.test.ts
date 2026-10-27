@@ -25,7 +25,7 @@ const screenRoutes = [
 	"settings/machine/[id]/edit.tsx",
 	"browser/[id].tsx",
 	"settings/theme.tsx",
-	"notifications.tsx",
+	"notifications/index.tsx",
 	"onboarding.tsx",
 	"pair.tsx",
 	"preview/[id].tsx",
@@ -60,6 +60,7 @@ const deferredRoutes = [
 	"(tabs)/(projects)/_layout.tsx",
 	"(tabs)/(prs)/_layout.tsx",
 	"settings/_layout.tsx",
+	"notifications/_layout.tsx",
 ];
 
 describe("route error boundaries", () => {

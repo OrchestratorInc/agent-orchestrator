@@ -191,7 +191,7 @@ describe("Workers header", () => {
 	it("declares Settings and Notifications as trailing header items", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		const [settings, notifications] = headerButtons();
-		expect(settings.props).toMatchObject({ icon: "gearshape", accessibilityLabel: "Settings" });
+		expect(settings.props).toMatchObject({ icon: "gear", accessibilityLabel: "Settings" });
 		expect(notifications.props).toMatchObject({ icon: "bell", accessibilityLabel: "Notifications" });
 		expect(notifications.findAllByType("StackToolbarBadge" as never)).toHaveLength(0);
 		act(() => settings.props.onPress());

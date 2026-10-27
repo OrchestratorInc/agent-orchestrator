@@ -154,7 +154,7 @@ vi.mock("./NotificationSwipeRow", async () => {
 	return { NotificationSwipeRow: ({ children, ...props }: { children: React.ReactNode; onClear: () => boolean }) => React.createElement("NotificationSwipeRow", props, children) };
 });
 
-import NotificationsScreen from "../app/notifications";
+import NotificationsScreen from "../app/notifications/index";
 import { MachineIdentity } from "./MachineIdentity";
 
 let renderer: ReactTestRenderer | undefined;

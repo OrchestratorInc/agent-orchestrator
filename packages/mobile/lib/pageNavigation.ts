@@ -7,9 +7,9 @@ import { Platform } from "react-native";
 // opened from a push tap or a sheet action landed as a bottom sheet.
 const PRESENTED_ROUTES = new Set(["spawn", "pair", "render"]);
 
-// Settings is a sheet only on iOS. Android pushes it as a page, so a page
-// opened from it goes on top like any other push.
-const IOS_PRESENTED_ROUTES = new Set(["settings"]);
+// Settings and Notifications are sheets only on iOS. Android pushes them as
+// pages, so a page opened from one goes on top like any other push.
+const IOS_PRESENTED_ROUTES = new Set(["settings", "notifications"]);
 
 export function isPresentedRoute(name: string, os: string = Platform.OS): boolean {
 	return PRESENTED_ROUTES.has(name) || (os === "ios" && IOS_PRESENTED_ROUTES.has(name)) || name.startsWith("sheets/");

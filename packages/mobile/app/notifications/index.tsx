@@ -1,6 +1,6 @@
 import { Stack, useFocusEffect, useRouter, type Href } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
-import { useOpenPage } from "../lib/pageNavigation";
+import { useOpenPage } from "../../lib/pageNavigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
@@ -20,11 +20,11 @@ import {
 	markAllNotificationsRead,
 	markNotificationRead,
 	type NotificationRecord,
-} from "../lib/api";
-import { AppSymbol } from "../lib/AppSymbol";
-import { rowDividerWidth } from "../lib/divider";
-import { haptics } from "../lib/haptics";
-import { NotificationTypeIcon } from "../lib/notification-type-icon";
+} from "../../lib/api";
+import { AppSymbol } from "../../lib/AppSymbol";
+import { rowDividerWidth } from "../../lib/divider";
+import { haptics } from "../../lib/haptics";
+import { NotificationTypeIcon } from "../../lib/notification-type-icon";
 import {
 	notificationIdentity,
 	notificationsAcrossHosts,
@@ -34,27 +34,27 @@ import {
 	notificationVisual,
 	relativeTime,
 	type HostedNotification,
-} from "../lib/notificationView";
-import { useApp } from "../lib/store";
-import { MINUTE_MS, useNow } from "../lib/useNow";
-import type { Theme } from "../lib/theme";
-import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { Button, Dot, EmptyState, ListSectionHeader } from "../lib/ui";
-import { usePressFeedback } from "../lib/pressFeedback";
-import { refreshControlColors } from "../lib/refreshControlColors";
-import { TabPageScroll } from "../lib/TabPageScroll";
-import { toolbarIcon } from "../lib/toolbarIcon";
-import { UnpairedState } from "../lib/UnpairedState";
-import { iconSize, radius, space, stateOpacity, type } from "../lib/tokens";
-import { userFacingError } from "../lib/connectionError";
-import { ToastHost } from "../lib/Toast";
-import type { ToastDuration } from "../lib/Toast.types";
-import { useToast } from "../lib/useToast";
-import { NotificationSwipeRow } from "../lib/NotificationSwipeRow";
-import { MachineIdentity } from "../lib/MachineIdentity";
-import { machineAppearance } from "../lib/machineAppearance";
+} from "../../lib/notificationView";
+import { useApp } from "../../lib/store";
+import { MINUTE_MS, useNow } from "../../lib/useNow";
+import type { Theme } from "../../lib/theme";
+import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
+import { usePressFeedback } from "../../lib/pressFeedback";
+import { refreshControlColors } from "../../lib/refreshControlColors";
+import { TabPageScroll } from "../../lib/TabPageScroll";
+import { toolbarIcon } from "../../lib/toolbarIcon";
+import { UnpairedState } from "../../lib/UnpairedState";
+import { iconSize, radius, space, stateOpacity, type } from "../../lib/tokens";
+import { userFacingError } from "../../lib/connectionError";
+import { ToastHost } from "../../lib/Toast";
+import type { ToastDuration } from "../../lib/Toast.types";
+import { useToast } from "../../lib/useToast";
+import { NotificationSwipeRow } from "../../lib/NotificationSwipeRow";
+import { MachineIdentity } from "../../lib/MachineIdentity";
+import { machineAppearance } from "../../lib/machineAppearance";
 
-export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 const PAGE_SIZE = 50;
 type FeedItem = HostedNotification<NotificationRecord>;
@@ -303,7 +303,9 @@ function NotificationsContent() {
 		// What a tap does depends on the session behind it, exactly as the renderer
 		// decides: a terminated agent waiting on input is restored, not opened.
 		const action = notificationAction(notification, sessionState(notification.hostId, notification.sessionId));
-		if (action.kind === "open") router.navigate({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: notification.hostId } });
+		// Through openPage: on iOS this page is a sheet, and a session pushed
+		// while it is up would open inside it.
+		if (action.kind === "open") openPage({ pathname: "/session/[id]", params: { id: action.sessionId, hostId: notification.hostId } });
 		else if (action.kind === "review") openPage(notificationTarget(notification, knownHostIds) as Href);
 		// Back to the board's own PRs tab: navigating from this pushed page would
 		// stack a second board on top of it.
@@ -369,7 +371,7 @@ function NotificationsContent() {
 		void restore(sessionId, hostId)
 			.then(() => {
 				haptics.success();
-				router.navigate({ pathname: "/session/[id]", params: { id: sessionId, hostId } });
+				openPage({ pathname: "/session/[id]", params: { id: sessionId, hostId } });
 			})
 			.catch((cause) => {
 				haptics.error();

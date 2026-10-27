@@ -6,6 +6,12 @@ import { toolbarIcon } from "./toolbarIcon";
 /** What the badge prints; past this it stops growing. */
 const MAX_BADGE = 99;
 
+// iOS draws the board's own pair as the Settings app's gear and the bell, as
+// bare glyphs without iOS 26's shared glass capsule. Android keeps its
+// Material settings and notifications glyphs.
+const SETTINGS_ICON = toolbarIcon({ ios: "gear", android: "settings" });
+const NOTIFICATIONS_ICON = toolbarIcon({ ios: "bell", android: "notifications" });
+
 export type BoardHeaderItemsProps = {
 	unread: number;
 	notifications?: boolean;
@@ -46,10 +52,11 @@ export function BoardHeaderItems({ unread, notifications = true, filter = null, 
 	const trailing = useMemo(() => (
 		<Stack.Toolbar placement="right">
 			{!ios ? filter : null}
-			<Stack.Toolbar.Button icon={toolbarIcon("settings")} accessibilityLabel="Settings" onPress={() => router.push("/settings")} />
+			<Stack.Toolbar.Button icon={SETTINGS_ICON} hidesSharedBackground accessibilityLabel="Settings" onPress={() => router.push("/settings")} />
 			{notifications ? (
 				<Stack.Toolbar.Button
-					icon={toolbarIcon("notifications")}
+					icon={NOTIFICATIONS_ICON}
+					hidesSharedBackground
 					// iOS draws bar-item badges only from iOS 26, so the count is in the label too.
 					accessibilityLabel={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
 					onPress={() => router.navigate("/notifications")}

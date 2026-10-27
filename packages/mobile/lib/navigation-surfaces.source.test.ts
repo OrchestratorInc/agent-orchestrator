@@ -59,8 +59,8 @@ describe("navigation surfaces", () => {
 		}
 		const items = source("./BoardHeaderItems.tsx");
 		expect(items).toContain('<Stack.Toolbar placement="right">');
-		expect(items).toContain('icon={toolbarIcon("settings")}');
-		expect(items).toContain('icon={toolbarIcon("notifications")}');
+		expect(items).toContain("icon={SETTINGS_ICON} hidesSharedBackground");
+		expect(items).toContain("icon={NOTIFICATIONS_ICON}");
 		expect(items).toContain("<Stack.Toolbar.Badge>");
 	});
 

@@ -16,10 +16,11 @@ describe("notifications host routing", () => {
 // The title, back button and Clear all are the native header's: a large title
 // on iOS, a top app bar on Android, the system back on both.
 describe("notifications header", () => {
-	const page = source("../app/notifications.tsx");
+	const page = source("../app/notifications/index.tsx");
 
-	it("takes a large title from the root stack instead of drawing a header row", () => {
-		expect(source("../app/_layout.tsx")).toContain('<Stack.Screen name="notifications" options={{ title: "Notifications", ...largeTitleScreenOptions() }} />');
+	it("takes a large title from its own stack instead of drawing a header row", () => {
+		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>');
+		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack.Screen name="index" options={{ title: "Notifications" }} />');
 		expect(page).not.toContain("ScreenHeader");
 		expect(page).not.toContain("HeaderIconButton");
 		expect(page).not.toContain("insets.top");
@@ -40,7 +41,7 @@ describe("notifications header", () => {
 
 // The page is built from the shared pieces rather than local copies of them.
 describe("notifications body", () => {
-	const page = source("../app/notifications.tsx");
+	const page = source("../app/notifications/index.tsx");
 
 	it("says what went wrong through the shared, announced toast", () => {
 		expect(page).toContain("<ToastHost toast={toast} />");

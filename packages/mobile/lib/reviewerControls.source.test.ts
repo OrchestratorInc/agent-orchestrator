@@ -174,7 +174,7 @@ describe("reviewer control integration", () => {
 		expect(source("./PRCard.tsx")).toContain("openPage({\n\t\t\t\t\tpathname: \"/review/[sessionId]\"");
 		expect(source("./worker-list-row.tsx")).toContain("if (reviewRoute) openPage(reviewRoute);");
 		expect(source("./chat/ChatSessionScreen.tsx")).toContain("if (route) openPage(route);");
-		expect(source("../app/notifications.tsx")).toContain('action.kind === "review") openPage(');
+		expect(source("../app/notifications/index.tsx")).toContain('action.kind === "review") openPage(');
 		expect(source("./PushManager.tsx")).toContain('if (target === "review") openPage(destination as Href);');
 		expect(detail).toContain("openPage(destination);");
 		for (const path of ["./PRCard.tsx", "./worker-list-row.tsx", "./chat/ChatSessionScreen.tsx", "../app/review/[sessionId].tsx"]) {
