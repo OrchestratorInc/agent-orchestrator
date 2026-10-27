@@ -1,0 +1,57 @@
+{
+  "note": "Recorded by the search benchmark (search_benchmark_test.go). Regenerate with scripts/search-benchmark.sh --update after an intentional ranking change.",
+  "suites": {
+    "agentic": {
+      "n": 43,
+      "session_r1": 93,
+      "session_r5": 95.3,
+      "session_r10": 95.3,
+      "session_ndcg10": 94.5,
+      "session_mrr": 0.942,
+      "turn_n": 0,
+      "turn_r5": 0,
+      "turn_r10": 0,
+      "turn_mrr": 0,
+      "empty": 2.3
+    },
+    "locomo/full": {
+      "n": 1536,
+      "session_r1": 62.8,
+      "session_r5": 87.8,
+      "session_r10": 94.1,
+      "session_ndcg10": 75.4,
+      "session_mrr": 0.738,
+      "turn_n": 1536,
+      "turn_r5": 53.2,
+      "turn_r10": 62,
+      "turn_mrr": 0.406,
+      "empty": 0.3
+    },
+    "longmemeval-s/full": {
+      "n": 470,
+      "session_r1": 87.7,
+      "session_r5": 96.8,
+      "session_r10": 98.1,
+      "session_ndcg10": 90.7,
+      "session_mrr": 0.915,
+      "turn_n": 470,
+      "turn_r5": 83.4,
+      "turn_r10": 88.7,
+      "turn_mrr": 0.698,
+      "empty": 0.6
+    },
+    "longmemeval-s/quick": {
+      "n": 100,
+      "session_r1": 92,
+      "session_r5": 100,
+      "session_r10": 100,
+      "session_ndcg10": 93.5,
+      "session_mrr": 0.954,
+      "turn_n": 100,
+      "turn_r5": 84,
+      "turn_r10": 89,
+      "turn_mrr": 0.756,
+      "empty": 0
+    }
+  }
+}

@@ -811,6 +811,52 @@ type SessionInterfaceTransitionMessage struct {
 	AuthoredByUser  bool
 }
 
+type SessionSearchDoc struct {
+	ID        int64
+	SourceKey string
+	DocKey    string
+	SessionID string
+	ProjectID string
+	Harness   string
+	Machine   string
+	Kind      string
+	MessageID string
+	Seq       int64
+	CreatedAt int64
+	IndexedAt int64
+}
+
+type SessionSearchFt struct {
+	Title string
+	Body  string
+	Paths string
+}
+
+type SessionSearchSource struct {
+	SourceKey     string
+	Kind          string
+	SessionID     string
+	ProjectID     string
+	Harness       string
+	Path          string
+	CursorValue   int64
+	FileSize      int64
+	FileMtime     int64
+	DocCount      int64
+	Fingerprint   string
+	Stamp         string
+	State         string
+	LastErrorCode string
+	UpdatedAt     int64
+}
+
+type SessionSearchText struct {
+	ID    int64
+	Title string
+	Body  string
+	Paths string
+}
+
 type SessionTerminalTurn struct {
 	ID              int64
 	SessionID       string
