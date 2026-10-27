@@ -3,6 +3,7 @@ import {
 	claudeChoiceModel,
 	filterDisabledModels,
 	foldClaudeAliasDefault,
+	mergeSameNamedModels,
 	offeredCatalogModels,
 	splitClaudeModels,
 	withoutLocalAvailability,
@@ -48,6 +49,37 @@ describe("splitClaudeModels", () => {
 		const { current, other } = splitClaudeModels(aliases);
 		expect(current.map((item) => item.id)).toEqual(["fable", "opus", "opus[1m]", "sonnet", "haiku"]);
 		expect(other).toEqual([]);
+	});
+});
+
+describe("mergeSameNamedModels", () => {
+	it("lists a model reached by two ids once, keeping the chosen id", () => {
+		const models = [model("Fable 5.1", "fable"), model("Opus 5.5", "opus"), model("Sonnet 5.5"), model("Opus 5.5", "claude-opus-5-5")];
+		const merged = mergeSameNamedModels(models, "claude-opus-5-5");
+		expect(merged.map((item) => item.id)).toEqual(["fable", "sonnet-5-5", "claude-opus-5-5"]);
+		expect(merged.find((item) => item.id === "claude-opus-5-5")).toMatchObject({ aliases: ["opus"] });
+		// With nothing chosen, the first listing stays.
+		expect(mergeSameNamedModels(models).map((item) => item.id)).toEqual(["fable", "opus", "sonnet-5-5"]);
+	});
+
+	it("keeps the row a chosen alias already folded into", () => {
+		const models = [{ ...model("Opus 5.5", "opus"), aliases: ["default"] }, model("Opus 5.5", "claude-opus-5-5")];
+		const merged = mergeSameNamedModels(models, "default");
+		expect(merged).toEqual([{ id: "opus", label: "Opus 5.5", aliases: ["default", "claude-opus-5-5"] }]);
+	});
+
+	it("with nothing chosen, keeps a twin the installed CLI can run", () => {
+		const gated = { ...model("Opus 5.5", "claude-opus-5-5"), unavailableReason: "Requires Claude Code 2.2" };
+		const merged = mergeSameNamedModels([gated, model("Opus 5.5", "opus")]);
+		expect(merged).toEqual([{ id: "opus", label: "Opus 5.5", aliases: ["claude-opus-5-5"] }]);
+	});
+
+	it("keeps distinct names, context variants, and the same name under different groups", () => {
+		const models = [
+			model("Opus 5.5"), model("Opus 5.5 (1M context)", "opus[1m]"),
+			{ ...model("GPT-6", "openai/gpt-6"), group: "OpenAI" }, { ...model("GPT-6", "codex/gpt-6"), group: "Codex" },
+		];
+		expect(mergeSameNamedModels(models).map((item) => item.id)).toEqual(["opus-5-5", "opus[1m]", "openai/gpt-6", "codex/gpt-6"]);
 	});
 });
 
