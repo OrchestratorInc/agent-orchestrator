@@ -210,6 +210,62 @@ paths:
       summary: Read recognized login prompts and background process state
       tags:
       - agents
+  /api/v1/agents/{agent}/auth/operations/{operationId}/actions:
+    post:
+      operationId: actOnAgentUILogin
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentLoginActionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLoginSnapshot'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Send a fixed action to a recognized native login menu
+      tags:
+      - agents
   /api/v1/agents/{agent}/auth/operations/{operationId}/code:
     post:
       operationId: submitAgentUILoginCode
@@ -13896,6 +13952,26 @@ components:
       required:
       - agents
       type: object
+    AgentLoginActionRequest:
+      properties:
+        action:
+          enum:
+          - previous
+          - next
+          - select
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+          - "6"
+          - "7"
+          - "8"
+          - "9"
+          type: string
+      required:
+      - action
+      type: object
     AgentLoginMethod:
       properties:
         id:
@@ -13925,6 +14001,18 @@ components:
         loginUrl:
           type: string
         method:
+          type: string
+        nativeOptions:
+          items:
+            type: string
+          type: array
+        nativePrompt:
+          enum:
+          - waiting
+          - menu
+          - terminal_required
+          type: string
+        selectedOption:
           type: string
         status:
           enum:

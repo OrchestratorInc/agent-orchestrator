@@ -73,6 +73,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/auth/operations/{operationId}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a fixed action to a recognized native login menu */
+        post: operations["actOnAgentUILogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/auth/operations/{operationId}/code": {
         parameters: {
             query?: never;
@@ -4712,6 +4729,10 @@ export interface components {
         AgentInstallerCatalogResponse: {
             agents: components["schemas"]["AgentInstallPlan"][];
         };
+        AgentLoginActionRequest: {
+            /** @enum {string} */
+            action: "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+        };
         AgentLoginMethod: {
             id: string;
             label: string;
@@ -4726,6 +4747,10 @@ export interface components {
             id: string;
             loginUrl?: string;
             method: string;
+            nativeOptions?: string[];
+            /** @enum {string} */
+            nativePrompt?: "waiting" | "menu" | "terminal_required";
+            selectedOption?: string;
             /** @enum {string} */
             status: "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
         };
@@ -8490,6 +8515,70 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    actOnAgentUILogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentLoginActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginSnapshot"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

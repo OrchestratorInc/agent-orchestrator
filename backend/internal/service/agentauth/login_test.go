@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,207 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
+
+type guidedTerminalFake struct {
+	mu         sync.Mutex
+	input      shellterm.OpenCommandTerminalInput
+	output     string
+	alive      bool
+	keys       []string
+	closed     bool
+	closeErr   error
+	closeCalls int
+}
+
+func (f *guidedTerminalFake) OpenCommandTerminal(_ context.Context, input shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.input = input
+	f.alive = true
+	return shellterm.ShellTerminal{HandleID: "private-auth-pty"}, nil
+}
+func (f *guidedTerminalFake) ObserveAuthTerminal(_ context.Context, _ string) (shellterm.AuthTerminalObservation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return shellterm.AuthTerminalObservation{Output: f.output, Alive: f.alive}, nil
+}
+func (f *guidedTerminalFake) SendAuthTerminalKey(_ context.Context, _ string, action string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, action)
+	return nil
+}
+func (f *guidedTerminalFake) CloseShellTerminal(_ context.Context, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalls++
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	f.closed = true
+	return nil
+}
+
+func (f *guidedTerminalFake) IsShellTerminalChildAlive(context.Context, string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.alive && !f.closed, nil
+}
+
+func TestEveryCommandPlanHasAnInlineLoginMethod(t *testing.T) {
+	for _, plan := range plans {
+		if len(plan.command) == 0 || plan.LaunchMode != LaunchTerminal {
+			continue
+		}
+		if got := loginMethods(plan.AgentID); len(got) == 0 {
+			t.Errorf("%s has no inline login method", plan.AgentID)
+		}
+	}
+}
+
+func TestGuidedNativeLoginDoesNotStartAnotherCommandAfterCleanupFailure(t *testing.T) {
+	pty := &guidedTerminalFake{closeErr: errors.New("child still running")}
+	svc := New(foundExecutable("opencode"), pty)
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "opencode", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.CancelLogin(t.Context(), "opencode", started.ID)
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_CANCEL_PENDING" {
+		t.Fatalf("cancel error=%v", err)
+	}
+	_, err = svc.StartLogin(t.Context(), "opencode", "native", "")
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_CLEANUP_PENDING" {
+		t.Fatalf("restart error=%v", err)
+	}
+	pty.mu.Lock()
+	calls := pty.closeCalls
+	pty.mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("cleanup calls=%d", calls)
+	}
+}
+
+func TestGuidedNativeLoginHidesTerminalAndCancels(t *testing.T) {
+	pty := &guidedTerminalFake{output: "private credential=do-not-return\n> OpenAI\n"}
+	svc := New(foundExecutable("opencode"), pty)
+	t.Cleanup(svc.Close)
+	plan, err := svc.Plan(t.Context(), "opencode")
+	if err != nil || len(plan.Methods) < 4 || plan.Methods[3].ID != "native" {
+		t.Fatalf("plan methods=%+v err=%v", plan.Methods, err)
+	}
+	started, err := svc.StartLogin(t.Context(), "opencode", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.NativePrompt != "waiting" || started.Status != "running" {
+		t.Fatalf("started=%+v", started)
+	}
+	var current LoginSnapshot
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err = svc.Login(t.Context(), "opencode", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.NativePrompt == "menu" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if current.NativePrompt != "menu" || current.SelectedOption != "OpenAI" {
+		t.Fatalf("prompt=%+v", current)
+	}
+	encoded, _ := json.Marshal(current)
+	if strings.Contains(string(encoded), "do-not-return") || strings.Contains(string(encoded), "private-auth-pty") {
+		t.Fatalf("leaked terminal: %s", encoded)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "opencode", started.ID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	pty.mu.Lock()
+	if !reflect.DeepEqual(pty.keys, []string{"next"}) || !reflect.DeepEqual(pty.input.Argv[1:], []string{"auth", "login"}) {
+		t.Fatalf("keys=%v argv=%v", pty.keys, pty.input.Argv)
+	}
+	pty.mu.Unlock()
+	if _, err := svc.CancelLogin(t.Context(), "opencode", started.ID); err != nil {
+		t.Fatal(err)
+	}
+	pty.mu.Lock()
+	closed := pty.closed
+	pty.mu.Unlock()
+	if !closed {
+		t.Fatal("hidden PTY was not closed")
+	}
+}
+
+func TestNativePromptRequiresFallbackForUnreviewedOutput(t *testing.T) {
+	for _, output := range []string{"secret=do-not-return\n> Custom provider", "Enter your API key: do-not-return", "Choose a provider\n", "Choose a provider\n1) Anthropic\n2) Custom gateway\n"} {
+		kind, label, options := nativePrompt(output)
+		if kind != "terminal_required" || label != "" || options != nil {
+			t.Fatalf("output=%q kind=%q label=%q options=%v", output, kind, label, options)
+		}
+	}
+	// A lone numbered line is ordinary output text, not a menu.
+	if kind, _, _ := nativePrompt("1. Read the docs first"); kind != "waiting" {
+		t.Fatalf("lone numbered line kind=%q", kind)
+	}
+}
+
+func TestNativePromptRecognizesNumberedMenus(t *testing.T) {
+	kind, selected, options := nativePrompt("Select a provider\n1) Anthropic\n2) OpenAI\n3) OpenRouter\n")
+	if kind != "menu" || selected != "" || !reflect.DeepEqual(options, []string{"Anthropic", "OpenAI", "OpenRouter"}) {
+		t.Fatalf("kind=%q selected=%q options=%v", kind, selected, options)
+	}
+	kind, selected, options = nativePrompt("1) Anthropic\n2) Custom provider\n")
+	if kind != "terminal_required" || selected != "" || options != nil {
+		t.Fatalf("unreviewed numbered menu kind=%q options=%v", kind, options)
+	}
+}
+
+func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
+	pty := &guidedTerminalFake{output: "Select a provider\n1) Anthropic\n2) OpenAI\n"}
+	svc := New(foundExecutable("goose"), pty)
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "goose", "native", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var current LoginSnapshot
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err = svc.Login(t.Context(), "goose", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if current.NativePrompt == "menu" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if current.NativePrompt != "menu" || !reflect.DeepEqual(current.NativeOptions, []string{"Anthropic", "OpenAI"}) {
+		t.Fatalf("snapshot=%+v", current)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "next"); err == nil {
+		t.Fatal("accepted navigation on a numbered menu")
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "3"); err == nil {
+		t.Fatal("accepted a digit outside the recognized options")
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2"); err != nil {
+		t.Fatal(err)
+	}
+	pty.mu.Lock()
+	if !reflect.DeepEqual(pty.keys, []string{"2"}) {
+		t.Fatalf("keys=%v", pty.keys)
+	}
+	pty.mu.Unlock()
+	if _, err := svc.CancelLogin(t.Context(), "goose", started.ID); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLoginMethodsInvokeOnlyFixedCommands(t *testing.T) {
 	for _, tc := range []struct {
@@ -35,6 +237,27 @@ func TestLoginMethodsInvokeOnlyFixedCommands(t *testing.T) {
 		{"claude-code", "console", []string{"auth", "login", "--console"}, false},
 		{"claude-code", "sso", []string{"auth", "login", "--sso"}, false},
 		{"claude-code", "setup_token", nil, true},
+		{"cline", "browser", []string{"auth", "cline"}, false},
+		{"kiro", "browser", []string{"login"}, false},
+		{"cursor", "browser", []string{"login"}, false},
+		{"continue", "browser", []string{"login"}, false},
+		{"grok", "browser", []string{"login"}, false},
+		{"command-code", "browser", []string{"login"}, false},
+		{"opencode", "anthropic_key", nil, true},
+		{"opencode", "openai_key", nil, true},
+		{"opencode", "openrouter_key", nil, true},
+		{"opencode-v2", "anthropic_key", []string{"auth", "import", "--standalone"}, true},
+		{"opencode-v2", "openai_key", []string{"auth", "import", "--standalone"}, true},
+		{"opencode-v2", "openrouter_key", []string{"auth", "import", "--standalone"}, true},
+		{"codewhale", "codewhale_deepseek_key", []string{"auth", "set", "--provider", "deepseek", "--api-key-stdin"}, true},
+		{"codewhale", "codewhale_openai_key", []string{"auth", "set", "--provider", "openai", "--api-key-stdin"}, true},
+		{"codewhale", "codewhale_openrouter_key", []string{"auth", "set", "--provider", "openrouter", "--api-key-stdin"}, true},
+		{"aider", "aider_openai_key", nil, true},
+		{"aider", "aider_anthropic_key", nil, true},
+		{"aider", "aider_openrouter_key", nil, true},
+		{"aider", "aider_deepseek_key", nil, true},
+		{"aider", "aider_gemini_key", nil, true},
+		{"gemini", "gemini_api_key", nil, true},
 	} {
 		t.Run(tc.agent+"/"+tc.method, func(t *testing.T) {
 			args, secret, err := loginArgs(tc.agent, tc.method)
@@ -49,7 +272,8 @@ func TestUILoginRejectsInvalidInputBeforeLaunch(t *testing.T) {
 	svc := New(foundExecutable("codex"), nil)
 	svc.commandContext = func(context.Context, string, ...string) *exec.Cmd { t.Fatal("launched invalid login"); return nil }
 	for _, tc := range []struct{ agent, method, secret string }{
-		{"unknown", "browser", ""}, {"cursor", "browser", ""}, {"codex", "--arbitrary", ""},
+		{"unknown", "browser", ""}, {"kiro", "device_code", ""}, {"cursor", "api_key", "test"}, {"continue", "api_key", "test"}, {"grok", "device_code", ""}, {"command-code", "api_key", "test"}, {"opencode-v2", "browser", ""}, {"cline", "api_key", "test"}, {"codewhale", "provider_from_client", "test"}, {"codex", "--arbitrary", ""},
+		{"aider", "aider_custom_key", ""}, {"aider", "browser", ""}, {"gemini", "browser", ""}, {"gemini", "api_key", "test"},
 		{"codex", "browser", "secret"}, {"codex", "api_key", ""}, {"codex", "api_key", "one\ntwo"},
 		{"codex", "api_key", strings.Repeat("s", 16*1024+1)}, {"claude-code", "api_key", "secret"},
 	} {
@@ -86,6 +310,14 @@ func TestLoginOutputExposesOnlyRecognizedPrompts(t *testing.T) {
 			t.Fatalf("accepted unsafe URL: %s", raw)
 		}
 	}
+	if !safeLoginURL("cline", "https://app.cline.bot/auth/cli") {
+		t.Fatal("rejected Cline's account host")
+	}
+	for _, raw := range []string{"http://app.cline.bot/auth/cli", "https://app.cline.bot.evil.test/auth/cli", "https://evil@app.cline.bot/auth/cli", "https://app.cline.bot:444/auth/cli"} {
+		if safeLoginURL("cline", raw) {
+			t.Fatalf("accepted unsafe Cline URL: %s", raw)
+		}
+	}
 }
 
 // The subprocess verifies stdin without touching any real harness credentials.
@@ -109,6 +341,18 @@ func TestUILoginHelper(t *testing.T) {
 			os.Exit(3)
 		}
 		fmt.Println("test-secret https://auth.openai.com/oauth/authorize?secret=test-secret")
+	case "opencode-v2":
+		var credentials []struct {
+			ID            string `json:"id"`
+			IntegrationID string `json:"integrationID"`
+			Value         struct {
+				Type string `json:"type"`
+				Key  string `json:"key"`
+			} `json:"value"`
+		}
+		if err := json.NewDecoder(os.Stdin).Decode(&credentials); err != nil || len(credentials) != 1 || credentials[0].ID == "" || credentials[0].IntegrationID != "anthropic" || credentials[0].Value.Type != "key" || credentials[0].Value.Key != "test-secret" || !strings.HasSuffix(os.Getenv("XDG_DATA_HOME"), "opencode-v2-home") {
+			os.Exit(3)
+		}
 	case "fail":
 		fmt.Println("private failure details")
 		os.Exit(4)
@@ -161,6 +405,70 @@ func TestUILoginSecretUsesStdinAndDiscardsOutput(t *testing.T) {
 	if strings.Contains(string(data), "test-secret") {
 		t.Fatalf("credential leaked: %s", data)
 	}
+}
+
+func TestCodewhaleProviderKeyUsesNativeStdinWithoutExposingOutput(t *testing.T) {
+	t.Setenv("AO_TEST_UI_LOGIN", "secret")
+	svc := New(foundExecutable("codewhale"), nil)
+	svc.commandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		if !reflect.DeepEqual(args, []string{"auth", "set", "--provider", "deepseek", "--api-key-stdin"}) {
+			t.Fatalf("unexpected Codewhale args: %v", args)
+		}
+		return process.CommandContext(ctx, os.Args[0], "-test.run=^TestUILoginHelper$")
+	}
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "codewhale", "codewhale_deepseek_key", "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := svc.Login(t.Context(), "codewhale", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != "running" {
+			data, _ := json.Marshal(result)
+			if result.Status != "succeeded" || result.LoginURL != "" || strings.Contains(string(data), "test-secret") {
+				t.Fatalf("result=%s", data)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("Codewhale credential import did not finish")
+}
+
+func TestOpenCodeV2ImportUsesStdinAndIsolatedNativeHome(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("AO_TEST_UI_LOGIN", "opencode-v2")
+	svc := New(foundExecutable("opencode"), nil)
+	svc.commandContext = func(ctx context.Context, _ string, args ...string) *exec.Cmd {
+		if !reflect.DeepEqual(args, []string{"auth", "import", "--standalone"}) {
+			t.Fatalf("unexpected OpenCode 2 import args: %v", args)
+		}
+		return process.CommandContext(ctx, os.Args[0], "-test.run=^TestUILoginHelper$")
+	}
+	t.Cleanup(svc.Close)
+	started, err := svc.StartLogin(t.Context(), "opencode-v2", "anthropic_key", "test-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := svc.Login(t.Context(), "opencode-v2", started.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Status != "running" {
+			if result.Status != "succeeded" || result.LoginURL != "" {
+				t.Fatalf("result=%+v", result)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("OpenCode 2 import did not finish")
 }
 
 func TestUILoginFailureDoesNotExposeProcessOutput(t *testing.T) {

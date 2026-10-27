@@ -12,7 +12,9 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -141,6 +143,16 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
+	configDir, err := geminiConfigDir()
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if configDir != "" {
+		status, err := geminiLocalAuthStatus(ctx, filepath.Dir(configDir))
+		if err != nil || status == ports.AgentAuthStatusConfigured {
+			return status, err
+		}
+	}
 	configured, err := hasCachedCredentials()
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -193,6 +205,36 @@ func geminiAPIKeySelected(path string) (bool, error) {
 		return false, err
 	}
 	return settings.Security.Auth.SelectedType == "gemini-api-key", nil
+}
+
+// geminiLocalAuthStatus records file evidence only when the selected API-key
+// method also has a nonempty key in Gemini's own environment file.
+func geminiLocalAuthStatus(ctx context.Context, home string) (ports.AgentAuthStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	configDir := filepath.Join(home, ".gemini")
+	selected, err := geminiAPIKeySelected(filepath.Join(configDir, "settings.json"))
+	if err != nil || !selected {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	envPath := filepath.Join(configDir, ".env")
+	data, err := os.ReadFile(envPath)
+	if os.IsNotExist(err) {
+		return ports.AgentAuthStatusUnknown, nil
+	}
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "export ")
+		if value, ok := strings.CutPrefix(line, "GEMINI_API_KEY="); ok && strings.Trim(strings.TrimSpace(value), `"'`) != "" {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(envPath).WithMethod(domain.AgentAccountMethodAPIKey))
+			return ports.AgentAuthStatusConfigured, nil
+		}
+	}
+	return ports.AgentAuthStatusUnknown, nil
 }
 
 // Gemini CLI accepts comments in settings.json. Replace them with whitespace

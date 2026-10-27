@@ -74,6 +74,9 @@ type OpenCommandTerminalInput struct {
 	// It is persisted so the workflow can reconcile commands after a restart.
 	Owner                   string
 	Argv                    []string
+	// HideFromList keeps a daemon-owned guided login PTY out of the user's
+	// terminal drawer. The auth service still owns and closes its handle.
+	HideFromList            bool
 	Env                     map[string]string
 	WorkingDir              string
 	Title                   string

@@ -108,6 +108,13 @@ func exactAllowedOrigins(origins []string) map[string]struct{} {
 // rendererOnlyArea names the area a path belongs to when only the configured
 // renderer origins may reach it from a browser, or "" for ordinary routes.
 func rendererOnlyArea(path string) string {
+	// Generic harness login operations can write native credentials.
+	if rest, ok := strings.CutPrefix(path, "/api/v1/agents/"); ok {
+		parts := strings.Split(rest, "/")
+		if len(parts) >= 3 && parts[0] != "" && parts[1] == "auth" && parts[2] == "operations" {
+			return "agent credential management"
+		}
+	}
 	for _, area := range []struct {
 		name     string
 		prefixes []string
