@@ -35,6 +35,21 @@ export function providerCatalogLive(snapshot: Pick<ConversationSnapshot, "contro
 	return snapshot.controller.state === "ready" || snapshot.controller.state === "busy";
 }
 
+export type TurnOptionsLoad = { key: string; refresh: boolean };
+
+/**
+ * When a chat screen loads its catalog: once for each provider state it sees,
+ * past the cache when the provider has just come up, because what was cached
+ * was read while it could not answer. `live` is undefined before the first
+ * snapshot; `previousKey` is the key of the last load.
+ */
+export function turnOptionsLoadFor(previousKey: string | undefined, sessionId: string, live: boolean | undefined): TurnOptionsLoad | undefined {
+	if (live === undefined) return undefined;
+	const key = `${sessionId}:${live}`;
+	if (previousKey === key) return undefined;
+	return { key, refresh: live && previousKey === `${sessionId}:false` };
+}
+
 /** Nothing to pick from: the provider was not running yet, or offers no choice. */
 export function isEmptyTurnOptionCatalog(catalog: TurnOptionCatalog<unknown[], unknown[]>): boolean {
 	return !catalog.models.length && !catalog.configOptions.length;

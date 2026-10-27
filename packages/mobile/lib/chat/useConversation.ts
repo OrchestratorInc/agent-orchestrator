@@ -248,16 +248,15 @@ export function useMobileConversation(
 	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean }) => {
 		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
+		// An empty catalog is usually a provider that is not up yet: it is not
+		// cached, so the next load asks again, and what it offered before stays.
 		const catalog = await turnOptionsCache.load(cacheKey, async () => {
 			return loadTurnOptionCatalog({
 				loadModels: () => getConversationModels(cfg, sessionId),
 				loadConfigOptions: () => getConversationConfigOptions(cfg, sessionId),
 			});
-		});
+		}, (loaded) => !isEmptyTurnOptionCatalog(loaded));
 		if (isEmptyTurnOptionCatalog(catalog)) {
-			// Usually a provider that is not up yet: ask again next time rather than
-			// serving "no choices" for 30 seconds, and keep what it offered before.
-			turnOptionsCache.delete(cacheKey);
 			const known = lastTurnOptions.get(cacheKey);
 			if (known) return known;
 		} else {

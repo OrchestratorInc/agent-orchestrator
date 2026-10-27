@@ -100,6 +100,33 @@ it("reports each registration once it is answered, not each renewal", async () =
 	expect(onViewing).toHaveBeenCalledTimes(2);
 });
 
+it("reports the renewal that succeeds when the registration failed, once", async () => {
+	const onViewing = vi.fn();
+	fixture.request.mockRejectedValueOnce(new Error("request timed out"));
+	await act(async () => { renderer = create(<Harness onViewing={onViewing} />); });
+	expect(onViewing).not.toHaveBeenCalled();
+	await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+	expect(requests()).toHaveLength(2);
+	expect(onViewing).toHaveBeenCalledTimes(1);
+	await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+	expect(onViewing).toHaveBeenCalledTimes(1);
+});
+
+it("does not report a slow answer from before the app went to the background", async () => {
+	const onViewing = vi.fn();
+	let answer!: () => void;
+	fixture.request.mockImplementationOnce(() => new Promise((resolve) => { answer = () => resolve({ status: 204 }); }));
+	await act(async () => { renderer = create(<Harness onViewing={onViewing} />); });
+	await act(async () => { fixture.listener?.("background"); });
+	await act(async () => { fixture.listener?.("active"); });
+	fixture.request.mockRejectedValueOnce(new Error("release failed")).mockRejectedValueOnce(new Error("registration failed"));
+	await act(async () => { answer(); });
+	expect(requests().map((request) => request.active)).toEqual([true, false, true]);
+	expect(onViewing).not.toHaveBeenCalled();
+	await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+	expect(onViewing).toHaveBeenCalledTimes(1);
+});
+
 it("does not report a registration the daemon rejected", async () => {
 	const onViewing = vi.fn();
 	fixture.request.mockRejectedValue(new Error("404 unsupported"));

@@ -21,7 +21,8 @@ export function coveredOnlyBySheets(routes: readonly StackRoute[] | undefined, k
 /**
  * Keep a viewed chat awake. Older daemons can safely ignore this endpoint.
  *
- * `onViewing` runs once each time the chat is registered as viewed. The daemon
+ * `onViewing` runs once each time the chat becomes viewed, when the daemon first
+ * accepts the lease (the registration, or a renewal if that failed). The daemon
  * wakes a hibernated chat before it answers that request and reports the wake no
  * other way, so this is when the screen should read the conversation again.
  */
@@ -52,22 +53,32 @@ export function useChatViewLease(config: ServerConfig | null, sessionId: string,
 		let timer: ReturnType<typeof setInterval> | undefined;
 		let tail: Promise<void> = Promise.resolve();
 		let pending = 0;
-		const send = (viewActive: boolean, announce = false) => {
+		// Each activation announces once, on its first request that succeeds: a
+		// registration that times out or fails is retried by the next renewal, and
+		// that renewal is the one that woke the chat.
+		let activation = 0;
+		let announced = 0;
+		const send = (viewActive: boolean) => {
 			pending++;
+			const sentFor = activation;
 			// Release follows any in-flight renewal, so a delayed true request
 			// cannot leave the chat marked as viewed after navigation/background.
 			tail = tail.then(async () => {
 				await apiRequest(config, `/api/v1/sessions/${encodeURIComponent(sessionId)}/chat-view`, {
 					method: "POST", body: JSON.stringify({ viewId, active: viewActive }),
 				});
-				if (announce) onViewingRef.current?.();
+				if (viewActive && active && sentFor === activation && announced !== activation) {
+					announced = activation;
+					onViewingRef.current?.();
+				}
 			}).catch(() => {}).finally(() => { pending--; });
 		};
 		const update = (next: boolean) => {
 			if (next === active) return;
 			active = next;
+			if (next) activation++;
 			clearInterval(timer);
-			send(next, next);
+			send(next);
 			if (next) timer = setInterval(() => { if (pending === 0) send(true); }, 15_000);
 		};
 		update(AppState.currentState === "active");

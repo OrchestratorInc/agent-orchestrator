@@ -43,7 +43,7 @@ import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
-import { providerCatalogLive } from "./turnOptionsCatalog";
+import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
 import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
@@ -202,12 +202,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// empty one until the screen was reopened.
 	const providerLive = conversation.snapshot ? providerCatalogLive(conversation.snapshot) : undefined;
 	useEffect(() => {
-		if (providerLive === undefined) return;
-		const key = `${session.id}:${providerLive}`;
-		if (turnOptionsRequestedFor.current === key) return;
-		const woke = providerLive && turnOptionsRequestedFor.current === `${session.id}:false`;
-		turnOptionsRequestedFor.current = key;
-		void conversation.loadTurnOptions(woke ? { refresh: true } : undefined).catch(() => {});
+		const load = turnOptionsLoadFor(turnOptionsRequestedFor.current, session.id, providerLive);
+		if (!load) return;
+		turnOptionsRequestedFor.current = load.key;
+		void conversation.loadTurnOptions(load.refresh ? { refresh: true } : undefined).catch(() => {});
 	}, [conversation.loadTurnOptions, providerLive, session.id]);
 
 	const sessionName = sessionTitle(session);
