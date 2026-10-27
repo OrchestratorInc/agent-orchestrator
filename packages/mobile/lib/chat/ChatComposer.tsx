@@ -19,7 +19,6 @@ import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type 
 import { Button } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
 import { KEYBOARD_DOCK_GAP } from "../session/keyboardInset";
-import { MicKey } from "../voice/MicKey";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
@@ -483,9 +482,6 @@ export function ChatComposer({
 	// Dictation here is hands-free (tap, speak, tap again), and it drops the
 	// keyboard: the card stays open while the mic is.
 	const primary = listening ? "stopDictation" : transcribing ? "transcribing" : primaryAction === "stop" ? "stopTurn" : nothingToSend && canDictate ? "dictate" : "send";
-	// While a turn runs with nothing drafted the round button stops it, so the
-	// mic stays beside it as a glyph (hold to talk, double-tap to keep it open).
-	const sideMic = primary === "stopTurn" && canDictate ? <MicKey variant="plain" size={touchTarget} glyphSize={iconSize.lg} disabled={stopped || submitting} state={voice.state} mode={voice.mode} onPressIn={voice.pressIn} onPressOut={voice.pressOut} onToggleLatched={voice.toggleLatched} /> : null;
 	const roundButton = primary === "stopTurn"
 		? <Pressable accessibilityRole="button" accessibilityLabel="Stop turn" accessibilityState={{ busy: interrupting, disabled: disabled || interrupting }} disabled={disabled || interrupting} android_ripple={buttonFeedback.android_ripple} onPress={() => { haptics.tap(); void onInterrupt(); }} style={({ pressed }) => [styles.roundTarget, pressed && buttonFeedback.pressed, (disabled || interrupting) && styles.inactive]}><View style={[styles.roundDisc, styles.roundStop]}>{interrupting ? <ActivityIndicator size="small" color={t.textPrimary} /> : <AppSymbol name="stop" size={iconSize.xs} weight="bold" color={t.textPrimary} />}</View></Pressable>
 		: primary === "send"
@@ -506,11 +502,10 @@ export function ChatComposer({
 	// The corner controls stay where they are; the pill grows up around them. The
 	// field starts between them and is let out to the pill's full width, and the
 	// controls row opens under it, its settings rising into place.
-	const rightCorner = CORNER_CONTROL * (sideMic ? 2 : 1);
 	const fieldInsets = useAnimatedStyle(() => ({
 		paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, space.sm]),
-		paddingRight: interpolate(openness.value, [0, 1], [rightCorner, space.sm]),
-	}), [rightCorner]);
+		paddingRight: interpolate(openness.value, [0, 1], [CORNER_CONTROL, space.sm]),
+	}));
 	const controlsOpening = useAnimatedStyle(() => ({
 		height: interpolate(openness.value, [0, 1], [0, touchTarget], "clamp"),
 		opacity: interpolate(openness.value, [0.35, 1], [0, 1], "clamp"),
@@ -678,7 +673,7 @@ export function ChatComposer({
 				</Animated.View>
 				{/* Mounted closed too, at no height, so the settings are already
 				    drawn when the row opens rather than appearing partway through. */}
-				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: rightCorner }, controlsOpening]}>
+				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
 						<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} onOpenFallback={onOpenSettings} />
 					</View>
@@ -690,7 +685,6 @@ export function ChatComposer({
 				    sheet's does. */}
 				<View style={[styles.corner, styles.cornerLeading]}>{attachMenu}</View>
 				<View style={[styles.corner, styles.cornerTrailing]}>
-					{sideMic}
 					{roundButton}
 				</View>
 			</View>}

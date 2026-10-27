@@ -86,10 +86,9 @@ describe("chat composer pill", () => {
 		expect(composer).toContain('latestText.current = "";\n\t\t\tsetText("");');
 	});
 
-	// Two discs side by side have no hierarchy; the send button is the only shape
-	// that commits, so dictation is a bare glyph here.
-	it("keeps dictation a glyph and the send a filled circle", () => {
-		expect(composer).toContain('<MicKey variant="plain" size={touchTarget}');
+	// A running turn shows only its stop button: no mic beside it.
+	it("drops the mic while the stop button shows, and keeps the send a filled circle", () => {
+		expect(composer).not.toContain("MicKey");
 		expect(styleRule("send")).toContain("width: touchTarget, height: touchTarget, borderRadius: radius.pill");
 		expect(styleRule("send")).toContain("backgroundColor: t.accent");
 	});
@@ -198,7 +197,7 @@ describe("collapsed and expanded composer", () => {
 		expect(composer).toContain("const expanded = focused || hasDraft || attachments.length > 0 || listening || transcribing;");
 		expect(composer).toContain("onFocus={() => setFocused(true)}");
 		expect(composer).toContain("onBlur={() => setFocused(false)}");
-		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: rightCorner }, controlsOpening]}>');
+		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>');
 		expect(composer).toContain("<ChatTurnSettingsControl snapshot={snapshot}");
 	});
 

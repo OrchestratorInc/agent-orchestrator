@@ -42,7 +42,7 @@ describe("active turn controls", () => {
 	});
 
 	it("keeps settings and active-turn delivery state in the pill's controls row", () => {
-		expect(composerSource).toContain("style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: rightCorner }, controlsOpening]}>");
+		expect(composerSource).toContain("style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>");
 		expect(composerSource).toContain('numberOfLines={1} style={styles.deliveryNoteText}');
 		expect(composerSource).toContain('Sent after this');
 	});
