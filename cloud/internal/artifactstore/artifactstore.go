@@ -145,12 +145,28 @@ func ContentType(cleanPath string) string {
 		return "image/gif"
 	case ".webp":
 		return "image/webp"
+	case ".avif":
+		return "image/avif"
+	case ".apng":
+		return "image/apng"
+	case ".bmp":
+		return "image/bmp"
+	case ".ico":
+		return "image/x-icon"
 	case ".pdf":
 		return "application/pdf"
 	case ".mp3":
 		return "audio/mpeg"
 	case ".wav":
 		return "audio/wav"
+	case ".m4a":
+		return "audio/mp4"
+	case ".aac":
+		return "audio/aac"
+	case ".flac":
+		return "audio/flac"
+	case ".ogg", ".oga", ".opus":
+		return "audio/ogg"
 	case ".mp4":
 		return "video/mp4"
 	case ".m4v":

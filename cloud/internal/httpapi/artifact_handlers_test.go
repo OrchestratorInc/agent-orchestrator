@@ -929,9 +929,11 @@ func TestArtifactFileServesByteRanges(t *testing.T) {
 	}
 }
 
-func TestArtifactVideoContentTypes(t *testing.T) {
+func TestArtifactMediaContentTypes(t *testing.T) {
 	for path, want := range map[string]string{
 		"a.mp4": "video/mp4", "a.webm": "video/webm", "a.mov": "video/quicktime", "a.m4v": "video/x-m4v", "a.ogv": "video/ogg",
+		"a.m4a": "audio/mp4", "a.aac": "audio/aac", "a.flac": "audio/flac", "a.ogg": "audio/ogg", "a.opus": "audio/ogg",
+		"a.avif": "image/avif", "a.apng": "image/apng", "a.bmp": "image/bmp", "a.ico": "image/x-icon",
 	} {
 		if got := artifactstore.ContentType(path); got != want {
 			t.Errorf("ContentType(%q) = %q, want %q", path, got, want)
