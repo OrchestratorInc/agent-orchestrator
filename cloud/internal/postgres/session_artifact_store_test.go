@@ -637,8 +637,45 @@ func TestDeletingASessionCanDeleteItsArtifacts(t *testing.T) {
 	if got := artifactEventCount(t, admin, fixture.sessionID); got != events+1 {
 		t.Fatalf("artifact events = %d, want %d", got, events+1)
 	}
-	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, []domain.SessionArtifact{draft}, nil); !errors.Is(err, ErrArtifactVersionUnknown) {
-		t.Fatalf("committing the open upload after the delete = %v, want ErrArtifactVersionUnknown", err)
+	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, []domain.SessionArtifact{draft}, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("committing the open upload after the delete = %v, want ErrNotFound", err)
+	}
+}
+
+// An upload that finishes after the archive, from a worker whose connection
+// is still current, neither records nor commits, so no deleted file returns.
+func TestAnArchivedSessionTakesNoNewArtifacts(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+
+	report := testArtifact("late/report.html", 10)
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{report}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TerminateSession(ctx, principal, fixture.orgID, fixture.sessionID, true); err != nil {
+		t.Fatal(err)
+	}
+	late := report
+	late.Size, late.VersionID = 11, "v-late-report-2"
+	if err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, late.S3Key, late.VersionID, late.Size); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("recording an upload after the archive = %v, want ErrNotFound", err)
+	}
+	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, []domain.SessionArtifact{late}, nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("committing after the archive = %v, want ErrNotFound", err)
+	}
+	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("artifacts after a late upload = %+v, %v", listed, err)
+	}
+
+	// A restored session takes artifacts again.
+	if err := store.RestoreSession(ctx, principal, fixture.orgID, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{late}, nil); err != nil {
+		t.Fatalf("commit after the restore: %v", err)
 	}
 }
 

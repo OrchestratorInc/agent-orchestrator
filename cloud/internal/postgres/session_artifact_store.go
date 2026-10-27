@@ -44,10 +44,11 @@ func (s *Store) ArtifactUploadAllowed(ctx context.Context, orgID, sessionID stri
 // RecordArtifactUpload records an uploaded object version that the session
 // has not committed yet. The sweeper deletes it after ArtifactUploadTTL unless
 // a commit claims it first. It returns ErrArtifactLimit, and records nothing,
-// when the session's uncommitted uploads would exceed their limits.
+// when the session's uncommitted uploads would exceed their limits, and
+// ErrNotFound when the session is archived.
 func (s *Store) RecordArtifactUpload(ctx context.Context, orgID, sessionID, s3Key, versionID string, size int64) error {
 	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		if err := requireSessionTx(ctx, tx, orgID, sessionID, true); err != nil {
+		if err := requireLiveSessionTx(ctx, tx, orgID, sessionID); err != nil {
 			return err
 		}
 		count, bytes, err := pendingArtifactUploadsTx(ctx, tx, orgID, sessionID)
@@ -148,8 +149,9 @@ func (s *Store) ChangedSessionArtifacts(
 // session; versions the commit replaces or deletes are queued for the
 // sweeper. It returns ErrStaleWorker when the worker's connection was
 // replaced, ErrArtifactVersionUnknown for a version that is not an open
-// upload, and ErrArtifactLimit when the result would exceed the session's
-// file count or total size; each changes nothing. A commit that changes
+// upload, ErrArtifactLimit when the result would exceed the session's file
+// count or total size, and ErrNotFound when the session is archived or its
+// project deleted; each changes nothing. A commit that changes
 // nothing appends no event.
 func (s *Store) CommitSessionArtifacts(
 	ctx context.Context,
@@ -162,10 +164,10 @@ func (s *Store) CommitSessionArtifacts(
 		return nil
 	}
 	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		if err := requireSessionTx(ctx, tx, orgID, sessionID, true); err != nil {
+		// An archived session, or a deleted project's, takes no new artifacts.
+		if err := requireLiveSessionTx(ctx, tx, orgID, sessionID); err != nil {
 			return err
 		}
-		// A deleted project's sessions take no new artifacts.
 		var projectDeleted bool
 		if err := tx.QueryRow(
 			ctx,
@@ -788,6 +790,22 @@ func scanSessionArtifact(row pgx.CollectableRow) (domain.SessionArtifact, error)
 // organization. lock takes the session row lock, which serializes artifact
 // commits and uploads; FOR NO KEY UPDATE leaves inserts into tables that
 // reference the session unblocked.
+// requireLiveSessionTx locks a session that is not archived, or returns
+// ErrNotFound. TerminateSession updates the same row, so an upload or commit
+// either lands before an archive or sees it.
+func requireLiveSessionTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
+	var terminated bool
+	err := tx.QueryRow(
+		ctx,
+		`SELECT is_terminated FROM ao_sessions WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE`,
+		orgID, sessionID,
+	).Scan(&terminated)
+	if errors.Is(err, pgx.ErrNoRows) || terminated {
+		return ErrNotFound
+	}
+	return err
+}
+
 func requireSessionTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, lock bool) error {
 	query := `SELECT 1 FROM ao_sessions WHERE org_id = $1 AND id = $2`
 	if lock {
