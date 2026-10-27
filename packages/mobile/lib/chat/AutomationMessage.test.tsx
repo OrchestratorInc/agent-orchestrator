@@ -1,0 +1,104 @@
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+const fixtures = vi.hoisted(() => ({
+	theme: new Proxy({}, { get: () => "#000000" }),
+	app: { sessions: [] as Array<{ id: string; projectId: string; harness?: string }>, config: { host: "127.0.0.1", hostId: "h1" } as object | null },
+	getSession: vi.fn(),
+	push: vi.fn(),
+	openGitHub: vi.fn(),
+}));
+vi.mock("react-native", () => ({
+	View: "View", Text: "Text", Pressable: "Pressable", ScrollView: "ScrollView",
+	StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
+}));
+vi.mock("expo-router", () => ({ router: { push: fixtures.push } }));
+vi.mock("../AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
+vi.mock("../api", () => ({ getSession: fixtures.getSession }));
+vi.mock("../store", () => ({ useApp: () => fixtures.app }));
+vi.mock("../haptics", () => ({ haptics: { tap: vi.fn() } }));
+vi.mock("../icons", () => ({ Feather: "Feather" }));
+vi.mock("../openGitHub", () => ({ openGitHub: fixtures.openGitHub }));
+vi.mock("../files/navigation", () => ({ useFilesNavigation: () => null }));
+vi.mock("./ChatMarkdown", () => ({ ChatMarkdown: "ChatMarkdown" }));
+vi.mock("../ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
+
+import { ConversationHarness, WorkerUpdateRows } from "./AutomationMessage";
+import type { WorkerUpdate } from "./automationMessages";
+
+const update = (key: string, sessionId: string): WorkerUpdate => ({ key, state: "done", name: sessionId, sessionId, projectId: "p", body: "Done.", createdAt: "2026-10-27T10:00:00Z" });
+
+let renderer: ReactTestRenderer | undefined;
+beforeEach(() => {
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	fixtures.getSession.mockReset();
+	fixtures.push.mockReset();
+	fixtures.openGitHub.mockReset();
+	fixtures.app.sessions = [];
+	const error = console.error;
+	vi.spyOn(console, "error").mockImplementation((...args) => {
+		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
+		error(...args);
+	});
+});
+afterEach(() => {
+	act(() => renderer?.unmount());
+	renderer = undefined;
+	vi.restoreAllMocks();
+});
+
+const logos = () => renderer!.root.findAll((node) => (node.type as unknown) === "AgentLogo").map((node) => node.props.harness);
+
+async function draw(updates: WorkerUpdate[]) {
+	await act(async () => {
+		renderer = create(<ConversationHarness.Provider value="claude-code"><WorkerUpdateRows updates={updates} /></ConversationHarness.Provider>);
+	});
+}
+
+it("draws a live worker's own harness without asking the daemon", async () => {
+	fixtures.app.sessions = [{ id: "w-live", projectId: "p", harness: "codex" }];
+	await draw([update("a", "w-live")]);
+	expect(logos()).toEqual(["codex"]);
+	expect(fixtures.getSession).not.toHaveBeenCalled();
+});
+
+it("reads a worker the board leaves out once, and draws its harness", async () => {
+	fixtures.getSession.mockResolvedValue({ id: "w-archived", projectId: "p", harness: "opencode" });
+	await draw([update("a", "w-archived"), update("b", "w-archived")]);
+	expect(logos()).toEqual(["opencode", "opencode"]);
+	expect(fixtures.getSession).toHaveBeenCalledTimes(1);
+});
+
+it("falls back to the chat's own agent, never a generic glyph, when the worker cannot be read", async () => {
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
+	await draw([update("a", "w-gone")]);
+	expect(logos()).toEqual(["claude-code"]);
+	expect(renderer!.root.findAll((node) => (node.type as unknown) === "Feather" && node.props.name === "cpu")).toEqual([]);
+});
+
+const textOf = (node: { children: unknown[] }): string => node.children.map((child) => typeof child === "string" ? child : textOf(child as { children: unknown[] })).join("");
+const pressables = () => renderer!.root.findAll((node) => (node.type as unknown) === "Pressable");
+
+it("opens a report anywhere on its row, with its links live and a way into the worker's chat", async () => {
+	fixtures.app.sessions = [{ id: "w-1", projectId: "p", harness: "codex" }];
+	const report = { ...update("a", "w-1"), body: "PR #7291 open\nAll CI checks pass: https://github.com/o/r/pull/7291" };
+	await draw([report]);
+	expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "link")).toEqual([]);
+	await act(async () => pressables()[0]!.props.onPress());
+	const link = renderer!.root.find((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "link");
+	expect(textOf(link)).toBe("https://github.com/o/r/pull/7291");
+	await act(async () => link.props.onPress());
+	expect(fixtures.openGitHub).toHaveBeenCalledWith("https://github.com/o/r/pull/7291");
+	const openChat = pressables().find((node) => textOf(node).includes("Open chat"))!;
+	await act(async () => openChat.props.onPress());
+	expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/session/[id]", params: { id: "w-1", projectId: "p", hostId: "h1" } });
+});
+
+it("opens an artifact from the worker's artifact folder in the viewer", async () => {
+	fixtures.app.sessions = [{ id: "w-1", projectId: "p" }];
+	await draw([{ ...update("a", "w-1"), body: "Wrote the audit.\nartifact: /Users/x/.ao/data/artifacts/w-1/audit.md\nartifact: /tmp/elsewhere.md" }]);
+	const links = renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityRole === "link");
+	expect(links.map((node) => node.props.accessibilityLabel)).toEqual(["Open audit.md"]);
+	await act(async () => links[0]!.props.onPress());
+	expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/artifact/[sessionId]", params: { sessionId: "w-1", entry: "audit.md", hostId: "h1" } });
+});

@@ -63,7 +63,7 @@ describe("sent human message actions", () => {
 	it("offers Edit and Copy from a long-press menu instead of an always-visible pen", () => {
 		expect(human).toContain("<MessageContextMenu");
 		expect(human).toContain("canEdit={Boolean(onEdit)}");
-		expect(human).toContain("Clipboard.setStringAsync(editableMessageText(item.text).body.trim()); haptics.success();");
+		expect(human).toContain("Clipboard.setStringAsync(editableMessageText(humanVisibleText(item.text)).body.trim()); haptics.success();");
 		expect(human).not.toContain('name="edit-2"');
 	});
 

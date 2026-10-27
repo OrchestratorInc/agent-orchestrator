@@ -60,6 +60,10 @@ export type ConversationMessage = {
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
+	/** The AO session that sent this message (`ao send`), when another agent did. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	/** The daemon can branch before this human prompt and resend it edited. */
 	editAvailable?: boolean;
 	createdAt: string;

@@ -82,6 +82,8 @@ import { press, type, space } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
+import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerUpdateRows } from "./AutomationMessage";
+import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { SessionStartupView } from "../session/sessionStartup";
 
@@ -149,6 +151,9 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const openingTurnId = startup?.view.openingTurnId;
 	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
+	// Each worker's newest report, as one stable set until some worker reports again.
+	const latestUpdateKeys = [...latestWorkerUpdateKeys(items)].sort().join("\n");
+	const latestUpdates = useMemo(() => new Set(latestUpdateKeys.split("\n")), [latestUpdateKeys]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
@@ -242,6 +247,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 	) : null;
 
 	return (
+		<ConversationHarness.Provider value={snapshot.harness}>
+		<LatestWorkerUpdates.Provider value={latestUpdates}>
 		<View style={styles.timelineWrap}>
 			<FlatList<ConversationGroup>
 				ref={listRef}
@@ -305,6 +312,8 @@ export const ChatTimeline = memo(function ChatTimeline({
 			</View> : null}
 			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
 		</View>
+		</LatestWorkerUpdates.Provider>
+		</ConversationHarness.Provider>
 	);
 });
 
@@ -410,14 +419,19 @@ const TimelineItem = memo(function TimelineItem({
 		if (item.role === "user" && item.origin === "human") {
 			if (editor) return <View style={styles.userRow}>{editor}</View>;
 			const delivery = deliveryCopy(item.delivery);
-			const { body, attachments } = stagedAttachmentParts(item.text);
+			// Reports the daemon folded in while the orchestrator was busy are drawn as
+			// the worker rows they are, above what the user typed.
+			const reports = piggybackedUpdates(item);
+			const { body, attachments } = stagedAttachmentParts(humanVisibleText(item.text));
 			// Long-press opens Edit and Copy, so the text is not selectable: a
 			// selection would take the same gesture.
 			return (
+				<>
+				{reports.length > 0 ? <WorkerUpdateRows updates={reports} /> : null}
 				<View style={styles.userRow}>
 					<MessageContextMenu style={styles.userMenu} canEdit={Boolean(onEdit)} onAction={(action) => {
 						if (action === "edit") onEdit?.(item);
-						else { void Clipboard.setStringAsync(editableMessageText(item.text).body.trim()); haptics.success(); }
+						else { void Clipboard.setStringAsync(editableMessageText(humanVisibleText(item.text)).body.trim()); haptics.success(); }
 					}}>
 						<View style={[styles.userBubble, styles.menuBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
 							<SentResponseQuotes content={item.content} />
@@ -427,10 +441,11 @@ const TimelineItem = memo(function TimelineItem({
 						</View>
 					</MessageContextMenu>
 				</View>
+				</>
 			);
 		}
 		if (item.role === "user") {
-			return <OriginMessage message={item} />;
+			return <OriginMessageView message={item} fallback={<OriginMessage message={item} />} />;
 		}
 		return (
 			<View style={styles.assistantRow}>
