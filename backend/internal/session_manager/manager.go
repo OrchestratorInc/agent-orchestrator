@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
@@ -6268,6 +6269,24 @@ func (m *Manager) runtimeEnv(id domain.SessionID, project domain.ProjectID, issu
 func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectID, issue domain.IssueID, projectEnv map[string]string, accountID string) (map[string]string, error) {
 	caseInsensitive := envKeysCaseInsensitive
 	env := spawnEnvForOS(id, project, issue, m.dataDir, projectEnv, caseInsensitive)
+	if m.dataDir != "" {
+		if keys, err := providerkeys.Load(m.dataDir); err == nil {
+			for key, value := range keys {
+				overridden := false
+				for configured := range projectEnv {
+					if configured == key || caseInsensitive && strings.EqualFold(configured, key) {
+						overridden = true
+						break
+					}
+				}
+				if !overridden {
+					setProtectedEnv(env, key, value, caseInsensitive)
+				}
+			}
+		} else {
+			m.logger.Warn("provider environment unavailable", "error", err)
+		}
+	}
 	// Project configuration must never redirect AO-owned hook callbacks to a
 	// different daemon. New receives the resolved absolute path in production;
 	// the environment fallback keeps focused embedders and tests compatible.

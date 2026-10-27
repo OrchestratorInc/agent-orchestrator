@@ -256,6 +256,8 @@ func TestUILoginRequiresConfiguredRendererOrigin(t *testing.T) {
 		"/api/v1/agents/codex/auth/operations/login-1",
 		"/api/v1/agents/claude-code/auth/operations",
 		"/api/v1/agents/claude-code/auth/operations/login-1",
+		"/api/v1/agents/opencode-v2/auth/operations",
+		"/api/v1/agents/goose/auth/operations/login-1/actions",
 		"/api/v1/agents/claude-code/auth/operations/login-1/code",
 	} {
 		for _, origin := range []string{"app://renderer", "http://localhost:5173", "http://localhost", "http://ao-preview.hostile.localhost:5181", "null", ""} {

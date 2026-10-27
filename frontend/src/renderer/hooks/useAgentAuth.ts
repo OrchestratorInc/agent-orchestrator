@@ -51,6 +51,16 @@ export async function getAgentUILogin(agentId: string, operationId: string, host
 	return data;
 }
 
+export type AgentLoginMenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+
+export async function actOnAgentUILogin(agentId: string, operationId: string, action: AgentLoginMenuAction, hostId?: string): Promise<AgentLoginSnapshot> {
+	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/actions", {
+		params: { path: { agent: agentId, operationId } }, body: { action },
+	});
+	if (error || !data) throw new Error(apiErrorMessage(error, "Could not control sign-in."));
+	return data;
+}
+
 export async function cancelAgentUILogin(agentId: string, operationId: string, hostId?: string): Promise<void> {
 	const { error } = await viaMain<unknown>(hostId, { action: "cancel", agentId, operationId })
 		?? await clientForSessionHost(hostId).DELETE("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } });

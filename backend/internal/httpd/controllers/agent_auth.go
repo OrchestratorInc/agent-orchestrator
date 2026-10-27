@@ -27,6 +27,7 @@ type AgentUILoginService interface {
 	StartLogin(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 	Login(context.Context, string, string) (agentauth.LoginSnapshot, error)
 	CancelLogin(context.Context, string, string) (agentauth.LoginSnapshot, error)
+	ActOnLogin(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 	SubmitLoginCode(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 }
 
@@ -43,7 +44,49 @@ func (c *AgentAuthController) Register(r chi.Router) {
 	r.Post("/agents/{agent}/auth/operations", c.startUILogin)
 	r.Get("/agents/{agent}/auth/operations/{operationId}", c.uiLogin)
 	r.Delete("/agents/{agent}/auth/operations/{operationId}", c.uiLogin)
+	r.Post("/agents/{agent}/auth/operations/{operationId}/actions", c.uiLoginAction)
 	r.Post("/agents/{agent}/auth/operations/{operationId}/code", c.submitUILoginCode)
+}
+
+func (c *AgentAuthController) uiLoginAction(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	svc, ok := c.Svc.(AgentUILoginService)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, "/api/v1/agents/{agent}/auth/operations/{operationId}/actions")
+		return
+	}
+	var req AgentLoginActionRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Invalid login action.", nil))
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Expected one login action.", nil))
+		return
+	}
+	if !validLoginAction(req.Action) {
+		envelope.WriteError(w, r, apierr.Invalid("AGENT_AUTH_ACTION_INVALID", "Choose a supported login menu action.", nil))
+		return
+	}
+	result, err := svc.ActOnLogin(r.Context(), chi.URLParam(r, "agent"), chi.URLParam(r, "operationId"), req.Action)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+// validLoginAction allows fixed menu navigation and the digits 1-9 for
+// numbered native pickers; the service still rejects digits outside the
+// recognized option list.
+func validLoginAction(action string) bool {
+	switch action {
+	case "previous", "next", "select":
+		return true
+	}
+	return len(action) == 1 && action >= "1" && action <= "9"
 }
 
 func (c *AgentAuthController) submitUILoginCode(w http.ResponseWriter, r *http.Request) {

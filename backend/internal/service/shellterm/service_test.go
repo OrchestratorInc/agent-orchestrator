@@ -1763,6 +1763,88 @@ func TestCloseShellTerminalDestroysRuntimeAndDeletesRecord(t *testing.T) {
 	}
 }
 
+func TestGuidedAuthTerminalStaysOutOfNormalTerminalList(t *testing.T) {
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	hidden, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Terminal fallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("listed=%+v, hidden=%s", listed, hidden.HandleID)
+	}
+	delete(rt.aliveByHandle, hidden.HandleID) // Native login command exited.
+	listed, err = svc.ListShellTerminalsForCurrentAppRun(t.Context())
+	if err != nil || len(listed) != 1 || listed[0].HandleID != visible.HandleID {
+		t.Fatalf("list after native exit=%+v err=%v", listed, err)
+	}
+	if observed, err := svc.ObserveAuthTerminal(t.Context(), hidden.HandleID); err != nil || observed.Alive {
+		t.Fatalf("guided login lost exit observation: %+v, %v", observed, err)
+	}
+	if err := svc.CloseShellTerminal(t.Context(), hidden.HandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.hiddenAuthTerminals[hidden.HandleID]; ok {
+		t.Fatal("hidden handle retained after close")
+	}
+}
+
+func TestGuidedAuthTerminalObservationAndInputArePrivate(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "private terminal frame"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	term, err := svc.OpenCommandTerminal(t.Context(), OpenCommandTerminalInput{Argv: []string{"pi"}, Title: "Guided login", HideFromList: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.ObserveAuthTerminal(t.Context(), term.HandleID)
+	if err != nil || got.Output != rt.output || !got.Alive {
+		t.Fatalf("observation=%+v err=%v", got, err)
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "next"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "\x1b[B" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no menu key sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "3"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.input != "3" {
+			t.Fatalf("sent=%q", sent.input)
+		}
+	default:
+		t.Fatal("no digit sent")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "arbitrary"); err == nil {
+		t.Fatal("accepted arbitrary PTY input")
+	}
+	if err := svc.SendAuthTerminalKey(t.Context(), term.HandleID, "0"); err == nil {
+		t.Fatal("accepted a digit outside the fixed action set")
+	}
+	if _, err := svc.ObserveAuthTerminal(t.Context(), "missing"); err == nil {
+		t.Fatal("observed unrelated PTY")
+	}
+}
+
 func TestCloseShellTerminalReturnsNotFoundForUnknownHandle(t *testing.T) {
 	svc := newTestService(newFakeShellRuntime(), &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
 

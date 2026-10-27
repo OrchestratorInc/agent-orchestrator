@@ -68,7 +68,10 @@ type InitialInputReadyState struct {
 // values from the reviewed auth registry; the input is sent only after the
 // harness renders one of its known editor-ready states.
 type OpenCommandTerminalInput struct {
-	Argv                    []string
+	Argv []string
+	// HideFromList keeps a daemon-owned guided login PTY out of the user's
+	// terminal drawer. The auth service still owns and closes its handle.
+	HideFromList            bool
 	Env                     map[string]string
 	WorkingDir              string
 	Title                   string

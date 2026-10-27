@@ -334,6 +334,23 @@ describe("HarnessSettingsSection", () => {
 		}
 	});
 
+	it("offers explicit login when authentication is unknown without showing logout", async () => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+			? { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", logoutCommand: "codex logout", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never
+			: get(path, options));
+		renderSection();
+		await userEvent.click(await findListRow("codex"));
+		const page = await findAgentRow("codex");
+		expect(within(page).getByRole("button", { name: "Login" })).toBeEnabled();
+		expect(within(page).queryByRole("button", { name: "Log out" })).toBeNull();
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		expect(await within(page).findByRole("region", { name: "Sign in to Codex" })).toBeVisible();
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
@@ -894,6 +911,7 @@ describe("HarnessSettingsSection", () => {
 		const page = await findAgentRow("codex");
 		expect(await within(page).findByText("Connected")).toBeInTheDocument();
 		await userEvent.click(await within(page).findByRole("button", { name: "Log in again" }));
+		await userEvent.click(await within(page).findByRole("button", { name: "Open terminal login" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "codex" } } });
 		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
@@ -1053,7 +1071,8 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
-		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
+		if (authentication === "unknown") expect(within(row).getByRole("button", { name: "Login" })).toBeEnabled();
+		else expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
 		// Credential presence alone does not imply a failed provider check.
 		if (authentication === "configured") expect(within(row).getByText("Installed")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
@@ -1326,6 +1345,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
 		await userEvent.click(within(row).getByRole("button", { name: "Login" }));
 		expect(within(row).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
+		await userEvent.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Complete login terminal" }));
 		await waitFor(() => expect(apiClient.DELETE).toHaveBeenCalled());
 		expect(within(row).queryByRole("button", { name: "Update" })).toBeNull();
@@ -1803,6 +1823,7 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("claude-code");
 		const login = await within(row).findByRole("button", { name: "Login" });
 		await user.click(login);
+		await user.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await within(row).findByTestId("inline-terminal-body");
 		expect(terminalStateCallback.value).toBeDefined();
 		expect(terminalFocusRequested.value).toBe(false);
@@ -1866,6 +1887,7 @@ describe("HarnessSettingsSection", () => {
 			</QueryClientProvider>,
 		);
 		const row = await findAgentRow("claude-code");
+		await userEvent.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await within(row).findByTestId("inline-terminal-body");
 		expect(calls.auth).toBe(1);
 	});
@@ -1882,6 +1904,7 @@ describe("HarnessSettingsSection", () => {
 		client.setQueryData(otherAgent, { agentId: "codex", models: [] });
 		const row = await findAgentRow("claude-code");
 		await user.click(await within(row).findByRole("button", { name: "Login" }));
+		await user.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await within(row).findByTestId("inline-terminal-body");
 		expect(client.getQueryState(local)?.isInvalidated).toBe(false);
 
@@ -1924,6 +1947,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("claude-code");
 		await user.click(await within(row).findByRole("button", { name: "Login" }));
+		await user.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await within(row).findByTestId("inline-terminal-body");
 		return { row, close, probeCalls: () => probeCalls, exit: () => act(() => terminalStateCallback.value?.("exited")) };
 	}
@@ -1984,6 +2008,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("mimo-code");
 		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await userEvent.click(await within(row).findByRole("button", { name: "Complete login terminal" }));
 
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
@@ -2032,6 +2057,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("claude-code");
 		await user.click(await within(row).findByRole("button", { name: "Login" }));
+		await user.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await user.click(await within(row).findByRole("button", { name: "Close settings" }));
 
 		await waitFor(() => expect(closeTerminal).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
@@ -2460,6 +2486,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(selector).toHaveTextContent("not_ready"));
 		const row = await findAgentRow("codex");
 		await userEvent.click(await within(row).findByRole("button", { name: "Login" }));
+		await userEvent.click(await within(row).findByRole("button", { name: "Open terminal login" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Complete login terminal" }));
 
 		await waitFor(() => expect(selector).toHaveTextContent(/^ready$/));

@@ -88,7 +88,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	// existing cached-readiness fallback when fetching the snapshot fails.
 	const installationPending = !input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown");
 	const isSetupAction = authPlan?.action === "setup";
-	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
+	// Inline key methods replace the documentation card: the button opens the
+	// Account login panel instead of the setup docs.
+	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation" && !authPlan?.methods?.length;
 	const authStatus = readinessAgent?.authentication.state;
 	// Who the harness is signed in as, when its own login check names it.
 	const account = authStatus === "authorized" || authStatus === "configured" ? readinessAgent?.authentication.account : undefined;

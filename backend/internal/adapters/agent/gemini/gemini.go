@@ -3,13 +3,18 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -131,11 +136,61 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return bin, nil
 }
 
-// AuthStatus remains unknown because Gemini has no cheap credential-validation command.
-// Key or OAuth-file presence alone cannot establish that an account works.
+// AuthStatus reports locally configured API-key auth without claiming the key
+// is valid. OAuth remains unknown without a cheap credential-validation command.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	_, err := p.ResolveBinary(ctx)
-	return ports.AgentAuthStatusUnknown, err
+	if _, err := p.ResolveBinary(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	return geminiLocalAuthStatus(ctx, home)
+}
+
+func geminiLocalAuthStatus(ctx context.Context, home string) (ports.AgentAuthStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	settingsPath := filepath.Join(home, ".gemini", "settings.json")
+	settings, err := os.ReadFile(settingsPath)
+	if os.IsNotExist(err) {
+		return ports.AgentAuthStatusUnknown, nil
+	}
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	var config struct {
+		Security struct {
+			Auth struct {
+				SelectedType string `json:"selectedType"`
+			} `json:"auth"`
+		} `json:"security"`
+	}
+	if err := json.Unmarshal(settings, &config); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if config.Security.Auth.SelectedType != "gemini-api-key" {
+		return ports.AgentAuthStatusUnknown, nil
+	}
+	envPath := filepath.Join(home, ".gemini", ".env")
+	data, err := os.ReadFile(envPath)
+	if os.IsNotExist(err) {
+		return ports.AgentAuthStatusUnknown, nil
+	}
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "export ")
+		if value, ok := strings.CutPrefix(line, "GEMINI_API_KEY="); ok && strings.Trim(strings.TrimSpace(value), `"'`) != "" {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(envPath).WithMethod(domain.AgentAccountMethodAPIKey))
+			return ports.AgentAuthStatusConfigured, nil
+		}
+	}
+	return ports.AgentAuthStatusUnknown, nil
 }
 
 // ResolveBinaryPresence keeps initial inventory discovery free of child processes.

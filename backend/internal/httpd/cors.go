@@ -105,12 +105,18 @@ func exactAllowedOrigins(origins []string) map[string]struct{} {
 }
 
 func isCodexAccountPath(path string) bool {
+	// Every harness login operation may eventually write native credentials.
+	// Keep the same renderer-only boundary for the generic operation route.
+	if rest, ok := strings.CutPrefix(path, "/api/v1/agents/"); ok {
+		parts := strings.Split(rest, "/")
+		if len(parts) >= 3 && parts[0] != "" && parts[1] == "auth" && parts[2] == "operations" {
+			return true
+		}
+	}
 	for _, prefix := range []string{
 		"/api/v1/agents/codex/accounts",
 		"/api/v1/agents/codex/account-switches",
 		"/api/v1/agents/accounts",
-		"/api/v1/agents/codex/auth/operations",
-		"/api/v1/agents/claude-code/auth/operations",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
