@@ -1491,6 +1491,7 @@ function ChatWorkspaceContent({
 								snapshot.controller.state === "connecting" ||
 								snapshot.controller.state === "stopped"
 							)) ||
+							snapshot.controller.state === "cold" ||
 							settingsLoading ||
 							session?.provisionState === "provisioning" ||
 							// A save in flight is not here: the bar holds back what cannot overlap one.

@@ -488,6 +488,7 @@ type Manager struct {
 	launchStartWait           time.Duration
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
+	chatRestores              map[domain.SessionID]*chatRestore
 	inputLeases               map[domain.SessionID]int
 	inputDrained              map[domain.SessionID]chan struct{}
 	// inputLeaseSince is when a session's current run of input leases began,
@@ -925,6 +926,7 @@ func New(d Deps) *Manager {
 		backgroundContext:              d.BackgroundContext,
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
+		chatRestores:                   make(map[domain.SessionID]*chatRestore),
 		launchStartWait:                3 * time.Second,
 		inputLeases:                    make(map[domain.SessionID]int),
 		inputDrained:                   make(map[domain.SessionID]chan struct{}),
@@ -3283,7 +3285,15 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // Unlike RestoreWithMode, it preserves the existing worktree and terminal
 // identity and never changes the durable terminated flag as an intermediate
 // step.
-func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if ok && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
+		!rec.IsTerminated && rec.ProvisionState.WithDefault() == domain.SessionProvisionReady {
+		return m.ensureChatController(ctx, id, true)
+	}
 	return m.resumeAgentWithMode(ctx, id, false)
 }
 
@@ -4286,6 +4296,18 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 		if rec.IsTerminated || rec.IsTaskPreparation || rec.HibernatedAt != nil || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 			continue
 		}
+		if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+			hot, err := m.chatNeedsStartupRestore(ctx, rec)
+			if err != nil {
+				m.finishStatusRecovery(ctx, rec, err)
+				m.logger.Warn("reconcile: Chat recovery obligations unavailable", "sessionID", rec.ID, "error", err)
+				continue
+			}
+			if !hot {
+				m.finishStatusRecovery(ctx, rec, nil)
+				continue
+			}
+		}
 		candidates = append(candidates, rec)
 		ids = append(ids, rec.ID)
 	}
@@ -4337,7 +4359,15 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 					defer m.endAgentOperation(rec.ID, agentOperationReconcile)
 					recoveryCtx, cancel := context.WithTimeout(ctx, m.statusVerificationLimit)
 					defer cancel()
-					return m.checkSessionHealth(recoveryCtx, rec)
+					// Input or teardown may have committed since the startup list.
+					current, err := m.getRecord(recoveryCtx, rec.ID)
+					if err != nil || current.IsTerminated {
+						return err
+					}
+					if m.chat != nil && domain.NormalizeSessionMode(current.Mode) == domain.SessionModeChat && m.chat.HasLiveChatController(current.ID) {
+						return nil
+					}
+					return m.checkSessionHealth(recoveryCtx, current)
 				}()
 				retry := err != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat &&
 					retryableStartupChatCheck(err) && len(m.startupChatRetryDelays) > 0

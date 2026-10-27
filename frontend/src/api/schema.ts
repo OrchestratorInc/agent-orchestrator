@@ -5527,7 +5527,7 @@ export interface components {
             compactedAt?: null | string;
             continueTurnId: string;
             /** @enum {string} */
-            controller: "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
+            controller: "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped" | "cold";
             conversationId: string;
             harness?: string;
             hasMoreBefore: boolean;

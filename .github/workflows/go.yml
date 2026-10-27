@@ -121,7 +121,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        # Keep historical migration coverage within the existing 20m budget.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     defaults:
       run:
         working-directory: backend
@@ -136,7 +137,7 @@ jobs:
       - name: Test SQLite shard
         run: |
           tests=$(go test -race -list . ./internal/storage/sqlite | grep -E '^(Test|Example|Fuzz)')
-          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 4) == shard' | paste -sd '|' -)
+          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 8) == shard' | paste -sd '|' -)
           test -n "$selected"
           go test -race -count=1 -timeout=20m -run "^($selected)$" ./internal/storage/sqlite
 
