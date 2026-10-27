@@ -1,3 +1,4 @@
+import { artifactFilePath, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
 import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
@@ -126,6 +127,8 @@ export type DashboardSession = {
 	autoInjectReview?: boolean;
 	/** Automatically deliver failing CI checks to the worker. */
 	autoInjectCI?: boolean;
+	/** Files in the session's artifact directory, newest first. */
+	artifacts?: SessionArtifact[];
 };
 
 export type OrchestratorLink = {
@@ -276,6 +279,8 @@ type WireSession = {
 	autoInjectReview?: boolean;
 	autoInjectCI?: boolean;
 	prs?: WirePR[];
+	/** SessionArtifactView[]; read through parseArtifacts. */
+	artifactFiles?: unknown;
 };
 
 type WireProject = {
@@ -374,6 +379,7 @@ function mapSession(s: WireSession): DashboardSession {
 		autoReviewEnabled: !!s.autoReviewEnabled,
 		autoInjectReview: s.autoInjectReview ?? true,
 		autoInjectCI: s.autoInjectCI ?? true,
+		artifacts: sortArtifacts(parseArtifacts(s.artifactFiles)),
 	};
 }
 
@@ -667,6 +673,29 @@ export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry
 	}
 	const external = mobileReachablePreviewURL(typeof data?.previewUrl === "string" ? data.previewUrl : undefined, cfg.host);
 	return external ? { entry: external.hostname, url: external.href, authenticated: false } : null;
+}
+
+// ---- Artifacts --------------------------------------------------------------
+
+/** Full URL of one artifact's bytes, for a WebView or Image with auth headers. */
+export function artifactFileUrl(cfg: ServerConfig, sessionId: string, path: string): string | undefined {
+	const route = artifactFilePath(sessionId, path);
+	return route ? `${httpBase(cfg)}${route}` : undefined;
+}
+
+/** One artifact's contents as text. The caller decides whether it is really text. */
+export async function getArtifactText(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<string> {
+	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) throw new Error("This artifact's path can't be opened.");
+	const res = await req(cfg, route, init);
+	return res.text();
+}
+
+/** Deletes one listed artifact file; returns the session with its refreshed list. */
+export async function deleteArtifact(cfg: ServerConfig, sessionId: string, path: string): Promise<DashboardSession> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/artifact-files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+	const data = await res.json();
+	return mapSession(data?.session ?? data);
 }
 
 /** Rewrite host-loopback previews for the phone without ever forwarding AO auth. */

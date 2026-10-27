@@ -537,10 +537,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			canRename: !("projectName" in session),
 			canPin: !("projectName" in session),
 			pinned: "projectName" in session ? false : Boolean(session.isPinned),
+			artifactCount: "projectName" in session ? undefined : session.artifacts?.length,
 			onFiles: filesNavigation.openChanges,
 			onMap: () => router.push(chatSheetRoute({ kind: "conversation-map", markers: conversationMarkers(actionsEntryRef.current?.snapshot ?? current), onSelect: setJumpToSequence })),
 			onOpenShell: () => void openShell(),
 			onPreview: () => router.push({ pathname: "/preview/[id]", params: { id: session.id, title, hostId: currentHostId } }),
+			onArtifacts: () => router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId: session.id, title: sessionName, hostId: currentHostId } }),
 			onPullRequests: () => {
 				const route = !("projectName" in session) && (session.prs?.length ?? (session.pr ? 1 : 0)) <= 1
 					? reviewRouteForSession(session, currentHostId)
