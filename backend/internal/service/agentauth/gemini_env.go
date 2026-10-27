@@ -12,7 +12,7 @@ import (
 )
 
 // geminiConfigHome is stubbed in tests; production resolves the user's home.
-var geminiConfigHome = func() (string, error) { return os.UserHomeDir() }
+var geminiConfigHome = os.UserHomeDir
 
 // geminiEnvLine matches GEMINI_API_KEY assignments with an optional `export `,
 // per dotenv syntax, while leaving every other variable untouched.
