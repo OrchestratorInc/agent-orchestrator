@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-const MARKDOWN_FONTS = ['400 16px "EB Garamond"', '400 16px "Geist Variable"', '400 16px "Geist Mono Variable"'];
+const MARKDOWN_FONTS = ['400 16px "Geist Variable"', '400 16px "Geist Mono Variable"'];
 let loading: Promise<void> | undefined;
 
 /** One shared request, started at app startup rather than once per artifact card. */

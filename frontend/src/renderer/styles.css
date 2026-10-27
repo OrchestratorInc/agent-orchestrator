@@ -3,7 +3,6 @@
 @import "../styles/tokens.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
-@import "./assets/fonts/eb-garamond/font.css";
 @import "./components/artifact-document.css";
 @source "../../../packages/product-ui/src";
 

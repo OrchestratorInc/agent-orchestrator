@@ -36,9 +36,8 @@
 	padding-bottom: 0;
 	border-bottom: 0;
 	color: var(--color-text-primary);
-	font-family: "EB Garamond", Georgia, serif;
-	font-weight: 400;
-	line-height: 1.2;
+	font-weight: 600;
+	line-height: 1.25;
 	letter-spacing: -0.015em;
 }
 

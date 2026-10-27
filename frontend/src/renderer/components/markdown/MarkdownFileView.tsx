@@ -4,8 +4,8 @@ import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
  * expanded previews, and the sidebar's file viewer.
  *
  * Also shown alongside a Markdown file's diff. The Markdown structure uses
- * github-markdown-css with AO theme tokens and EB Garamond headings shared
- * across every file surface.
+ * github-markdown-css with AO theme tokens shared across every
+ * file surface.
  *
  * Two choices carried over from `ChatMarkdown.tsx`, for the same reasons:
  *
