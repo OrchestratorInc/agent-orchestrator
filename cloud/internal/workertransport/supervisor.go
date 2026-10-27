@@ -1583,6 +1583,10 @@ func transportError(err error) (string, string) {
 		return "WORKSPACE_PERMISSION_DENIED", "The worker denied access to the workspace path."
 	case errors.Is(err, workerexec.ErrChatAdapterInstalling):
 		return "CHAT_ADAPTER_INSTALLING", "Setting up Chat UI on this workspace. Try again in a minute."
+	case errors.Is(err, exec.ErrNotFound):
+		// The coding agent is not on the workspace yet: a template that installs
+		// its tools in the background, or the worker's own install still running.
+		return "CHAT_AGENT_INSTALLING", "Setting up the coding agent on this workspace. Try again in a minute."
 	case errors.Is(err, workerexec.ErrChatAdapterUnavailable):
 		return "CHAT_ADAPTER_UNAVAILABLE", "Chat UI for Claude needs the Claude ACP adapter (@agentclientprotocol/claude-agent-acp) on this workspace, and AO could not install it. Install it in the workspace template, or use the terminal."
 	default:

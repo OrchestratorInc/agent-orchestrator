@@ -274,6 +274,21 @@ func (s *Store) ListPullRequestsBySession(
 	return records, nil
 }
 
+// pullRequestShownBySessionTx resolves a pull request a session shows: its
+// own, one it claimed, or, for an orchestrator, any in its project.
+func pullRequestShownBySessionTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, number int, prURL string) (domain.PullRequest, error) {
+	return scanPullRequest(tx.QueryRow(ctx, `SELECT `+pullRequestColumns+`
+		FROM ao_pull_requests pr
+		WHERE pr.org_id = $1 AND pr.number = $3 AND pr.url = $4 AND (
+			pr.session_id = $2 OR pr.claimed_by_session_id = $2 OR EXISTS (
+				SELECT 1 FROM ao_sessions requested
+				JOIN ao_sessions owner ON owner.org_id = pr.org_id AND owner.id = pr.session_id
+				WHERE requested.org_id = $1 AND requested.id = $2 AND requested.kind = 'orchestrator'
+					AND owner.project_id = requested.project_id
+			)
+		)`, orgID, sessionID, number, prURL))
+}
+
 // PullRequestForMerge authorizes a session editor and resolves a PR displayed
 // by that session. The repository and provider identity come from the record.
 func (s *Store) PullRequestForMerge(ctx context.Context, principal domain.Principal, orgID, sessionID string, number int, prURL string) (domain.PullRequest, error) {
@@ -282,17 +297,13 @@ func (s *Store) PullRequestForMerge(ctx context.Context, principal domain.Princi
 		if access.Role == "viewer" {
 			return ErrForbidden
 		}
+		// Someone a project or session was shared with asks its owner to
+		// merge instead (RequestPullRequestMerge).
+		if access.Role != "member" {
+			return ErrMergeNeedsApproval
+		}
 		var err error
-		record, err = scanPullRequest(tx.QueryRow(ctx, `SELECT `+pullRequestColumns+`
-			FROM ao_pull_requests pr
-			WHERE pr.org_id = $1 AND pr.number = $3 AND pr.url = $4 AND (
-				pr.session_id = $2 OR pr.claimed_by_session_id = $2 OR EXISTS (
-					SELECT 1 FROM ao_sessions requested
-					JOIN ao_sessions owner ON owner.org_id = pr.org_id AND owner.id = pr.session_id
-					WHERE requested.org_id = $1 AND requested.id = $2 AND requested.kind = 'orchestrator'
-						AND owner.project_id = requested.project_id
-				)
-			)`, orgID, sessionID, number, prURL))
+		record, err = pullRequestShownBySessionTx(ctx, tx, orgID, sessionID, number, prURL)
 		return err
 	})
 	if err != nil {

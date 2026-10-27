@@ -118,12 +118,14 @@ func TestSettleClaudeChatStart(t *testing.T) {
 	}
 }
 
-// A session never waits on npm: the settle gives the adapter's install at
-// most claudeChatAdapterWait (about 15 seconds) once the workspace is ready.
-func TestSettleClaudeChatStartWaitsBriefly(t *testing.T) {
+// The settle gives the adapter's install claudeChatAdapterWait once the
+// workspace is ready: long enough for an install that only starts then (about
+// 20 seconds on a template that installs Node itself), short enough that a
+// broken install still moves the session to the terminal soon.
+func TestSettleClaudeChatStartWaitsForAnInstall(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if claudeChatAdapterWait > 20*time.Second {
-		t.Fatalf("claudeChatAdapterWait = %v, want a short window", claudeChatAdapterWait)
+	if claudeChatAdapterWait < time.Minute || claudeChatAdapterWait > 2*time.Minute {
+		t.Fatalf("claudeChatAdapterWait = %v, want between one and two minutes", claudeChatAdapterWait)
 	}
 	var waited time.Duration
 	settleClaudeChatStart(context.Background(), logger, worker.LaunchContext{Harness: "claude-code", Interface: "chat"}, chatAdapterSettle{

@@ -361,6 +361,8 @@ export function AgentModelPicker({
 	const pickFromSearch = useCallback((event: Event, harness: string, id: string) => pickRef.current(event, harness, id), []);
 	const modelValue = pending ? shownModel : source.modelLabel;
 	const offersAutoCompact = compactsEarly(pending?.harness, pending?.model);
+	// Only while there is nothing to show yet: a reload after a pick keeps the rows in place.
+	const waiting = loading && !pending && source.efforts.length === 0 && source.fast === undefined && source.thinking === undefined;
 
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
@@ -396,7 +398,8 @@ export function AgentModelPicker({
 				)}
 				</>}
 			</OptionMenuTrigger>
-			<OptionMenuContent align={terminal ? "start" : "end"} side={terminal ? "right" : "top"} className="chat-settings-menu w-64 text-[12px]!"
+			{/* Pinned to the trigger's left edge, which stays put while its label changes width. */}
+			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady className="chat-settings-menu w-64 text-[12px]!"
 				onCloseAutoFocus={(event) => {
 					management.onCloseAutoFocus(event);
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
@@ -481,13 +484,13 @@ export function AgentModelPicker({
 										</span>
 									</OptionMenuItem>
 								) : null}
-								{loading && !pending ? (
+								{waiting ? (
 									<OptionMenuItem disabled className="gap-2 text-xs text-muted-foreground">
 										<Loader2 aria-hidden="true" className="size-3 animate-spin" />
 										{t("agentSwitch.loadingSettings")}
 									</OptionMenuItem>
 								) : null}
-								{settable && !(loading && !pending) && source.efforts.length > 0 ? (
+								{settable && !waiting && source.efforts.length > 0 ? (
 									<OptionMenuSub>
 										<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
 										<OptionMenuSubContent className={SUB_CLASS}>
@@ -509,9 +512,14 @@ export function AgentModelPicker({
 											))}
 										</OptionMenuSubContent>
 									</OptionMenuSub>
+								) : settable && !waiting && !modelsProblem ? (
+									// The same row, disabled, so the menu does not change shape between models.
+									<OptionMenuSub>
+										<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
+									</OptionMenuSub>
 								) : null}
 							</div>
-							{settable && !(loading && !pending) && (source.fast !== undefined || source.thinking !== undefined) ? (
+							{settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
 								<div className={DIVIDER}>
 									<ToggleRow label={t("agentSwitch.fastMode")} checked={source.fast} onChange={source.onToggleFast} />
 									<ToggleRow label={t("agentSwitch.thinking")} checked={source.thinking} onChange={source.onToggleThinking} />
@@ -755,7 +763,8 @@ export function ComposerErrorNotice(
 	return (
 		<div
 			role="alert"
-			className="-mb-2 flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
+			data-composer-notice
+			className="flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
 		>
 			<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
 			<div className="min-w-0 flex-1">

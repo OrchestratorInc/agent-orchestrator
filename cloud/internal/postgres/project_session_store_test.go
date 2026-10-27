@@ -270,7 +270,7 @@ func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 }
 
 func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
-	const scanSessionDestinations = 39
+	const scanSessionDestinations = 41
 	if got := strings.Count(sessionInsertReturning, ",") + 1; got != scanSessionDestinations {
 		t.Fatalf("session insert RETURNING fields = %d, want %d", got, scanSessionDestinations)
 	}

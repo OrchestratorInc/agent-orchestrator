@@ -739,8 +739,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if cfg.ProviderConversationID != "" && providerHandleOwnedByActiveBranch {
 		if activeBranch.ProviderConversationID != "" &&
 			activeBranch.ProviderConversationID != cfg.ProviderConversationID {
-			return nil, fmt.Errorf("active conversation branch provider handle %q does not match session handle %q",
-				activeBranch.ProviderConversationID, cfg.ProviderConversationID)
+			// Retrying cannot change either handle, so this is a resume failure
+			// the user must act on, not an internal error.
+			return nil, fmt.Errorf("%w: active conversation branch provider handle %q does not match session handle %q",
+				ports.ErrChatResumeFailed, activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
 	}
 	// A switch to Claude Code sets the window, Auto (empty) included.
@@ -814,7 +816,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if cfg.ProviderConversationID != "" {
 		// A target that has not answered yet still needs its standing context, though
 		// the source's turns come before it.
-		unanswered := s.switchBranchUnanswered(ctx, conversation.ID, activeBranch)
+		unanswered := s.branchUnanswered(ctx, cfg.SessionID, conversation.ID, activeBranch)
 		freshIfMissing = freshIfMissing || unanswered
 		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
@@ -2325,11 +2327,15 @@ func withHandoffNote(systemPrompt, note string) string {
 	return strings.TrimSpace(strings.TrimSpace(systemPrompt) + "\n\nAO provider handoff context:\n\n" + note)
 }
 
-// switchBranchUnanswered reports a branch a switch opened whose agent never
-// had a turn, so its provider never saved the conversation. Resuming it would
-// fail forever; it can start fresh, since its handoff note holds the context.
-func (s *Service) switchBranchUnanswered(ctx context.Context, conversationID string, branch domain.ConversationBranch) bool {
-	if s.reader == nil || branch.Strategy != domain.ConversationBranchStrategyApproximateContext || branch.HandoffNote == "" {
+// branchUnanswered reports a branch whose agent never had a turn, so its
+// provider may never have saved the conversation: one a switch opened (its
+// handoff note holds the context), or a provider boundary the session reserved
+// for itself, as a replacement orchestrator's first start does over inherited
+// project history. Resuming it would fail forever; it can start fresh.
+func (s *Service) branchUnanswered(ctx context.Context, session domain.SessionID, conversationID string, branch domain.ConversationBranch) bool {
+	switchBranch := branch.Strategy == domain.ConversationBranchStrategyApproximateContext && branch.HandoffNote != ""
+	ownBoundary := branch.ParentBranchID != "" && branch.SessionID == session
+	if s.reader == nil || !switchBranch && !ownBoundary {
 		return false
 	}
 	rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)

@@ -129,6 +129,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 vi.mock("../lib/cloud-cp/stream-bridge", () => ({
 	subscribeSessionEventsBridged: subscribeSessionEventsMock,
+	subscribeSessionLiveBridged: vi.fn(async () => undefined),
 }));
 vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useSessionInterfaceTransition")>(),
@@ -2002,6 +2003,58 @@ describe("SessionView", () => {
 
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
+	});
+
+	it("keeps a restored Coder Chat session's loader while its workspace comes back", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "restoring",
+		};
+		useTerminalResetStore.getState().bump("sess-2", 1);
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
+	});
+
+	it.each([
+		["worker", "requested"],
+		["worker", "provisioning"],
+		["orchestrator", "provisioning"],
+		["orchestrator", "bootstrapping"],
+	] as const)("shows the startup loader over Coder Chat %s while its workspace is %s", (kind, observedState) => {
+		const session = workerSession(kind === "orchestrator" ? "sess-orch" : "sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState,
+			coderWorkspaceUrl: "https://coder.example.com/@me/ws",
+		};
+
+		render(<SessionView sessionId={session.id} />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	it("drops the Coder Chat startup loader once the workspace is connected", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 	});
 
 	it("does not skip agent preparation just because the worker reports running", async () => {
@@ -5555,7 +5608,7 @@ describe("SessionView", () => {
 		}
 	});
 
-	it("opens a requested HTML artifact in the Browser panel", async () => {
+	it("opens a requested HTML artifact in the Artifacts tab", async () => {
 		const worker = workspaces[0].sessions[0];
 		const previewUrl = "http://ao-preview-artifact.abc.localhost:3001/report.html";
 		worker.artifactFiles = [{ kind: "html", name: "report.html", path: "report.html", previewUrl, size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
@@ -5564,13 +5617,9 @@ describe("SessionView", () => {
 
 			render(<SessionView sessionId="sess-1" />);
 
-			await waitFor(() =>
-				expect(chatViewPostMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
-					params: { path: { sessionId: "sess-1" } },
-					body: { url: previewUrl },
-				}),
-			);
-			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(screen.getByText("selected report.html")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(chatViewPostMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
 			expect(inspectorOpen("sess-1")).toBe(true);
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		} finally {

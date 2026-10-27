@@ -1751,3 +1751,30 @@ describe("startRemoteProxy when the upstream fails", () => {
 		expect(await proxy.agentBrowserUrl("ao-1")).toBe("");
 	});
 });
+
+describe("remote mobile control browser boundary", () => {
+	it("rejects hostile mobile control and password requests before injecting credentials", async () => {
+		const fetchSites: unknown[] = [];
+		const { port, seen } = await startUpstream((req) => { fetchSites.push(req.headers["sec-fetch-site"]); return { status: 200, body: "{}" }; });
+		proxy = await startRemoteProxy({ label: "mobile", url: `http://127.0.0.1:${port}`, password: "pw" });
+		for (const origin of ["http://hostile.localhost:3001", "http://127.0.0.1:8000", "null", "http://evil.example"]) {
+			for (const [method, route] of [["POST", "enable"], ["POST", "regenerate"], ["GET", "status"], ["OPTIONS", "enable"]]) {
+				const response = await fetch(`${proxy.base}/api/v1/mobile/${route}`, { method, headers: { Origin: origin, "content-type": "text/plain" } });
+				expect(response.status).toBe(403);
+			}
+		}
+		for (const route of ["mobile/status", "m%6fbile/status"]) {
+			const response = await fetch(`${proxy.base}/api/v1/${route}`, { headers: { "sec-fetch-site": "cross-site" } });
+			expect(response.status).toBe(403);
+		}
+		expect(seen).toHaveLength(0);
+		const trusted = await fetch(`${proxy.base}/api/v1/mobile/status`, { headers: { Origin: "app://renderer", "sec-fetch-site": "cross-site" } });
+		expect(trusted.status).toBe(200);
+		expect(seen[0].auth).toBe("Bearer pw");
+		expect(fetchSites[0]).toBeUndefined();
+		// Protected media retains main's trusted-renderer browser boundary.
+		const media = await fetch(`${proxy.base}/api/v1/sessions/s1/workspace/file/blob`, { headers: { Origin: "app://renderer", "sec-fetch-site": "cross-site" } });
+		expect(media.status).toBe(200);
+		expect(fetchSites[1]).toBeUndefined();
+	});
+});

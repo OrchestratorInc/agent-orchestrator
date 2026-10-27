@@ -343,6 +343,21 @@ describe("GlobalSettingsForm", () => {
 		expect(useUiStore.getState().sideChats).toBe(true);
 	});
 
+	it("offers Chrome mode only in Developer mode, as a link to the Browser settings", async () => {
+		const user = userEvent.setup();
+		const openGlobalSettings = vi.fn();
+		useUiStore.setState({ openGlobalSettings });
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByText("Use agents in my Chrome")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		expect(await screen.findByText("Use agents in my Chrome")).toBeInTheDocument();
+		expect(screen.queryByRole("switch", { name: "Use agents in my Chrome" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Go to" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("browserProfiles");
+	});
+
 	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {
 		const user = userEvent.setup();
 		renderForm("general");

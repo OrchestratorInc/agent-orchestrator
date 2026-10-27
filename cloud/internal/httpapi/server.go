@@ -67,6 +67,9 @@ type Store interface {
 	SetCloudSessionAutoInjectReview(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SetCloudSessionTerminateOnPRMerge(context.Context, domain.Principal, string, string, bool) (domain.Session, error)
 	SendMessage(context.Context, domain.Principal, string, string, string, string, domain.ChatTurnSettings) (domain.ClientEvent, error)
+	// SendMessageWithLease sends a person's message under the session's
+	// composer lease, presenting the grant's epoch (0 for none).
+	SendMessageWithLease(ctx context.Context, principal domain.Principal, orgID, sessionID, idempotencyKey, text string, settings domain.ChatTurnSettings, composerEpoch int64) (domain.ClientEvent, error)
 	// ListClientEvents lists the session's client events after a sequence,
 	// only of the given types when any are given.
 	ListClientEvents(ctx context.Context, principal domain.Principal, orgID, sessionID string, after int64, limit int, types []string) ([]domain.ClientEvent, bool, error)
@@ -89,7 +92,7 @@ type Store interface {
 	RecordPullRequestOpened(ctx context.Context, orgID string, pr domain.PullRequest, deliveryID string) error
 	ClaimWorkerTurn(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (domain.WorkerTurn, bool, error)
 	RequestTurnCancellation(ctx context.Context, principal domain.Principal, orgID, sessionID, turnID string) error
-	SteerTurn(context.Context, domain.Principal, string, string, string, string, string) (domain.ClientEvent, error)
+	SteerTurn(ctx context.Context, principal domain.Principal, orgID, sessionID, turnID, idempotencyKey, text string, composerEpoch int64) (domain.ClientEvent, error)
 	CreateWorkerChatApproval(context.Context, string, string, string, int64, worker.ChatApproval) error
 	WorkerChatApprovalDecision(context.Context, string, string, string, int64, string, int, string) (string, error)
 	DecideChatApproval(context.Context, domain.Principal, string, string, string, string) error
@@ -220,15 +223,21 @@ type Server struct {
 	terminalStreams         *terminalStreams
 	agentBrowserRelays      *agentBrowserRelays
 	workWaiters             *workWaiters
-	notificationWake        func()
-	analytics               analytics.Sink
-	sandboxWake             func()
-	projectSnapshots        ProjectSnapshotter
-	billingOptions          *BillingOptions
-	billingStore            billingStore
-	offerCache              planOfferCache
-	presenceLimiter         presenceLimiter
-	notificationWaiters     *notificationWaiters
+	// sessionEventWaiters wakes a session's event streams on ao_session_event;
+	// sessionEventNotify is set once that listener runs.
+	sessionEventWaiters *workWaiters
+	sessionEventNotify  atomic.Bool
+	// sessionLiveWaiters wakes a session's live streams on ao_session_live.
+	sessionLiveWaiters  *workWaiters
+	notificationWake    func()
+	analytics           analytics.Sink
+	sandboxWake         func()
+	projectSnapshots    ProjectSnapshotter
+	billingOptions      *BillingOptions
+	billingStore        billingStore
+	offerCache          planOfferCache
+	presenceLimiter     presenceLimiter
+	notificationWaiters *notificationWaiters
 	// workerBinariesBySHA serves the content-addressed worker/helper binaries
 	// so a worker with a stale baked copy can heal itself to this exact build.
 	workerBinariesBySHA map[string][]byte
@@ -414,6 +423,8 @@ func New(options Options) *Server {
 		terminalStreams:           newTerminalStreams(),
 		agentBrowserRelays:        newAgentBrowserRelays(),
 		workWaiters:               newWorkWaiters(),
+		sessionEventWaiters:       newWorkWaiters(),
+		sessionLiveWaiters:        newWorkWaiters(),
 		notificationWake:          options.NotificationWake,
 		analytics:                 options.Analytics,
 		sandboxWake:               options.SandboxWake,
@@ -474,6 +485,9 @@ func New(options Options) *Server {
 	// Public HTTPS bounce page for the desktop sign-in flow: WorkOS redirects the
 	// browser here, and it hands the OAuth result off to the ao-app:// deep link.
 	router.Get("/app/auth/return", server.appAuthReturn)
+	// Public page a shared session's link opens: it hands the share, carried
+	// in the URL fragment, to the ao-app://share deep link.
+	router.Get("/app/share", server.appShareLink)
 	if server.github != nil {
 		router.Get("/api/cloud/v1/github/install/setup", server.githubSetupCallback)
 		router.Get("/api/cloud/v1/github/oauth/callback", server.githubOAuthCallback)
@@ -659,6 +673,15 @@ func New(options Options) *Server {
 			router.Post("/sessions/wake", server.wakePausedSessions)
 			router.Post("/sessions/{sessionId}/resume", server.resumeSession)
 			router.Post("/sessions/{sessionId}/presence", server.touchSessionPresence)
+			router.Post("/sessions/{sessionId}/composer/acquire", server.acquireComposerLease)
+			router.Post("/sessions/{sessionId}/composer/renew", server.renewComposerLease)
+			router.Post("/sessions/{sessionId}/composer/release", server.releaseComposerLease)
+			router.Post("/sessions/{sessionId}/composer/queue", server.requestComposerTurn)
+			router.Delete("/sessions/{sessionId}/composer/queue", server.leaveComposerQueue)
+			router.Post("/sessions/{sessionId}/composer/takeover", server.takeOverComposerLease)
+			router.Post("/sessions/{sessionId}/composer/draft", server.publishComposerDraft)
+			router.Put("/sessions/{sessionId}/chat-settings", server.setSessionChatSettings)
+			router.Get("/session-participants", server.listSessionParticipants)
 			router.Post("/sessions/{sessionId}/startup-retry", server.retrySessionStartup)
 			router.Post("/sessions/{sessionId}/restore", server.restoreSession)
 			router.Get("/sessions/{sessionId}/children", server.listSessionChildren)
@@ -698,6 +721,10 @@ func New(options Options) *Server {
 			router.Put("/sessions/{sessionId}/workspace/review/file", server.putWorkspaceReviewFile)
 			router.Get("/sessions/{sessionId}/pull-requests", server.listSessionPullRequests)
 			router.Post("/sessions/{sessionId}/pull-requests/{number}/merge", server.mergeSessionPullRequest)
+			router.Post("/sessions/{sessionId}/pull-requests/{number}/merge-requests", server.requestPullRequestMerge)
+			router.Get("/projects/{projectId}/merge-requests", server.listProjectMergeRequests)
+			router.Post("/merge-requests/{requestId}/approve", server.approveMergeRequest)
+			router.Post("/merge-requests/{requestId}/reject", server.rejectMergeRequest)
 			router.Get("/sessions/{sessionId}/reviews", server.getSessionReviewState)
 			router.Post("/sessions/{sessionId}/reviews/trigger", server.triggerSessionReviews)
 			router.Post("/sessions/{sessionId}/reviews/cancel", server.cancelSessionReviews)

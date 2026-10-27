@@ -463,6 +463,19 @@ export interface ChatWorkspaceProps {
 	agentSwitch?: AgentSwitchProps;
 	/** A line above the chat box, such as a switch waiting for the next message. */
 	composerNotice?: ReactNode;
+	/**
+	 * Locks the chat box with this placeholder, as while someone else in a
+	 * shared session is writing to the agent. Decisions the current turn needs
+	 * stay available.
+	 */
+	composerLockedPlaceholder?: string;
+	/** Every edit of the chat box's draft text or move of its caret. */
+	onComposerInput?: (text: string, caret?: number) => void;
+	/**
+	 * Shows the turn settings (model, effort, mode) read-only, as for someone
+	 * in a shared session whose owner sets them.
+	 */
+	settingsLocked?: boolean;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -591,8 +604,9 @@ export interface ChatWorkspaceProps {
 	centerInWindow?: boolean;
 	/** The project has a setup script, so the start-up checklist lists that step. */
 	showSetupStep?: boolean;
-	/** Show the attach control, disabled, before there is a workspace to attach into. */
-	attachLater?: boolean;
+	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
+	holdAttachments?: boolean;
+	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
 }
 
 type ChatWorkspaceActivation =
@@ -743,6 +757,9 @@ function ChatWorkspaceContent({
 	models,
 	agentSwitch,
 	composerNotice,
+	composerLockedPlaceholder,
+	settingsLocked = false,
+	onComposerInput,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -794,7 +811,8 @@ function ChatWorkspaceContent({
 	composerTray,
 	centerInWindow = false,
 	showSetupStep = true,
-	attachLater,
+	holdAttachments,
+	onHeldAttachmentsChange,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -1424,13 +1442,6 @@ function ChatWorkspaceContent({
 	const discarded = snapshot.turns.filter((t) => t.rolledBack).length;
 
 	const brokenServers = useMemo(() => brokenMcpServers(snapshot), [snapshot]);
-	const reauthErrorInChat = snapshot.turns.some(
-		(entry) => entry.state === "failed" && Boolean(entry.errorMessage?.trim()) &&
-			entry.errorMessage?.trim() === snapshot.account?.reauthReason?.trim(),
-	) || snapshot.items.some(
-		(item) => item.kind === "activity" && item.activityKind === "error" &&
-			Boolean(item.summary.trim()) && item.summary.trim() === snapshot.account?.reauthReason?.trim(),
-	);
 	const editHumanMessage = onEditMessage;
 	const pendingApproval = useMemo(
 		() => latestPendingInteraction(snapshot.items, "approval", turn),
@@ -1467,9 +1478,9 @@ function ChatWorkspaceContent({
 					approvalModes={approvalModes}
 					approvalModeLimits={approvalModeLimits}
 					reroute={stableModelReroute}
-					onChange={newWorkDisabled ? undefined : onChooseSettings}
+					onChange={newWorkDisabled || settingsLocked ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
-					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
+					onChangeConfigOption={newWorkDisabled || settingsLocked ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
@@ -1482,12 +1493,14 @@ function ChatWorkspaceContent({
 							)) ||
 							settingsLoading ||
 							session?.provisionState === "provisioning" ||
-							controllerTransitioning || configOptionPending || newWorkDisabled
+							// A save in flight is not here: the bar holds back what cannot overlap one.
+							controllerTransitioning || newWorkDisabled || settingsLocked
 						}
 				/>
 			) : null,
 		[
 			settingsReady,
+			settingsLocked,
 			settingsLoading,
 			lastModel,
 			configOptionError,
@@ -1812,9 +1825,9 @@ function ChatWorkspaceContent({
 					}
 					role="tabpanel"
 				>
-					{/* Keep sign-in guidance available without repeating the error from chat. */}
 					{snapshot.account ? (
-						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId} reasonInTimeline={reauthErrorInChat} />
+						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness}
+							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
 					) : null}
 					{!draftPersistenceAvailable ? (
 						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">
@@ -1946,9 +1959,8 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									{composerNotice}
 									<ChatComposer
-										attachedTop={Boolean(composerNotice)}
+										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -1973,6 +1985,7 @@ function ChatWorkspaceContent({
 										onCancelQueuedEdit={cancelQueuedEdit}
 										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
 										onDraftEmptyChange={setComposerEmpty}
+										onDraftInput={onComposerInput}
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
@@ -2002,9 +2015,11 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
-											arrivingInChat
+											composerLockedPlaceholder !== undefined
+												? composerLockedPlaceholder
+												: arrivingInChat
 												? arrivingPlaceholder
 												: openingStarting && !session
 												// Same words the session shows once it can queue, so nothing changes on handoff.
@@ -2028,7 +2043,8 @@ function ChatWorkspaceContent({
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-										attachLater={attachLater}
+										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
+										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}

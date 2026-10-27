@@ -2791,7 +2791,8 @@ html.sidebar-reordering * {
 	.chat-composer-startup-shimmer { animation: none; transition: none; }
 }
 
-.cursor-chat-composer[data-attached-top] {
+/* Join only a notice that actually rendered, after the floating queue. */
+[data-composer-notice] + .cursor-chat-composer {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
 }
@@ -6146,6 +6147,69 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 ::highlight(artifact-selection) {
 	background-color: var(--color-term-selection-light);
 	color: inherit;
+}
+
+/* pdf.js text layer over a PDF page canvas: invisible text sized to the page's glyphs, so it can be selected. */
+.pdf-text-layer {
+	position: absolute;
+	inset: 0;
+	overflow: clip;
+	line-height: 1;
+	text-align: initial;
+	letter-spacing: normal;
+	word-spacing: normal;
+	text-size-adjust: none;
+	forced-color-adjust: none;
+	transform-origin: 0 0;
+	z-index: 0;
+	--min-font-size: 1;
+	--text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+	--min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-text-layer :is(span, br) {
+	position: absolute;
+	color: transparent;
+	white-space: pre;
+	cursor: text;
+	transform-origin: 0% 0%;
+	user-select: text;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+	z-index: 1;
+	--font-height: 0;
+	font-size: calc(var(--text-scale-factor) * var(--font-height));
+	--scale-x: 1;
+	--rotate: 0deg;
+	transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+	display: contents;
+}
+
+.pdf-text-layer ::selection {
+	background: var(--color-term-selection-light);
+	color: transparent;
+}
+
+.pdf-text-layer br::selection {
+	background: transparent;
+}
+
+.pdf-text-layer .endOfContent {
+	position: absolute;
+	inset: 100% 0 0;
+	display: block;
+	z-index: 0;
+	cursor: default;
+	user-select: none;
+}
+
+.pdf-text-layer.selecting .endOfContent {
+	top: 0;
 }
 
 .chat-annotation-target {

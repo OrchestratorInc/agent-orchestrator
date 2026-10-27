@@ -12,6 +12,8 @@
 import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import type { Options } from "react-markdown";
+import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
@@ -257,6 +259,38 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 	return undefined;
 }
 
+// Keyed on which sessions exist, not on the workspace list: that list changes with every session
+// event, and a new plugin list re-parses every message that renders it.
+// ponytail: one cached session set; chats on two hosts at once rebuild in turn, key the cache by set if that shows up.
+type References = { sessions: string; plugins: Options["remarkPlugins"] };
+const referencesByWorkspaces = new WeakMap<object, References>();
+let latestReferences: References | undefined;
+
+/**
+ * Agents message each other in plain prose; their paths read as code and the
+ * sessions they name link to them. Built once per workspace list and shared by
+ * every message, and the same list until a session is added or removed.
+ */
+export function usePlainReferences(): Options["remarkPlugins"] {
+	const workspaces = useChatLinkWorkspaces();
+	let references = referencesByWorkspaces.get(workspaces);
+	if (!references) {
+		const sessions = JSON.stringify(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id])));
+		references = latestReferences?.sessions === sessions
+			? latestReferences
+			: { sessions, plugins: [[remarkPlainReferences, new Map(JSON.parse(sessions) as [string, string][])]] };
+		referencesByWorkspaces.set(workspaces, references);
+	}
+	latestReferences = references;
+	return references.plugins;
+}
+
+/** Prose one agent sent another, with its plain references highlighted. Its own component, so only drawn prose reads them. */
+function AgentProse({ text, muted, className }: { text: string; muted?: boolean; className?: string }) {
+	const references = usePlainReferences();
+	return <ChatMarkdown text={text} muted={muted} safeOrigin remarkPlugins={references} className={className} />;
+}
+
 function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const [open, setOpen] = useState(false);
 	const session = useWorkerSession(update.sessionId, update.projectId);
@@ -315,7 +349,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 			))}
 			{open ? (
 				<div className="mb-2 ml-6 mt-1 min-w-0">
-					<ChatMarkdown text={detail} muted safeOrigin className="whitespace-pre-wrap text-xs leading-relaxed" />
+					<AgentProse text={detail} muted className="whitespace-pre-wrap text-xs leading-relaxed" />
 				</div>
 			) : null}
 		</div>
@@ -368,7 +402,7 @@ export function FromAgent({ item, children }: { item: ConversationItem; children
 						{name}
 					</SessionLabelLink>
 				) : null}
-				<ChatMarkdown text={update.body} safeOrigin />
+				<AgentProse text={update.body} />
 			</Folded>
 		</div>
 	);
